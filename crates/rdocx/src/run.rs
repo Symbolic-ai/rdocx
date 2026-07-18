@@ -266,6 +266,17 @@ impl<'a> RunRef<'a> {
         self.inner.properties.as_ref().and_then(|rpr| rpr.spacing)
     }
 
+    /// Get the highlight color, if set: either the `w:highlight` keyword
+    /// (e.g. "yellow") or the shading fill value the `highlight()` builder
+    /// writes — OOXML has two mechanisms for highlighted text.
+    pub fn highlight(&self) -> Option<String> {
+        let rpr = self.inner.properties.as_ref()?;
+        if let Some(h) = rpr.highlight {
+            return Some(h.to_str().to_string());
+        }
+        rpr.shading.as_ref().and_then(|sh| sh.fill.clone())
+    }
+
     /// Get vertical alignment (superscript/subscript), if set.
     pub fn vert_align(&self) -> Option<&str> {
         self.inner

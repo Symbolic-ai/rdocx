@@ -407,6 +407,13 @@ impl<'a> ParagraphRef<'a> {
     }
 
     /// Get the alignment, if set.
+    /// Get list numbering as (num_id, level) if this paragraph is a list
+    /// item. Resolve bullet-vs-numbered via `Document::numbering_is_bullet`.
+    pub fn numbering(&self) -> Option<(u32, u32)> {
+        let ppr = self.inner.properties.as_ref()?;
+        Some((ppr.num_id?, ppr.num_ilvl.unwrap_or(0)))
+    }
+
     pub fn alignment(&self) -> Option<Alignment> {
         self.inner
             .properties

@@ -503,6 +503,42 @@ impl Document {
         rels.add(rel_types::IMAGE, &rel_target)
     }
 
+    /// Whether the given numbering definition renders as bullets (true)
+    /// or numbers (false). None if the id is unknown.
+    pub fn numbering_is_bullet(&self, num_id: u32) -> Option<bool> {
+        let numbering = self.numbering.as_ref()?;
+        let abstract_num = numbering.get_abstract_num_for(num_id)?;
+        let fmt = abstract_num.levels.first()?.num_fmt?;
+        Some(fmt == rdocx_oxml::numbering::ST_NumberFormat::Bullet)
+    }
+
+    /// Append an external hyperlink to the last paragraph (creating one if
+    /// the document is empty): adds the External relationship and wraps the
+    /// new run in a hyperlink span.
+    pub fn append_hyperlink(&mut self, text: &str, url: &str) {
+        use rdocx_opc::relationship::rel_types;
+
+        let rel_id = {
+            let rels = self.package.get_or_create_part_rels(&self.doc_part_name);
+            rels.add_external(rel_types::HYPERLINK, url)
+        };
+
+        if !matches!(self.document.body.content.last(), Some(BodyContent::Paragraph(_))) {
+            self.document.body.content.push(BodyContent::Paragraph(CT_P::new()));
+        }
+        let Some(BodyContent::Paragraph(p)) = self.document.body.content.last_mut() else {
+            unreachable!();
+        };
+        let run_start = p.runs.len();
+        p.add_run(text);
+        p.hyperlinks.push(rdocx_oxml::text::HyperlinkSpan {
+            rel_id: Some(rel_id),
+            anchor: None,
+            run_start,
+            run_end: run_start + 1,
+        });
+    }
+
     // ---- Header/Footer ----
 
     /// Set the default header text.
@@ -3164,4 +3200,76 @@ mod tests {
         doc.add_paragraph("Just text.");
         assert!(doc.images().is_empty());
     }
+
+    #[test]
+    fn numbering_getter_round_trips() {
+        let mut doc = Document::new();
+        doc.add_bullet_list_item("bullet item", 0);
+        doc.add_numbered_list_item("numbered item", 0);
+        doc.add_paragraph("plain");
+
+        let bytes = doc.to_bytes().unwrap();
+        let doc2 = Document::from_bytes(&bytes).unwrap();
+        let paras = doc2.paragraphs();
+
+        let (bullet_id, bullet_lvl) = paras[0].numbering().expect("bullet numbering");
+        assert_eq!(bullet_lvl, 0);
+        assert_eq!(doc2.numbering_is_bullet(bullet_id), Some(true));
+
+        let (num_id, _) = paras[1].numbering().expect("numbered numbering");
+        assert_eq!(doc2.numbering_is_bullet(num_id), Some(false));
+
+        assert!(paras[2].numbering().is_none());
+    }
+
+    #[test]
+    fn highlight_getter_round_trips() {
+        let mut doc = Document::new();
+        {
+            let mut p = doc.add_paragraph("");
+            let mut r = p.add_run("glowing");
+            r = r.highlight("yellow");
+            let _ = r;
+        }
+
+        let bytes = doc.to_bytes().unwrap();
+        let doc2 = Document::from_bytes(&bytes).unwrap();
+        let paras = doc2.paragraphs();
+        let run = paras[0].runs().next().expect("run");
+        assert_eq!(run.highlight().as_deref(), Some("yellow"));
+    }
+
+    #[test]
+    fn run_style_id_getter_round_trips() {
+        let mut doc = Document::new();
+        {
+            let mut p = doc.add_paragraph("");
+            let mut r = p.add_run("code text");
+            r = r.style("SourceText");
+            let _ = r;
+        }
+
+        let bytes = doc.to_bytes().unwrap();
+        let doc2 = Document::from_bytes(&bytes).unwrap();
+        let paras = doc2.paragraphs();
+        let run = paras[0].runs().next().expect("run");
+        assert_eq!(run.style_id(), Some("SourceText"));
+    }
+
+    #[test]
+    fn append_hyperlink_round_trips() {
+        let mut doc = Document::new();
+        doc.add_paragraph("visit ");
+        doc.append_hyperlink("GNOME", "https://gnome.org");
+
+        let bytes = doc.to_bytes().unwrap();
+        let doc2 = Document::from_bytes(&bytes).unwrap();
+
+        let links = doc2.links();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].text, "GNOME");
+        assert_eq!(links[0].url.as_deref(), Some("https://gnome.org"));
+        assert_eq!(doc2.paragraphs()[0].text(), "visit GNOME");
+    }
+
 }
