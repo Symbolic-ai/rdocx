@@ -416,6 +416,19 @@ impl<'a> ParagraphRef<'a> {
             .unwrap_or(false)
     }
 
+    /// Line spacing as a multiplier of single spacing (1.0, 1.5, 2.0…)
+    /// when the spacing rule is "auto" (the w:line value counts 240ths of
+    /// a line). Returns None when unset or when the rule is exact/atLeast
+    /// point spacing.
+    pub fn line_spacing_multiple(&self) -> Option<f64> {
+        let ppr = self.inner.properties.as_ref()?;
+        let line = ppr.line_spacing?;
+        match ppr.line_rule.as_deref() {
+            None | Some("auto") => Some(line.0 as f64 / 240.0),
+            _ => None,
+        }
+    }
+
     /// Hyperlink spans in this paragraph as (run_start, run_end, rel_id).
     /// Resolve rel_id to a URL with `Document::hyperlink_url`.
     pub fn hyperlink_spans(&self) -> Vec<(usize, usize, Option<&str>)> {
