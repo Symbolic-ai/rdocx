@@ -125,6 +125,15 @@ impl<'a> Paragraph<'a> {
         self.inner.text()
     }
 
+    /// Append a footnote reference run (`<w:footnoteReference w:id="..."/>`).
+    /// The footnote content itself is added via `Document::add_footnote`.
+    pub fn add_footnote_ref(&mut self, id: i32) {
+        use rdocx_oxml::text::{CT_R, RunContent};
+        let mut r = CT_R::new("");
+        r.content = vec![RunContent::FootnoteRef { id }];
+        self.inner.runs.push(r);
+    }
+
     /// Add a run with the given text and return a mutable reference for chaining.
     pub fn add_run(&mut self, text: &str) -> Run<'_> {
         self.inner.runs.push(CT_R::new(text));

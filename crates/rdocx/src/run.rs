@@ -209,6 +209,16 @@ impl<'a> RunRef<'a> {
         self.inner.text()
     }
 
+    /// The footnote id referenced by this run, if it holds a
+    /// `<w:footnoteReference/>`.
+    pub fn footnote_id(&self) -> Option<i32> {
+        use rdocx_oxml::text::RunContent;
+        self.inner.content.iter().find_map(|c| match c {
+            RunContent::FootnoteRef { id } => Some(*id),
+            _ => None,
+        })
+    }
+
     /// Check if bold.
     pub fn is_bold(&self) -> bool {
         self.inner

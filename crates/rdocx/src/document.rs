@@ -36,6 +36,8 @@ pub struct Document {
     doc_part_name: String,
     /// Cached count of image media parts (avoids rescanning parts on each embed).
     image_counter: usize,
+    /// Footnotes: loaded from word/footnotes.xml on open, written back on save.
+    footnotes: rdocx_oxml::footnotes::CT_Footnotes,
 }
 
 impl Document {
@@ -58,6 +60,7 @@ impl Document {
             core_properties: None,
             doc_part_name: "/word/document.xml".to_string(),
             image_counter: 0,
+            footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
         }
     }
 
@@ -126,6 +129,14 @@ impl Document {
             .filter(|k| k.starts_with("/word/media/image"))
             .count();
 
+        let footnotes = package
+            .get_part_rels(&doc_part_name)
+            .and_then(|rels| rels.get_by_type(rel_types::FOOTNOTES))
+            .map(|rel| OpcPackage::resolve_rel_target(&doc_part_name, &rel.target))
+            .and_then(|part| package.get_part(&part))
+            .and_then(|xml| rdocx_oxml::footnotes::CT_Footnotes::from_xml(xml).ok())
+            .unwrap_or_else(rdocx_oxml::footnotes::CT_Footnotes::new);
+
         Ok(Document {
             package,
             document,
@@ -134,6 +145,7 @@ impl Document {
             core_properties,
             doc_part_name,
             image_counter,
+            footnotes,
         })
     }
 
@@ -168,6 +180,20 @@ impl Document {
             self.package.set_part("/word/numbering.xml", numbering_xml);
         }
 
+        // Serialize footnotes.xml when any footnotes exist
+        if !self.footnotes.footnotes.is_empty() {
+            let fx = self.footnotes.to_xml_footnotes()?;
+            self.package.set_part("/word/footnotes.xml", fx);
+            self.package.content_types.add_override(
+                "/word/footnotes.xml",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+            );
+            let rels = self.package.get_or_create_part_rels(&self.doc_part_name.clone());
+            if rels.get_by_type(rel_types::FOOTNOTES).is_none() {
+                rels.add(rel_types::FOOTNOTES, "footnotes.xml");
+            }
+        }
+
         // Serialize docProps/core.xml if we have metadata
         if let Some(ref props) = self.core_properties {
             let core_xml = props.to_xml()?;
@@ -190,6 +216,45 @@ impl Document {
             .paragraphs()
             .map(|p| ParagraphRef { inner: p })
             .collect()
+    }
+
+    /// All footnotes as (id, plain text), in file order.
+    pub fn footnotes(&self) -> Vec<(i32, String)> {
+        self.footnotes
+            .footnotes
+            .iter()
+            .map(|f| {
+                let text = f
+                    .paragraphs
+                    .iter()
+                    .map(|p| p.text())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (f.id, text)
+            })
+            .collect()
+    }
+
+    /// Add a footnote with the given text; returns its id. Pair with
+    /// `Paragraph::add_footnote_ref` to reference it from the body.
+    pub fn add_footnote(&mut self, text: &str) -> i32 {
+        use rdocx_oxml::footnotes::CT_Footnote;
+        use rdocx_oxml::text::CT_P;
+        let id = self
+            .footnotes
+            .footnotes
+            .iter()
+            .map(|f| f.id)
+            .max()
+            .unwrap_or(1)
+            + 1;
+        let mut p = CT_P::new();
+        p.add_run(text);
+        self.footnotes.footnotes.push(CT_Footnote {
+            id,
+            paragraphs: vec![p],
+        });
+        id
     }
 
     /// Add a paragraph with the given text and return a mutable reference.
