@@ -299,6 +299,12 @@ impl<'a> RunRef<'a> {
         None
     }
 
+    /// Get raised/lowered text position in half-points, if set.
+    /// (LibreOffice encodes super/subscript this way on HTML import.)
+    pub fn position(&self) -> Option<i32> {
+        self.inner.properties.as_ref().and_then(|rpr| rpr.position)
+    }
+
     /// Get vertical alignment (superscript/subscript), if set.
     pub fn vert_align(&self) -> Option<&str> {
         self.inner
