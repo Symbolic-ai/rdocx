@@ -539,6 +539,15 @@ impl Document {
         });
     }
 
+    /// Get a builder for the last paragraph in the body, if any. Lets
+    /// callers interleave plain runs with `append_hyperlink` calls.
+    pub fn last_paragraph_mut(&mut self) -> Option<Paragraph<'_>> {
+        match self.document.body.content.last_mut() {
+            Some(BodyContent::Paragraph(p)) => Some(Paragraph { inner: p }),
+            _ => None,
+        }
+    }
+
     /// Resolve a hyperlink relationship ID to its external URL.
     pub fn hyperlink_url(&self, rel_id: &str) -> Option<String> {
         use rdocx_opc::relationship::rel_types;
