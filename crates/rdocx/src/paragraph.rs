@@ -407,6 +407,16 @@ impl<'a> ParagraphRef<'a> {
     }
 
     /// Get the alignment, if set.
+    /// Hyperlink spans in this paragraph as (run_start, run_end, rel_id).
+    /// Resolve rel_id to a URL with `Document::hyperlink_url`.
+    pub fn hyperlink_spans(&self) -> Vec<(usize, usize, Option<&str>)> {
+        self.inner
+            .hyperlinks
+            .iter()
+            .map(|h| (h.run_start, h.run_end, h.rel_id.as_deref()))
+            .collect()
+    }
+
     /// Get list numbering as (num_id, level) if this paragraph is a list
     /// item. Resolve bullet-vs-numbered via `Document::numbering_is_bullet`.
     pub fn numbering(&self) -> Option<(u32, u32)> {

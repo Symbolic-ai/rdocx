@@ -539,6 +539,16 @@ impl Document {
         });
     }
 
+    /// Resolve a hyperlink relationship ID to its external URL.
+    pub fn hyperlink_url(&self, rel_id: &str) -> Option<String> {
+        use rdocx_opc::relationship::rel_types;
+        let rels = self.package.get_part_rels(&self.doc_part_name)?;
+        rels.items
+            .iter()
+            .find(|r| r.id == rel_id && r.rel_type == rel_types::HYPERLINK)
+            .map(|r| r.target.clone())
+    }
+
     // ---- Header/Footer ----
 
     /// Set the default header text.
@@ -3270,6 +3280,14 @@ mod tests {
         assert_eq!(links[0].text, "GNOME");
         assert_eq!(links[0].url.as_deref(), Some("https://gnome.org"));
         assert_eq!(doc2.paragraphs()[0].text(), "visit GNOME");
+
+        let paras = doc2.paragraphs();
+        let spans = paras[0].hyperlink_spans();
+        assert_eq!(spans.len(), 1);
+        let (start, end, rel_id) = (spans[0].0, spans[0].1, spans[0].2);
+        assert_eq!(end - start, 1);
+        let url = doc2.hyperlink_url(rel_id.expect("rel id"));
+        assert_eq!(url.as_deref(), Some("https://gnome.org"));
     }
 
 }
