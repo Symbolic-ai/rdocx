@@ -407,6 +407,15 @@ impl<'a> ParagraphRef<'a> {
     }
 
     /// Get the alignment, if set.
+    /// Check if a page break is set before this paragraph.
+    pub fn is_page_break_before(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|ppr| ppr.page_break_before)
+            .unwrap_or(false)
+    }
+
     /// Hyperlink spans in this paragraph as (run_start, run_end, rel_id).
     /// Resolve rel_id to a URL with `Document::hyperlink_url`.
     pub fn hyperlink_spans(&self) -> Vec<(usize, usize, Option<&str>)> {
