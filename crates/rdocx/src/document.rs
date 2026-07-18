@@ -548,6 +548,18 @@ impl Document {
         }
     }
 
+    /// Fetch the raw bytes of an embedded image by its relationship ID.
+    pub fn image_data(&self, rel_id: &str) -> Option<Vec<u8>> {
+        let rels = self.package.get_part_rels(&self.doc_part_name)?;
+        let rel = rels.items.iter().find(|r| r.id == rel_id)?;
+        let target = if rel.target.starts_with('/') {
+            rel.target.clone()
+        } else {
+            format!("/word/{}", rel.target)
+        };
+        self.package.get_part(&target).map(|b| b.to_vec())
+    }
+
     /// Resolve a hyperlink relationship ID to its external URL.
     pub fn hyperlink_url(&self, rel_id: &str) -> Option<String> {
         use rdocx_opc::relationship::rel_types;
@@ -3297,6 +3309,38 @@ mod tests {
         assert_eq!(end - start, 1);
         let url = doc2.hyperlink_url(rel_id.expect("rel id"));
         assert_eq!(url.as_deref(), Some("https://gnome.org"));
+    }
+
+
+    #[test]
+    fn picture_round_trips() {
+        // 1x1 red PNG
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+            0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00,
+            0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
+            0x00, 0x00, 0x03, 0x00, 0x01, 0x9E, 0xDD, 0x22, 0x71, 0x00, 0x00, 0x00,
+            0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        let mut doc = Document::new();
+        doc.add_paragraph("before");
+        doc.add_picture(png, "dot.png", Length::inches(1.0), Length::inches(1.0));
+
+        let bytes = doc.to_bytes().unwrap();
+        let doc2 = Document::from_bytes(&bytes).unwrap();
+        let paras = doc2.paragraphs();
+        let mut found = None;
+        for p in &paras {
+            for r in p.runs() {
+                if let Some((rel, _alt)) = r.inline_image() {
+                    found = Some(rel.to_string());
+                }
+            }
+        }
+        let rel = found.expect("no inline image found on read");
+        let data = doc2.image_data(&rel).expect("image bytes missing");
+        assert_eq!(data, png);
     }
 
 }

@@ -286,6 +286,19 @@ impl<'a> RunRef<'a> {
         rpr.shading.as_ref().and_then(|sh| sh.fill.clone())
     }
 
+    /// If this run contains an inline image, return (rel_id, alt text).
+    pub fn inline_image(&self) -> Option<(&str, Option<&str>)> {
+        use rdocx_oxml::text::RunContent;
+        for c in &self.inner.content {
+            if let RunContent::Drawing(d) = c {
+                if let Some(inline) = &d.inline {
+                    return Some((inline.embed_id.as_str(), inline.description.as_deref()));
+                }
+            }
+        }
+        None
+    }
+
     /// Get vertical alignment (superscript/subscript), if set.
     pub fn vert_align(&self) -> Option<&str> {
         self.inner
