@@ -236,6 +236,15 @@ impl<'a> RunRef<'a> {
             .unwrap_or(false)
     }
 
+    /// Check if underlined (any underline style other than none).
+    pub fn is_underline(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|rpr| rpr.underline.as_ref())
+            .is_some_and(|u| !matches!(u, ST_Underline::None))
+    }
+
     /// Get font size in points, if set.
     pub fn size(&self) -> Option<f64> {
         self.inner
