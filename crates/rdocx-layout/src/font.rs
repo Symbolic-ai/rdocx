@@ -100,6 +100,36 @@ impl FontManager {
         }
     }
 
+    /// Create a font manager that loads bundled fonts without discovering
+    /// system fonts.
+    ///
+    /// This mode makes font resolution reproducible across machines. It
+    /// requires the `bundled-fonts` feature so callers cannot accidentally
+    /// construct an empty deterministic font database.
+    pub fn new_deterministic() -> Result<Self> {
+        #[cfg(feature = "bundled-fonts")]
+        {
+            let mut db = fontdb::Database::new();
+            for (_family, data) in crate::bundled_fonts::bundled_font_data() {
+                db.load_font_data(data.to_vec());
+            }
+
+            Ok(FontManager {
+                db,
+                cache: HashMap::new(),
+                fonts: Vec::new(),
+                next_id: 0,
+            })
+        }
+
+        #[cfg(not(feature = "bundled-fonts"))]
+        {
+            Err(LayoutError::Layout(
+                "deterministic font mode requires the 'bundled-fonts' feature".to_string(),
+            ))
+        }
+    }
+
     /// Load additional font files (user-provided or extracted from DOCX).
     ///
     /// These fonts are loaded AFTER system fonts, so they take the highest
@@ -421,6 +451,29 @@ fn map_font_name(name: &str) -> &[&str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "bundled-fonts")]
+    use crate::bundled_fonts::bundled_font_data;
+
+    #[cfg(feature = "bundled-fonts")]
+    #[test]
+    fn deterministic_font_manager_uses_only_bundled_fonts() {
+        let mut fm = FontManager::new_deterministic().expect("bundled fonts should load");
+
+        assert_eq!(fm.db.faces().count(), bundled_font_data().len());
+        assert!(fm.resolve_font(Some("Arial"), false, false).is_ok());
+    }
+
+    #[cfg(not(feature = "bundled-fonts"))]
+    #[test]
+    fn deterministic_font_manager_requires_bundled_fonts() {
+        match FontManager::new_deterministic() {
+            Err(LayoutError::Layout(message)) => assert_eq!(
+                message,
+                "deterministic font mode requires the 'bundled-fonts' feature"
+            ),
+            _ => panic!("deterministic mode must reject a build without bundled fonts"),
+        }
+    }
 
     #[test]
     fn load_system_font() {

@@ -38,6 +38,13 @@ impl Engine {
         }
     }
 
+    /// Create an engine that resolves fonts without system font discovery.
+    pub fn new_deterministic() -> Result<Self> {
+        Ok(Engine {
+            font_manager: FontManager::new_deterministic()?,
+        })
+    }
+
     /// Lay out the entire document.
     pub fn layout(&mut self, input: &LayoutInput) -> Result<LayoutResult> {
         // Load user-provided / DOCX-embedded fonts (highest priority)

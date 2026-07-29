@@ -30,3 +30,8 @@ pub use output::{
 pub fn layout_document(input: &LayoutInput) -> Result<LayoutResult> {
     engine::Engine::new().layout(input)
 }
+
+/// Lay out a DOCX using bundled fonts without system font discovery.
+pub fn layout_document_deterministic(input: &LayoutInput) -> Result<LayoutResult> {
+    engine::Engine::new_deterministic()?.layout(input)
+}

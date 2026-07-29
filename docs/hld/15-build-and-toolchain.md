@@ -30,7 +30,7 @@ fonts differ between machines and between a developer's machine and a CI runner.
 both the hash harness and the SSIM gate: a baseline recorded locally would
 mismatch CI in a way indistinguishable from a real regression.
 
-The fix is an explicit deterministic mode:
+`rdocx-layout` provides an explicit deterministic mode:
 
 ```rust
 impl FontManager {
@@ -40,12 +40,23 @@ impl FontManager {
 }
 ```
 
-Used by the hash harness, the golden-PNG gate and the SSIM harness. Never the
-default for library users, who want system fonts.
+The constructor starts with a fresh font database, loads only the checked-in
+bundled font bytes, and returns a layout error when `bundled-fonts` is disabled.
+It never calls system-font discovery. Document-embedded fonts remain explicit
+layout inputs, so they are deterministic too.
 
-Two side benefits: it is the first thing to genuinely exercise the
-`--no-default-features` path with bundled fonts off, and it is the same code
-path the WASM build needs.
+`Engine::new_deterministic()` and `layout_document_deterministic()` carry that
+database through layout. The public facade exposes
+`Document::render_page_to_png_deterministic()`, which lays out and rasterises a
+page through the same path. Existing constructors and rendering methods still
+load system fonts for library users.
+
+The hash harness, golden-PNG gate and SSIM harness use the deterministic path.
+The normal rendering API does not change its font-discovery behaviour.
+
+The `--no-default-features` path verifies that deterministic construction fails
+early without bundled fonts. This is also the same font-isolation path the WASM
+build needs.
 
 Builds otherwise stay native. There is no development container. The Linux-only
 work, manylinux wheels, `wasm32` checks and the LibreOffice render oracle, runs
@@ -55,7 +66,7 @@ on CI runners as it always would have.
 
 | Crate | Feature | Default | Notes |
 |---|---|---|---|
-| `oxml-layout` | `bundled-fonts` | on | The 20 bundled TTFs |
+| `rdocx-layout` | `bundled-fonts` | on | The 20 bundled TTFs and the deterministic rendering path |
 | `oxml-layout` | `system-fonts` | on | **New.** Off for wasm, where `fontconfig` will not build |
 | `rpptx` | `default-template` | on | The bundled `default.pptx` |
 | `rpptx` | `render` | on | Pulls in `rpptx-render` and `oxml-pdf` |

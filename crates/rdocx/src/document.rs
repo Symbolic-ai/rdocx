@@ -1967,6 +1967,22 @@ impl Document {
         Ok(rdocx_pdf::render_page_to_png(&layout, page_index, dpi))
     }
 
+    /// Render a single page to PNG using bundled fonts without system font
+    /// discovery.
+    ///
+    /// # Arguments
+    /// * `page_index` - 0-based page index
+    /// * `dpi` - Resolution (72 = 1:1, 150 = standard, 300 = high quality)
+    pub fn render_page_to_png_deterministic(
+        &self,
+        page_index: usize,
+        dpi: f64,
+    ) -> Result<Option<Vec<u8>>> {
+        let input = self.build_layout_input();
+        let layout = rdocx_layout::layout_document_deterministic(&input)?;
+        Ok(rdocx_pdf::render_page_to_png(&layout, page_index, dpi))
+    }
+
     /// Render all pages of the document to PNG bytes.
     pub fn render_all_pages(&self, dpi: f64) -> Result<Vec<Vec<u8>>> {
         let input = self.build_layout_input();
@@ -2745,6 +2761,39 @@ mod tests {
     use super::*;
     use crate::paragraph::Alignment;
     use rdocx_oxml::units::{HalfPoint, Twips};
+
+    #[test]
+    fn deterministic_render_is_independent_of_system_fonts() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Deterministic rendering");
+
+        let input = doc.build_layout_input();
+        let layout = rdocx_layout::layout_document_deterministic(&input)
+            .expect("deterministic layout should succeed");
+        let bundled_fonts = rdocx_layout::bundled_fonts::bundled_font_data();
+
+        assert!(!layout.fonts.is_empty());
+        for font in &layout.fonts {
+            assert!(!font.data.is_empty());
+            assert!(
+                bundled_fonts
+                    .iter()
+                    .any(|(_family, data)| *data == font.data.as_slice()),
+                "resolved font '{}' did not come from the bundled font set",
+                font.family
+            );
+        }
+
+        let inspected = rdocx_pdf::render_page_to_png(&layout, 0, 150.0)
+            .expect("document should have a first page");
+        let facade = doc
+            .render_page_to_png_deterministic(0, 150.0)
+            .expect("deterministic layout should succeed")
+            .expect("document should have a first page");
+
+        assert!(!inspected.is_empty());
+        assert_eq!(facade, inspected);
+    }
 
     #[test]
     fn create_new_document() {

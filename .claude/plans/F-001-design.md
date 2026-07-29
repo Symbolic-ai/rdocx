@@ -1,6 +1,6 @@
 # F-001, Deterministic font mode
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S01
 **Size**: M
 **Depends on**: none
@@ -23,6 +23,10 @@ Add `FontManager::new_deterministic() -> Result<Self>` that loads bundled font
 bytes and never calls `load_system_fonts()`. It returns a layout error when the
 `bundled-fonts` feature is disabled rather than creating a manager that will
 fail later during resolution.
+
+Correct the `rdocx-layout` manifest so `bundled-fonts` is default-on, matching
+the existing code comments and HLD. The `rdocx` facade is the existing named
+consumer that requires bundled fallback fonts in a normal build.
 
 Thread that mode through `Engine::new_deterministic()`, a
 `layout_document_deterministic()` entry point, and
@@ -61,6 +65,11 @@ produces identical PNG bytes.
 - Bundled fonts. Read `docs/hld/15-build-and-toolchain.md`. Verify every loaded
   family has its real licence and run
   `cargo test -p rdocx-layout --no-default-features`.
+- Default feature correction. The existing consumer is `rdocx`, whose normal
+  rendering path already documents bundled fallback fonts. Run
+  `cargo test -p rdocx-layout --no-default-features` to exercise the feature-off
+  path and confirm `rdocx-layout` defaults to `bundled-fonts` with
+  `cargo tree -e features -p rdocx-layout`.
 - Public API of published crates. Read `docs/hld/10-bindings-spec.md` and the
   structural rules in `CLAUDE.md`. State the additive semver impact, run
   `cargo publish --dry-run` for the affected crates, and inspect their package
@@ -73,11 +82,13 @@ initial baseline is owned by F-003.
 
 ## Implementation checklist
 
-- [ ] Add the deterministic `FontManager` constructor and its feature-off error.
-- [ ] Thread deterministic construction through the layout engine.
-- [ ] Expose deterministic page-one PNG rendering through `Document`.
-- [ ] Add focused unit and golden tests.
-- [ ] Run the risk-routing checks and record the exact evidence.
+- [x] Add the deterministic `FontManager` constructor and its feature-off error.
+- [x] Correct the manifest so `bundled-fonts` is default-on for the existing
+  `rdocx` consumer.
+- [x] Thread deterministic construction through the layout engine.
+- [x] Expose deterministic page-one PNG rendering through `Document`.
+- [x] Add focused unit and golden tests.
+- [x] Run the risk-routing checks and record the exact evidence.
 
 ## Open questions
 
