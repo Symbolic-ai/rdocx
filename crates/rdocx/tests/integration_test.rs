@@ -6,6 +6,8 @@ use rdocx::table::VerticalAlignment;
 use rdocx::{
     BorderStyle, Length, SectionBreak, StyleBuilder, TabAlignment, TabLeader, UnderlineStyle,
 };
+use rdocx_opc::OpcPackage;
+use rdocx_opc::relationship::rel_types;
 
 #[test]
 fn create_and_round_trip_simple_document() {
@@ -840,11 +842,63 @@ fn metadata_round_trip() {
 
     // Round-trip through DOCX bytes
     let bytes = doc.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let relationship = package
+        .package_rels
+        .get_by_type(rel_types::CORE_PROPERTIES)
+        .unwrap();
+    assert_eq!(relationship.target, "docProps/core.xml");
+
     let doc2 = Document::from_bytes(&bytes).unwrap();
     assert_eq!(doc2.title(), Some("Test Title"));
     assert_eq!(doc2.author(), Some("Test Author"));
     assert_eq!(doc2.subject(), Some("Test Subject"));
     assert_eq!(doc2.keywords(), Some("rust, docx, test"));
+}
+
+#[test]
+fn core_properties_at_relationship_target_round_trip_in_place() {
+    let mut source = Document::new();
+    source.set_title("Original title");
+    source.set_author("Original author");
+
+    let bytes = source.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let core_xml = package.parts.remove("/docProps/core.xml").unwrap();
+    package.set_part("/custom/metadata.xml", core_xml);
+    package.content_types.overrides.remove("/docProps/core.xml");
+    package.content_types.add_override(
+        "/custom/metadata.xml",
+        "application/vnd.openxmlformats-package.core-properties+xml",
+    );
+    package
+        .package_rels
+        .items
+        .retain(|rel| rel.rel_type != rel_types::CORE_PROPERTIES);
+    package
+        .package_rels
+        .add(rel_types::CORE_PROPERTIES, "custom/metadata.xml");
+
+    let mut custom_package = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut custom_package).unwrap();
+    let mut document = Document::from_bytes(custom_package.get_ref()).unwrap();
+    assert_eq!(document.title(), Some("Original title"));
+    assert_eq!(document.author(), Some("Original author"));
+
+    document.set_title("Updated title");
+    let saved = document.to_bytes().unwrap();
+    let saved_package = OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    assert!(saved_package.get_part("/docProps/core.xml").is_none());
+    assert!(saved_package.get_part("/custom/metadata.xml").is_some());
+    let relationship = saved_package
+        .package_rels
+        .get_by_type(rel_types::CORE_PROPERTIES)
+        .unwrap();
+    assert_eq!(relationship.target, "custom/metadata.xml");
+
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.title(), Some("Updated title"));
+    assert_eq!(reopened.author(), Some("Original author"));
 }
 
 #[test]

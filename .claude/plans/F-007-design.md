@@ -1,6 +1,6 @@
 # F-007, Resolve core properties through the relationship
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S02
 **Size**: S
 **Depends on**: none
@@ -70,12 +70,12 @@ not digest.
 
 ## Implementation checklist
 
-- [ ] Add the package-level core-properties relationship constant.
-- [ ] Resolve and retain the relationship target during document load.
-- [ ] Save metadata and its content type to the retained target.
-- [ ] Create the conventional part and relationship only when none exists.
-- [ ] Add the custom-target and conventional-target regression assertions.
-- [ ] Run focused OPC and rdocx integration tests plus the packaging rider.
+- [x] Add the package-level core-properties relationship constant.
+- [x] Resolve and retain the relationship target during document load.
+- [x] Save metadata and its content type to the retained target.
+- [x] Create the conventional part and relationship only when none exists.
+- [x] Add the custom-target and conventional-target regression assertions.
+- [x] Run focused OPC and rdocx integration tests plus the packaging rider.
 
 ## Open questions
 

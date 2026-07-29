@@ -32,6 +32,8 @@ pub struct Document {
     styles: CT_Styles,
     numbering: Option<CT_Numbering>,
     core_properties: Option<CoreProperties>,
+    /// Package part containing the core properties, resolved from `_rels/.rels`.
+    core_properties_part_name: String,
     /// Part name for the main document
     doc_part_name: String,
     /// Part name the styles were loaded from, and where they are written back.
@@ -50,10 +52,13 @@ pub struct Document {
 /// Fallback part names used when a document does not already declare one.
 const DEFAULT_STYLES_PART: &str = "/word/styles.xml";
 const DEFAULT_NUMBERING_PART: &str = "/word/numbering.xml";
+const DEFAULT_CORE_PROPERTIES_PART: &str = "/docProps/core.xml";
 const STYLES_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml";
 const NUMBERING_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml";
+const CORE_PROPERTIES_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-package.core-properties+xml";
 
 impl Document {
     /// Create a new, empty document with default page setup and styles.
@@ -73,6 +78,7 @@ impl Document {
             styles,
             numbering: None,
             core_properties: None,
+            core_properties_part_name: DEFAULT_CORE_PROPERTIES_PART.to_string(),
             doc_part_name: "/word/document.xml".to_string(),
             styles_part_name: DEFAULT_STYLES_PART.to_string(),
             numbering_part_name: DEFAULT_NUMBERING_PART.to_string(),
@@ -129,9 +135,14 @@ impl Document {
             None => None,
         };
 
-        // Try to load core properties from docProps/core.xml
-        let core_properties = package
-            .get_part("/docProps/core.xml")
+        // Core properties are a package-level relationship, not a document part.
+        let core_properties_part_name = package
+            .package_rels
+            .get_by_type(rel_types::CORE_PROPERTIES)
+            .map(|rel| OpcPackage::resolve_rel_target("/", &rel.target));
+        let core_properties = core_properties_part_name
+            .as_deref()
+            .and_then(|part| package.get_part(part))
             .and_then(|xml| CoreProperties::from_xml(xml).ok());
 
         let image_counter = package
@@ -155,6 +166,8 @@ impl Document {
             styles,
             numbering,
             core_properties,
+            core_properties_part_name: core_properties_part_name
+                .unwrap_or_else(|| DEFAULT_CORE_PROPERTIES_PART.to_string()),
             doc_part_name,
             styles_part_name: styles_part_name.unwrap_or_else(|| DEFAULT_STYLES_PART.to_string()),
             numbering_part_name: numbering_part_name
@@ -221,14 +234,29 @@ impl Document {
             }
         }
 
-        // Serialize docProps/core.xml if we have metadata
+        // Serialize core properties to the package relationship's target.
         if let Some(ref props) = self.core_properties {
             let core_xml = props.to_xml()?;
-            self.package.set_part("/docProps/core.xml", core_xml);
+            self.package
+                .set_part(&self.core_properties_part_name, core_xml);
             self.package.content_types.add_override(
-                "/docProps/core.xml",
-                "application/vnd.openxmlformats-package.core-properties+xml",
+                &self.core_properties_part_name,
+                CORE_PROPERTIES_CONTENT_TYPE,
             );
+            if self
+                .package
+                .package_rels
+                .get_by_type(rel_types::CORE_PROPERTIES)
+                .is_none()
+            {
+                let target = self
+                    .core_properties_part_name
+                    .strip_prefix('/')
+                    .unwrap_or(&self.core_properties_part_name);
+                self.package
+                    .package_rels
+                    .add(rel_types::CORE_PROPERTIES, target);
+            }
         }
 
         Ok(())
