@@ -1,6 +1,6 @@
 # F-008, Non-consuming setter twins
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S02
 **Size**: M
 **Depends on**: none
@@ -72,12 +72,12 @@ their serialized output.
 
 ## Implementation checklist
 
-- [ ] Inventory every public `mut self -> Self` builder in the three files.
-- [ ] Add one in-place setter per builder with the same mutation semantics.
-- [ ] Delegate every existing builder to its setter.
-- [ ] Add borrowed-wrapper compilation and serialized-equivalence coverage to
+- [x] Inventory every public `mut self -> Self` builder in the three files.
+- [x] Add one in-place setter per builder with the same mutation semantics.
+- [x] Delegate every existing builder to its setter.
+- [x] Add borrowed-wrapper compilation and serialized-equivalence coverage to
       the existing rdocx integration test binary.
-- [ ] Run focused rdocx tests, rustdoc, and the packaging rider.
+- [x] Run focused rdocx tests, rustdoc, and the packaging rider.
 
 ## Open questions
 

@@ -9,6 +9,12 @@ use rdocx::{
 use rdocx_opc::OpcPackage;
 use rdocx_opc::relationship::rel_types;
 
+fn document_xml(document: &mut Document) -> Vec<u8> {
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    package.get_part("/word/document.xml").unwrap().to_vec()
+}
+
 #[test]
 fn create_and_round_trip_simple_document() {
     let mut doc = Document::new();
@@ -1557,4 +1563,96 @@ fn line_spacing_multiple_round_trips() {
     let paras = doc2.paragraphs();
     let p = paras.first().unwrap();
     assert_eq!(p.line_spacing_multiple(), Some(2.0));
+}
+
+#[test]
+fn non_consuming_setters_mutate_borrowed_wrappers() {
+    let mut doc = Document::new();
+    doc.add_paragraph("Borrowed paragraph");
+
+    doc.paragraph_mut(0)
+        .unwrap()
+        .set_alignment(Alignment::Right);
+    doc.paragraph_mut(0)
+        .unwrap()
+        .add_run(" borrowed run")
+        .set_bold(true);
+
+    {
+        let mut table = doc.add_table(1, 1);
+        table.set_layout_fixed();
+        table.row(0).unwrap().set_header();
+        table
+            .cell(0, 0)
+            .unwrap()
+            .set_vertical_alignment(VerticalAlignment::Center);
+    }
+
+    let bytes = doc.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraphs = reopened.paragraphs();
+    assert_eq!(paragraphs[0].alignment(), Some(Alignment::Right));
+    assert!(paragraphs[0].runs().last().unwrap().is_bold());
+    let tables = reopened.tables();
+    assert!(tables[0].row(0).unwrap().is_header());
+    assert_eq!(
+        tables[0].cell(0, 0).unwrap().vertical_alignment(),
+        Some(VerticalAlignment::Center)
+    );
+}
+
+#[test]
+fn non_consuming_setters_match_consuming_builders() {
+    let mut builders = Document::new();
+    {
+        let mut paragraph = builders
+            .add_paragraph("Paragraph")
+            .alignment(Alignment::Center)
+            .space_after(Length::pt(6.0));
+        paragraph
+            .add_run(" run")
+            .bold(true)
+            .font("Arial")
+            .color("123456");
+    }
+    {
+        let mut table = builders
+            .add_table(1, 1)
+            .style("TableGrid")
+            .alignment(Alignment::Center)
+            .layout_fixed();
+        table.row(0).unwrap().height(Length::pt(18.0)).header();
+        table
+            .cell(0, 0)
+            .unwrap()
+            .width(Length::inches(2.0))
+            .shading("D9EAF7")
+            .vertical_alignment(VerticalAlignment::Center);
+    }
+
+    let mut setters = Document::new();
+    {
+        let mut paragraph = setters.add_paragraph("Paragraph");
+        paragraph.set_alignment(Alignment::Center);
+        paragraph.set_space_after(Length::pt(6.0));
+        let mut run = paragraph.add_run(" run");
+        run.set_bold(true);
+        run.set_font("Arial");
+        run.set_color("123456");
+    }
+    {
+        let mut table = setters.add_table(1, 1);
+        table.set_style("TableGrid");
+        table.set_alignment(Alignment::Center);
+        table.set_layout_fixed();
+        let mut row = table.row(0).unwrap();
+        row.set_height(Length::pt(18.0));
+        row.set_header();
+        let mut cell = row.cell(0).unwrap();
+        cell.set_width(Length::inches(2.0));
+        cell.set_shading("D9EAF7");
+        cell.set_vertical_alignment(VerticalAlignment::Center);
+    }
+
+    assert_eq!(document_xml(&mut setters), document_xml(&mut builders));
 }

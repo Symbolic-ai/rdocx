@@ -76,11 +76,11 @@ slice support, and `__iter__`. `Document::paragraphs() -> Vec<ParagraphRef>` is
 never called from the binding.
 
 **Consuming builders are bypassed.** A `fn bold(mut self, val: bool) -> Self`
-cannot back a Python property setter. M1 adds non-consuming `set_*` twins across
-the facade, roughly 40 one-liners, with the existing builders delegating to
-them. Purely additive, and an ergonomics win for Rust users independently:
-`doc.paragraph_mut(3).unwrap().set_bold(true)` is currently impossible without a
-rebind dance.
+cannot back a Python property setter. The facade exposes 61 non-consuming
+`set_*` twins: 24 on `Paragraph`, 19 on `Run`, and 18 across `Table`, `Row`, and
+`Cell`. The existing builders delegate to them. The surface is additive, and a
+borrowed nested handle can mutate without a rebind:
+`doc.paragraph_mut(3).unwrap().add_run("text").set_bold(true)`.
 
 **Threading.** `Document` holds only maps, vectors and strings, so it is `Send`
 and `Sync`. `to_pdf`, `render_all_pages` and `to_bytes` run inside

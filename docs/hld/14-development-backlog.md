@@ -100,8 +100,9 @@ with its metadata intact.
 ### F-008, Non-consuming setter twins (M)
 Add `set_*` siblings for every consuming builder in `paragraph.rs`, `run.rs`,
 `table.rs`, with the builders delegating.
-**Test gate**: `doc.paragraph_mut(0).unwrap().set_bold(true)` compiles and has the
-same effect as the builder form.
+**Test gate**:
+`doc.paragraph_mut(0).unwrap().add_run("text").set_bold(true)` compiles and has
+the same effect as the builder form.
 
 ### F-009, Cache the layout result (M)
 `RefCell<Option<Rc<LayoutResult>>>` on `Document`, invalidated on mutation, plus
