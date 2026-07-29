@@ -1,6 +1,6 @@
 # F-011, Pin unit truncation behaviour
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S02
 **Size**: S
 **Depends on**: none
@@ -16,7 +16,7 @@ would shift document geometry and silently invalidate output comparisons.
 
 - `docs/hld/01-glossary.md`, "Units".
 - `docs/hld/11-migration-plan.md`, "Preserve behaviour, do not improve it".
-- `docs/hld/12-testing-strategy.md`, "Unit and property tests".
+- `docs/hld/12-testing-strategy.md`, "New tests the extracted crates need".
 
 ## Approach
 
@@ -61,13 +61,13 @@ Expected to remain unchanged. This story adds tests only.
 
 ## Implementation checklist
 
-- [ ] Choose positive and negative fractional vectors that distinguish
+- [x] Choose positive and negative fractional vectors that distinguish
       truncation from rounding.
-- [ ] Pin every `Length` constructor in its existing test module.
-- [ ] Pin every `Twips` and `Emu` constructor in the existing units test module.
-- [ ] Demonstrate the gates would fail under rounding, then restore production
+- [x] Pin every `Length` constructor in its existing test module.
+- [x] Pin every `Twips` and `Emu` constructor in the existing units test module.
+- [x] Demonstrate the gates would fail under rounding, then restore production
       code unchanged.
-- [ ] Run focused unit tests and the hash harness.
+- [x] Run focused unit tests and the hash harness.
 
 ## Open questions
 

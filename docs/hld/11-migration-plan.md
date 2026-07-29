@@ -99,9 +99,10 @@ Three things are deliberately left wrong during the move, because correcting
 them mid-extraction would produce hash deltas indistinguishable from migration
 bugs:
 
-- **Unit truncation.** Every constructor uses `as i64` truncation. Pin it with
-  tests *before* anyone changes it to rounding, because a rounding change shifts
-  every twip, which shifts layout, which moves the regression tests' output.
+- **Unit truncation.** Float constructors truncate toward zero with `as i64` or
+  `as i32`. Positive and negative fractional tests pin every `Length`, `Twips`
+  and `Emu` constructor. A rounding change shifts every twip, which shifts
+  layout, which moves the regression tests' output.
 - **`apply_tint_shade`.** Keep Word's 0-255 convention and its naive sRGB
   interpolation, byte for byte. `oxml-drawing` adds spec-correct functions
   alongside under different names.
