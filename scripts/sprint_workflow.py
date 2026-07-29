@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -147,6 +148,18 @@ def save(sprint: str, data: dict) -> None:
     state_path(sprint).write_text(
         json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+
+
+def git_head() -> str:
+    """Return the commit whose evidence is being recorded or checked."""
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
 
 
 def parse_current_sprint() -> tuple[str, list[dict]]:
@@ -343,6 +356,7 @@ def cmd_mark_feature(args: argparse.Namespace) -> int:
 
 def cmd_record_review(args: argparse.Namespace) -> int:
     data = load(args.sprint)
+    head = git_head()
     bound = data.get("max_review_passes", MAX_REVIEW_PASSES)
     if args.passno > bound and not args.extend:
         die(
@@ -356,22 +370,63 @@ def cmd_record_review(args: argparse.Namespace) -> int:
             "blocking": args.blocking,
             "should_fix": args.should_fix,
             "nice_to_have": args.nice_to_have,
+            "head": head,
         }
     )
     save(args.sprint, data)
     verdict = "clean" if args.blocking == 0 else f"{args.blocking} blocking"
-    print(f"{args.sprint} review pass {args.passno} recorded: {verdict}")
+    print(
+        f"{args.sprint} review pass {args.passno} recorded at {head[:12]}: {verdict}"
+    )
     return 0
 
 
 def cmd_record_verification(args: argparse.Namespace) -> int:
     data = load(args.sprint)
+    head = git_head()
     data["verifications"].append(
-        {"scope": args.scope, "passed": args.passed, "harness": args.harness}
+        {
+            "scope": args.scope,
+            "passed": args.passed,
+            "harness": args.harness,
+            "head": head,
+        }
     )
     save(args.sprint, data)
-    print(f"{args.sprint} verification recorded: {args.scope}, passed={args.passed}")
+    print(
+        f"{args.sprint} verification recorded at {head[:12]}: "
+        f"{args.scope}, passed={args.passed}"
+    )
     return 0
+
+
+def closure_evidence_problems(data: dict, head: str) -> list[str]:
+    """Return stale or missing review and verification evidence for HEAD."""
+    problems: list[str] = []
+    if not data["reviews"]:
+        problems.append("no sprint-review pass recorded")
+    else:
+        review = data["reviews"][-1]
+        if review["blocking"] != 0:
+            problems.append(
+                f"last review pass has {review['blocking']} blocking finding(s)"
+            )
+        if review.get("head") != head:
+            problems.append(
+                "latest sprint review covered "
+                f"{review.get('head') or 'an unrecorded HEAD'}, current HEAD is {head}"
+            )
+
+    verified = [
+        verification
+        for verification in data["verifications"]
+        if verification["scope"] == "full"
+        and verification["passed"]
+        and verification.get("head") == head
+    ]
+    if not verified:
+        problems.append(f"no passing `/verify --full` recorded for current HEAD {head}")
+    return problems
 
 
 def cmd_validate_handoff(args: argparse.Namespace) -> int:
@@ -426,6 +481,7 @@ def cmd_validate_handoff(args: argparse.Namespace) -> int:
 def cmd_close_preflight(args: argparse.Namespace) -> int:
     data = load(args.sprint)
     problems: list[str] = []
+    head = git_head()
 
     if data["phase"] == "blocked":
         problems.append("sprint is blocked. Resolve what blocked it and re-run.")
@@ -446,16 +502,7 @@ def cmd_close_preflight(args: argparse.Namespace) -> int:
             "features neither completed nor carried: " + ", ".join(sorted(incomplete))
         )
 
-    if not data["reviews"]:
-        problems.append("no sprint-review pass recorded")
-    elif data["reviews"][-1]["blocking"] != 0:
-        problems.append(
-            f"last review pass has {data['reviews'][-1]['blocking']} blocking finding(s)"
-        )
-
-    full = [v for v in data["verifications"] if v["scope"] == "full" and v["passed"]]
-    if not full:
-        problems.append("no passing `/verify --full` recorded")
+    problems.extend(closure_evidence_problems(data, head))
 
     # The durable delivery record must agree with the run state. This catches a
     # completion that updated the JSON but missed one of the canonical ledgers.

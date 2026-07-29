@@ -52,7 +52,7 @@ both of which alter output silently. Without a byte-level baseline, every later
 step is unverifiable.
 
 **End-of-milestone gate**: `cargo test --workspace` green, the hash harness
-records a baseline that reproduces on a second machine, and `v0.2.1` is tagged.
+records a baseline that reproduces on a second machine, and `v0.3.1` is tagged.
 
 ### F-001, Deterministic font mode (M)
 Add `FontManager::new_deterministic()` using bundled fonts only, bypassing
@@ -118,7 +118,7 @@ Tests locking the current `as i64` truncation in every `Length`, `Twips` and
 `Emu` constructor, before anyone changes it to rounding.
 **Test gate**: the pinning tests, which must fail if truncation becomes rounding.
 
-### F-012, Tag v0.2.1 (S)
+### F-012, Tag v0.3.1 (S)
 A known-good published state immediately before the churn.
 **Depends on**: F-003 through F-009.
 **Test gate**: the release tag builds and publishes from a clean clone.

@@ -11,6 +11,64 @@ from scripts import sprint_workflow as workflow
 
 
 class SprintWorkflowTests(unittest.TestCase):
+    def test_review_and_verification_evidence_is_bound_to_head(self) -> None:
+        data = {
+            "reviews": [{"pass": 4, "blocking": 0, "head": "current"}],
+            "verifications": [
+                {"scope": "full", "passed": True, "head": "current"}
+            ],
+        }
+        self.assertEqual(workflow.closure_evidence_problems(data, "current"), [])
+
+        data["reviews"][-1]["head"] = "reviewed-old"
+        data["verifications"][-1]["head"] = "verified-old"
+        self.assertEqual(
+            workflow.closure_evidence_problems(data, "current"),
+            [
+                "latest sprint review covered reviewed-old, current HEAD is current",
+                "no passing `/verify --full` recorded for current HEAD current",
+            ],
+        )
+
+    def test_recorded_evidence_captures_head(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            scratch = Path(directory)
+            state = {
+                "schema_version": workflow.SCHEMA_VERSION,
+                "sprint": "S01",
+                "phase": "review",
+                "max_review_passes": 3,
+                "features": {},
+                "reviews": [],
+                "verifications": [],
+            }
+            (scratch / "S01-run.json").write_text(json.dumps(state), encoding="utf-8")
+            review_args = argparse.Namespace(
+                sprint="S01",
+                passno=4,
+                blocking=0,
+                should_fix=0,
+                nice_to_have=0,
+                extend=True,
+            )
+            verify_args = argparse.Namespace(
+                sprint="S01",
+                scope="full",
+                passed=True,
+                harness="unchanged",
+            )
+
+            with (
+                patch.object(workflow, "SCRATCH", scratch),
+                patch.object(workflow, "git_head", return_value="abc123"),
+            ):
+                workflow.cmd_record_review(review_args)
+                workflow.cmd_record_verification(verify_args)
+
+            saved = json.loads((scratch / "S01-run.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["reviews"][-1]["head"], "abc123")
+            self.assertEqual(saved["verifications"][-1]["head"], "abc123")
+
     def test_run_sprint_phase_sequence_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             scratch = Path(directory)
