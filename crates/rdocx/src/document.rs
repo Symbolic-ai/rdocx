@@ -65,6 +65,8 @@ const STYLES_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml";
 const NUMBERING_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml";
+const CORE_PROPERTIES_REL_TYPE: &str =
+    "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties";
 const CORE_PROPERTIES_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-package.core-properties+xml";
 
@@ -158,7 +160,7 @@ impl Document {
         // Core properties are a package-level relationship, not a document part.
         let core_properties_part_name = package
             .package_rels
-            .get_by_type(rel_types::CORE_PROPERTIES)
+            .get_by_type(CORE_PROPERTIES_REL_TYPE)
             .map(|rel| OpcPackage::resolve_rel_target("/", &rel.target));
         let core_properties = core_properties_part_name
             .as_deref()
@@ -316,7 +318,7 @@ impl Document {
             if self
                 .package
                 .package_rels
-                .get_by_type(rel_types::CORE_PROPERTIES)
+                .get_by_type(CORE_PROPERTIES_REL_TYPE)
                 .is_none()
             {
                 let target = self
@@ -325,7 +327,7 @@ impl Document {
                     .unwrap_or(&self.core_properties_part_name);
                 self.package
                     .package_rels
-                    .add(rel_types::CORE_PROPERTIES, target);
+                    .add(CORE_PROPERTIES_REL_TYPE, target);
             }
         }
 
