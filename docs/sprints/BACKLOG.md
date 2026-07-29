@@ -16,7 +16,7 @@ regenerated, never hand-edited.
 
 | Milestone | F-IDs | Done | In Progress | Pending |
 |-----------|-------|------|-------------|---------|
-| M1, Preparation and safety net              | 12 | 0 | 6 | 6  |
+| M1, Preparation and safety net              | 12 | 6 | 0 | 6  |
 | M2, Shared infrastructure extraction        | 10 | 0 | 0 | 10 |
 | M3, Media                                   | 6  | 0 | 0 | 6  |
 | M4, Layout primitives                       | 8  | 0 | 0 | 8  |
@@ -30,7 +30,7 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **150** | **0** | **6** | **144** |
+| **Total** | **150** | **6** | **0** | **144** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -40,12 +40,12 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-M1 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-001 | Deterministic font mode                      | S01 | M | in-progress |
-| F-002 | rust-toolchain.toml                          | S01 | S | in-progress |
-| F-003 | Output-stability hash harness                | S01 | L | in-progress |
-| F-004 | Caladea licence and the false OFL claim      | S01 | S | in-progress |
-| F-005 | Fix the image counter                        | S01 | S | in-progress |
-| F-006 | Fix the JPEG standalone-marker walk          | S01 | S | in-progress |
+| F-001 | Deterministic font mode                      | S01 | M | done |
+| F-002 | rust-toolchain.toml                          | S01 | S | done |
+| F-003 | Output-stability hash harness                | S01 | L | done |
+| F-004 | Caladea licence and the false OFL claim      | S01 | S | done |
+| F-005 | Fix the image counter                        | S01 | S | done |
+| F-006 | Fix the JPEG standalone-marker walk          | S01 | S | done |
 | F-007 | Resolve core properties through the rel      | S02 | S | pending |
 | F-008 | Non-consuming setter twins                   | S02 | M | pending |
 | F-009 | Cache the layout result                      | S02 | M | pending |

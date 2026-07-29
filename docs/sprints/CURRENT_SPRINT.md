@@ -24,12 +24,12 @@ fixed and released.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-001 | Deterministic font mode | M | in-progress | codex |
-| F-002 | rust-toolchain.toml | S | in-progress | codex |
-| F-003 | Output-stability hash harness | L | in-progress | codex |
-| F-004 | Caladea licence and the false OFL claim | S | in-progress | codex |
-| F-005 | Fix the image counter | S | in-progress | codex |
-| F-006 | Fix the JPEG standalone-marker walk | S | in-progress | codex |
+| F-001 | Deterministic font mode | M | done | - |
+| F-002 | rust-toolchain.toml | S | done | - |
+| F-003 | Output-stability hash harness | L | done | - |
+| F-004 | Caladea licence and the false OFL claim | S | done | - |
+| F-005 | Fix the image counter | S | done | - |
+| F-006 | Fix the JPEG standalone-marker walk | S | done | - |
 
 ## Sequencing note
 

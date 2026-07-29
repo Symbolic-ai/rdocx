@@ -19,6 +19,12 @@ defended.
 
 | F-ID | Sprint | Size | Est. days | Actual days | Completed | Notes |
 |------|--------|------|-----------|-------------|-----------|-------|
+| F-001 | S01 | M | 2 | 1 | 2026-07-29 | Deterministic bundled-font path |
+| F-002 | S01 | S | 1 | 1 | 2026-07-29 | Rust 1.97.1 toolchain pin |
+| F-003 | S01 | L | 4 | 1 | 2026-07-29 | Initial 28-entry hash baseline |
+| F-004 | S01 | S | 1 | 1 | 2026-07-29 | Caladea licence and notice |
+| F-005 | S01 | S | 1 | 1 | 2026-07-29 | Collision-safe image suffix allocation |
+| F-006 | S01 | S | 1 | 1 | 2026-07-29 | Safe JPEG standalone-marker walk |
 
 ## Velocity
 
