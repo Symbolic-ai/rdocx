@@ -13,7 +13,7 @@ defended.
 
 | Sprint | Milestone | Planned | Done | Carried | Est. days | Actual days | Notes |
 |--------|-----------|---------|------|---------|-----------|-------------|-------|
-| S01 | M1 | 6 | - | - | 10 | - | in progress |
+| S01 | M1 | 6 | 6 | 0 | 10 | 6 | Completed with no carries |
 
 ## Completed features
 
@@ -33,9 +33,12 @@ sustained, and the whole plan is sized at roughly 390 developer-days. If the
 first three sprints diverge from that by more than 30 percent, replan rather
 than absorb it.
 
+Stories per week is completed stories divided by actual days, multiplied by
+five working days.
+
 | Window | Stories | Days | Stories/week |
 |--------|---------|------|--------------|
-| _(no data yet)_ | | | |
+| S01 | 6 | 6 | 5.00 |
 
 ## Escalation record
 
