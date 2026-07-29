@@ -32,7 +32,7 @@ immediately before structural churn begins.
 | F-009 | Cache the layout result | M | done | - |
 | F-010 | Reserve crate names | S | done | - |
 | F-011 | Pin unit truncation behaviour | S | done | - |
-| F-012 | Tag v0.3.1 | S | pending | - |
+| F-012 | Tag v0.3.1 | S | in-progress | codex |
 
 ## Sequencing note
 
