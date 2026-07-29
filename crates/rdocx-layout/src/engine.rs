@@ -565,8 +565,14 @@ pub fn layout_paragraph(
             let marker_italic = marker_rpr.italic.unwrap_or(false);
             let marker_font_family = marker_rpr.font_ascii.as_deref();
 
-            if let Ok(font_id) = fm.resolve_font(marker_font_family, marker_bold, marker_italic)
-                && let Ok(shaped) = fm.shape_text(font_id, &marker.marker_text, marker_font_size)
+            // Bullet glyphs are not in every font either, so the marker gets
+            // the same coverage check as body text.
+            if let Ok(font_id) = fm.resolve_font_for_text(
+                marker_font_family,
+                marker_bold,
+                marker_italic,
+                &marker.marker_text,
+            ) && let Ok(shaped) = fm.shape_text(font_id, &marker.marker_text, marker_font_size)
             {
                 let metrics = fm.metrics(font_id, marker_font_size)?;
                 let color = marker_rpr
@@ -677,7 +683,10 @@ pub fn layout_paragraph(
             baseline_offset += pos as f64 / 2.0; // half-points to points
         }
 
-        let font_id = fm.resolve_font(font_family.as_deref(), bold, italic)?;
+        // Resolved against the run's own text, so a family without glyphs for
+        // this script is replaced by one that has them.
+        let font_id =
+            fm.resolve_font_for_text(font_family.as_deref(), bold, italic, &run.text())?;
         let metrics = fm.metrics(font_id, font_size)?;
 
         for content in &run.content {
