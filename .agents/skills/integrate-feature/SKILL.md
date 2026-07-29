@@ -7,6 +7,6 @@ description: "Integrate a prepared worker branch into the canonical sprint branc
 
 Canonical source: `.claude/commands/integrate-feature.md`.
 
-Source SHA-256: `7166d59a40d634f9c9a9783413f65e3ea925e37e947317ca103cfed750f47326`.
+Source SHA-256: `7545819f275a8a289ac91a95a83f222987a6a52832373ec8f37a582d7b077160`.
 
 Read the canonical source in full before acting, and follow it with whatever tools this host provides. Treat any invocation arguments as arguments to that workflow. Where it names another slash command, follow the repository skill of the same name. Where it says to ask with `AskUserQuestion`, ask through this host's own question mechanism. `.claude/WORKFLOW.md` wins on any process question. Do not edit this generated adapter.

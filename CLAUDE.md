@@ -84,6 +84,9 @@ truth for what must pass.
   `/integrate-feature`. `/run-sprint` drives all of it for a whole sprint.
 - Sprint branches are `sprint/sNN` off `main`. Worker branches are
   `work/<fid-lower>-<agent>`.
+- Worker branches and worktrees remain available through sprint verification
+  and review. `/close-sprint` removes clean completed workers after pushing
+  `main` and the sprint tag.
 - **Editing a command or skill means regenerating `.agents/skills/`.** `/verify`
   fails on drift.
 - **Only `/close-sprint` may merge to `main` or create a tag.**

@@ -33,8 +33,8 @@ telling you the exact `/close-sprint` invocation.
 
 5. Audit for leftovers from an interrupted run. `git worktree list` and
    `git branch --list 'work/*'` against the run state. Report anything the state
-   does not know about. **Do not delete a worktree or branch**, report it and let
-   the human decide.
+   does not know about. **Do not delete a worktree or branch.** Worker cleanup
+   belongs to `/close-sprint` after the integrated sprint is pushed.
 6. Report every F-ID that is not `completed`, with its state, its dependencies,
    and the skills its diff will trigger.
 
@@ -204,8 +204,8 @@ When the latest pass is clean:
    - Integrated F-IDs, and anything blocked or carried.
    - The verification evidence, especially the harness result.
    - Review passes and their verdicts.
-   - **Retained worker branches and worktrees**, as cleanup targets for the
-     human.
+   - **Retained worker branches and worktrees**, which `/close-sprint` will
+     remove after the sprint merge and tag are pushed.
    - The exact next command:
 
      ```text
@@ -218,6 +218,7 @@ When the latest pass is clean:
 - **Verifying per worker instead of once over the integrated result.** That is
   precisely the failure `/sprint-review` exists to catch.
 - **Re-recording the hash baseline to make step 6 pass.**
-- **Deleting a worker branch or worktree.**
+- **Deleting a worker branch or worktree.** `/close-sprint` owns cleanup after
+  the sprint is safely pushed.
 - **Running a confirmation pass after a clean review pass.**
 - **Merging to `main`, tagging, or pushing anything other than `sprint/sNN`.**

@@ -20,9 +20,10 @@ tag.** Nothing else does so, implicitly or otherwise.
      `main` in first and re-verify.
    - No worker work is stranded. `git worktree list` and
      `git branch --list 'work/*'` against the run state. `close-preflight`
-     already refuses an unconsumed `.claude/handoffs/F-XXX-ready.md`. Report
-     the retained branches and worktrees so the human can remove them after the
-     merge. **Do not remove them yourself.**
+     already refuses an unconsumed `.claude/handoffs/F-XXX-ready.md`. Record
+     the completed workers that become cleanup targets after the push. A
+     carried worker, an untracked branch or a worktree absent from the run
+     state is not a cleanup target.
 
 2. **`/verify --full`.** Everything, workspace-wide, including packaging and the
    supply-chain check. Not `--fast`, not the changed-crate subset.
@@ -48,11 +49,25 @@ tag.** Nothing else does so, implicitly or otherwise.
 
 8. **Push** `main` and the tag.
 
-9. **Open the next sprint.** If `--next SMM` was given, run `/sync-sprint SMM`.
+9. **Clean completed workers.** Only after both pushes succeed, inspect every
+   cleanup target recorded in the run state:
+   - Confirm the F-ID is `completed`, its handoff was consumed and its recorded
+     integration commit is an ancestor of `main`.
+   - Confirm the path is still registered to the recorded worker branch and
+     `git -C <worktree-path> status --porcelain` is empty.
+   - Run `git worktree remove <worktree-path>` without `--force`.
+   - Delete the recorded local worker branch. A squash integration means this
+     requires `git branch -D <worker-branch>`, so perform it only after all
+     preceding checks pass.
+   - Never remove a carried worker, a dirty worktree, a remote branch or an
+     unrelated worktree. Leave any failed target intact and report the exact
+     reason.
 
-10. **Report** what merged, the tag, the velocity for this sprint, and whether
-    it diverged from the plan by more than 30 percent, which is an escalation
-    trigger.
+10. **Open the next sprint.** If `--next SMM` was given, run `/sync-sprint SMM`.
+
+11. **Report** what merged, the tag, the velocity for this sprint, whether it
+    diverged from the plan by more than 30 percent, and every worker cleanup
+    outcome. A variance over 30 percent is an escalation trigger.
 
 ## Carrying a story
 
