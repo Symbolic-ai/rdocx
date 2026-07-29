@@ -16,7 +16,7 @@ regenerated, never hand-edited.
 
 | Milestone | F-IDs | Done | In Progress | Pending |
 |-----------|-------|------|-------------|---------|
-| M1, Preparation and safety net              | 12 | 6 | 1 | 5  |
+| M1, Preparation and safety net              | 12 | 6 | 2 | 4  |
 | M2, Shared infrastructure extraction        | 10 | 0 | 0 | 10 |
 | M3, Media                                   | 6  | 0 | 0 | 6  |
 | M4, Layout primitives                       | 8  | 0 | 0 | 8  |
@@ -30,7 +30,7 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **150** | **6** | **1** | **143** |
+| **Total** | **150** | **6** | **2** | **142** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -49,7 +49,7 @@ regenerated, never hand-edited.
 | F-007 | Resolve core properties through the rel      | S02 | S | in-progress |
 | F-008 | Non-consuming setter twins                   | S02 | M | pending |
 | F-009 | Cache the layout result                      | S02 | M | pending |
-| F-010 | Reserve crate names                          | S02 | S | pending |
+| F-010 | Reserve crate names                          | S02 | S | in-progress |
 | F-011 | Pin unit truncation behaviour                | S02 | S | pending |
 | F-012 | Tag v0.3.1                                   | S02 | S | pending |
 <!-- AUTOGEN:backlog-M1 END -->
