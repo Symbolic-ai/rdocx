@@ -42,14 +42,14 @@ The core focus is **DOCX**: a high-level, python-docx-inspired API for building 
 
 ```toml
 [dependencies]
-rdocx = "0.2"
+rdocx = "0.3"
 ```
 
 To include bundled metric-compatible fonts (Carlito, Caladea, Liberation family):
 
 ```toml
 [dependencies]
-rdocx-layout = { version = "0.2", features = ["bundled-fonts"] }
+rdocx-layout = { version = "0.3", features = ["bundled-fonts"] }
 ```
 
 ## Quick Start
