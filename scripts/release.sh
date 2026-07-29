@@ -48,8 +48,8 @@ echo "Current version: $CURRENT"
 # Update workspace Cargo.toml (package version + internal dep versions)
 sed -i '' "s/version = \"$CURRENT\"/version = \"$VERSION\"/g" Cargo.toml
 
-# Update rdocx-wasm (excluded from workspace, has its own version)
-sed -i '' "s/version = \"$CURRENT\"/version = \"$VERSION\"/" crates/rdocx-wasm/Cargo.toml
+# rdocx-wasm is a workspace member and inherits version.workspace = true, so
+# it needs no separate bump.
 
 # Update README.md version references (e.g. rdocx = "0.1" -> rdocx = "0.2")
 CURRENT_SHORT=$(echo "$CURRENT" | sed 's/\.[0-9]*$//')
@@ -65,7 +65,7 @@ cargo check --workspace --quiet
 echo "Updated all crates to $VERSION"
 
 # Commit, tag, and push
-git add Cargo.toml Cargo.lock crates/rdocx-wasm/Cargo.toml README.md
+git add Cargo.toml Cargo.lock README.md
 git commit -m "Release v$VERSION"
 git tag "v$VERSION"
 git push origin main "v$VERSION"
