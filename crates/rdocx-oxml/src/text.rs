@@ -171,6 +171,11 @@ impl CT_R {
                             .and_then(|a| std::str::from_utf8(&a.value).ok()?.parse::<i32>().ok())
                             .unwrap_or(0);
                         content.push(RunContent::EndnoteRef { id });
+                    } else {
+                        // Capture unknown empty child elements (e.g.
+                        // w:commentReference) as raw XML, mirroring the
+                        // Event::Start fallback above.
+                        extra_xml.push(capture_empty_element(e)?);
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"r") => {
@@ -647,6 +652,27 @@ mod tests {
         assert_eq!(parsed.hyperlinks[0].rel_id, Some("rId7".to_string()));
         assert_eq!(parsed.hyperlinks[0].run_start, 1);
         assert_eq!(parsed.hyperlinks[0].run_end, 2);
+    }
+
+    #[test]
+    fn unknown_empty_run_children_roundtrip() {
+        // Unknown empty elements inside a run (e.g. w:commentReference)
+        // must be captured and re-emitted, not silently dropped.
+        let p = parse_paragraph(
+            r#"<w:r><w:t>flagged</w:t></w:r><w:r><w:commentReference w:id="1"/></w:r>"#,
+        );
+        assert_eq!(p.runs.len(), 2);
+        assert_eq!(p.runs[1].extra_xml.len(), 1);
+
+        let mut output = Vec::new();
+        let mut writer = Writer::new(&mut output);
+        p.to_xml(&mut writer).unwrap();
+        let xml = String::from_utf8(output).unwrap();
+        assert!(
+            xml.contains(r#"<w:commentReference w:id="1"/>"#),
+            "comment reference must survive round-trip: {xml}"
+        );
+        assert!(xml.contains("flagged"));
     }
 
     #[test]
