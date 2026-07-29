@@ -253,7 +253,11 @@ fn render_image(
         return;
     };
 
-    // Calculate the transform to position and scale the image
+    // Calculate the transform to position and scale the image. A zero
+    // dimension from a malformed image would make this an infinite scale.
+    if decoded.width == 0 || decoded.height == 0 {
+        return;
+    }
     let sx = rect.width as f32 / decoded.width as f32;
     let sy = rect.height as f32 / decoded.height as f32;
 

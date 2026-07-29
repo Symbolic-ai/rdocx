@@ -81,7 +81,7 @@ impl<'a> Table<'a> {
     /// Set borders on all edges and internal gridlines.
     pub fn borders(mut self, style: crate::BorderStyle, size_eighths_pt: u32, color: &str) -> Self {
         let edge = CT_BorderEdge {
-            val: style.to_st_border(),
+            val: style.to_st(),
             sz: Some(size_eighths_pt),
             space: Some(0),
             color: Some(color.to_string()),
@@ -350,8 +350,9 @@ impl<'a> Cell<'a> {
         };
         use rdocx_oxml::units::Twips;
 
-        // Default nested table column width: use equal splits of 4500tw (~3.125")
-        let col_width = Twips(4500 / cols as i32);
+        // Default nested table column width: use equal splits of 4500tw (~3.125").
+        // Clamped so a zero-column request cannot divide by zero.
+        let col_width = Twips(4500 / cols.max(1) as i32);
 
         let grid = CT_TblGrid {
             columns: (0..cols)

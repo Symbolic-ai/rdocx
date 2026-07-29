@@ -57,6 +57,11 @@ pub fn capture_element(reader: &mut Reader<&[u8]>, start: &BytesStart) -> Result
             Ok(Event::DocType(ref e)) => {
                 writer.write_event(Event::DocType(e.to_owned().into_owned()))?;
             }
+            // Entity references are their own event since quick-xml 0.41;
+            // re-emit them verbatim so captured markup round-trips unchanged.
+            Ok(Event::GeneralRef(ref e)) => {
+                writer.write_event(Event::GeneralRef(e.to_owned().into_owned()))?;
+            }
             Ok(Event::Eof) => break,
             Err(e) => return Err(e.into()),
         }
@@ -109,15 +114,12 @@ mod tests {
         let mut buf = Vec::new();
 
         loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    let captured = capture_empty_element(e).unwrap();
-                    let s = String::from_utf8(captured).unwrap();
-                    assert!(s.contains("item"));
-                    assert!(s.contains("attr"));
-                    return;
-                }
-                _ => {}
+            if let Ok(Event::Empty(ref e)) = reader.read_event_into(&mut buf) {
+                let captured = capture_empty_element(e).unwrap();
+                let s = String::from_utf8(captured).unwrap();
+                assert!(s.contains("item"));
+                assert!(s.contains("attr"));
+                return;
             }
             buf.clear();
         }

@@ -1,0 +1,60 @@
+# Supply-chain policy, enforced in CI by `cargo deny check`.
+#
+# The bar is zero known vulnerabilities and zero unmaintained crates. Anything
+# listed under `ignore` below is a deliberate, explained exception with a route
+# out — not a permanent waiver.
+
+[graph]
+all-features = true
+
+[advisories]
+yanked = "deny"
+ignore = [
+    # ttf-parser is unmaintained (RUSTSEC-2026-0192). No vulnerability is known;
+    # the crate is feature-complete and widely deployed.
+    #
+    # We cannot drop it yet: `fontdb`, which provides system font discovery,
+    # depends on it unconditionally, so removing rdocx's own direct usage would
+    # not remove it from the tree. Clearing this means replacing fontdb (with
+    # fontique, say) and moving our font parsing to skrifa — which is already in
+    # the graph via subsetter, so it would add no new dependencies.
+    #
+    # Revisit when fontdb migrates or when the fontique swap is scheduled.
+    "RUSTSEC-2026-0192",
+]
+
+[licenses]
+# Permissive licences only. rdocx is dual MIT/Apache-2.0 and must stay
+# redistributable under both.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    "Unlicense",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Codecs a DOCX never uses. They arrived through `zip`'s default features and
+# were removed by narrowing those; denying them keeps the door shut.
+deny = [
+    { name = "zstd" },
+    { name = "bzip2" },
+    { name = "lzma-rust2" },
+    { name = "ppmd-rust" },
+    { name = "aes" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

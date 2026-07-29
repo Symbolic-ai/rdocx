@@ -55,12 +55,9 @@ pub enum BorderStyle {
 }
 
 impl BorderStyle {
-    /// Convert to the OXML ST_Border type (public for table module).
-    pub(crate) fn to_st_border(self) -> ST_Border {
-        self.to_st()
-    }
-
-    fn to_st(self) -> ST_Border {
+    /// Convert to the OXML `ST_Border` type. Visible to the table module,
+    /// which builds cell borders from the same enum.
+    pub(crate) fn to_st(self) -> ST_Border {
         match self {
             Self::None => ST_Border::None,
             Self::Single => ST_Border::Single,

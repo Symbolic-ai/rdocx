@@ -34,43 +34,32 @@ impl CoreProperties {
 
         let mut props = CoreProperties::default();
         let mut buf = Vec::new();
-        let mut current_tag: Option<String> = None;
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    let local = local_name(name.as_ref());
-                    match local {
-                        "title" | "creator" | "subject" | "description" | "keywords"
-                        | "lastModifiedBy" | "created" | "modified" => {
-                            current_tag = Some(local.to_string());
-                        }
+                    let field = match local_name(name.as_ref()) {
+                        "title" => &mut props.title,
+                        "creator" => &mut props.creator,
+                        "subject" => &mut props.subject,
+                        "description" => &mut props.description,
+                        "keywords" => &mut props.keywords,
+                        "lastModifiedBy" => &mut props.last_modified_by,
+                        "created" => &mut props.created,
+                        "modified" => &mut props.modified,
                         _ => {
-                            current_tag = None;
+                            buf.clear();
+                            continue;
                         }
+                    };
+                    // Consume the whole element: a value containing an entity
+                    // arrives as several events, so a single Text event is not
+                    // enough to reconstruct it.
+                    let text = crate::xml_text::read_element_text(&mut reader, name);
+                    if !text.is_empty() {
+                        *field = Some(text);
                     }
-                }
-                Ok(Event::Text(ref e)) => {
-                    if let Some(ref tag) = current_tag {
-                        let text = e.unescape().unwrap_or_default().to_string();
-                        if !text.is_empty() {
-                            match tag.as_str() {
-                                "title" => props.title = Some(text),
-                                "creator" => props.creator = Some(text),
-                                "subject" => props.subject = Some(text),
-                                "description" => props.description = Some(text),
-                                "keywords" => props.keywords = Some(text),
-                                "lastModifiedBy" => props.last_modified_by = Some(text),
-                                "created" => props.created = Some(text),
-                                "modified" => props.modified = Some(text),
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-                Ok(Event::End(_)) => {
-                    current_tag = None;
                 }
                 Ok(Event::Eof) => break,
                 Err(e) => return Err(e.into()),

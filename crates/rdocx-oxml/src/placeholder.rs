@@ -18,14 +18,28 @@ pub fn replace_in_paragraph(para: &mut CT_P, placeholder: &str, replacement: &st
 
     let mut total = 0;
 
+    // Byte offset in the concatenated paragraph text at which to look for the
+    // next match. Resuming *after* the text we just inserted is what keeps this
+    // terminating when the replacement itself contains the placeholder
+    // (`replace("NAME", "NAME Smith")`); restarting from 0 would rematch the
+    // replacement forever.
+    let mut search_from = 0usize;
+
     // We loop because after one replacement the text layout changes
     // and there may be more matches.
     loop {
         // 1. Concatenate all run text and build a char map.
         let (full_text, char_map) = build_char_map(&para.runs);
 
-        // 2. Find first match (byte offset in full_text).
-        let Some(byte_start) = full_text.find(placeholder) else {
+        if search_from >= full_text.len() {
+            break;
+        }
+
+        // 2. Find the next match (byte offset in full_text).
+        let Some(byte_start) = full_text[search_from..]
+            .find(placeholder)
+            .map(|i| search_from + i)
+        else {
             break;
         };
         // Convert byte offsets to char indices (char_map is indexed by char position).
@@ -65,6 +79,11 @@ pub fn replace_in_paragraph(para: &mut CT_P, placeholder: &str, replacement: &st
 
         // Update hyperlink spans to account for removed runs.
         reindex_hyperlinks(para);
+
+        // Text before `byte_start` is untouched and the replacement now
+        // occupies `byte_start..byte_start + replacement.len()`, so this stays
+        // on a char boundary of the rebuilt text.
+        search_from = byte_start + replacement.len();
 
         total += 1;
     }
@@ -256,6 +275,48 @@ pub fn replace_in_xml_part(
     placeholder: &str,
     replacement: &str,
 ) -> crate::error::Result<(Vec<u8>, usize)> {
+    replace_many_in_xml_part(xml, &[(placeholder, replacement)])
+}
+
+/// Apply several placeholder replacements to a raw XML part in one pass.
+///
+/// Equivalent to calling [`replace_in_xml_part`] once per pair, but parses and
+/// re-serialises the part a single time — which matters when filling a template
+/// with many fields.
+pub fn replace_many_in_xml_part(
+    xml: &[u8],
+    replacements: &[(&str, &str)],
+) -> crate::error::Result<(Vec<u8>, usize)> {
+    rewrite_text_boxes(xml, &mut |paragraphs| {
+        replacements
+            .iter()
+            .map(|(placeholder, replacement)| {
+                replace_in_paragraphs(paragraphs, placeholder, replacement)
+            })
+            .sum()
+    })
+}
+
+/// Apply a regex replacement to text boxes and shapes within a raw XML part.
+///
+/// The regex counterpart to [`replace_in_xml_part`]; `replacement` supports
+/// `$1`-style capture group references.
+pub fn replace_regex_in_xml_part(
+    xml: &[u8],
+    re: &regex::Regex,
+    replacement: &str,
+) -> crate::error::Result<(Vec<u8>, usize)> {
+    rewrite_text_boxes(xml, &mut |paragraphs| {
+        replace_regex_in_paragraphs(paragraphs, re, replacement)
+    })
+}
+
+/// Walk `xml`, handing the paragraphs of each `w:txbxContent` element to
+/// `edit`, and re-serialise. Returns the rewritten XML and the summed count.
+fn rewrite_text_boxes(
+    xml: &[u8],
+    edit: &mut dyn FnMut(&mut Vec<CT_P>) -> usize,
+) -> crate::error::Result<(Vec<u8>, usize)> {
     use crate::namespace::matches_local_name;
     use quick_xml::events::Event;
     use quick_xml::{Reader, Writer};
@@ -355,9 +416,8 @@ pub fn replace_in_xml_part(
                     inner_buf.clear();
                 }
 
-                // Do replacement on paragraphs
-                let count = replace_in_paragraphs(&mut paragraphs, placeholder, replacement);
-                total_count += count;
+                // Hand the collected paragraphs to the caller's edit function
+                total_count += edit(&mut paragraphs);
 
                 // Re-serialize paragraphs into the writer
                 for p in &paragraphs {
@@ -390,8 +450,16 @@ pub fn replace_in_chart_xml(
     placeholder: &str,
     replacement: &str,
 ) -> crate::error::Result<(Vec<u8>, usize)> {
+    replace_many_in_chart_xml(xml, &[(placeholder, replacement)])
+}
+
+/// Apply several placeholder replacements to chart XML in one pass.
+pub fn replace_many_in_chart_xml(
+    xml: &[u8],
+    replacements: &[(&str, &str)],
+) -> crate::error::Result<(Vec<u8>, usize)> {
     use crate::namespace::matches_local_name;
-    use quick_xml::events::{BytesText, Event};
+    use quick_xml::events::{BytesEnd, BytesText, Event};
     use quick_xml::{Reader, Writer};
 
     let mut reader = Reader::from_reader(xml);
@@ -401,54 +469,33 @@ pub fn replace_in_chart_xml(
     let mut buf = Vec::new();
     let mut total_count = 0;
 
-    // Track whether we're inside an <a:t> or <c:v> element
-    let mut in_text_element = false;
-    let mut text_tag_name: Option<String> = None;
-
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Eof) => break,
-            Ok(Event::Start(ref e)) => {
+            // <a:t> holds DrawingML run text, <c:v> a chart value cache entry.
+            Ok(Event::Start(ref e))
+                if matches_local_name(e.name().as_ref(), b"t")
+                    || matches_local_name(e.name().as_ref(), b"v") =>
+            {
                 let name = e.name();
-                if matches_local_name(name.as_ref(), b"t")
-                    || matches_local_name(name.as_ref(), b"v")
-                {
-                    // Check parent context: a:t for drawing text, c:v for chart value cache
-                    let local = std::str::from_utf8(name.as_ref()).unwrap_or("");
-                    // We match both "a:t" and "c:v" generically
-                    if local.ends_with(":t")
-                        || local.ends_with(":v")
-                        || local == "t"
-                        || local == "v"
-                    {
-                        in_text_element = true;
-                        text_tag_name = Some(local.to_string());
-                    }
-                }
-                writer.write_event(Event::Start(e.clone()))?;
-            }
-            Ok(Event::Text(ref e)) if in_text_element => {
-                let text = e.unescape().unwrap_or_default().to_string();
-                if text.contains(placeholder) {
-                    let new_text = text.replace(placeholder, replacement);
+                writer.write_event(Event::Start(e.borrow()))?;
+
+                // Consume the element as a whole. Reading it event by event
+                // would split the value at every entity reference and could
+                // miss a placeholder straddling one.
+                let mut text = crate::xml_text::read_element_text(&mut reader, name);
+                for (placeholder, replacement) in replacements {
                     let occurrences = text.matches(placeholder).count();
-                    total_count += occurrences;
-                    writer.write_event(Event::Text(BytesText::new(&new_text)))?;
-                } else {
-                    writer.write_event(Event::Text(e.clone()))?;
-                }
-            }
-            Ok(Event::End(ref e)) => {
-                if in_text_element {
-                    let qname = e.name();
-                    let name_bytes = qname.as_ref();
-                    let name_str = std::str::from_utf8(name_bytes).unwrap_or("").to_string();
-                    if text_tag_name.as_deref() == Some(&name_str) {
-                        in_text_element = false;
-                        text_tag_name = None;
+                    if occurrences > 0 {
+                        total_count += occurrences;
+                        text = text.replace(placeholder, replacement);
                     }
                 }
-                writer.write_event(Event::End(e.clone()))?;
+                writer.write_event(Event::Text(BytesText::new(&text)))?;
+
+                writer.write_event(Event::End(BytesEnd::new(
+                    std::str::from_utf8(name.as_ref()).unwrap_or_default(),
+                )))?;
             }
             Ok(ev) => {
                 writer.write_event(ev)?;
@@ -469,14 +516,20 @@ pub fn replace_in_chart_xml(
 pub fn replace_regex_in_paragraph(para: &mut CT_P, re: &regex::Regex, replacement: &str) -> usize {
     let mut total = 0;
 
+    // See `replace_in_paragraph`: resume after the inserted text so a
+    // replacement that itself matches the pattern cannot loop forever.
+    // `captures_at` (rather than slicing) keeps anchors and look-around
+    // evaluating against the full paragraph text.
+    let mut search_from = 0usize;
+
     loop {
         let (full_text, char_map) = build_char_map(&para.runs);
-        if char_map.is_empty() {
+        if char_map.is_empty() || search_from > full_text.len() {
             break;
         }
 
-        // Find first match
-        let Some(m) = re.captures(&full_text).and_then(|caps| {
+        // Find the next match
+        let Some(m) = re.captures_at(&full_text, search_from).and_then(|caps| {
             let mat = caps.get(0)?;
             // Expand capture groups in replacement
             let mut expanded = String::new();
@@ -487,6 +540,16 @@ pub fn replace_regex_in_paragraph(para: &mut CT_P, re: &regex::Regex, replacemen
         };
 
         let (byte_start, byte_end, expanded_replacement) = m;
+
+        // A zero-width match would neither consume input nor advance the
+        // cursor; step past it so the loop always makes progress.
+        if byte_start == byte_end {
+            search_from = full_text[byte_start..]
+                .chars()
+                .next()
+                .map_or(full_text.len() + 1, |c| byte_start + c.len_utf8());
+            continue;
+        }
 
         // Convert byte offsets to char indices
         let match_start = full_text[..byte_start].chars().count();
@@ -522,6 +585,7 @@ pub fn replace_regex_in_paragraph(para: &mut CT_P, re: &regex::Regex, replacemen
 
         para.runs.retain(|r| !r.content.is_empty());
         reindex_hyperlinks(para);
+        search_from = byte_start + expanded_replacement.len();
         total += 1;
     }
 

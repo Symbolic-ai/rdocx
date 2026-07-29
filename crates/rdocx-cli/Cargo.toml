@@ -14,9 +14,14 @@ categories.workspace = true
 [[bin]]
 name = "rdocx"
 path = "src/main.rs"
+# The binary shares its name with the `rdocx` library crate, which makes
+# `cargo doc --workspace` collide on the output path. The CLI has no API docs
+# worth publishing, so skip it.
+doc = false
 
 [dependencies]
 rdocx = { workspace = true }
 rdocx-oxml = { workspace = true }
-clap = { version = "4", features = ["derive"] }
-serde_json = "1"
+rdocx-opc = { workspace = true }
+clap = { workspace = true }
+serde_json = { workspace = true }

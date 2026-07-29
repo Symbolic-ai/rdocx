@@ -410,8 +410,8 @@ fn split_text_subsegment(seg: &TextSegment, byte_start: usize, byte_end: usize) 
         let advances = seg.advances[char_start..end].to_vec();
         let width: f64 = advances.iter().sum();
         (glyphs, advances, width)
-    } else if seg.glyph_ids.is_empty() {
-        // No glyphs (shouldn't happen, but handle gracefully)
+    } else if seg.glyph_ids.is_empty() || seg.text.is_empty() {
+        // No glyphs, or no text to apportion them across
         (vec![], vec![], 0.0)
     } else {
         // Non-1:1 mapping (ligatures, complex scripts) — proportional estimate
@@ -757,10 +757,11 @@ mod tests {
     #[test]
     fn words_wrap_to_multiple_lines() {
         let fm = FontManager::new();
-        let mut items = Vec::new();
         // Each word is 200pt wide, line is 468pt → should wrap
-        items.push(InlineItem::Text(make_text_segment("Word1", 200.0)));
-        items.push(InlineItem::Text(make_text_segment("Word2", 200.0)));
+        let mut items = vec![
+            InlineItem::Text(make_text_segment("Word1", 200.0)),
+            InlineItem::Text(make_text_segment("Word2", 200.0)),
+        ];
         items.push(InlineItem::Text(make_text_segment("Word3", 200.0)));
 
         let lines = break_into_lines(&items, &LineBreakParams::default(), &fm).unwrap();

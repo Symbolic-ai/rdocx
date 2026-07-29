@@ -308,7 +308,7 @@ mod tests {
         bdr.to_xml(&mut writer).unwrap();
         let xml = String::from_utf8(output).unwrap();
 
-        let full = format!("{xml}");
+        let full = xml.to_string();
         let mut reader = Reader::from_str(&full);
         reader.config_mut().trim_text(true);
         let mut buf = Vec::new();

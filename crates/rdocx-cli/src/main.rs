@@ -93,6 +93,19 @@ enum Command {
 fn main() {
     let cli = Cli::parse();
 
+    // `validate` is the one command whose exit status carries a verdict, so it
+    // is dispatched separately from the commands that only report errors.
+    if let Command::Validate { file } = &cli.command {
+        match commands::validate(file) {
+            Ok(true) => return,
+            Ok(false) => process::exit(1),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                process::exit(1);
+            }
+        }
+    }
+
     let result = match cli.command {
         Command::Inspect { file, json } => commands::inspect(&file, json),
         Command::Text { file } => commands::text(&file),
@@ -110,7 +123,8 @@ fn main() {
             value,
             output,
         } => commands::replace(&file, &placeholder, &value, &output),
-        Command::Validate { file } => commands::validate(&file),
+        // Handled above so its exit code can reflect the verdict.
+        Command::Validate { .. } => unreachable!(),
         Command::Render {
             file,
             output_dir,

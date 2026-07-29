@@ -3,6 +3,8 @@
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::shared::ST_Jc;
 
+use crate::sanitize::{font_family, hex_color};
+
 /// Generate base CSS styles for the HTML document.
 pub(crate) fn generate_base_css() -> String {
     r#"body { font-family: 'Calibri', 'Arial', sans-serif; font-size: 11pt; line-height: 1.4; margin: 1in; color: #000; }
@@ -75,10 +77,10 @@ pub(crate) fn paragraph_style(ppr: Option<&CT_PPr>) -> String {
     // Background shading
     if let Some(shd) = &ppr.shading
         && let Some(fill) = &shd.fill
-        && fill != "auto"
         && fill != "FFFFFF"
+        && let Some(color) = hex_color(fill)
     {
-        styles.push(format!("background-color:#{fill}"));
+        styles.push(format!("background-color:{color}"));
     }
 
     // Line spacing
@@ -115,8 +117,8 @@ pub(crate) fn run_style(rpr: Option<&CT_RPr>) -> String {
     let mut styles = Vec::new();
 
     // Font family
-    if let Some(font) = &rpr.font_ascii {
-        styles.push(format!("font-family:'{font}'"));
+    if let Some(family) = rpr.font_ascii.as_deref().and_then(font_family) {
+        styles.push(format!("font-family:{family}"));
     }
 
     // Font size (half-points → pt)
@@ -126,20 +128,20 @@ pub(crate) fn run_style(rpr: Option<&CT_RPr>) -> String {
     }
 
     // Color
-    if let Some(color) = &rpr.color
-        && color != "auto"
-        && color != "000000"
+    if let Some(raw) = &rpr.color
+        && raw != "000000"
+        && let Some(color) = hex_color(raw)
     {
-        styles.push(format!("color:#{color}"));
+        styles.push(format!("color:{color}"));
     }
 
     // Background/highlight via shading
     if let Some(shd) = &rpr.shading
         && let Some(fill) = &shd.fill
-        && fill != "auto"
         && fill != "FFFFFF"
+        && let Some(color) = hex_color(fill)
     {
-        styles.push(format!("background-color:#{fill}"));
+        styles.push(format!("background-color:{color}"));
     }
 
     // Character spacing

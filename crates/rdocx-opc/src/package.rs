@@ -135,8 +135,13 @@ impl OpcPackage {
         zip.start_file("_rels/.rels", options)?;
         zip.write_all(&pkg_rels_xml)?;
 
-        // Write part-level .rels files
-        for (part_name, rels) in &self.part_rels {
+        // Write part-level .rels files. Both loops iterate in sorted order so
+        // that saving the same package twice produces byte-identical output;
+        // a HashMap's order would vary between runs.
+        let mut rels_names: Vec<&String> = self.part_rels.keys().collect();
+        rels_names.sort_unstable();
+        for part_name in rels_names {
+            let rels = &self.part_rels[part_name];
             let rels_path = part_name_to_rels_path(part_name);
             let rels_xml = rels.to_xml()?;
             zip.start_file(&rels_path, options)?;
@@ -144,11 +149,13 @@ impl OpcPackage {
         }
 
         // Write all parts
-        for (name, data) in &self.parts {
+        let mut part_names: Vec<&String> = self.parts.keys().collect();
+        part_names.sort_unstable();
+        for name in part_names {
             // Strip leading "/" for ZIP entry name
             let zip_name = name.strip_prefix('/').unwrap_or(name);
             zip.start_file(zip_name, options)?;
-            zip.write_all(data)?;
+            zip.write_all(&self.parts[name])?;
         }
 
         zip.finish()?;
@@ -176,17 +183,23 @@ impl OpcPackage {
     }
 
     /// Resolve the target URI of a relationship relative to its source part.
+    ///
+    /// `.` and `..` segments are collapsed, so a target such as
+    /// `../media/image1.png` on `/word/charts/chart1.xml` resolves to
+    /// `/media/image1.png` and matches the key it is stored under. Without
+    /// this, parts referenced through a parent directory could never be found.
     pub fn resolve_rel_target(source_part: &str, rel_target: &str) -> String {
-        if rel_target.starts_with('/') {
-            return rel_target.to_string();
-        }
-        // Get the directory of the source part
-        let dir = if let Some(pos) = source_part.rfind('/') {
-            &source_part[..=pos]
+        let joined = if rel_target.starts_with('/') {
+            rel_target.to_string()
         } else {
-            "/"
+            // Directory of the source part, including the trailing slash.
+            let dir = match source_part.rfind('/') {
+                Some(pos) => &source_part[..=pos],
+                None => "/",
+            };
+            format!("{dir}{rel_target}")
         };
-        format!("{dir}{rel_target}")
+        normalize_part_name(&joined)
     }
 
     /// Find the main document part URI by looking at package relationships.
@@ -217,14 +230,49 @@ impl OpcPackage {
     }
 }
 
+/// Collapse `.` and `..` segments in an absolute part name.
+///
+/// A `..` that would escape the package root is dropped, matching how OPC
+/// consumers treat over-long parent traversals.
+fn normalize_part_name(path: &str) -> String {
+    if !path.contains("./") && !path.ends_with("/.") && !path.ends_with("/..") {
+        return path.to_string();
+    }
+
+    let mut segments: Vec<&str> = Vec::new();
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            other => segments.push(other),
+        }
+    }
+
+    let mut out = String::with_capacity(path.len());
+    for segment in segments {
+        out.push('/');
+        out.push_str(segment);
+    }
+    if out.is_empty() { "/".to_string() } else { out }
+}
+
 /// Convert a .rels file path to the part name it belongs to.
 /// e.g. "word/_rels/document.xml.rels" → "/word/document.xml"
 fn rels_path_to_part_name(rels_path: &str) -> String {
-    // Remove "_rels/" segment and ".rels" suffix
-    let path = rels_path
-        .replace("_rels/", "")
-        .trim_end_matches(".rels")
-        .to_string();
+    // Strip the ".rels" suffix once (`trim_end_matches` would strip repeats,
+    // turning "a.rels.rels" into "a") and drop only the "_rels" path segment
+    // that directly precedes the file name.
+    let without_suffix = rels_path.strip_suffix(".rels").unwrap_or(rels_path);
+    let path = match without_suffix.rfind("_rels/") {
+        Some(pos) => format!(
+            "{}{}",
+            &without_suffix[..pos],
+            &without_suffix[pos + "_rels/".len()..]
+        ),
+        None => without_suffix.to_string(),
+    };
     if path.starts_with('/') {
         path
     } else {
@@ -271,6 +319,53 @@ mod tests {
             OpcPackage::resolve_rel_target("/word/document.xml", "/word/styles.xml"),
             "/word/styles.xml"
         );
+    }
+
+    #[test]
+    fn resolve_target_collapses_parent_segments() {
+        // Charts and headers routinely reference media through a parent dir.
+        assert_eq!(
+            OpcPackage::resolve_rel_target("/word/charts/chart1.xml", "../media/image1.png"),
+            "/word/media/image1.png"
+        );
+        assert_eq!(
+            OpcPackage::resolve_rel_target("/word/document.xml", "./styles.xml"),
+            "/word/styles.xml"
+        );
+        assert_eq!(
+            OpcPackage::resolve_rel_target("/word/document.xml", "../../../etc/passwd"),
+            "/etc/passwd"
+        );
+    }
+
+    #[test]
+    fn rels_path_suffix_is_stripped_once() {
+        assert_eq!(
+            rels_path_to_part_name("word/_rels/document.xml.rels"),
+            "/word/document.xml"
+        );
+        // A part whose own name ends in ".rels" must keep that segment.
+        assert_eq!(
+            rels_path_to_part_name("word/_rels/odd.rels.rels"),
+            "/word/odd.rels"
+        );
+    }
+
+    #[test]
+    fn saved_packages_are_byte_identical() {
+        let mut pkg = OpcPackage::new_docx();
+        for i in 0..40 {
+            pkg.set_part(&format!("/word/media/image{i}.png"), vec![i as u8]);
+        }
+        pkg.get_or_create_part_rels("/word/document.xml")
+            .add(rel_types::STYLES, "styles.xml");
+
+        let write = || {
+            let mut buf = std::io::Cursor::new(Vec::new());
+            pkg.write_to(&mut buf).unwrap();
+            buf.into_inner()
+        };
+        assert_eq!(write(), write());
     }
 
     #[test]

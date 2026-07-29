@@ -15,4 +15,4 @@ categories.workspace = true
 quick-xml = { workspace = true }
 thiserror = { workspace = true }
 itoa = { workspace = true }
-regex = "1"
+regex = { workspace = true }

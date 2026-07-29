@@ -122,14 +122,11 @@ impl CT_R {
                                 })
                                 .unwrap_or(false)
                         });
+                        // `read_text` returns the raw markup span, so entity
+                        // references in it still need resolving.
                         let text = reader
                             .read_text(name)
-                            .map(|t| {
-                                // Unescape XML entities (&amp; &lt; &gt; &quot; &apos;)
-                                quick_xml::escape::unescape(&t)
-                                    .map(|u| u.to_string())
-                                    .unwrap_or_else(|_| t.to_string())
-                            })
+                            .map(|t| crate::xml_text::decode_escaped(&t))
                             .unwrap_or_default();
                         content.push(RunContent::Text(CT_Text {
                             text,

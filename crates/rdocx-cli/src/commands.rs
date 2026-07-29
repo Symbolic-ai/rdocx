@@ -82,11 +82,26 @@ pub fn inspect(file: &Path, json: bool) -> Result<()> {
 }
 
 /// Extract plain text from a DOCX file.
+///
+/// Body paragraphs and table cell text are both emitted, in document order —
+/// printing only `paragraphs()` would silently drop everything inside tables.
 pub fn text(file: &Path) -> Result<()> {
     let doc = Document::open(file)?;
 
     for para in doc.paragraphs() {
         println!("{}", para.text());
+    }
+    for table in doc.tables() {
+        for row_idx in 0..table.row_count() {
+            let Some(row) = table.row(row_idx) else {
+                continue;
+            };
+            let cells: Vec<String> = (0..row.cell_count())
+                .filter_map(|i| row.cell(i))
+                .map(|c| c.text().replace('\n', " "))
+                .collect();
+            println!("{}", cells.join("\t"));
+        }
     }
 
     Ok(())
@@ -283,6 +298,9 @@ pub fn replace(file: &Path, placeholder: &str, value: &str, output: &Path) -> Re
 pub fn render(file: &Path, output_dir: Option<&Path>, dpi: f64, page: Option<usize>) -> Result<()> {
     let doc = Document::open(file)?;
     let out_dir = output_dir.unwrap_or_else(|| Path::new("."));
+    // Writing into a directory the user named but has not created should not
+    // fail with a bare "No such file or directory".
+    std::fs::create_dir_all(out_dir)?;
 
     let stem = file.file_stem().unwrap_or_default().to_string_lossy();
 
@@ -316,62 +334,105 @@ pub fn render(file: &Path, output_dir: Option<&Path>, dpi: f64, page: Option<usi
     Ok(())
 }
 
-/// Validate OOXML conformance of a DOCX file.
-pub fn validate(file: &Path) -> Result<()> {
+/// Validate a DOCX file's structure.
+///
+/// Returns `Ok(false)` when a structural error was found, so the caller can
+/// exit non-zero — a validator that always succeeds cannot gate anything in CI.
+/// Advisory findings (empty paragraphs, missing metadata) are reported but do
+/// not affect the exit status.
+pub fn validate(file: &Path) -> Result<bool> {
     let doc = Document::open(file)?;
 
-    let mut issues: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
 
-    // Check: Empty document
-    if doc.content_count() == 0 {
-        issues.push("Document has no content (no paragraphs or tables)".to_string());
-    }
+    // --- Structural errors ---
 
-    // Check: Empty paragraphs (warning)
-    let mut empty_count = 0;
-    for para in doc.paragraphs() {
-        if para.text().trim().is_empty() {
-            empty_count += 1;
+    // Every relationship must point at a part that is actually in the package.
+    let package = rdocx_opc::OpcPackage::open(file)?;
+    if let Some(doc_part) = package.main_document_part() {
+        if package.get_part(&doc_part).is_none() {
+            errors.push(format!("main document part {doc_part} is missing"));
         }
-    }
-    if empty_count > 0 {
-        issues.push(format!("{empty_count} empty paragraph(s) found"));
-    }
-
-    // Check: Heading level gaps
-    let mut prev_level: Option<u32> = None;
-    for para in doc.paragraphs() {
-        if let Some(style_id) = para.style_id()
-            && let Some(level_str) = style_id.strip_prefix("Heading")
-            && let Ok(level) = level_str.parse::<u32>()
-        {
-            if let Some(prev) = prev_level
-                && level > prev + 1
-            {
-                issues.push(format!(
-                    "Heading level gap: Heading{prev} -> Heading{level} (skipped level(s))"
-                ));
+        if let Some(rels) = package.get_part_rels(&doc_part) {
+            for rel in &rels.items {
+                // External targets live outside the package by definition.
+                if rel.target_mode.as_deref() == Some("External") {
+                    continue;
+                }
+                let target = rdocx_opc::OpcPackage::resolve_rel_target(&doc_part, &rel.target);
+                if package.get_part(&target).is_none() {
+                    errors.push(format!(
+                        "relationship {} points at missing part {target}",
+                        rel.id
+                    ));
+                }
             }
-            prev_level = Some(level);
+        }
+    } else {
+        errors.push("package declares no main document relationship".to_string());
+    }
+
+    // Every part needs a declared content type.
+    for part_name in package.parts.keys() {
+        if package.content_types.content_type_for(part_name).is_none() {
+            errors.push(format!("part {part_name} has no declared content type"));
         }
     }
 
-    // Check: Missing metadata
+    // --- Advisory findings ---
+
+    if doc.content_count() == 0 {
+        warnings.push("Document has no content (no paragraphs or tables)".to_string());
+    }
+
+    let empty_count = doc
+        .paragraphs()
+        .iter()
+        .filter(|p| p.text().trim().is_empty())
+        .count();
+    if empty_count > 0 {
+        warnings.push(format!("{empty_count} empty paragraph(s) found"));
+    }
+
+    let mut prev_level: Option<u32> = None;
+    for (level, _) in doc.headings() {
+        if let Some(prev) = prev_level
+            && level > prev + 1
+        {
+            warnings.push(format!(
+                "Heading level gap: Heading{prev} -> Heading{level} (skipped level(s))"
+            ));
+        }
+        prev_level = Some(level);
+    }
+
     if doc.title().is_none() {
-        issues.push("Missing document title".to_string());
+        warnings.push("Missing document title".to_string());
     }
     if doc.author().is_none() {
-        issues.push("Missing document author".to_string());
+        warnings.push("Missing document author".to_string());
     }
 
-    if issues.is_empty() {
+    // --- Report ---
+
+    if errors.is_empty() && warnings.is_empty() {
         println!("OK — no issues found in {}", file.display());
-    } else {
-        println!("Found {} issue(s) in {}:", issues.len(), file.display());
-        for (i, issue) in issues.iter().enumerate() {
+        return Ok(true);
+    }
+
+    if !errors.is_empty() {
+        println!("{} error(s) in {}:", errors.len(), file.display());
+        for (i, issue) in errors.iter().enumerate() {
+            println!("  {}. {issue}", i + 1);
+        }
+    }
+    if !warnings.is_empty() {
+        println!("{} warning(s) in {}:", warnings.len(), file.display());
+        for (i, issue) in warnings.iter().enumerate() {
             println!("  {}. {issue}", i + 1);
         }
     }
 
-    Ok(())
+    Ok(errors.is_empty())
 }

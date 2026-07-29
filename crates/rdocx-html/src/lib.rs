@@ -5,6 +5,7 @@
 mod css;
 mod emitter;
 mod markdown;
+mod sanitize;
 
 use std::collections::HashMap;
 

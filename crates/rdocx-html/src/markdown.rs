@@ -141,8 +141,13 @@ fn collect_paragraph_text(para: &CT_P, hyperlink_urls: &HashMap<String, String>)
     // Build hyperlink map
     let mut hyperlink_map: HashMap<usize, &str> = HashMap::new();
     for hl in &para.hyperlinks {
+        // Markdown renderers turn `[text](javascript:...)` into a live link too,
+        // so the same scheme allowlist applies here.
         if let Some(rel_id) = &hl.rel_id
-            && let Some(url) = hyperlink_urls.get(rel_id)
+            && let Some(url) = hyperlink_urls
+                .get(rel_id)
+                .map(String::as_str)
+                .and_then(crate::sanitize::safe_url)
         {
             for i in hl.run_start..hl.run_end {
                 hyperlink_map.insert(i, url);

@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
     "crates/rdocx-opc",
     "crates/rdocx-oxml",
@@ -8,8 +8,6 @@ members = [
     "crates/rdocx-pdf",
     "crates/rdocx-html",
     "crates/rdocx-cli",
-]
-exclude = [
     "crates/rdocx-wasm",
 ]
 
@@ -34,15 +32,35 @@ rdocx-pdf = { path = "crates/rdocx-pdf", version = "0.1.2" }
 rdocx-html = { path = "crates/rdocx-html", version = "0.1.2" }
 
 # External dependencies
-zip = "8.1"
-quick-xml = "0.37"
+#
+# Feature sets are deliberately minimal: a DOCX is a ZIP that only ever uses
+# the Stored and Deflate methods, so the aes-crypto/bzip2/lzma/ppmd/zstd/xz
+# codecs and the `time` timestamp support are all dead weight — and they drag
+# in getrandom -> wasm-bindgen/js-sys. Likewise fontdb's `memmap` feature is
+# off: fonts are read into memory anyway, and it avoids memmap2 entirely.
+zip = { version = "8.1", default-features = false, features = [
+    "deflate-flate2-zlib-rs",
+] }
+quick-xml = "0.41"
 thiserror = "2"
-fontdb = "0.23"
-rustybuzz = "0.20"
+fontdb = { version = "0.23", default-features = false, features = [
+    "std",
+    "fs",
+    "fontconfig",
+] }
+harfrust = "0.12"
 ttf-parser = "0.25"
 unicode-linebreak = "0.1"
-image = "0.25"
 itoa = "1"
+regex = "1.13"
+clap = { version = "4.6", features = ["derive"] }
+serde_json = "1"
+pdf-writer = "0.15"
+subsetter = "0.2"
+miniz_oxide = "0.9"
+tiny-skia = "0.12"
+wasm-bindgen = "0.2.126"
+js-sys = "0.3.103"
 
 [profile.release]
 opt-level = 3

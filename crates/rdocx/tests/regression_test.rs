@@ -1,0 +1,219 @@
+//! Regression tests for previously-fixed defects.
+//!
+//! Each test names the failure it locks down, so a reintroduction is obvious
+//! from the test name alone rather than from a diff.
+
+use std::collections::HashMap;
+
+use rdocx::{Document, Length};
+
+/// A replacement that contains the placeholder used to restart the search from
+/// offset 0 and match its own output forever.
+#[test]
+fn replacement_containing_the_placeholder_terminates() {
+    let mut doc = Document::new();
+    doc.add_paragraph("Hello NAME!");
+
+    let count = doc.replace_text("NAME", "NAME Smith");
+
+    assert_eq!(count, 1);
+    assert_eq!(doc.paragraphs()[0].text(), "Hello NAME Smith!");
+}
+
+#[test]
+fn repeated_placeholders_are_all_replaced() {
+    let mut doc = Document::new();
+    doc.add_paragraph("a X b X c X d");
+
+    let count = doc.replace_text("X", "Y");
+
+    assert_eq!(count, 3);
+    assert_eq!(doc.paragraphs()[0].text(), "a Y b Y c Y d");
+}
+
+#[test]
+fn overlapping_replacement_does_not_rescan_its_own_output() {
+    let mut doc = Document::new();
+    doc.add_paragraph("aaa");
+
+    let count = doc.replace_text("a", "aa");
+
+    assert_eq!(count, 3, "each source 'a' should be replaced exactly once");
+    assert_eq!(doc.paragraphs()[0].text(), "aaaaaa");
+}
+
+/// The regex path had the same non-termination hazard, plus one for patterns
+/// that can match the empty string.
+#[test]
+fn regex_replacement_containing_the_pattern_terminates() {
+    let mut doc = Document::new();
+    doc.add_paragraph("value: 42");
+
+    let count = doc.replace_regex(r"\d+", "[$0]").unwrap();
+
+    assert_eq!(count, 1);
+    assert_eq!(doc.paragraphs()[0].text(), "value: [42]");
+}
+
+#[test]
+fn zero_width_regex_match_terminates() {
+    let mut doc = Document::new();
+    doc.add_paragraph("abc");
+
+    // `x*` matches the empty string at every position.
+    let count = doc.replace_regex("x*", "-").unwrap();
+
+    assert!(count <= 4, "should not loop indefinitely, got {count}");
+}
+
+/// `9360 / cols` panicked when a caller asked for a zero-column table.
+#[test]
+fn zero_column_tables_do_not_panic() {
+    let mut doc = Document::new();
+
+    let table = doc.add_table(2, 0);
+    assert_eq!(table.row_count(), 2);
+
+    doc.insert_table(0, 1, 0);
+
+    let mut with_cell = doc.add_table(1, 1);
+    let mut cell = with_cell.cell(0, 0).unwrap();
+    cell.add_table(1, 0);
+}
+
+/// Styles were always written to `/word/styles.xml`, so a document without a
+/// styles part gained an orphan that Word would ignore.
+#[test]
+fn styles_part_is_reachable_after_save() {
+    let mut doc = Document::new();
+    doc.add_paragraph("Body");
+    let bytes = doc.to_bytes().unwrap();
+
+    let pkg = rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+
+    let rels = pkg
+        .get_part_rels("/word/document.xml")
+        .expect("document should have relationships");
+    let styles_rel = rels
+        .get_by_type(rdocx_opc::relationship::rel_types::STYLES)
+        .expect("styles relationship must exist");
+    let target =
+        rdocx_opc::OpcPackage::resolve_rel_target("/word/document.xml", &styles_rel.target);
+
+    assert!(
+        pkg.get_part(&target).is_some(),
+        "styles relationship must point at a part that exists"
+    );
+    assert!(
+        pkg.content_types.content_type_for(&target).is_some(),
+        "styles part needs a content type"
+    );
+}
+
+/// Adding a list twice must not produce two numbering relationships.
+#[test]
+fn numbering_relationship_is_added_once() {
+    let mut doc = Document::new();
+    doc.add_bullet_list_item("first", 0);
+    doc.add_numbered_list_item("second", 0);
+    let bytes = doc.to_bytes().unwrap();
+
+    let pkg = rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let rels = pkg.get_part_rels("/word/document.xml").unwrap();
+    let numbering_rels = rels.get_all_by_type(rdocx_opc::relationship::rel_types::NUMBERING);
+
+    assert_eq!(
+        numbering_rels.len(),
+        1,
+        "expected exactly one numbering rel"
+    );
+}
+
+/// Saving the same document twice must produce identical bytes.
+#[test]
+fn saving_is_reproducible() {
+    let mut doc = Document::new();
+    doc.add_paragraph("Reproducible");
+    for i in 0..25 {
+        doc.add_picture(
+            &[0u8, 1, 2, 3, i],
+            &format!("img{i}.png"),
+            Length::inches(1.0),
+            Length::inches(1.0),
+        );
+    }
+
+    let first = doc.to_bytes().unwrap();
+    let second = doc.to_bytes().unwrap();
+
+    assert_eq!(first, second);
+}
+
+/// Batching must produce the same result as replacing one field at a time.
+#[test]
+fn batch_replacement_matches_sequential() {
+    let build = || {
+        let mut doc = Document::new();
+        doc.add_paragraph("Dear {{name}}, your order {{order}} ships {{date}}.");
+        doc
+    };
+
+    let mut sequential = build();
+    let mut n = sequential.replace_text("{{name}}", "Ada");
+    n += sequential.replace_text("{{order}}", "A-1");
+    n += sequential.replace_text("{{date}}", "Friday");
+
+    let mut batched = build();
+    let map = HashMap::from([
+        ("{{name}}", "Ada"),
+        ("{{order}}", "A-1"),
+        ("{{date}}", "Friday"),
+    ]);
+    let batch_count = batched.replace_all(&map);
+
+    assert_eq!(n, batch_count);
+    assert_eq!(
+        sequential.paragraphs()[0].text(),
+        batched.paragraphs()[0].text()
+    );
+    assert_eq!(
+        batched.paragraphs()[0].text(),
+        "Dear Ada, your order A-1 ships Friday."
+    );
+}
+
+/// Entity references must survive a parse/serialise round trip.
+#[test]
+fn xml_entities_round_trip() {
+    let mut doc = Document::new();
+    doc.add_paragraph("Ampersand & <angle> \"quote\" 'apos'");
+    doc.set_title("Title & Co. <tagged>");
+
+    let bytes = doc.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+
+    assert_eq!(
+        reopened.paragraphs()[0].text(),
+        "Ampersand & <angle> \"quote\" 'apos'"
+    );
+    assert_eq!(reopened.title(), Some("Title & Co. <tagged>"));
+}
+
+/// A crafted font name or colour must not be able to break out of the `style`
+/// attribute it is written into.
+#[test]
+fn hostile_run_properties_cannot_inject_html() {
+    let mut doc = Document::new();
+    {
+        let mut para = doc.add_paragraph("");
+        para.add_run("text")
+            .font("Arial\" onmouseover=\"alert(1)")
+            .color("red;} body{display:none} .x{");
+    }
+
+    let html = doc.to_html_fragment();
+
+    assert!(!html.contains("onmouseover"), "attribute injection: {html}");
+    assert!(!html.contains("display:none"), "css injection: {html}");
+    assert!(html.contains("text"));
+}

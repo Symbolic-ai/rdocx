@@ -24,6 +24,12 @@ pub struct WasmDocument {
     package_bytes: Option<Vec<u8>>,
 }
 
+impl Default for WasmDocument {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[wasm_bindgen]
 impl WasmDocument {
     /// Create a new, empty document.
@@ -51,8 +57,7 @@ impl WasmDocument {
             .get_part(&doc_part)
             .ok_or_else(|| JsValue::from_str("Document part not found in package"))?;
 
-        let document =
-            CT_Document::from_xml(xml).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let document = CT_Document::from_xml(xml).map_err(|e| JsValue::from_str(&e.to_string()))?;
 
         // Try to load styles
         let styles = package
@@ -119,10 +124,7 @@ impl WasmDocument {
             }
             tbl.rows.push(row);
         }
-        self.document
-            .body
-            .content
-            .push(BodyContent::Table(tbl));
+        self.document.body.content.push(BodyContent::Table(tbl));
     }
 
     /// Get the text content of the entire document.

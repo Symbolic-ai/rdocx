@@ -11,6 +11,7 @@ use rdocx_oxml::table::{CT_Tbl, CellContent, VMerge};
 use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent};
 
 use crate::css;
+use crate::sanitize::{escape_html, escape_html_attr, safe_url};
 use crate::{HtmlOptions, ImageData};
 
 /// Emit the full body content as HTML.
@@ -185,7 +186,7 @@ fn emit_paragraph(
     if style.is_empty() {
         out.push_str(&format!("<{tag}>"));
     } else {
-        out.push_str(&format!("<{tag} style=\"{style}\">"));
+        out.push_str(&format!("<{tag} style=\"{}\">", escape_html_attr(&style)));
     }
 
     emit_paragraph_content(out, para, styles, images, hyperlink_urls, options);
@@ -205,8 +206,13 @@ fn emit_paragraph_content(
     // Build a map of which runs are inside hyperlinks
     let mut hyperlink_map: HashMap<usize, &str> = HashMap::new();
     for hl in &para.hyperlinks {
+        // A target with an unsafe scheme yields no <a> at all, so the run text
+        // still renders but cannot become a script trigger.
         if let Some(rel_id) = &hl.rel_id
-            && let Some(url) = hyperlink_urls.get(rel_id)
+            && let Some(url) = hyperlink_urls
+                .get(rel_id)
+                .map(String::as_str)
+                .and_then(safe_url)
         {
             for i in hl.run_start..hl.run_end {
                 hyperlink_map.insert(i, url);
@@ -259,7 +265,7 @@ fn emit_run(
     // Open semantic tags
     let has_style = !style.is_empty();
     if has_style {
-        out.push_str(&format!("<span style=\"{style}\">"));
+        out.push_str(&format!("<span style=\"{}\">", escape_html_attr(&style)));
     }
     if tags.bold {
         out.push_str("<strong>");
@@ -343,9 +349,12 @@ fn emit_run(
 /// Emit an inline image as a base64 data URI.
 fn emit_image(out: &mut String, img: &ImageData) {
     let base64 = base64_encode(&img.data);
+    // `content_type` is a public field, so it is not necessarily one of the
+    // literals rdocx derives from the part name.
     out.push_str(&format!(
         "<img src=\"data:{};base64,{}\" style=\"max-width:100%\">",
-        img.content_type, base64
+        escape_html_attr(&img.content_type),
+        base64
     ));
 }
 
@@ -386,7 +395,10 @@ fn emit_table(
     if table_style.is_empty() {
         out.push_str("<table>\n");
     } else {
-        out.push_str(&format!("<table style=\"{table_style}\">\n"));
+        out.push_str(&format!(
+            "<table style=\"{}\">\n",
+            escape_html_attr(&table_style)
+        ));
     }
 
     for row in &tbl.rows {
@@ -431,10 +443,10 @@ fn emit_table(
                 // Cell shading
                 if let Some(shd) = &props.shading
                     && let Some(fill) = &shd.fill
-                    && fill != "auto"
                     && fill != "FFFFFF"
+                    && let Some(color) = crate::sanitize::hex_color(fill)
                 {
-                    td_style.push_str(&format!("background-color:#{fill};"));
+                    td_style.push_str(&format!("background-color:{color};"));
                 }
 
                 // Cell borders
@@ -451,7 +463,10 @@ fn emit_table(
             if td_style.is_empty() {
                 out.push_str(&format!("<td{td_attrs}>"));
             } else {
-                out.push_str(&format!("<td{td_attrs} style=\"{td_style}\">"));
+                out.push_str(&format!(
+                    "<td{td_attrs} style=\"{}\">",
+                    escape_html_attr(&td_style)
+                ));
             }
 
             for content in &cell.content {
@@ -507,26 +522,6 @@ fn count_vmerge_span(
     }
 
     span
-}
-
-/// Escape HTML special characters.
-fn escape_html(text: &str) -> String {
-    let mut result = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            '&' => result.push_str("&amp;"),
-            '<' => result.push_str("&lt;"),
-            '>' => result.push_str("&gt;"),
-            '"' => result.push_str("&quot;"),
-            _ => result.push(ch),
-        }
-    }
-    result
-}
-
-/// Escape HTML attribute value.
-fn escape_html_attr(text: &str) -> String {
-    escape_html(text)
 }
 
 /// Simple base64 encoding.

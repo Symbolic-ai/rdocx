@@ -241,7 +241,12 @@ pub fn layout_table(
     })
 }
 
-/// Compute column widths from CT_TblGrid, scaling to available width if needed.
+/// Compute column widths from CT_TblGrid, shrinking to the available width if
+/// the declared grid overflows it.
+///
+/// A grid narrower than the text column keeps its declared width: Word renders
+/// a deliberately narrow table at the size the author chose rather than
+/// stretching it to the margins, and so do we.
 fn compute_column_widths(
     grid: Option<&CT_TblGrid>,
     available_width: f64,
@@ -251,14 +256,14 @@ fn compute_column_widths(
         Some(g) if !g.columns.is_empty() => {
             let widths: Vec<f64> = g.columns.iter().map(|c| c.width.to_pt()).collect();
             let total: f64 = widths.iter().sum();
-            if total > 0.01 && (total - available_width).abs() > 1.0 {
-                // Scale to fit available width
-                let scale = available_width / total;
-                widths.iter().map(|w| w * scale).collect()
-            } else if total < 0.01 {
+            if total < 0.01 {
                 // All zero widths — distribute equally based on column count
                 let n = g.columns.len();
                 vec![available_width / n as f64; n]
+            } else if total > available_width + 1.0 {
+                // Overflows the text column: scale down so it fits the page.
+                let scale = available_width / total;
+                widths.iter().map(|w| w * scale).collect()
             } else {
                 widths
             }
@@ -331,19 +336,41 @@ mod tests {
     use rdocx_oxml::units::Twips;
 
     #[test]
-    fn column_widths_from_grid() {
+    fn narrow_grid_keeps_its_declared_width() {
         let tbl = CT_Tbl::new();
         let grid = CT_TblGrid {
             columns: vec![
-                CT_TblGridCol { width: Twips(2880) }, // 2 inches
+                CT_TblGridCol { width: Twips(2880) }, // 2 inches = 144pt
                 CT_TblGridCol { width: Twips(2880) },
             ],
         };
+
+        // 288pt total in a 468pt text column: the author asked for a narrow
+        // table, so it must not be stretched to the margins.
         let widths = compute_column_widths(Some(&grid), 468.0, &tbl);
+
         assert_eq!(widths.len(), 2);
-        // 2880tw = 144pt, total = 288pt, scaled to 468pt
         let total: f64 = widths.iter().sum();
-        assert!((total - 468.0).abs() < 1.0);
+        assert!((total - 288.0).abs() < 1.0, "got {total}");
+    }
+
+    #[test]
+    fn overflowing_grid_is_scaled_down_to_fit() {
+        let tbl = CT_Tbl::new();
+        let grid = CT_TblGrid {
+            columns: vec![
+                CT_TblGridCol { width: Twips(7200) }, // 5 inches = 360pt
+                CT_TblGridCol { width: Twips(7200) },
+            ],
+        };
+
+        // 720pt total will not fit a 468pt column, so scale it down.
+        let widths = compute_column_widths(Some(&grid), 468.0, &tbl);
+
+        let total: f64 = widths.iter().sum();
+        assert!((total - 468.0).abs() < 1.0, "got {total}");
+        // Proportions are preserved.
+        assert!((widths[0] - widths[1]).abs() < 0.01);
     }
 
     #[test]

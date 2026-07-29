@@ -1,7 +1,7 @@
 //! Font loading, resolution, shaping, and metrics.
 //!
 //! Uses fontdb for system font discovery, ttf-parser for metrics,
-//! and rustybuzz for text shaping.
+//! and HarfRust for text shaping.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,6 +50,13 @@ struct LoadedFont {
     data: Arc<Vec<u8>>,
     face_index: u32,
     units_per_em: u16,
+    /// Vertical metrics in design units, read once when the face is loaded.
+    ascender: i16,
+    descender: i16,
+    line_gap: i16,
+    /// HarfRust's per-face shaping caches. Building these is the expensive
+    /// part of shaping, so it happens once per face instead of once per run.
+    shaper_data: harfrust::ShaperData,
 }
 
 /// Manages font discovery, loading, shaping, and metrics.
@@ -225,9 +232,30 @@ impl FontManager {
             .with_face_data(db_id, |data, idx| (Arc::new(data.to_vec()), idx))
             .ok_or_else(|| LayoutError::FontParse("Failed to load font data".into()))?;
 
-        let face = ttf_parser::Face::parse(&data, face_index)
-            .map_err(|e| LayoutError::FontParse(format!("ttf-parser error: {e}")))?;
-        let units_per_em = face.units_per_em();
+        let (units_per_em, ascender, descender, line_gap) = {
+            let face = ttf_parser::Face::parse(&data, face_index)
+                .map_err(|e| LayoutError::FontParse(format!("ttf-parser error: {e}")))?;
+            (
+                face.units_per_em(),
+                face.ascender(),
+                face.descender(),
+                face.line_gap(),
+            )
+        };
+
+        // Every metric and advance is scaled by size/upem, so a zero here would
+        // turn the whole layout into infinities.
+        if units_per_em == 0 {
+            return Err(LayoutError::FontParse(format!(
+                "font '{family_name}' declares zero units per em"
+            )));
+        }
+
+        let shaper_data = {
+            let face = harfrust::FontRef::from_index(&data, face_index)
+                .map_err(|e| LayoutError::FontParse(format!("failed to read font face: {e}")))?;
+            harfrust::ShaperData::new(&face)
+        };
 
         let actual_family = self
             .db
@@ -249,6 +277,10 @@ impl FontManager {
             data,
             face_index,
             units_per_em,
+            ascender,
+            descender,
+            line_gap,
+            shaper_data,
         });
         self.cache.insert(key, idx);
 
@@ -258,31 +290,42 @@ impl FontManager {
     /// Get font metrics at a given size in points.
     pub fn metrics(&self, font_id: FontId, size_pt: f64) -> Result<FontMetrics> {
         let font = self.get_font(font_id)?;
-        let face = ttf_parser::Face::parse(&font.data, font.face_index)
-            .map_err(|e| LayoutError::FontParse(format!("ttf-parser error: {e}")))?;
-
-        let upem = font.units_per_em as f64;
-        let scale = size_pt / upem;
+        let scale = size_pt / font.units_per_em as f64;
 
         Ok(FontMetrics {
-            ascent: face.ascender() as f64 * scale,
-            descent: -(face.descender() as f64) * scale, // make positive
-            line_gap: face.line_gap() as f64 * scale,
+            ascent: font.ascender as f64 * scale,
+            descent: -(font.descender as f64) * scale, // make positive
+            line_gap: font.line_gap as f64 * scale,
             units_per_em: font.units_per_em,
         })
     }
 
-    /// Shape a text string using rustybuzz. Returns glyph IDs and advances.
+    /// Shape a text string using HarfRust. Returns glyph IDs and advances.
     pub fn shape_text(&self, font_id: FontId, text: &str, size_pt: f64) -> Result<ShapedText> {
+        // HarfRust cannot derive segment properties from an empty buffer, and
+        // there is nothing to shape anyway.
+        if text.is_empty() {
+            return Ok(ShapedText {
+                glyph_ids: Vec::new(),
+                advances: Vec::new(),
+                width: 0.0,
+            });
+        }
+
         let font = self.get_font(font_id)?;
 
-        let face = rustybuzz::Face::from_slice(&font.data, font.face_index)
-            .ok_or_else(|| LayoutError::Shaping("Failed to create rustybuzz face".into()))?;
+        let face = harfrust::FontRef::from_index(&font.data, font.face_index)
+            .map_err(|e| LayoutError::Shaping(format!("failed to read font face: {e}")))?;
 
-        let mut buffer = rustybuzz::UnicodeBuffer::new();
+        let shaper = font.shaper_data.shaper(&face).build();
+
+        let mut buffer = harfrust::UnicodeBuffer::new();
         buffer.push_str(text);
+        // Infer direction, script and language from the text. Unlike rustybuzz,
+        // HarfRust does not do this implicitly and panics on an unset direction.
+        buffer.guess_segment_properties();
 
-        let output = rustybuzz::shape(&face, &[], buffer);
+        let output = shaper.shape(buffer, harfrust::ShapeOptions::default());
         let infos = output.glyph_infos();
         let positions = output.glyph_positions();
 
