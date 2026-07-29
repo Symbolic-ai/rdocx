@@ -29,7 +29,7 @@ fixed and released.
 | F-003 | Output-stability hash harness | L | pending | - |
 | F-004 | Caladea licence and the false OFL claim | S | in-progress | codex |
 | F-005 | Fix the image counter | S | pending | - |
-| F-006 | Fix the JPEG standalone-marker walk | S | pending | - |
+| F-006 | Fix the JPEG standalone-marker walk | S | in-progress | codex |
 
 ## Sequencing note
 
