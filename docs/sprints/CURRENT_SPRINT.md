@@ -31,7 +31,7 @@ immediately before structural churn begins.
 | F-008 | Non-consuming setter twins | M | pending | - |
 | F-009 | Cache the layout result | M | pending | - |
 | F-010 | Reserve crate names | S | in-progress | codex |
-| F-011 | Pin unit truncation behaviour | S | pending | - |
+| F-011 | Pin unit truncation behaviour | S | in-progress | codex |
 | F-012 | Tag v0.3.1 | S | pending | - |
 
 ## Sequencing note
