@@ -171,6 +171,18 @@ impl CT_R {
                             .and_then(|a| std::str::from_utf8(&a.value).ok()?.parse::<i32>().ok())
                             .unwrap_or(0);
                         content.push(RunContent::EndnoteRef { id });
+                    } else if !matches_local_name(name.as_ref(), b"rPr") {
+                        // Capture unknown empty child elements (e.g.
+                        // w:commentReference) as raw XML, mirroring the
+                        // Event::Start fallback above.
+                        //
+                        // A self-closing <w:rPr/> is deliberately skipped.
+                        // extra_xml is re-emitted after the run content, but
+                        // CT_R requires w:rPr to be the first child, so
+                        // capturing it here would move it past <w:t> and
+                        // produce schema-invalid output. An empty rPr carries
+                        // no formatting, so dropping it loses nothing.
+                        extra_xml.push(capture_empty_element(e)?);
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"r") => {
@@ -647,6 +659,49 @@ mod tests {
         assert_eq!(parsed.hyperlinks[0].rel_id, Some("rId7".to_string()));
         assert_eq!(parsed.hyperlinks[0].run_start, 1);
         assert_eq!(parsed.hyperlinks[0].run_end, 2);
+    }
+
+    #[test]
+    fn unknown_empty_run_children_roundtrip() {
+        // Unknown empty elements inside a run (e.g. w:commentReference)
+        // must be captured and re-emitted, not silently dropped.
+        let p = parse_paragraph(
+            r#"<w:r><w:t>flagged</w:t></w:r><w:r><w:commentReference w:id="1"/></w:r>"#,
+        );
+        assert_eq!(p.runs.len(), 2);
+        assert_eq!(p.runs[1].extra_xml.len(), 1);
+
+        let mut output = Vec::new();
+        let mut writer = Writer::new(&mut output);
+        p.to_xml(&mut writer).unwrap();
+        let xml = String::from_utf8(output).unwrap();
+        assert!(
+            xml.contains(r#"<w:commentReference w:id="1"/>"#),
+            "comment reference must survive round-trip: {xml}"
+        );
+        assert!(xml.contains("flagged"));
+    }
+
+    #[test]
+    fn empty_run_properties_are_not_moved_after_content() {
+        // extra_xml is written after the run content, and CT_R requires
+        // w:rPr first, so a self-closing <w:rPr/> must not be captured.
+        // Capturing it would emit <w:t> before <w:rPr/> and break the schema.
+        let p = parse_paragraph(r#"<w:r><w:rPr/><w:t>x</w:t></w:r>"#);
+        assert_eq!(p.runs.len(), 1);
+        assert!(
+            p.runs[0].extra_xml.is_empty(),
+            "an empty w:rPr must not be captured as extra_xml"
+        );
+
+        let mut output = Vec::new();
+        let mut writer = Writer::new(&mut output);
+        p.to_xml(&mut writer).unwrap();
+        let xml = String::from_utf8(output).unwrap();
+        assert!(
+            !xml.contains(r#"<w:t>x</w:t><w:rPr/>"#),
+            "w:rPr must never follow run content: {xml}"
+        );
     }
 
     #[test]

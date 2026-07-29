@@ -1490,3 +1490,17 @@ fn save_pdf_to_file() {
         std::fs::remove_file(path).ok();
     }
 }
+
+#[test]
+fn line_spacing_multiple_round_trips() {
+    let mut doc = Document::new();
+    doc.add_paragraph("double spaced")
+        .line_spacing_multiple(2.0);
+
+    let bytes = doc.to_bytes().unwrap();
+    let doc2 = Document::from_bytes(&bytes).unwrap();
+
+    let paras = doc2.paragraphs();
+    let p = paras.first().unwrap();
+    assert_eq!(p.line_spacing_multiple(), Some(2.0));
+}

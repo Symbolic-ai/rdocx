@@ -7,11 +7,30 @@ use crate::borders::CT_BorderEdge;
 use crate::error::Result;
 use crate::namespace::matches_local_name;
 use crate::properties::{CT_Shd, get_val_attr};
+use crate::raw_xml::{capture_element, capture_empty_element};
 #[cfg(test)]
 use crate::shared::ST_Border;
 use crate::shared::ST_Jc;
 use crate::text::CT_P;
 use crate::units::Twips;
+
+/// Write any captured raw XML that belongs immediately before position `pos`.
+///
+/// Table children we do not model are stored as `(position, raw)` pairs so
+/// they can be put back where they were found, the same way `CT_P` handles
+/// its own unknown children.
+fn write_extras_at<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    extra_xml: &[(usize, Vec<u8>)],
+    pos: usize,
+) -> Result<()> {
+    for (at, raw) in extra_xml {
+        if *at == pos {
+            writer.get_mut().write_all(raw)?;
+        }
+    }
+    Ok(())
+}
 
 // ---- Table border types ----
 
@@ -768,6 +787,10 @@ pub struct CT_Tc {
     pub properties: Option<CT_TcPr>,
     /// Cell content (paragraphs and nested tables).
     pub content: Vec<CellContent>,
+    /// Raw XML for children we do not model (content controls, bookmarks,
+    /// revision marks), tagged with the content index they appeared before so
+    /// they can be written back in place.
+    pub extra_xml: Vec<(usize, Vec<u8>)>,
 }
 
 #[allow(non_snake_case)]
@@ -777,6 +800,7 @@ impl CT_Tc {
             properties: None,
             // OOXML requires at least one paragraph per cell
             content: vec![CellContent::Paragraph(CT_P::new())],
+            extra_xml: Vec::new(),
         }
     }
 
@@ -813,6 +837,7 @@ impl CT_Tc {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         let mut properties = None;
         let mut content = Vec::new();
+        let mut extra_xml = Vec::new();
         let mut buf = Vec::new();
 
         loop {
@@ -826,7 +851,17 @@ impl CT_Tc {
                     } else if matches_local_name(name.as_ref(), b"tbl") {
                         content.push(CellContent::Table(CT_Tbl::from_xml(reader)?));
                     } else {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
+                        // Content controls (w:sdt), bookmarks and revision
+                        // marks live here. Keep them verbatim rather than
+                        // dropping the subtree, which used to delete every
+                        // paragraph wrapped in a content control.
+                        extra_xml.push((content.len(), capture_element(reader, e)?));
+                    }
+                }
+                Ok(Event::Empty(ref e)) => {
+                    let name = e.name();
+                    if !matches_local_name(name.as_ref(), b"tcPr") {
+                        extra_xml.push((content.len(), capture_empty_element(e)?));
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tc") => {
@@ -842,6 +877,7 @@ impl CT_Tc {
         Ok(CT_Tc {
             properties,
             content,
+            extra_xml,
         })
     }
 
@@ -852,12 +888,14 @@ impl CT_Tc {
             props.to_xml(writer)?;
         }
 
-        for item in &self.content {
+        for (idx, item) in self.content.iter().enumerate() {
+            write_extras_at(writer, &self.extra_xml, idx)?;
             match item {
                 CellContent::Paragraph(p) => p.to_xml(writer)?,
                 CellContent::Table(tbl) => tbl.to_xml(writer)?,
             }
         }
+        write_extras_at(writer, &self.extra_xml, self.content.len())?;
 
         writer.write_event(Event::End(BytesEnd::new("w:tc")))?;
         Ok(())
@@ -877,6 +915,9 @@ impl Default for CT_Tc {
 pub struct CT_Row {
     pub properties: Option<CT_TrPr>,
     pub cells: Vec<CT_Tc>,
+    /// Raw XML for children we do not model, tagged with the cell index they
+    /// appeared before so they can be written back in place.
+    pub extra_xml: Vec<(usize, Vec<u8>)>,
 }
 
 #[allow(non_snake_case)]
@@ -885,12 +926,14 @@ impl CT_Row {
         CT_Row {
             properties: None,
             cells: Vec::new(),
+            extra_xml: Vec::new(),
         }
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         let mut properties = None;
         let mut cells = Vec::new();
+        let mut extra_xml = Vec::new();
         let mut buf = Vec::new();
 
         loop {
@@ -902,7 +945,15 @@ impl CT_Row {
                     } else if matches_local_name(name.as_ref(), b"tc") {
                         cells.push(CT_Tc::from_xml(reader)?);
                     } else {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
+                        // A cell wrapped in a content control used to be
+                        // dropped here, leaving a row with no cells at all.
+                        extra_xml.push((cells.len(), capture_element(reader, e)?));
+                    }
+                }
+                Ok(Event::Empty(ref e)) => {
+                    let name = e.name();
+                    if !matches_local_name(name.as_ref(), b"trPr") {
+                        extra_xml.push((cells.len(), capture_empty_element(e)?));
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tr") => {
@@ -915,7 +966,11 @@ impl CT_Row {
             buf.clear();
         }
 
-        Ok(CT_Row { properties, cells })
+        Ok(CT_Row {
+            properties,
+            cells,
+            extra_xml,
+        })
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -925,9 +980,11 @@ impl CT_Row {
             props.to_xml(writer)?;
         }
 
-        for cell in &self.cells {
+        for (idx, cell) in self.cells.iter().enumerate() {
+            write_extras_at(writer, &self.extra_xml, idx)?;
             cell.to_xml(writer)?;
         }
+        write_extras_at(writer, &self.extra_xml, self.cells.len())?;
 
         writer.write_event(Event::End(BytesEnd::new("w:tr")))?;
         Ok(())
@@ -948,6 +1005,9 @@ pub struct CT_Tbl {
     pub properties: Option<CT_TblPr>,
     pub grid: Option<CT_TblGrid>,
     pub rows: Vec<CT_Row>,
+    /// Raw XML for children we do not model, tagged with the row index they
+    /// appeared before so they can be written back in place.
+    pub extra_xml: Vec<(usize, Vec<u8>)>,
 }
 
 #[allow(non_snake_case)]
@@ -957,6 +1017,7 @@ impl CT_Tbl {
             properties: None,
             grid: None,
             rows: Vec::new(),
+            extra_xml: Vec::new(),
         }
     }
 
@@ -964,6 +1025,7 @@ impl CT_Tbl {
         let mut properties = None;
         let mut grid = None;
         let mut rows = Vec::new();
+        let mut extra_xml = Vec::new();
         let mut buf = Vec::new();
 
         loop {
@@ -977,7 +1039,19 @@ impl CT_Tbl {
                     } else if matches_local_name(name.as_ref(), b"tr") {
                         rows.push(CT_Row::from_xml(reader)?);
                     } else {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
+                        // Rows wrapped in a content control used to be dropped
+                        // here, which silently deleted whole tables.
+                        extra_xml.push((rows.len(), capture_element(reader, e)?));
+                    }
+                }
+                Ok(Event::Empty(ref e)) => {
+                    let name = e.name();
+                    // tblPr and tblGrid have fixed positions ahead of the rows,
+                    // so a self-closing one must not be re-emitted from here.
+                    if !matches_local_name(name.as_ref(), b"tblPr")
+                        && !matches_local_name(name.as_ref(), b"tblGrid")
+                    {
+                        extra_xml.push((rows.len(), capture_empty_element(e)?));
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tbl") => {
@@ -994,6 +1068,7 @@ impl CT_Tbl {
             properties,
             grid,
             rows,
+            extra_xml,
         })
     }
 
@@ -1008,9 +1083,11 @@ impl CT_Tbl {
             grid.to_xml(writer)?;
         }
 
-        for row in &self.rows {
+        for (idx, row) in self.rows.iter().enumerate() {
+            write_extras_at(writer, &self.extra_xml, idx)?;
             row.to_xml(writer)?;
         }
+        write_extras_at(writer, &self.extra_xml, self.rows.len())?;
 
         writer.write_event(Event::End(BytesEnd::new("w:tbl")))?;
         Ok(())
@@ -1342,5 +1419,80 @@ mod tests {
 
         // text() should concat paragraph text with newline separator
         assert_eq!(cell.text(), "First\nSecond");
+    }
+
+    /// Serialize a table and return the XML, for the fidelity tests below.
+    fn table_to_xml(tbl: &CT_Tbl) -> String {
+        let mut output = Vec::new();
+        let mut writer = Writer::new(&mut output);
+        tbl.to_xml(&mut writer).unwrap();
+        String::from_utf8(output).unwrap()
+    }
+
+    /// Table children we do not model must survive a read and write cycle.
+    ///
+    /// These used to be dropped, which silently deleted whole rows, cells and
+    /// paragraphs whenever they were wrapped in a content control, and lost
+    /// the bookmarks that cross references and a table of figures rely on.
+    #[test]
+    fn unknown_table_children_round_trip() {
+        const GRID: &str = r#"<w:tblGrid><w:gridCol w:w="4675"/></w:tblGrid>"#;
+
+        for (label, inner) in [
+            (
+                "row wrapped in a content control",
+                format!(
+                    r#"{GRID}<w:sdt><w:sdtContent><w:tr><w:tc><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc></w:tr></w:sdtContent></w:sdt>"#
+                ),
+            ),
+            (
+                "cell wrapped in a content control",
+                format!(
+                    r#"{GRID}<w:tr><w:sdt><w:sdtContent><w:tc><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc></w:sdtContent></w:sdt></w:tr>"#
+                ),
+            ),
+            (
+                "paragraph wrapped in a content control",
+                format!(
+                    r#"{GRID}<w:tr><w:tc><w:sdt><w:sdtContent><w:p><w:r><w:t>x</w:t></w:r></w:p></w:sdtContent></w:sdt></w:tc></w:tr>"#
+                ),
+            ),
+            (
+                "bookmark at table level",
+                format!(
+                    r#"{GRID}<w:bookmarkStart w:id="1" w:name="b"/><w:tr><w:tc><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc></w:tr>"#
+                ),
+            ),
+            (
+                "bookmark at row level",
+                format!(
+                    r#"{GRID}<w:tr><w:bookmarkStart w:id="1" w:name="b"/><w:tc><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc></w:tr>"#
+                ),
+            ),
+        ] {
+            let tbl = parse_table(&inner);
+            let xml = table_to_xml(&tbl);
+            assert_eq!(
+                xml,
+                format!("<w:tbl>{inner}</w:tbl>"),
+                "{label} was not preserved"
+            );
+        }
+    }
+
+    /// A self-closing tblPr or tblGrid must not be captured as extra XML.
+    /// Both have a fixed position ahead of the rows, and extras are written
+    /// from the row positions, so capturing them would reorder the children.
+    #[test]
+    fn self_closing_table_properties_are_not_reordered() {
+        let tbl = parse_table(
+            r#"<w:tblPr/><w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:tc><w:p/></w:tc></w:tr>"#,
+        );
+        assert!(tbl.extra_xml.is_empty(), "tblPr must not be captured");
+        let xml = table_to_xml(&tbl);
+        assert!(
+            !xml.contains("</w:tr><w:tblPr/>"),
+            "tblPr must never follow the rows: {xml}"
+        );
     }
 }

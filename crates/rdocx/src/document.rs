@@ -43,6 +43,8 @@ pub struct Document {
     numbering_part_name: String,
     /// Greatest numeric suffix among existing image media parts.
     image_counter: usize,
+    /// Footnotes: loaded from word/footnotes.xml on open, written back on save.
+    footnotes: rdocx_oxml::footnotes::CT_Footnotes,
 }
 
 /// Fallback part names used when a document does not already declare one.
@@ -75,6 +77,7 @@ impl Document {
             styles_part_name: DEFAULT_STYLES_PART.to_string(),
             numbering_part_name: DEFAULT_NUMBERING_PART.to_string(),
             image_counter: 0,
+            footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
         }
     }
 
@@ -138,6 +141,14 @@ impl Document {
             .max()
             .unwrap_or(0);
 
+        let footnotes = package
+            .get_part_rels(&doc_part_name)
+            .and_then(|rels| rels.get_by_type(rel_types::FOOTNOTES))
+            .map(|rel| OpcPackage::resolve_rel_target(&doc_part_name, &rel.target))
+            .and_then(|part| package.get_part(&part))
+            .and_then(|xml| rdocx_oxml::footnotes::CT_Footnotes::from_xml(xml).ok())
+            .unwrap_or_default();
+
         Ok(Document {
             package,
             document,
@@ -149,6 +160,7 @@ impl Document {
             numbering_part_name: numbering_part_name
                 .unwrap_or_else(|| DEFAULT_NUMBERING_PART.to_string()),
             image_counter,
+            footnotes,
         })
     }
 
@@ -191,6 +203,22 @@ impl Document {
                 rel_types::NUMBERING,
                 NUMBERING_CONTENT_TYPE,
             );
+        }
+
+        // Serialize footnotes.xml when any footnotes exist
+        if !self.footnotes.footnotes.is_empty() {
+            let fx = self.footnotes.to_xml_footnotes()?;
+            self.package.set_part("/word/footnotes.xml", fx);
+            self.package.content_types.add_override(
+                "/word/footnotes.xml",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+            );
+            let rels = self
+                .package
+                .get_or_create_part_rels(&self.doc_part_name.clone());
+            if rels.get_by_type(rel_types::FOOTNOTES).is_none() {
+                rels.add(rel_types::FOOTNOTES, "footnotes.xml");
+            }
         }
 
         // Serialize docProps/core.xml if we have metadata
@@ -240,6 +268,45 @@ impl Document {
             .paragraphs()
             .map(|p| ParagraphRef { inner: p })
             .collect()
+    }
+
+    /// All footnotes as (id, plain text), in file order.
+    pub fn footnotes(&self) -> Vec<(i32, String)> {
+        self.footnotes
+            .footnotes
+            .iter()
+            .map(|f| {
+                let text = f
+                    .paragraphs
+                    .iter()
+                    .map(|p| p.text())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (f.id, text)
+            })
+            .collect()
+    }
+
+    /// Add a footnote with the given text; returns its id. Pair with
+    /// `Paragraph::add_footnote_ref` to reference it from the body.
+    pub fn add_footnote(&mut self, text: &str) -> i32 {
+        use rdocx_oxml::footnotes::CT_Footnote;
+        use rdocx_oxml::text::CT_P;
+        let id = self
+            .footnotes
+            .footnotes
+            .iter()
+            .map(|f| f.id)
+            .max()
+            .unwrap_or(1)
+            + 1;
+        let mut p = CT_P::new();
+        p.add_run(text);
+        self.footnotes.footnotes.push(CT_Footnote {
+            id,
+            paragraphs: vec![p],
+        });
+        id
     }
 
     /// Add a paragraph with the given text and return a mutable reference.
@@ -567,6 +634,75 @@ impl Document {
         self.package
             .get_or_create_part_rels(&self.doc_part_name)
             .add(rel_types::IMAGE, &rel_target)
+    }
+
+    /// Whether the given numbering definition renders as bullets (true)
+    /// or numbers (false). None if the id is unknown.
+    pub fn numbering_is_bullet(&self, num_id: u32) -> Option<bool> {
+        let numbering = self.numbering.as_ref()?;
+        let abstract_num = numbering.get_abstract_num_for(num_id)?;
+        let fmt = abstract_num.levels.first()?.num_fmt?;
+        Some(fmt == rdocx_oxml::numbering::ST_NumberFormat::Bullet)
+    }
+
+    /// Append an external hyperlink to the last paragraph (creating one if
+    /// the document is empty): adds the External relationship and wraps the
+    /// new run in a hyperlink span.
+    pub fn append_hyperlink(&mut self, text: &str, url: &str) {
+        use rdocx_opc::relationship::rel_types;
+
+        let rel_id = {
+            let rels = self.package.get_or_create_part_rels(&self.doc_part_name);
+            rels.add_external(rel_types::HYPERLINK, url)
+        };
+
+        if !matches!(
+            self.document.body.content.last(),
+            Some(BodyContent::Paragraph(_))
+        ) {
+            self.document
+                .body
+                .content
+                .push(BodyContent::Paragraph(CT_P::new()));
+        }
+        let Some(BodyContent::Paragraph(p)) = self.document.body.content.last_mut() else {
+            unreachable!();
+        };
+        let run_start = p.runs.len();
+        p.add_run(text);
+        p.hyperlinks.push(rdocx_oxml::text::HyperlinkSpan {
+            rel_id: Some(rel_id),
+            anchor: None,
+            run_start,
+            run_end: run_start + 1,
+        });
+    }
+
+    /// Get a builder for the last paragraph in the body, if any. Lets
+    /// callers interleave plain runs with `append_hyperlink` calls.
+    pub fn last_paragraph_mut(&mut self) -> Option<Paragraph<'_>> {
+        match self.document.body.content.last_mut() {
+            Some(BodyContent::Paragraph(p)) => Some(Paragraph { inner: p }),
+            _ => None,
+        }
+    }
+
+    /// Fetch the raw bytes of an embedded image by its relationship ID.
+    pub fn image_data(&self, rel_id: &str) -> Option<Vec<u8>> {
+        let rels = self.package.get_part_rels(&self.doc_part_name)?;
+        let rel = rels.items.iter().find(|r| r.id == rel_id)?;
+        let target = OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
+        self.package.get_part(&target).map(|b| b.to_vec())
+    }
+
+    /// Resolve a hyperlink relationship ID to its external URL.
+    pub fn hyperlink_url(&self, rel_id: &str) -> Option<String> {
+        use rdocx_opc::relationship::rel_types;
+        let rels = self.package.get_part_rels(&self.doc_part_name)?;
+        rels.items
+            .iter()
+            .find(|r| r.id == rel_id && r.rel_type == rel_types::HYPERLINK)
+            .map(|r| r.target.clone())
     }
 
     // ---- Header/Footer ----
@@ -3351,6 +3487,115 @@ mod tests {
         let mut doc = Document::new();
         doc.add_paragraph("Just text.");
         assert!(doc.images().is_empty());
+    }
+
+    #[test]
+    fn numbering_getter_round_trips() {
+        let mut doc = Document::new();
+        doc.add_bullet_list_item("bullet item", 0);
+        doc.add_numbered_list_item("numbered item", 0);
+        doc.add_paragraph("plain");
+
+        let bytes = doc.to_bytes().unwrap();
+        let doc2 = Document::from_bytes(&bytes).unwrap();
+        let paras = doc2.paragraphs();
+
+        let (bullet_id, bullet_lvl) = paras[0].numbering().expect("bullet numbering");
+        assert_eq!(bullet_lvl, 0);
+        assert_eq!(doc2.numbering_is_bullet(bullet_id), Some(true));
+
+        let (num_id, _) = paras[1].numbering().expect("numbered numbering");
+        assert_eq!(doc2.numbering_is_bullet(num_id), Some(false));
+
+        assert!(paras[2].numbering().is_none());
+    }
+
+    #[test]
+    fn highlight_getter_round_trips() {
+        let mut doc = Document::new();
+        {
+            let mut p = doc.add_paragraph("");
+            let mut r = p.add_run("glowing");
+            r = r.highlight("yellow");
+            let _ = r;
+        }
+
+        let bytes = doc.to_bytes().unwrap();
+        let doc2 = Document::from_bytes(&bytes).unwrap();
+        let paras = doc2.paragraphs();
+        let run = paras[0].runs().next().expect("run");
+        assert_eq!(run.highlight().as_deref(), Some("yellow"));
+    }
+
+    #[test]
+    fn run_style_id_getter_round_trips() {
+        let mut doc = Document::new();
+        {
+            let mut p = doc.add_paragraph("");
+            let mut r = p.add_run("code text");
+            r = r.style("SourceText");
+            let _ = r;
+        }
+
+        let bytes = doc.to_bytes().unwrap();
+        let doc2 = Document::from_bytes(&bytes).unwrap();
+        let paras = doc2.paragraphs();
+        let run = paras[0].runs().next().expect("run");
+        assert_eq!(run.style_id(), Some("SourceText"));
+    }
+
+    #[test]
+    fn append_hyperlink_round_trips() {
+        let mut doc = Document::new();
+        doc.add_paragraph("visit ");
+        doc.append_hyperlink("GNOME", "https://gnome.org");
+
+        let bytes = doc.to_bytes().unwrap();
+        let doc2 = Document::from_bytes(&bytes).unwrap();
+
+        let links = doc2.links();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].text, "GNOME");
+        assert_eq!(links[0].url.as_deref(), Some("https://gnome.org"));
+        assert_eq!(doc2.paragraphs()[0].text(), "visit GNOME");
+
+        let paras = doc2.paragraphs();
+        let spans = paras[0].hyperlink_spans();
+        assert_eq!(spans.len(), 1);
+        let (start, end, rel_id) = (spans[0].0, spans[0].1, spans[0].2);
+        assert_eq!(end - start, 1);
+        let url = doc2.hyperlink_url(rel_id.expect("rel id"));
+        assert_eq!(url.as_deref(), Some("https://gnome.org"));
+    }
+
+    #[test]
+    fn picture_round_trips() {
+        // 1x1 red PNG
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x9E, 0xDD, 0x22,
+            0x71, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        let mut doc = Document::new();
+        doc.add_paragraph("before");
+        doc.add_picture(png, "dot.png", Length::inches(1.0), Length::inches(1.0));
+
+        let bytes = doc.to_bytes().unwrap();
+        let doc2 = Document::from_bytes(&bytes).unwrap();
+        let paras = doc2.paragraphs();
+        let mut found = None;
+        for p in &paras {
+            for r in p.runs() {
+                if let Some((rel, _alt)) = r.inline_image() {
+                    found = Some(rel.to_string());
+                }
+            }
+        }
+        let rel = found.expect("no inline image found on read");
+        let data = doc2.image_data(&rel).expect("image bytes missing");
+        assert_eq!(data, png);
     }
 }
 
