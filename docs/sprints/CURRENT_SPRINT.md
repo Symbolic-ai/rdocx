@@ -26,7 +26,7 @@ fixed and released.
 |------|-------|------|--------|-------|
 | F-001 | Deterministic font mode | M | in-progress | codex |
 | F-002 | rust-toolchain.toml | S | in-progress | codex |
-| F-003 | Output-stability hash harness | L | pending | - |
+| F-003 | Output-stability hash harness | L | in-progress | codex |
 | F-004 | Caladea licence and the false OFL claim | S | in-progress | codex |
 | F-005 | Fix the image counter | S | pending | - |
 | F-006 | Fix the JPEG standalone-marker walk | S | in-progress | codex |
