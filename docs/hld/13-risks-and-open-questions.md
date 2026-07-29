@@ -148,13 +148,6 @@ except `document.xml` and `styles.xml`. Detailed in `10-bindings-spec.md`.
 
 Re-runs the entire layout per call.
 
-### The JPEG marker walk
-
-Does not special-case standalone markers, which carry no length field, so
-encountering one mid-stream reads two arbitrary bytes as a length. A
-wrong-answer bug rather than a hang, and it will not trigger on well-formed
-files.
-
 ### `release.sh`
 
 Its README rewrite is an unanchored global replace of the bare string `"0.2"`

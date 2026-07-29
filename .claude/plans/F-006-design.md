@@ -1,6 +1,6 @@
 # F-006, Fix the JPEG standalone-marker walk
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S01
 **Size**: S
 **Depends on**: none
@@ -64,10 +64,10 @@ before a JPEG SOF segment.
 
 ## Implementation checklist
 
-- [ ] Classify standalone JPEG markers in the existing marker walk.
-- [ ] Validate every length-bearing segment before indexing or advancing.
-- [ ] Add the RST-before-SOF regression fixture in code.
-- [ ] Add the full truncation loop and run the rdocx-pdf unit tests.
+- [x] Classify standalone JPEG markers in the existing marker walk.
+- [x] Validate every length-bearing segment before indexing or advancing.
+- [x] Add the RST-before-SOF regression fixture in code.
+- [x] Add the full truncation loop and run the rdocx-pdf unit tests.
 
 ## Open questions
 

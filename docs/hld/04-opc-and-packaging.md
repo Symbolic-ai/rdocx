@@ -159,10 +159,12 @@ Word assumes 96. rdocx passes 72 so the Python bindings match python-docx, and
 that constant is documented rather than buried.
 
 Header parsing is lifted from the PDF crate, where `jpeg_dimensions` and the
-PNG IHDR reader are currently private. One real defect travels with them: the
-JPEG marker walk does not special-case standalone markers, which carry no length
-field, so encountering one mid-stream reads two arbitrary bytes as a length.
-Fix it during the move.
+PNG IHDR reader are currently private. The JPEG walk classifies SOI, TEM and
+RST0 through RST7 as standalone markers with no length field, and EOI terminates
+the codestream. Length-bearing segments are validated for a present length of
+at least two bytes and bounds within the input before the walk indexes or
+advances. Fill bytes and truncated input return safely. Preserve these
+invariants when the reader moves to `oxml-media`.
 
 ## Package integrity
 
