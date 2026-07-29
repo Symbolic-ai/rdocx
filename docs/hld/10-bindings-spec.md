@@ -82,10 +82,14 @@ cannot back a Python property setter. The facade exposes 61 non-consuming
 borrowed nested handle can mutate without a rebind:
 `doc.paragraph_mut(3).unwrap().add_run("text").set_bold(true)`.
 
-**Threading.** `Document` holds only maps, vectors and strings, so it is `Send`
-and `Sync`. `to_pdf`, `render_all_pages` and `to_bytes` run inside
-`py.allow_threads`, so a Python thread pool genuinely parallelises rendering.
-That is a capability python-docx has no equivalent for.
+**Threading.** `Document` remains `Send` and `Sync`. Its normal and
+deterministic layouts live in separate `Mutex<Option<Arc<LayoutResult>>>`
+caches, with a compile-time regression gate preserving that contract.
+`to_pdf`, `render_all_pages` and `to_bytes` run inside `py.allow_threads`, so a
+Python thread pool genuinely parallelises work across documents. Concurrent
+rendering of one document shares the immutable cached result after the first
+layout for that font mode. That is a capability python-docx has no equivalent
+for.
 
 ## Python API shape
 

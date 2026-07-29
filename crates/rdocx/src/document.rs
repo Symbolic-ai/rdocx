@@ -1,6 +1,10 @@
 //! The main Document type — entry point for the rdocx API.
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+#[cfg(test)]
+use std::cell::Cell;
 
 use rdocx_opc::OpcPackage;
 use rdocx_opc::relationship::rel_types;
@@ -47,6 +51,10 @@ pub struct Document {
     image_counter: usize,
     /// Footnotes: loaded from word/footnotes.xml on open, written back on save.
     footnotes: rdocx_oxml::footnotes::CT_Footnotes,
+    /// Normal layout, including system font discovery, computed on first use.
+    layout_cache: Mutex<Option<Arc<rdocx_layout::LayoutResult>>>,
+    /// Bundled-font-only layout used by deterministic rendering.
+    deterministic_layout_cache: Mutex<Option<Arc<rdocx_layout::LayoutResult>>>,
 }
 
 /// Fallback part names used when a document does not already declare one.
@@ -59,6 +67,16 @@ const NUMBERING_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml";
 const CORE_PROPERTIES_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-package.core-properties+xml";
+
+#[cfg(test)]
+thread_local! {
+    static LAYOUT_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_layout_invocation() {
+    LAYOUT_INVOCATIONS.set(LAYOUT_INVOCATIONS.get() + 1);
+}
 
 impl Document {
     /// Create a new, empty document with default page setup and styles.
@@ -84,6 +102,8 @@ impl Document {
             numbering_part_name: DEFAULT_NUMBERING_PART.to_string(),
             image_counter: 0,
             footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
+            layout_cache: Mutex::new(None),
+            deterministic_layout_cache: Mutex::new(None),
         }
     }
 
@@ -174,7 +194,57 @@ impl Document {
                 .unwrap_or_else(|| DEFAULT_NUMBERING_PART.to_string()),
             image_counter,
             footnotes,
+            layout_cache: Mutex::new(None),
+            deterministic_layout_cache: Mutex::new(None),
         })
+    }
+
+    /// Clear layouts derived from the current document state.
+    fn invalidate_layout(&mut self) {
+        self.layout_cache
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        self.deterministic_layout_cache
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+    }
+
+    /// Return the normal-font layout, computing it once after each mutation.
+    fn cached_layout(&self) -> Result<Arc<rdocx_layout::LayoutResult>> {
+        let mut cache = self
+            .layout_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(layout) = cache.as_ref() {
+            return Ok(Arc::clone(layout));
+        }
+
+        let input = self.build_layout_input();
+        #[cfg(test)]
+        record_layout_invocation();
+        let layout = Arc::new(rdocx_layout::layout_document(&input)?);
+        *cache = Some(Arc::clone(&layout));
+        Ok(layout)
+    }
+
+    /// Return the bundled-font-only layout, computing it once after mutation.
+    fn cached_deterministic_layout(&self) -> Result<Arc<rdocx_layout::LayoutResult>> {
+        let mut cache = self
+            .deterministic_layout_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(layout) = cache.as_ref() {
+            return Ok(Arc::clone(layout));
+        }
+
+        let input = self.build_layout_input();
+        #[cfg(test)]
+        record_layout_invocation();
+        let layout = Arc::new(rdocx_layout::layout_document_deterministic(&input)?);
+        *cache = Some(Arc::clone(&layout));
+        Ok(layout)
     }
 
     /// Save the document to a file path.
@@ -318,6 +388,7 @@ impl Document {
     /// Add a footnote with the given text; returns its id. Pair with
     /// `Paragraph::add_footnote_ref` to reference it from the body.
     pub fn add_footnote(&mut self, text: &str) -> i32 {
+        self.invalidate_layout();
         use rdocx_oxml::footnotes::CT_Footnote;
         use rdocx_oxml::text::CT_P;
         let id = self
@@ -339,6 +410,7 @@ impl Document {
 
     /// Add a paragraph with the given text and return a mutable reference.
     pub fn add_paragraph(&mut self, text: &str) -> Paragraph<'_> {
+        self.invalidate_layout();
         let mut p = CT_P::new();
         if !text.is_empty() {
             p.add_run(text);
@@ -357,6 +429,7 @@ impl Document {
 
     /// Get a mutable reference to a paragraph by index (among paragraphs only).
     pub fn paragraph_mut(&mut self, index: usize) -> Option<Paragraph<'_>> {
+        self.invalidate_layout();
         self.document
             .body
             .paragraphs_mut()
@@ -378,6 +451,7 @@ impl Document {
     /// Add a table with the specified number of rows and columns.
     /// Returns a mutable reference for further configuration.
     pub fn add_table(&mut self, rows: usize, cols: usize) -> Table<'_> {
+        self.invalidate_layout();
         use rdocx_oxml::table::{CT_Row, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc};
         use rdocx_oxml::units::Twips;
 
@@ -433,6 +507,7 @@ impl Document {
     /// Panics if `index > content_count()`. (Unlike [`Self::insert_document`]
     /// and [`Self::insert_toc`], which clamp an out-of-range index to the end.)
     pub fn insert_paragraph(&mut self, index: usize, text: &str) -> Paragraph<'_> {
+        self.invalidate_layout();
         let mut p = CT_P::new();
         if !text.is_empty() {
             p.add_run(text);
@@ -454,6 +529,7 @@ impl Document {
     /// Panics if `index > content_count()`. (Unlike [`Self::insert_document`]
     /// and [`Self::insert_toc`], which clamp an out-of-range index to the end.)
     pub fn insert_table(&mut self, index: usize, rows: usize, cols: usize) -> Table<'_> {
+        self.invalidate_layout();
         use rdocx_oxml::table::{CT_Row, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc};
         use rdocx_oxml::units::Twips;
 
@@ -495,6 +571,7 @@ impl Document {
     ///
     /// Returns `true` if an element was removed, `false` if the index was out of bounds.
     pub fn remove_content(&mut self, index: usize) -> bool {
+        self.invalidate_layout();
         self.document.body.remove(index).is_some()
     }
 
@@ -514,6 +591,7 @@ impl Document {
         width: Length,
         height: Length,
     ) -> Paragraph<'_> {
+        self.invalidate_layout();
         let rel_id = self.embed_image(image_data, image_filename);
 
         let inline = CT_Inline::new(&rel_id, width.to_emu(), height.to_emu());
@@ -545,6 +623,7 @@ impl Document {
         image_data: &[u8],
         image_filename: &str,
     ) -> Paragraph<'_> {
+        self.invalidate_layout();
         let rel_id = self.embed_image(image_data, image_filename);
 
         // Get page dimensions from section properties (default US Letter)
@@ -595,6 +674,7 @@ impl Document {
         height: Length,
         behind_text: bool,
     ) -> Paragraph<'_> {
+        self.invalidate_layout();
         let rel_id = self.embed_image(image_data, image_filename);
 
         let mut anchor = CT_Anchor::background(&rel_id, width.to_emu(), height.to_emu());
@@ -658,6 +738,7 @@ impl Document {
     /// Public so callers can pre-embed an image and then pass the returned
     /// `rel_id` to [`crate::Cell::add_picture`] for inline cell images.
     pub fn embed_image(&mut self, image_data: &[u8], filename: &str) -> String {
+        self.invalidate_layout();
         let rel_target = self.store_image_part(image_data, filename);
         self.package
             .get_or_create_part_rels(&self.doc_part_name)
@@ -677,6 +758,7 @@ impl Document {
     /// the document is empty): adds the External relationship and wraps the
     /// new run in a hyperlink span.
     pub fn append_hyperlink(&mut self, text: &str, url: &str) {
+        self.invalidate_layout();
         use rdocx_opc::relationship::rel_types;
 
         let rel_id = {
@@ -709,6 +791,7 @@ impl Document {
     /// Get a builder for the last paragraph in the body, if any. Lets
     /// callers interleave plain runs with `append_hyperlink` calls.
     pub fn last_paragraph_mut(&mut self) -> Option<Paragraph<'_>> {
+        self.invalidate_layout();
         match self.document.body.content.last_mut() {
             Some(BodyContent::Paragraph(p)) => Some(Paragraph { inner: p }),
             _ => None,
@@ -740,22 +823,26 @@ impl Document {
     /// Creates a header part with the given text and references it from
     /// the section properties.
     pub fn set_header(&mut self, text: &str) {
+        self.invalidate_layout();
         self.set_header_footer_part(text, true, HdrFtrType::Default);
     }
 
     /// Set the default footer text.
     pub fn set_footer(&mut self, text: &str) {
+        self.invalidate_layout();
         self.set_header_footer_part(text, false, HdrFtrType::Default);
     }
 
     /// Set the first-page header text.
     pub fn set_first_page_header(&mut self, text: &str) {
+        self.invalidate_layout();
         self.set_different_first_page(true);
         self.set_header_footer_part(text, true, HdrFtrType::First);
     }
 
     /// Set the first-page footer text.
     pub fn set_first_page_footer(&mut self, text: &str) {
+        self.invalidate_layout();
         self.set_different_first_page(true);
         self.set_header_footer_part(text, false, HdrFtrType::First);
     }
@@ -781,6 +868,7 @@ impl Document {
         width: Length,
         height: Length,
     ) {
+        self.invalidate_layout();
         self.set_header_footer_image_part(
             image_data,
             image_filename,
@@ -799,6 +887,7 @@ impl Document {
         width: Length,
         height: Length,
     ) {
+        self.invalidate_layout();
         self.set_header_footer_image_part(
             image_data,
             image_filename,
@@ -825,6 +914,7 @@ impl Document {
         images: &[(&str, &[u8], &str)],
         hdr_type: HdrFtrType,
     ) {
+        self.invalidate_layout();
         self.set_raw_hdr_ftr_with_images(header_xml, images, true, hdr_type);
     }
 
@@ -835,6 +925,7 @@ impl Document {
         images: &[(&str, &[u8], &str)],
         hdr_type: HdrFtrType,
     ) {
+        self.invalidate_layout();
         self.set_raw_hdr_ftr_with_images(footer_xml, images, false, hdr_type);
     }
 
@@ -851,6 +942,7 @@ impl Document {
         height: Length,
         bg_color: &str,
     ) {
+        self.invalidate_layout();
         self.set_header_footer_image_bg_part(
             image_data,
             image_filename,
@@ -870,6 +962,7 @@ impl Document {
         width: Length,
         height: Length,
     ) {
+        self.invalidate_layout();
         self.set_different_first_page(true);
         self.set_header_footer_image_part(
             image_data,
@@ -1107,6 +1200,7 @@ impl Document {
     /// If no bullet list definition exists yet, one is created automatically.
     /// Returns a mutable `Paragraph` for further configuration.
     pub fn add_bullet_list_item(&mut self, text: &str, level: u32) -> Paragraph<'_> {
+        self.invalidate_layout();
         // Find or create a bullet list numId
         let num_id = {
             let numbering = self.ensure_numbering();
@@ -1150,6 +1244,7 @@ impl Document {
     /// If no numbered list definition exists yet, one is created automatically.
     /// Returns a mutable `Paragraph` for further configuration.
     pub fn add_numbered_list_item(&mut self, text: &str, level: u32) -> Paragraph<'_> {
+        self.invalidate_layout();
         // Find or create a numbered list numId
         let num_id = {
             let numbering = self.ensure_numbering();
@@ -1208,6 +1303,7 @@ impl Document {
 
     /// Add a custom style to the document.
     pub fn add_style(&mut self, builder: StyleBuilder) {
+        self.invalidate_layout();
         self.styles.styles.push(builder.build());
     }
 
@@ -1236,6 +1332,7 @@ impl Document {
 
     /// Get a mutable reference to section properties, creating defaults if needed.
     pub fn section_properties_mut(&mut self) -> &mut CT_SectPr {
+        self.invalidate_layout();
         self.document
             .body
             .sect_pr
@@ -1322,6 +1419,7 @@ impl Document {
 
     /// Set the document title.
     pub fn set_title(&mut self, title: &str) {
+        self.invalidate_layout();
         self.ensure_core_properties().title = Some(title.to_string());
     }
 
@@ -1332,6 +1430,7 @@ impl Document {
 
     /// Set the document author/creator.
     pub fn set_author(&mut self, author: &str) {
+        self.invalidate_layout();
         self.ensure_core_properties().creator = Some(author.to_string());
     }
 
@@ -1342,6 +1441,7 @@ impl Document {
 
     /// Set the document subject.
     pub fn set_subject(&mut self, subject: &str) {
+        self.invalidate_layout();
         self.ensure_core_properties().subject = Some(subject.to_string());
     }
 
@@ -1352,6 +1452,7 @@ impl Document {
 
     /// Set the document keywords.
     pub fn set_keywords(&mut self, keywords: &str) {
+        self.invalidate_layout();
         self.ensure_core_properties().keywords = Some(keywords.to_string());
     }
 
@@ -1367,6 +1468,7 @@ impl Document {
     /// Copies all body content (paragraphs and tables) from the other document.
     /// Handles style deduplication and numbering remapping.
     pub fn append(&mut self, other: &Document) {
+        self.invalidate_layout();
         self.merge_styles(other);
 
         let start_idx = self.document.body.content.len();
@@ -1379,6 +1481,7 @@ impl Document {
 
     /// Append the content of another document with a section break.
     pub fn append_with_break(&mut self, other: &Document, break_type: crate::SectionBreak) {
+        self.invalidate_layout();
         // Insert a section break paragraph before the merged content
         let mut p = CT_P::new();
         let sect_pr = match break_type {
@@ -1412,6 +1515,7 @@ impl Document {
     ///
     /// An `index` past the end is clamped to the end rather than panicking.
     pub fn insert_document(&mut self, index: usize, other: &Document) {
+        self.invalidate_layout();
         self.merge_styles(other);
 
         let insert_at = index.min(self.document.body.content.len());
@@ -1534,6 +1638,7 @@ impl Document {
     /// * `index` - Body content index at which to insert the TOC
     /// * `max_level` - Maximum heading level to include (1-9, typically 3)
     pub fn insert_toc(&mut self, index: usize, max_level: u32) {
+        self.invalidate_layout();
         use rdocx_oxml::borders::{CT_TabStop, CT_Tabs};
         use rdocx_oxml::shared::{ST_TabJc, ST_TabLeader};
         use rdocx_oxml::text::HyperlinkSpan;
@@ -1731,6 +1836,7 @@ impl Document {
     /// A `replacement` that contains `placeholder` is substituted once, not
     /// repeatedly.
     pub fn replace_text(&mut self, placeholder: &str, replacement: &str) -> usize {
+        self.invalidate_layout();
         self.replace_batch(&[(placeholder, replacement)])
     }
 
@@ -1740,6 +1846,7 @@ impl Document {
     /// serialised and re-parsed once for the whole batch rather than once per
     /// placeholder.
     pub fn replace_all(&mut self, replacements: &std::collections::HashMap<&str, &str>) -> usize {
+        self.invalidate_layout();
         let pairs: Vec<(&str, &str)> = replacements.iter().map(|(k, v)| (*k, *v)).collect();
         self.replace_batch(&pairs)
     }
@@ -1835,6 +1942,7 @@ impl Document {
     /// Searches body paragraphs, tables (including nested), headers, and footers.
     /// Returns the total number of replacements made, or an error if the regex is invalid.
     pub fn replace_regex(&mut self, pattern: &str, replacement: &str) -> Result<usize> {
+        self.invalidate_layout();
         let re =
             regex::Regex::new(pattern).map_err(|e| Error::Other(format!("invalid regex: {e}")))?;
         Ok(self.replace_regex_compiled(&re, replacement))
@@ -1842,6 +1950,7 @@ impl Document {
 
     /// Replace multiple regex patterns at once. Returns total replacements.
     pub fn replace_all_regex(&mut self, patterns: &[(String, String)]) -> Result<usize> {
+        self.invalidate_layout();
         let mut count = 0;
         for (pattern, replacement) in patterns {
             count += self.replace_regex(pattern, replacement)?;
@@ -2035,7 +2144,8 @@ impl Document {
     /// 2. System fonts
     /// 3. Bundled fonts (if `bundled-fonts` feature is enabled)
     pub fn to_pdf(&self) -> Result<Vec<u8>> {
-        self.to_pdf_with_fonts(&[])
+        let layout = self.cached_layout()?;
+        Ok(rdocx_pdf::render_to_pdf(&layout))
     }
 
     /// Render the document to PDF bytes with user-provided font files.
@@ -2058,6 +2168,8 @@ impl Document {
                 data: data.to_vec(),
             });
         }
+        #[cfg(test)]
+        record_layout_invocation();
         let layout = rdocx_layout::layout_document(&input)?;
         Ok(rdocx_pdf::render_to_pdf(&layout))
     }
@@ -2137,8 +2249,7 @@ impl Document {
     /// * `page_index` - 0-based page index
     /// * `dpi` - Resolution (72 = 1:1, 150 = standard, 300 = high quality)
     pub fn render_page_to_png(&self, page_index: usize, dpi: f64) -> Result<Option<Vec<u8>>> {
-        let input = self.build_layout_input();
-        let layout = rdocx_layout::layout_document(&input)?;
+        let layout = self.cached_layout()?;
         Ok(rdocx_pdf::render_page_to_png(&layout, page_index, dpi))
     }
 
@@ -2153,16 +2264,22 @@ impl Document {
         page_index: usize,
         dpi: f64,
     ) -> Result<Option<Vec<u8>>> {
-        let input = self.build_layout_input();
-        let layout = rdocx_layout::layout_document_deterministic(&input)?;
+        let layout = self.cached_deterministic_layout()?;
         Ok(rdocx_pdf::render_page_to_png(&layout, page_index, dpi))
     }
 
     /// Render all pages of the document to PNG bytes.
     pub fn render_all_pages(&self, dpi: f64) -> Result<Vec<Vec<u8>>> {
-        let input = self.build_layout_input();
-        let layout = rdocx_layout::layout_document(&input)?;
+        let layout = self.cached_layout()?;
         Ok(rdocx_pdf::render_all_pages(&layout, dpi))
+    }
+
+    /// Return a cloned positioned page from the cached normal-font layout.
+    ///
+    /// `page_index` is zero-based. An index beyond the document returns `None`.
+    pub fn layout_page(&self, page_index: usize) -> Result<Option<rdocx_layout::PageFrame>> {
+        let layout = self.cached_layout()?;
+        Ok(layout.pages.get(page_index).cloned())
     }
 
     /// Build a LayoutInput from the document's current state.
@@ -2951,6 +3068,113 @@ mod tests {
     use super::*;
     use crate::paragraph::Alignment;
     use rdocx_oxml::units::{HalfPoint, Twips};
+
+    fn reset_layout_invocations() {
+        LAYOUT_INVOCATIONS.set(0);
+    }
+
+    fn layout_invocations() -> usize {
+        LAYOUT_INVOCATIONS.get()
+    }
+
+    #[test]
+    fn rendering_all_pages_performs_one_layout() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Page 1");
+        for page in 2..=20 {
+            doc.add_paragraph(&format!("Page {page}"))
+                .page_break_before(true);
+        }
+
+        reset_layout_invocations();
+        for page_index in 0..20 {
+            assert!(
+                doc.render_page_to_png_deterministic(page_index, 1.0)
+                    .expect("deterministic layout should succeed")
+                    .is_some(),
+                "page {page_index} should exist"
+            );
+        }
+
+        assert_eq!(layout_invocations(), 1);
+    }
+
+    #[test]
+    fn document_mutation_invalidates_cached_layout() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Before mutation");
+
+        reset_layout_invocations();
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        assert_eq!(layout_invocations(), 1);
+
+        doc.add_paragraph("After mutation");
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        assert_eq!(layout_invocations(), 2);
+    }
+
+    #[test]
+    fn mutable_accessor_invalidates_cached_layout() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Before wrapper mutation");
+
+        reset_layout_invocations();
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        assert_eq!(layout_invocations(), 1);
+
+        doc.paragraph_mut(0)
+            .expect("paragraph should exist")
+            .add_run(" changed");
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        assert_eq!(layout_invocations(), 2);
+
+        let mut table = doc.add_table(1, 1);
+        table
+            .cell(0, 0)
+            .expect("cell should exist")
+            .set_text("table mutation");
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        assert_eq!(layout_invocations(), 3);
+    }
+
+    #[test]
+    fn font_modes_use_isolated_layout_caches() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Font mode isolation");
+
+        reset_layout_invocations();
+        doc.render_page_to_png(0, 1.0).unwrap();
+        doc.render_page_to_png(0, 1.0).unwrap();
+        assert!(doc.layout_page(0).unwrap().is_some());
+        assert!(doc.layout_page(usize::MAX).unwrap().is_none());
+        assert_eq!(doc.render_all_pages(1.0).unwrap().len(), 1);
+        assert!(!doc.to_pdf().unwrap().is_empty());
+        assert_eq!(layout_invocations(), 1);
+
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        assert_eq!(layout_invocations(), 2);
+
+        doc.render_page_to_png(0, 1.0).unwrap();
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        assert_eq!(layout_invocations(), 2);
+
+        let (family, font_data) = rdocx_layout::bundled_fonts::bundled_font_data()[0];
+        doc.to_pdf_with_fonts(&[(family, font_data)]).unwrap();
+        doc.to_pdf_with_fonts(&[(family, font_data)]).unwrap();
+        assert_eq!(layout_invocations(), 4);
+    }
+
+    #[test]
+    fn document_remains_send_and_sync() {
+        fn assert_send_and_sync<T: Send + Sync>() {}
+        assert_send_and_sync::<Document>();
+    }
 
     #[test]
     fn deterministic_render_is_independent_of_system_fonts() {

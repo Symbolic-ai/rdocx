@@ -137,10 +137,6 @@ Found during the audit that produced this plan, and each has a story in M1.
 `to_docx_bytes` rebuilds a minimal package, silently discarding every part
 except `document.xml` and `styles.xml`. Detailed in `10-bindings-spec.md`.
 
-### `render_page_to_png` is O(n squared)
-
-Re-runs the entire layout per call.
-
 ### `release.sh`
 
 Its README rewrite is an unanchored global replace of the bare string `"0.2"`

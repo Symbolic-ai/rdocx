@@ -1,6 +1,6 @@
 # F-009, Cache the layout result
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S02
 **Size**: M
 **Depends on**: none
@@ -89,13 +89,13 @@ alter any selected XML or PNG bytes.
 
 ## Implementation checklist
 
-- [ ] Add the two-mode thread-safe cache and private compute/invalidate helpers.
-- [ ] Route normal and deterministic page rendering through the matching cache.
-- [ ] Add the public cloned-page entry point.
-- [ ] Invalidate every direct mutation and mutable-accessor path.
-- [ ] Add one-layout, invalidation, and font-mode isolation tests without a new
+- [x] Add the two-mode thread-safe cache and private compute/invalidate helpers.
+- [x] Route normal and deterministic page rendering through the matching cache.
+- [x] Add the public cloned-page entry point.
+- [x] Invalidate every direct mutation and mutable-accessor path.
+- [x] Add one-layout, invalidation, and font-mode isolation tests without a new
       abstraction or test binary.
-- [ ] Run focused rdocx, layout, PDF, rustdoc, packaging, and harness checks.
+- [x] Run focused rdocx, layout, PDF, rustdoc, packaging, and harness checks.
 
 ## Open questions
 

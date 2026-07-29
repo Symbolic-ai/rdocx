@@ -105,8 +105,10 @@ Add `set_*` siblings for every consuming builder in `paragraph.rs`, `run.rs`,
 the same effect as the builder form.
 
 ### F-009, Cache the layout result (M)
-`RefCell<Option<Rc<LayoutResult>>>` on `Document`, invalidated on mutation, plus
-a `layout_page` entry point. `render_page_to_png` is currently O(n squared).
+Separate `Mutex<Option<Arc<LayoutResult>>>` caches for normal and deterministic
+font modes on `Document`, invalidated before public mutation and mutable access,
+plus a cloned `layout_page` entry point. Caller-supplied font layouts remain
+uncached.
 **Test gate**: rendering all pages of a 20-page document performs exactly one
 layout, asserted with a counter.
 
