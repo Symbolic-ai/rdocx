@@ -111,6 +111,11 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
     let mut bit_depth = 0u8;
     let mut color_type = 0u8;
     let mut idat_data = Vec::new();
+    // Palette entries as RGB triples, for indexed images.
+    let mut palette: Vec<u8> = Vec::new();
+    // Per-palette-entry alpha. Only meaningful for indexed images, where tRNS
+    // is a list of alpha bytes indexed the same way as PLTE.
+    let mut palette_alpha: Vec<u8> = Vec::new();
 
     while pos + 8 <= data.len() {
         let chunk_len =
@@ -136,6 +141,14 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
             b"IDAT" => {
                 idat_data.extend_from_slice(&data[chunk_data_start..chunk_data_end]);
             }
+            b"PLTE" => {
+                palette.clear();
+                palette.extend_from_slice(&data[chunk_data_start..chunk_data_end]);
+            }
+            b"tRNS" => {
+                palette_alpha.clear();
+                palette_alpha.extend_from_slice(&data[chunk_data_start..chunk_data_end]);
+            }
             b"IEND" => break,
             _ => {}
         }
@@ -154,6 +167,7 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
     let channels: usize = match color_type {
         0 => 1, // Grayscale
         2 => 3, // RGB
+        3 => 1, // Indexed: one palette index per pixel
         4 => 2, // Grayscale + Alpha
         6 => 4, // RGBA
         _ => return None,
@@ -249,6 +263,45 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
             Some(DecodedImage {
                 data: unfiltered,
                 alpha: None,
+                width,
+                height,
+                color_space: "DeviceRGB",
+                is_jpeg: false,
+            })
+        }
+        3 => {
+            // Indexed colour: every byte is an index into the palette.
+            // Word embeds these routinely, because most tools default to a
+            // palette when an image has few colours.
+            if palette.len() < 3 {
+                return None;
+            }
+            let entries = palette.len() / 3;
+            let pixel_count = (width * height) as usize;
+            let mut rgb = Vec::with_capacity(pixel_count * 3);
+            let mut alpha = Vec::with_capacity(pixel_count);
+            let mut all_opaque = true;
+            for &index in unfiltered.iter().take(pixel_count) {
+                let i = index as usize;
+                if i < entries {
+                    rgb.extend_from_slice(&palette[i * 3..i * 3 + 3]);
+                } else {
+                    // An index past the end of the palette is malformed. Emit
+                    // black rather than dropping the whole image.
+                    rgb.extend_from_slice(&[0, 0, 0]);
+                }
+                // tRNS may cover only the first few entries. Anything it does
+                // not mention is opaque.
+                let a = palette_alpha.get(i).copied().unwrap_or(255);
+                if a != 255 {
+                    all_opaque = false;
+                }
+                alpha.push(a);
+            }
+            Some(DecodedImage {
+                data: rgb,
+                // Match the RGBA path: no SMask when nothing is transparent.
+                alpha: if all_opaque { None } else { Some(alpha) },
                 width,
                 height,
                 color_space: "DeviceRGB",
@@ -394,5 +447,106 @@ mod tests {
             assert_eq!(jpeg_dimensions(&jpeg[..length]), None, "length {length}");
         }
         assert_eq!(jpeg_dimensions(&jpeg), Some((3, 2)));
+    }
+
+    /// Build a PNG chunk. The decoder does not verify CRCs, so a zero CRC is
+    /// enough to keep these fixtures readable.
+    fn png_chunk(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut c = Vec::new();
+        c.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        c.extend_from_slice(kind);
+        c.extend_from_slice(body);
+        c.extend_from_slice(&[0, 0, 0, 0]);
+        c
+    }
+
+    /// Build an 8-bit indexed PNG from a palette and one index per pixel.
+    fn indexed_png(
+        width: u32,
+        height: u32,
+        palette: &[u8],
+        trns: Option<&[u8]>,
+        indices: &[u8],
+    ) -> Vec<u8> {
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.push(8); // bit depth
+        ihdr.push(3); // colour type: indexed
+        ihdr.extend_from_slice(&[0, 0, 0]); // compression, filter, interlace
+
+        // One filter byte per scanline, filter 0 meaning no filtering.
+        let mut raw = Vec::new();
+        for y in 0..height as usize {
+            raw.push(0);
+            raw.extend_from_slice(&indices[y * width as usize..(y + 1) * width as usize]);
+        }
+        let idat = miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6);
+
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        out.extend_from_slice(&png_chunk(b"IHDR", &ihdr));
+        if !palette.is_empty() {
+            out.extend_from_slice(&png_chunk(b"PLTE", palette));
+        }
+        if let Some(t) = trns {
+            out.extend_from_slice(&png_chunk(b"tRNS", t));
+        }
+        out.extend_from_slice(&png_chunk(b"IDAT", &idat));
+        out.extend_from_slice(&png_chunk(b"IEND", &[]));
+        out
+    }
+
+    /// Indexed PNGs used to fall into the catch-all and be dropped, so any
+    /// document containing one lost that image with no warning.
+    #[test]
+    fn indexed_png_expands_palette_to_rgb() {
+        // red, green, blue
+        let palette = [255, 0, 0, 0, 255, 0, 0, 0, 255];
+        let png = indexed_png(2, 2, &palette, None, &[0, 1, 2, 0]);
+
+        let decoded = decode_image(&png, "image/png").expect("indexed PNG must decode");
+        assert_eq!((decoded.width, decoded.height), (2, 2));
+        assert_eq!(decoded.color_space, "DeviceRGB");
+        assert!(!decoded.is_jpeg);
+        assert_eq!(
+            decoded.data,
+            vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 0, 0]
+        );
+        assert!(
+            decoded.alpha.is_none(),
+            "a fully opaque image should not carry an alpha channel"
+        );
+    }
+
+    /// tRNS on an indexed image is per palette entry, and it may cover only
+    /// the first few entries.
+    #[test]
+    fn indexed_png_honours_trns_alpha() {
+        let palette = [255, 0, 0, 0, 255, 0];
+        // Entry 0 fully transparent. Entry 1 is not mentioned, so opaque.
+        let png = indexed_png(2, 1, &palette, Some(&[0]), &[0, 1]);
+
+        let decoded = decode_image(&png, "image/png").expect("indexed PNG must decode");
+        assert_eq!(decoded.data, vec![255, 0, 0, 0, 255, 0]);
+        assert_eq!(decoded.alpha, Some(vec![0, 255]));
+    }
+
+    /// Colour type 3 without a PLTE chunk is malformed. Returning None is
+    /// right, but it must not be confused with the palette case above.
+    #[test]
+    fn indexed_png_without_palette_is_rejected() {
+        let png = indexed_png(1, 1, &[], None, &[0]);
+        assert!(decode_image(&png, "image/png").is_none());
+    }
+
+    /// An index past the end of the palette is malformed input. It should not
+    /// panic and should not discard the rest of the image.
+    #[test]
+    fn indexed_png_out_of_range_index_falls_back_to_black() {
+        let palette = [255, 0, 0]; // a single entry, so index 5 is invalid
+        let png = indexed_png(2, 1, &palette, None, &[0, 5]);
+
+        let decoded = decode_image(&png, "image/png").expect("should still decode");
+        assert_eq!(decoded.data, vec![255, 0, 0, 0, 0, 0]);
     }
 }
