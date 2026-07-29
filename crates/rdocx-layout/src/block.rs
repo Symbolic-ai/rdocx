@@ -1,11 +1,38 @@
 //! Block-level layout: paragraphs and tables as positioned blocks.
 
 use rdocx_oxml::borders::CT_PBdr;
+use rdocx_oxml::drawing::{ST_RelativeFromH, ST_RelativeFromV};
 use rdocx_oxml::shared::ST_Jc;
 
 use crate::line::LayoutLine;
 use crate::output::Color;
 use crate::table::TableBlock;
+
+/// A floating drawing anchored to a paragraph.
+///
+/// Offsets are kept in points alongside the frame they are measured from. A
+/// `wp:anchor` offset is meaningless on its own: the same number means a
+/// different place depending on whether it is relative to the page, the
+/// margin, the text column or the paragraph.
+#[derive(Debug, Clone)]
+pub struct AnchoredDrawing {
+    /// Render underneath the text rather than on top of it.
+    pub behind_doc: bool,
+    /// Frame the horizontal offset is measured from.
+    pub rel_h: ST_RelativeFromH,
+    /// Horizontal offset in points.
+    pub off_h: f64,
+    /// Frame the vertical offset is measured from.
+    pub rel_v: ST_RelativeFromV,
+    /// Vertical offset in points.
+    pub off_v: f64,
+    /// Width in points.
+    pub width: f64,
+    /// Height in points.
+    pub height: f64,
+    /// Relationship ID of the image part.
+    pub embed_id: String,
+}
 
 /// A laid-out block element (paragraph or table).
 #[derive(Debug, Clone)]
@@ -79,6 +106,12 @@ impl LayoutBlock {
 pub struct ParagraphBlock {
     /// Laid-out lines.
     pub lines: Vec<LayoutLine>,
+    /// Floating drawings anchored to this paragraph.
+    ///
+    /// These travel with the paragraph so the paginator can resolve a
+    /// paragraph-relative or line-relative offset once it knows where the
+    /// paragraph actually landed.
+    pub anchored: Vec<AnchoredDrawing>,
     /// Space before the paragraph in points.
     pub space_before: f64,
     /// Space after the paragraph in points.
@@ -141,6 +174,7 @@ pub fn build_paragraph_block(
 ) -> ParagraphBlock {
     ParagraphBlock {
         lines,
+        anchored: Vec::new(),
         space_before,
         space_after,
         borders,
@@ -164,6 +198,7 @@ mod tests {
     #[test]
     fn paragraph_block_height() {
         let block = ParagraphBlock {
+            anchored: Vec::new(),
             lines: vec![
                 LayoutLine {
                     items: vec![],

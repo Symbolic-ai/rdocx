@@ -171,9 +171,6 @@ impl Engine {
         // Post-pagination pass: apply page background color
         apply_page_background(&mut pages, input);
 
-        // Post-pagination pass: resolve anchor (background) images
-        resolve_anchor_images(&mut pages, input);
-
         // Post-pagination pass: resolve inline image data
         resolve_inline_images(&mut pages, input);
 
@@ -257,74 +254,6 @@ fn extract_background_color(xml: &str) -> Option<Color> {
         }
     }
     None
-}
-
-/// Resolve anchor (floating) images from the document and inject them into page frames.
-///
-/// For `behind_doc=true` images: inserts at the START of page elements (renders underneath).
-/// For `behind_doc=false` images: inserts at the END (renders on top).
-fn resolve_anchor_images(pages: &mut [PageFrame], input: &LayoutInput) {
-    use crate::output::Rect;
-    use rdocx_oxml::text::RunContent;
-
-    // Collect all anchor drawings from body content
-    let mut anchor_images: Vec<(bool, f64, f64, f64, f64, String)> = Vec::new();
-
-    for content in &input.document.body.content {
-        if let BodyContent::Paragraph(p) = content {
-            for run in &p.runs {
-                for rc in &run.content {
-                    if let RunContent::Drawing(drawing) = rc
-                        && let Some(ref anchor) = drawing.anchor
-                    {
-                        let behind = anchor.behind_doc;
-                        // Convert EMU positions and extents to points
-                        let x = anchor.pos_h_offset.to_pt();
-                        let y = anchor.pos_v_offset.to_pt();
-                        let w = anchor.extent_cx.to_pt();
-                        let h = anchor.extent_cy.to_pt();
-                        anchor_images.push((behind, x, y, w, h, anchor.embed_id.clone()));
-                    }
-                }
-            }
-        }
-    }
-
-    if anchor_images.is_empty() {
-        return;
-    }
-
-    // For each anchor image, resolve image data and add to pages
-    for (behind, x, y, w, h, embed_id) in &anchor_images {
-        let (data, content_type) = if let Some(img) = input.images.get(embed_id) {
-            (img.data.clone(), img.content_type.clone())
-        } else {
-            continue;
-        };
-
-        let element = PositionedElement::Image {
-            rect: Rect {
-                x: *x,
-                y: *y,
-                width: *w,
-                height: *h,
-            },
-            data,
-            content_type,
-            embed_id: None, // Already resolved
-        };
-
-        if *behind {
-            // Behind-doc images go on the first page only
-            // (proper page association would require paragraph-to-page mapping)
-            if let Some(page) = pages.first_mut() {
-                page.elements.insert(0, element);
-            }
-        } else if let Some(page) = pages.first_mut() {
-            // Foreground anchor images go on the first page only
-            page.elements.push(element);
-        }
-    }
 }
 
 /// Resolve inline image data from input.images by embed_id.
@@ -877,7 +806,7 @@ pub fn layout_paragraph(
 
     let lines = line::break_into_lines(&inline_items, &line_params, fm)?;
 
-    Ok(block::build_paragraph_block(
+    let mut result = block::build_paragraph_block(
         lines,
         space_before,
         space_after,
@@ -890,7 +819,37 @@ pub fn layout_paragraph(
         keep_lines,
         page_break_before,
         widow_control,
-    ))
+    );
+    result.anchored = collect_anchored_drawings(para);
+    Ok(result)
+}
+
+/// Collect the floating drawings anchored to a paragraph.
+///
+/// The offsets stay paired with the frame they are measured from. Resolving
+/// them here is not possible: a paragraph-relative offset needs the laid-out
+/// position of the paragraph, which only the paginator knows.
+fn collect_anchored_drawings(para: &CT_P) -> Vec<block::AnchoredDrawing> {
+    let mut out = Vec::new();
+    for run in &para.runs {
+        for rc in &run.content {
+            if let RunContent::Drawing(drawing) = rc
+                && let Some(ref anchor) = drawing.anchor
+            {
+                out.push(block::AnchoredDrawing {
+                    behind_doc: anchor.behind_doc,
+                    rel_h: anchor.pos_h_relative_from,
+                    off_h: anchor.pos_h_offset.to_pt(),
+                    rel_v: anchor.pos_v_relative_from,
+                    off_v: anchor.pos_v_offset.to_pt(),
+                    width: anchor.extent_cx.to_pt(),
+                    height: anchor.extent_cy.to_pt(),
+                    embed_id: anchor.embed_id.clone(),
+                });
+            }
+        }
+    }
+    out
 }
 
 /// Merge direct paragraph properties (only fields explicitly set in the XML).
