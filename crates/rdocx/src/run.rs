@@ -300,10 +300,10 @@ impl<'a> RunRef<'a> {
     pub fn inline_image(&self) -> Option<(&str, Option<&str>)> {
         use rdocx_oxml::text::RunContent;
         for c in &self.inner.content {
-            if let RunContent::Drawing(d) = c {
-                if let Some(inline) = &d.inline {
-                    return Some((inline.embed_id.as_str(), inline.description.as_deref()));
-                }
+            if let RunContent::Drawing(d) = c
+                && let Some(inline) = &d.inline
+            {
+                return Some((inline.embed_id.as_str(), inline.description.as_deref()));
             }
         }
         None
