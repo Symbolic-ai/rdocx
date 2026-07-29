@@ -2,11 +2,7 @@
 
 ## Toolchain pinning
 
-The repository currently has **three independent sources of truth** for the
-toolchain: the developer's local install, `dtolnay/rust-toolchain` in CI, and
-the pinned MSRV job. There is no `rust-toolchain.toml`.
-
-M1 adds one:
+The repository pins its development toolchain in `rust-toolchain.toml`:
 
 ```toml
 # rust-toolchain.toml

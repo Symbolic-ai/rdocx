@@ -1,6 +1,6 @@
 # F-002, rust-toolchain.toml
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S01
 **Size**: S
 **Depends on**: none
@@ -56,9 +56,9 @@ Expected to be unchanged.
 
 ## Implementation checklist
 
-- [ ] Add `rust-toolchain.toml` with the specified channel, components, and target.
-- [ ] Confirm rustup selects the pinned channel.
-- [ ] Confirm the workspace and CI MSRV pins remain 1.93.
+- [x] Add `rust-toolchain.toml` with the specified channel, components, and target.
+- [x] Confirm rustup selects the pinned channel.
+- [x] Confirm the workspace and CI MSRV pins remain 1.93.
 
 ## Open questions
 
