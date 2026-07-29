@@ -16,7 +16,7 @@ regenerated, never hand-edited.
 
 | Milestone | F-IDs | Done | In Progress | Pending |
 |-----------|-------|------|-------------|---------|
-| M1, Preparation and safety net              | 12 | 0 | 2 | 10 |
+| M1, Preparation and safety net              | 12 | 0 | 3 | 9  |
 | M2, Shared infrastructure extraction        | 10 | 0 | 0 | 10 |
 | M3, Media                                   | 6  | 0 | 0 | 6  |
 | M4, Layout primitives                       | 8  | 0 | 0 | 8  |
@@ -30,7 +30,7 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **150** | **0** | **2** | **148** |
+| **Total** | **150** | **0** | **3** | **147** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -43,7 +43,7 @@ regenerated, never hand-edited.
 | F-001 | Deterministic font mode                      | S01 | M | in-progress |
 | F-002 | rust-toolchain.toml                          | S01 | S | in-progress |
 | F-003 | Output-stability hash harness                | S01 | L | pending |
-| F-004 | Caladea licence and the false OFL claim      | S01 | S | pending |
+| F-004 | Caladea licence and the false OFL claim      | S01 | S | in-progress |
 | F-005 | Fix the image counter                        | S01 | S | pending |
 | F-006 | Fix the JPEG standalone-marker walk          | S01 | S | pending |
 | F-007 | Resolve core properties through the rel      | S02 | S | pending |
