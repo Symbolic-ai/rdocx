@@ -3,11 +3,12 @@
 //! Handles page breaks, widow/orphan control, keep-with-next,
 //! keep-lines-together, and header/footer placement.
 
-use crate::block::{LayoutBlock, ParagraphBlock};
+use crate::block::{AnchoredDrawing, LayoutBlock, ParagraphBlock};
 use crate::font::FontManager;
 use crate::line::{LayoutLine, LineItem};
 use crate::output::{Color, GlyphRun, OutlineEntry, PageFrame, Point, PositionedElement, Rect};
 
+use rdocx_oxml::drawing::{ST_RelativeFromH, ST_RelativeFromV};
 use rdocx_oxml::shared::{ST_Border, ST_Jc, ST_Underline};
 
 /// A resolved border edge: (thickness in pt, color, optional dash pattern as (dash, gap)).
@@ -217,6 +218,10 @@ pub fn paginate(
 struct Pager<'a> {
     pages: Vec<PageFrame>,
     elements: Vec<PositionedElement>,
+    /// Anchored drawings marked behindDoc. Held apart from the normal element
+    /// list so they can be emitted before everything else on the page, which
+    /// is what puts them underneath the text.
+    behind_elements: Vec<PositionedElement>,
     cursor_y: f64,
     page_number: usize,
     content_height: f64,
@@ -239,6 +244,7 @@ impl<'a> Pager<'a> {
         Pager {
             pages: Vec::new(),
             elements: Vec::new(),
+            behind_elements: Vec::new(),
             cursor_y: 0.0,
             page_number: 1,
             content_height: geometry.content_height(),
@@ -259,8 +265,40 @@ impl<'a> Pager<'a> {
         self.has_content_flag = true;
     }
 
+    /// Place the drawings anchored to a paragraph whose top sits at `para_top`,
+    /// measured from the top of the content area.
+    fn place_anchored(&mut self, anchored: &[AnchoredDrawing], para_top: f64, indent_left: f64) {
+        for a in anchored {
+            if a.embed_id.is_empty() {
+                continue;
+            }
+            let x = resolve_anchor_h(a.rel_h, a.off_h, &self.geometry, indent_left);
+            let y = resolve_anchor_v(a.rel_v, a.off_v, &self.geometry, para_top);
+            let element = PositionedElement::Image {
+                rect: Rect {
+                    x,
+                    y,
+                    width: a.width,
+                    height: a.height,
+                },
+                // The inline image pass fills these in from the embed id.
+                data: Vec::new(),
+                content_type: String::new(),
+                embed_id: Some(a.embed_id.clone()),
+            };
+            if a.behind_doc {
+                self.behind_elements.push(element);
+            } else {
+                self.elements.push(element);
+            }
+        }
+    }
+
     fn finish_page(&mut self) {
         let mut all_elements = Vec::new();
+
+        // behindDoc drawings render underneath everything else on the page.
+        all_elements.append(&mut self.behind_elements);
 
         if let Some(hf) = self.header_footer {
             // Choose header blocks: first-page or default
@@ -314,6 +352,44 @@ impl<'a> Pager<'a> {
 }
 
 /// Paginate a single paragraph, handling splitting across pages.
+/// Resolve a horizontal anchor offset against the frame it is measured from.
+///
+/// An offset says nothing on its own. The same number lands somewhere
+/// different depending on the frame, and treating every offset as a page
+/// coordinate put anchored drawings in the corner of the sheet.
+fn resolve_anchor_h(rel: ST_RelativeFromH, off: f64, g: &PageGeometry, indent_left: f64) -> f64 {
+    match rel {
+        ST_RelativeFromH::Page | ST_RelativeFromH::LeftMargin => off,
+        ST_RelativeFromH::RightMargin | ST_RelativeFromH::OutsideMargin => {
+            g.page_width - g.margin_right + off
+        }
+        ST_RelativeFromH::InsideMargin => g.margin_left + off,
+        // A character-relative offset starts where the text does on the line.
+        ST_RelativeFromH::Character => g.margin_left + indent_left + off,
+        // Margin and column both start at the left edge of the text area.
+        // Multiple columns are not laid out yet, so the two coincide.
+        ST_RelativeFromH::Margin | ST_RelativeFromH::Column => g.margin_left + off,
+    }
+}
+
+/// Resolve a vertical anchor offset against the frame it is measured from.
+///
+/// `para_top` is the top of the anchoring paragraph, measured from the top of
+/// the content area.
+fn resolve_anchor_v(rel: ST_RelativeFromV, off: f64, g: &PageGeometry, para_top: f64) -> f64 {
+    match rel {
+        ST_RelativeFromV::Page | ST_RelativeFromV::TopMargin => off,
+        ST_RelativeFromV::BottomMargin | ST_RelativeFromV::OutsideMargin => {
+            g.page_height - g.margin_bottom + off
+        }
+        ST_RelativeFromV::Margin | ST_RelativeFromV::InsideMargin => g.margin_top + off,
+        // Paragraph and line are both relative to where this paragraph landed.
+        // Per-line anchoring would need the line box, which is finer than we
+        // track here, so the paragraph top stands in for both.
+        ST_RelativeFromV::Paragraph | ST_RelativeFromV::Line => g.margin_top + para_top + off,
+    }
+}
+
 fn paginate_paragraph(
     para: &ParagraphBlock,
     block_idx: usize,
@@ -428,6 +504,10 @@ fn paginate_paragraph(
         );
     }
 
+    // Anchored drawings resolve against the paragraph's position, so place
+    // them now that the page and the cursor are settled.
+    pager.place_anchored(&para.anchored, pager.cursor_y, para.indent_left);
+
     render_paragraph_lines(
         &para.lines,
         para,
@@ -445,6 +525,8 @@ fn paginate_paragraph(
 fn render_para_split(para: &ParagraphBlock, split_at: usize, space_before: f64, pager: &mut Pager) {
     // Render lines before split on current page
     pager.cursor_y += space_before;
+    // A split paragraph anchors its drawings to where it starts.
+    pager.place_anchored(&para.anchored, pager.cursor_y, para.indent_left);
     render_paragraph_lines(
         &para.lines[..split_at],
         para,
@@ -465,6 +547,9 @@ fn render_para_split(para: &ParagraphBlock, split_at: usize, space_before: f64, 
         if lines_that_fit > 0 && lines_that_fit < remaining_lines.len() {
             // Build a temporary para with remaining lines
             let temp_para = ParagraphBlock {
+                // The anchors were placed with the first part of the
+                // paragraph, so the continuation must not place them again.
+                anchored: Vec::new(),
                 lines: remaining_lines.to_vec(),
                 space_before: 0.0,
                 space_after: para.space_after,
@@ -1164,6 +1249,7 @@ mod tests {
             lines.push(make_line(line_height));
         }
         ParagraphBlock {
+            anchored: Vec::new(),
             lines,
             space_before: 0.0,
             space_after: 0.0,
@@ -1264,6 +1350,7 @@ mod tests {
     fn underline_renders_line_element() {
         let fm = FontManager::new();
         let para = ParagraphBlock {
+            anchored: Vec::new(),
             lines: vec![make_text_line(14.0, Some(ST_Underline::Single), false)],
             space_before: 0.0,
             space_after: 0.0,
@@ -1294,6 +1381,7 @@ mod tests {
     fn strikethrough_renders_line_element() {
         let fm = FontManager::new();
         let para = ParagraphBlock {
+            anchored: Vec::new(),
             lines: vec![make_text_line(14.0, None, true)],
             space_before: 0.0,
             space_after: 0.0,
@@ -1360,6 +1448,7 @@ mod tests {
             is_last: true,
         };
         let para = ParagraphBlock {
+            anchored: Vec::new(),
             lines: vec![line],
             space_before: 0.0,
             space_after: 0.0,
@@ -1390,6 +1479,7 @@ mod tests {
         use rdocx_oxml::borders::{CT_BorderEdge, CT_PBdr};
         let fm = FontManager::new();
         let para = ParagraphBlock {
+            anchored: Vec::new(),
             lines: vec![make_line(14.0)],
             space_before: 0.0,
             space_after: 0.0,
@@ -1433,6 +1523,7 @@ mod tests {
     fn paragraph_shading_renders_filled_rect() {
         let fm = FontManager::new();
         let para = ParagraphBlock {
+            anchored: Vec::new(),
             lines: vec![make_line(14.0)],
             space_before: 0.0,
             space_after: 0.0,
@@ -1467,6 +1558,7 @@ mod tests {
     fn double_underline_renders_two_lines() {
         let fm = FontManager::new();
         let para = ParagraphBlock {
+            anchored: Vec::new(),
             lines: vec![make_text_line(14.0, Some(ST_Underline::Double), false)],
             space_before: 0.0,
             space_after: 0.0,
@@ -1563,6 +1655,7 @@ mod tests {
             is_last: true,
         };
         let para = ParagraphBlock {
+            anchored: Vec::new(),
             lines: vec![line],
             space_before: 0.0,
             space_after: 0.0,
@@ -1596,6 +1689,7 @@ mod tests {
         let fm = FontManager::new();
         // Line with "Hello World" (1 space = 1 gap), width 200 out of 468 available
         let para = ParagraphBlock {
+            anchored: Vec::new(),
             lines: vec![
                 make_justified_line("Hello World", 200.0, false),
                 make_justified_line("End.", 40.0, true),
@@ -1640,6 +1734,7 @@ mod tests {
     fn justified_last_line_stays_left_aligned() {
         let fm = FontManager::new();
         let para = ParagraphBlock {
+            anchored: Vec::new(),
             lines: vec![
                 make_justified_line("Hello World Test", 200.0, false),
                 make_justified_line("End.", 40.0, true),
@@ -1689,6 +1784,7 @@ mod tests {
         let fm = FontManager::new();
         // A line with a single word (no spaces) should not be stretched
         let para = ParagraphBlock {
+            anchored: Vec::new(),
             lines: vec![
                 make_justified_line("Superlongword", 100.0, false),
                 make_justified_line("End.", 40.0, true),
@@ -1726,5 +1822,79 @@ mod tests {
             (total_advance - 100.0).abs() < 0.1,
             "single word should not be stretched: {total_advance}"
         );
+    }
+
+    /// A wp:anchor offset means nothing without the frame it is measured from.
+    /// Treating every offset as a page coordinate put anchored drawings in the
+    /// corner of the sheet instead of beside their paragraph.
+    #[test]
+    fn anchor_offsets_resolve_against_their_frame() {
+        let g = PageGeometry::default(); // 612 x 792, 72pt margins
+        let para_top = 100.0;
+        let off = 10.0;
+
+        assert_eq!(resolve_anchor_h(ST_RelativeFromH::Page, off, &g, 0.0), 10.0);
+        assert_eq!(
+            resolve_anchor_h(ST_RelativeFromH::LeftMargin, off, &g, 0.0),
+            10.0
+        );
+        assert_eq!(
+            resolve_anchor_h(ST_RelativeFromH::Margin, off, &g, 0.0),
+            82.0,
+            "margin-relative starts at the left margin"
+        );
+        assert_eq!(
+            resolve_anchor_h(ST_RelativeFromH::Column, off, &g, 0.0),
+            82.0,
+            "column-relative starts at the text area"
+        );
+        assert_eq!(
+            resolve_anchor_h(ST_RelativeFromH::RightMargin, off, &g, 0.0),
+            550.0,
+            "right-margin-relative starts at the right margin edge"
+        );
+        assert_eq!(
+            resolve_anchor_h(ST_RelativeFromH::Character, off, &g, 36.0),
+            118.0,
+            "character-relative includes the paragraph indent"
+        );
+
+        assert_eq!(
+            resolve_anchor_v(ST_RelativeFromV::Page, off, &g, para_top),
+            10.0
+        );
+        assert_eq!(
+            resolve_anchor_v(ST_RelativeFromV::TopMargin, off, &g, para_top),
+            10.0
+        );
+        assert_eq!(
+            resolve_anchor_v(ST_RelativeFromV::Margin, off, &g, para_top),
+            82.0
+        );
+        assert_eq!(
+            resolve_anchor_v(ST_RelativeFromV::Paragraph, off, &g, para_top),
+            182.0,
+            "paragraph-relative follows the paragraph down the page"
+        );
+        assert_eq!(
+            resolve_anchor_v(ST_RelativeFromV::Line, off, &g, para_top),
+            182.0
+        );
+        assert_eq!(
+            resolve_anchor_v(ST_RelativeFromV::BottomMargin, off, &g, para_top),
+            730.0
+        );
+    }
+
+    /// The same offset must land somewhere different once the paragraph moves.
+    /// This is the property the old code could not express at all.
+    #[test]
+    fn paragraph_relative_anchor_tracks_the_paragraph() {
+        let g = PageGeometry::default();
+        let near_top = resolve_anchor_v(ST_RelativeFromV::Paragraph, 5.0, &g, 0.0);
+        let further_down = resolve_anchor_v(ST_RelativeFromV::Paragraph, 5.0, &g, 300.0);
+        assert_eq!(near_top, 77.0);
+        assert_eq!(further_down, 377.0);
+        assert!(further_down > near_top);
     }
 }
