@@ -27,7 +27,7 @@ immediately before structural churn begins.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-007 | Resolve core properties through the rel | S | pending | - |
+| F-007 | Resolve core properties through the rel | S | in-progress | codex |
 | F-008 | Non-consuming setter twins | M | pending | - |
 | F-009 | Cache the layout result | M | pending | - |
 | F-010 | Reserve crate names | S | pending | - |
