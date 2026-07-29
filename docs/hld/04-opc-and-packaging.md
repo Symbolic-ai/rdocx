@@ -91,12 +91,15 @@ exists, so resolve through it.
 
 ## Part naming
 
-**Numeric suffixes are allocated as `1 + max(existing suffix)`, never as
-`count + 1`.** Deleting slide 2 and then adding a slide must not collide with
-slide 3. The existing rdocx image counter gets this wrong by counting matching
-parts, so a package holding `image1` and `image5` next writes `image3`, and one
-holding `image1`, `image2` and `image4` overwrites `image3`. `MediaNamer::scan`
-parses the maximum instead, and the rdocx bug is fixed independently in M1.
+**Numeric suffixes are allocated after the greatest positive parsed suffix,
+never as `count + 1`.** Deleting slide 2 and then adding a slide must not
+collide with slide 3. The rdocx image counter parses the consecutive decimal
+digits after `/word/media/image`, including `usize::MAX`, and ignores missing,
+signed, zero, nonnumeric and unrelated suffixes. Ordinary packages allocate
+`1 + max(existing suffix)`. At the finite boundary, checked increment wraps
+from `usize::MAX` to 1 and skips every occupied parsed suffix until a free
+positive number is found. Allocation never creates `image0` or overwrites an
+existing numbered image part.
 
 Canonical part layouts:
 

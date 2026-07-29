@@ -132,13 +132,6 @@ review.
 
 Found during the audit that produced this plan, and each has a story in M1.
 
-### The image counter
-
-`crates/rdocx/src/document.rs:135-138` counts parts matching `/word/media/image`
-rather than parsing the maximum suffix. A package holding `image1` and `image5`
-next writes `image3`. One holding `image1`, `image2` and `image4` **overwrites**
-`image3`.
-
 ### The `rdocx-wasm` save path
 
 `to_docx_bytes` rebuilds a minimal package, silently discarding every part

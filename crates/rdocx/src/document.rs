@@ -41,7 +41,7 @@ pub struct Document {
     styles_part_name: String,
     /// Part name for numbering definitions, resolved the same way.
     numbering_part_name: String,
-    /// Cached count of image media parts (avoids rescanning parts on each embed).
+    /// Greatest numeric suffix among existing image media parts.
     image_counter: usize,
 }
 
@@ -134,8 +134,9 @@ impl Document {
         let image_counter = package
             .parts
             .keys()
-            .filter(|k| k.starts_with("/word/media/image"))
-            .count();
+            .filter_map(|name| image_number_from_part_name(name))
+            .max()
+            .unwrap_or(0);
 
         Ok(Document {
             package,
@@ -522,8 +523,18 @@ impl Document {
 
     /// Return the next unique image number and bump the counter.
     fn next_image_number(&mut self) -> usize {
-        self.image_counter += 1;
-        self.image_counter
+        let mut candidate = self.image_counter.checked_add(1).unwrap_or(1);
+        while self
+            .package
+            .parts
+            .keys()
+            .filter_map(|name| image_number_from_part_name(name))
+            .any(|number| number == candidate)
+        {
+            candidate = candidate.checked_add(1).unwrap_or(1);
+        }
+        self.image_counter = candidate;
+        candidate
     }
 
     /// Store image bytes as a new media part and declare its content type.
@@ -2460,6 +2471,21 @@ fn relative_target(source_part: &str, target_part: &str) -> String {
 }
 
 /// The lower-cased file extension of `filename`, defaulting to `png`.
+fn image_number_from_part_name(name: &str) -> Option<usize> {
+    let suffix = name.strip_prefix("/word/media/image")?;
+    let digit_count = suffix
+        .bytes()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if digit_count == 0 {
+        return None;
+    }
+    suffix[..digit_count]
+        .parse::<usize>()
+        .ok()
+        .filter(|index| *index > 0)
+}
+
 fn image_extension(filename: &str) -> String {
     match filename.rsplit_once('.') {
         Some((_, ext)) if !ext.is_empty() => ext.to_lowercase(),
