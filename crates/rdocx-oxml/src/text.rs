@@ -73,6 +73,11 @@ pub struct CT_R {
     pub content: Vec<RunContent>,
     /// Unknown child elements captured as raw XML.
     pub extra_xml: Vec<Vec<u8>>,
+    /// Drawings read out of an `mc:AlternateContent` block, for layout only.
+    ///
+    /// Never serialised. The verbatim copy in `extra_xml` is what gets
+    /// written, so emitting these as well would duplicate the element.
+    pub alt_drawings: Vec<CT_Drawing>,
 }
 
 #[allow(non_snake_case)]
@@ -82,6 +87,7 @@ impl CT_R {
             properties: None,
             content: vec![RunContent::Text(CT_Text::new(text))],
             extra_xml: Vec::new(),
+            alt_drawings: Vec::new(),
         }
     }
 
@@ -105,6 +111,7 @@ impl CT_R {
         let mut properties = None;
         let mut content = Vec::new();
         let mut extra_xml = Vec::new();
+        let mut alt_drawings = Vec::new();
         let mut buf = Vec::new();
 
         loop {
@@ -134,6 +141,16 @@ impl CT_R {
                         }));
                     } else if matches_local_name(name.as_ref(), b"drawing") {
                         content.push(RunContent::Drawing(CT_Drawing::from_xml(reader)?));
+                    } else if matches_local_name(name.as_ref(), b"AlternateContent") {
+                        // Keep the block verbatim so the VML fallback survives
+                        // a write, and separately read the DrawingML out of it
+                        // so layout can see the shape. alt_drawings is never
+                        // serialised, the raw copy below is what gets written.
+                        let raw = capture_element(reader, e)?;
+                        if let Some(drawing) = crate::drawing::parse_alternate_content(&raw) {
+                            alt_drawings.push(drawing);
+                        }
+                        extra_xml.push(raw);
                     } else {
                         // Capture unknown child elements as raw XML
                         extra_xml.push(capture_element(reader, e)?);
@@ -199,6 +216,7 @@ impl CT_R {
             properties,
             content,
             extra_xml,
+            alt_drawings,
         })
     }
 
@@ -395,6 +413,7 @@ impl CT_P {
                             properties: None,
                             content: vec![RunContent::Field { field_type }],
                             extra_xml: Vec::new(),
+                            alt_drawings: Vec::new(),
                         });
                     } else {
                         // Capture unknown elements (bookmarks, comments, etc.) as raw XML
@@ -683,6 +702,69 @@ mod tests {
     }
 
     #[test]
+    fn alternate_content_is_preserved_once_and_parsed_for_layout() {
+        // A shape as Word writes it: DrawingML in mc:Choice, VML in the
+        // fallback. The block has to come back out verbatim, exactly once,
+        // while still being visible to layout.
+        let src = concat!(
+            r#"<w:r><mc:AlternateContent><mc:Choice Requires="wps">"#,
+            r#"<w:drawing><wp:anchor behindDoc="0">"#,
+            r#"<wp:positionH relativeFrom="column"><wp:posOffset>914400</wp:posOffset></wp:positionH>"#,
+            r#"<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>"#,
+            r#"<wp:extent cx="914400" cy="457200"/>"#,
+            r#"<a:graphic><a:graphicData><wps:wsp><wps:spPr>"#,
+            r#"<a:prstGeom prst="rect"/><a:solidFill><a:srgbClr val="729FCF"/></a:solidFill>"#,
+            r#"<a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln>"#,
+            r#"</wps:spPr><wps:txbx><w:txbxContent>"#,
+            r#"<w:p><w:r><w:t>boxed</w:t></w:r></w:p>"#,
+            r#"</w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic>"#,
+            r#"</wp:anchor></w:drawing></mc:Choice>"#,
+            r#"<mc:Fallback><w:pict><v:rect/></w:pict></mc:Fallback>"#,
+            r#"</mc:AlternateContent></w:r>"#,
+        );
+        let p = parse_paragraph(src);
+        assert_eq!(p.runs.len(), 1);
+        let run = &p.runs[0];
+
+        // Visible to layout.
+        assert_eq!(
+            run.alt_drawings.len(),
+            1,
+            "the drawing must reach the model"
+        );
+        let anchor = run.alt_drawings[0]
+            .anchor
+            .as_ref()
+            .expect("should be an anchored drawing");
+        let shape = anchor.shape.as_ref().expect("should carry shape content");
+        assert_eq!(shape.preset.as_deref(), Some("rect"));
+        assert_eq!(
+            shape.solid_fill.as_deref(),
+            Some("729FCF"),
+            "the fill colour must win over the outline colour"
+        );
+        assert_eq!(shape.text.len(), 1);
+        assert_eq!(shape.text[0].text(), "boxed");
+
+        // Preserved verbatim, exactly once.
+        let mut output = Vec::new();
+        let mut writer = Writer::new(&mut output);
+        p.to_xml(&mut writer).unwrap();
+        let xml = String::from_utf8(output).unwrap();
+        assert_eq!(
+            xml.matches("<mc:AlternateContent").count(),
+            1,
+            "the block must not be duplicated: {xml}"
+        );
+        assert_eq!(
+            xml.matches("<mc:Fallback").count(),
+            1,
+            "the VML fallback must survive"
+        );
+        assert!(xml.contains(r#"<a:prstGeom prst="rect"/>"#));
+    }
+
+    #[test]
     fn empty_run_properties_are_not_moved_after_content() {
         // extra_xml is written after the run content, and CT_R requires
         // w:rPr first, so a self-closing <w:rPr/> must not be captured.
@@ -764,6 +846,7 @@ mod tests {
                 field_type: FieldType::Page,
             }],
             extra_xml: Vec::new(),
+            alt_drawings: Vec::new(),
         });
 
         let mut output = Vec::new();
@@ -844,6 +927,7 @@ mod tests {
             properties: None,
             content: vec![RunContent::FootnoteRef { id: 2 }],
             extra_xml: Vec::new(),
+            alt_drawings: Vec::new(),
         });
         p.add_run(" text after");
 

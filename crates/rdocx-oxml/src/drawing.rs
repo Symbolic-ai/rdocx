@@ -136,6 +136,147 @@ pub struct CT_Anchor {
     /// Raw XML bytes for the entire wp:anchor element (used for round-trip preservation).
     /// When present, to_xml uses this instead of structured serialization.
     pub raw_xml: Option<Vec<u8>>,
+    /// Shape content, when the anchor holds a `wps:wsp` rather than a picture.
+    pub shape: Option<CT_Shape>,
+}
+
+/// A `wps:wsp` shape: preset geometry, an optional fill, and optional text.
+///
+/// Word writes these inside `mc:AlternateContent`, with a VML fallback beside
+/// them. Only what we can actually draw is modelled here.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CT_Shape {
+    /// Preset geometry name from `a:prstGeom@prst`, e.g. "rect" or "line".
+    pub preset: Option<String>,
+    /// Solid fill colour as RRGGBB, from the shape's own fill rather than its
+    /// outline. `None` covers both `a:noFill` and a fill we cannot resolve,
+    /// such as a theme colour.
+    pub solid_fill: Option<String>,
+    /// Paragraphs of the shape's text box, from `wps:txbx/w:txbxContent`.
+    pub text: Vec<crate::text::CT_P>,
+}
+
+/// Parse the DrawingML held inside a captured `mc:AlternateContent` block.
+///
+/// Word writes a shape as a compatibility block: the modern DrawingML sits in
+/// `mc:Choice` and a VML fallback in `mc:Fallback`. We read the Choice and
+/// ignore the Fallback.
+///
+/// The caller keeps the raw bytes for write back, so whatever comes out of
+/// here must not be serialised again or the element ends up duplicated.
+pub fn parse_alternate_content(raw: &[u8]) -> Option<CT_Drawing> {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut in_choice = false;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                let name = e.name();
+                let local = name.as_ref();
+                if matches_local_name(local, b"Choice") {
+                    in_choice = true;
+                } else if in_choice && matches_local_name(local, b"drawing") {
+                    return CT_Drawing::from_xml(&mut reader).ok();
+                }
+            }
+            Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"Choice") => {
+                in_choice = false;
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    None
+}
+
+/// Pull the preset geometry and solid fill out of a captured `wps:spPr`.
+///
+/// The fill has to be told apart from the outline colour. Both are written as
+/// `a:srgbClr`, and the outline sits inside `a:ln`, so anything at or below an
+/// `a:ln` is skipped.
+fn parse_shape_props(raw: &[u8]) -> (Option<String>, Option<String>) {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut preset = None;
+    let mut fill = None;
+    let mut ln_depth = 0usize;
+    let mut in_solid_fill = false;
+
+    // Only a Start can open a scope. A self-closing a:ln or a:solidFill has no
+    // children, so it must not change the depth or the fill flag.
+    loop {
+        let event = reader.read_event_into(&mut buf);
+        match event {
+            Ok(Event::Start(ref e)) => {
+                let name = e.name();
+                let local = name.as_ref();
+                if matches_local_name(local, b"ln") {
+                    ln_depth += 1;
+                } else if matches_local_name(local, b"solidFill") {
+                    in_solid_fill = true;
+                } else if matches_local_name(local, b"prstGeom") {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"prst" {
+                            preset = std::str::from_utf8(&attr.value).ok().map(str::to_string);
+                        }
+                    }
+                } else if matches_local_name(local, b"srgbClr")
+                    && in_solid_fill
+                    && ln_depth == 0
+                    && fill.is_none()
+                {
+                    // srgbClr can carry children such as a:alpha, so it turns
+                    // up as a Start as well as an Empty.
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"val" {
+                            fill = std::str::from_utf8(&attr.value).ok().map(str::to_string);
+                        }
+                    }
+                }
+            }
+            Ok(Event::Empty(ref e)) => {
+                let name = e.name();
+                let local = name.as_ref();
+                if matches_local_name(local, b"prstGeom") {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"prst" {
+                            preset = std::str::from_utf8(&attr.value).ok().map(str::to_string);
+                        }
+                    }
+                } else if matches_local_name(local, b"srgbClr")
+                    && in_solid_fill
+                    && ln_depth == 0
+                    && fill.is_none()
+                {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"val" {
+                            fill = std::str::from_utf8(&attr.value).ok().map(str::to_string);
+                        }
+                    }
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                let name = e.name();
+                let local = name.as_ref();
+                if matches_local_name(local, b"ln") {
+                    ln_depth = ln_depth.saturating_sub(1);
+                } else if matches_local_name(local, b"solidFill") {
+                    in_solid_fill = false;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    (preset, fill)
 }
 
 impl CT_Anchor {
@@ -155,6 +296,7 @@ impl CT_Anchor {
             description: Some("Background".to_string()),
             name: Some("Background".to_string()),
             raw_xml: None,
+            shape: None,
         }
     }
 
@@ -181,6 +323,7 @@ impl CT_Anchor {
         let mut extent_cx = Emu(0);
         let mut extent_cy = Emu(0);
         let mut embed_id = String::new();
+        let mut shape: Option<CT_Shape> = None;
         let mut description = None;
         let mut name = None;
         let mut buf = Vec::new();
@@ -291,6 +434,38 @@ impl CT_Anchor {
                             }
                             inner_buf.clear();
                         }
+                    } else if matches_local_name(ename.as_ref(), b"spPr") {
+                        // Capture the shape properties and read geometry and
+                        // fill out of them separately, so the fill colour is
+                        // not confused with the outline colour.
+                        let raw = capture_element(reader, e)?;
+                        let (preset, solid_fill) = parse_shape_props(&raw);
+                        let s = shape.get_or_insert_with(CT_Shape::default);
+                        s.preset = preset;
+                        s.solid_fill = solid_fill;
+                    } else if matches_local_name(ename.as_ref(), b"txbxContent") {
+                        // A shape's text box holds ordinary w:p paragraphs.
+                        let mut inner_buf = Vec::new();
+                        let mut paragraphs = Vec::new();
+                        loop {
+                            match reader.read_event_into(&mut inner_buf) {
+                                Ok(Event::Start(ref ie))
+                                    if matches_local_name(ie.name().as_ref(), b"p") =>
+                                {
+                                    paragraphs.push(crate::text::CT_P::from_xml(reader)?);
+                                }
+                                Ok(Event::End(ref ie))
+                                    if matches_local_name(ie.name().as_ref(), b"txbxContent") =>
+                                {
+                                    break;
+                                }
+                                Ok(Event::Eof) => break,
+                                Err(e) => return Err(e.into()),
+                                _ => {}
+                            }
+                            inner_buf.clear();
+                        }
+                        shape.get_or_insert_with(CT_Shape::default).text = paragraphs;
                     } else if matches_local_name(ename.as_ref(), b"blip") {
                         for attr in e.attributes() {
                             let attr = attr?;
@@ -341,6 +516,7 @@ impl CT_Anchor {
             description,
             name,
             raw_xml: None, // Will be set by CT_Drawing::from_xml
+            shape,
         })
     }
 

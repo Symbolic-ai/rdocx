@@ -838,7 +838,7 @@ pub fn layout_paragraph(
         page_break_before,
         widow_control,
     );
-    result.anchored = collect_anchored_drawings(para);
+    result.anchored = collect_anchored_drawings(para, styles, input, fm, num_state)?;
     Ok(result)
 }
 
@@ -847,27 +847,77 @@ pub fn layout_paragraph(
 /// The offsets stay paired with the frame they are measured from. Resolving
 /// them here is not possible: a paragraph-relative offset needs the laid-out
 /// position of the paragraph, which only the paginator knows.
-fn collect_anchored_drawings(para: &CT_P) -> Vec<block::AnchoredDrawing> {
+///
+/// A shape's text box is laid out here rather than later, because breaking it
+/// into lines needs the font manager.
+fn collect_anchored_drawings(
+    para: &CT_P,
+    styles: &CT_Styles,
+    input: &LayoutInput,
+    fm: &mut FontManager,
+    num_state: &mut NumberingState,
+) -> Result<Vec<block::AnchoredDrawing>> {
     let mut out = Vec::new();
+
+    // Drawings written plainly, and drawings recovered from an
+    // mc:AlternateContent block, are both anchored the same way.
     for run in &para.runs {
-        for rc in &run.content {
-            if let RunContent::Drawing(drawing) = rc
-                && let Some(ref anchor) = drawing.anchor
-            {
-                out.push(block::AnchoredDrawing {
-                    behind_doc: anchor.behind_doc,
-                    rel_h: anchor.pos_h_relative_from,
-                    off_h: anchor.pos_h_offset.to_pt(),
-                    rel_v: anchor.pos_v_relative_from,
-                    off_v: anchor.pos_v_offset.to_pt(),
-                    width: anchor.extent_cx.to_pt(),
-                    height: anchor.extent_cy.to_pt(),
+        let plain = run.content.iter().filter_map(|rc| match rc {
+            RunContent::Drawing(d) => Some(d),
+            _ => None,
+        });
+        for drawing in plain.chain(run.alt_drawings.iter()) {
+            let Some(anchor) = drawing.anchor.as_ref() else {
+                continue;
+            };
+
+            // A picture also carries a pic:spPr, so a parsed shape alone does
+            // not mean this is a shape. An embed id is what makes it a
+            // picture, and that takes precedence.
+            let shape = if anchor.embed_id.is_empty() {
+                anchor.shape.as_ref()
+            } else {
+                None
+            };
+
+            let content = match shape {
+                Some(shape) => {
+                    // A shape's text box wraps at the shape width.
+                    let mut text = Vec::new();
+                    for p in &shape.text {
+                        text.push(layout_paragraph(
+                            p,
+                            anchor.extent_cx.to_pt(),
+                            styles,
+                            input,
+                            fm,
+                            num_state,
+                        )?);
+                    }
+                    block::AnchoredContent::Shape {
+                        preset: block::ShapePreset::from_prst(shape.preset.as_deref()),
+                        fill: shape.solid_fill.as_deref().map(Color::from_hex),
+                        text,
+                    }
+                }
+                None => block::AnchoredContent::Image {
                     embed_id: anchor.embed_id.clone(),
-                });
-            }
+                },
+            };
+
+            out.push(block::AnchoredDrawing {
+                behind_doc: anchor.behind_doc,
+                rel_h: anchor.pos_h_relative_from,
+                off_h: anchor.pos_h_offset.to_pt(),
+                rel_v: anchor.pos_v_relative_from,
+                off_v: anchor.pos_v_offset.to_pt(),
+                width: anchor.extent_cx.to_pt(),
+                height: anchor.extent_cy.to_pt(),
+                content,
+            });
         }
     }
-    out
+    Ok(out)
 }
 
 /// Merge direct paragraph properties (only fields explicitly set in the XML).

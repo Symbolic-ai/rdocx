@@ -492,6 +492,7 @@ impl Document {
 
         let drawing = CT_Drawing::inline(inline);
         let run = CT_R {
+            alt_drawings: Vec::new(),
             properties: None,
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
@@ -541,6 +542,7 @@ impl Document {
         let anchor = CT_Anchor::background(&rel_id, page_width_emu, page_height_emu);
         let drawing = CT_Drawing::anchor(anchor);
         let run = CT_R {
+            alt_drawings: Vec::new(),
             properties: None,
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
@@ -574,6 +576,7 @@ impl Document {
 
         let drawing = CT_Drawing::anchor(anchor);
         let run = CT_R {
+            alt_drawings: Vec::new(),
             properties: None,
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
@@ -1018,6 +1021,7 @@ impl Document {
 
         let inline = CT_Inline::new(&img_rel_id, width.to_emu(), height.to_emu());
         let run = CT_R {
+            alt_drawings: Vec::new(),
             properties: None,
             content: vec![RunContent::Drawing(CT_Drawing::inline(inline))],
             extra_xml: Vec::new(),
@@ -1612,6 +1616,7 @@ impl Document {
 
             // Tab run (separates text from page number)
             p.runs.push(CT_R {
+                alt_drawings: Vec::new(),
                 properties: None,
                 content: vec![rdocx_oxml::text::RunContent::Tab],
                 extra_xml: Vec::new(),

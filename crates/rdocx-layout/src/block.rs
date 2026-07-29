@@ -30,8 +30,50 @@ pub struct AnchoredDrawing {
     pub width: f64,
     /// Height in points.
     pub height: f64,
-    /// Relationship ID of the image part.
-    pub embed_id: String,
+    /// What the drawing actually holds.
+    pub content: AnchoredContent,
+}
+
+/// The drawable content of an anchored drawing.
+#[derive(Debug, Clone)]
+pub enum AnchoredContent {
+    /// A picture, identified by its relationship ID.
+    Image { embed_id: String },
+    /// A shape: preset geometry, an optional fill, and optional text.
+    ///
+    /// The text arrives already laid out, because breaking it into lines needs
+    /// a font manager and that only exists in the engine.
+    Shape {
+        /// Preset geometry we recognise.
+        preset: ShapePreset,
+        /// Fill colour, or `None` for `a:noFill` and for fills we cannot
+        /// resolve. An unfilled shape draws no body, only its text.
+        fill: Option<Color>,
+        /// Laid-out paragraphs of the shape's text box.
+        text: Vec<ParagraphBlock>,
+    },
+}
+
+/// The preset geometries we can draw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShapePreset {
+    /// A rectangle, drawn as a filled box.
+    Rect,
+    /// A straight line, drawn along the top edge of the extent.
+    Line,
+    /// Anything else. The body is not drawn, but text still is.
+    Unsupported,
+}
+
+impl ShapePreset {
+    /// Map an `a:prstGeom@prst` value onto what we can draw.
+    pub fn from_prst(prst: Option<&str>) -> Self {
+        match prst {
+            Some("rect") => ShapePreset::Rect,
+            Some("line") | Some("straightConnector1") => ShapePreset::Line,
+            _ => ShapePreset::Unsupported,
+        }
+    }
 }
 
 /// A laid-out block element (paragraph or table).
@@ -237,5 +279,23 @@ mod tests {
         };
         assert!((block.content_height() - 26.0).abs() < 0.01);
         assert!((block.total_height() - 40.0).abs() < 0.01);
+    }
+
+    /// Only the presets we can actually draw map to a drawable body. Anything
+    /// else still renders its text, so it must not be treated as a rectangle.
+    #[test]
+    fn shape_presets_map_to_what_we_can_draw() {
+        assert_eq!(ShapePreset::from_prst(Some("rect")), ShapePreset::Rect);
+        assert_eq!(ShapePreset::from_prst(Some("line")), ShapePreset::Line);
+        assert_eq!(
+            ShapePreset::from_prst(Some("straightConnector1")),
+            ShapePreset::Line
+        );
+        assert_eq!(
+            ShapePreset::from_prst(Some("roundRect")),
+            ShapePreset::Unsupported,
+            "an unhandled preset must not silently draw as a plain rectangle"
+        );
+        assert_eq!(ShapePreset::from_prst(None), ShapePreset::Unsupported);
     }
 }

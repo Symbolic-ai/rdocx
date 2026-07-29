@@ -3,7 +3,7 @@
 //! Handles page breaks, widow/orphan control, keep-with-next,
 //! keep-lines-together, and header/footer placement.
 
-use crate::block::{AnchoredDrawing, LayoutBlock, ParagraphBlock};
+use crate::block::{AnchoredContent, AnchoredDrawing, LayoutBlock, ParagraphBlock, ShapePreset};
 use crate::font::FontManager;
 use crate::line::{LayoutLine, LineItem};
 use crate::output::{Color, GlyphRun, OutlineEntry, PageFrame, Point, PositionedElement, Rect};
@@ -269,27 +269,64 @@ impl<'a> Pager<'a> {
     /// measured from the top of the content area.
     fn place_anchored(&mut self, anchored: &[AnchoredDrawing], para_top: f64, indent_left: f64) {
         for a in anchored {
-            if a.embed_id.is_empty() {
-                continue;
-            }
             let x = resolve_anchor_h(a.rel_h, a.off_h, &self.geometry, indent_left);
             let y = resolve_anchor_v(a.rel_v, a.off_v, &self.geometry, para_top);
-            let element = PositionedElement::Image {
-                rect: Rect {
-                    x,
-                    y,
-                    width: a.width,
-                    height: a.height,
-                },
-                // The inline image pass fills these in from the embed id.
-                data: Vec::new(),
-                content_type: String::new(),
-                embed_id: Some(a.embed_id.clone()),
+            let rect = Rect {
+                x,
+                y,
+                width: a.width,
+                height: a.height,
             };
+
+            let mut produced: Vec<PositionedElement> = Vec::new();
+
+            match &a.content {
+                AnchoredContent::Image { embed_id } => {
+                    if embed_id.is_empty() {
+                        continue;
+                    }
+                    produced.push(PositionedElement::Image {
+                        rect,
+                        // The inline image pass fills these in from the embed id.
+                        data: Vec::new(),
+                        content_type: String::new(),
+                        embed_id: Some(embed_id.clone()),
+                    });
+                }
+                AnchoredContent::Shape { preset, fill, text } => {
+                    // A shape with no fill draws no body. That is not a gap:
+                    // Word uses unfilled rectangles as plain text boxes.
+                    match (preset, fill) {
+                        (ShapePreset::Rect, Some(color)) => {
+                            produced.push(PositionedElement::FilledRect {
+                                rect,
+                                color: *color,
+                            });
+                        }
+                        (ShapePreset::Line, Some(color)) => {
+                            // A line shape's extent describes its bounding box,
+                            // so the stroke runs corner to corner.
+                            produced.push(PositionedElement::Line {
+                                start: Point { x, y },
+                                end: Point {
+                                    x: x + a.width,
+                                    y: y + a.height,
+                                },
+                                width: 1.0,
+                                color: *color,
+                                dash_pattern: None,
+                            });
+                        }
+                        _ => {}
+                    }
+                    produced.extend(render_shape_text(text, &self.geometry, rect));
+                }
+            }
+
             if a.behind_doc {
-                self.behind_elements.push(element);
+                self.behind_elements.append(&mut produced);
             } else {
-                self.elements.push(element);
+                self.elements.append(&mut produced);
             }
         }
     }
@@ -352,6 +389,62 @@ impl<'a> Pager<'a> {
 }
 
 /// Paginate a single paragraph, handling splitting across pages.
+/// Shift a positioned element by a fixed offset.
+///
+/// Paragraph rendering always lays out against the page margins, so a text box
+/// is rendered at the margin first and then moved to where the shape sits.
+fn translate_element(element: &mut PositionedElement, dx: f64, dy: f64) {
+    match element {
+        PositionedElement::Text(run) => {
+            run.origin.x += dx;
+            run.origin.y += dy;
+        }
+        PositionedElement::Line { start, end, .. } => {
+            start.x += dx;
+            start.y += dy;
+            end.x += dx;
+            end.y += dy;
+        }
+        PositionedElement::FilledRect { rect, .. }
+        | PositionedElement::Image { rect, .. }
+        | PositionedElement::LinkAnnotation { rect, .. } => {
+            rect.x += dx;
+            rect.y += dy;
+        }
+    }
+}
+
+/// Render a shape's text box inside `rect`.
+///
+/// The paragraphs arrive already laid out at the shape's width. They are
+/// rendered as if they sat at the left margin and then translated onto the
+/// shape, which keeps all the justification and indent handling in one place.
+fn render_shape_text(
+    text: &[ParagraphBlock],
+    geometry: &PageGeometry,
+    rect: Rect,
+) -> Vec<PositionedElement> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+
+    let mut local = Vec::new();
+    let mut y = 0.0;
+    for para in text {
+        render_paragraph_lines(&para.lines, para, geometry, y, &mut local);
+        y += para.content_height();
+    }
+
+    // render_paragraph_lines works in content-area coordinates, so undo the
+    // margin it applied and then move onto the shape.
+    let dx = rect.x - geometry.margin_left;
+    let dy = rect.y - geometry.margin_top;
+    for element in &mut local {
+        translate_element(element, dx, dy);
+    }
+    local
+}
+
 /// Resolve a horizontal anchor offset against the frame it is measured from.
 ///
 /// An offset says nothing on its own. The same number lands somewhere

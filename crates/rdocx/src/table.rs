@@ -262,6 +262,7 @@ impl<'a> Cell<'a> {
         let inline = CT_Inline::new(rel_id, width.to_emu(), height.to_emu());
         let drawing = CT_Drawing::inline(inline);
         let run = CT_R {
+            alt_drawings: Vec::new(),
             properties: None,
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
