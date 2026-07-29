@@ -490,9 +490,27 @@ pub fn layout_paragraph(
 
     let resolved_ppr = style_resolver::resolve_paragraph_properties(para_style_id, styles);
 
-    // Merge direct paragraph properties
     let mut effective_ppr = resolved_ppr;
-    if let Some(ref direct_ppr) = para.properties {
+
+    // A numbering level carries paragraph properties of its own, mainly the
+    // indentation for that level. They sit between the style and direct
+    // formatting, so merge them before the direct properties rather than
+    // after. Without this every level of a list draws at the same indent.
+    let direct_ppr = para.properties.as_ref();
+    let list_num_id = direct_ppr.and_then(|p| p.num_id).or(effective_ppr.num_id);
+    let list_ilvl = direct_ppr
+        .and_then(|p| p.num_ilvl)
+        .or(effective_ppr.num_ilvl)
+        .unwrap_or(0);
+    if let (Some(num_id), Some(numbering)) = (list_num_id, input.numbering.as_ref())
+        && let Some(lvl_ppr) =
+            style_resolver::level_paragraph_properties(num_id, list_ilvl, numbering)
+    {
+        merge_direct_ppr(&mut effective_ppr, lvl_ppr);
+    }
+
+    // Merge direct paragraph properties
+    if let Some(direct_ppr) = direct_ppr {
         merge_direct_ppr(&mut effective_ppr, direct_ppr);
     }
 
