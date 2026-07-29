@@ -132,18 +132,6 @@ review.
 
 Found during the audit that produced this plan, and each has a story in M1.
 
-### Font licensing, currently shipping
-
-`crates/rdocx-layout/fonts/` contains `LICENSE-Carlito` and
-`LICENSE-Liberation` but **no licence for the four Caladea TTFs**, while
-`bundled_fonts.rs:12` asserts that "All fonts are licensed under the SIL Open
-Font License". Carlito and Liberation are OFL. **Caladea is Apache-2.0.**
-
-So the stated licence is wrong for 4 of the 20 bundled fonts, and Apache-2.0's
-attribution requirement is not being met. This ships today in `rdocx-layout`
-0.2.0 behind a default-on feature. Fix is cheap and should not wait for the
-migration.
-
 ### The image counter
 
 `crates/rdocx/src/document.rs:135-138` counts parts matching `/word/media/image`

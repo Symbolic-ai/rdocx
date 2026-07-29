@@ -79,7 +79,7 @@ check, and there is no `include` or `exclude` in the manifest.
 
 ```toml
 [package]
-include = ["src/**/*", "fonts/*.ttf", "fonts/LICENSE-*", "README.md"]
+include = ["src/**/*", "fonts/*.ttf", "fonts/LICENSE-*", "fonts/NOTICE-*", "README.md"]
 ```
 
 Drop `--no-verify`, and assert the resulting `.crate` size against the 10 MiB
@@ -90,10 +90,11 @@ The same treatment applies to `crates/rpptx/assets/default.pptx`. **An asset
 must live under its own crate's directory**: a workspace-root `assets/` compiles
 locally but is not collected into the published tarball.
 
-Also fix the licence gap while republishing under new crate names:
-`LICENSE-Caladea` plus a NOTICE, and correct the doc comment in
-`bundled_fonts.rs` which currently claims all bundled fonts are SIL OFL when
-Caladea is Apache-2.0.
+Every bundled font family has its licence under the crate's `fonts/` directory.
+Caladea ships with the full Apache License 2.0 text in `LICENSE-Caladea` and its
+copyright, trademark and designer attribution in `NOTICE-Caladea`. The
+`bundled_fonts.rs` module documentation identifies Caladea as Apache-2.0 and
+the Carlito and Liberation families as SIL Open Font License 1.1.
 
 ## Publishing
 

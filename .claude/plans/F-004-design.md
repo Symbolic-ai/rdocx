@@ -1,6 +1,6 @@
 # F-004, Caladea licence and the false OFL claim
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S01
 **Size**: S
 **Depends on**: none
@@ -60,10 +60,10 @@ Expected to be unchanged because only licence assets, tests, and comments move.
 
 ## Implementation checklist
 
-- [ ] Add the Apache-2.0 licence and Caladea notice under the crate's fonts directory.
-- [ ] Correct the bundled-font module documentation.
-- [ ] Add the family-to-licence regression test.
-- [ ] Verify the files are present in the packaged crate.
+- [x] Add the Apache-2.0 licence and Caladea notice under the crate's fonts directory.
+- [x] Correct the bundled-font module documentation.
+- [x] Add the family-to-licence regression test.
+- [x] Verify the files are present in the packaged crate.
 
 ## Open questions
 
