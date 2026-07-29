@@ -107,6 +107,16 @@ oxml-core -> oxml-opc -> oxml-media -> oxml-drawing -> oxml-layout -> oxml-pdf
   -> rpptx-oxml -> rpptx-layout -> rpptx-render -> rpptx-chart -> rpptx -> rpptx-cli
 ```
 
+The fourteen future crates.io names in this graph are reserved at version
+0.0.0 under the owner `mantissaman`: `oxml-core`, `oxml-opc`, `oxml-media`,
+`oxml-drawing`, `oxml-layout`, `oxml-pdf`, `oxml-sml`, `oxml-cli-support`,
+`rpptx-oxml`, `rpptx-layout`, `rpptx-render`, `rpptx-chart`, `rpptx`, and
+`rpptx-cli`. Each placeholder is dependency-free and exposes no usable API.
+
+`oxml-py-support`, `rpptx-py`, and `rpptx-wasm` are not reserved on crates.io.
+The binding crates are not published there, and the WASM packages use the npm
+publication path.
+
 `publish.yml` currently sleeps 60 seconds between each of seven crates, which is
 six minutes of unconditional waiting that is **still racy**. At twenty crates it
 is twenty minutes. Replace with `cargo publish --workspace`, which handles

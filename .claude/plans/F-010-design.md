@@ -1,6 +1,6 @@
 # F-010, Reserve crate names
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S02
 **Size**: S
 **Depends on**: none
@@ -68,14 +68,14 @@ workspace or sample outputs.
 
 ## Implementation checklist
 
-- [ ] Resolve the exact crates.io name list and owner identity.
-- [ ] Confirm credentials can create every approved name without exposing them.
-- [ ] Create minimal temporary placeholder packages outside the workspace.
-- [ ] Inspect package lists, licences, manifests, and dry-run archives.
-- [ ] Obtain final approval listing every irreversible publication.
-- [ ] Publish sequentially, verify exact version and ownership, and stop on the
+- [x] Resolve the exact crates.io name list and owner identity.
+- [x] Confirm credentials can create every approved name without exposing them.
+- [x] Create minimal temporary placeholder packages outside the workspace.
+- [x] Inspect package lists, licences, manifests, and dry-run archives.
+- [x] Obtain final approval listing every irreversible publication.
+- [x] Publish sequentially, verify exact version and ownership, and stop on the
       first failure.
-- [ ] Update the HLD to distinguish reserved crates.io names from unchecked
+- [x] Update the HLD to distinguish reserved crates.io names from unchecked
       PyPI or npm names.
 
 ## Open questions

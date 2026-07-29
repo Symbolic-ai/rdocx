@@ -19,10 +19,11 @@ this lands.
 
 ### Q2, PyPI name availability
 
-`rdocx` and `rpptx` are free on crates.io. PyPI has not been checked. If either
-is taken, maturin's `module-name` allows shipping distribution `rdocx-python`
-while keeping `import rdocx`. Claim both names as soon as the decision to ship
-wheels is confirmed.
+The future crates.io names in the publishing graph are controlled by
+`mantissaman` through 0.0.0 placeholders. PyPI has not been checked. If either
+`rdocx` or `rpptx` is taken there, maturin's `module-name` allows shipping a
+distribution such as `rdocx-python` while keeping `import rdocx`. Claim both
+PyPI names as soon as the decision to ship wheels is confirmed.
 
 ### Q3, the deck corpus
 
