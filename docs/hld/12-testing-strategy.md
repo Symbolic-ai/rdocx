@@ -27,13 +27,18 @@ The existing file is the model: `zero_column_tables_do_not_panic`,
 
 ## The hash harness
 
-The single highest-value mechanism in the plan, built in M1 before anything
-moves.
+The single highest-value mechanism in the plan is
+`scripts/hash_harness.py --check`. It deletes the expected generated outputs,
+runs `generate_all_samples`, and records the flushed `word/document.xml`,
+`word/styles.xml`, and `word/numbering.xml` state plus the page-one PNG for each
+of the seven samples. PNGs are rendered at 150 dpi through the deterministic
+font path.
 
-For every sample produced by `generate_all_samples.rs`, record a SHA-256 of the
-flushed `document.xml`, `styles.xml` and `numbering.xml`, plus the page-one PNG
-at 150 dpi **rendered in deterministic font mode**. Compare after every
-migration step.
+The sorted `scripts/hash_baseline.json` manifest has 28 entries. Each entry is
+either a SHA-256 digest or JSON `null` when an optional XML part is absent.
+Check mode reads the manifest without modifying it and reports added, removed,
+and changed entries. Baseline writes require `--update --reason <text>`, and an
+empty reason is rejected. Generated PNGs remain ignored under `samples/`.
 
 It exists because the extraction changes unit conversion and text-shaping input
 types, and both alter output **without failing to compile**. Structural
@@ -42,6 +47,7 @@ round-trip tests cannot see that class of defect.
 Rules:
 
 - Every PR in M1 through M6 gates on it.
+- Baseline updates require a non-empty review reason.
 - An intentional behavioural change lands as its own labelled commit with its
   expected delta stated in the message and reviewed.
 - An unexplained delta blocks the merge.

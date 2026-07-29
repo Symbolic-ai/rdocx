@@ -63,6 +63,14 @@ fn export_all(dir: &Path, name: &str, mut doc: Document) {
     doc.save(&docx_path).unwrap();
     println!("  {name}.docx");
 
+    let png = doc
+        .render_page_to_png_deterministic(0, 150.0)
+        .unwrap()
+        .expect("every generated sample should have a first page");
+    let png_path = dir.join(format!("{name}.png"));
+    std::fs::write(&png_path, &png).unwrap();
+    println!("  {name}.png ({} bytes)", png.len());
+
     match doc.to_pdf() {
         Ok(pdf) => {
             let pdf_path = dir.join(format!("{name}.pdf"));

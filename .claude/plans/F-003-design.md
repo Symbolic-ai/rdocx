@@ -1,6 +1,6 @@
 # F-003, Output-stability hash harness
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S01
 **Size**: L
 **Depends on**: F-001
@@ -75,11 +75,11 @@ a re-record of an existing one.
 
 ## Implementation checklist
 
-- [ ] Add deterministic page-one PNG output to the existing sample generator.
-- [ ] Add the check and reason-gated update script.
-- [ ] Add unit coverage for comparison and update refusal behavior.
-- [ ] Record the initial deterministic baseline.
-- [ ] Prove an injected writer whitespace change fails check mode, then restore it.
+- [x] Add deterministic page-one PNG output to the existing sample generator.
+- [x] Add the check and reason-gated update script.
+- [x] Add unit coverage for comparison and update refusal behavior.
+- [x] Record the initial deterministic baseline.
+- [x] Prove an injected writer whitespace change fails check mode, then restore it.
 
 ## Open questions
 

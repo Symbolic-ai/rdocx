@@ -5,6 +5,7 @@
 # Generated sample outputs
 samples/*.docx
 samples/*.pdf
+samples/*.png
 samples/*.html
 samples/*.md
 samples/~$*
