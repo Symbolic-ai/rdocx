@@ -7,6 +7,167 @@ use std::collections::HashMap;
 
 use rdocx::{Document, Length};
 
+#[test]
+fn next_image_name_uses_the_highest_existing_index_not_the_part_count() {
+    let cases: &[(&[&str], &str)] = &[
+        (
+            &["/word/media/image1.png", "/word/media/image5.png"],
+            "/word/media/image6.png",
+        ),
+        (
+            &[
+                "/word/media/image1.png",
+                "/word/media/image2.png",
+                "/word/media/image4.png",
+            ],
+            "/word/media/image5.png",
+        ),
+    ];
+
+    for (existing_names, expected_name) in cases {
+        let mut seed = Document::new();
+        let seed_bytes = seed.to_bytes().unwrap();
+        let mut package =
+            rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(seed_bytes)).unwrap();
+        for name in *existing_names {
+            package.set_part(name, vec![0xAA]);
+        }
+
+        let mut package_bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut package_bytes).unwrap();
+        let mut reopened = Document::from_bytes(&package_bytes.into_inner()).unwrap();
+        reopened.add_picture(
+            &[0x11, 0x22, 0x33],
+            "added.png",
+            Length::inches(1.0),
+            Length::inches(1.0),
+        );
+
+        let saved = reopened.to_bytes().unwrap();
+        let saved_package =
+            rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+        assert_eq!(
+            saved_package.get_part(expected_name),
+            Some([0x11, 0x22, 0x33].as_slice()),
+            "existing names: {existing_names:?}"
+        );
+    }
+}
+
+#[test]
+fn malformed_media_names_do_not_change_the_highest_image_index() {
+    let mut seed = Document::new();
+    let seed_bytes = seed.to_bytes().unwrap();
+    let mut package = rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(seed_bytes)).unwrap();
+    for name in [
+        "/word/media/image4.png",
+        "/word/media/image.png",
+        "/word/media/imagezero.png",
+        "/word/media/image-7.png",
+        "/word/media/image0.png",
+        "/word/media/images99.png",
+        "/ppt/media/image99.png",
+    ] {
+        package.set_part(name, vec![0xAA]);
+    }
+
+    let mut package_bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut package_bytes).unwrap();
+    let mut reopened = Document::from_bytes(&package_bytes.into_inner()).unwrap();
+    reopened.add_picture(
+        &[0x44, 0x55, 0x66],
+        "added.png",
+        Length::inches(1.0),
+        Length::inches(1.0),
+    );
+
+    let saved = reopened.to_bytes().unwrap();
+    let saved_package = rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    assert_eq!(
+        saved_package.get_part("/word/media/image5.png"),
+        Some([0x44, 0x55, 0x66].as_slice())
+    );
+}
+
+#[test]
+fn occupied_max_image_suffix_wraps_to_a_free_low_number() {
+    let mut document = Document::new();
+    let bytes = document.to_bytes().unwrap();
+    let mut package = rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let lower_name = format!("/word/media/image{}.png", usize::MAX - 1);
+    let max_name = format!("/word/media/image{}.png", usize::MAX);
+
+    package.set_part("/word/media/image1.png", vec![0xaa]);
+    package.set_part(&lower_name, vec![0xbb]);
+    package.set_part(&max_name, vec![0xbb]);
+
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let mut reopened = Document::from_bytes(&input.into_inner()).unwrap();
+    reopened.add_picture(
+        &[0x44, 0x55, 0x66],
+        "added.png",
+        Length::inches(1.0),
+        Length::inches(1.0),
+    );
+
+    let saved = reopened.to_bytes().unwrap();
+    let saved_package = rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+
+    assert_eq!(
+        saved_package.get_part("/word/media/image2.png"),
+        Some([0x44, 0x55, 0x66].as_slice())
+    );
+    assert!(saved_package.get_part("/word/media/image0.png").is_none());
+    assert_eq!(
+        saved_package.get_part("/word/media/image1.png"),
+        Some([0xaa].as_slice())
+    );
+    assert_eq!(saved_package.get_part(&lower_name), Some([0xbb].as_slice()));
+    assert_eq!(saved_package.get_part(&max_name), Some([0xbb].as_slice()));
+}
+
+#[test]
+fn max_minus_one_allocates_max_then_wraps_safely() {
+    let mut document = Document::new();
+    let bytes = document.to_bytes().unwrap();
+    let mut package = rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let lower_name = format!("/word/media/image{}.png", usize::MAX - 1);
+    let max_name = format!("/word/media/image{}.png", usize::MAX);
+
+    package.set_part(&lower_name, vec![0xaa]);
+
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let mut reopened = Document::from_bytes(&input.into_inner()).unwrap();
+    reopened.add_picture(
+        &[0x11, 0x22, 0x33],
+        "first.png",
+        Length::inches(1.0),
+        Length::inches(1.0),
+    );
+    reopened.add_picture(
+        &[0x44, 0x55, 0x66],
+        "second.png",
+        Length::inches(1.0),
+        Length::inches(1.0),
+    );
+
+    let saved = reopened.to_bytes().unwrap();
+    let saved_package = rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+
+    assert_eq!(saved_package.get_part(&lower_name), Some([0xaa].as_slice()));
+    assert_eq!(
+        saved_package.get_part(&max_name),
+        Some([0x11, 0x22, 0x33].as_slice())
+    );
+    assert_eq!(
+        saved_package.get_part("/word/media/image1.png"),
+        Some([0x44, 0x55, 0x66].as_slice())
+    );
+    assert!(saved_package.get_part("/word/media/image0.png").is_none());
+}
+
 /// A replacement that contains the placeholder used to restart the search from
 /// offset 0 and match its own output forever.
 #[test]

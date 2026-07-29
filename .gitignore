@@ -5,6 +5,7 @@
 # Generated sample outputs
 samples/*.docx
 samples/*.pdf
+samples/*.png
 samples/*.html
 samples/*.md
 samples/~$*
@@ -24,3 +25,16 @@ Thumbs.db
 # Temporary files
 /tmp/
 *.tmp
+
+# Workflow scratch. In-flight notes and sprint run state are local memory,
+# not the delivery record. The record lives in docs/sprints/.
+.claude/scratch/
+.claude/settings.local.json
+
+# Deck corpus. Fetched by a script rather than committed, so the published
+# crates stay small. See docs/hld/12-testing-strategy.md.
+/corpus/
+
+# Python bytecode from the gate scripts under scripts/.
+__pycache__/
+*.pyc

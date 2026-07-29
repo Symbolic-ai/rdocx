@@ -50,21 +50,43 @@ fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
 /// Parse JPEG SOF marker to get image dimensions.
 fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     let mut i = 2; // Skip SOI marker
-    while i + 4 < data.len() {
+    while i < data.len() {
         if data[i] != 0xFF {
             return None;
         }
-        let marker = data[i + 1];
-        let length = u16::from_be_bytes([data[i + 2], data[i + 3]]) as usize;
+
+        // A marker may be preceded by any number of 0xFF fill bytes.
+        while data.get(i) == Some(&0xFF) {
+            i += 1;
+        }
+        let marker = *data.get(i)?;
+        i += 1;
+
+        // EOI terminates the codestream, so trailing bytes are not markers.
+        if marker == 0xD9 {
+            return None;
+        }
+
+        // SOI, TEM, and restart markers have no length field.
+        if matches!(marker, 0x01 | 0xD0..=0xD8) {
+            continue;
+        }
+
+        let length = u16::from_be_bytes([*data.get(i)?, *data.get(i + 1)?]) as usize;
+        if length < 2 {
+            return None;
+        }
+        let segment_end = i.checked_add(length)?;
+        let segment = data.get(i..segment_end)?;
 
         // SOF0, SOF1, SOF2 markers contain dimensions
-        if matches!(marker, 0xC0..=0xC2) && i + 9 < data.len() {
-            let height = u16::from_be_bytes([data[i + 5], data[i + 6]]) as u32;
-            let width = u16::from_be_bytes([data[i + 7], data[i + 8]]) as u32;
+        if matches!(marker, 0xC0..=0xC2) {
+            let height = u16::from_be_bytes([*segment.get(3)?, *segment.get(4)?]) as u32;
+            let width = u16::from_be_bytes([*segment.get(5)?, *segment.get(6)?]) as u32;
             return Some((width, height));
         }
 
-        i += 2 + length;
+        i = segment_end;
     }
     None
 }
@@ -300,6 +322,15 @@ fn paeth_predictor(a: i32, b: i32, c: i32) -> u8 {
 mod tests {
     use super::*;
 
+    fn jpeg_with_restart_marker_before_sof() -> Vec<u8> {
+        let mut jpeg = vec![0xFF, 0xD8];
+        jpeg.extend_from_slice(&[0xFF, 0xD0]);
+        jpeg.extend_from_slice(&[
+            0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x02, 0x00, 0x03, 0x03, 0x01, 0x11, 0x00,
+        ]);
+        jpeg
+    }
+
     #[test]
     fn decode_jpeg_pass_through() {
         // Minimal JPEG: SOI + SOF0 header + EOI
@@ -335,5 +366,33 @@ mod tests {
         assert!(is_jpeg(&[0xFF, 0xD8, 0xFF]));
         assert!(!is_jpeg(&[0x89, 0x50, 0x4E, 0x47])); // PNG signature
         assert!(!is_jpeg(&[0xFF])); // Too short
+    }
+
+    #[test]
+    fn jpeg_restart_marker_before_sof_preserves_dimensions() {
+        assert_eq!(
+            jpeg_dimensions(&jpeg_with_restart_marker_before_sof()),
+            Some((3, 2))
+        );
+    }
+
+    #[test]
+    fn jpeg_bytes_after_eoi_cannot_supply_dimensions() {
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xD9];
+        jpeg.extend_from_slice(&[
+            0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x02, 0x00, 0x03, 0x03, 0x01, 0x11, 0x00,
+        ]);
+
+        assert_eq!(jpeg_dimensions(&jpeg), None);
+    }
+
+    #[test]
+    fn every_truncated_jpeg_header_returns_without_panicking() {
+        let jpeg = jpeg_with_restart_marker_before_sof();
+
+        for length in 0..jpeg.len() {
+            assert_eq!(jpeg_dimensions(&jpeg[..length]), None, "length {length}");
+        }
+        assert_eq!(jpeg_dimensions(&jpeg), Some((3, 2)));
     }
 }

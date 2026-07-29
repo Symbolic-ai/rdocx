@@ -1,0 +1,6 @@
+interface:
+  display_name: "Voice Rules"
+  short_description: "The prose conventions /verify enforces. No em-dash, no en-das..."
+  default_prompt: "Use $voice-rules to follow the repository workflow."
+policy:
+  allow_implicit_invocation: true
