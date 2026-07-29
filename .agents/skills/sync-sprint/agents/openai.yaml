@@ -1,0 +1,6 @@
+interface:
+  display_name: "Sync Sprint"
+  short_description: "Open a new sprint. Regenerates CURRENT_SPRINT.md and creates..."
+  default_prompt: "Use $sync-sprint to follow the repository workflow."
+policy:
+  allow_implicit_invocation: false

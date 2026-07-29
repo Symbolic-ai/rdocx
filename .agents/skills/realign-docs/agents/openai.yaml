@@ -1,0 +1,6 @@
+interface:
+  display_name: "Realign Docs"
+  short_description: "Bring README.md and docs/hld/ back into line with what was ac..."
+  default_prompt: "Use $realign-docs to follow the repository workflow."
+policy:
+  allow_implicit_invocation: false
