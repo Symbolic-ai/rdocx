@@ -33,6 +33,10 @@ SCRATCH = REPO / ".claude" / "scratch"
 HANDOFFS = REPO / ".claude" / "handoffs"
 CURRENT_SPRINT = REPO / "docs" / "sprints" / "CURRENT_SPRINT.md"
 BACKLOG = REPO / "docs" / "sprints" / "BACKLOG.md"
+SPRINT_TRACKER = REPO / "docs" / "sprints" / "SPRINT_TRACKER.md"
+AS_BUILT = REPO / "docs" / "sprints" / "AS_BUILT.md"
+PLANS = REPO / ".claude" / "plans"
+REVIEWS = REPO / ".claude" / "reviews"
 
 SPRINT_RE = re.compile(r"^# Current Sprint, (S\d+(?:\.\d+)?)$", re.MULTILINE)
 WAVE_ROW_RE = re.compile(
@@ -70,6 +74,7 @@ PHASES = (
     "design",
     "questions",
     "implementation",
+    "integration",
     "verification",
     "review",
     "ready_to_close",
@@ -164,6 +169,51 @@ def backlog_statuses() -> dict[str, str]:
     if not BACKLOG.exists():
         die(f"{BACKLOG} not found")
     return {r[0]: r[2] for r in BACKLOG_ROW_RE.findall(BACKLOG.read_text(encoding="utf-8"))}
+
+
+def completed_record_problems(sprint: str, fid: str) -> list[str]:
+    """Return missing or stale durable records for one completed feature."""
+    problems: list[str] = []
+    current_id, current_features = parse_current_sprint()
+    current = {feature["fid"]: feature for feature in current_features}
+    feature = current.get(fid)
+    if current_id != sprint:
+        problems.append(f"CURRENT_SPRINT.md says {current_id}, run state says {sprint}")
+    elif feature is None:
+        problems.append(f"{fid} has no CURRENT_SPRINT.md row")
+    else:
+        if feature["tracker_status"] != "done":
+            problems.append(
+                f"{fid} is completed in run state but "
+                f"'{feature['tracker_status']}' in CURRENT_SPRINT.md"
+            )
+        if feature["owner"] != "-":
+            problems.append(
+                f"{fid} is completed but CURRENT_SPRINT.md owner is "
+                f"'{feature['owner']}'"
+            )
+
+    plan = PLANS / f"{fid}-design.md"
+    if not plan.exists():
+        problems.append(f"{fid} has no design plan at {plan.relative_to(REPO)}")
+    elif "**Status**: completed" not in plan.read_text(encoding="utf-8"):
+        problems.append(f"{fid} design plan is not completed")
+
+    if not AS_BUILT.exists() or not re.search(
+        rf"^### {re.escape(fid)},", AS_BUILT.read_text(encoding="utf-8"), re.MULTILINE
+    ):
+        problems.append(f"{fid} has no AS_BUILT.md entry")
+
+    tracker_text = (
+        SPRINT_TRACKER.read_text(encoding="utf-8") if SPRINT_TRACKER.exists() else ""
+    )
+    if not re.search(
+        rf"^\|\s*{re.escape(fid)}\s*\|\s*{re.escape(sprint)}\s*\|",
+        tracker_text,
+        re.MULTILINE,
+    ):
+        problems.append(f"{fid} has no {sprint} row in SPRINT_TRACKER.md")
+    return problems
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -407,14 +457,33 @@ def cmd_close_preflight(args: argparse.Namespace) -> int:
     if not full:
         problems.append("no passing `/verify --full` recorded")
 
-    # The trackers must agree with the run state. This is the check that catches
-    # a completion that updated the JSON but not the markdown, or the reverse.
+    # The durable delivery record must agree with the run state. This catches a
+    # completion that updated the JSON but missed one of the canonical ledgers.
     statuses = backlog_statuses()
     for fid, f in data["features"].items():
         want = "done" if f["state"] == "completed" else None
         if want and statuses.get(fid) != want:
             problems.append(
                 f"{fid} is completed in run state but '{statuses.get(fid)}' in BACKLOG.md"
+            )
+        if want:
+            problems.extend(completed_record_problems(args.sprint, fid))
+
+    if data["reviews"]:
+        last_pass = data["reviews"][-1]["pass"]
+        review = REVIEWS / f"{args.sprint}-sprint-review-pass-{last_pass}.md"
+        if not review.exists():
+            problems.append(
+                f"latest sprint review file is missing: {review.relative_to(REPO)}"
+            )
+        elif not re.search(
+            r"^\*\*Verdict\*\*:\s*0 blocking,",
+            review.read_text(encoding="utf-8"),
+            re.MULTILINE,
+        ):
+            problems.append(
+                "latest sprint review file does not report zero blocking: "
+                f"{review.relative_to(REPO)}"
             )
 
     if problems:

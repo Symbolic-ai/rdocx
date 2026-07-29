@@ -12,8 +12,8 @@ the workspace, which is what `/close-sprint` requires.
 
 1. **Format.** `cargo fmt --all --check`.
 
-2. **Lint.** `cargo clippy --workspace --all-targets --all-features -D warnings`,
-   with `--exclude rdocx-py --exclude rpptx-py`.
+2. **Lint.** `cargo clippy --workspace --all-targets --all-features --exclude
+   rdocx-py --exclude rpptx-py -- -D warnings`.
 
 3. **Test the changed crates.** `cargo test -p <crate>` for each crate touched.
    Determine the set from `git diff --name-only` against the sprint base.
@@ -39,17 +39,28 @@ the workspace, which is what `/close-sprint` requires.
    they agree. Regenerate with the same script and commit the result.
 
 7. **The no-default-features path.**
-   `cargo test -p oxml-layout --no-default-features`. This is the only thing
-   that exercises bundled fonts being off.
+   `cargo test -p rdocx-layout --no-default-features`. This is the only thing
+   that exercises bundled fonts being off. Change the package name to
+   `oxml-layout` in F-013 when that rename lands.
 
 8. **The wasm targets.**
-   `cargo check --target wasm32-unknown-unknown -p rdocx-wasm -p rpptx-wasm`.
-   Skipped by `--fast`.
+   `cargo check --target wasm32-unknown-unknown -p rdocx-wasm`. Add
+   `-p rpptx-wasm` in F-138 when that crate lands. Skipped by `--fast`.
 
 9. **Docs.** `cargo doc --workspace --no-deps` with `RUSTDOCFLAGS=-D warnings`.
    Skipped by `--fast`.
 
-10. **Packaging.** `cargo publish --dry-run` plus the `.crate` size assertion.
+10. **Packaging.** Run `cargo publish --workspace --dry-run`, then assert every
+    generated archive is below the crates.io 10 MiB limit:
+
+    ```bash
+    oversized=$(find target/package -name '*.crate' -size +10485760c -print)
+    if [ -n "$oversized" ]; then
+      echo "package exceeds 10 MiB: $oversized" >&2
+      exit 1
+    fi
+    ```
+
     `--full` only. This is what `--no-verify` used to hide.
 
 11. **Supply chain.** `cargo deny check`. `--full` only.

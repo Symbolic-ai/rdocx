@@ -5,7 +5,7 @@
 **Goal**: Make every future change measurable before anything moves. Rendering
 becomes reproducible across machines, a byte-level baseline exists for every
 sample, and the three shipped defects found during the architecture audit are
-fixed and released.
+fixed. Release remains F-012 in S02.
 
 ## Spec references
 
