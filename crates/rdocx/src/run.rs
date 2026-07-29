@@ -209,6 +209,16 @@ impl<'a> RunRef<'a> {
         self.inner.text()
     }
 
+    /// The footnote id referenced by this run, if it holds a
+    /// `<w:footnoteReference/>`.
+    pub fn footnote_id(&self) -> Option<i32> {
+        use rdocx_oxml::text::RunContent;
+        self.inner.content.iter().find_map(|c| match c {
+            RunContent::FootnoteRef { id } => Some(*id),
+            _ => None,
+        })
+    }
+
     /// Check if bold.
     pub fn is_bold(&self) -> bool {
         self.inner
@@ -234,6 +244,15 @@ impl<'a> RunRef<'a> {
             .as_ref()
             .and_then(|rpr| rpr.strike)
             .unwrap_or(false)
+    }
+
+    /// Check if underlined (any underline style other than none).
+    pub fn is_underline(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|rpr| rpr.underline.as_ref())
+            .is_some_and(|u| !matches!(u, ST_Underline::None))
     }
 
     /// Get font size in points, if set.
@@ -264,6 +283,36 @@ impl<'a> RunRef<'a> {
     /// Get character spacing in twips, if set.
     pub fn character_spacing(&self) -> Option<Twips> {
         self.inner.properties.as_ref().and_then(|rpr| rpr.spacing)
+    }
+
+    /// Get the highlight color, if set: either the `w:highlight` keyword
+    /// (e.g. "yellow") or the shading fill value the `highlight()` builder
+    /// writes — OOXML has two mechanisms for highlighted text.
+    pub fn highlight(&self) -> Option<String> {
+        let rpr = self.inner.properties.as_ref()?;
+        if let Some(h) = rpr.highlight {
+            return Some(h.to_str().to_string());
+        }
+        rpr.shading.as_ref().and_then(|sh| sh.fill.clone())
+    }
+
+    /// If this run contains an inline image, return (rel_id, alt text).
+    pub fn inline_image(&self) -> Option<(&str, Option<&str>)> {
+        use rdocx_oxml::text::RunContent;
+        for c in &self.inner.content {
+            if let RunContent::Drawing(d) = c {
+                if let Some(inline) = &d.inline {
+                    return Some((inline.embed_id.as_str(), inline.description.as_deref()));
+                }
+            }
+        }
+        None
+    }
+
+    /// Get raised/lowered text position in half-points, if set.
+    /// (LibreOffice encodes super/subscript this way on HTML import.)
+    pub fn position(&self) -> Option<i32> {
+        self.inner.properties.as_ref().and_then(|rpr| rpr.position)
     }
 
     /// Get vertical alignment (superscript/subscript), if set.

@@ -122,6 +122,15 @@ impl<'a> Paragraph<'a> {
         self.inner.text()
     }
 
+    /// Append a footnote reference run (`<w:footnoteReference w:id="..."/>`).
+    /// The footnote content itself is added via `Document::add_footnote`.
+    pub fn add_footnote_ref(&mut self, id: i32) {
+        use rdocx_oxml::text::{CT_R, RunContent};
+        let mut r = CT_R::new("");
+        r.content = vec![RunContent::FootnoteRef { id }];
+        self.inner.runs.push(r);
+    }
+
     /// Add a run with the given text and return a mutable reference for chaining.
     pub fn add_run(&mut self, text: &str) -> Run<'_> {
         self.inner.runs.push(CT_R::new(text));
@@ -404,6 +413,45 @@ impl<'a> ParagraphRef<'a> {
     }
 
     /// Get the alignment, if set.
+    /// Check if a page break is set before this paragraph.
+    pub fn is_page_break_before(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|ppr| ppr.page_break_before)
+            .unwrap_or(false)
+    }
+
+    /// Line spacing as a multiplier of single spacing (1.0, 1.5, 2.0…)
+    /// when the spacing rule is "auto" (the w:line value counts 240ths of
+    /// a line). Returns None when unset or when the rule is exact/atLeast
+    /// point spacing.
+    pub fn line_spacing_multiple(&self) -> Option<f64> {
+        let ppr = self.inner.properties.as_ref()?;
+        let line = ppr.line_spacing?;
+        match ppr.line_rule.as_deref() {
+            None | Some("auto") => Some(line.0 as f64 / 240.0),
+            _ => None,
+        }
+    }
+
+    /// Hyperlink spans in this paragraph as (run_start, run_end, rel_id).
+    /// Resolve rel_id to a URL with `Document::hyperlink_url`.
+    pub fn hyperlink_spans(&self) -> Vec<(usize, usize, Option<&str>)> {
+        self.inner
+            .hyperlinks
+            .iter()
+            .map(|h| (h.run_start, h.run_end, h.rel_id.as_deref()))
+            .collect()
+    }
+
+    /// Get list numbering as (num_id, level) if this paragraph is a list
+    /// item. Resolve bullet-vs-numbered via `Document::numbering_is_bullet`.
+    pub fn numbering(&self) -> Option<(u32, u32)> {
+        let ppr = self.inner.properties.as_ref()?;
+        Some((ppr.num_id?, ppr.num_ilvl.unwrap_or(0)))
+    }
+
     pub fn alignment(&self) -> Option<Alignment> {
         self.inner
             .properties
