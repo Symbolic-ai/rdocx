@@ -25,6 +25,11 @@ defended.
 | F-004 | S01 | S | 1 | 1 | 2026-07-29 | Caladea licence and notice |
 | F-005 | S01 | S | 1 | 1 | 2026-07-29 | Collision-safe image suffix allocation |
 | F-006 | S01 | S | 1 | 1 | 2026-07-29 | Safe JPEG standalone-marker walk |
+| F-007 | S02 | S | 1 | 1 | 2026-07-30 | Relationship-based core properties |
+| F-008 | S02 | M | 2 | 1 | 2026-07-30 | 61 non-consuming setter twins |
+| F-009 | S02 | M | 2 | 1 | 2026-07-30 | Thread-safe two-mode layout cache |
+| F-010 | S02 | S | 1 | 1 | 2026-07-30 | Fourteen crates.io names reserved |
+| F-011 | S02 | S | 1 | 1 | 2026-07-30 | Unit truncation behavior pinned |
 
 ## Velocity
 

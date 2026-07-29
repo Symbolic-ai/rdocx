@@ -27,11 +27,11 @@ immediately before structural churn begins.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-007 | Resolve core properties through the rel | S | in-progress | codex |
-| F-008 | Non-consuming setter twins | M | in-progress | codex |
-| F-009 | Cache the layout result | M | in-progress | codex |
-| F-010 | Reserve crate names | S | in-progress | codex |
-| F-011 | Pin unit truncation behaviour | S | in-progress | codex |
+| F-007 | Resolve core properties through the rel | S | done | - |
+| F-008 | Non-consuming setter twins | M | done | - |
+| F-009 | Cache the layout result | M | done | - |
+| F-010 | Reserve crate names | S | done | - |
+| F-011 | Pin unit truncation behaviour | S | done | - |
 | F-012 | Tag v0.3.1 | S | pending | - |
 
 ## Sequencing note
