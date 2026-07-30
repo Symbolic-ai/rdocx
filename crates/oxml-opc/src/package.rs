@@ -399,7 +399,7 @@ mod tests {
 <p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld>
   <p:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/>
-  <p:sldLayoutIdLst><p:sldLayoutId id="1" r:id="rId1"/></p:sldLayoutIdLst>
+  <p:sldLayoutIdLst><p:sldLayoutId id="2147483648" r:id="rId1"/></p:sldLayoutIdLst>
   <p:txStyles><p:titleStyle/><p:bodyStyle/><p:otherStyle/></p:txStyles>
 </p:sldMaster>"#;
         const THEME: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -613,6 +613,18 @@ mod tests {
             .target;
         let theme_part = OpcPackage::resolve_rel_target(&master_part, theme_target);
         assert_eq!(theme_part, "/ppt/theme/theme1.xml");
+
+        let master_xml = std::str::from_utf8(package.parts.get(&master_part).unwrap()).unwrap();
+        let layout_id = master_xml
+            .split_once("<p:sldLayoutId id=\"")
+            .unwrap()
+            .1
+            .split_once('"')
+            .unwrap()
+            .0
+            .parse::<u64>()
+            .unwrap();
+        assert!(layout_id >= 2_147_483_648);
 
         assert!(package.parts.contains_key(&presentation_part));
         assert!(package.parts.contains_key(&slide_part));

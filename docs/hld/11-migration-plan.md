@@ -153,9 +153,10 @@ The repository keeps the name `tensorbee/rdocx`, so **no existing link is
 affected at all**. crates.io indexes by crate name, docs.rs builds from the
 uploaded tarball, and no redirect is involved.
 
-rdocx goes to **0.3.0**. It is a breaking release regardless: `Error::Opc` and
-`Error::Layout` change their inner types, `line.rs` is a public module whose
-types change, and `PositionedElement` becomes `#[non_exhaustive]`.
+The eventual rdocx cutover is a breaking release regardless of its assigned
+version. `Error::Opc` and `Error::Layout` change their inner types, `line.rs` is
+a public module whose types change, and `PositionedElement` becomes
+`#[non_exhaustive]`.
 
 ## Release tooling
 
@@ -165,6 +166,8 @@ then tags the exact fully verified commit after a separate final approval. It
 owns the `v*` release namespace, while `/close-sprint` owns `sNN` tags and
 `/spec-bump` owns local `spec-v*` tags.
 
-`publish.yml` uses `cargo publish --workspace`, available at the pinned
-toolchain. It performs archive verification and propagates authentication,
-network, compilation and duplicate-version failures without relabelling them.
+Today `publish.yml` names the seven released rdocx packages explicitly in
+dependency order. F-049 expands that allowlist to the completed shared and
+PowerPoint crates only after PowerPoint development and separate publication
+approval. The workflow propagates authentication, network, compilation and
+duplicate-version failures without relabelling them.
