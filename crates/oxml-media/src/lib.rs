@@ -1,5 +1,88 @@
 //! Format-neutral image metadata and media naming.
 
+use std::collections::HashSet;
+
+/// Allocates collision-free numbered media part names.
+#[derive(Clone, Debug)]
+pub struct MediaNamer {
+    directory: String,
+    stem: String,
+    occupied: HashSet<usize>,
+    next: usize,
+}
+
+impl MediaNamer {
+    /// Scans existing package part names for positive numeric suffixes.
+    pub fn scan<'a>(directory: &str, stem: &str, existing: impl Iterator<Item = &'a str>) -> Self {
+        let directory = normalize_directory(directory);
+        let mut occupied = HashSet::new();
+        for name in existing {
+            if let Some(index) = media_index(name, &directory, stem) {
+                occupied.insert(index);
+            }
+        }
+        let next = occupied
+            .iter()
+            .copied()
+            .max()
+            .and_then(|index| index.checked_add(1))
+            .unwrap_or(1);
+
+        Self {
+            directory,
+            stem: stem.to_owned(),
+            occupied,
+            next,
+        }
+    }
+
+    /// Returns the next free package part name using `extension` verbatim.
+    pub fn next_part_name(&mut self, extension: &str) -> String {
+        while self.occupied.contains(&self.next) {
+            self.next = self.next.checked_add(1).unwrap_or(1);
+        }
+
+        let index = self.next;
+        self.occupied.insert(index);
+        self.next = index.checked_add(1).unwrap_or(1);
+        let separator = if self.directory == "/" { "" } else { "/" };
+        format!(
+            "{}{separator}{}{index}.{extension}",
+            self.directory, self.stem
+        )
+    }
+}
+
+fn normalize_directory(directory: &str) -> String {
+    let directory = directory.trim_matches('/');
+    if directory.is_empty() {
+        "/".to_owned()
+    } else {
+        format!("/{directory}")
+    }
+}
+
+fn media_index(name: &str, directory: &str, stem: &str) -> Option<usize> {
+    let (name_directory, filename) = name.rsplit_once('/')?;
+    let name_directory = if name_directory.is_empty() {
+        "/"
+    } else {
+        name_directory
+    };
+    if name_directory != directory {
+        return None;
+    }
+    let suffix = filename.strip_prefix(stem)?;
+    let (digits, extension) = suffix.split_once('.')?;
+    if digits.is_empty()
+        || extension.is_empty()
+        || !digits.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    digits.parse().ok().filter(|index| *index > 0)
+}
+
 /// An image format supported by OOXML consumers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImageFormat {
@@ -640,7 +723,7 @@ fn is_standard_wmf(data: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImageFormat, ImageInfo, NativeSize, probe, resolve};
+    use super::{ImageFormat, ImageInfo, MediaNamer, NativeSize, probe, resolve};
 
     const SVG_WITH_PROLOG: &[u8] = br#"<?xml version="1.0"?>
         <!-- generated -->
@@ -987,6 +1070,75 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn next_image_name_uses_the_highest_existing_index_not_the_part_count() {
+        let cases: &[(&[&str], &str)] = &[
+            (
+                &["/word/media/image1.png", "/word/media/image5.png"],
+                "/word/media/image6.png",
+            ),
+            (
+                &[
+                    "/word/media/image1.png",
+                    "/word/media/image2.png",
+                    "/word/media/image4.png",
+                ],
+                "/word/media/image5.png",
+            ),
+        ];
+
+        for (existing, expected) in cases {
+            let mut namer = MediaNamer::scan("/word/media", "image", existing.iter().copied());
+            assert_eq!(namer.next_part_name("png"), *expected);
+        }
+    }
+
+    #[test]
+    fn malformed_media_names_do_not_change_the_highest_image_index() {
+        let existing = [
+            "/word/media/image4.png",
+            "/word/media/image.png",
+            "/word/media/imagezero.png",
+            "/word/media/image-7.png",
+            "/word/media/image0.png",
+            "/word/media/images99.png",
+            "/ppt/media/image99.png",
+        ];
+        let mut namer = MediaNamer::scan("/word/media", "image", existing.iter().copied());
+
+        assert_eq!(namer.next_part_name("png"), "/word/media/image5.png");
+
+        let mut normalized = MediaNamer::scan("word/media/", "image", existing.iter().copied());
+        assert_eq!(normalized.next_part_name("jpeg"), "/word/media/image5.jpeg");
+
+        let root = ["/image1.png"];
+        let mut root_namer = MediaNamer::scan("/", "image", root.into_iter());
+        assert_eq!(root_namer.next_part_name("webp"), "/image2.webp");
+    }
+
+    #[test]
+    fn occupied_max_image_suffix_wraps_to_a_free_low_number() {
+        let lower_name = format!("/word/media/image{}.png", usize::MAX - 1);
+        let max_name = format!("/word/media/image{}.png", usize::MAX);
+        let existing = ["/word/media/image1.png", &lower_name, &max_name];
+        let mut namer = MediaNamer::scan("/word/media", "image", existing.into_iter());
+
+        assert_eq!(namer.next_part_name("png"), "/word/media/image2.png");
+    }
+
+    #[test]
+    fn max_minus_one_allocates_max_then_wraps_safely() {
+        let lower_name = format!("/word/media/image{}.png", usize::MAX - 1);
+        let existing = [lower_name.as_str()];
+        let mut namer = MediaNamer::scan("/word/media", "image", existing.into_iter());
+
+        assert_eq!(
+            namer.next_part_name("png"),
+            format!("/word/media/image{}.png", usize::MAX)
+        );
+        assert_eq!(namer.next_part_name("png"), "/word/media/image1.png");
     }
 
     #[test]

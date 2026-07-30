@@ -1,6 +1,6 @@
 # F-025, MediaNamer
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S05
 **Size**: S
 **Depends on**: none
@@ -68,10 +68,10 @@ Expected to remain unchanged. Existing rdocx naming remains the active path.
 
 ## Implementation checklist
 
-- [ ] Add exact directory, stem, and positive suffix parsing.
-- [ ] Add collision-safe allocation and integer-boundary wrap.
-- [ ] Port all F-005 sentence-named regression cases.
-- [ ] Confirm no rdocx consumer changes and run the unchanged hash gate.
+- [x] Add exact directory, stem, and positive suffix parsing.
+- [x] Add collision-safe allocation and integer-boundary wrap.
+- [x] Port all F-005 sentence-named regression cases.
+- [x] Confirm no rdocx consumer changes and run the unchanged hash gate.
 
 ## Open questions
 
