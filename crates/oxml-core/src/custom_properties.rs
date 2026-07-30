@@ -7,7 +7,7 @@ use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::error::{OxmlError, Result};
 use crate::raw_xml::{capture_element, capture_empty_element};
-use crate::xml::local_name;
+use crate::xml::{extra_namespace_declarations, local_name};
 use crate::xml_text::read_element_text;
 
 const CUSTOM_PROPERTIES_NS: &str =
@@ -49,6 +49,7 @@ pub struct CustomProperty {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CustomProperties {
     pub properties: Vec<CustomProperty>,
+    extra_namespaces: Vec<(String, String)>,
 }
 
 impl CustomProperties {
@@ -70,6 +71,9 @@ impl CustomProperties {
                             return Err(OxmlError::UnexpectedElement("Properties".to_owned()));
                         }
                         root_open = true;
+                        properties
+                            .extra_namespaces
+                            .extend(extra_namespace_declarations(element)?);
                     } else if !root_open {
                         return Err(OxmlError::UnexpectedElement(
                             String::from_utf8_lossy(name).into_owned(),
@@ -141,6 +145,9 @@ impl CustomProperties {
         let mut root = BytesStart::new("Properties");
         root.push_attribute(("xmlns", CUSTOM_PROPERTIES_NS));
         root.push_attribute(("xmlns:vt", VARIANT_TYPES_NS));
+        for (name, value) in &self.extra_namespaces {
+            root.push_attribute((name.as_str(), value.as_str()));
+        }
         writer.write_event(Event::Start(root))?;
 
         for property in &self.properties {
@@ -401,10 +408,10 @@ mod tests {
     #[test]
     fn unknown_custom_property_value_is_preserved_verbatim() {
         let xml = format!(
-            r#"<Properties xmlns="{CUSTOM_PROPERTIES_NS}" xmlns:vt="{VARIANT_TYPES_NS}"><property fmtid="{FMTID}" pid="2" name="Unsigned"><vt:ui4>4294967295</vt:ui4></property></Properties>"#
+            r#"<Properties xmlns="{CUSTOM_PROPERTIES_NS}" xmlns:v="{VARIANT_TYPES_NS}"><property fmtid="{FMTID}" pid="2" name="Unsigned"><v:ui4>4294967295</v:ui4></property></Properties>"#
         );
         let properties = CustomProperties::from_xml(xml.as_bytes()).unwrap();
-        let expected = br#"<vt:ui4>4294967295</vt:ui4>"#;
+        let expected = br#"<v:ui4>4294967295</v:ui4>"#;
         assert_eq!(
             properties.properties[0].value,
             CustomPropertyValue::Raw(expected.to_vec())
@@ -414,6 +421,11 @@ mod tests {
             output
                 .windows(expected.len())
                 .any(|window| window == expected)
+        );
+        assert!(
+            std::str::from_utf8(&output)
+                .unwrap()
+                .contains(&format!(r#"xmlns:v="{VARIANT_TYPES_NS}""#))
         );
         assert_eq!(CustomProperties::from_xml(&output).unwrap(), properties);
     }

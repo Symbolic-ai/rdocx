@@ -1,13 +1,13 @@
 //! Application-specific properties from `docProps/app.xml`.
 
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
-use quick_xml::{Reader, Writer, XmlVersion};
+use quick_xml::{Reader, Writer};
 use std::collections::HashSet;
 use std::io::Write;
 
 use crate::error::{OxmlError, Result};
 use crate::raw_xml::{capture_element, capture_empty_element};
-use crate::xml::local_name;
+use crate::xml::{extra_namespace_declarations, local_name};
 use crate::xml_text::read_element_text;
 
 const EXTENDED_PROPERTIES_NS: &str =
@@ -202,7 +202,9 @@ impl AppProperties {
                             return Err(OxmlError::UnexpectedElement("Properties".to_owned()));
                         }
                         root_open = true;
-                        properties.capture_namespaces(element)?;
+                        properties
+                            .extra_namespaces
+                            .extend(extra_namespace_declarations(element)?);
                     } else if !root_open {
                         return Err(OxmlError::UnexpectedElement(
                             String::from_utf8_lossy(name).into_owned(),
@@ -313,21 +315,6 @@ impl AppProperties {
 
         writer.write_event(Event::End(BytesEnd::new("Properties")))?;
         Ok(writer.into_inner())
-    }
-
-    fn capture_namespaces(&mut self, element: &BytesStart<'_>) -> Result<()> {
-        for attribute in element.attributes() {
-            let attribute = attribute?;
-            let key = attribute.key.as_ref();
-            if key.starts_with(b"xmlns:") && key != b"xmlns:vt" {
-                let name = std::str::from_utf8(key)?.to_owned();
-                let value = attribute
-                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
-                    .into_owned();
-                self.extra_namespaces.push((name, value));
-            }
-        }
-        Ok(())
     }
 
     fn set_text(&mut self, property: KnownProperty, text: String) -> Result<()> {

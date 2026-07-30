@@ -1,6 +1,9 @@
 //! Shared OOXML namespace and attribute helpers.
 
+use quick_xml::XmlVersion;
 use quick_xml::events::BytesStart;
+
+use crate::error::Result;
 
 /// Relationships namespace.
 pub const R_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -28,6 +31,25 @@ pub fn get_attr(element: &BytesStart<'_>, name: &[u8]) -> Option<String> {
         .flatten()
         .find(|attr| matches_local_name(attr.key.as_ref(), name))
         .and_then(|attr| std::str::from_utf8(&attr.value).ok().map(str::to_owned))
+}
+
+/// Return non-`vt` prefixed namespace declarations needed by raw XML children.
+pub(crate) fn extra_namespace_declarations(
+    element: &BytesStart<'_>,
+) -> Result<Vec<(String, String)>> {
+    let mut declarations = Vec::new();
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let key = attribute.key.as_ref();
+        if key.starts_with(b"xmlns:") && key != b"xmlns:vt" {
+            let name = std::str::from_utf8(key)?.to_owned();
+            let value = attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
+                .into_owned();
+            declarations.push((name, value));
+        }
+    }
+    Ok(declarations)
 }
 
 #[cfg(test)]
