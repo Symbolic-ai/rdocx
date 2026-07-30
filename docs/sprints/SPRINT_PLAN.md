@@ -61,12 +61,7 @@ land before anyone is tempted to change truncation to rounding.
 |------|-------|------|
 | F-013 | Create oxml-core                             | M |
 | F-014 | New unit types                               | M |
-| F-015 | rdocx-oxml becomes a facade                  | S |
-| F-016 | Length re-export                             | S |
 | F-017 | App and custom properties                    | M |
-
-F-015 is the load-bearing trick of the whole migration and its acceptance check
-is a `git diff --stat` shape, not a behaviour.
 
 #### Sprint S04, oxml-opc
 
@@ -74,13 +69,19 @@ is a `git diff --stat` shape, not a behaviour.
 
 | F-ID | Title | Size |
 |------|-------|------|
+| F-015 | rdocx-oxml becomes a facade                  | S |
+| F-016 | Length re-export                             | S |
 | F-018 | Create oxml-opc                              | M |
 | F-019 | PresentationML relationship and content types| S |
 | F-020 | oxml-opc reads a pptx                        | M |
 | F-021 | Zip-slip hardening tests                     | S |
 | F-022 | rdocx-opc deprecation shim                   | S |
 
-F-020 converts the plan's central assumption into a test.
+F-015 and F-016 carry from S03. They must not begin until the rdocx 0.5.0
+release boundary has passed, so published rdocx packages remain independent of
+the unpublished `oxml-core` development crate. F-015 remains the load-bearing
+facade step, and its acceptance check is a `git diff --stat` shape rather than
+a behaviour. F-020 converts the plan's central package assumption into a test.
 
 ### M3, Media
 

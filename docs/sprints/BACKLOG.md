@@ -61,8 +61,8 @@ regenerated, never hand-edited.
 |------|-------|--------|------|--------|
 | F-013 | Create oxml-core                             | S03 | M | done |
 | F-014 | New unit types                               | S03 | M | done |
-| F-015 | rdocx-oxml becomes a facade                  | S03 | S | pending |
-| F-016 | Length re-export                             | S03 | S | pending |
+| F-015 | rdocx-oxml becomes a facade                  | S04 | S | pending |
+| F-016 | Length re-export                             | S04 | S | pending |
 | F-017 | App and custom properties                    | S03 | M | done |
 | F-018 | Create oxml-opc                              | S04 | M | pending |
 | F-019 | PresentationML relationship and content types| S04 | S | pending |
