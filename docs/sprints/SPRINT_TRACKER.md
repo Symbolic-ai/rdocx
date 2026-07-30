@@ -41,6 +41,10 @@ defended.
 | F-019 | S04 | S | 1 | 1 | 2026-07-30 | PresentationML package constants |
 | F-020 | S04 | M | 2 | 1 | 2026-07-30 | Code-built PowerPoint OPC proof |
 | F-021 | S04 | S | 1 | 1 | 2026-07-30 | Canonical ZIP entry normalization |
+| F-023 | S05 | M | 2 | 1 | 2026-07-30 | Dependency-free image format sniffing |
+| F-024 | S05 | L | 4 | 1 | 2026-07-30 | Safe image metadata and DPI probing |
+| F-025 | S05 | S | 1 | 1 | 2026-07-30 | Collision-free shared media naming |
+| F-026 | S05 | S | 1 | 1 | 2026-07-30 | Dependency-free native EMU sizing |
 
 ## Velocity
 

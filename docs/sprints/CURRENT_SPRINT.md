@@ -27,10 +27,10 @@ unchanged until the post-PowerPoint cutover.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-023 | oxml-media format sniffing | M | in-progress | codex |
-| F-025 | MediaNamer | S | in-progress | codex |
-| F-024 | Image probing and DPI | L | in-progress | codex |
-| F-026 | native_size with explicit DPI | S | in-progress | codex |
+| F-023 | oxml-media format sniffing | M | done | - |
+| F-025 | MediaNamer | S | done | - |
+| F-024 | Image probing and DPI | L | done | - |
+| F-026 | native_size with explicit DPI | S | done | - |
 
 ## Sequencing note
 

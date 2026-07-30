@@ -646,3 +646,122 @@ gate. Both hostile cases were observed failing before the normalization fix.
 
 **Notes for future sessions.** Preserve package-path normalization before raw
 metadata classification when the reader gains further ZIP validation.
+
+### F-023, oxml-media format sniffing
+
+**Sprint.** S05
+**Completed.** 2026-07-30
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The new dependency-free `oxml-media` crate classifies PNG,
+JPEG, GIF, BMP, TIFF, WebP, SVG, EMF, and WMF from bytes. It exposes canonical
+extension and content-type mappings plus sniff-first resolution with extension
+fallback and a PNG default.
+
+**Non-obvious choices.** The staged crate remains at version 0.0.0 with
+publication disabled. Released rdocx consumers still use their existing image
+paths until the deferred cutover after PowerPoint development.
+
+**Deviations from the design plan.** Microscope review tightened SVG prolog
+handling and standard WMF recognition before the final clean pass.
+
+**Spec sections touched.** None. The existing media and migration contracts
+already specify the staged crate and sniffing precedence.
+
+**Tests.** Magic-byte coverage for every format, canonical mappings,
+misleading-extension precedence, unknown-image fallback, every-prefix safety,
+the dependency and package riders, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep format detection byte-led when the released
+consumers move to `oxml-media`.
+
+### F-024, Image probing and DPI
+
+**Sprint.** S05
+**Completed.** 2026-07-30
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `oxml-media` now probes pixel dimensions, optional DPI,
+bit depth, channel count, and alpha metadata from bounded PNG, JPEG, GIF, BMP,
+and WebP headers.
+
+**Non-obvious choices.** All fixtures are constructed in code. Unsupported,
+inconsistent, and truncated headers return `None`, and every indexed read is
+bounds checked without adding a decoder dependency.
+
+**Deviations from the design plan.** Microscope review found and drove fixes
+for BMP mask placement and alpha classification plus WebP frame, profile,
+canvas, RIFF-padding, and parity validation before clean pass 4.
+
+**Spec sections touched.** None. The implementation follows the existing
+binary-header parsing contract.
+
+**Tests.** PNG `pHYs`, JFIF density units, EXIF before progressive SOF, GIF,
+BMP, all WebP layouts, every-prefix truncation, 22 integrated media tests, and
+the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Preserve bounded parsing and the truncation
+loops whenever another header layout is accepted.
+
+### F-025, MediaNamer
+
+**Sprint.** S05
+**Completed.** 2026-07-30
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** `MediaNamer` scans exact directory and stem matches for
+positive numeric suffixes, allocates after the maximum, and wraps safely after
+`usize::MAX` without emitting zero or reusing an occupied name.
+
+**Non-obvious choices.** The caller's extension is preserved verbatim. The
+allocator retains occupied suffixes so integer wrap can search safely from one.
+
+**Deviations from the design plan.** Microscope pass 1 found that root package
+parts were not recognized. The fix normalizes the empty root split back to `/`
+and adds root, trailing-slash, and non-PNG regression coverage.
+
+**Spec sections touched.** None. The existing media contract already requires
+maximum-suffix allocation.
+
+**Tests.** All four F-005 sentence-named regressions, root and directory
+normalization, caller extension handling, 22 integrated media tests, and the
+integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** The released rdocx allocator remains active
+until the deferred consumer cutover.
+
+### F-026, native_size with explicit DPI
+
+**Sprint.** S05
+**Completed.** 2026-07-30
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** `ImageInfo::native_size` returns dependency-free
+`NativeSize` values with explicit width and height EMU fields. Each axis uses
+finite positive declared DPI when available and otherwise uses the caller's
+finite positive default.
+
+**Non-obvious choices.** Pixel conversion uses 914400 EMU per inch and
+truncates toward zero. Invalid effective DPI or dimensions outside the `i64`
+range return `None`.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, and
+`docs/hld/14-development-backlog.md` now state the dependency-free return type.
+
+**Tests.** Declared-DPI precedence, independent per-axis fallback, fractional
+truncation, invalid input, dependency and package riders, 22 integrated media
+tests, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** The later consumer cutover must supply its own
+default DPI and convert no units outside this API.
