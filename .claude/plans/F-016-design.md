@@ -1,7 +1,7 @@
 # F-016, Length re-export
 
 **Status**: approved
-**Sprint**: S03
+**Sprint**: S04
 **Size**: S
 **Depends on**: F-013
 
@@ -70,6 +70,8 @@ Expected to remain unchanged. Any delta blocks integration.
 
 ## Open questions
 
-Resolved by carrying this story. It will not start while publishing the real
-`oxml-core` implementation is prohibited and rdocx publication still needs to
-remain possible.
+None. The story remains approved but will be carried until PowerPoint
+development is complete and the real shared crates have an approved
+publication path. The rdocx 0.5.0 boundary protects that release but does not
+make unpublished `oxml-core` implementation code available to later package
+dry-runs.

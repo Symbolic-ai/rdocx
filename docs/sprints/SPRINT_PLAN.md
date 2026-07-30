@@ -1,16 +1,32 @@
 # Sprint Plan
 
-Sprint-by-sprint roadmap for the oxml extraction and the rpptx build. Each
-sprint is approximately 2 weeks of focused work. Sprint clocks start at the
-first `/start-feature` of that sprint, not at a fixed calendar date.
+Sprint-by-sprint roadmap for the oxml extraction and the rpptx build. Sprints
+are dependency and review boundaries, not fixed two-week containers. Sprint
+clocks start at the first `/start-feature` of that sprint, not at a fixed
+calendar date.
 
 36 sprints across 13 milestones, roughly 390 developer-days. The sizing
 rationale and the compression options are in
 `docs/hld/14-development-backlog.md`.
 
-M1 to M6 are the extraction: rdocx ends on shared infrastructure and ships as
-0.3.0, with no behavioural change. M7 to M12 build rpptx. M13 ships the
-bindings for both.
+M1 to M6 are the extraction: rdocx ends on shared infrastructure with no
+behavioural change. M7 to M12 build rpptx. M13 ships the bindings for both.
+
+## Capacity calibration after S03
+
+S01 through S03 completed 15 stories representing 24 estimated developer-days
+in 15 recorded actual days. That is 5.00 stories per working week and 1.6
+estimated days per actual day. The story-count rate is not used alone because
+the remaining plan contains substantially more L and XL work than the first
+three sprints.
+
+The remaining 366 estimated developer-days therefore forecast to about 46
+active working weeks at the observed weighted rate. Use 45 to 50 weeks as the
+current planning range. Keep the existing dependency-defined sprint and
+milestone boundaries, and size each implementation wave by dependencies,
+exclusive resources, and estimated days rather than filling a fixed calendar
+box. Recalculate after S06, when the evidence includes the first post-baseline
+L story and the higher-risk layout extraction.
 
 ## Goals per sprint
 
@@ -77,11 +93,13 @@ land before anyone is tempted to change truncation to rounding.
 | F-021 | Zip-slip hardening tests                     | S |
 | F-022 | rdocx-opc deprecation shim                   | S |
 
-F-015 and F-016 carry from S03. They must not begin until the rdocx 0.5.0
-release boundary has passed, so published rdocx packages remain independent of
-the unpublished `oxml-core` development crate. F-015 remains the load-bearing
-facade step, and its acceptance check is a `git diff --stat` shape rather than
-a behaviour. F-020 converts the plan's central package assumption into a test.
+F-015 and F-016 carry from S03, and F-022 joins their deferred cutover. They
+must not begin until PowerPoint development is complete and the real shared
+crates have an approved publication path. Passing the rdocx 0.5.0 release
+boundary protects that release but does not make an unpublished implementation
+available to later package dry-runs. F-015 remains the load-bearing facade
+step, and its acceptance check is a `git diff --stat` shape rather than a
+behaviour. F-020 converts the plan's central package assumption into a test.
 
 ### M3, Media
 

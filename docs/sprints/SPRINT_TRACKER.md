@@ -60,4 +60,4 @@ was done about it. Empty is the expected state.
 
 | Date | Trigger | F-ID or sprint | Response |
 |------|---------|----------------|----------|
-| 2026-07-30 | Three-sprint velocity variance exceeded 30 percent | S01 to S03 | Open S04 pending and replan remaining milestones before implementation |
+| 2026-07-30 | Three-sprint velocity variance exceeded 30 percent | S01 to S03 | Reforecast 366 remaining estimated days to 45 to 50 active weeks, retain dependency-defined boundaries, and recalibrate after S06 |
