@@ -225,7 +225,10 @@ is really a JPEG resolves to JPEG.
 **Test gate**: the naming assertions from F-005, now in the shared crate.
 
 ### F-026, native_size with explicit DPI (S)
-`native_size(default_dpi)`, documented as 72 for python-docx parity against
+`native_size(default_dpi) -> Option<NativeSize>` returns dependency-free EMU
+dimensions. Declared finite positive DPI wins per axis, otherwise the explicit
+caller default applies. Conversion truncates toward zero, and an invalid
+effective DPI returns `None`. Callers use 72 for python-docx parity against
 Word's 96.
 **Depends on**: F-024.
 **Test gate**: a 96 dpi PNG probed at `default_dpi = 72` yields the expected EMU.

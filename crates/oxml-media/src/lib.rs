@@ -130,6 +130,43 @@ pub struct ImageInfo {
     pub has_alpha: bool,
 }
 
+/// An image's physical size in English Metric Units.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeSize {
+    /// Width in English Metric Units.
+    pub width_emu: i64,
+    /// Height in English Metric Units.
+    pub height_emu: i64,
+}
+
+impl ImageInfo {
+    /// Calculates the physical image size using declared or fallback DPI.
+    ///
+    /// Each declared finite positive axis DPI takes precedence over
+    /// `default_dpi`. The conversion truncates fractional EMU toward zero.
+    /// Returns `None` when either axis has no finite positive effective DPI or
+    /// the converted size is outside the `i64` range.
+    pub fn native_size(&self, default_dpi: f64) -> Option<NativeSize> {
+        let dpi_x = effective_dpi(self.dpi_x, default_dpi)?;
+        let dpi_y = effective_dpi(self.dpi_y, default_dpi)?;
+        Some(NativeSize {
+            width_emu: pixels_to_emu(self.width_px, dpi_x)?,
+            height_emu: pixels_to_emu(self.height_px, dpi_y)?,
+        })
+    }
+}
+
+fn effective_dpi(declared: Option<f64>, default_dpi: f64) -> Option<f64> {
+    declared
+        .filter(|dpi| dpi.is_finite() && *dpi > 0.0)
+        .or_else(|| (default_dpi.is_finite() && default_dpi > 0.0).then_some(default_dpi))
+}
+
+fn pixels_to_emu(pixels: u32, dpi: f64) -> Option<i64> {
+    let emu = f64::from(pixels) * 914_400.0 / dpi;
+    (emu.is_finite() && emu < i64::MAX as f64).then_some(emu as i64)
+}
+
 /// Reads image metadata from a supported raster header.
 ///
 /// Unsupported, malformed, and truncated data returns `None`.
@@ -603,7 +640,7 @@ fn is_standard_wmf(data: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImageFormat, probe, resolve};
+    use super::{ImageFormat, ImageInfo, NativeSize, probe, resolve};
 
     const SVG_WITH_PROLOG: &[u8] = br#"<?xml version="1.0"?>
         <!-- generated -->
@@ -739,6 +776,85 @@ mod tests {
         data.extend_from_slice(&63_u32.to_le_bytes()[..3]);
         data.extend_from_slice(&31_u32.to_le_bytes()[..3]);
         data
+    }
+
+    #[test]
+    fn declared_dpi_overrides_the_caller_default() {
+        let info = probe(&png_with_phys(1)).expect("valid PNG");
+
+        assert_eq!(
+            info.native_size(72.0),
+            Some(NativeSize {
+                width_emu: 304_761,
+                height_emu: 304_761,
+            })
+        );
+    }
+
+    #[test]
+    fn missing_axis_dpi_uses_the_explicit_default() {
+        let info = ImageInfo {
+            format: ImageFormat::Png,
+            width_px: 96,
+            height_px: 72,
+            dpi_x: Some(96.0),
+            dpi_y: None,
+            bit_depth: 8,
+            channels: 4,
+            has_alpha: true,
+        };
+
+        assert_eq!(
+            info.native_size(72.0),
+            Some(NativeSize {
+                width_emu: 914_400,
+                height_emu: 914_400,
+            })
+        );
+    }
+
+    #[test]
+    fn native_size_truncates_fractional_emu_toward_zero() {
+        let info = ImageInfo {
+            format: ImageFormat::Png,
+            width_px: 1,
+            height_px: 2,
+            dpi_x: Some(7.0),
+            dpi_y: Some(7.0),
+            bit_depth: 8,
+            channels: 4,
+            has_alpha: true,
+        };
+
+        assert_eq!(
+            info.native_size(72.0),
+            Some(NativeSize {
+                width_emu: 130_628,
+                height_emu: 261_257,
+            })
+        );
+    }
+
+    #[test]
+    fn invalid_effective_dpi_returns_none() {
+        let mut info = ImageInfo {
+            format: ImageFormat::Png,
+            width_px: 32,
+            height_px: 16,
+            dpi_x: None,
+            dpi_y: None,
+            bit_depth: 8,
+            channels: 4,
+            has_alpha: true,
+        };
+
+        for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(info.native_size(invalid), None);
+        }
+
+        info.dpi_x = Some(f64::NAN);
+        info.dpi_y = Some(96.0);
+        assert_eq!(info.native_size(0.0), None);
     }
 
     #[test]

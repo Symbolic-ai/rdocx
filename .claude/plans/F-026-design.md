@@ -1,6 +1,6 @@
 # F-026, native_size with explicit DPI
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S05
 **Size**: S
 **Depends on**: F-024
@@ -82,12 +82,12 @@ S05.
 
 ## Implementation checklist
 
-- [ ] Resolve the return type and dependency contract.
-- [ ] Add per-axis declared-DPI and caller-default selection.
-- [ ] Convert pixels to EMU with truncation toward zero.
-- [ ] Reject invalid effective DPI.
-- [ ] Add the declared-DPI, fallback, truncation, and invalid-input tests.
-- [ ] Run dependency, package, unit-conversion, and unchanged-hash riders.
+- [x] Resolve the return type and dependency contract.
+- [x] Add per-axis declared-DPI and caller-default selection.
+- [x] Convert pixels to EMU with truncation toward zero.
+- [x] Reject invalid effective DPI.
+- [x] Add the declared-DPI, fallback, truncation, and invalid-input tests.
+- [x] Run dependency, package, unit-conversion, and unchanged-hash riders.
 
 ## Open questions
 
