@@ -304,8 +304,93 @@ pub struct CT_TblPr {
     pub indent: Option<CT_TblWidth>,
     /// Table shading/background
     pub shading: Option<CT_Shd>,
-    /// "Look" flags for conditional formatting (firstRow, lastRow, etc.)
-    pub look: Option<String>,
+    /// Which parts of the table style's conditional formatting apply.
+    pub look: Option<CT_TblLook>,
+}
+
+/// `w:tblLook` — which parts of a table style's conditional formatting apply.
+///
+/// The style reference in `w:tblStyle` says *which* style to use. This says
+/// which of its conditional parts to turn on: header row emphasis, banding,
+/// first-column formatting. Dropping it leaves the style name intact and the
+/// table rendered with base formatting only, which reads as the style having
+/// been lost.
+///
+/// `w:val` is a legacy bitmask carrying the same information. Both are kept,
+/// because writers disagree about which one to emit and readers disagree about
+/// which one to trust.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[allow(non_snake_case)]
+pub struct CT_TblLook {
+    /// Legacy bitmask form, e.g. "04A0".
+    pub val: Option<String>,
+    pub first_row: Option<bool>,
+    pub last_row: Option<bool>,
+    pub first_column: Option<bool>,
+    pub last_column: Option<bool>,
+    pub no_h_band: Option<bool>,
+    pub no_v_band: Option<bool>,
+}
+
+/// Read an OOXML boolean attribute, which may be written as 1/0 or true/false.
+fn parse_ooxml_bool(value: &str) -> Option<bool> {
+    match value {
+        "1" | "true" | "on" => Some(true),
+        "0" | "false" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn ooxml_bool_str(value: bool) -> &'static str {
+    if value { "1" } else { "0" }
+}
+
+#[allow(non_snake_case)]
+impl CT_TblLook {
+    pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
+        let mut look = CT_TblLook::default();
+        for attr in e.attributes().flatten() {
+            let value = std::str::from_utf8(&attr.value)?;
+            let key = attr.key.as_ref();
+            if matches_local_name(key, b"val") {
+                look.val = Some(value.to_string());
+            } else if matches_local_name(key, b"firstRow") {
+                look.first_row = parse_ooxml_bool(value);
+            } else if matches_local_name(key, b"lastRow") {
+                look.last_row = parse_ooxml_bool(value);
+            } else if matches_local_name(key, b"firstColumn") {
+                look.first_column = parse_ooxml_bool(value);
+            } else if matches_local_name(key, b"lastColumn") {
+                look.last_column = parse_ooxml_bool(value);
+            } else if matches_local_name(key, b"noHBand") {
+                look.no_h_band = parse_ooxml_bool(value);
+            } else if matches_local_name(key, b"noVBand") {
+                look.no_v_band = parse_ooxml_bool(value);
+            }
+        }
+        Ok(look)
+    }
+
+    pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        let mut e = BytesStart::new("w:tblLook");
+        if let Some(ref val) = self.val {
+            e.push_attribute(("w:val", val.as_str()));
+        }
+        for (name, value) in [
+            ("w:firstRow", self.first_row),
+            ("w:lastRow", self.last_row),
+            ("w:firstColumn", self.first_column),
+            ("w:lastColumn", self.last_column),
+            ("w:noHBand", self.no_h_band),
+            ("w:noVBand", self.no_v_band),
+        ] {
+            if let Some(value) = value {
+                e.push_attribute((name, ooxml_bool_str(value)));
+            }
+        }
+        writer.write_event(Event::Empty(e))?;
+        Ok(())
+    }
 }
 
 #[allow(non_snake_case)]
@@ -334,10 +419,8 @@ impl CT_TblPr {
                         pr.indent = Some(CT_TblWidth::from_xml_attrs(e)?);
                     } else if matches_local_name(name.as_ref(), b"shd") {
                         pr.shading = Some(CT_Shd::from_xml_attrs(e)?);
-                    } else if matches_local_name(name.as_ref(), b"tblLook")
-                        && let Some(val) = get_val_attr(e)?
-                    {
-                        pr.look = Some(val);
+                    } else if matches_local_name(name.as_ref(), b"tblLook") {
+                        pr.look = Some(CT_TblLook::from_xml_attrs(e)?);
                     }
                 }
                 Ok(Event::Start(ref e)) => {
@@ -407,9 +490,7 @@ impl CT_TblPr {
         }
 
         if let Some(ref look) = self.look {
-            let mut e = BytesStart::new("w:tblLook");
-            e.push_attribute(("w:val", look.as_str()));
-            writer.write_event(Event::Empty(e))?;
+            look.to_xml(writer)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:tblPr")))?;
@@ -497,6 +578,11 @@ pub struct CT_TrPr {
     pub jc: Option<ST_Jc>,
     /// Allow row to break across pages
     pub cant_split: Option<bool>,
+    /// `w:cnfStyle` — which conditional parts of the table style this row is.
+    ///
+    /// Word writes this alongside `w:tblLook` and needs both to reproduce a
+    /// styled table. Dropping it loses the header-row and banding emphasis.
+    pub cnf_style: Option<String>,
 }
 
 #[allow(non_snake_case)]
@@ -526,6 +612,8 @@ impl CT_TrPr {
                         if let Some(val) = get_val_attr(e)? {
                             pr.jc = Some(ST_Jc::from_str(&val)?);
                         }
+                    } else if matches_local_name(name.as_ref(), b"cnfStyle") {
+                        pr.cnf_style = get_val_attr(e)?;
                     } else if matches_local_name(name.as_ref(), b"cantSplit") {
                         pr.cant_split = Some(true);
                     }
@@ -549,6 +637,13 @@ impl CT_TrPr {
         }
 
         writer.write_event(Event::Start(BytesStart::new("w:trPr")))?;
+
+        // cnfStyle comes first in the schema sequence for both trPr and tcPr.
+        if let Some(ref cnf) = self.cnf_style {
+            let mut e = BytesStart::new("w:cnfStyle");
+            e.push_attribute(("w:val", cnf.as_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
 
         if let Some(ref cant_split) = self.cant_split
             && *cant_split
@@ -585,6 +680,7 @@ impl CT_TrPr {
             && self.header.is_none()
             && self.jc.is_none()
             && self.cant_split.is_none()
+            && self.cnf_style.is_none()
     }
 }
 
@@ -635,6 +731,8 @@ pub struct CT_TcPr {
     pub no_wrap: Option<bool>,
     /// Text direction
     pub text_direction: Option<String>,
+    /// `w:cnfStyle` — which conditional parts of the table style this cell is.
+    pub cnf_style: Option<String>,
 }
 
 #[allow(non_snake_case)]
@@ -670,6 +768,8 @@ impl CT_TcPr {
                         }
                     } else if matches_local_name(name.as_ref(), b"shd") {
                         pr.shading = Some(CT_Shd::from_xml_attrs(e)?);
+                    } else if matches_local_name(name.as_ref(), b"cnfStyle") {
+                        pr.cnf_style = get_val_attr(e)?;
                     } else if matches_local_name(name.as_ref(), b"noWrap") {
                         pr.no_wrap = Some(true);
                     } else if matches_local_name(name.as_ref(), b"textDirection")
@@ -705,6 +805,12 @@ impl CT_TcPr {
         }
 
         writer.write_event(Event::Start(BytesStart::new("w:tcPr")))?;
+
+        if let Some(ref cnf) = self.cnf_style {
+            let mut e = BytesStart::new("w:cnfStyle");
+            e.push_attribute(("w:val", cnf.as_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
 
         if let Some(ref width) = self.width {
             width.write_xml(writer, "w:tcW")?;
@@ -767,6 +873,7 @@ impl CT_TcPr {
             && self.v_align.is_none()
             && self.no_wrap.is_none()
             && self.text_direction.is_none()
+            && self.cnf_style.is_none()
     }
 }
 
@@ -1478,6 +1585,98 @@ mod tests {
                 "{label} was not preserved"
             );
         }
+    }
+
+    /// A styled table must keep the markup that says which conditional parts
+    /// of its style apply.
+    ///
+    /// `w:tblStyle` alone is not enough. `w:tblLook` and `w:cnfStyle` are what
+    /// turn on the header row, banding and first column formatting, so losing
+    /// them leaves the style name intact and the table drawn with base
+    /// formatting only, which reads as the style having been lost.
+    #[test]
+    fn table_style_conditional_formatting_round_trips() {
+        let inner = concat!(
+            r#"<w:tblPr><w:tblStyle w:val="GridTable4-Accent1"/>"#,
+            r#"<w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0" w:noHBand="0" w:noVBand="1"/>"#,
+            r#"</w:tblPr><w:tblGrid><w:gridCol w:w="4675"/></w:tblGrid>"#,
+            r#"<w:tr><w:trPr><w:cnfStyle w:val="100000000000"/></w:trPr>"#,
+            r#"<w:tc><w:tcPr><w:cnfStyle w:val="001000000000"/></w:tcPr><w:p/></w:tc>"#,
+            r#"</w:tr>"#,
+        );
+        let tbl = parse_table(inner);
+
+        let look = tbl
+            .properties
+            .as_ref()
+            .and_then(|p| p.look.as_ref())
+            .expect("tblLook should be parsed");
+        assert_eq!(look.val.as_deref(), Some("04A0"));
+        assert_eq!(look.first_row, Some(true));
+        assert_eq!(look.last_row, Some(false));
+        assert_eq!(look.first_column, Some(true));
+        assert_eq!(look.no_v_band, Some(true));
+
+        assert_eq!(
+            tbl.rows[0]
+                .properties
+                .as_ref()
+                .and_then(|p| p.cnf_style.as_deref()),
+            Some("100000000000")
+        );
+        assert_eq!(
+            tbl.rows[0].cells[0]
+                .properties
+                .as_ref()
+                .and_then(|p| p.cnf_style.as_deref()),
+            Some("001000000000")
+        );
+
+        assert_eq!(
+            table_to_xml(&tbl),
+            format!("<w:tbl>{inner}</w:tbl>"),
+            "the whole thing must survive a write"
+        );
+    }
+
+    /// A row or cell carrying only cnfStyle is not empty.
+    ///
+    /// Both types skip writing their properties when every field is unset, so
+    /// a new field that is not in that check is parsed and then silently
+    /// dropped on the way out.
+    #[test]
+    fn properties_holding_only_cnf_style_are_still_written() {
+        let tbl = parse_table(concat!(
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid>"#,
+            r#"<w:tr><w:trPr><w:cnfStyle w:val="100000000000"/></w:trPr>"#,
+            r#"<w:tc><w:tcPr><w:cnfStyle w:val="001000000000"/></w:tcPr><w:p/></w:tc></w:tr>"#,
+        ));
+        let xml = table_to_xml(&tbl);
+        assert!(
+            xml.contains(r#"<w:trPr><w:cnfStyle w:val="100000000000"/></w:trPr>"#),
+            "{xml}"
+        );
+        assert!(
+            xml.contains(r#"<w:tcPr><w:cnfStyle w:val="001000000000"/></w:tcPr>"#),
+            "{xml}"
+        );
+    }
+
+    /// OOXML booleans come in both spellings.
+    #[test]
+    fn tbl_look_accepts_either_boolean_spelling() {
+        let tbl = parse_table(concat!(
+            r#"<w:tblPr><w:tblLook w:firstRow="true" w:lastRow="false" w:noVBand="1"/></w:tblPr>"#,
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid>"#,
+        ));
+        let look = tbl
+            .properties
+            .as_ref()
+            .and_then(|p| p.look.as_ref())
+            .unwrap();
+        assert_eq!(look.first_row, Some(true));
+        assert_eq!(look.last_row, Some(false));
+        assert_eq!(look.no_v_band, Some(true));
     }
 
     /// A self-closing tblPr or tblGrid must not be captured as extra XML.

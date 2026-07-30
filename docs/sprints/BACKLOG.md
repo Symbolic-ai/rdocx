@@ -51,7 +51,7 @@ regenerated, never hand-edited.
 | F-009 | Cache the layout result                      | S02 | M | done |
 | F-010 | Reserve crate names                          | S02 | S | done |
 | F-011 | Pin unit truncation behaviour                | S02 | S | done |
-| F-012 | Tag v0.3.1                                   | S02 | S | in-progress |
+| F-012 | Tag v0.4.1                                   | S02 | S | in-progress |
 <!-- AUTOGEN:backlog-M1 END -->
 
 ### M2, Shared infrastructure extraction

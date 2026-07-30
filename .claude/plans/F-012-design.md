@@ -1,4 +1,4 @@
-# F-012, Tag v0.3.1
+# F-012, Tag v0.4.1
 
 **Status**: approved
 **Sprint**: S02
@@ -8,8 +8,8 @@
 ## Problem
 
 M1 needs a known-good published state immediately before extraction begins.
-The workspace is currently 0.3.0, while the existing `scripts/release.sh`
-requires `main`, commits, tags, and pushes directly. More importantly,
+The existing `scripts/release.sh` requires `main`, commits, tags, and pushes
+directly. More importantly,
 `/run-sprint` forbids tags and pushes other than `sprint/s02`, while
 `/close-sprint` is the only tagging workflow and explicitly refuses release
 tags. F-012 cannot satisfy its test gate under the current command authority.
@@ -30,7 +30,7 @@ story pauses after a clean full verification and sprint review, reports the
 exact release command, and requires a separate final go/no-go immediately
 before external mutation.
 
-Prepare an exact 0.3.1 commit before those gates. `/release v0.3.1` verifies a
+Prepare an exact 0.4.1 commit before those gates. `/release v0.4.1` verifies a
 clean reviewed SHA, creates and pushes the tag, verifies all seven current
 publishable crates plus the GitHub release, then permits F-012 to complete its
 ledger-only finalization. It must not use the current error-swallowing
@@ -55,10 +55,18 @@ only F-003 through F-009.
 |---|---|---|
 | clean-clone integration | `/verify --full` at the exact release SHA | Workspace, harness, docs, packaging, wasm, and supply chain are green before tagging |
 | packaging | seven `cargo publish --dry-run` archives plus size and bundled-font contents | Every current publishable crate is releasable and licensed |
-| release | exact `cargo info <crate>@0.3.1` and GitHub release inspection | The tag workflow published all seven crates and created the release without a swallowed failure |
+| release | exact `cargo info <crate>@0.4.1` and GitHub release inspection | The tag workflow published all seven crates and created the release without a swallowed failure |
 
 The backlog test gate is a clean-clone build and successful publication from
-the exact v0.3.1 release tag.
+the exact v0.4.1 release tag.
+
+## Release-line reconciliation
+
+`v0.4.0` was published from `main` after S02 branched, with contract changes
+and rendering fixes. S02 merges that exact release before publishing so the
+new known-good boundary includes both lines of work. Publishing `v0.3.1` from
+the older branch would omit the `v0.4.0` changes and would leave sprint closure
+trying to reconcile a lower workspace version into `main`.
 
 ## HLD impact
 
@@ -87,10 +95,11 @@ runner triggered for that commit.
       or `/close-sprint` boundaries.
 - [x] Add and validate the dedicated release command and generated adapter.
 - [x] Confirm F-003 through F-011 are completed and integrated.
-- [x] Prepare the exact 0.3.1 version and internal dependency-pin diff.
+- [x] Merge the published v0.4.0 source and prepare the exact 0.4.1 version and
+      internal dependency-pin diff.
 - [x] Run the full gate and release packaging checks from a clean clone.
 - [ ] Obtain explicit go/no-go immediately before the irreversible tag push.
-- [ ] Push v0.3.1 through the authorized mechanism and verify all seven crates
+- [ ] Push v0.4.1 through the authorized mechanism and verify all seven crates
       plus the GitHub release.
 
 ## Open questions

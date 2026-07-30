@@ -239,7 +239,7 @@ missing. `rdocx-opc` exposes the standard relationship type publicly.
 
 **Non-obvious choices.** The facade retains a private copy of the stable
 relationship URI so the `rdocx 0.3.0` package can still verify against the
-published `rdocx-opc 0.3.0` dependency before both move to 0.3.1.
+published `rdocx-opc 0.3.0` dependency before both move to 0.4.1.
 
 **Deviations from the design plan.** The full packaging gate exposed the
 published-dependency compatibility issue after workspace tests passed. An

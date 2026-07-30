@@ -1,11 +1,80 @@
 //! Block-level layout: paragraphs and tables as positioned blocks.
 
 use rdocx_oxml::borders::CT_PBdr;
+use rdocx_oxml::drawing::{ST_RelativeFromH, ST_RelativeFromV};
 use rdocx_oxml::shared::ST_Jc;
 
 use crate::line::LayoutLine;
 use crate::output::Color;
 use crate::table::TableBlock;
+
+/// A floating drawing anchored to a paragraph.
+///
+/// Offsets are kept in points alongside the frame they are measured from. A
+/// `wp:anchor` offset is meaningless on its own: the same number means a
+/// different place depending on whether it is relative to the page, the
+/// margin, the text column or the paragraph.
+#[derive(Debug, Clone)]
+pub struct AnchoredDrawing {
+    /// Render underneath the text rather than on top of it.
+    pub behind_doc: bool,
+    /// Frame the horizontal offset is measured from.
+    pub rel_h: ST_RelativeFromH,
+    /// Horizontal offset in points.
+    pub off_h: f64,
+    /// Frame the vertical offset is measured from.
+    pub rel_v: ST_RelativeFromV,
+    /// Vertical offset in points.
+    pub off_v: f64,
+    /// Width in points.
+    pub width: f64,
+    /// Height in points.
+    pub height: f64,
+    /// What the drawing actually holds.
+    pub content: AnchoredContent,
+}
+
+/// The drawable content of an anchored drawing.
+#[derive(Debug, Clone)]
+pub enum AnchoredContent {
+    /// A picture, identified by its relationship ID.
+    Image { embed_id: String },
+    /// A shape: preset geometry, an optional fill, and optional text.
+    ///
+    /// The text arrives already laid out, because breaking it into lines needs
+    /// a font manager and that only exists in the engine.
+    Shape {
+        /// Preset geometry we recognise.
+        preset: ShapePreset,
+        /// Fill colour, or `None` for `a:noFill` and for fills we cannot
+        /// resolve. An unfilled shape draws no body, only its text.
+        fill: Option<Color>,
+        /// Laid-out paragraphs of the shape's text box.
+        text: Vec<ParagraphBlock>,
+    },
+}
+
+/// The preset geometries we can draw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShapePreset {
+    /// A rectangle, drawn as a filled box.
+    Rect,
+    /// A straight line, drawn along the top edge of the extent.
+    Line,
+    /// Anything else. The body is not drawn, but text still is.
+    Unsupported,
+}
+
+impl ShapePreset {
+    /// Map an `a:prstGeom@prst` value onto what we can draw.
+    pub fn from_prst(prst: Option<&str>) -> Self {
+        match prst {
+            Some("rect") => ShapePreset::Rect,
+            Some("line") | Some("straightConnector1") => ShapePreset::Line,
+            _ => ShapePreset::Unsupported,
+        }
+    }
+}
 
 /// A laid-out block element (paragraph or table).
 #[derive(Debug, Clone)]
@@ -79,6 +148,12 @@ impl LayoutBlock {
 pub struct ParagraphBlock {
     /// Laid-out lines.
     pub lines: Vec<LayoutLine>,
+    /// Floating drawings anchored to this paragraph.
+    ///
+    /// These travel with the paragraph so the paginator can resolve a
+    /// paragraph-relative or line-relative offset once it knows where the
+    /// paragraph actually landed.
+    pub anchored: Vec<AnchoredDrawing>,
     /// Space before the paragraph in points.
     pub space_before: f64,
     /// Space after the paragraph in points.
@@ -141,6 +216,7 @@ pub fn build_paragraph_block(
 ) -> ParagraphBlock {
     ParagraphBlock {
         lines,
+        anchored: Vec::new(),
         space_before,
         space_after,
         borders,
@@ -164,6 +240,7 @@ mod tests {
     #[test]
     fn paragraph_block_height() {
         let block = ParagraphBlock {
+            anchored: Vec::new(),
             lines: vec![
                 LayoutLine {
                     items: vec![],
@@ -202,5 +279,23 @@ mod tests {
         };
         assert!((block.content_height() - 26.0).abs() < 0.01);
         assert!((block.total_height() - 40.0).abs() < 0.01);
+    }
+
+    /// Only the presets we can actually draw map to a drawable body. Anything
+    /// else still renders its text, so it must not be treated as a rectangle.
+    #[test]
+    fn shape_presets_map_to_what_we_can_draw() {
+        assert_eq!(ShapePreset::from_prst(Some("rect")), ShapePreset::Rect);
+        assert_eq!(ShapePreset::from_prst(Some("line")), ShapePreset::Line);
+        assert_eq!(
+            ShapePreset::from_prst(Some("straightConnector1")),
+            ShapePreset::Line
+        );
+        assert_eq!(
+            ShapePreset::from_prst(Some("roundRect")),
+            ShapePreset::Unsupported,
+            "an unhandled preset must not silently draw as a plain rectangle"
+        );
+        assert_eq!(ShapePreset::from_prst(None), ShapePreset::Unsupported);
     }
 }

@@ -154,6 +154,20 @@ pub fn resolve_run_properties(
     effective
 }
 
+/// The paragraph properties a numbering level carries, mainly its indentation.
+///
+/// In the property chain these sit between the paragraph style and direct
+/// formatting, so the indent for a list level applies unless the paragraph
+/// sets its own.
+pub fn level_paragraph_properties(
+    num_id: u32,
+    ilvl: u32,
+    numbering: &CT_Numbering,
+) -> Option<&CT_PPr> {
+    let abs = numbering.get_abstract_num_for(num_id)?;
+    abs.levels.iter().find(|l| l.ilvl == ilvl)?.ppr.as_ref()
+}
+
 /// Generate the marker text for a numbered/bulleted list item.
 pub fn generate_marker(
     num_id: u32,
@@ -164,6 +178,13 @@ pub fn generate_marker(
     let abs = numbering.get_abstract_num_for(num_id)?;
     let lvl = abs.levels.iter().find(|l| l.ilvl == ilvl)?;
 
+    // Counters belong to the abstract definition, not the numbering instance.
+    // Writers such as Pandoc and LibreOffice emit a separate w:num per list
+    // block while pointing them all at one w:abstractNum, and readers are
+    // expected to carry the count across them. Keying on num_id restarted the
+    // sequence at every block, so a two item list rendered as "1." twice.
+    let counter_id = abs.abstract_num_id;
+
     let num_fmt = lvl.num_fmt.unwrap_or(ST_NumberFormat::Decimal);
     let start = lvl.start.unwrap_or(1);
     let lvl_text = lvl.lvl_text.as_deref().unwrap_or("%1.");
@@ -171,8 +192,8 @@ pub fn generate_marker(
     let marker_text = if num_fmt == ST_NumberFormat::Bullet {
         lvl_text.to_string()
     } else {
-        let count = state.advance(num_id, ilvl, start);
-        format_lvl_text(lvl_text, num_id, ilvl, count, numbering, state)
+        let count = state.advance(counter_id, ilvl, start);
+        format_lvl_text(lvl_text, num_id, counter_id, ilvl, count, numbering, state)
     };
 
     let marker_rpr = lvl.rpr.clone().unwrap_or_default();
@@ -187,6 +208,7 @@ pub fn generate_marker(
 fn format_lvl_text(
     template: &str,
     num_id: u32,
+    counter_id: u32,
     current_ilvl: u32,
     current_count: u32,
     numbering: &CT_Numbering,
@@ -204,7 +226,7 @@ fn format_lvl_text(
             let count = if lvl_idx == current_ilvl {
                 current_count
             } else {
-                state.current(num_id, lvl_idx)
+                state.current(counter_id, lvl_idx)
             };
             let fmt = abs
                 .levels
@@ -403,5 +425,69 @@ mod tests {
         assert_eq!(to_letter(26, false), "z");
         assert_eq!(to_letter(27, false), "a"); // wraps
         assert_eq!(to_letter(1, true), "A");
+    }
+
+    /// Two numbering instances that share one abstract definition are one
+    /// list and must keep counting.
+    ///
+    /// Pandoc and LibreOffice both emit a separate `w:num` per list block
+    /// pointing at the same `w:abstractNum`. Keying counters on num_id made
+    /// every block restart, so a two item list rendered as "1." twice.
+    #[test]
+    fn shared_abstract_definition_continues_the_count() {
+        let mut numbering = CT_Numbering::new();
+        let first = numbering.add_numbered_list();
+        let abstract_id = numbering
+            .nums
+            .iter()
+            .find(|n| n.num_id == first)
+            .unwrap()
+            .abstract_num_id;
+
+        // A second instance pointing at the same abstract definition.
+        let second = numbering.nums.iter().map(|n| n.num_id).max().unwrap() + 1;
+        numbering.nums.push(rdocx_oxml::numbering::CT_Num {
+            num_id: second,
+            abstract_num_id: abstract_id,
+        });
+
+        let mut state = NumberingState::new();
+        let a = generate_marker(first, 0, &numbering, &mut state).unwrap();
+        let b = generate_marker(second, 0, &numbering, &mut state).unwrap();
+        assert_eq!(a.marker_text, "1.");
+        assert_eq!(b.marker_text, "2.", "the count must carry across instances");
+    }
+
+    /// Separate abstract definitions are separate lists and each restarts.
+    #[test]
+    fn separate_abstract_definitions_count_independently() {
+        let mut numbering = CT_Numbering::new();
+        let first = numbering.add_numbered_list();
+        let second = numbering.add_numbered_list();
+
+        let mut state = NumberingState::new();
+        let a = generate_marker(first, 0, &numbering, &mut state).unwrap();
+        let b = generate_marker(second, 0, &numbering, &mut state).unwrap();
+        assert_eq!(a.marker_text, "1.");
+        assert_eq!(b.marker_text, "1.");
+    }
+
+    /// Each level carries its own indent, and deeper levels step further in.
+    #[test]
+    fn level_paragraph_properties_expose_per_level_indent() {
+        let mut numbering = CT_Numbering::new();
+        let num_id = numbering.add_numbered_list();
+
+        let lvl0 = level_paragraph_properties(num_id, 0, &numbering)
+            .expect("level 0 should carry paragraph properties");
+        let lvl1 = level_paragraph_properties(num_id, 1, &numbering)
+            .expect("level 1 should carry paragraph properties");
+
+        let left0 = lvl0.ind_left.expect("level 0 indent").0;
+        let left1 = lvl1.ind_left.expect("level 1 indent").0;
+        assert!(
+            left1 > left0,
+            "level 1 must indent further than level 0, got {left0} then {left1}"
+        );
     }
 }

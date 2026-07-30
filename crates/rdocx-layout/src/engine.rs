@@ -171,9 +171,6 @@ impl Engine {
         // Post-pagination pass: apply page background color
         apply_page_background(&mut pages, input);
 
-        // Post-pagination pass: resolve anchor (background) images
-        resolve_anchor_images(&mut pages, input);
-
         // Post-pagination pass: resolve inline image data
         resolve_inline_images(&mut pages, input);
 
@@ -257,74 +254,6 @@ fn extract_background_color(xml: &str) -> Option<Color> {
         }
     }
     None
-}
-
-/// Resolve anchor (floating) images from the document and inject them into page frames.
-///
-/// For `behind_doc=true` images: inserts at the START of page elements (renders underneath).
-/// For `behind_doc=false` images: inserts at the END (renders on top).
-fn resolve_anchor_images(pages: &mut [PageFrame], input: &LayoutInput) {
-    use crate::output::Rect;
-    use rdocx_oxml::text::RunContent;
-
-    // Collect all anchor drawings from body content
-    let mut anchor_images: Vec<(bool, f64, f64, f64, f64, String)> = Vec::new();
-
-    for content in &input.document.body.content {
-        if let BodyContent::Paragraph(p) = content {
-            for run in &p.runs {
-                for rc in &run.content {
-                    if let RunContent::Drawing(drawing) = rc
-                        && let Some(ref anchor) = drawing.anchor
-                    {
-                        let behind = anchor.behind_doc;
-                        // Convert EMU positions and extents to points
-                        let x = anchor.pos_h_offset.to_pt();
-                        let y = anchor.pos_v_offset.to_pt();
-                        let w = anchor.extent_cx.to_pt();
-                        let h = anchor.extent_cy.to_pt();
-                        anchor_images.push((behind, x, y, w, h, anchor.embed_id.clone()));
-                    }
-                }
-            }
-        }
-    }
-
-    if anchor_images.is_empty() {
-        return;
-    }
-
-    // For each anchor image, resolve image data and add to pages
-    for (behind, x, y, w, h, embed_id) in &anchor_images {
-        let (data, content_type) = if let Some(img) = input.images.get(embed_id) {
-            (img.data.clone(), img.content_type.clone())
-        } else {
-            continue;
-        };
-
-        let element = PositionedElement::Image {
-            rect: Rect {
-                x: *x,
-                y: *y,
-                width: *w,
-                height: *h,
-            },
-            data,
-            content_type,
-            embed_id: None, // Already resolved
-        };
-
-        if *behind {
-            // Behind-doc images go on the first page only
-            // (proper page association would require paragraph-to-page mapping)
-            if let Some(page) = pages.first_mut() {
-                page.elements.insert(0, element);
-            }
-        } else if let Some(page) = pages.first_mut() {
-            // Foreground anchor images go on the first page only
-            page.elements.push(element);
-        }
-    }
 }
 
 /// Resolve inline image data from input.images by embed_id.
@@ -561,9 +490,27 @@ pub fn layout_paragraph(
 
     let resolved_ppr = style_resolver::resolve_paragraph_properties(para_style_id, styles);
 
-    // Merge direct paragraph properties
     let mut effective_ppr = resolved_ppr;
-    if let Some(ref direct_ppr) = para.properties {
+
+    // A numbering level carries paragraph properties of its own, mainly the
+    // indentation for that level. They sit between the style and direct
+    // formatting, so merge them before the direct properties rather than
+    // after. Without this every level of a list draws at the same indent.
+    let direct_ppr = para.properties.as_ref();
+    let list_num_id = direct_ppr.and_then(|p| p.num_id).or(effective_ppr.num_id);
+    let list_ilvl = direct_ppr
+        .and_then(|p| p.num_ilvl)
+        .or(effective_ppr.num_ilvl)
+        .unwrap_or(0);
+    if let (Some(num_id), Some(numbering)) = (list_num_id, input.numbering.as_ref())
+        && let Some(lvl_ppr) =
+            style_resolver::level_paragraph_properties(num_id, list_ilvl, numbering)
+    {
+        merge_direct_ppr(&mut effective_ppr, lvl_ppr);
+    }
+
+    // Merge direct paragraph properties
+    if let Some(direct_ppr) = direct_ppr {
         merge_direct_ppr(&mut effective_ppr, direct_ppr);
     }
 
@@ -618,8 +565,14 @@ pub fn layout_paragraph(
             let marker_italic = marker_rpr.italic.unwrap_or(false);
             let marker_font_family = marker_rpr.font_ascii.as_deref();
 
-            if let Ok(font_id) = fm.resolve_font(marker_font_family, marker_bold, marker_italic)
-                && let Ok(shaped) = fm.shape_text(font_id, &marker.marker_text, marker_font_size)
+            // Bullet glyphs are not in every font either, so the marker gets
+            // the same coverage check as body text.
+            if let Ok(font_id) = fm.resolve_font_for_text(
+                marker_font_family,
+                marker_bold,
+                marker_italic,
+                &marker.marker_text,
+            ) && let Ok(shaped) = fm.shape_text(font_id, &marker.marker_text, marker_font_size)
             {
                 let metrics = fm.metrics(font_id, marker_font_size)?;
                 let color = marker_rpr
@@ -730,7 +683,10 @@ pub fn layout_paragraph(
             baseline_offset += pos as f64 / 2.0; // half-points to points
         }
 
-        let font_id = fm.resolve_font(font_family.as_deref(), bold, italic)?;
+        // Resolved against the run's own text, so a family without glyphs for
+        // this script is replaced by one that has them.
+        let font_id =
+            fm.resolve_font_for_text(font_family.as_deref(), bold, italic, &run.text())?;
         let metrics = fm.metrics(font_id, font_size)?;
 
         for content in &run.content {
@@ -877,7 +833,7 @@ pub fn layout_paragraph(
 
     let lines = line::break_into_lines(&inline_items, &line_params, fm)?;
 
-    Ok(block::build_paragraph_block(
+    let mut result = block::build_paragraph_block(
         lines,
         space_before,
         space_after,
@@ -890,7 +846,87 @@ pub fn layout_paragraph(
         keep_lines,
         page_break_before,
         widow_control,
-    ))
+    );
+    result.anchored = collect_anchored_drawings(para, styles, input, fm, num_state)?;
+    Ok(result)
+}
+
+/// Collect the floating drawings anchored to a paragraph.
+///
+/// The offsets stay paired with the frame they are measured from. Resolving
+/// them here is not possible: a paragraph-relative offset needs the laid-out
+/// position of the paragraph, which only the paginator knows.
+///
+/// A shape's text box is laid out here rather than later, because breaking it
+/// into lines needs the font manager.
+fn collect_anchored_drawings(
+    para: &CT_P,
+    styles: &CT_Styles,
+    input: &LayoutInput,
+    fm: &mut FontManager,
+    num_state: &mut NumberingState,
+) -> Result<Vec<block::AnchoredDrawing>> {
+    let mut out = Vec::new();
+
+    // Drawings written plainly, and drawings recovered from an
+    // mc:AlternateContent block, are both anchored the same way.
+    for run in &para.runs {
+        let plain = run.content.iter().filter_map(|rc| match rc {
+            RunContent::Drawing(d) => Some(d),
+            _ => None,
+        });
+        for drawing in plain.chain(run.alt_drawings.iter()) {
+            let Some(anchor) = drawing.anchor.as_ref() else {
+                continue;
+            };
+
+            // A picture also carries a pic:spPr, so a parsed shape alone does
+            // not mean this is a shape. An embed id is what makes it a
+            // picture, and that takes precedence.
+            let shape = if anchor.embed_id.is_empty() {
+                anchor.shape.as_ref()
+            } else {
+                None
+            };
+
+            let content = match shape {
+                Some(shape) => {
+                    // A shape's text box wraps at the shape width.
+                    let mut text = Vec::new();
+                    for p in &shape.text {
+                        text.push(layout_paragraph(
+                            p,
+                            anchor.extent_cx.to_pt(),
+                            styles,
+                            input,
+                            fm,
+                            num_state,
+                        )?);
+                    }
+                    block::AnchoredContent::Shape {
+                        preset: block::ShapePreset::from_prst(shape.preset.as_deref()),
+                        fill: shape.solid_fill.as_deref().map(Color::from_hex),
+                        text,
+                    }
+                }
+                None => block::AnchoredContent::Image {
+                    embed_id: anchor.embed_id.clone(),
+                },
+            };
+
+            out.push(block::AnchoredDrawing {
+                behind_doc: anchor.behind_doc,
+                rel_h: anchor.pos_h_relative_from,
+                off_h: anchor.pos_h_offset.to_pt(),
+                rel_v: anchor.pos_v_relative_from,
+                off_v: anchor.pos_v_offset.to_pt(),
+                width: anchor.extent_cx.to_pt(),
+                height: anchor.extent_cy.to_pt(),
+                content,
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// Merge direct paragraph properties (only fields explicitly set in the XML).

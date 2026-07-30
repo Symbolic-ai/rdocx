@@ -5,7 +5,7 @@
 **Goal**: Put every remaining prerequisite for extraction in place while the
 current rdocx behaviour is still stable. Resolve the carried packaging defect,
 prepare the Rust and Python-facing APIs, pin layout and unit behaviour, reserve
-the future crate names, then publish and tag v0.3.1 as the known-good state
+the future crate names, then publish and tag v0.4.1 as the known-good state
 immediately before structural churn begins.
 
 ## Spec references
@@ -21,7 +21,7 @@ immediately before structural churn begins.
 - `docs/hld/15-build-and-toolchain.md`, for crate-name reservation, publishing
   order, packaging verification, and the pre-churn release process.
 - `docs/hld/12-testing-strategy.md`, for the workspace, hash-harness,
-  packaging, and supply-chain gates that the v0.3.1 tag must pass.
+  packaging, and supply-chain gates that the v0.4.1 tag must pass.
 
 ## The wave
 
@@ -32,7 +32,7 @@ immediately before structural churn begins.
 | F-009 | Cache the layout result | M | done | - |
 | F-010 | Reserve crate names | S | done | - |
 | F-011 | Pin unit truncation behaviour | S | done | - |
-| F-012 | Tag v0.3.1 | S | in-progress | codex |
+| F-012 | Tag v0.4.1 | S | in-progress | codex |
 
 ## Sequencing note
 
@@ -54,5 +54,5 @@ known-good boundary after every S02 prerequisite is integrated and verified.
 - Every reserved `oxml-*` and `rpptx*` crate name resolves through `cargo info`.
 - Unit constructors retain their current `as i64` truncation, pinned by tests.
 - The full workspace, hash harness, packaging, and supply-chain gates pass from
-  a clean clone, the baseline reproduces on a second machine, and v0.3.1 is
+  a clean clone, the baseline reproduces on a second machine, and v0.4.1 is
   published and tagged.

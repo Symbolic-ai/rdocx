@@ -1,6 +1,6 @@
 {
   "entries": {
-    "contract:page1.png": "23cc71026c8cc3ba4860e517ca2ba9df9062caed69baeacaed21a911d5bc6ba5",
+    "contract:page1.png": "504977f2017680736254709429370708554166410856873fd5c38a1d5283b98a",
     "contract:word/document.xml": "1ecd9138e09122a5980ca80451ddd8f93d4e6d3af8bb80e582dc8cb697277dfe",
     "contract:word/numbering.xml": "01d6cb0aa0ecc30b3d2a77c4df062b1c727d70ff9cbc0824910f049daf878a26",
     "contract:word/styles.xml": "0dc0b047b6019b798b83bfe4d66eb91d14b03caea3f6bdb0934d48fbb863fba4",
@@ -12,7 +12,7 @@
     "invoice:word/document.xml": "bb2d71711f6a613044dfabc166ae340354345666a98687e02df815efa220c655",
     "invoice:word/numbering.xml": null,
     "invoice:word/styles.xml": "0dc0b047b6019b798b83bfe4d66eb91d14b03caea3f6bdb0934d48fbb863fba4",
-    "letter:page1.png": "402d059d7918aaab46c92bd0c12eab69ddf1e0129c86560d466d7f750db0da8b",
+    "letter:page1.png": "d3a00cf6c37a1eb6c1897e36b062c10e8b0fdc8c2a6f26c1034026f83578d1c0",
     "letter:word/document.xml": "54f74a133887b1b93da1070517f9d7f687dbdc27b1307f1696c4b41f66d5fc05",
     "letter:word/numbering.xml": "c6511604704117eb00ad2faffb9173e4f48d22f62557ca72a51d60b7907c8058",
     "letter:word/styles.xml": "0dc0b047b6019b798b83bfe4d66eb91d14b03caea3f6bdb0934d48fbb863fba4",
@@ -29,5 +29,5 @@
     "report:word/numbering.xml": "2aa0599486d98573be0b7febb04ec63c08d3dfc5341b0f722b93cae113803bbc",
     "report:word/styles.xml": "0dc0b047b6019b798b83bfe4d66eb91d14b03caea3f6bdb0934d48fbb863fba4"
   },
-  "reason": "F-003 initial deterministic baseline"
+  "reason": "List levels now apply their own w:pPr indent (#13), so page-one PNGs for letter and contract shift. Verified by rendering both before and after: the only visual change is list markers moving to their level indent with correct hanging indent. No other content moved."
 }
