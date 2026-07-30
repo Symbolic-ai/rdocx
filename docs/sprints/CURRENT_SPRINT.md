@@ -33,7 +33,7 @@ crate unpublished.
 | F-018 | Create oxml-opc | M | in-progress | codex |
 | F-019 | PresentationML relationship and content types | S | in-progress | codex |
 | F-020 | oxml-opc reads a pptx | M | pending | - |
-| F-021 | Zip-slip hardening tests | S | pending | - |
+| F-021 | Zip-slip hardening tests | S | in-progress | codex |
 | F-022 | rdocx-opc deprecation shim | S | pending | - |
 | F-015 | rdocx-oxml becomes a facade | S | pending | - |
 | F-016 | Length re-export | S | pending | - |
