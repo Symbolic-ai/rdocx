@@ -1,6 +1,8 @@
 //! Format-neutral OOXML primitives.
 
+pub mod app_properties;
 pub mod core_properties;
+pub mod custom_properties;
 pub mod error;
 mod length;
 pub mod raw_xml;

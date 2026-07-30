@@ -1,6 +1,6 @@
 # F-017, App and custom properties
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S03
 **Size**: M
 **Depends on**: F-013
@@ -91,11 +91,11 @@ rdocx document rendering in this story.
 
 ## Implementation checklist
 
-- [ ] Add the application-properties union and ordered parse/write support.
-- [ ] Add the custom-property collection and concrete value enum.
-- [ ] Preserve unknown application children and custom value subtrees.
-- [ ] Add code-constructed Word, PowerPoint, and custom-property fixtures.
-- [ ] Run focused round-trip, package, and hash checks.
+- [x] Add the application-properties union and ordered parse/write support.
+- [x] Add the custom-property collection and concrete value enum.
+- [x] Preserve unknown application children and custom value subtrees.
+- [x] Add code-constructed Word, PowerPoint, and custom-property fixtures.
+- [x] Run focused round-trip, package, and hash checks.
 
 ## Open questions
 
