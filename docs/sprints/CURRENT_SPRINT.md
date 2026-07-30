@@ -1,62 +1,64 @@
-# Current Sprint, S02
+# Current Sprint, S03
 
-**Milestone**: M1 Preparation and safety net.
+**Milestone**: M2 Core and package extraction.
 
-**Goal**: Put every remaining prerequisite for extraction in place while the
-current rdocx behaviour is still stable. Resolve the carried packaging defect,
-prepare the Rust and Python-facing APIs, pin layout and unit behaviour, reserve
-the future crate names, then publish and tag v0.4.1 as the known-good state
-immediately before structural churn begins.
+**Goal**: Establish the unpublished `oxml-core` implementation and add the
+shared unit and property models needed by both Word and PowerPoint. Preserve
+existing rdocx behaviour and keep the rdocx 0.5.0 release line independent of
+the development crate.
 
 ## Spec references
 
-- `docs/hld/04-opc-and-packaging.md`, for relationship-based core-properties
-  lookup and the package invariants F-007 must preserve.
-- `docs/hld/10-bindings-spec.md`, for the non-consuming setter surface F-008
-  adds so Rust builders can back Python properties.
-- `docs/hld/08-rendering-spec.md`, for the cached `LayoutResult`, mutation
-  invalidation, and one-layout-per-document requirement in F-009.
-- `docs/hld/11-migration-plan.md`, for pinning truncation before extraction and
-  separating behaviour preservation from structural moves.
-- `docs/hld/15-build-and-toolchain.md`, for crate-name reservation, publishing
-  order, packaging verification, and the pre-churn release process.
-- `docs/hld/12-testing-strategy.md`, for the workspace, hash-harness,
-  packaging, and supply-chain gates that the v0.4.1 tag must pass.
+- `docs/hld/01-glossary.md`, for the canonical OOXML unit definitions and
+  their exact storage scales.
+- `docs/hld/02-scope-and-non-goals.md`, for sharing core, app, and custom
+  properties between Word and PowerPoint through `oxml-core`.
+- `docs/hld/03-architecture.md`, for the `oxml-core` ownership boundary,
+  dependency direction, parser conventions, and `rdocx-oxml` facade role.
+- `docs/hld/05-drawingml-model.md`, for the DrawingML consumers of `Angle`,
+  `Centipoints`, and `Percent1000` and the legacy Word colour boundary.
+- `docs/hld/11-migration-plan.md`, for the zero-call-site facade extraction,
+  operation order, and behaviour-preservation constraints.
+- `docs/hld/12-testing-strategy.md`, for unit round-trips, truncation tests,
+  public XML text coverage, and cross-format app-properties fixtures.
+- `docs/hld/14-development-backlog.md`, for the F-013 through F-017 contracts,
+  dependencies, and test gates.
+- `docs/hld/15-build-and-toolchain.md`, for publication ordering and the rule
+  that `oxml-*` and `rpptx*` placeholders stay at 0.0.0 until PowerPoint
+  development is complete.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-007 | Resolve core properties through the rel | S | done | - |
-| F-008 | Non-consuming setter twins | M | done | - |
-| F-009 | Cache the layout result | M | done | - |
-| F-010 | Reserve crate names | S | done | - |
-| F-011 | Pin unit truncation behaviour | S | done | - |
-| F-012 | Tag v0.4.1 | S | done | - |
+| F-013 | Create oxml-core | M | done | - |
+| F-014 | New unit types | M | done | - |
+| F-015 | rdocx-oxml becomes a facade | S | pending | - |
+| F-016 | Length re-export | S | pending | - |
+| F-017 | App and custom properties | M | done | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-F-007, F-008, F-009, F-010 and F-011 are independent and may proceed in
-parallel when their touched files and external publishing actions do not
-overlap. F-012 is last. It depends on F-003 through F-011 and serves as the
-known-good boundary after every S02 prerequisite is integrated and verified.
-After S02 closes into `main`, merge that updated `main` into
-`feature/release-0.5.0` before the next release branch continues.
+F-013 establishes `oxml-core` and blocks every other story. After it lands,
+F-014 and F-017 can proceed independently when their touched files do not
+overlap. F-015 and F-016 are carried by explicit decision because their facade
+switch would make published rdocx crates depend on the unpublished
+`oxml-core` implementation.
 
 ## Definition of done for this sprint
 
-- Core properties resolve through their package relationship at a non-standard
-  part path and round-trip with metadata intact.
-- The consuming builders delegate to non-consuming setter twins, with the
-  setter test gate green.
-- Rendering every page of a 20-page document performs exactly one layout and
-  every mutation invalidates the cache.
-- Every reserved `oxml-*` and `rpptx*` crate name resolves through `cargo info`.
-- The reserved `oxml-*` and `rpptx*` crates remain at 0.0.0 until PowerPoint
-  development is complete.
-- Unit constructors retain their current `as i64` truncation, pinned by tests.
-- The full workspace, hash harness, packaging, and supply-chain gates pass from
-  a clean clone, the baseline reproduces on a second machine, and v0.4.1 is
-  published and tagged.
+- The generic unit, XML helper, raw XML, core-properties, error, and `Length`
+  implementations live in `oxml-core`, with their existing tests moved intact.
+- `Centipoints`, `Angle`, `Percent1000`, and `Length::mm` pass their specified
+  conversion and round-trip assertions while existing float constructors keep
+  truncating toward zero.
+- Word and PowerPoint app-properties fixtures parse and round-trip without
+  emitting fields belonging only to the other format, and custom properties
+  round-trip with unmodelled XML preserved.
+- Workspace tests pass and the hash harness remains unchanged.
+- No `oxml-*` or `rpptx*` development crate is published beyond its existing
+  0.0.0 placeholder.
+- F-015 and F-016 remain pending with their carry reason recorded for the next
+  planning decision.

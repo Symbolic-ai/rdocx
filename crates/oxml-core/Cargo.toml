@@ -1,0 +1,15 @@
+[package]
+name = "oxml-core"
+description = "Format-neutral OOXML units, XML helpers, and document properties"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+quick-xml = { workspace = true }
+thiserror = { workspace = true }
