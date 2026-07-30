@@ -75,7 +75,10 @@ publication.
 A story that is not done may be carried, but not silently:
 
 - Set it back to `pending` in `docs/sprints/BACKLOG.md`.
-- Move it to the next sprint in `docs/sprints/SPRINT_PLAN.md`.
+- Move it to its next eligible sprint in `docs/sprints/SPRINT_PLAN.md` and set
+  that exact sprint in `BACKLOG.md`. A story blocked by an explicit release or
+  publication boundary may skip intervening sprints. If no later target is
+  already planned, use the immediate next sprint.
 - Record the reason in the `SPRINT_TRACKER.md` summary row.
 
 **Three carries of the same F-ID is an escalation trigger.** The design plan was

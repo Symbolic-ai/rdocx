@@ -7,6 +7,6 @@ description: "Close a sprint. The only command that merges to main and creates a
 
 Canonical source: `.claude/commands/close-sprint.md`.
 
-Source SHA-256: `da530193d03121ecbb32245c5e8a9600708ebb6d6e4dc006c7fc8455e9a08f60`.
+Source SHA-256: `312ad9b23240239592caf58d1a91e8cea112f4523fa6dc1573773716af643a3f`.
 
 Read the canonical source in full before acting, and follow it with whatever tools this host provides. Treat any invocation arguments as arguments to that workflow. Where it names another slash command, follow the repository skill of the same name. Where it says to ask with `AskUserQuestion`, ask through this host's own question mechanism. `.claude/WORKFLOW.md` wins on any process question. Do not edit this generated adapter.
