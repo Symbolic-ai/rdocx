@@ -35,7 +35,7 @@ the development crate.
 | F-014 | New unit types | M | in-progress | codex |
 | F-015 | rdocx-oxml becomes a facade | S | pending | - |
 | F-016 | Length re-export | S | pending | - |
-| F-017 | App and custom properties | M | pending | - |
+| F-017 | App and custom properties | M | in-progress | codex |
 
 ## Sequencing note
 
