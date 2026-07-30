@@ -517,3 +517,126 @@ self-closing-value regressions.
 
 **Notes for future sessions.** Keep unknown XML preservation and schema child
 order intact when adding further extended-property variants.
+
+### F-018, Create oxml-opc
+
+**Sprint.** S04
+**Completed.** 2026-07-30
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** A new private `oxml-opc` workspace crate now owns a staged
+copy of the format-neutral OPC package, content-type, relationship, and error
+implementation. Generic `OpcPackage::new`, `OpcPackage::with_main_part`, and
+`ContentTypes::minimal` replace the DOCX-specific public constructors in the
+new crate.
+
+**Non-obvious choices.** The crate remains at 0.0.0 with `publish = false` and
+depends only on `quick-xml`, `thiserror`, and `zip`. The existing `rdocx-opc`
+implementation and every released rdocx consumer remain untouched until the
+real shared crates have an approved publication path.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** None. The existing architecture, OPC, migration,
+testing, and build specifications already describe the staged extraction.
+
+**Tests.** Eleven moved OPC tests rebuilt around private DOCX helpers,
+`minimal_content_types_contain_only_universal_defaults`,
+`with_main_part_resolves_and_round_trips`, independent dependency inspection,
+local package verification, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep `rdocx-opc` and released consumers on the
+published implementation until the deferred F-022 cutover is packageable.
+
+### F-019, PresentationML relationship and content types
+
+**Sprint.** S04
+**Completed.** 2026-07-30
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** `oxml-opc` now exposes package, shared-property, and
+PresentationML relationship constants plus universal, shared-property, and
+PresentationML content-type constants. The generic minimal constructor reuses
+the universal values.
+
+**Non-obvious choices.** Word-specific MIME constants remain outside this
+story. The table-driven gate lists every public value and asserts uniqueness,
+the correct relationship namespace, the `application` MIME top-level type,
+and the absence of whitespace or extra slashes.
+
+**Deviations from the design plan.** Microscope pass 1 found that the initial
+MIME-shape assertion accepted arbitrary top-level types and extra slashes. The
+gate was tightened before clean pass 2.
+
+**Spec sections touched.** None. The existing OPC and PresentationML
+specifications already enumerate the required constants.
+
+**Tests.** `relationship_and_content_type_constants_are_unique_and_well_formed`,
+all-target compilation, a 12,155-byte integrated local package, dependency
+inspection, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Add future package constants to the exhaustive
+table so a new value cannot bypass namespace and MIME-shape classification.
+
+### F-020, oxml-opc reads a pptx
+
+**Sprint.** S04
+**Completed.** 2026-07-30
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** A code-built PowerPoint package fixture writes and reopens
+a presentation, slide, and slide-layout graph entirely in memory. It proves
+main-part discovery, relationship round-tripping, normalized package keys, and
+parent-directory layout resolution.
+
+**Non-obvious choices.** The fixture lives in the existing `package.rs` test
+module. It adds no binary fixture, integration-test target, dependency,
+production API, or production-code change.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** None. The existing OPC and testing specifications
+already require this exact package graph.
+
+**Tests.** `pptx_package_resolves_main_slide_and_layout_parts`,
+`presentation_layout_target_resolves_one_directory_up`, all 18 integrated
+`oxml-opc` tests, and the integrated full gate. Both named tests were observed
+failing for their intended reasons before completion.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** OPC navigation is now proven against both Word
+and PowerPoint package shapes before any PresentationML parser is introduced.
+
+### F-021, Zip-slip hardening tests
+
+**Sprint.** S04
+**Completed.** 2026-07-30
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The `oxml-opc` reader now normalizes ZIP entry names before
+classifying package metadata and parts. Root-escaping traversal clamps to the
+package root, and absolute entries become canonical leading-slash part names.
+
+**Non-obvious choices.** Normalization uses OPC package-path algebra rather
+than host filesystem canonicalization, and no archive entry is extracted to
+the filesystem. The released `rdocx-opc` reader remains unchanged.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** None. The existing OPC and testing specifications
+already require canonical package names and both hostile cases.
+
+**Tests.** `zip_entry_that_escapes_root_is_clamped_to_root`,
+`absolute_zip_entry_is_normalized_to_package_root`, the opaque package
+round-trip, deterministic save, all integrated OPC parser tests, and the full
+gate. Both hostile cases were observed failing before the normalization fix.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Preserve package-path normalization before raw
+metadata classification when the reader gains further ZIP validation.

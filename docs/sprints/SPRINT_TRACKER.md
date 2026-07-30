@@ -36,6 +36,10 @@ defended.
 | F-013 | S03 | M | 2 | 1 | 2026-07-30 | Unpublished shared OOXML core |
 | F-014 | S03 | M | 2 | 1 | 2026-07-30 | Shared schema unit types |
 | F-017 | S03 | M | 2 | 1 | 2026-07-30 | Shared app and custom properties |
+| F-018 | S04 | M | 2 | 1 | 2026-07-30 | Unpublished format-neutral OPC package |
+| F-019 | S04 | S | 1 | 1 | 2026-07-30 | PresentationML package constants |
+| F-020 | S04 | M | 2 | 1 | 2026-07-30 | Code-built PowerPoint OPC proof |
+| F-021 | S04 | S | 1 | 1 | 2026-07-30 | Canonical ZIP entry normalization |
 
 ## Velocity
 

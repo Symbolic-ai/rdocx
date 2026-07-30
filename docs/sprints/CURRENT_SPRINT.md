@@ -30,10 +30,10 @@ crate unpublished.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-018 | Create oxml-opc | M | in-progress | codex |
-| F-019 | PresentationML relationship and content types | S | in-progress | codex |
-| F-020 | oxml-opc reads a pptx | M | in-progress | codex |
-| F-021 | Zip-slip hardening tests | S | in-progress | codex |
+| F-018 | Create oxml-opc | M | done | - |
+| F-019 | PresentationML relationship and content types | S | done | - |
+| F-020 | oxml-opc reads a pptx | M | done | - |
+| F-021 | Zip-slip hardening tests | S | done | - |
 | F-022 | rdocx-opc deprecation shim | S | pending | - |
 | F-015 | rdocx-oxml becomes a facade | S | pending | - |
 | F-016 | Length re-export | S | pending | - |
@@ -49,9 +49,9 @@ real shared crates have an approved publication path. The rdocx 0.5.0 boundary
 alone cannot satisfy later package dry-runs because the registry holds only
 dependency-free 0.0.0 placeholders.
 
-The recorded three-sprint velocity variance requires replanning the remaining
-milestones before implementation begins. Opening S04 creates the delivery
-boundary and does not waive that escalation.
+The recorded three-sprint velocity variance was addressed before
+implementation by the capacity calibration in `SPRINT_PLAN.md`. Recalculate
+after S06 when the evidence includes larger and higher-risk extraction work.
 
 ## Definition of done for this sprint
 
