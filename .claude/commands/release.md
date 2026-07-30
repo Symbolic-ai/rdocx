@@ -26,10 +26,10 @@ Refuse before any tag or push if one check fails:
    declared hash-harness result.
 5. The latest recorded `/sprint-review SNN` is clean at the current HEAD, and
    its review file reports zero blocking findings.
-6. `cargo publish -p <crate> --dry-run` passes for each of the seven packages
-   listed below. Every archive is below 10 MiB. The `rdocx-layout` archive
-   contains all bundled TTF files, `LICENSE-Caladea`, `NOTICE-Caladea`, and the
-   OFL licence.
+6. `cargo publish --workspace --dry-run` passes from the clean tree and produces
+   exactly the seven packages listed below. A dry-run uploads nothing. Every
+   archive is below 10 MiB. The `rdocx-layout` archive contains all bundled TTF
+   files, `LICENSE-Caladea`, `NOTICE-Caladea`, and the OFL licence.
 7. The seven publishable packages are exactly `rdocx-opc`, `rdocx-oxml`,
    `rdocx-layout`, `rdocx-html`, `rdocx-pdf`, `rdocx`, and `rdocx-cli`, all at
    `X.Y.Z`. `rdocx-wasm` may inherit the workspace version, but remains
