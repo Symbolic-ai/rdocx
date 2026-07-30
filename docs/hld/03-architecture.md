@@ -62,8 +62,9 @@ churn. The edge runs `oxml-drawing → rdocx-oxml`, never the reverse.
 handling. Staying independent means it is publishable first and consumable
 alone, which matters for `rdocx-wasm`, which wants only `OpcPackage`.
 
-**`oxml-media` has no dependencies at all.** It is pure byte sniffing, so it is
-a leaf that anything can take cheaply.
+**`oxml-media` has no dependencies at all.** It owns byte sniffing, image header
+probing, and intrinsic EMU sizing through its local `NativeSize` value. It
+remains a leaf that anything can take cheaply without importing `oxml-core`.
 
 **`oxml-layout` is where the format boundary genuinely falls.** Its
 `output.rs` is already 100 percent docx-free: page frames, positioned elements,

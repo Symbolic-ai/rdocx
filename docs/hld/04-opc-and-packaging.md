@@ -142,8 +142,12 @@ pub struct ImageInfo {
 }
 pub fn probe(data: &[u8]) -> Option<ImageInfo>;
 
+pub struct NativeSize {
+    pub width_emu: i64, pub height_emu: i64,
+}
+
 impl ImageInfo {
-    pub fn native_size(&self, default_dpi: f64) -> (Length, Length);
+    pub fn native_size(&self, default_dpi: f64) -> Option<NativeSize>;
 }
 
 pub struct MediaNamer { /* dir, stem, next */ }
@@ -159,8 +163,15 @@ crate exists to eliminate.
 
 **`native_size` takes the DPI rather than baking one in**, because the right
 default differs by consumer: python-docx assumes 72 when a file declares none,
-Word assumes 96. rdocx passes 72 so the Python bindings match python-docx, and
-that constant is documented rather than buried.
+while Word assumes 96. Each declared finite positive axis DPI takes precedence
+over the caller default. Missing or invalid declared DPI falls back per axis.
+The conversion multiplies pixels by 914400 EMU per inch and truncates toward
+zero. The method returns `None` if either effective DPI is not finite and
+positive, or if a converted dimension is outside the `i64` range.
+
+`NativeSize` keeps the result dependency-free and exposes explicit EMU fields.
+The later rdocx consumer cutover supplies 72 for python-docx parity without
+adding an `oxml-core` edge to `oxml-media`.
 
 Header parsing is lifted from the PDF crate, where `jpeg_dimensions` and the
 PNG IHDR reader are currently private. The JPEG walk classifies SOI, TEM and

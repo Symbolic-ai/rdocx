@@ -1,69 +1,60 @@
-# Current Sprint, S04
+# Current Sprint, S05
 
-**Milestone**: M2 Shared infrastructure extraction.
+**Milestone**: M3 Media.
 
-**Goal**: Make the OPC package layer format-neutral and prove it against a
-code-built PowerPoint package. Defer the guarded Word facade moves until the
-real shared crates may be published after PowerPoint development, preserve
-existing rdocx behaviour, and keep every `oxml-*` and `rpptx*` development
-crate unpublished.
+**Goal**: Stage and prove `oxml-media` as the single owner of image format
+sniffing, dimensions, DPI, intrinsic sizing, and media naming. Keep the crate
+isolated and unpublished, with every released rdocx dependency and output
+unchanged until the post-PowerPoint cutover.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for format-family dependency direction,
-  versioning, and the facade boundary retained by the published Word crates.
-- `docs/hld/04-opc-and-packaging.md`, for generic package constructors,
-  relationship and content-type constants, part-name resolution, deterministic
-  saves, and package integrity.
-- `docs/hld/11-migration-plan.md`, for the zero-call-site facade pattern and
-  the required order of the `oxml-core`, `oxml-opc`, and compatibility-shim
-  steps.
-- `docs/hld/12-testing-strategy.md`, for the PowerPoint-shaped OPC fixture,
-  constant-table assertions, zip-slip cases, and unchanged hash gate.
-- `docs/hld/14-development-backlog.md`, for the F-015, F-016, and F-018 through
-  F-022 contracts, dependencies, and story test gates.
-- `docs/hld/15-build-and-toolchain.md`, for package verification and the rule
-  that development crates stay at 0.0.0 and unpublished until PowerPoint work
-  is complete.
+- `docs/hld/03-architecture.md`, for the dependency rule that `oxml-media` is
+  a dependency-free format-neutral leaf.
+- `docs/hld/04-opc-and-packaging.md`, for the media API, sniffing precedence,
+  DPI semantics, native-size calculation, naming contract, and safe header
+  parsing invariants.
+- `docs/hld/11-migration-plan.md`, for staging `oxml-media` without changing
+  released consumers before PowerPoint development is complete.
+- `docs/hld/12-testing-strategy.md`, for magic-byte, DPI, truncation-loop, and
+  highest-existing-suffix regression coverage.
+- `docs/hld/14-development-backlog.md`, for the F-023 through F-026 contracts,
+  dependencies, and story test gates.
+- `docs/hld/15-build-and-toolchain.md`, for keeping development crates at
+  version 0.0.0 and outside the seven-package rdocx publication allowlist.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-018 | Create oxml-opc | M | done | - |
-| F-019 | PresentationML relationship and content types | S | done | - |
-| F-020 | oxml-opc reads a pptx | M | done | - |
-| F-021 | Zip-slip hardening tests | S | done | - |
-| F-022 | rdocx-opc deprecation shim | S | pending | - |
-| F-015 | rdocx-oxml becomes a facade | S | pending | - |
-| F-016 | Length re-export | S | pending | - |
+| F-023 | oxml-media format sniffing | M | done | - |
+| F-025 | MediaNamer | S | done | - |
+| F-024 | Image probing and DPI | L | done | - |
+| F-026 | native_size with explicit DPI | S | done | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-F-018 establishes `oxml-opc`. F-019 and F-021 depend on that crate, while F-020
-additionally depends on F-019. F-015, F-016, and F-022 are carried directly to
-the S32.2 cutover after PowerPoint development and shared publication
-readiness. The rdocx 0.5.0 boundary alone cannot satisfy later package dry-runs
-because the registry holds only dependency-free 0.0.0 placeholders.
-
-The recorded three-sprint velocity variance was addressed before
-implementation by the capacity calibration in `SPRINT_PLAN.md`. Recalculate
-after S06 when the evidence includes larger and higher-risk extraction work.
+F-023 establishes `ImageFormat` and blocks F-024. F-024 establishes
+`ImageInfo` and blocks F-026. F-025 is independent of that parser chain and can
+run in parallel once the crate exists. F-027 and F-028 remain deferred to
+S32.2, so S05 does not alter released rdocx consumers or the hash baseline.
 
 ## Definition of done for this sprint
 
-- `oxml-opc` owns the format-neutral package implementation and its eleven
-  moved tests, with generic main-part and minimal-content-type constructors.
-- Relationship and content-type constants cover the package, shared document
-  properties, and PresentationML cases with uniqueness and shape tests.
-- A code-built PowerPoint package resolves `/ppt/presentation.xml` and a slide
-  layout target through the required parent-directory traversal.
-- Root-escaping and absolute zip entries are normalized or rejected by direct
-  hardening tests.
-- F-015, F-016, and F-022 are carried directly to S32.2, with their approved
-  zero-churn and compatibility contracts intact.
-- The full workspace, package, supply-chain, and hash gates pass with all
+- `oxml-media` exists at version 0.0.0 with publication disabled and no crate
+  dependencies.
+- Every supported format is identified from magic bytes, and sniffing a JPEG
+  overrides a misleading `.png` extension.
+- PNG, JPEG, GIF, BMP, and WebP dimensions and DPI metadata are probed safely,
+  including PNG unit modes, JFIF density units, EXIF before SOF, progressive
+  JPEG, and every truncated prefix.
+- `MediaNamer` allocates after the highest existing numeric suffix rather than
+  counting parts.
+- `native_size(default_dpi)` uses declared DPI when present and the explicit
+  caller default otherwise.
+- The full workspace, package, supply-chain, and hash gates pass with all 28
   existing hash entries unchanged.
-- No `oxml-*` or `rpptx*` development crate is published.
+- No `oxml-*` or `rpptx*` development crate is published, and no released
+  rdocx dependency changes.
