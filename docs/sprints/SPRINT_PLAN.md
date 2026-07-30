@@ -5,12 +5,13 @@ are dependency and review boundaries, not fixed two-week containers. Sprint
 clocks start at the first `/start-feature` of that sprint, not at a fixed
 calendar date.
 
-36 sprints across 13 milestones, roughly 390 developer-days. The sizing
-rationale and the compression options are in
+36 numbered sprints plus two deferred cutover sprints across 13 milestones,
+roughly 390 developer-days. The sizing rationale and compression options are in
 `docs/hld/14-development-backlog.md`.
 
-M1 to M6 are the extraction: rdocx ends on shared infrastructure with no
-behavioural change. M7 to M12 build rpptx. M13 ships the bindings for both.
+M1 to M5 stage the extraction without changing released rdocx dependencies.
+M7 to M12 build rpptx. Deferred M6 publication and rdocx cutover follow M12,
+then M13 ships the bindings for both.
 
 ## Capacity calibration after S03
 
@@ -85,28 +86,24 @@ land before anyone is tempted to change truncation to rounding.
 
 | F-ID | Title | Size |
 |------|-------|------|
-| F-015 | rdocx-oxml becomes a facade                  | S |
-| F-016 | Length re-export                             | S |
 | F-018 | Create oxml-opc                              | M |
 | F-019 | PresentationML relationship and content types| S |
 | F-020 | oxml-opc reads a pptx                        | M |
 | F-021 | Zip-slip hardening tests                     | S |
-| F-022 | rdocx-opc deprecation shim                   | S |
 
-F-015 and F-016 carry from S03, and F-022 joins their deferred cutover. They
-must not begin until PowerPoint development is complete and the real shared
-crates have an approved publication path. Passing the rdocx 0.5.0 release
-boundary protects that release but does not make an unpublished implementation
-available to later package dry-runs. F-015 remains the load-bearing facade
-step, and its acceptance check is a `git diff --stat` shape rather than a
-behaviour. F-020 converts the plan's central package assumption into a test.
+F-015 and F-016 carried from S03, and F-022 joined their deferred cutover. They
+are rescheduled to S32.2 after PowerPoint development and shared-crate
+publication readiness. Passing the rdocx 0.5.0 release boundary protects that
+release but does not make an unpublished implementation available to later
+package dry-runs. F-020 converts the plan's central package assumption into a
+test.
 
 ### M3, Media
 
 #### Sprint S05, oxml-media
 
-**Goal**: one crate owns image sniffing, dimensions and naming, and rdocx uses
-it.
+**Goal**: stage and prove one crate that owns image sniffing, dimensions, and
+naming without changing released rdocx dependencies.
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -114,18 +111,17 @@ it.
 | F-024 | Image probing and DPI                        | L |
 | F-025 | MediaNamer                                   | S |
 | F-026 | native_size with explicit DPI                | S |
-| F-027 | rdocx adopts oxml-media                      | M |
-| F-028 | add_picture_auto                             | S |
 
-F-027 produces the one expected hash-harness delta of the whole extraction:
-content types become sniffed rather than trusted. Label the commit accordingly.
+F-027 and F-028 move to S32.2. F-027 retains the one expected hash-harness
+delta of the whole extraction: content types become sniffed rather than
+trusted. Label that later cutover commit accordingly.
 
 ### M4, Layout primitives
 
 #### Sprint S06, oxml-layout and the line.rs decoupling
 
-**Goal**: the format-neutral layout types are extracted, including the one file
-that needs genuine API design.
+**Goal**: the format-neutral layout types are staged in isolation, including
+the one file that needs genuine API design.
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -138,8 +134,8 @@ hard on the hash harness.
 
 #### Sprint S07, The PositionedElement extension
 
-**Goal**: the shared element type can express a rotated, clipped,
-gradient-filled shape, and rdocx's construction sites do not change.
+**Goal**: the staged shared element type can express a rotated, clipped,
+gradient-filled shape without changing released rdocx construction sites.
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -164,8 +160,9 @@ recursion hazard that S09 then tests for.
 | F-038 | Golden-PNG harness                           | M |
 | F-039 | Global CTM flip                              | L |
 
-F-039 is the single highest-risk change in the plan. It lands before any pptx
-code exists, so a regression has only one possible cause.
+F-039 is the single highest-risk change in the plan. It lands before
+PresentationML rendering code exists, so a regression has only one possible
+cause.
 
 #### Sprint S09, Groups, paths and the recursion fix
 
@@ -193,23 +190,16 @@ between this design and PDFs that silently lose fonts, images or links.
 
 F-045 also fixes the dash pattern that all PNG output currently discards.
 
-### M6, rdocx 0.3.0 release
+### M6, deferred shared publication and rdocx cutover
 
-#### Sprint S11, Ship the extraction
+#### Sprint S11, Staged extraction gate
 
-**Goal**: the shared infrastructure is published and rdocx is on it.
+**Goal**: verify the isolated shared crates and continue PowerPoint development
+without publishing them or changing released rdocx dependencies.
 
-| F-ID | Title | Size |
-|------|-------|------|
-| F-046 | rdocx-pdf deprecation shim                   | S |
-| F-047 | Packaging include and size gate              | M |
-| F-048 | Replace release.sh with cargo-release        | M |
-| F-049 | Rework publish.yml                           | M |
-| F-050 | CI matrix additions                          | S |
-| F-051 | CHANGELOG and migration notes                | S |
-
-**This is the M6 release gate.** Everything after this point is new
-construction on a shipped foundation.
+No publication or consumer-cutover story runs at S11. F-046 through F-051 are
+rescheduled to S32.1 and S32.2 after PowerPoint development. S11 is the staged
+extraction validation boundary before DrawingML construction begins.
 
 ### M7, DrawingML
 
@@ -467,6 +457,43 @@ in most viewers.
 |------|-------|------|
 | F-127 | Chart colour resolution                      | M |
 | F-128 | Preserved chart fallback                     | S |
+
+### Deferred shared publication and rdocx cutover
+
+#### Sprint S32.1, Shared publication readiness
+
+**Goal**: make the completed shared crates packageable, fully gated, and ready
+for an explicitly approved publication without publishing from this sprint.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-047 | Packaging include and size gate              | M |
+| F-048 | Automate split-family release preparation    | M |
+| F-049 | Extend publish.yml to the extracted workspace| M |
+| F-050 | CI matrix additions                          | S |
+
+After S32.1, publication runs only through a separate reviewed release plan
+with explicit approval. S32.2 cannot start until the registry contains the
+approved shared-crate versions and a clean consumer resolves those versions.
+
+#### Sprint S32.2, Released rdocx cutover
+
+**Goal**: after the real shared crates are published through their approved
+release plan, move released rdocx consumers onto them and document the cutover.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-015 | rdocx-oxml becomes a facade                  | S |
+| F-016 | Length re-export                             | S |
+| F-022 | rdocx-opc deprecation shim                   | S |
+| F-027 | rdocx adopts oxml-media                      | M |
+| F-028 | add_picture_auto                             | S |
+| F-046 | rdocx layout and PDF cutover                 | M |
+| F-051 | CHANGELOG and migration notes                | S |
+
+**This is the deferred M6 release gate.** The shared crates are real published
+dependencies, released rdocx packages pass archive verification, and the hash
+harness contains only the declared F-027 content-type delta.
 
 ### M13, Bindings and tooling
 

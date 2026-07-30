@@ -124,14 +124,14 @@ harness will flag it. Label the commit accordingly.
 
 ## What happens to the published crates
 
-All seven are published at 0.2.0. Downloads are roughly 4,000 on each sub-crate,
-almost entirely transitive, and **59** on `rdocx-cli`, which is the honest
-human-install signal. This is the cheapest moment this rename will ever be.
+All seven released rdocx crates are published at 0.4.1. The development-only
+`oxml-*` and `rpptx*` crates remain unpublished until PowerPoint development is
+complete and a separate release is explicitly approved.
 
 | Crate | Fate |
 |---|---|
-| `rdocx-opc` | 0.3.0 deprecation shim, then stop publishing. The 0.3.x stays on crates.io forever |
-| `rdocx-pdf` | Same, over `oxml-pdf` |
+| `rdocx-opc` | Deprecation shim in the approved cutover release, then stop publishing. Prior versions stay on crates.io forever |
+| `rdocx-pdf` | Same, over published `oxml-pdf` |
 | `rdocx-oxml` | **Stays a real crate permanently.** It keeps ~8,700 lines of WordprocessingML |
 | `rdocx-layout` | Stays. Keeps the flow model |
 | `rdocx`, `rdocx-cli`, `rdocx-html` | Names unaffected |

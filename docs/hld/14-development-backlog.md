@@ -130,16 +130,18 @@ A known-good published state immediately before the churn.
 
 ## Milestone 2, Shared infrastructure extraction (about 2 weeks)
 
-**Goal**: `oxml-core` and `oxml-opc` exist, rdocx consumes them, and no
-behaviour changed.
+**Goal**: `oxml-core` and `oxml-opc` exist as isolated staged crates, and no
+released rdocx dependency or behaviour changes.
 
 **End-of-milestone gate**: hash harness unchanged, and `OpcPackage` opens a real
 `.pptx` in a test.
 
 ### F-013, Create oxml-core (M)
-Move `units.rs`, `raw_xml.rs`, `xml_text.rs`, the generic half of `namespace.rs`,
-`core_properties.rs`, `error.rs`, plus `crates/rdocx/src/length.rs`. Make
-`xml_text` public. Consolidate the duplicate `local_name` and `get_attr` helpers.
+Copy `units.rs`, `raw_xml.rs`, `xml_text.rs`, the generic half of
+`namespace.rs`, `core_properties.rs`, `error.rs`, plus
+`crates/rdocx/src/length.rs`. Leave released rdocx consumers unchanged. Make
+`xml_text` public. Consolidate the duplicate `local_name` and `get_attr`
+helpers in the staged crate.
 **Test gate**: the moved tests pass unchanged in their new crate.
 
 ### F-014, New unit types (M)
@@ -166,8 +168,8 @@ Neither exists today.
 other format's fields `None`, and round-trip without emitting them.
 
 ### F-018, Create oxml-opc (M)
-Move `rdocx-opc` verbatim. Replace `new_docx` with `with_main_part` and
-`ContentTypes::minimal`.
+Copy `rdocx-opc` into an isolated staged crate. Replace `new_docx` with
+`with_main_part` and `ContentTypes::minimal` without changing `rdocx-opc`.
 **Test gate**: the 11 moved tests pass, with the two docx-specific ones rebuilt
 on a local fixture helper.
 
@@ -201,10 +203,10 @@ flipped to `oxml_opc` directly.
 
 ## Milestone 3, Media (about 1 week)
 
-**Goal**: one crate owns everything about an image byte string, and rdocx uses it.
+**Goal**: one isolated staged crate owns everything about an image byte string.
 
-**End-of-milestone gate**: hash harness shows exactly one expected delta, the
-sniffed content types.
+**End-of-milestone gate**: the staged crate passes its tests and the hash
+harness remains unchanged. The sniffed content-type delta waits for F-027.
 
 ### F-023, oxml-media format sniffing (M)
 `ImageFormat::sniff`, `from_extension`, `extension`, `content_type`, `resolve`.
@@ -253,15 +255,16 @@ a rotated, clipped, gradient-filled shape.
 that matters most.
 
 ### F-029, Create oxml-layout (M)
-Move `output.rs`, `font.rs`, `bundled_fonts.rs` and `fonts/`, `error.rs`. Move
-`FontFile` into the crate and re-export from `rdocx-layout::input`.
-**Test gate**: the moved tests pass, and `Document::load_fonts_from_dir` still
-compiles unchanged.
+Copy `output.rs`, `font.rs`, `bundled_fonts.rs` and `fonts/`, `error.rs` into an
+isolated staged crate. Move `FontFile` within that staged implementation and
+leave `rdocx-layout` unchanged.
+**Test gate**: the copied tests pass in `oxml-layout`, and the existing
+`Document::load_fonts_from_dir` remains unchanged.
 
 ### F-030, Decouple line.rs (L)
-Replace the four docx imports with `TabStop`, `Align`, `TabAlign`, `Underline`
-and `LineSpacing`. Add `wrap: bool`. Write
-`crates/rdocx-layout/src/convert.rs`.
+In staged `oxml-layout`, replace the four docx imports with `TabStop`, `Align`,
+`TabAlign`, `Underline` and `LineSpacing`. Add `wrap: bool`. The rdocx-side
+converter waits for the deferred consumer cutover.
 **Depends on**: F-029.
 **Test gate**: `line.rs`'s 11 tests rewritten on the new types pass, and the hash
 harness is unchanged.
@@ -289,8 +292,8 @@ Solid, linear, radial and tile paints. Stroke width, cap, join and dash.
 Add both `PositionedElement` variants, `PageFrame::background`,
 `LayoutResult::diagnostics`, and `#[non_exhaustive]` on both enums.
 **Depends on**: F-031, F-033.
-**Test gate**: `rdocx-layout` compiles with zero construction-site changes, and
-the hash harness is unchanged.
+**Test gate**: the staged `oxml-layout` construction sites compile, and the hash
+harness is unchanged.
 
 ### F-035, The walk helper (S)
 `walk(elements, &mut f)` flattening groups and accumulating the transform.
@@ -307,15 +310,16 @@ Content-addressed media handles replacing `embed_id` as the renderer's key.
 
 ## Milestone 5, PDF backend (about 2 weeks)
 
-**Goal**: `oxml-pdf` renders rotated, clipped, gradient-filled paths and nested
-groups, and rdocx's output is bit-identical to before.
+**Goal**: staged `oxml-pdf` renders rotated, clipped, gradient-filled paths and
+nested groups while released rdocx remains unchanged.
 
 **End-of-milestone gate**: golden-PNG diffs of the whole sample corpus show zero
 pixel changes.
 
 ### F-037, Create oxml-pdf (S)
-Rename `rdocx-pdf`, rewire to `oxml-layout` and `oxml-media`, delete the
-duplicated header parsers.
+Copy `rdocx-pdf` into an isolated staged `oxml-pdf`, rewire the copy to
+`oxml-layout` and `oxml-media`, and delete duplicated header parsers from the
+copy. Leave `rdocx-pdf` unchanged until F-046.
 **Depends on**: F-029, F-024.
 **Test gate**: the eight moved tests pass.
 
@@ -371,15 +375,21 @@ empty corner, and a dashed line has gaps.
 
 ---
 
-## Milestone 6, rdocx 0.3.0 release (about 1 week)
+## Milestone 6, shared publication and rdocx cutover (after PowerPoint development)
 
-**Goal**: the extraction ships.
+**Goal**: after PowerPoint development is complete, the shared crates are
+published through an approved release plan and rdocx moves onto them.
 
 **End-of-milestone gate**: `cargo publish --dry-run` passes for every crate and
 the `.crate` sizes are under the limit.
 
-### F-046, rdocx-pdf deprecation shim (S)
-**Test gate**: workspace compiles, `rdocx::Error::Layout` wraps the new type.
+### F-046, rdocx layout and PDF cutover (M)
+Move `rdocx-layout` onto the published `oxml-layout` types through its retained
+flow-model facade, add the `rdocx-pdf` deprecation shim over published
+`oxml-pdf`, and install the rdocx-side conversion boundary deferred from F-030.
+**Depends on**: F-030, F-037, F-047 through F-050.
+**Test gate**: the workspace compiles, `rdocx::Error::Layout` wraps the new
+type, and the hash harness is unchanged.
 
 ### F-047, Packaging include and size gate (M)
 `include` on `oxml-layout`, drop `--no-verify`, assert `.crate` size in CI.
@@ -404,7 +414,7 @@ order.
 **Test gate**: all new jobs pass on a clean tree.
 
 ### F-051, CHANGELOG and migration notes (S)
-Document the crate moves, the deprecations, and the `0.3.0` breaking changes.
+Document the crate moves, the deprecations, and the eventual breaking cutover.
 **Test gate**: every renamed crate is named in the CHANGELOG with its replacement.
 
 ---

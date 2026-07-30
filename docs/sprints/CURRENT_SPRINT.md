@@ -43,11 +43,10 @@ crate unpublished.
 Rows are listed in dependency order, not F-ID order.
 
 F-018 establishes `oxml-opc`. F-019 and F-021 depend on that crate, while F-020
-additionally depends on F-019. F-015, F-016, and F-022 are deferred cutover
-stories. They must not begin until PowerPoint development is complete and the
-real shared crates have an approved publication path. The rdocx 0.5.0 boundary
-alone cannot satisfy later package dry-runs because the registry holds only
-dependency-free 0.0.0 placeholders.
+additionally depends on F-019. F-015, F-016, and F-022 are carried directly to
+the S32.2 cutover after PowerPoint development and shared publication
+readiness. The rdocx 0.5.0 boundary alone cannot satisfy later package dry-runs
+because the registry holds only dependency-free 0.0.0 placeholders.
 
 The recorded three-sprint velocity variance was addressed before
 implementation by the capacity calibration in `SPRINT_PLAN.md`. Recalculate
@@ -63,8 +62,8 @@ after S06 when the evidence includes larger and higher-risk extraction work.
   layout target through the required parent-directory traversal.
 - Root-escaping and absolute zip entries are normalized or rejected by direct
   hardening tests.
-- F-015, F-016, and F-022 are carried into the deferred shared-crate cutover,
-  with their approved zero-churn and compatibility contracts intact.
+- F-015, F-016, and F-022 are carried directly to S32.2, with their approved
+  zero-churn and compatibility contracts intact.
 - The full workspace, package, supply-chain, and hash gates pass with all
   existing hash entries unchanged.
 - No `oxml-*` or `rpptx*` development crate is published.

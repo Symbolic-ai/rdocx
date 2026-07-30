@@ -615,6 +615,8 @@ were observed failing for their intended reasons before completion.
 
 **Notes for future sessions.** OPC navigation is now proven against both Word
 and PowerPoint package shapes before any PresentationML parser is introduced.
+The close workflow preserves the S32.2 target for publication-bound cutovers
+instead of forcing them through every intervening sprint.
 
 ### F-021, Zip-slip hardening tests
 

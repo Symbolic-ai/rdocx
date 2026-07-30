@@ -1,7 +1,7 @@
 # F-022, rdocx-opc deprecation shim
 
 **Status**: approved
-**Sprint**: S04
+**Sprint**: S32.2
 **Size**: S
 **Depends on**: F-018
 

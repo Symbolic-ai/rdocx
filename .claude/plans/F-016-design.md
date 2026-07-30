@@ -1,7 +1,7 @@
 # F-016, Length re-export
 
 **Status**: approved
-**Sprint**: S04
+**Sprint**: S32.2
 **Size**: S
 **Depends on**: F-013
 
