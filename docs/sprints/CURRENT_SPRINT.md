@@ -31,7 +31,7 @@ the development crate.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-013 | Create oxml-core | M | pending | - |
+| F-013 | Create oxml-core | M | in-progress | codex |
 | F-014 | New unit types | M | pending | - |
 | F-015 | rdocx-oxml becomes a facade | S | pending | - |
 | F-016 | Length re-export | S | pending | - |
