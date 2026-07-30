@@ -1,6 +1,6 @@
 # F-019, PresentationML relationship and content types
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S04
 **Size**: S
 **Depends on**: F-018
@@ -105,14 +105,14 @@ and any digest delta blocks the sprint.
 
 ## Implementation checklist
 
-- [ ] Add the package-level, shared-property, and PresentationML relationship
+- [x] Add the package-level, shared-property, and PresentationML relationship
       constants to `oxml_opc::relationship::rel_types`.
-- [ ] Expose the existing `content_types` module and add the shared property and
+- [x] Expose the existing `content_types` module and add the shared property and
       PresentationML MIME constants.
-- [ ] Reuse the universal constants in `ContentTypes::minimal()`.
-- [ ] Add the complete table-driven uniqueness and well-formedness gate.
-- [ ] Keep every rdocx consumer and publication setting unchanged.
-- [ ] Run focused tests, the package archive check, and the unchanged hash
+- [x] Reuse the universal constants in `ContentTypes::minimal()`.
+- [x] Add the complete table-driven uniqueness and well-formedness gate.
+- [x] Keep every rdocx consumer and publication setting unchanged.
+- [x] Run focused tests, the package archive check, and the unchanged hash
       harness.
 
 ## Open questions

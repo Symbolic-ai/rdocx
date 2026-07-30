@@ -7,6 +7,38 @@ use quick_xml::{Reader, Writer};
 
 use crate::error::{OpcError, Result};
 
+pub const RELATIONSHIPS: &str = "application/vnd.openxmlformats-package.relationships+xml";
+pub const XML: &str = "application/xml";
+
+pub const CORE_PROPERTIES: &str = "application/vnd.openxmlformats-package.core-properties+xml";
+pub const EXTENDED_PROPERTIES: &str =
+    "application/vnd.openxmlformats-officedocument.extended-properties+xml";
+pub const CUSTOM_PROPERTIES: &str =
+    "application/vnd.openxmlformats-officedocument.custom-properties+xml";
+pub const THEME: &str = "application/vnd.openxmlformats-officedocument.theme+xml";
+
+pub const PRESENTATION: &str =
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml";
+pub const SLIDESHOW: &str =
+    "application/vnd.openxmlformats-officedocument.presentationml.slideshow.main+xml";
+pub const SLIDE: &str = "application/vnd.openxmlformats-officedocument.presentationml.slide+xml";
+pub const SLIDE_LAYOUT: &str =
+    "application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml";
+pub const SLIDE_MASTER: &str =
+    "application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml";
+pub const NOTES_SLIDE: &str =
+    "application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml";
+pub const NOTES_MASTER: &str =
+    "application/vnd.openxmlformats-officedocument.presentationml.notesMaster+xml";
+pub const PRES_PROPS: &str =
+    "application/vnd.openxmlformats-officedocument.presentationml.presProps+xml";
+pub const VIEW_PROPS: &str =
+    "application/vnd.openxmlformats-officedocument.presentationml.viewProps+xml";
+pub const TABLE_STYLES: &str =
+    "application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml";
+pub const HANDOUT_MASTER: &str =
+    "application/vnd.openxmlformats-officedocument.presentationml.handoutMaster+xml";
+
 /// A single content type entry, either a Default by extension or an Override by part name.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContentType {
@@ -173,11 +205,8 @@ impl ContentTypes {
     /// Create the minimal content types shared by every OPC package.
     pub fn minimal() -> Self {
         let mut defaults = HashMap::new();
-        defaults.insert(
-            "rels".to_string(),
-            "application/vnd.openxmlformats-package.relationships+xml".to_string(),
-        );
-        defaults.insert("xml".to_string(), "application/xml".to_string());
+        defaults.insert("rels".to_string(), RELATIONSHIPS.to_string());
+        defaults.insert("xml".to_string(), XML.to_string());
 
         ContentTypes {
             defaults,

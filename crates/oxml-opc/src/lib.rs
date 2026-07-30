@@ -6,7 +6,7 @@
 //! - Parsing `.rels` relationship files
 //! - Navigating parts by URI and resolving relationships
 
-mod content_types;
+pub mod content_types;
 mod error;
 mod package;
 pub mod relationship;

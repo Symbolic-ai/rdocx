@@ -7,10 +7,19 @@ use crate::error::{OpcError, Result};
 
 /// Well-known OOXML relationship types.
 pub mod rel_types {
+    // Package-level relationships.
     pub const CORE_PROPERTIES: &str =
         "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties";
+    pub const THUMBNAIL: &str =
+        "http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail";
+
+    // Shared officeDocument relationships.
     pub const DOCUMENT: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument";
+    pub const EXTENDED_PROPERTIES: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties";
+    pub const CUSTOM_PROPERTIES: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties";
     pub const STYLES: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles";
     pub const NUMBERING: &str =
@@ -35,6 +44,26 @@ pub mod rel_types {
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes";
     pub const CHART: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+
+    // PresentationML relationships.
+    pub const SLIDE: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
+    pub const SLIDE_LAYOUT: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout";
+    pub const SLIDE_MASTER: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster";
+    pub const NOTES_SLIDE: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide";
+    pub const NOTES_MASTER: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster";
+    pub const PRES_PROPS: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/presProps";
+    pub const VIEW_PROPS: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/viewProps";
+    pub const TABLE_STYLES: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/tableStyles";
+    pub const HANDOUT_MASTER: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/handoutMaster";
 }
 
 /// A single relationship entry.
@@ -230,6 +259,84 @@ impl Relationships {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relationship_and_content_type_constants_are_unique_and_well_formed() {
+        const PACKAGE_PREFIX: &str =
+            "http://schemas.openxmlformats.org/package/2006/relationships/";
+        const OFFICE_PREFIX: &str =
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+
+        let package_relationships = [rel_types::CORE_PROPERTIES, rel_types::THUMBNAIL];
+        let office_relationships = [
+            rel_types::DOCUMENT,
+            rel_types::STYLES,
+            rel_types::NUMBERING,
+            rel_types::HEADER,
+            rel_types::FOOTER,
+            rel_types::IMAGE,
+            rel_types::SETTINGS,
+            rel_types::FONT_TABLE,
+            rel_types::THEME,
+            rel_types::HYPERLINK,
+            rel_types::FOOTNOTES,
+            rel_types::ENDNOTES,
+            rel_types::CHART,
+            rel_types::EXTENDED_PROPERTIES,
+            rel_types::CUSTOM_PROPERTIES,
+            rel_types::SLIDE,
+            rel_types::SLIDE_LAYOUT,
+            rel_types::SLIDE_MASTER,
+            rel_types::NOTES_SLIDE,
+            rel_types::NOTES_MASTER,
+            rel_types::PRES_PROPS,
+            rel_types::VIEW_PROPS,
+            rel_types::TABLE_STYLES,
+            rel_types::HANDOUT_MASTER,
+        ];
+
+        let mut relationship_values = std::collections::HashSet::new();
+        for value in package_relationships {
+            assert!(value.starts_with(PACKAGE_PREFIX));
+            assert!(!value.chars().any(char::is_whitespace));
+            assert!(relationship_values.insert(value));
+        }
+        for value in office_relationships {
+            assert!(value.starts_with(OFFICE_PREFIX));
+            assert!(!value.chars().any(char::is_whitespace));
+            assert!(relationship_values.insert(value));
+        }
+
+        let content_type_values = [
+            crate::content_types::RELATIONSHIPS,
+            crate::content_types::XML,
+            crate::content_types::CORE_PROPERTIES,
+            crate::content_types::EXTENDED_PROPERTIES,
+            crate::content_types::CUSTOM_PROPERTIES,
+            crate::content_types::THEME,
+            crate::content_types::PRESENTATION,
+            crate::content_types::SLIDESHOW,
+            crate::content_types::SLIDE,
+            crate::content_types::SLIDE_LAYOUT,
+            crate::content_types::SLIDE_MASTER,
+            crate::content_types::NOTES_SLIDE,
+            crate::content_types::NOTES_MASTER,
+            crate::content_types::PRES_PROPS,
+            crate::content_types::VIEW_PROPS,
+            crate::content_types::TABLE_STYLES,
+            crate::content_types::HANDOUT_MASTER,
+        ];
+
+        let mut content_types = std::collections::HashSet::new();
+        for value in content_type_values {
+            let (kind, subtype) = value.split_once('/').expect("valid MIME type");
+            assert_eq!(kind, "application");
+            assert!(!subtype.is_empty());
+            assert!(!subtype.contains('/'));
+            assert!(!value.chars().any(char::is_whitespace));
+            assert!(content_types.insert(value));
+        }
+    }
 
     #[test]
     fn round_trip_relationships() {
