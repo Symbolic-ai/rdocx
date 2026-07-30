@@ -30,7 +30,7 @@ unchanged until the post-PowerPoint cutover.
 | F-023 | oxml-media format sniffing | M | in-progress | codex |
 | F-025 | MediaNamer | S | pending | - |
 | F-024 | Image probing and DPI | L | in-progress | codex |
-| F-026 | native_size with explicit DPI | S | pending | - |
+| F-026 | native_size with explicit DPI | S | in-progress | codex |
 
 ## Sequencing note
 
