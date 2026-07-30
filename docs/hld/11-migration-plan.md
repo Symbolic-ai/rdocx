@@ -2,8 +2,10 @@
 
 How the `oxml-*` crates are extracted without breaking a shipped library.
 
-Covers milestones M1 through M6. Every step is an in-place `git mv`, so history
-is preserved for free, and `cargo test --workspace` is green at every step.
+Covers milestones M1 through M6. Shared implementations are staged in their new
+crate before a later facade step deletes the old files and installs re-exports.
+This keeps `cargo test --workspace` green at every independently revertible
+step. Git still recognises the final delete and add pairs as moves.
 
 ## The safety net comes first
 
@@ -54,7 +56,7 @@ plainly: most of this migration is a re-export block.
 
 | Step | Crate | Note |
 |---|---|---|
-| 1 | `oxml-core` | Move five files plus `length.rs`. Add the new unit types, app and custom properties. Make `xml_text` public |
+| 1 | `oxml-core` | Stage five files plus `length.rs`, leaving the old files until steps 2 and 3. Add the new unit types, app and custom properties. Make `xml_text` public |
 | 2 | `rdocx-oxml` facade | The re-export block above |
 | 3 | `Length` | Delete `crates/rdocx/src/length.rs`, re-export from `oxml-core` |
 | 4 | `oxml-opc` | Move verbatim, generalise the constructors, add the pptx relationship types |

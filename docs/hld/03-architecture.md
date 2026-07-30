@@ -94,7 +94,11 @@ and the style resolver. Slides do not paginate, so none of it transfers.
 
 ## Versioning
 
-`oxml-*` and `rdocx-*` share `version.workspace = true` and move together.
+During PowerPoint development, each implemented `oxml-*` crate keeps its
+reserved `version = "0.0.0"` and sets `publish = false`. The released `rdocx-*`
+crates continue to use the workspace version. The two families move together
+only after the PowerPoint implementation is complete and the shared crates have
+their own reviewed publication plan.
 
 `rpptx-*` crates **opt out** with an explicit `version = "0.1.0"`, and carry
 their own `keywords` and `categories`, because the workspace values say

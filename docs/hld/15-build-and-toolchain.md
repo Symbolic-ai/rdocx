@@ -128,6 +128,11 @@ development is complete. A normal `v*` release must not publish a later version
 of any package in those families. Their eventual publication requires its own
 reviewed release plan and explicit approval.
 
+Implemented development crates keep the reserved `version = "0.0.0"` and set
+`publish = false` in the workspace. The release workflow remains an explicit
+allowlist of the seven released rdocx packages, so adding implementation code
+does not turn a reserved name into a publication candidate.
+
 Two tag namespaces:
 
 | Tag | Workflow | Publishes |

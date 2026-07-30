@@ -1,6 +1,6 @@
 # F-013, Create oxml-core
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S03
 **Size**: M
 **Depends on**: none
@@ -97,13 +97,13 @@ Expected to remain unchanged. Any delta blocks the sprint.
 
 ## Implementation checklist
 
-- [ ] Apply the approved version and publication boundary to `oxml-core` and
+- [x] Apply the approved version and publication boundary to `oxml-core` and
       add the workspace dependency.
-- [ ] Stage the shared source and existing tests without changing behaviour.
-- [ ] Add the shared XML helper module and remove its internal duplication.
-- [ ] Make `xml_text` public and add the specified event coverage.
-- [ ] Prove the new crate has no dependency edge into either format family.
-- [ ] Run the focused crate, packaging, workspace-check, and hash gates.
+- [x] Stage the shared source and existing tests without changing behaviour.
+- [x] Add the shared XML helper module and remove its internal duplication.
+- [x] Make `xml_text` public and add the specified event coverage.
+- [x] Prove the new crate has no dependency edge into either format family.
+- [x] Run the focused crate, packaging, workspace-check, and hash gates.
 
 ## Open questions
 
