@@ -147,10 +147,11 @@ package dry-runs, an absent local and remote tag, and a separate final approval
 immediately before the push. `/close-sprint` remains the only command allowed
 to merge `main` or create an `sNN` tag.
 
-The tag starts `publish.yml`. Publication succeeds only after all seven current
-crates and the GitHub release are externally verified. `rdocx-wasm` inherits
-the workspace version but stays `publish = false` because its distribution path
-is npm.
+The tag starts `publish.yml`. Its Linux runner reproduces the deterministic hash
+baseline before crates.io publication begins. Publication succeeds only after
+all seven current crates and the GitHub release are externally verified.
+`rdocx-wasm` inherits the workspace version but stays `publish = false` because
+its distribution path is npm.
 
 The Python package version tracks the Rust train through a
 `pre-release-replacements` entry so the wheel version and the crate version

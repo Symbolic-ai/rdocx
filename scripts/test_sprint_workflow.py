@@ -62,6 +62,10 @@ class SprintWorkflowTests(unittest.TestCase):
         )
 
         self.assertIn("cargo publish --workspace", publish)
+        self.assertLess(
+            publish.index("python3 scripts/hash_harness.py --check"),
+            publish.index("cargo publish --workspace"),
+        )
         self.assertNotIn("--no-verify", publish)
         self.assertNotIn("|| echo", publish)
 
