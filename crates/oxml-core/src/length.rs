@@ -23,6 +23,13 @@ impl Length {
         }
     }
 
+    /// Create a length from millimetres.
+    pub fn mm(val: f64) -> Self {
+        Length {
+            emu: (val * 36000.0) as i64,
+        }
+    }
+
     /// Create a length from points.
     pub fn pt(val: f64) -> Self {
         Length {
@@ -115,5 +122,12 @@ mod tests {
         assert_eq!(Length::emu(-7).to_emu(), -7);
         assert_eq!(Length::twips(7).to_emu(), 4445);
         assert_eq!(Length::twips(-7).to_emu(), -4445);
+    }
+
+    #[test]
+    fn length_millimetres_round_trip() {
+        assert_eq!(Length::mm(25.4).to_emu(), 914_400);
+        assert_eq!(Length::mm(1.75 / 36_000.0).to_emu(), 1);
+        assert_eq!(Length::mm(-1.75 / 36_000.0).to_emu(), -1);
     }
 }

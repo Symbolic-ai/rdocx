@@ -85,6 +85,51 @@ impl HalfPoint {
     }
 }
 
+/// Centipoints, 1/100 of a point.
+/// Used for DrawingML font sizes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct Centipoints(pub i32);
+
+impl Centipoints {
+    pub fn from_pt(pt: f64) -> Self {
+        Centipoints((pt * 100.0) as i32)
+    }
+
+    pub fn to_pt(self) -> f64 {
+        self.0 as f64 / 100.0
+    }
+}
+
+/// Angles stored in 60,000ths of a degree.
+/// Used for DrawingML rotation and gradient angles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct Angle(pub i32);
+
+impl Angle {
+    pub fn from_degrees(degrees: f64) -> Self {
+        Angle((degrees * 60_000.0) as i32)
+    }
+
+    pub fn to_degrees(self) -> f64 {
+        self.0 as f64 / 60_000.0
+    }
+}
+
+/// Percentages stored in thousandths of a percent.
+/// A stored value of 75,000 represents 75 percent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct Percent1000(pub i32);
+
+impl Percent1000 {
+    pub fn from_percent(percent: f64) -> Self {
+        Percent1000((percent * 1000.0) as i32)
+    }
+
+    pub fn to_fraction(self) -> f64 {
+        self.0 as f64 / 100_000.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +182,36 @@ mod tests {
         assert_eq!(Emu::from_cm(-1.75 / 360000.0).0, -1);
         assert_eq!(Emu::from_pt(1.75 / 12700.0).0, 1);
         assert_eq!(Emu::from_pt(-1.75 / 12700.0).0, -1);
+    }
+
+    #[test]
+    fn centipoints_round_trip_points() {
+        let value = Centipoints::from_pt(18.0);
+        assert_eq!(value.0, 1800);
+        assert_eq!(value.to_pt(), 18.0);
+    }
+
+    #[test]
+    fn angle_round_trip_degrees() {
+        let value = Angle::from_degrees(90.0);
+        assert_eq!(value.0, 5_400_000);
+        assert_eq!(value.to_degrees(), 90.0);
+    }
+
+    #[test]
+    fn percent1000_round_trip_percent() {
+        let value = Percent1000::from_percent(75.0);
+        assert_eq!(value.0, 75_000);
+        assert_eq!(value.to_fraction(), 0.75);
+    }
+
+    #[test]
+    fn new_unit_float_constructors_truncate_toward_zero() {
+        assert_eq!(Centipoints::from_pt(1.75 / 100.0).0, 1);
+        assert_eq!(Centipoints::from_pt(-1.75 / 100.0).0, -1);
+        assert_eq!(Angle::from_degrees(1.75 / 60_000.0).0, 1);
+        assert_eq!(Angle::from_degrees(-1.75 / 60_000.0).0, -1);
+        assert_eq!(Percent1000::from_percent(1.75 / 1000.0).0, 1);
+        assert_eq!(Percent1000::from_percent(-1.75 / 1000.0).0, -1);
     }
 }

@@ -1,6 +1,6 @@
 # F-014, New unit types
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S03
 **Size**: M
 **Depends on**: F-013
@@ -73,10 +73,10 @@ Expected to remain unchanged. The new types have no rdocx call sites.
 
 ## Implementation checklist
 
-- [ ] Add the three concrete unit newtypes and exact conversions.
-- [ ] Add millimetre support to `Length`.
-- [ ] Add the backlog assertions and truncation-discriminating cases.
-- [ ] Run focused `oxml-core` tests, packaging, and the hash harness.
+- [x] Add the three concrete unit newtypes and exact conversions.
+- [x] Add millimetre support to `Length`.
+- [x] Add the backlog assertions and truncation-discriminating cases.
+- [x] Run focused `oxml-core` tests, packaging, and the hash harness.
 
 ## Open questions
 
