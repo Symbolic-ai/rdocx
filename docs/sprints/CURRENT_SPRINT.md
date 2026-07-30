@@ -27,7 +27,7 @@ unchanged until the post-PowerPoint cutover.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-023 | oxml-media format sniffing | M | pending | - |
+| F-023 | oxml-media format sniffing | M | in-progress | codex |
 | F-025 | MediaNamer | S | pending | - |
 | F-024 | Image probing and DPI | L | pending | - |
 | F-026 | native_size with explicit DPI | S | pending | - |
