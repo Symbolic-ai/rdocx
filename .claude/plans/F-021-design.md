@@ -1,6 +1,6 @@
 # F-021, Zip-slip hardening tests
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S04
 **Size**: S
 **Depends on**: F-018
@@ -85,11 +85,11 @@ sprint.
 
 ## Implementation checklist
 
-- [ ] Wait for F-018 to establish `oxml-opc` and its moved package tests.
-- [ ] Normalize ZIP entry names before raw package classification.
-- [ ] Add the root-escaping code-built ZIP fixture and regression assertion.
-- [ ] Add the absolute-entry code-built ZIP fixture and regression assertion.
-- [ ] Run focused package tests, the integrated package round-trip, and the
+- [x] Wait for F-018 to establish `oxml-opc` and its moved package tests.
+- [x] Normalize ZIP entry names before raw package classification.
+- [x] Add the root-escaping code-built ZIP fixture and regression assertion.
+- [x] Add the absolute-entry code-built ZIP fixture and regression assertion.
+- [x] Run focused package tests, the integrated package round-trip, and the
       unchanged hash gate.
 
 ## Open questions

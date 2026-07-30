@@ -54,7 +54,8 @@ impl OpcPackage {
             if entry.is_dir() {
                 continue;
             }
-            let name = entry.name().to_string();
+            let name = normalize_part_name(entry.name());
+            let name = name.strip_prefix('/').unwrap_or(&name).to_string();
             let mut data = Vec::new();
             entry.read_to_end(&mut data)?;
             raw_parts.insert(name, data);
@@ -323,6 +324,27 @@ fn part_name_to_rels_path(part_name: &str) -> String {
 mod tests {
     use super::*;
 
+    fn package_zip(entries: &[(&str, &[u8])]) -> std::io::Cursor<Vec<u8>> {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = ZipWriter::new(&mut buffer);
+            let options = SimpleFileOptions::default();
+            for (name, data) in entries {
+                zip.start_file(name, options).unwrap();
+                zip.write_all(data).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buffer.set_position(0);
+        buffer
+    }
+
+    const MINIMAL_CONTENT_TYPES: &[u8] =
+        br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>"#;
+
     #[test]
     fn with_main_part_resolves_and_round_trips() {
         let mut package = OpcPackage::with_main_part(
@@ -397,6 +419,45 @@ mod tests {
         assert_eq!(
             OpcPackage::resolve_rel_target("/word/document.xml", "../../../etc/passwd"),
             "/etc/passwd"
+        );
+    }
+
+    #[test]
+    fn zip_entry_that_escapes_root_is_clamped_to_root() {
+        let archive = package_zip(&[
+            ("[Content_Types].xml", MINIMAL_CONTENT_TYPES),
+            ("../../etc/passwd", b"not a real password file"),
+        ]);
+
+        let package = OpcPackage::from_reader(archive).unwrap();
+
+        assert_eq!(
+            package.get_part("/etc/passwd"),
+            Some(b"not a real password file".as_slice())
+        );
+        assert!(package.parts.keys().all(|name| !name.contains("..")));
+    }
+
+    #[test]
+    fn absolute_zip_entry_is_normalized_to_package_root() {
+        let archive = package_zip(&[
+            ("/[Content_Types].xml", MINIMAL_CONTENT_TYPES),
+            ("/absolute/path.xml", b"<absolute/>"),
+        ]);
+
+        let package = OpcPackage::from_reader(archive).unwrap();
+
+        assert_eq!(
+            package.get_part("/absolute/path.xml"),
+            Some(b"<absolute/>".as_slice())
+        );
+        assert_eq!(
+            package
+                .parts
+                .keys()
+                .filter(|name| name.as_str() == "/absolute/path.xml")
+                .count(),
+            1
         );
     }
 
