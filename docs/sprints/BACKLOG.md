@@ -17,11 +17,11 @@ regenerated, never hand-edited.
 | Milestone | F-IDs | Done | In Progress | Pending |
 |-----------|-------|------|-------------|---------|
 | M1, Preparation and safety net              | 12 | 12 | 0 | 0  |
-| M2, Shared infrastructure extraction        | 10 | 3 | 0 | 7  |
+| M2, Shared infrastructure extraction        | 10 | 7 | 0 | 3  |
 | M3, Media                                   | 6  | 0 | 0 | 6  |
 | M4, Layout primitives                       | 8  | 0 | 0 | 8  |
 | M5, PDF backend                             | 9  | 0 | 0 | 9  |
-| M6, rdocx 0.3.0 release                     | 6  | 0 | 0 | 6  |
+| M6, Shared publication and rdocx cutover     | 6  | 0 | 0 | 6  |
 | M7, DrawingML                               | 15 | 0 | 0 | 15 |
 | M8, PresentationML                          | 14 | 0 | 0 | 14 |
 | M9, Inheritance resolver                    | 8  | 0 | 0 | 8  |
@@ -30,7 +30,7 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **150** | **15** | **0** | **135** |
+| **Total** | **150** | **19** | **0** | **131** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -61,14 +61,14 @@ regenerated, never hand-edited.
 |------|-------|--------|------|--------|
 | F-013 | Create oxml-core                             | S03 | M | done |
 | F-014 | New unit types                               | S03 | M | done |
-| F-015 | rdocx-oxml becomes a facade                  | S04 | S | pending |
-| F-016 | Length re-export                             | S04 | S | pending |
+| F-015 | rdocx-oxml becomes a facade                  | S32.2 | S | pending |
+| F-016 | Length re-export                             | S32.2 | S | pending |
 | F-017 | App and custom properties                    | S03 | M | done |
-| F-018 | Create oxml-opc                              | S04 | M | pending |
-| F-019 | PresentationML relationship and content types| S04 | S | pending |
-| F-020 | oxml-opc reads a pptx                        | S04 | M | pending |
-| F-021 | Zip-slip hardening tests                     | S04 | S | pending |
-| F-022 | rdocx-opc deprecation shim                   | S04 | S | pending |
+| F-018 | Create oxml-opc                              | S04 | M | done |
+| F-019 | PresentationML relationship and content types| S04 | S | done |
+| F-020 | oxml-opc reads a pptx                        | S04 | M | done |
+| F-021 | Zip-slip hardening tests                     | S04 | S | done |
+| F-022 | rdocx-opc deprecation shim                   | S32.2 | S | pending |
 <!-- AUTOGEN:backlog-M2 END -->
 
 ### M3, Media
@@ -80,8 +80,8 @@ regenerated, never hand-edited.
 | F-024 | Image probing and DPI                        | S05 | L | pending |
 | F-025 | MediaNamer                                   | S05 | S | pending |
 | F-026 | native_size with explicit DPI                | S05 | S | pending |
-| F-027 | rdocx adopts oxml-media                      | S05 | M | pending |
-| F-028 | add_picture_auto                             | S05 | S | pending |
+| F-027 | rdocx adopts oxml-media                      | S32.2 | M | pending |
+| F-028 | add_picture_auto                             | S32.2 | S | pending |
 <!-- AUTOGEN:backlog-M3 END -->
 
 ### M4, Layout primitives
@@ -115,17 +115,17 @@ regenerated, never hand-edited.
 | F-045 | Rasteriser: groups, paths, gradients, dashes | S10 | L | pending |
 <!-- AUTOGEN:backlog-M5 END -->
 
-### M6, rdocx 0.3.0 release
+### M6, Shared publication and rdocx cutover
 
 <!-- AUTOGEN:backlog-M6 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-046 | rdocx-pdf deprecation shim                   | S11 | S | pending |
-| F-047 | Packaging include and size gate              | S11 | M | pending |
-| F-048 | Replace release.sh with cargo-release        | S11 | M | pending |
-| F-049 | Rework publish.yml                           | S11 | M | pending |
-| F-050 | CI matrix additions                          | S11 | S | pending |
-| F-051 | CHANGELOG and migration notes                | S11 | S | pending |
+| F-046 | rdocx layout and PDF cutover                 | S32.2 | M | pending |
+| F-047 | Packaging include and size gate              | S32.1 | M | pending |
+| F-048 | Automate split-family release preparation   | S32.1 | M | pending |
+| F-049 | Extend publish.yml to the extracted workspace| S32.1 | M | pending |
+| F-050 | CI matrix additions                          | S32.1 | S | pending |
+| F-051 | CHANGELOG and migration notes                | S32.2 | S | pending |
 <!-- AUTOGEN:backlog-M6 END -->
 
 ### M7, DrawingML

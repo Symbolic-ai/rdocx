@@ -422,6 +422,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxml-opc"
+version = "0.0.0"
+dependencies = [
+ "quick-xml",
+ "thiserror",
+ "zip",
+]
+
+[[package]]
 name = "pdf-writer"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,64 +1,69 @@
-# Current Sprint, S03
+# Current Sprint, S04
 
-**Milestone**: M2 Core and package extraction.
+**Milestone**: M2 Shared infrastructure extraction.
 
-**Goal**: Establish the unpublished `oxml-core` implementation and add the
-shared unit and property models needed by both Word and PowerPoint. Preserve
-existing rdocx behaviour and keep the rdocx 0.5.0 release line independent of
-the development crate.
+**Goal**: Make the OPC package layer format-neutral and prove it against a
+code-built PowerPoint package. Defer the guarded Word facade moves until the
+real shared crates may be published after PowerPoint development, preserve
+existing rdocx behaviour, and keep every `oxml-*` and `rpptx*` development
+crate unpublished.
 
 ## Spec references
 
-- `docs/hld/01-glossary.md`, for the canonical OOXML unit definitions and
-  their exact storage scales.
-- `docs/hld/02-scope-and-non-goals.md`, for sharing core, app, and custom
-  properties between Word and PowerPoint through `oxml-core`.
-- `docs/hld/03-architecture.md`, for the `oxml-core` ownership boundary,
-  dependency direction, parser conventions, and `rdocx-oxml` facade role.
-- `docs/hld/05-drawingml-model.md`, for the DrawingML consumers of `Angle`,
-  `Centipoints`, and `Percent1000` and the legacy Word colour boundary.
-- `docs/hld/11-migration-plan.md`, for the zero-call-site facade extraction,
-  operation order, and behaviour-preservation constraints.
-- `docs/hld/12-testing-strategy.md`, for unit round-trips, truncation tests,
-  public XML text coverage, and cross-format app-properties fixtures.
-- `docs/hld/14-development-backlog.md`, for the F-013 through F-017 contracts,
-  dependencies, and test gates.
-- `docs/hld/15-build-and-toolchain.md`, for publication ordering and the rule
-  that `oxml-*` and `rpptx*` placeholders stay at 0.0.0 until PowerPoint
-  development is complete.
+- `docs/hld/03-architecture.md`, for format-family dependency direction,
+  versioning, and the facade boundary retained by the published Word crates.
+- `docs/hld/04-opc-and-packaging.md`, for generic package constructors,
+  relationship and content-type constants, part-name resolution, deterministic
+  saves, and package integrity.
+- `docs/hld/11-migration-plan.md`, for the zero-call-site facade pattern and
+  the required order of the `oxml-core`, `oxml-opc`, and compatibility-shim
+  steps.
+- `docs/hld/12-testing-strategy.md`, for the PowerPoint-shaped OPC fixture,
+  constant-table assertions, zip-slip cases, and unchanged hash gate.
+- `docs/hld/14-development-backlog.md`, for the F-015, F-016, and F-018 through
+  F-022 contracts, dependencies, and story test gates.
+- `docs/hld/15-build-and-toolchain.md`, for package verification and the rule
+  that development crates stay at 0.0.0 and unpublished until PowerPoint work
+  is complete.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-013 | Create oxml-core | M | done | - |
-| F-014 | New unit types | M | done | - |
+| F-018 | Create oxml-opc | M | done | - |
+| F-019 | PresentationML relationship and content types | S | done | - |
+| F-020 | oxml-opc reads a pptx | M | done | - |
+| F-021 | Zip-slip hardening tests | S | done | - |
+| F-022 | rdocx-opc deprecation shim | S | pending | - |
 | F-015 | rdocx-oxml becomes a facade | S | pending | - |
 | F-016 | Length re-export | S | pending | - |
-| F-017 | App and custom properties | M | done | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-F-013 establishes `oxml-core` and blocks every other story. After it lands,
-F-014 and F-017 can proceed independently when their touched files do not
-overlap. F-015 and F-016 are carried by explicit decision because their facade
-switch would make published rdocx crates depend on the unpublished
-`oxml-core` implementation.
+F-018 establishes `oxml-opc`. F-019 and F-021 depend on that crate, while F-020
+additionally depends on F-019. F-015, F-016, and F-022 are carried directly to
+the S32.2 cutover after PowerPoint development and shared publication
+readiness. The rdocx 0.5.0 boundary alone cannot satisfy later package dry-runs
+because the registry holds only dependency-free 0.0.0 placeholders.
+
+The recorded three-sprint velocity variance was addressed before
+implementation by the capacity calibration in `SPRINT_PLAN.md`. Recalculate
+after S06 when the evidence includes larger and higher-risk extraction work.
 
 ## Definition of done for this sprint
 
-- The generic unit, XML helper, raw XML, core-properties, error, and `Length`
-  implementations live in `oxml-core`, with their existing tests moved intact.
-- `Centipoints`, `Angle`, `Percent1000`, and `Length::mm` pass their specified
-  conversion and round-trip assertions while existing float constructors keep
-  truncating toward zero.
-- Word and PowerPoint app-properties fixtures parse and round-trip without
-  emitting fields belonging only to the other format, and custom properties
-  round-trip with unmodelled XML preserved.
-- Workspace tests pass and the hash harness remains unchanged.
-- No `oxml-*` or `rpptx*` development crate is published beyond its existing
-  0.0.0 placeholder.
-- F-015 and F-016 remain pending with their carry reason recorded for the next
-  planning decision.
+- `oxml-opc` owns the format-neutral package implementation and its eleven
+  moved tests, with generic main-part and minimal-content-type constructors.
+- Relationship and content-type constants cover the package, shared document
+  properties, and PresentationML cases with uniqueness and shape tests.
+- A code-built PowerPoint package resolves `/ppt/presentation.xml` and a slide
+  layout target through the required parent-directory traversal.
+- Root-escaping and absolute zip entries are normalized or rejected by direct
+  hardening tests.
+- F-015, F-016, and F-022 are carried directly to S32.2, with their approved
+  zero-churn and compatibility contracts intact.
+- The full workspace, package, supply-chain, and hash gates pass with all
+  existing hash entries unchanged.
+- No `oxml-*` or `rpptx*` development crate is published.

@@ -56,21 +56,24 @@ plainly: most of this migration is a re-export block.
 
 | Step | Crate | Note |
 |---|---|---|
-| 1 | `oxml-core` | Stage five files plus `length.rs`, leaving the old files until steps 2 and 3. Add the new unit types, app and custom properties. Make `xml_text` public |
-| 2 | `rdocx-oxml` facade | The re-export block above |
-| 3 | `Length` | Delete `crates/rdocx/src/length.rs`, re-export from `oxml-core` |
-| 4 | `oxml-opc` | Move verbatim, generalise the constructors, add the pptx relationship types |
-| 5 | `rdocx-opc` shim | `pub use oxml_opc::*` with a deprecation note. Consumers still compile untouched |
-| 6 | Consumers | Flip imports to `oxml_opc` directly. `rdocx::Error::Opc` changes its inner type |
-| 7 | `oxml-media` | All new. Then adopt it in rdocx and delete the old helpers |
-| 8 | `oxml-layout` | Move the output types, font manager and bundled fonts |
-| 9 | **`line.rs` decoupling** | Its own PR, its own review |
-| 10 | `PositionedElement` extension | `Transform`, `Path`, `Paint`, `Group`, `walk`, `#[non_exhaustive]` |
-| 11 | `oxml-pdf` | Rename, rewrite the three collection passes on `walk`, add the new arms |
-| 12 | `rdocx-pdf` shim | `pub use oxml_pdf::*` |
+| 1 | `oxml-core` staging | Copy the shared implementation, add its new types, and leave released rdocx consumers unchanged |
+| 2 | `oxml-opc` staging | Copy the package implementation, generalise constructors, add PowerPoint constants, and prove the isolated crate |
+| 3 | `oxml-media` staging | Build the shared media implementation without changing released consumers |
+| 4 | `oxml-layout` staging | Copy the output types, font manager, and bundled fonts behind an isolated crate boundary |
+| 5 | **`line.rs` decoupling** | Its own PR and review inside the staged layout implementation |
+| 6 | `PositionedElement` extension | Add `Transform`, `Path`, `Paint`, `Group`, `walk`, and `#[non_exhaustive]` |
+| 7 | `oxml-pdf` staging | Copy the backend, rewrite the three collection passes on `walk`, and add the new arms |
+| 8 | PowerPoint implementation | Finish and review the shared-crate publication plan before any released rdocx package consumes real development code |
+| 9 | `rdocx-oxml` and `Length` cutover | Apply the re-export block above and delete the staged duplicates |
+| 10 | `rdocx-opc` cutover | Install the deprecated shim, flip direct consumers, and change `rdocx::Error::Opc` to the shared type |
+| 11 | Media and layout cutover | Move released rdocx consumers onto the published shared crates and delete their staged duplicates |
+| 12 | `rdocx-pdf` cutover | Install `pub use oxml_pdf::*` after the shared backend is publishable |
 
-Each edge points only at an already-migrated crate, and each step is
-independently revertable.
+Staging steps keep every released rdocx package on its published dependency
+graph. Cutover steps begin only after PowerPoint development is complete and
+the real shared crates have an approved publication path. This preserves the
+full package dry-run gate without publishing development crates early, and
+each step remains independently revertable.
 
 ## The one piece of real API design
 
@@ -121,14 +124,14 @@ harness will flag it. Label the commit accordingly.
 
 ## What happens to the published crates
 
-All seven are published at 0.2.0. Downloads are roughly 4,000 on each sub-crate,
-almost entirely transitive, and **59** on `rdocx-cli`, which is the honest
-human-install signal. This is the cheapest moment this rename will ever be.
+All seven released rdocx crates are published at 0.4.1. The development-only
+`oxml-*` and `rpptx*` crates remain unpublished until PowerPoint development is
+complete and a separate release is explicitly approved.
 
 | Crate | Fate |
 |---|---|
-| `rdocx-opc` | 0.3.0 deprecation shim, then stop publishing. The 0.3.x stays on crates.io forever |
-| `rdocx-pdf` | Same, over `oxml-pdf` |
+| `rdocx-opc` | Deprecation shim in the approved cutover release, then stop publishing. Prior versions stay on crates.io forever |
+| `rdocx-pdf` | Same, over published `oxml-pdf` |
 | `rdocx-oxml` | **Stays a real crate permanently.** It keeps ~8,700 lines of WordprocessingML |
 | `rdocx-layout` | Stays. Keeps the flow model |
 | `rdocx`, `rdocx-cli`, `rdocx-html` | Names unaffected |
@@ -150,9 +153,10 @@ The repository keeps the name `tensorbee/rdocx`, so **no existing link is
 affected at all**. crates.io indexes by crate name, docs.rs builds from the
 uploaded tarball, and no redirect is involved.
 
-rdocx goes to **0.3.0**. It is a breaking release regardless: `Error::Opc` and
-`Error::Layout` change their inner types, `line.rs` is a public module whose
-types change, and `PositionedElement` becomes `#[non_exhaustive]`.
+The eventual rdocx cutover is a breaking release regardless of its assigned
+version. `Error::Opc` and `Error::Layout` change their inner types, `line.rs` is
+a public module whose types change, and `PositionedElement` becomes
+`#[non_exhaustive]`.
 
 ## Release tooling
 
@@ -162,6 +166,8 @@ then tags the exact fully verified commit after a separate final approval. It
 owns the `v*` release namespace, while `/close-sprint` owns `sNN` tags and
 `/spec-bump` owns local `spec-v*` tags.
 
-`publish.yml` uses `cargo publish --workspace`, available at the pinned
-toolchain. It performs archive verification and propagates authentication,
-network, compilation and duplicate-version failures without relabelling them.
+Today `publish.yml` names the seven released rdocx packages explicitly in
+dependency order. F-049 expands that allowlist to the completed shared and
+PowerPoint crates only after PowerPoint development and separate publication
+approval. The workflow propagates authentication, network, compilation and
+duplicate-version failures without relabelling them.

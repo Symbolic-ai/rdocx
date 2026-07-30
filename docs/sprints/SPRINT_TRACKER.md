@@ -16,6 +16,7 @@ defended.
 | S01 | M1 | 6 | 6 | 0 | 10 | 6 | Completed with no carries |
 | S02 | M1 | 6 | 6 | 0 | 8 | 6 | Completed M1 and published rdocx 0.4.1 |
 | S03 | M2 | 5 | 3 | 2 | 8 | 3 | F-015 and F-016 carried to S04 to keep rdocx 0.5.0 independent of unpublished oxml-core |
+| S04 | M2 | 7 | 4 | 3 | 9 | 4 | F-015, F-016, and F-022 carried to S32.2 so development crates remain unpublished until PowerPoint is complete |
 
 ## Completed features
 
@@ -36,6 +37,10 @@ defended.
 | F-013 | S03 | M | 2 | 1 | 2026-07-30 | Unpublished shared OOXML core |
 | F-014 | S03 | M | 2 | 1 | 2026-07-30 | Shared schema unit types |
 | F-017 | S03 | M | 2 | 1 | 2026-07-30 | Shared app and custom properties |
+| F-018 | S04 | M | 2 | 1 | 2026-07-30 | Unpublished format-neutral OPC package |
+| F-019 | S04 | S | 1 | 1 | 2026-07-30 | PresentationML package constants |
+| F-020 | S04 | M | 2 | 1 | 2026-07-30 | Code-built PowerPoint OPC proof |
+| F-021 | S04 | S | 1 | 1 | 2026-07-30 | Canonical ZIP entry normalization |
 
 ## Velocity
 
@@ -52,6 +57,7 @@ five working days.
 | S01 | 6 | 6 | 5.00 |
 | S02 | 6 | 6 | 5.00 |
 | S03 | 3 | 3 | 5.00 |
+| S04 | 4 | 4 | 5.00 |
 
 ## Escalation record
 
@@ -60,4 +66,4 @@ was done about it. Empty is the expected state.
 
 | Date | Trigger | F-ID or sprint | Response |
 |------|---------|----------------|----------|
-| 2026-07-30 | Three-sprint velocity variance exceeded 30 percent | S01 to S03 | Open S04 pending and replan remaining milestones before implementation |
+| 2026-07-30 | Three-sprint velocity variance exceeded 30 percent | S01 to S03 | Reforecast 366 remaining estimated days to 45 to 50 active weeks, retain dependency-defined boundaries, and recalibrate after S06 |
