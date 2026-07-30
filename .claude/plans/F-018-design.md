@@ -1,6 +1,6 @@
 # F-018, Create oxml-opc
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S04
 **Size**: M
 **Depends on**: none
@@ -137,14 +137,14 @@ sprint.
 
 ## Implementation checklist
 
-- [ ] Add the unpublished version 0.0.0 crate to the workspace and dependency
+- [x] Add the unpublished version 0.0.0 crate to the workspace and dependency
       table.
-- [ ] Stage the existing OPC modules and all eleven tests in `oxml-opc`.
-- [ ] Generalise the content-type and package constructors without changing
+- [x] Stage the existing OPC modules and all eleven tests in `oxml-opc`.
+- [x] Generalise the content-type and package constructors without changing
       the remaining implementation.
-- [ ] Rebuild DOCX-specific test setup behind local helpers.
-- [ ] Keep `rdocx-opc` and all published rdocx consumers unchanged.
-- [ ] Run the focused tests, dependency inspection, manifest audit, full gate,
+- [x] Rebuild DOCX-specific test setup behind local helpers.
+- [x] Keep `rdocx-opc` and all published rdocx consumers unchanged.
+- [x] Run the focused tests, dependency inspection, manifest audit, full gate,
       and unchanged hash harness.
 
 ## Open questions
