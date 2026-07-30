@@ -7,6 +7,6 @@ description: "Release an already prepared and reviewed workspace version. The on
 
 Canonical source: `.claude/commands/release.md`.
 
-Source SHA-256: `16a43cffab3e5f36f8865618ebba614220f5590561956da40f85c2dbb1c9ad32`.
+Source SHA-256: `332eca9c586cff593a3e3bebf7a7f25febef0e148f2f646aa279c5346cf8b442`.
 
 Read the canonical source in full before acting, and follow it with whatever tools this host provides. Treat any invocation arguments as arguments to that workflow. Where it names another slash command, follow the repository skill of the same name. Where it says to ask with `AskUserQuestion`, ask through this host's own question mechanism. `.claude/WORKFLOW.md` wins on any process question. Do not edit this generated adapter.

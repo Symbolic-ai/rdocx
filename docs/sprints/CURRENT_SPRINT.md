@@ -42,6 +42,8 @@ F-007, F-008, F-009, F-010 and F-011 are independent and may proceed in
 parallel when their touched files and external publishing actions do not
 overlap. F-012 is last. It depends on F-003 through F-011 and serves as the
 known-good boundary after every S02 prerequisite is integrated and verified.
+After S02 closes into `main`, merge that updated `main` into
+`feature/release-0.5.0` before the next release branch continues.
 
 ## Definition of done for this sprint
 
@@ -52,6 +54,8 @@ known-good boundary after every S02 prerequisite is integrated and verified.
 - Rendering every page of a 20-page document performs exactly one layout and
   every mutation invalidates the cache.
 - Every reserved `oxml-*` and `rpptx*` crate name resolves through `cargo info`.
+- The reserved `oxml-*` and `rpptx*` crates remain at 0.0.0 until PowerPoint
+  development is complete.
 - Unit constructors retain their current `as i64` truncation, pinned by tests.
 - The full workspace, hash harness, packaging, and supply-chain gates pass from
   a clean clone, the baseline reproduces on a second machine, and v0.4.1 is

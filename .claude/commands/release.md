@@ -26,13 +26,16 @@ Refuse before any tag or push if one check fails:
    declared hash-harness result.
 5. The latest recorded `/sprint-review SNN` is clean at the current HEAD, and
    its review file reports zero blocking findings.
-6. `cargo publish --workspace --dry-run` passes from the clean tree. Every
-   archive is below 10 MiB. The `rdocx-layout` archive contains all bundled TTF
-   files, `LICENSE-Caladea`, `NOTICE-Caladea`, and the OFL licence.
+6. `cargo publish -p <crate> --dry-run` passes for each of the seven packages
+   listed below. Every archive is below 10 MiB. The `rdocx-layout` archive
+   contains all bundled TTF files, `LICENSE-Caladea`, `NOTICE-Caladea`, and the
+   OFL licence.
 7. The seven publishable packages are exactly `rdocx-opc`, `rdocx-oxml`,
    `rdocx-layout`, `rdocx-html`, `rdocx-pdf`, `rdocx`, and `rdocx-cli`, all at
    `X.Y.Z`. `rdocx-wasm` may inherit the workspace version, but remains
-   `publish = false` and is not a crates.io package.
+   `publish = false` and is not a crates.io package. The workflow contains an
+   explicit allowlist for those seven packages. It must not publish an
+   `oxml-*` or `rpptx*` package while PowerPoint development is incomplete.
 8. The tag is absent locally and from `origin`. Fetch the remote tag namespace
    before deciding. Refuse a conflicting or already-published version rather
    than treating it as success.

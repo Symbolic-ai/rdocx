@@ -61,10 +61,24 @@ class SprintWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("cargo publish --workspace", publish)
+        release_crates = (
+            "rdocx-opc",
+            "rdocx-oxml",
+            "rdocx-layout",
+            "rdocx-html",
+            "rdocx-pdf",
+            "rdocx",
+            "rdocx-cli",
+        )
+        for crate_name in release_crates:
+            self.assertEqual(publish.count(f"cargo publish -p {crate_name}\n"), 1)
+
+        self.assertNotIn("cargo publish --workspace", publish)
+        self.assertNotIn("cargo publish -p oxml-", publish)
+        self.assertNotIn("cargo publish -p rpptx", publish)
         self.assertLess(
             publish.index("python3 scripts/hash_harness.py --check"),
-            publish.index("cargo publish --workspace"),
+            publish.index("cargo publish -p rdocx-opc"),
         )
         self.assertNotIn("--no-verify", publish)
         self.assertNotIn("|| echo", publish)

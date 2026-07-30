@@ -20,8 +20,44 @@ jobs:
       - name: Verify output stability
         run: python3 scripts/hash_harness.py --check
 
-      - name: Publish workspace
-        run: cargo publish --workspace
+      - name: Publish rdocx-opc
+        run: cargo publish -p rdocx-opc
+
+      - name: Wait for registry index
+        run: sleep 60
+
+      - name: Publish rdocx-oxml
+        run: cargo publish -p rdocx-oxml
+
+      - name: Wait for registry index
+        run: sleep 60
+
+      - name: Publish rdocx-layout
+        run: cargo publish -p rdocx-layout
+
+      - name: Wait for registry index
+        run: sleep 60
+
+      - name: Publish rdocx-html
+        run: cargo publish -p rdocx-html
+
+      - name: Wait for registry index
+        run: sleep 60
+
+      - name: Publish rdocx-pdf
+        run: cargo publish -p rdocx-pdf
+
+      - name: Wait for registry index
+        run: sleep 60
+
+      - name: Publish rdocx
+        run: cargo publish -p rdocx
+
+      - name: Wait for registry index
+        run: sleep 60
+
+      - name: Publish rdocx-cli
+        run: cargo publish -p rdocx-cli
 
   release:
     name: GitHub Release

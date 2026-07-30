@@ -117,17 +117,23 @@ The fourteen future crates.io names in this graph are reserved at version
 The binding crates are not published there, and the WASM packages use the npm
 publication path.
 
-`publish.yml` uses `cargo publish --workspace`, which handles workspace package
-selection and is available at the pinned toolchain. Archive verification is not
-skipped. Authentication, network, compilation and duplicate-version failures
-all fail the job instead of being relabelled as success.
+`publish.yml` explicitly publishes the seven released rdocx packages in
+dependency order. It does not use workspace-wide publication. Archive
+verification is not skipped. Authentication, network, compilation and
+duplicate-version failures all fail the job instead of being relabelled as
+success.
+
+The `oxml-*` and `rpptx*` placeholders remain at 0.0.0 until PowerPoint
+development is complete. A normal `v*` release must not publish a later version
+of any package in those families. Their eventual publication requires its own
+reviewed release plan and explicit approval.
 
 Two tag namespaces:
 
 | Tag | Workflow | Publishes |
 |---|---|---|
 | `v*` | `publish.yml` | crates.io, the lockstep family |
-| `rpptx-v*` | `publish.yml` | crates.io, the incubating family |
+| `rpptx-v*` | none until development is complete | no publication |
 | `py-v*` | `wheels.yml` | PyPI via OIDC trusted publishing |
 
 Wheels are separate so a Rust patch release does not rebuild twelve wheels, and

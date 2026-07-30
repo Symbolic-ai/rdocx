@@ -56,6 +56,7 @@ only F-003 through F-009.
 | clean-clone integration | `/verify --full` at the exact release SHA | Workspace, harness, docs, packaging, wasm, and supply chain are green before tagging |
 | packaging | seven `cargo publish --dry-run` archives plus size and bundled-font contents | Every current publishable crate is releasable and licensed |
 | release | exact `cargo info <crate>@0.4.1` and GitHub release inspection | The tag workflow published all seven crates and created the release without a swallowed failure |
+| publication boundary | inspect the workflow allowlist | No `oxml-*` or `rpptx*` development package can be published by an rdocx release tag |
 
 The backlog test gate is a clean-clone build and successful publication from
 the exact v0.4.1 release tag.
@@ -97,6 +98,7 @@ runner triggered for that commit.
 - [x] Confirm F-003 through F-011 are completed and integrated.
 - [x] Merge the published v0.4.0 source and prepare the exact 0.4.1 version and
       internal dependency-pin diff.
+- [x] Restrict the publication workflow to the seven released rdocx crates.
 - [x] Run the full gate and release packaging checks from a clean clone.
 - [ ] Obtain explicit go/no-go immediately before the irreversible tag push.
 - [ ] Push v0.4.1 through the authorized mechanism and verify all seven crates
