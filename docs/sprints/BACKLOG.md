@@ -17,7 +17,7 @@ regenerated, never hand-edited.
 | Milestone | F-IDs | Done | In Progress | Pending |
 |-----------|-------|------|-------------|---------|
 | M1, Preparation and safety net              | 12 | 12 | 0 | 0  |
-| M2, Shared infrastructure extraction        | 10 | 3 | 1 | 6  |
+| M2, Shared infrastructure extraction        | 10 | 3 | 2 | 5  |
 | M3, Media                                   | 6  | 0 | 0 | 6  |
 | M4, Layout primitives                       | 8  | 0 | 0 | 8  |
 | M5, PDF backend                             | 9  | 0 | 0 | 9  |
@@ -30,7 +30,7 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **150** | **15** | **1** | **134** |
+| **Total** | **150** | **15** | **2** | **133** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -65,7 +65,7 @@ regenerated, never hand-edited.
 | F-016 | Length re-export                             | S04 | S | pending |
 | F-017 | App and custom properties                    | S03 | M | done |
 | F-018 | Create oxml-opc                              | S04 | M | in-progress |
-| F-019 | PresentationML relationship and content types| S04 | S | pending |
+| F-019 | PresentationML relationship and content types| S04 | S | in-progress |
 | F-020 | oxml-opc reads a pptx                        | S04 | M | pending |
 | F-021 | Zip-slip hardening tests                     | S04 | S | pending |
 | F-022 | rdocx-opc deprecation shim                   | S04 | S | pending |

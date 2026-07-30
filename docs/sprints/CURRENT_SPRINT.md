@@ -31,7 +31,7 @@ crate unpublished.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-018 | Create oxml-opc | M | in-progress | codex |
-| F-019 | PresentationML relationship and content types | S | pending | - |
+| F-019 | PresentationML relationship and content types | S | in-progress | codex |
 | F-020 | oxml-opc reads a pptx | M | pending | - |
 | F-021 | Zip-slip hardening tests | S | pending | - |
 | F-022 | rdocx-opc deprecation shim | S | pending | - |
