@@ -1,6 +1,6 @@
 # F-024, Image probing and DPI
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S05
 **Size**: L
 **Depends on**: F-023
@@ -80,13 +80,13 @@ Expected to remain unchanged. Only the isolated unpublished crate changes.
 
 ## Implementation checklist
 
-- [ ] Add `ImageInfo` and format dispatch through F-023.
-- [ ] Implement PNG dimensions and `pHYs` DPI semantics.
-- [ ] Lift and extend the safe JPEG marker walk for JFIF, EXIF ordering, and
+- [x] Add `ImageInfo` and format dispatch through F-023.
+- [x] Implement PNG dimensions and `pHYs` DPI semantics.
+- [x] Lift and extend the safe JPEG marker walk for JFIF, EXIF ordering, and
       progressive SOF.
-- [ ] Implement GIF, BMP, and WebP metadata readers.
-- [ ] Add in-code fixtures and every-prefix truncation loops.
-- [ ] Run focused parser tests, package riders, and the unchanged hash gate.
+- [x] Implement GIF, BMP, and WebP metadata readers.
+- [x] Add in-code fixtures and every-prefix truncation loops.
+- [x] Run focused parser tests, package riders, and the unchanged hash gate.
 
 ## Open questions
 

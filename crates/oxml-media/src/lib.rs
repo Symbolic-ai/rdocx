@@ -109,6 +109,405 @@ pub fn resolve(data: &[u8], filename: &str) -> ImageFormat {
         .unwrap_or(ImageFormat::Png)
 }
 
+/// Metadata available from an image header without decoding its pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageInfo {
+    /// Detected image format.
+    pub format: ImageFormat,
+    /// Image width in pixels.
+    pub width_px: u32,
+    /// Image height in pixels.
+    pub height_px: u32,
+    /// Horizontal dots per inch when declared by the image.
+    pub dpi_x: Option<f64>,
+    /// Vertical dots per inch when declared by the image.
+    pub dpi_y: Option<f64>,
+    /// Bits used for one channel.
+    pub bit_depth: u8,
+    /// Number of colour channels, including alpha when present.
+    pub channels: u8,
+    /// Whether the header declares an alpha channel.
+    pub has_alpha: bool,
+}
+
+/// Reads image metadata from a supported raster header.
+///
+/// Unsupported, malformed, and truncated data returns `None`.
+pub fn probe(data: &[u8]) -> Option<ImageInfo> {
+    match ImageFormat::sniff(data)? {
+        ImageFormat::Png => probe_png(data),
+        ImageFormat::Jpeg => probe_jpeg(data),
+        ImageFormat::Gif => probe_gif(data),
+        ImageFormat::Bmp => probe_bmp(data),
+        ImageFormat::Webp => probe_webp(data),
+        ImageFormat::Tiff | ImageFormat::Svg | ImageFormat::Emf | ImageFormat::Wmf => None,
+    }
+}
+
+fn probe_png(data: &[u8]) -> Option<ImageInfo> {
+    if read_be_u32(data, 8)? != 13 || data.get(12..16)? != b"IHDR" {
+        return None;
+    }
+    let width_px = read_be_u32(data, 16)?;
+    let height_px = read_be_u32(data, 20)?;
+    if width_px == 0 || height_px == 0 {
+        return None;
+    }
+
+    let bit_depth = *data.get(24)?;
+    let color_type = *data.get(25)?;
+    let (channels, has_alpha) = match (color_type, bit_depth) {
+        (0, 1 | 2 | 4 | 8 | 16) => (1, false),
+        (2, 8 | 16) => (3, false),
+        (3, 1 | 2 | 4 | 8) => (1, false),
+        (4, 8 | 16) => (2, true),
+        (6, 8 | 16) => (4, true),
+        _ => return None,
+    };
+    if data.get(26..28)? != [0, 0] || *data.get(28)? > 1 {
+        return None;
+    }
+    data.get(29..33)?;
+
+    let mut info = ImageInfo {
+        format: ImageFormat::Png,
+        width_px,
+        height_px,
+        dpi_x: None,
+        dpi_y: None,
+        bit_depth,
+        channels,
+        has_alpha,
+    };
+    let mut offset = 33usize;
+    while offset < data.len() {
+        let length = usize::try_from(read_be_u32(data, offset)?).ok()?;
+        let kind_start = offset.checked_add(4)?;
+        let payload_start = kind_start.checked_add(4)?;
+        let payload_end = payload_start.checked_add(length)?;
+        let chunk_end = payload_end.checked_add(4)?;
+        let kind = data.get(kind_start..payload_start)?;
+        let payload = data.get(payload_start..payload_end)?;
+        data.get(payload_end..chunk_end)?;
+
+        match kind {
+            b"pHYs" if length == 9 => match payload[8] {
+                0 => {}
+                1 => {
+                    info.dpi_x = Some(f64::from(read_be_u32(payload, 0)?) * 0.0254);
+                    info.dpi_y = Some(f64::from(read_be_u32(payload, 4)?) * 0.0254);
+                }
+                _ => return None,
+            },
+            b"pHYs" => return None,
+            b"IDAT" | b"IEND" => return Some(info),
+            _ => {}
+        }
+        offset = chunk_end;
+    }
+    Some(info)
+}
+
+fn probe_jpeg(data: &[u8]) -> Option<ImageInfo> {
+    let mut offset = 2usize;
+    let mut dpi_x = None;
+    let mut dpi_y = None;
+
+    while offset < data.len() {
+        if *data.get(offset)? != 0xff {
+            return None;
+        }
+        while data.get(offset) == Some(&0xff) {
+            offset = offset.checked_add(1)?;
+        }
+        let marker = *data.get(offset)?;
+        offset = offset.checked_add(1)?;
+        if marker == 0 || marker == 0xd9 {
+            return None;
+        }
+        if marker == 0x01 || marker == 0xd8 || (0xd0..=0xd7).contains(&marker) {
+            continue;
+        }
+
+        let segment_length = usize::from(read_be_u16(data, offset)?);
+        if segment_length < 2 {
+            return None;
+        }
+        let payload_start = offset.checked_add(2)?;
+        let segment_end = offset.checked_add(segment_length)?;
+        let payload = data.get(payload_start..segment_end)?;
+
+        if marker == 0xe0 && payload.starts_with(b"JFIF\0") {
+            if payload.len() < 12 {
+                return None;
+            }
+            let density_x = read_be_u16(payload, 8)?;
+            let density_y = read_be_u16(payload, 10)?;
+            if density_x == 0 || density_y == 0 {
+                return None;
+            }
+            match payload[7] {
+                0 => {}
+                1 => {
+                    dpi_x = Some(f64::from(density_x));
+                    dpi_y = Some(f64::from(density_y));
+                }
+                2 => {
+                    dpi_x = Some(f64::from(density_x) * 2.54);
+                    dpi_y = Some(f64::from(density_y) * 2.54);
+                }
+                _ => return None,
+            }
+        }
+
+        if is_jpeg_sof(marker) {
+            if payload.len() < 6 {
+                return None;
+            }
+            let bit_depth = payload[0];
+            let height_px = u32::from(read_be_u16(payload, 1)?);
+            let width_px = u32::from(read_be_u16(payload, 3)?);
+            let channels = payload[5];
+            let component_bytes = usize::from(channels).checked_mul(3)?;
+            if width_px == 0
+                || height_px == 0
+                || bit_depth == 0
+                || channels == 0
+                || payload.len() < 6usize.checked_add(component_bytes)?
+            {
+                return None;
+            }
+            return Some(ImageInfo {
+                format: ImageFormat::Jpeg,
+                width_px,
+                height_px,
+                dpi_x,
+                dpi_y,
+                bit_depth,
+                channels,
+                has_alpha: false,
+            });
+        }
+        offset = segment_end;
+    }
+    None
+}
+
+fn is_jpeg_sof(marker: u8) -> bool {
+    matches!(
+        marker,
+        0xc0 | 0xc1 | 0xc2 | 0xc3 | 0xc5 | 0xc6 | 0xc7 | 0xc9 | 0xca | 0xcb | 0xcd | 0xce | 0xcf
+    )
+}
+
+fn probe_gif(data: &[u8]) -> Option<ImageInfo> {
+    let width_px = u32::from(read_le_u16(data, 6)?);
+    let height_px = u32::from(read_le_u16(data, 8)?);
+    let packed = *data.get(10)?;
+    data.get(11..13)?;
+    if width_px == 0 || height_px == 0 {
+        return None;
+    }
+    Some(ImageInfo {
+        format: ImageFormat::Gif,
+        width_px,
+        height_px,
+        dpi_x: None,
+        dpi_y: None,
+        bit_depth: ((packed >> 4) & 0x07) + 1,
+        channels: 3,
+        has_alpha: false,
+    })
+}
+
+fn probe_bmp(data: &[u8]) -> Option<ImageInfo> {
+    data.get(..14)?;
+    let dib_size = read_le_u32(data, 14)?;
+    let (width_px, height_px, bits_per_pixel, dpi_x, dpi_y, compression, alpha_mask, core_header) =
+        if dib_size == 12 {
+            data.get(14..26)?;
+            if read_le_u16(data, 22)? != 1 {
+                return None;
+            }
+            (
+                u32::from(read_le_u16(data, 18)?),
+                u32::from(read_le_u16(data, 20)?),
+                read_le_u16(data, 24)?,
+                None,
+                None,
+                0,
+                0,
+                true,
+            )
+        } else if matches!(dib_size, 40 | 52 | 56 | 108 | 124) {
+            let dib_end = 14usize.checked_add(usize::try_from(dib_size).ok()?)?;
+            data.get(14..dib_end)?;
+            let width = read_le_i32(data, 18)?;
+            let height = read_le_i32(data, 22)?;
+            if width <= 0 || height == 0 || read_le_u16(data, 26)? != 1 {
+                return None;
+            }
+            let width_px = u32::try_from(width).ok()?;
+            let height_px = height
+                .checked_abs()
+                .and_then(|value| u32::try_from(value).ok())?;
+            let ppm_x = read_le_i32(data, 38)?;
+            let ppm_y = read_le_i32(data, 42)?;
+            let compression = read_le_u32(data, 30)?;
+            if dib_size == 40 && compression == 3 {
+                data.get(dib_end..dib_end.checked_add(12)?)?;
+            }
+            (
+                width_px,
+                height_px,
+                read_le_u16(data, 28)?,
+                (ppm_x > 0).then(|| f64::from(ppm_x) * 0.0254),
+                (ppm_y > 0).then(|| f64::from(ppm_y) * 0.0254),
+                compression,
+                if dib_size >= 56 {
+                    read_le_u32(data, 66)?
+                } else {
+                    0
+                },
+                false,
+            )
+        } else {
+            return None;
+        };
+    if width_px == 0 || height_px == 0 {
+        return None;
+    }
+    let (bit_depth, channels, has_alpha) =
+        match (core_header, bits_per_pixel, compression, alpha_mask != 0) {
+            (true, 1 | 4 | 8, 0, _) => (u8::try_from(bits_per_pixel).ok()?, 1, false),
+            (true, 24, 0, _) => (8, 3, false),
+            (false, 1 | 4 | 8, 0, _) => (u8::try_from(bits_per_pixel).ok()?, 1, false),
+            (false, 16, 0 | 3, _) => (5, 3, false),
+            (false, 24, 0, _) => (8, 3, false),
+            (false, 32, 3 | 6, true) => (8, 4, true),
+            (false, 32, 0 | 3, _) => (8, 3, false),
+            _ => return None,
+        };
+    Some(ImageInfo {
+        format: ImageFormat::Bmp,
+        width_px,
+        height_px,
+        dpi_x,
+        dpi_y,
+        bit_depth,
+        channels,
+        has_alpha,
+    })
+}
+
+fn probe_webp(data: &[u8]) -> Option<ImageInfo> {
+    let riff_size = usize::try_from(read_le_u32(data, 4)?).ok()?;
+    let riff_end = riff_size.checked_add(8)?;
+    if riff_end > data.len() || riff_size < 12 || riff_size & 1 != 0 {
+        return None;
+    }
+    let kind = data.get(12..16)?;
+    let chunk_size = usize::try_from(read_le_u32(data, 16)?).ok()?;
+    let payload_end = 20usize.checked_add(chunk_size)?;
+    let padded_end = payload_end.checked_add(chunk_size & 1)?;
+    if padded_end > riff_end {
+        return None;
+    }
+    let payload = data.get(20..payload_end)?;
+    let (width_px, height_px, has_alpha) = match kind {
+        b"VP8 " => {
+            if payload.len() < 10
+                || payload[0] & 1 != 0
+                || payload[0] & 0x10 == 0
+                || (payload[0] >> 1) & 0x07 > 3
+                || payload.get(3..6)? != b"\x9d\x01\x2a"
+            {
+                return None;
+            }
+            (
+                u32::from(read_le_u16(payload, 6)? & 0x3fff),
+                u32::from(read_le_u16(payload, 8)? & 0x3fff),
+                false,
+            )
+        }
+        b"VP8L" => {
+            if payload.len() < 5 || payload[0] != 0x2f {
+                return None;
+            }
+            let bits = read_le_u32(payload, 1)?;
+            if bits >> 29 != 0 {
+                return None;
+            }
+            (
+                (bits & 0x3fff) + 1,
+                ((bits >> 14) & 0x3fff) + 1,
+                bits & (1 << 28) != 0,
+            )
+        }
+        b"VP8X" => {
+            if payload.len() < 10 || payload[0] & 0xc1 != 0 || payload.get(1..4)? != [0, 0, 0] {
+                return None;
+            }
+            let width_px = read_le_u24(payload, 4)?.checked_add(1)?;
+            let height_px = read_le_u24(payload, 7)?.checked_add(1)?;
+            width_px.checked_mul(height_px)?;
+            (width_px, height_px, payload[0] & 0x10 != 0)
+        }
+        _ => return None,
+    };
+    if width_px == 0 || height_px == 0 {
+        return None;
+    }
+    if chunk_size & 1 != 0 && *data.get(payload_end)? != 0 {
+        return None;
+    }
+    Some(ImageInfo {
+        format: ImageFormat::Webp,
+        width_px,
+        height_px,
+        dpi_x: None,
+        dpi_y: None,
+        bit_depth: 8,
+        channels: if has_alpha { 4 } else { 3 },
+        has_alpha,
+    })
+}
+
+fn read_be_u16(data: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_be_bytes(
+        data.get(offset..offset.checked_add(2)?)?.try_into().ok()?,
+    ))
+}
+
+fn read_be_u32(data: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_be_bytes(
+        data.get(offset..offset.checked_add(4)?)?.try_into().ok()?,
+    ))
+}
+
+fn read_le_u16(data: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(
+        data.get(offset..offset.checked_add(2)?)?.try_into().ok()?,
+    ))
+}
+
+fn read_le_u24(data: &[u8], offset: usize) -> Option<u32> {
+    let bytes = data.get(offset..offset.checked_add(3)?)?;
+    Some(u32::from(bytes[0]) | (u32::from(bytes[1]) << 8) | (u32::from(bytes[2]) << 16))
+}
+
+fn read_le_u32(data: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(
+        data.get(offset..offset.checked_add(4)?)?.try_into().ok()?,
+    ))
+}
+
+fn read_le_i32(data: &[u8], offset: usize) -> Option<i32> {
+    Some(i32::from_le_bytes(
+        data.get(offset..offset.checked_add(4)?)?.try_into().ok()?,
+    ))
+}
+
 fn is_svg(data: &[u8]) -> bool {
     let data = data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(data);
     let mut data = trim_ascii_start(data);
@@ -204,7 +603,7 @@ fn is_standard_wmf(data: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImageFormat, resolve};
+    use super::{ImageFormat, probe, resolve};
 
     const SVG_WITH_PROLOG: &[u8] = br#"<?xml version="1.0"?>
         <!-- generated -->
@@ -214,6 +613,265 @@ mod tests {
             <!ELEMENT svg ANY>
         ]>
         <svg xmlns="http://www.w3.org/2000/svg">"#;
+
+    fn png_with_phys(unit: u8) -> Vec<u8> {
+        let mut data = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        data.extend_from_slice(&32_u32.to_be_bytes());
+        data.extend_from_slice(&16_u32.to_be_bytes());
+        data.extend_from_slice(&[8, 6, 0, 0, 0]);
+        data.extend_from_slice(&[0; 4]);
+        data.extend_from_slice(&9_u32.to_be_bytes());
+        data.extend_from_slice(b"pHYs");
+        data.extend_from_slice(&3780_u32.to_be_bytes());
+        data.extend_from_slice(&1890_u32.to_be_bytes());
+        data.push(unit);
+        data.extend_from_slice(&[0; 4]);
+        data
+    }
+
+    fn jpeg_with_jfif(units: u8) -> Vec<u8> {
+        let mut data = b"\xff\xd8\xff\xe0\0\x10JFIF\0\x01\x02".to_vec();
+        data.push(units);
+        data.extend_from_slice(&300_u16.to_be_bytes());
+        data.extend_from_slice(&150_u16.to_be_bytes());
+        data.extend_from_slice(&[0, 0]);
+        data.extend_from_slice(b"\xff\xc0\0\x11\x08\0\x10\0\x20\x03");
+        data.extend_from_slice(&[1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0]);
+        data
+    }
+
+    fn progressive_jpeg_with_exif() -> Vec<u8> {
+        let mut data = b"\xff\xd8\xff\xe1\0\x08Exif\0\0".to_vec();
+        data.extend_from_slice(b"\xff\xc2\0\x11\x08\0\x18\0\x30\x03");
+        data.extend_from_slice(&[1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0]);
+        data
+    }
+
+    fn gif() -> Vec<u8> {
+        let mut data = b"GIF89a".to_vec();
+        data.extend_from_slice(&40_u16.to_le_bytes());
+        data.extend_from_slice(&20_u16.to_le_bytes());
+        data.extend_from_slice(&[0b0111_0000, 0, 0]);
+        data
+    }
+
+    fn bmp() -> Vec<u8> {
+        let mut data = vec![0; 54];
+        data[..2].copy_from_slice(b"BM");
+        data[2..6].copy_from_slice(&54_u32.to_le_bytes());
+        data[10..14].copy_from_slice(&54_u32.to_le_bytes());
+        data[14..18].copy_from_slice(&40_u32.to_le_bytes());
+        data[18..22].copy_from_slice(&48_i32.to_le_bytes());
+        data[22..26].copy_from_slice(&(-24_i32).to_le_bytes());
+        data[26..28].copy_from_slice(&1_u16.to_le_bytes());
+        data[28..30].copy_from_slice(&32_u16.to_le_bytes());
+        data[38..42].copy_from_slice(&3780_i32.to_le_bytes());
+        data[42..46].copy_from_slice(&1890_i32.to_le_bytes());
+        data
+    }
+
+    fn bmp_with_alpha_mask() -> Vec<u8> {
+        let mut data = bmp();
+        data.resize(70, 0);
+        data[2..6].copy_from_slice(&70_u32.to_le_bytes());
+        data[10..14].copy_from_slice(&70_u32.to_le_bytes());
+        data[14..18].copy_from_slice(&56_u32.to_le_bytes());
+        data[30..34].copy_from_slice(&3_u32.to_le_bytes());
+        data[54..58].copy_from_slice(&0x00ff_0000_u32.to_le_bytes());
+        data[58..62].copy_from_slice(&0x0000_ff00_u32.to_le_bytes());
+        data[62..66].copy_from_slice(&0x0000_00ff_u32.to_le_bytes());
+        data[66..70].copy_from_slice(&0xff00_0000_u32.to_le_bytes());
+        data
+    }
+
+    fn bmp_v4_bi_rgb_with_unused_alpha_mask() -> Vec<u8> {
+        let mut data = bmp();
+        data.resize(122, 0);
+        data[2..6].copy_from_slice(&122_u32.to_le_bytes());
+        data[10..14].copy_from_slice(&122_u32.to_le_bytes());
+        data[14..18].copy_from_slice(&108_u32.to_le_bytes());
+        data[66..70].copy_from_slice(&0xff00_0000_u32.to_le_bytes());
+        data
+    }
+
+    fn bmp_info_with_external_bitfields() -> Vec<u8> {
+        let mut data = bmp();
+        data.resize(66, 0);
+        data[2..6].copy_from_slice(&66_u32.to_le_bytes());
+        data[10..14].copy_from_slice(&66_u32.to_le_bytes());
+        data[30..34].copy_from_slice(&3_u32.to_le_bytes());
+        data[54..58].copy_from_slice(&0x00ff_0000_u32.to_le_bytes());
+        data[58..62].copy_from_slice(&0x0000_ff00_u32.to_le_bytes());
+        data[62..66].copy_from_slice(&0x0000_00ff_u32.to_le_bytes());
+        data
+    }
+
+    fn bmp_core(bits_per_pixel: u16) -> Vec<u8> {
+        let mut data = vec![0; 26];
+        data[..2].copy_from_slice(b"BM");
+        data[2..6].copy_from_slice(&26_u32.to_le_bytes());
+        data[10..14].copy_from_slice(&26_u32.to_le_bytes());
+        data[14..18].copy_from_slice(&12_u32.to_le_bytes());
+        data[18..20].copy_from_slice(&16_u16.to_le_bytes());
+        data[20..22].copy_from_slice(&8_u16.to_le_bytes());
+        data[22..24].copy_from_slice(&1_u16.to_le_bytes());
+        data[24..26].copy_from_slice(&bits_per_pixel.to_le_bytes());
+        data
+    }
+
+    fn webp_vp8() -> Vec<u8> {
+        let mut data = b"RIFF\x16\0\0\0WEBPVP8 \x0a\0\0\0\x10\0\0\x9d\x01\x2a".to_vec();
+        data.extend_from_slice(&64_u16.to_le_bytes());
+        data.extend_from_slice(&32_u16.to_le_bytes());
+        data
+    }
+
+    fn webp_vp8l() -> Vec<u8> {
+        let packed = 63_u32 | (31_u32 << 14) | (1_u32 << 28);
+        let mut data = b"RIFF\x12\0\0\0WEBPVP8L\x05\0\0\0\x2f".to_vec();
+        data.extend_from_slice(&packed.to_le_bytes());
+        data.push(0);
+        data
+    }
+
+    fn webp_vp8x() -> Vec<u8> {
+        let mut data = b"RIFF\x16\0\0\0WEBPVP8X\x0a\0\0\0\x10\0\0\0".to_vec();
+        data.extend_from_slice(&63_u32.to_le_bytes()[..3]);
+        data.extend_from_slice(&31_u32.to_le_bytes()[..3]);
+        data
+    }
+
+    #[test]
+    fn png_dimensions_and_phys_units_are_probed() {
+        let pixels_per_metre = probe(&png_with_phys(1)).expect("valid PNG");
+        assert_eq!(
+            (pixels_per_metre.width_px, pixels_per_metre.height_px),
+            (32, 16)
+        );
+        assert_eq!(
+            (pixels_per_metre.bit_depth, pixels_per_metre.channels),
+            (8, 4)
+        );
+        assert!(pixels_per_metre.has_alpha);
+        assert_eq!(pixels_per_metre.dpi_x, Some(96.012));
+        assert_eq!(pixels_per_metre.dpi_y, Some(48.006));
+
+        let unspecified = probe(&png_with_phys(0)).expect("valid PNG");
+        assert_eq!((unspecified.dpi_x, unspecified.dpi_y), (None, None));
+    }
+
+    #[test]
+    fn jpeg_jfif_density_units_are_probed() {
+        let inches = probe(&jpeg_with_jfif(1)).expect("valid JFIF density in inches");
+        assert_eq!((inches.width_px, inches.height_px), (32, 16));
+        assert_eq!((inches.dpi_x, inches.dpi_y), (Some(300.0), Some(150.0)));
+
+        let centimetres = probe(&jpeg_with_jfif(2)).expect("valid JFIF density in centimetres");
+        assert_eq!(
+            (centimetres.dpi_x, centimetres.dpi_y),
+            (Some(762.0), Some(381.0))
+        );
+    }
+
+    #[test]
+    fn jpeg_exif_before_progressive_sof_preserves_dimensions() {
+        let info = probe(&progressive_jpeg_with_exif()).expect("valid progressive JPEG");
+        assert_eq!((info.width_px, info.height_px), (48, 24));
+        assert_eq!(
+            (info.bit_depth, info.channels, info.has_alpha),
+            (8, 3, false)
+        );
+    }
+
+    #[test]
+    fn gif_bmp_and_webp_dimensions_are_probed() {
+        let gif = probe(&gif()).expect("valid GIF");
+        assert_eq!((gif.width_px, gif.height_px), (40, 20));
+
+        let bmp_info = probe(&bmp()).expect("valid BMP");
+        assert_eq!((bmp_info.width_px, bmp_info.height_px), (48, 24));
+        assert_eq!(
+            (bmp_info.dpi_x, bmp_info.dpi_y),
+            (Some(96.012), Some(48.006))
+        );
+        assert_eq!((bmp_info.channels, bmp_info.has_alpha), (3, false));
+
+        let bmp_alpha = probe(&bmp_with_alpha_mask()).expect("valid BMP alpha mask");
+        assert_eq!((bmp_alpha.channels, bmp_alpha.has_alpha), (4, true));
+
+        let bmp_unused_alpha =
+            probe(&bmp_v4_bi_rgb_with_unused_alpha_mask()).expect("valid BI_RGB bitmap");
+        assert_eq!(
+            (bmp_unused_alpha.channels, bmp_unused_alpha.has_alpha),
+            (3, false)
+        );
+        let bmp_bitfields =
+            probe(&bmp_info_with_external_bitfields()).expect("valid external BMP bitfields");
+        assert_eq!(
+            (bmp_bitfields.channels, bmp_bitfields.has_alpha),
+            (3, false)
+        );
+
+        let mut truncated_bitfields = bmp();
+        truncated_bitfields[30..34].copy_from_slice(&3_u32.to_le_bytes());
+        assert_eq!(probe(&truncated_bitfields), None);
+        assert_eq!(probe(&bmp_core(16)), None);
+        assert_eq!(probe(&bmp_core(32)), None);
+
+        for fixture in [webp_vp8(), webp_vp8l(), webp_vp8x()] {
+            let webp = probe(&fixture).expect("valid WebP");
+            assert_eq!((webp.width_px, webp.height_px), (64, 32));
+        }
+        assert!(probe(&webp_vp8l()).expect("valid VP8L").has_alpha);
+        assert!(probe(&webp_vp8x()).expect("valid VP8X").has_alpha);
+
+        let mut interframe = webp_vp8();
+        interframe[20] |= 1;
+        assert_eq!(probe(&interframe), None);
+
+        let mut unsupported_vp8_version = webp_vp8();
+        unsupported_vp8_version[20] = 0x18;
+        assert_eq!(probe(&unsupported_vp8_version), None);
+
+        let mut oversized_canvas = webp_vp8x();
+        oversized_canvas[24..30].fill(0xff);
+        assert_eq!(probe(&oversized_canvas), None);
+
+        let mut nonzero_padding = webp_vp8l();
+        *nonzero_padding.last_mut().expect("padding byte") = 1;
+        assert_eq!(probe(&nonzero_padding), None);
+
+        let mut odd_riff_size = webp_vp8();
+        odd_riff_size[4..8].copy_from_slice(&23_u32.to_le_bytes());
+        odd_riff_size.push(0);
+        assert_eq!(probe(&odd_riff_size), None);
+    }
+
+    #[test]
+    fn every_truncated_supported_header_returns_without_panicking() {
+        let fixtures = [
+            png_with_phys(1),
+            jpeg_with_jfif(1),
+            progressive_jpeg_with_exif(),
+            gif(),
+            bmp(),
+            bmp_with_alpha_mask(),
+            webp_vp8(),
+            webp_vp8l(),
+            webp_vp8x(),
+        ];
+
+        for data in fixtures {
+            for length in 0..data.len() {
+                if let Some(info) = probe(&data[..length]) {
+                    assert!(info.width_px > 0);
+                    assert!(info.height_px > 0);
+                    assert!(info.channels > 0);
+                    assert!(info.bit_depth > 0);
+                }
+            }
+        }
+    }
 
     #[test]
     fn every_supported_format_sniffs_from_magic_bytes() {
