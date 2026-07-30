@@ -1,6 +1,6 @@
 # F-023, oxml-media format sniffing
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S05
 **Size**: M
 **Depends on**: none
@@ -87,11 +87,11 @@ consumer. Any output delta blocks the sprint.
 
 ## Implementation checklist
 
-- [ ] Add the unpublished 0.0.0 crate to the workspace.
-- [ ] Add `ImageFormat` and the canonical mappings.
-- [ ] Add safe magic-byte sniffing for every supported format.
-- [ ] Add sniff-first `resolve` behavior and the PNG fallback.
-- [ ] Run focused tests, dependency and package riders, and the unchanged hash
+- [x] Add the unpublished 0.0.0 crate to the workspace.
+- [x] Add `ImageFormat` and the canonical mappings.
+- [x] Add safe magic-byte sniffing for every supported format.
+- [x] Add sniff-first `resolve` behavior and the PNG fallback.
+- [x] Run focused tests, dependency and package riders, and the unchanged hash
       gate.
 
 ## Open questions
