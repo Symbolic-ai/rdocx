@@ -1,13 +1,14 @@
 ---
-description: Close a sprint. The only command that merges to main and creates a tag.
+description: Close a sprint. The only command that merges to main and creates an sNN sprint tag.
 ---
 
 # /close-sprint SNN [--next SMM]
 
 Merge the sprint branch to `main`, tag it, push both, and open the next sprint.
 
-**This is the only command in the repository that may touch `main` or create a
-tag.** Nothing else does so, implicitly or otherwise.
+**This is the only command in the repository that may touch `main` or create an
+`sNN` sprint tag.** `/release` alone owns `v*` release tags and crates.io
+publication.
 
 ## Steps
 
@@ -86,5 +87,5 @@ wrong. Reset to `/design`.
 - **`/verify --full` fails.** Nothing merges on a red gate.
 - **A blocking sprint-review finding is unresolved.**
 - **A milestone gate is unmet**, including the manual ones.
-- **A release tag is requested.** Releases are `cargo release` plus
-  `publish.yml`, not this command. This creates the sprint tag only.
+- **A release tag is requested.** Run `/release vX.Y.Z`. This command creates
+  the sprint tag only.

@@ -117,15 +117,10 @@ The fourteen future crates.io names in this graph are reserved at version
 The binding crates are not published there, and the WASM packages use the npm
 publication path.
 
-`publish.yml` currently sleeps 60 seconds between each of seven crates, which is
-six minutes of unconditional waiting that is **still racy**. At twenty crates it
-is twenty minutes. Replace with `cargo publish --workspace`, which handles
-ordering and index propagation and is available at the pinned toolchain.
-
-Also narrow `|| echo "already published"`. It currently swallows authentication
-failures, network errors and genuine compile errors identically to a real
-duplicate. Match on the actual "already exists" message and re-raise everything
-else.
+`publish.yml` uses `cargo publish --workspace`, which handles workspace package
+selection and is available at the pinned toolchain. Archive verification is not
+skipped. Authentication, network, compilation and duplicate-version failures
+all fail the job instead of being relabelled as success.
 
 Two tag namespaces:
 
@@ -140,35 +135,22 @@ a binding-only fix does not force a crates.io release.
 
 ## Release process
 
-`scripts/release.sh` is deleted. It is BSD-`sed` only, its version replacement
-is an unanchored global substitution, and its README rewrite globally replaces
-the bare string `"0.2"` across the whole file, silently corrupting anything else
-that happens to be quoted that way.
+The unsafe `scripts/release.sh` is deleted. Version changes are targeted F-ID
+edits to `[workspace.package]`, the internal pins in
+`[workspace.dependencies]`, and `Cargo.lock`. They are reviewed before a tag is
+possible and never rewrite README prose by pattern.
 
-`cargo-release` replaces it:
+`/release vX.Y.Z` is the only command allowed to create or push a `v*` release
+tag or start crates.io publication. It requires a clean sprint branch, a full
+verification and clean sprint review recorded at the exact HEAD, passing
+package dry-runs, an absent local and remote tag, and a separate final approval
+immediately before the push. `/close-sprint` remains the only command allowed
+to merge `main` or create an `sNN` tag.
 
-```toml
-# release.toml
-consolidate-commits = true
-pre-release-commit-message = "Release v{{version}}"
-tag-name = "v{{version}}"
-tag = true
-push = true
-publish = false          # publishing is publish.yml's job, on the tag
-```
-
-```toml
-# crates/rpptx*/Cargo.toml, during incubation
-[package.metadata.release]
-shared-version = false
-tag-name = "rpptx-v{{version}}"
-```
-
-```bash
-cargo release 0.3.0 --workspace --exclude rpptx --exclude rpptx-oxml \
-                    --exclude rpptx-layout --exclude rpptx-render --exclude rpptx-chart --execute
-cargo release 0.1.4 -p rpptx-oxml -p rpptx-layout -p rpptx-render -p rpptx --execute
-```
+The tag starts `publish.yml`. Publication succeeds only after all seven current
+crates and the GitHub release are externally verified. `rdocx-wasm` inherits
+the workspace version but stays `publish = false` because its distribution path
+is npm.
 
 The Python package version tracks the Rust train through a
 `pre-release-replacements` entry so the wheel version and the crate version

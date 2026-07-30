@@ -138,11 +138,6 @@ Found during the audit that produced this plan, and each has a story in M1.
 `to_docx_bytes` rebuilds a minimal package, silently discarding every part
 except `document.xml` and `styles.xml`. Detailed in `10-bindings-spec.md`.
 
-### `release.sh`
-
-Its README rewrite is an unanchored global replace of the bare string `"0.2"`
-across the whole file. Anything else quoted `"0.2"` is silently corrupted.
-
 ## Assumptions that would invalidate the plan if wrong
 
 - **That a slide is a page.** The entire rendering reuse argument rests on it.

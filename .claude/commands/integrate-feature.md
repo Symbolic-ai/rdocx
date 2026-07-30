@@ -107,4 +107,5 @@ push to the end of the sprint run.
   targets. `/close-sprint` removes them after the integrated sprint passes its
   gates and is pushed.
 - **Pushing in `--batch`.**
-- **Merging to `main` or tagging.** Only `/close-sprint` does that.
+- **Merging to `main` or tagging.** `/close-sprint` owns `main` and sprint
+  tags. `/release` owns release tags.

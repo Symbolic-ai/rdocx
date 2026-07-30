@@ -7,6 +7,6 @@ description: "Run every unfinished F-ID in the current sprint. Designs first, im
 
 Canonical source: `.claude/commands/run-sprint.md`.
 
-Source SHA-256: `bdd547b28a77d1602094d398e40534346e824fa878dcac8501676d7ba015c955`.
+Source SHA-256: `ec2e8429eb4ac2de9368b1b42ed9298af71456cea0c806d545d81e197fc5c57f`.
 
 Read the canonical source in full before acting, and follow it with whatever tools this host provides. Treat any invocation arguments as arguments to that workflow. Where it names another slash command, follow the repository skill of the same name. Where it says to ask with `AskUserQuestion`, ask through this host's own question mechanism. `.claude/WORKFLOW.md` wins on any process question. Do not edit this generated adapter.

@@ -123,7 +123,7 @@ Tests locking the current `as i64` truncation in every `Length`, `Twips` and
 
 ### F-012, Tag v0.3.1 (S)
 A known-good published state immediately before the churn.
-**Depends on**: F-003 through F-009.
+**Depends on**: F-003 through F-011.
 **Test gate**: the release tag builds and publishes from a clean clone.
 
 ---
@@ -387,14 +387,14 @@ the `.crate` sizes are under the limit.
 **Test gate**: `cargo package --list` contains every TTF and the licence files,
 and the archive is under 10 MiB.
 
-### F-048, Replace release.sh with cargo-release (M)
-Delete the script. Add `release.toml` with the two tag namespaces.
+### F-048, Automate split-family release preparation (M)
+Add `cargo-release` preparation for the stable and incubating tag namespaces.
 **Test gate**: a dry-run bump of the workspace version updates
 `[workspace.package]` and every `[workspace.dependencies]` pin, and touches no
 README prose.
 
-### F-049, Rework publish.yml (M)
-`cargo publish --workspace`, narrowed error swallowing, both tag namespaces.
+### F-049, Extend publish.yml to the extracted workspace (M)
+Publish the expanded dependency graph and support both release tag namespaces.
 **Depends on**: F-048.
 **Test gate**: a dry-run publish of the full workspace succeeds in dependency
 order.

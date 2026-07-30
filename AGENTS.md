@@ -56,7 +56,9 @@ a gate and not a warning.
 - Do not run `cargo clean`. Iterate scoped.
 - **Do not commit or push unless the invoked workflow explicitly includes that
   action.** Never add an agent co-author trailer.
-- Only `/close-sprint` may merge to `main` or create a tag.
+- Only `/close-sprint` may merge to `main` or create an `sNN` sprint tag.
+- Only `/release` may create or push a `v*` release tag or start crates.io
+  publication. It requires a separate final approval at the reviewed SHA.
 
 ## Commands
 

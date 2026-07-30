@@ -62,6 +62,8 @@ the exact v0.3.1 release tag.
 
 ## HLD impact
 
+- `docs/hld/11-migration-plan.md`
+- `docs/hld/13-risks-and-open-questions.md`
 - `docs/hld/14-development-backlog.md`
 - `docs/hld/15-build-and-toolchain.md`
 
@@ -81,12 +83,12 @@ runner triggered for that commit.
 
 ## Implementation checklist
 
-- [ ] Implement the approved release authority without weakening `/run-sprint`
+- [x] Implement the approved release authority without weakening `/run-sprint`
       or `/close-sprint` boundaries.
-- [ ] Add and validate the dedicated release command and generated adapter.
-- [ ] Confirm F-003 through F-011 are completed and integrated.
-- [ ] Prepare the exact 0.3.1 version and internal dependency-pin diff.
-- [ ] Run the full gate and release packaging checks from a clean clone.
+- [x] Add and validate the dedicated release command and generated adapter.
+- [x] Confirm F-003 through F-011 are completed and integrated.
+- [x] Prepare the exact 0.3.1 version and internal dependency-pin diff.
+- [x] Run the full gate and release packaging checks from a clean clone.
 - [ ] Obtain explicit go/no-go immediately before the irreversible tag push.
 - [ ] Push v0.3.1 through the authorized mechanism and verify all seven crates
       plus the GitHub release.
