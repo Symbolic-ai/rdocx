@@ -16,6 +16,7 @@ defended.
 | S01 | M1 | 6 | 6 | 0 | 10 | 6 | Completed with no carries |
 | S02 | M1 | 6 | 6 | 0 | 8 | 6 | Completed M1 and published rdocx 0.4.1 |
 | S03 | M2 | 5 | 3 | 2 | 8 | 3 | F-015 and F-016 carried to S04 to keep rdocx 0.5.0 independent of unpublished oxml-core |
+| S04 | M2 | 7 | 4 | 3 | 9 | 4 | F-015, F-016, and F-022 carried to S32.2 so development crates remain unpublished until PowerPoint is complete |
 
 ## Completed features
 
@@ -56,6 +57,7 @@ five working days.
 | S01 | 6 | 6 | 5.00 |
 | S02 | 6 | 6 | 5.00 |
 | S03 | 3 | 3 | 5.00 |
+| S04 | 4 | 4 | 5.00 |
 
 ## Escalation record
 
