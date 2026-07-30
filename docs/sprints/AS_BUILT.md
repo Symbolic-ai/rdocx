@@ -379,3 +379,44 @@ mutations that made every gate fail.
 
 **Notes for future sessions.** A change from casts to rounding is a behavior
 change even when whole-unit conversion tests continue to pass.
+
+### F-012, Tag v0.4.1
+
+**Sprint.** S02
+**Completed.** 2026-07-30
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The workspace was published as seven lockstep rdocx crates
+at 0.4.1 from the reviewed S02 SHA. A dedicated `/release` command now owns
+`v*` tags and publication, while the tag workflow verifies the deterministic
+hash baseline and publishes only the approved rdocx allowlist.
+
+**Non-obvious choices.** The published `v0.4.0` mainline was merged into S02
+before release, preserving its contract changes and retargeting the planned
+0.3.1 release to 0.4.1. The fourteen `oxml-*` and `rpptx*` placeholders remain
+at 0.0.0 until PowerPoint development is complete.
+
+**Deviations from the design plan.** The original plan targeted 0.3.1 before
+the separate 0.4.0 release appeared. The reconciled plan and release evidence
+target 0.4.1. The publication workflow retains deliberate registry-index waits
+because real publication is explicitly allowlisted instead of workspace-wide.
+
+**Spec sections touched.** `docs/hld/11-migration-plan.md`, release boundary,
+`docs/hld/13-risks-and-open-questions.md`, release risks,
+`docs/hld/14-development-backlog.md`, M1 gate and F-012, and
+`docs/hld/15-build-and-toolchain.md`, "Publishing" and "Release process".
+
+**Tests.** `/verify --full` passed at
+`6e02a4b6417c9bb0c245237bdf8168dd06310c39`. The package dry-run produced
+exactly seven archives below 10 MiB, including all 20 TTFs and required licence
+files in `rdocx-layout`. GitHub Actions run 30522998328 passed, every exact
+`cargo info <crate>@0.4.1` lookup succeeded, all owners were `mantissaman`, and
+the GitHub release tag peeled to the reviewed SHA.
+
+**Hash harness.** Unchanged. All 28 entries matched locally and on the Linux
+publication runner.
+
+**Notes for future sessions.** The release workflow must remain restricted to
+the seven rdocx crates until PowerPoint development is complete. After S02 is
+merged, forward-merge `main` into `feature/release-0.5.0` before that release
+branch continues.

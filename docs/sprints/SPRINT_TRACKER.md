@@ -30,6 +30,7 @@ defended.
 | F-009 | S02 | M | 2 | 1 | 2026-07-30 | Thread-safe two-mode layout cache |
 | F-010 | S02 | S | 1 | 1 | 2026-07-30 | Fourteen crates.io names reserved |
 | F-011 | S02 | S | 1 | 1 | 2026-07-30 | Unit truncation behavior pinned |
+| F-012 | S02 | S | 1 | 1 | 2026-07-30 | Published and tagged rdocx 0.4.1 |
 
 ## Velocity
 

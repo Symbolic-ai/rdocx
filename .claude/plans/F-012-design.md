@@ -1,6 +1,6 @@
 # F-012, Tag v0.4.1
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S02
 **Size**: S
 **Depends on**: F-003 through F-011
@@ -100,8 +100,8 @@ runner triggered for that commit.
       internal dependency-pin diff.
 - [x] Restrict the publication workflow to the seven released rdocx crates.
 - [x] Run the full gate and release packaging checks from a clean clone.
-- [ ] Obtain explicit go/no-go immediately before the irreversible tag push.
-- [ ] Push v0.4.1 through the authorized mechanism and verify all seven crates
+- [x] Obtain explicit go/no-go immediately before the irreversible tag push.
+- [x] Push v0.4.1 through the authorized mechanism and verify all seven crates
       plus the GitHub release.
 
 ## Open questions
