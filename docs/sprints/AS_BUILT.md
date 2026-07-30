@@ -420,3 +420,100 @@ publication runner.
 the seven rdocx crates until PowerPoint development is complete. After S02 is
 merged, forward-merge `main` into `feature/release-0.5.0` before that release
 branch continues.
+
+### F-013, Create oxml-core
+
+**Sprint.** S03
+**Completed.** 2026-07-30
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** A new private `oxml-core` workspace crate now owns staged
+copies of the format-neutral error, units, raw XML, XML text, core properties,
+and `Length` implementations. It also provides shared namespace-aware XML
+helpers and public XML text handling with focused event coverage.
+
+**Non-obvious choices.** The crate remains at 0.0.0 with `publish = false`.
+The existing Word implementations stay in place until F-015 and F-016 can
+switch the facades without putting an unpublished dependency into a published
+rdocx package.
+
+**Deviations from the design plan.** None. The approved plan already specified
+the staged copy and delayed facade switch.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "Three families, one
+workspace", `docs/hld/11-migration-plan.md`, "The facade trick" and "Order of
+operations", and `docs/hld/15-build-and-toolchain.md`, "Publishing".
+
+**Tests.** The moved unit, raw XML, core properties, and XML text tests,
+`xml_text_handles_cdata_mixed_nested_and_general_refs`, workspace compilation,
+package verification, and the dependency-tree direction check.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Do not publish this crate or connect published
+rdocx packages to it until the PowerPoint development publication boundary is
+explicitly lifted.
+
+### F-014, New unit types
+
+**Sprint.** S03
+**Completed.** 2026-07-30
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `oxml_core::units` now exposes `Centipoints`, `Angle`, and
+`Percent1000` with the exact OOXML storage scales. `Length::mm` adds direct
+millimetre construction through 36,000 EMUs per millimetre.
+
+**Non-obvious choices.** Float conversions retain Rust cast semantics and
+truncate positive and negative fractional values toward zero. No generic unit
+abstraction or `Length::to_mm` accessor was added.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** None. The existing glossary and DrawingML model
+already specify the implemented types and scales.
+
+**Tests.** `centipoints_round_trip_points`, `angle_round_trip_degrees`,
+`percent1000_round_trip_percent`,
+`new_unit_float_constructors_truncate_toward_zero`, and
+`length_millimetres_round_trip`.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Preserve the pinned truncation rule when these
+types gain format consumers.
+
+### F-017, App and custom properties
+
+**Sprint.** S03
+**Completed.** 2026-07-30
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `oxml-core` now provides a shared application-properties
+union for Word and PowerPoint plus typed custom properties for text, signed
+integers, floating point values, Booleans, file times, and empty values.
+Parsers preserve child order and retain unsupported property subtrees as raw
+XML.
+
+**Non-obvious choices.** Parsed application children replay their encountered
+order, while constructed values use canonical schema order. Unsupported custom
+value types remain raw XML instead of being coerced to strings.
+
+**Deviations from the design plan.** Microscope passes 1 and 2 found malformed
+root acceptance and inconsistent self-closing typed values. Both were fixed
+with regression tests before the clean pass 3.
+
+**Spec sections touched.** None. The existing scope, architecture, and testing
+documents already describe the shared model.
+
+**Tests.** `word_app_properties_round_trip_without_presentation_fields`,
+`powerpoint_app_properties_round_trip_without_word_fields`,
+`unknown_app_property_subtree_is_preserved_verbatim`,
+`custom_property_value_types_round_trip`,
+`unknown_custom_property_value_is_preserved_verbatim`, and malformed-root and
+self-closing-value regressions.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep unknown XML preservation and schema child
+order intact when adding further extended-property variants.

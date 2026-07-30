@@ -32,6 +32,9 @@ defended.
 | F-010 | S02 | S | 1 | 1 | 2026-07-30 | Fourteen crates.io names reserved |
 | F-011 | S02 | S | 1 | 1 | 2026-07-30 | Unit truncation behavior pinned |
 | F-012 | S02 | S | 1 | 1 | 2026-07-30 | Published and tagged rdocx 0.4.1 |
+| F-013 | S03 | M | 2 | 1 | 2026-07-30 | Unpublished shared OOXML core |
+| F-014 | S03 | M | 2 | 1 | 2026-07-30 | Shared schema unit types |
+| F-017 | S03 | M | 2 | 1 | 2026-07-30 | Shared app and custom properties |
 
 ## Velocity
 
