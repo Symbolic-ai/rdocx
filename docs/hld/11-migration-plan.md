@@ -56,21 +56,24 @@ plainly: most of this migration is a re-export block.
 
 | Step | Crate | Note |
 |---|---|---|
-| 1 | `oxml-core` | Stage five files plus `length.rs`, leaving the old files until steps 2 and 3. Add the new unit types, app and custom properties. Make `xml_text` public |
-| 2 | `rdocx-oxml` facade | The re-export block above |
-| 3 | `Length` | Delete `crates/rdocx/src/length.rs`, re-export from `oxml-core` |
-| 4 | `oxml-opc` | Move verbatim, generalise the constructors, add the pptx relationship types |
-| 5 | `rdocx-opc` shim | `pub use oxml_opc::*` with a deprecation note. Consumers still compile untouched |
-| 6 | Consumers | Flip imports to `oxml_opc` directly. `rdocx::Error::Opc` changes its inner type |
-| 7 | `oxml-media` | All new. Then adopt it in rdocx and delete the old helpers |
-| 8 | `oxml-layout` | Move the output types, font manager and bundled fonts |
-| 9 | **`line.rs` decoupling** | Its own PR, its own review |
-| 10 | `PositionedElement` extension | `Transform`, `Path`, `Paint`, `Group`, `walk`, `#[non_exhaustive]` |
-| 11 | `oxml-pdf` | Rename, rewrite the three collection passes on `walk`, add the new arms |
-| 12 | `rdocx-pdf` shim | `pub use oxml_pdf::*` |
+| 1 | `oxml-core` staging | Copy the shared implementation, add its new types, and leave released rdocx consumers unchanged |
+| 2 | `oxml-opc` staging | Copy the package implementation, generalise constructors, add PowerPoint constants, and prove the isolated crate |
+| 3 | `oxml-media` staging | Build the shared media implementation without changing released consumers |
+| 4 | `oxml-layout` staging | Copy the output types, font manager, and bundled fonts behind an isolated crate boundary |
+| 5 | **`line.rs` decoupling** | Its own PR and review inside the staged layout implementation |
+| 6 | `PositionedElement` extension | Add `Transform`, `Path`, `Paint`, `Group`, `walk`, and `#[non_exhaustive]` |
+| 7 | `oxml-pdf` staging | Copy the backend, rewrite the three collection passes on `walk`, and add the new arms |
+| 8 | PowerPoint implementation | Finish and review the shared-crate publication plan before any released rdocx package consumes real development code |
+| 9 | `rdocx-oxml` and `Length` cutover | Apply the re-export block above and delete the staged duplicates |
+| 10 | `rdocx-opc` cutover | Install the deprecated shim, flip direct consumers, and change `rdocx::Error::Opc` to the shared type |
+| 11 | Media and layout cutover | Move released rdocx consumers onto the published shared crates and delete their staged duplicates |
+| 12 | `rdocx-pdf` cutover | Install `pub use oxml_pdf::*` after the shared backend is publishable |
 
-Each edge points only at an already-migrated crate, and each step is
-independently revertable.
+Staging steps keep every released rdocx package on its published dependency
+graph. Cutover steps begin only after PowerPoint development is complete and
+the real shared crates have an approved publication path. This preserves the
+full package dry-run gate without publishing development crates early, and
+each step remains independently revertable.
 
 ## The one piece of real API design
 

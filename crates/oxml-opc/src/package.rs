@@ -345,6 +345,53 @@ mod tests {
   <Default Extension="xml" ContentType="application/xml"/>
 </Types>"#;
 
+    fn independently_built_pptx() -> std::io::Cursor<Vec<u8>> {
+        const CONTENT_TYPES: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
+  <Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>
+  <Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
+</Types>"#;
+        const PACKAGE_RELS: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
+</Relationships>"#;
+        const PRESENTATION_RELS: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
+</Relationships>"#;
+        const SLIDE_RELS: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+</Relationships>"#;
+        const PRESENTATION: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
+  <p:sldSz cx="12192000" cy="6858000"/>
+  <p:notesSz cx="6858000" cy="9144000"/>
+</p:presentation>"#;
+        const SLIDE: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld>
+</p:sld>"#;
+        const SLIDE_LAYOUT: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sldLayout xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld>
+</p:sldLayout>"#;
+
+        package_zip(&[
+            ("[Content_Types].xml", CONTENT_TYPES),
+            ("_rels/.rels", PACKAGE_RELS),
+            ("ppt/presentation.xml", PRESENTATION),
+            ("ppt/_rels/presentation.xml.rels", PRESENTATION_RELS),
+            ("ppt/slides/slide1.xml", SLIDE),
+            ("ppt/slides/_rels/slide1.xml.rels", SLIDE_RELS),
+            ("ppt/slideLayouts/slideLayout1.xml", SLIDE_LAYOUT),
+        ])
+    }
+
     fn pptx_package() -> OpcPackage {
         let mut package =
             OpcPackage::with_main_part("ppt/presentation.xml", crate::content_types::PRESENTATION);
@@ -438,6 +485,36 @@ mod tests {
         assert!(reopened.parts.contains_key(&presentation_part));
         assert!(reopened.parts.contains_key(&slide_part));
         assert!(reopened.parts.contains_key(&layout_part));
+    }
+
+    #[test]
+    fn independently_built_pptx_opens_and_resolves_relationships() {
+        let package = OpcPackage::from_reader(independently_built_pptx()).unwrap();
+
+        let presentation_part = package.main_document_part().unwrap();
+        assert_eq!(presentation_part, "/ppt/presentation.xml");
+
+        let slide_target = &package
+            .get_part_rels(&presentation_part)
+            .unwrap()
+            .get_by_type(rel_types::SLIDE)
+            .unwrap()
+            .target;
+        let slide_part = OpcPackage::resolve_rel_target(&presentation_part, slide_target);
+        assert_eq!(slide_part, "/ppt/slides/slide1.xml");
+
+        let layout_target = &package
+            .get_part_rels(&slide_part)
+            .unwrap()
+            .get_by_type(rel_types::SLIDE_LAYOUT)
+            .unwrap()
+            .target;
+        let layout_part = OpcPackage::resolve_rel_target(&slide_part, layout_target);
+        assert_eq!(layout_part, "/ppt/slideLayouts/slideLayout1.xml");
+
+        assert!(package.parts.contains_key(&presentation_part));
+        assert!(package.parts.contains_key(&slide_part));
+        assert!(package.parts.contains_key(&layout_part));
     }
 
     #[test]

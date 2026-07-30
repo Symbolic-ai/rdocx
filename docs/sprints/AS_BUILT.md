@@ -597,15 +597,19 @@ parent-directory layout resolution.
 module. It adds no binary fixture, integration-test target, dependency,
 production API, or production-code change.
 
-**Deviations from the design plan.** None.
+**Deviations from the design plan.** Sprint review pass 1 required a second
+fixture built directly as a valid PresentationML ZIP, independent of
+`OpcPackage::write_to`, so the M2 real-package gate does not rely on a
+self-round-trip.
 
 **Spec sections touched.** None. The existing OPC and testing specifications
 already require this exact package graph.
 
 **Tests.** `pptx_package_resolves_main_slide_and_layout_parts`,
-`presentation_layout_target_resolves_one_directory_up`, all 18 integrated
-`oxml-opc` tests, and the integrated full gate. Both named tests were observed
-failing for their intended reasons before completion.
+`presentation_layout_target_resolves_one_directory_up`,
+`independently_built_pptx_opens_and_resolves_relationships`, all integrated
+`oxml-opc` tests, and the integrated full gate. The original two named tests
+were observed failing for their intended reasons before completion.
 
 **Hash harness.** Unchanged. All 28 integrated entries match.
 
