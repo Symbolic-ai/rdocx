@@ -345,6 +345,31 @@ mod tests {
   <Default Extension="xml" ContentType="application/xml"/>
 </Types>"#;
 
+    fn pptx_package() -> OpcPackage {
+        let mut package =
+            OpcPackage::with_main_part("ppt/presentation.xml", crate::content_types::PRESENTATION);
+        package
+            .content_types
+            .add_override("/ppt/slides/slide1.xml", crate::content_types::SLIDE);
+        package.content_types.add_override(
+            "/ppt/slideLayouts/slideLayout1.xml",
+            crate::content_types::SLIDE_LAYOUT,
+        );
+        package.set_part("/ppt/presentation.xml", b"<p:presentation/>".to_vec());
+        package.set_part("/ppt/slides/slide1.xml", b"<p:sld/>".to_vec());
+        package.set_part(
+            "/ppt/slideLayouts/slideLayout1.xml",
+            b"<p:sldLayout/>".to_vec(),
+        );
+        package
+            .get_or_create_part_rels("/ppt/presentation.xml")
+            .add(rel_types::SLIDE, "slides/slide1.xml");
+        package
+            .get_or_create_part_rels("/ppt/slides/slide1.xml")
+            .add(rel_types::SLIDE_LAYOUT, "../slideLayouts/slideLayout1.xml");
+        package
+    }
+
     #[test]
     fn with_main_part_resolves_and_round_trips() {
         let mut package = OpcPackage::with_main_part(
@@ -378,6 +403,51 @@ mod tests {
         assert_eq!(
             round_tripped.get_part("/ppt/presentation.xml"),
             Some(b"<p:presentation/>".as_slice())
+        );
+    }
+
+    #[test]
+    fn pptx_package_resolves_main_slide_and_layout_parts() {
+        let package = pptx_package();
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut buffer).unwrap();
+        buffer.set_position(0);
+        let reopened = OpcPackage::from_reader(buffer).unwrap();
+
+        let presentation_part = reopened.main_document_part().unwrap();
+        assert_eq!(presentation_part, "/ppt/presentation.xml");
+
+        let slide_target = &reopened
+            .get_part_rels(&presentation_part)
+            .unwrap()
+            .get_by_type(rel_types::SLIDE)
+            .unwrap()
+            .target;
+        let slide_part = OpcPackage::resolve_rel_target(&presentation_part, slide_target);
+        assert_eq!(slide_part, "/ppt/slides/slide1.xml");
+
+        let layout_target = &reopened
+            .get_part_rels(&slide_part)
+            .unwrap()
+            .get_by_type(rel_types::SLIDE_LAYOUT)
+            .unwrap()
+            .target;
+        let layout_part = OpcPackage::resolve_rel_target(&slide_part, layout_target);
+        assert_eq!(layout_part, "/ppt/slideLayouts/slideLayout1.xml");
+
+        assert!(reopened.parts.contains_key(&presentation_part));
+        assert!(reopened.parts.contains_key(&slide_part));
+        assert!(reopened.parts.contains_key(&layout_part));
+    }
+
+    #[test]
+    fn presentation_layout_target_resolves_one_directory_up() {
+        assert_eq!(
+            OpcPackage::resolve_rel_target(
+                "/ppt/slides/slide1.xml",
+                "../slideLayouts/slideLayout1.xml"
+            ),
+            "/ppt/slideLayouts/slideLayout1.xml"
         );
     }
 

@@ -1,6 +1,6 @@
 # F-020, oxml-opc reads a pptx
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S04
 **Size**: M
 **Depends on**: F-019
@@ -101,12 +101,12 @@ rdocx production call site.
 
 ## Implementation checklist
 
-- [ ] Build the pptx-shaped package through F-018 and F-019 public APIs.
-- [ ] Add presentation-to-slide and slide-to-layout relationships.
-- [ ] Write and reopen the fixture entirely in memory.
-- [ ] Assert main-part, slide-part, and parent-directory layout resolution.
-- [ ] Assert all three parts use normalized package keys after reopening.
-- [ ] Run focused `oxml-opc` tests and the unchanged hash harness.
+- [x] Build the pptx-shaped package through F-018 and F-019 public APIs.
+- [x] Add presentation-to-slide and slide-to-layout relationships.
+- [x] Write and reopen the fixture entirely in memory.
+- [x] Assert main-part, slide-part, and parent-directory layout resolution.
+- [x] Assert all three parts use normalized package keys after reopening.
+- [x] Run focused `oxml-opc` tests and the unchanged hash harness.
 
 ## Open questions
 
