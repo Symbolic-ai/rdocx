@@ -14,6 +14,7 @@ defended.
 | Sprint | Milestone | Planned | Done | Carried | Est. days | Actual days | Notes |
 |--------|-----------|---------|------|---------|-----------|-------------|-------|
 | S01 | M1 | 6 | 6 | 0 | 10 | 6 | Completed with no carries |
+| S02 | M1 | 6 | 6 | 0 | 8 | 6 | Completed M1 and published rdocx 0.4.1 |
 
 ## Completed features
 
@@ -45,6 +46,7 @@ five working days.
 | Window | Stories | Days | Stories/week |
 |--------|---------|------|--------------|
 | S01 | 6 | 6 | 5.00 |
+| S02 | 6 | 6 | 5.00 |
 
 ## Escalation record
 
