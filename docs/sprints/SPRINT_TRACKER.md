@@ -17,6 +17,7 @@ defended.
 | S02 | M1 | 6 | 6 | 0 | 8 | 6 | Completed M1 and published rdocx 0.4.1 |
 | S03 | M2 | 5 | 3 | 2 | 8 | 3 | F-015 and F-016 carried to S04 to keep rdocx 0.5.0 independent of unpublished oxml-core |
 | S04 | M2 | 7 | 4 | 3 | 9 | 4 | F-015, F-016, and F-022 carried to S32.2 so development crates remain unpublished until PowerPoint is complete |
+| S05 | M3 | 4 | 4 | 0 | 8 | 4 | Completed isolated unpublished oxml-media staging, with F-027 and F-028 remaining planned for S32.2 |
 
 ## Completed features
 
@@ -62,6 +63,7 @@ five working days.
 | S02 | 6 | 6 | 5.00 |
 | S03 | 3 | 3 | 5.00 |
 | S04 | 4 | 4 | 5.00 |
+| S05 | 4 | 4 | 5.00 |
 
 ## Escalation record
 
@@ -71,3 +73,4 @@ was done about it. Empty is the expected state.
 | Date | Trigger | F-ID or sprint | Response |
 |------|---------|----------------|----------|
 | 2026-07-30 | Three-sprint velocity variance exceeded 30 percent | S01 to S03 | Reforecast 366 remaining estimated days to 45 to 50 active weeks, retain dependency-defined boundaries, and recalibrate after S06 |
+| 2026-07-31 | Sprint estimate variance exceeded 30 percent | S05 | Record 4 actual days against 8 estimated, retain the 45 to 50 active week reforecast, and recalibrate after S06 |
