@@ -16,8 +16,9 @@ pub use line::{
     TabStop, TextSegment, Underline, break_into_lines,
 };
 pub use output::{
-    Color, DocumentMetadata, FieldKind, FontData, FontId, GlyphRun, LayoutResult, MediaId,
-    OutlineEntry, PageFrame, Point, PositionedElement, Rect,
+    Color, Diagnostic, DocumentMetadata, Effect, FieldKind, FontData, FontId, GlyphRun,
+    GroupElement, LayoutResult, MediaId, OutlineEntry, PageFrame, PathElement, Point,
+    PositionedElement, Rect,
 };
 pub use paint::{GradientStop, LineCap, LineJoin, Paint, Stroke};
 pub use path::{FillRule, Path, PathCommand};

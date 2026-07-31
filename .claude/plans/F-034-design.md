@@ -1,6 +1,6 @@
 # F-034, Path and Group arms
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S07
 **Size**: M
 **Depends on**: F-031, F-033
@@ -151,15 +151,15 @@ unpublished staged crate.
 
 ## Implementation checklist
 
-- [ ] Wait for integrated F-031 and F-033.
-- [ ] Add and export the path, diagnostic, effect, and group output types.
-- [ ] Add only Path and Group to `PositionedElement`.
-- [ ] Document the child-local to parent transform direction.
-- [ ] Add page background and layout diagnostics with neutral constructors.
-- [ ] Apply non-exhaustive attributes to the two enums and two structs.
-- [ ] Add the focused unit tests and public construction examples.
-- [ ] Clarify the two HLD sections listed above.
-- [ ] Run the scoped checks and consolidated sprint riders.
+- [x] Wait for integrated F-031 and F-033.
+- [x] Add and export the path, diagnostic, effect, and group output types.
+- [x] Add only Path and Group to `PositionedElement`.
+- [x] Document the child-local to parent transform direction.
+- [x] Add page background and layout diagnostics with neutral constructors.
+- [x] Apply non-exhaustive attributes to the two enums and two structs.
+- [x] Add the focused unit tests and public construction examples.
+- [x] Clarify the two HLD sections listed above.
+- [x] Run the scoped checks and consolidated sprint riders.
 
 ## Open questions
 

@@ -1,5 +1,9 @@
 //! Output types for the layout engine: positioned page frames, glyph runs, etc.
 
+use crate::paint::{Paint, Stroke};
+use crate::path::Path;
+use crate::transform::Transform;
+
 /// A point in 2D space (in typographic points from the top-left corner).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point {
@@ -113,6 +117,7 @@ pub struct GlyphRun {
 
 /// A positioned element on a page.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum PositionedElement {
     /// A run of shaped text glyphs.
     Text(GlyphRun),
@@ -136,10 +141,52 @@ pub enum PositionedElement {
     },
     /// A link annotation (hyperlink).
     LinkAnnotation { rect: Rect, url: String },
+    /// A backend-neutral filled or stroked path.
+    Path(PathElement),
+    /// A nested group with one child-local transform.
+    Group(GroupElement),
+}
+
+/// One path with optional fill and stroke paints.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PathElement {
+    pub path: Path,
+    pub fill: Option<Paint>,
+    pub stroke: Option<Stroke>,
+}
+
+/// A rendering approximation or fallback message.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Diagnostic {
+    pub message: String,
+}
+
+/// An effect applied to a group.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum Effect {
+    OuterShadow {
+        dx: f64,
+        dy: f64,
+        blur: f64,
+        color: Color,
+    },
+}
+
+/// A group of positioned children in one local coordinate system.
+#[derive(Debug, Clone)]
+pub struct GroupElement {
+    /// Maps child-local coordinates into the parent coordinate system.
+    pub transform: Transform,
+    pub clip: Option<Path>,
+    pub opacity: f64,
+    pub effects: Vec<Effect>,
+    pub children: Vec<PositionedElement>,
 }
 
 /// A single page of laid-out content.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct PageFrame {
     /// 1-based page number.
     pub page_number: usize,
@@ -149,6 +196,33 @@ pub struct PageFrame {
     pub height: f64,
     /// All positioned elements on this page.
     pub elements: Vec<PositionedElement>,
+    /// Optional paint behind every page element.
+    pub background: Option<Paint>,
+}
+
+impl PageFrame {
+    /// Construct a page with no background paint.
+    ///
+    /// ```
+    /// use oxml_layout::PageFrame;
+    ///
+    /// let page = PageFrame::new(1, 612.0, 792.0, Vec::new());
+    /// assert!(page.background.is_none());
+    /// ```
+    pub fn new(
+        page_number: usize,
+        width: f64,
+        height: f64,
+        elements: Vec<PositionedElement>,
+    ) -> Self {
+        Self {
+            page_number,
+            width,
+            height,
+            elements,
+            background: None,
+        }
+    }
 }
 
 /// Font data for embedding in PDF output.
@@ -198,6 +272,7 @@ pub struct OutlineEntry {
 
 /// The complete result of laying out a document.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct LayoutResult {
     /// Laid-out pages.
     pub pages: Vec<PageFrame>,
@@ -207,6 +282,33 @@ pub struct LayoutResult {
     pub metadata: Option<DocumentMetadata>,
     /// Outline/bookmark entries from headings.
     pub outlines: Vec<OutlineEntry>,
+    /// Rendering approximations and fallbacks collected during layout.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+impl LayoutResult {
+    /// Construct a result with no diagnostics.
+    ///
+    /// ```
+    /// use oxml_layout::LayoutResult;
+    ///
+    /// let result = LayoutResult::new(Vec::new(), Vec::new(), None, Vec::new());
+    /// assert!(result.diagnostics.is_empty());
+    /// ```
+    pub fn new(
+        pages: Vec<PageFrame>,
+        fonts: Vec<FontData>,
+        metadata: Option<DocumentMetadata>,
+        outlines: Vec<OutlineEntry>,
+    ) -> Self {
+        Self {
+            pages,
+            fonts,
+            metadata,
+            outlines,
+            diagnostics: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -261,5 +363,92 @@ mod media_id_tests {
             panic!("constructed image should remain an image");
         };
         assert_eq!(actual, media_id);
+    }
+}
+
+#[cfg(test)]
+mod group_output_tests {
+    use super::{
+        Color, Diagnostic, Effect, GroupElement, LayoutResult, PageFrame, PathElement,
+        PositionedElement, Rect,
+    };
+    use crate::{FillRule, Paint, Path, Stroke, Transform};
+
+    #[test]
+    fn path_and_group_arms_preserve_their_payloads() {
+        let path = Path::rect(Rect {
+            x: 1.0,
+            y: 2.0,
+            width: 3.0,
+            height: 4.0,
+        });
+        let path_element = PathElement {
+            path: path.clone(),
+            fill: Some(Paint::Solid(Color::BLACK)),
+            stroke: Some(Stroke::new(Paint::Solid(Color::WHITE), 2.0)),
+        };
+        let element = PositionedElement::Path(path_element.clone());
+        assert!(matches!(
+            element,
+            PositionedElement::Path(actual) if actual == path_element
+        ));
+
+        let group = GroupElement {
+            transform: Transform::IDENTITY,
+            clip: Some(Path {
+                commands: Vec::new(),
+                fill_rule: FillRule::EvenOdd,
+            }),
+            opacity: 0.5,
+            effects: vec![Effect::OuterShadow {
+                dx: 1.0,
+                dy: 2.0,
+                blur: 3.0,
+                color: Color::BLACK,
+            }],
+            children: Vec::new(),
+        };
+        let element = PositionedElement::Group(group);
+        assert!(matches!(
+            element,
+            PositionedElement::Group(actual)
+                if actual.opacity == 0.5 && actual.effects.len() == 1
+        ));
+    }
+
+    #[test]
+    fn page_frame_new_defaults_background_to_none() {
+        let page = PageFrame::new(1, 612.0, 792.0, Vec::new());
+        assert_eq!(page.page_number, 1);
+        assert_eq!(page.background, None);
+    }
+
+    #[test]
+    fn layout_result_new_defaults_diagnostics_to_empty() {
+        let result = LayoutResult::new(Vec::new(), Vec::new(), None, Vec::new());
+        assert_eq!(result.diagnostics, Vec::<Diagnostic>::new());
+    }
+
+    #[test]
+    fn group_transform_maps_child_coordinates_into_parent_coordinates() {
+        let child_to_parent = Transform {
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            e: 10.0,
+            f: 20.0,
+        };
+        let group = GroupElement {
+            transform: child_to_parent,
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children: Vec::new(),
+        };
+        assert_eq!(
+            group.transform.apply(super::Point { x: 1.0, y: 2.0 }),
+            super::Point { x: 11.0, y: 22.0 }
+        );
     }
 }
