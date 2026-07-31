@@ -1228,3 +1228,76 @@ gate.
 
 **Notes for future sessions.** Reuse this private registry for any new PDF
 primitive with alpha. Do not allocate graphics states per element.
+
+### F-043, Gradient shading dictionaries
+
+**Sprint.** S10
+**Completed.** 2026-07-31
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The staged PDF writer now emits deterministic type 2
+shading patterns, axial and radial shadings, and type 3 stitching functions
+over interval type 2 functions. Page-local pattern resources and fill or stroke
+operators address each gradient occurrence by stable depth-first identity.
+
+**Non-obvious choices.** Pattern matrices compose the accumulated group
+transform with the global page flip so paint and path geometry share top-left
+coordinates. Stops are clamped and sorted, the last repeated offset wins, and
+stop alpha uses the documented opaque DeviceRGB fallback over white.
+
+**Deviations from the design plan.** Microscope pass 1 corrected the pattern
+matrix to include the global page flip. Pass 2 strengthened the page-local
+resource test so it fails if pattern names leak between pages.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and `docs/hld/14-development-backlog.md` now
+describe the implemented PDF gradient resource graph, normalization, matrices,
+operators, and exact sampled gate.
+
+**Tests.** Linear and radial resource structure, stop normalization, mixed
+solid paint, gradient stroke operators, page-local resources, and exact rotated
+gradient samples under Poppler 26.01.0. The integrated 57-test `oxml-pdf`
+suite, seven-buffer golden gate, and full workspace gate also pass.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep PDF and raster gradient stop normalization
+aligned. The integrated gate completed normally after a worker-only duplicate
+hash rerun had stalled in the macOS loader without changing files or evidence.
+
+### F-045, Rasteriser groups, paths, gradients, dashes, and background
+
+**Sprint.** S10
+**Completed.** 2026-07-31
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The staged tiny-skia backend now recursively renders group
+transforms and intersecting clips, composites group opacity once per subtree,
+draws backend-neutral paths with solid or gradient paint, honours line and path
+dashes, and paints supported page backgrounds.
+
+**Non-obvious choices.** Scoped opacity uses a scratch pixmap so overlapping
+children are not attenuated individually. Non-extended gradient domains receive
+an explicit mask, while tile paint and group effects remain outside the S10
+contract.
+
+**Deviations from the design plan.** Microscope pass 1 added explicit raster
+stop normalization with clamping, stable sorting, and last-repeated-offset
+semantics to match F-043. Pass 2 was clean.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and `docs/hld/14-development-backlog.md` now
+describe recursive raster state, paint translation, dashes, backgrounds, and
+the deterministic sampled gates.
+
+**Tests.** Twelve raster tests cover the rotated-rectangle and dashed-line
+gates, nested transform order, clip intersection, group opacity, fill rules,
+linear and radial gradients, gradient domains and normalization, path dashes,
+and page backgrounds. The integrated 57-test `oxml-pdf` suite, exact golden
+gate, deliberate one-pixel rejection, and full workspace gate also pass.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Preserve recursive draw order and scoped state.
+Flattening groups would lose clip and opacity semantics even though `walk` is
+correct for collection passes.

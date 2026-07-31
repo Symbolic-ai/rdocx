@@ -179,13 +179,18 @@ fill, stroke and rule. Stroke state uses `w`, `J`, `j`, `M` and `d`. `Group` is
 `q`, `cm`, optional clip via `W n`, optional `/GS gs` for opacity, recurse,
 `Q`.
 
-**Gradients** are the real work: `/Pattern cs /P scn`, a pattern dictionary of
-type 2 whose `/Matrix` is the element-local transform so gradients rotate with
-their shape, a type 2 axial or type 3 radial shading, and a **type 3 stitching
-function over type 2 exponential functions**, one per stop interval. Stops are
-sorted, deduplicated and clamped, and a single-stop gradient degrades to a solid
-at build time. **Stop alpha needs a luminosity soft mask and is out of scope for
-v1**: composite the colour, drop the alpha, record a diagnostic.
+**Gradients** use `/Pattern cs /P scn` for fills and `/Pattern CS /P SCN` for
+strokes. One private registry pre-scans path paint in depth-first order,
+allocates one deterministic pattern per gradient occurrence, and gives each
+page only the pattern names that it uses. A type 2 pattern dictionary composes
+the accumulated element transform with the global page flip in `/Matrix` so
+the gradient rotates with its shape in the same top-left coordinate space as
+the path. It references a type 2 axial or type 3 radial shading and a **type 3
+stitching function over type 2 exponential functions**, one per stop interval.
+Stops are sorted and clamped, and the last stop at a repeated offset wins.
+Single-stop gradients degrade to a solid at build time. **Stop alpha needs a
+luminosity soft mask and is out of scope for v1**. The PDF fallback composites
+each stop over white and emits opaque DeviceRGB values.
 
 **Alpha** uses one document-wide `/ExtGState` per distinct normalized value.
 Each state sets both `CA` and `ca`, and each page references only the states its
@@ -195,17 +200,22 @@ geometry so each paint operation selects the right state.
 
 ## The rasteriser
 
-A recursive walk carrying an accumulated `tiny_skia::Transform` rather than the
-single page scale. `Group` pre-concatenates and builds a `Mask` from the clip
-path, threading it into the currently always-`None` mask argument. `Path` maps
-almost directly onto `PathBuilder`, `fill_path` and `stroke_path`, **which
-finally wires up dashes**. Gradients map near-directly onto tiny-skia's own
-`LinearGradient` and `RadialGradient`, making this the easiest part of the job.
-The hardcoded white page fill is replaced by `PageFrame.background`.
+Raster output uses one recursive renderer carrying the accumulated
+`tiny_skia::Transform` and current clip mask. A group pre-concatenates its local
+transform, intersects its optional path clip with the parent mask, and draws
+children in order. Non-opaque group content is composited through one scratch
+pixmap so overlapping children receive group opacity once rather than per
+primitive.
 
-Outer shadow renders as an offset silhouette: children to a scratch pixmap,
-tinted, drawn at the offset, then the real children on top. A separable box blur
-can land later, and the type already carries `blur`.
+Backend-neutral path commands map to `PathBuilder`, with non-zero and even-odd
+fill rules passed to `fill_path`. Solid, linear, and radial paint can fill or
+stroke paths. Gradient geometry follows the accumulated transform, and a
+non-extended gradient domain is clipped before painting. Line and path dash
+arrays use tiny-skia's phase-zero stroke dash support. Page background paint is
+drawn over the white default before page elements.
+
+Tile paint and group effects are not rendered by the raster backend. In
+particular, the `blur` field on an outer shadow has no raster approximation.
 
 ## Preset geometry
 

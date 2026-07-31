@@ -22,6 +22,7 @@ defended.
 | S07 | M4 | 5 | 5 | 0 | 8 | 5 | Completed M4 in unpublished oxml-layout with all 28 hashes unchanged |
 | S08 | M5 | 3 | 3 | 0 | 7 | 3 | Staged unpublished oxml-pdf, installed the exact golden gate, and completed the global CTM rewrite |
 | S09 | M5 | 4 | 4 | 0 | 7 | 4 | Completed nested groups, solid paths, transform-aware collection, and reusable alpha in unpublished oxml-pdf |
+| S10 | M5 | 2 | 2 | 0 | 8 | 2 | Completed M5 with PDF gradients and recursive raster groups, paths, clips, gradients, dashes, and backgrounds |
 
 ## Completed features
 
@@ -65,6 +66,8 @@ defended.
 | F-041 | S09 | M | 2 | 1 | 2026-07-31 | Solid PDF path geometry and paint |
 | F-042 | S09 | M | 2 | 1 | Nested font, image, and link collection |
 | F-044 | S09 | S | 1 | 1 | Reused PDF ExtGState alpha resources |
+| F-043 | S10 | L | 4 | 1 | 2026-07-31 | Deterministic PDF gradient resource graphs |
+| F-045 | S10 | L | 4 | 1 | 2026-07-31 | Recursive raster groups, paths, gradients, and dashes |
 
 ## Velocity
 
@@ -87,6 +90,7 @@ five working days.
 | S07 | 5 | 5 | 5.00 |
 | S08 | 3 | 3 | 5.00 |
 | S09 | 4 | 4 | 5.00 |
+| S10 | 2 | 2 | 5.00 |
 
 ## Escalation record
 
@@ -101,3 +105,4 @@ was done about it. Empty is the expected state.
 | 2026-07-31 | Sprint estimate variance exceeded 30 percent | S07 | Record 5 actual days against 8 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
 | 2026-07-31 | Sprint estimate variance exceeded 30 percent | S08 | Record 3 actual days against 7 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
 | 2026-07-31 | Sprint estimate variance exceeded 30 percent | S09 | Record 4 actual days against 7 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
+| 2026-07-31 | Sprint estimate variance exceeded 30 percent | S10 | Record 2 actual days against 8 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |

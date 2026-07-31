@@ -176,6 +176,12 @@ cover the cases that matter now.
   `ca`, while distinct values remain distinct and opaque content emits none.
 - A 50 percent black fill over white produces the exact midpoint pixel in the
   deterministic raster path.
+- Linear and radial path gradients produce type 2 patterns, type 2 or type 3
+  shadings, and type 3 stitching functions over interval type 2 functions.
+  Structural tests also pin stop normalization, fill and stroke pattern
+  operators, mixed solid paint, and page-local pattern resources.
+- A 90 degree group rotation turns a linear gradient's sampled colour change
+  vertical when rasterised at 72 dpi with the recorded Poppler 26.01.0.
 - **`Group` containing `Text` finds the font.** The regression test for the
   recursion hazard.
 - `Group` containing `Image` registers the XObject.
@@ -183,7 +189,11 @@ cover the cases that matter now.
 - A preceding leaf proves nested XObject registration and recursive emission
   use the same depth-first ordinal.
 - Raster: a rotated rectangle at 72 dpi has a filled interior pixel and an empty
-  corner. Deterministic, no golden files.
+  corner, and phase-zero line and path dashes have exact painted runs and gaps.
+  Nested group samples pin transform order, clip intersection, and subtree
+  opacity. Fill-rule, linear and radial gradient, gradient-domain, and page
+  background samples pin the remaining paint translations. These are
+  deterministic unit tests with no golden files.
 
 ## Binding tests
 

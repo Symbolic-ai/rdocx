@@ -368,10 +368,12 @@ group. This is the R3 regression gate.
 
 ### F-043, Gradient shading dictionaries (L)
 Type 2 axial and type 3 radial, with a type 3 stitching function over type 2
-exponentials, and a `/Matrix` so gradients rotate with their shape.
+exponentials, deterministic occurrence names, page-local pattern resources,
+and an accumulated `/Matrix` so gradients rotate with their shape. Fill and
+stroke pattern operators preserve the supported solid half of mixed paint.
 **Depends on**: F-041.
 **Test gate**: a rotated linear gradient renders with its axis rotated, asserted
-on sampled raster pixels.
+on sampled raster pixels at 72 dpi with Poppler 26.01.0.
 
 ### F-044, ExtGState alpha (S)
 One document-wide state per distinct normalized alpha, with page-local resource
@@ -380,8 +382,9 @@ references. Differing fill and stroke alpha paint the path in two operations.
 **Test gate**: a 50 percent alpha fill over white rasterises to the midpoint colour.
 
 ### F-045, Rasteriser: groups, paths, gradients, dashes, background (L)
-Recursive transform walk, clip masks, tiny-skia gradients, and the dash pattern
-that is currently discarded at `raster.rs:73`.
+The raster backend recursively composes group transforms, intersects clip
+masks, composites group opacity, translates path geometry and paint to
+tiny-skia, honours line and path dashes, and paints supported page backgrounds.
 **Depends on**: F-040, F-041, F-043.
 **Test gate**: a rotated rectangle at 72 dpi has a filled interior pixel and an
 empty corner, and a dashed line has gaps.
