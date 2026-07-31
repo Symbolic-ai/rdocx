@@ -1,6 +1,6 @@
 # F-037, Create oxml-pdf
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S08
 **Size**: S
 **Depends on**: F-029, F-024
@@ -96,9 +96,11 @@ The backlog test gate is that the eight moved tests pass.
   byte-identical.
 - Layout and rendering. Use deterministic fonts for every baseline and require
   the consolidated 28-entry hash harness to remain unchanged.
-- Staged package. Run `cargo package -p oxml-pdf --allow-dirty`, enforce the
-  existing 10 MiB archive ceiling, and confirm `version = "0.0.0"` with
-  `publish = false`. Do not publish the crate.
+- Staged package. Run `cargo package -p oxml-pdf --allow-dirty`. While the
+  internal crates remain unpublished, preserve its expected extracted-build
+  failure against the crates.io `0.0.0` placeholders, then run it with
+  `--no-verify`. Enforce the existing 10 MiB archive ceiling and confirm
+  `version = "0.0.0"` with `publish = false`. Do not publish the crate.
 
 ## Hash harness
 
@@ -106,12 +108,12 @@ Expected to remain unchanged. No released consumer uses `oxml-pdf` in F-037.
 
 ## Implementation checklist
 
-- [ ] Add the staged workspace member and dependency entries.
-- [ ] Copy and rewire the five backend source modules.
-- [ ] Replace duplicated JPEG header probing with `oxml-media`.
-- [ ] Preserve the local PNG pixel decoder and its focused coverage.
-- [ ] Make unsupported future element arms explicit without implementing them.
-- [ ] Pass the eight-test gate, dependency audit, package gate, and hash gate.
+- [x] Add the staged workspace member and dependency entries.
+- [x] Copy and rewire the five backend source modules.
+- [x] Replace duplicated JPEG header probing with `oxml-media`.
+- [x] Preserve the local PNG pixel decoder and its focused coverage.
+- [x] Make unsupported future element arms explicit without implementing them.
+- [x] Pass the eight-test gate, dependency audit, package gate, and hash gate.
 
 ## Open questions
 

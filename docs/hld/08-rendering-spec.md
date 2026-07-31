@@ -5,9 +5,11 @@ Owners: `oxml-layout` for the types, `oxml-pdf` for the backends,
 
 ## The seam that makes this cheap
 
-`crates/rdocx-layout/src/output.rs` is already 100 percent docx-free, and
-`crates/rdocx-pdf` depends on the layout crate and nothing else in the
-workspace. It consumes only:
+The staged `crates/oxml-pdf` backend consumes `oxml-layout::LayoutResult` and
+uses `oxml-media` for image format and header metadata. Its writer, font,
+image, and raster modules support the existing text, line, rectangle, image,
+link, metadata, and outline paths. The released `crates/rdocx-pdf` backend
+remains separate and unchanged. The shared contract is:
 
 ```rust
 pub struct LayoutResult { pages: Vec<PageFrame>, fonts: Vec<FontData>,
@@ -20,6 +22,11 @@ pub struct PageFrame { page_number: usize, width: f64, height: f64,
 passthrough, PNG inflate, soft masks, PDF assembly and the tiny-skia rasteriser
 all carry over unchanged. That is roughly 1,667 lines the presentation side does
 not have to write.
+
+`Path` and `Group` are explicit unsupported arms in the staged backend until
+their rendering work lands. The three font, image, and link collection passes
+also remain flat until they are rewritten on `walk`. The published backend does
+not depend on this staged crate before the shared-crate cutover.
 
 ## Extending `PositionedElement`
 
