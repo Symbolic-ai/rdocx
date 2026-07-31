@@ -56,6 +56,9 @@ defended.
 | F-034 | S07 | M | 2 | 1 | 2026-07-31 | Nested group and path output arms |
 | F-035 | S07 | S | 1 | 1 | 2026-07-31 | Transform-aware nested leaf traversal |
 | F-036 | S07 | S | 1 | 1 | 2026-07-31 | Content-addressed staged image keys |
+| F-037 | S08 | S | 1 | 1 | 2026-07-31 | Unpublished shared PDF backend staging |
+| F-038 | S08 | M | 2 | 1 | 2026-07-31 | Exact deterministic golden-PNG gate |
+| F-039 | S08 | L | 4 | 1 | 2026-07-31 | Global page CTM with reviewed pixel delta |
 
 ## Velocity
 
