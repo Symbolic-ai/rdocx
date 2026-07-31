@@ -61,12 +61,16 @@ Resolution is three stages, in this order:
 
 ```rust
 pub enum ColorTransform {
-    Tint(Percent1000), Shade(Percent1000), Alpha(Percent1000),
-    AlphaMod(Percent1000), AlphaOff(Percent1000),
-    LumMod(Percent1000), LumOff(Percent1000),
-    SatMod(Percent1000), SatOff(Percent1000),
-    HueMod(Percent1000), HueOff(Percent1000),
-    Gray, Comp, Inv, GammaOn, GammaOff,
+    Tint(Percent1000), Shade(Percent1000), Complement, Inverse, Gray,
+    Alpha(Percent1000), AlphaOffset(Percent1000), AlphaModulation(Percent1000),
+    Hue(Angle), HueOffset(Angle), HueModulation(Percent1000),
+    Saturation(Percent1000), SaturationOffset(Percent1000),
+    SaturationModulation(Percent1000), Luminance(Percent1000),
+    LuminanceOffset(Percent1000), LuminanceModulation(Percent1000),
+    Red(Percent1000), RedOffset(Percent1000), RedModulation(Percent1000),
+    Green(Percent1000), GreenOffset(Percent1000), GreenModulation(Percent1000),
+    Blue(Percent1000), BlueOffset(Percent1000), BlueModulation(Percent1000),
+    Gamma, InverseGamma,
 }
 ```
 
@@ -77,6 +81,21 @@ the wrong shade, which users notice immediately and cannot describe.
 Per ECMA-376 Part 1 section 20.1.2.3, `a:tint` and `a:shade` operate in linear
 gamma, and `a:lumMod` and `a:lumOff` operate on HSL luminance. Neither is a
 plain sRGB interpolation.
+
+The transform vector is evaluated from left to right. Tint, shade, inverse,
+and the absolute, offset, and modulation forms of the red, green, and blue
+channels operate in linear light. Hue, saturation, and luminance transforms
+operate on HSL components. Gray uses PowerPoint's encoded-channel weights of
+0.2126 red, 0.7152 green, and 0.0722 blue. Final channel conversion rounds
+exact halves upward. A zero-alpha result is transparent black.
+
+`ResolvedColor` is the observable PowerPoint RGBA contract used by the shared
+renderer. For partial alpha, PowerPoint's native shape clipboard PNG first
+quantises each channel to an 8-bit premultiplied value and then exposes an
+8-bit unpremultiplied RGBA pixel. Resolution reproduces that final round trip
+so exact RGBA agrees with the pinned PowerPoint oracle. The focused partial
+alpha regression prevents this transport-specific boundary rule from leaking
+into the individual colour operations.
 
 ### Do not touch the Word path
 

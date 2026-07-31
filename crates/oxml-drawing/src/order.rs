@@ -1,10 +1,10 @@
 /// Raw XML children grouped by their schema boundary.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct OrderedRawChildren {
     children: Vec<RawChild>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct RawChild {
     boundary: usize,
     xml: Vec<u8>,

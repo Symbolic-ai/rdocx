@@ -1,6 +1,6 @@
 # F-055, The colour transform stack
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S12
 **Size**: L
 **Depends on**: F-054, F-014
@@ -38,10 +38,14 @@ linear-gamma tint and shade, and RGB-to-HSL operations. Clamp only at the
 boundary each ECMA operation defines, then round final channel bytes
 consistently. Apply the stored vector strictly left to right.
 
-Build a temporary 40-shape oracle deck through a dev-only `oxml-opc`
-dependency, render it with installed Microsoft PowerPoint 16.104 build
-16.104.25121423, and export each named shape directly as PNG. Sample a uniform
-5 by 5 centre block and require all 25 pixels to have identical raw RGBA.
+Require an explicit PowerPoint-authored one-shape shell, byte-copy it without
+filesystem metadata, and build a separate temporary 40-shape oracle deck
+through a dev-only `oxml-opc` dependency. PowerPoint 16.104 build
+16.104.25121423 must reopen both the shell copy and transformed deck without
+repair and validate the exact path, slide count, shape count, and all shape
+names. Render each named shape with PowerPoint's `copy shape` command and write
+the clipboard's native PNG payload to a temporary file. Sample a uniform 5 by
+5 centre block and require all 25 pixels to have identical raw RGBA.
 Commit the resulting input and exact expected RGBA values as a readable Rust
 table, not as a binary fixture. Use 28 single-transform rows, one for each
 schema element, plus 12 ordered stacks covering non-commutativity, channel and
@@ -59,12 +63,16 @@ becomes a production dependency.
   linear gamma for tint and shade and HSL luminance for `lumMod` and `lumOff`.
 - Generate expected values from the same Rust formula. That would test the
   implementation against itself instead of the real PowerPoint oracle.
+- Use PowerPoint's `save as picture` command. On the pinned build its SDEF
+  command returns success for POSIX, HFS-style, and writable-worktree paths but
+  creates no file. The native PNG clipboard payload from `copy shape` is the
+  verified direct-render transport.
 
 ## Test plan
 
 | Category | Test | Asserts |
 |---|---|---|
-| differential | `powerpoint_colour_transform_oracle_matches_all_forty_pairs` | Forty readable input and transform stacks resolve to the exact RGBA sampled from direct PowerPoint shape PNG exports on version 16.104 build 16.104.25121423. |
+| differential | `powerpoint_colour_transform_oracle_matches_all_forty_pairs` | Forty readable input and transform stacks resolve to the exact RGBA sampled from direct PowerPoint shape clipboard PNGs on version 16.104 build 16.104.25121423. |
 | unit | `colour_transforms_apply_in_document_order` | Two non-commuting transforms produce the left-to-right result and not the reversed result. |
 | unit | `linear_gamma_round_trip_preserves_channel_endpoints` | The conversion helpers preserve 0 and 1 and remain within the required tolerance for intermediate values. |
 | unit | `alpha_transforms_clamp_to_the_valid_range` | Alpha, alphaMod, and alphaOff compose and clamp correctly. |
@@ -107,13 +115,14 @@ and the deliberately naive Word function remains byte-for-byte unchanged.
 
 ## Implementation checklist
 
-- [ ] Add every required transform variant and XML mapping.
-- [ ] Implement ordered resolution with linear-gamma and HSL helpers.
-- [ ] Generate and directly export 28 single-transform and 12 ordered-stack
-  shapes through the dev-only `oxml-opc` oracle helper.
-- [ ] Commit the readable 40-case table with its consumed oracle-build pin.
-- [ ] Add order, alpha, conversion, and mixed raw-child tests.
-- [ ] Prove the Word path and all 28 hashes are unchanged.
+- [x] Add every required transform variant and XML mapping.
+- [x] Implement ordered resolution with linear-gamma and HSL helpers.
+- [x] Generate and directly render 28 single-transform and 12 ordered-stack
+  shapes through the dev-only `oxml-opc` oracle helper and PowerPoint's native
+  shape clipboard PNG payload.
+- [x] Commit the readable 40-case table with its consumed oracle-build pin.
+- [x] Add order, alpha, conversion, and mixed raw-child tests.
+- [x] Prove the Word path and all 28 hashes are unchanged.
 
 ## Open questions
 

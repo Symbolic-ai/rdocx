@@ -12,3 +12,6 @@ publish = false
 [dependencies]
 oxml-core.workspace = true
 quick-xml.workspace = true
+
+[dev-dependencies]
+oxml-opc.workspace = true
