@@ -1,64 +1,67 @@
-# Current Sprint, S08
+# Current Sprint, S09
 
 **Milestone**: M5 PDF backend.
 
-**Goal**: Stage the shared PDF backend and move it to one global coordinate
-transform. Establish the deterministic golden-PNG gate before the
-coordinate-system rewrite, review its exact four-pixel Poppler antialias delta,
-then require exact output against the updated baseline.
+**Goal**: Make nested groups and backend-neutral paths render in the staged PDF
+backend, then move all three collection passes onto transform-aware traversal.
+Add reusable alpha graphics states while keeping the released dependency graph
+and every development-crate publication boundary unchanged.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for the `oxml-pdf` boundary, its exclusive
-  consumption of `LayoutResult`, and the dependency rule for staged crates.
-- `docs/hld/08-rendering-spec.md`, for the global CTM, upright text matrix,
-  image matrix, unchanged annotation path, and pixel-comparison requirement.
-- `docs/hld/11-migration-plan.md`, for staging `oxml-pdf` while released rdocx
-  keeps its dependency and publication boundary, and deferring the facade
-  cutover until shared publication.
-- `docs/hld/12-testing-strategy.md`, for deterministic golden-PNG comparison,
-  the injected one-pixel failure proof, and the `oxml-pdf` backend test floor.
-- `docs/hld/13-risks-and-open-questions.md`, for the coordinate-system risk and
-  the requirement to isolate the flip before any PowerPoint rendering code.
-- `docs/hld/14-development-backlog.md`, for the F-037 through F-039 contracts,
-  dependencies, sizes, and exact rendering gates.
-- `docs/hld/15-build-and-toolchain.md`, for deterministic font mode, WASM
-  constraints, staged versioning, packaging, and publication boundaries.
+- `docs/hld/03-architecture.md`, for the staged dependency direction and the
+  rule that shared backends do not depend on released format crates.
+- `docs/hld/08-rendering-spec.md`, for group graphics-state nesting, path
+  operators, accumulated transforms, clipping, collection traversal, and
+  `/ExtGState` alpha reuse.
+- `docs/hld/11-migration-plan.md`, for completing the staged `oxml-pdf` arms
+  and walk-based passes before any released shared-crate cutover.
+- `docs/hld/12-testing-strategy.md`, for the three nested collection
+  regressions, path and balanced graphics-state assertions, exact golden-PNG
+  comparison, and the unchanged hash harness.
+- `docs/hld/13-risks-and-open-questions.md`, for the output-drift gate and the
+  R3 risk of silently losing fonts, images, or links inside groups.
+- `docs/hld/14-development-backlog.md`, for the F-040, F-041, F-042, and F-044
+  contracts, dependencies, sizes, and test gates.
+- `docs/hld/15-build-and-toolchain.md`, for deterministic rendering, package
+  verification, and the rule that PowerPoint development crates stay at 0.0.0
+  with publication disabled.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-037 | Create oxml-pdf | S | done | - |
-| F-038 | Golden-PNG harness | M | done | - |
-| F-039 | Global CTM flip | L | done | - |
+| F-040 | Group rendering | M | pending | - |
+| F-041 | Path rendering | M | pending | - |
+| F-042 | Rewrite the three collection passes on walk | M | pending | - |
+| F-044 | ExtGState alpha | S | pending | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-F-037 first stages the backend on the shared layout and media crates without
-changing released rdocx. F-038 then records and proves the deterministic pixel
-comparison gate. F-039 lands last as its own reviewable behavioural commit,
-with that gate available to isolate and review the exact four-pixel Poppler
-antialias delta before returning to exact comparison.
+F-040 must land before F-042 because the R3 regressions need real nested group
+output before they can prove font, image, and link collection. F-041 and F-044
+depend only on the completed F-039 page transform, but they share the staged PDF
+writer surface with group rendering and must remain distinct reviewable
+behavioural commits.
 
 ## Definition of done for this sprint
 
-- `oxml-pdf` is an isolated staged copy wired to `oxml-layout` and
-  `oxml-media`, its duplicated header parsers are removed, and its eight moved
-  tests pass.
-- The deterministic golden-PNG harness passes on an unmodified sample corpus
-  and fails when a one-pixel offset is deliberately injected.
-- The PDF writer emits one page-level `q 1 0 0 -1 0 H cm`, uses an upright text
-  matrix and negative-height image matrix, and leaves link annotations outside
-  the content stream unchanged.
-- The old golden manifest differs only at the four reviewed Poppler 26.01.0
-  antialias pixels in `invoice` and `quote`. All seven buffers then match the
-  updated manifest exactly, while the existing 28-entry hash harness remains
-  unchanged.
-- Released rdocx manifests and dependencies stay unchanged. Its additive
-  deterministic PDF facade and mirrored writer rewrite share the reviewed CTM
-  behavior, while staged crates remain at 0.0.0 with publication disabled.
+- A three-deep group emits balanced `q` and `Q` operators, composes each `cm`
+  in the approved child-to-page order, applies optional `W n` clipping, and
+  restores graphics state after every subtree.
+- Fill-only, stroke-only, and combined paths emit the required PDF path and
+  paint operators, including width, cap, join, miter, and dash state.
+- Font subsetting, XObject registration, and link annotation collection all
+  use `walk`, with one nested target regression for each pass and transformed
+  link rectangles.
+- Distinct alpha values reuse one `/ExtGState` each, and a 50 percent fill over
+  white rasterises to the midpoint colour.
+- All seven golden page-one buffers match exactly, the existing 28-entry hash
+  harness remains unchanged, and the injected one-pixel proof still fails
+  precisely.
+- `oxml-pdf` remains at version 0.0.0 with publication disabled and without an
+  `rdocx-*` or `rpptx-*` dependency. No crate is published.
 - The full workspace, no-default-features, WASM, documentation, package, and
-  supply-chain gates pass without publishing any crate.
+  supply-chain gates pass.
