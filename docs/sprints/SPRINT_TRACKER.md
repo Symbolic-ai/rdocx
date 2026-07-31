@@ -23,6 +23,7 @@ defended.
 | S08 | M5 | 3 | 3 | 0 | 7 | 3 | Staged unpublished oxml-pdf, installed the exact golden gate, and completed the global CTM rewrite |
 | S09 | M5 | 4 | 4 | 0 | 7 | 4 | Completed nested groups, solid paths, transform-aware collection, and reusable alpha in unpublished oxml-pdf |
 | S10 | M5 | 2 | 2 | 0 | 8 | 2 | Completed M5 with PDF gradients and recursive raster groups, paths, clips, gradients, dashes, and backgrounds |
+| S11 | M6 | 0 | 0 | 0 | 0 | 1 | Confirmed the staged extraction boundary with no publication, consumer cutover, or implementation F-IDs |
 
 ## Completed features
 
@@ -91,6 +92,7 @@ five working days.
 | S08 | 3 | 3 | 5.00 |
 | S09 | 4 | 4 | 5.00 |
 | S10 | 2 | 2 | 5.00 |
+| S11 | 0 | 1 | 0.00 |
 
 ## Escalation record
 
