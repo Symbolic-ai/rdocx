@@ -28,7 +28,7 @@ or their rendered output.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-029 | Create oxml-layout | M | pending | - |
+| F-029 | Create oxml-layout | M | in-progress | codex |
 | F-030 | Decouple line.rs | L | pending | - |
 | F-031 | Transform | M | pending | - |
 

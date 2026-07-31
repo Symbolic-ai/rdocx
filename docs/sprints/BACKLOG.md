@@ -19,7 +19,7 @@ regenerated, never hand-edited.
 | M1, Preparation and safety net              | 12 | 12 | 0 | 0  |
 | M2, Shared infrastructure extraction        | 10 | 7 | 0 | 3  |
 | M3, Media                                   | 6  | 4 | 0 | 2  |
-| M4, Layout primitives                       | 8  | 0 | 0 | 8  |
+| M4, Layout primitives                       | 8  | 0 | 1 | 7  |
 | M5, PDF backend                             | 9  | 0 | 0 | 9  |
 | M6, Shared publication and rdocx cutover     | 6  | 0 | 0 | 6  |
 | M7, DrawingML                               | 15 | 0 | 0 | 15 |
@@ -30,7 +30,7 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **150** | **23** | **0** | **127** |
+| **Total** | **150** | **23** | **1** | **126** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -89,7 +89,7 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-M4 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-029 | Create oxml-layout                           | S06 | M | pending |
+| F-029 | Create oxml-layout                           | S06 | M | in-progress |
 | F-030 | Decouple line.rs                             | S06 | L | pending |
 | F-031 | Transform                                    | S06 | M | pending |
 | F-032 | Path and PathCommand                         | S07 | M | pending |
