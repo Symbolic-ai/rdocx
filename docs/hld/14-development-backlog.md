@@ -288,12 +288,13 @@ control hull.
 
 ### F-033, Paint and Stroke (M)
 Solid, linear, radial and tile paints. Stroke width, cap, join and dash.
-**Depends on**: F-032.
+**Depends on**: F-032, F-036.
 **Test gate**: a single-stop gradient degrades to solid at construction time.
 
 ### F-034, Path and Group arms (M)
 Add both `PositionedElement` variants, `PageFrame::background`,
-`LayoutResult::diagnostics`, and `#[non_exhaustive]` on both enums.
+`LayoutResult::diagnostics`, and `#[non_exhaustive]` on `PositionedElement`,
+`Effect`, `PageFrame` and `LayoutResult`, with constructors on the two structs.
 **Depends on**: F-031, F-033.
 **Test gate**: the staged `oxml-layout` construction sites compile, and the hash
 harness is unchanged.

@@ -64,7 +64,10 @@ pub struct Stroke { pub paint: Paint, pub width: f64,
 pub struct PathElement { pub path: Path, pub fill: Option<Paint>,
                          pub stroke: Option<Stroke> }
 
+#[non_exhaustive]
 pub enum Effect { OuterShadow { dx: f64, dy: f64, blur: f64, color: Color } }
+
+pub struct Diagnostic { pub message: String }
 
 pub struct GroupElement { pub transform: Transform, pub clip: Option<Path>,
                           pub opacity: f64, pub effects: Vec<Effect>,
@@ -78,9 +81,12 @@ pub enum PositionedElement {
 }
 ```
 
-`PageFrame` gains `background: Option<Paint>`, and `LayoutResult` gains
-`diagnostics: Vec<Diagnostic>`. Both become `#[non_exhaustive]` with a
-constructor, once, at the 0.3.0 cut.
+`PositionedElement` and `Effect` are the two non-exhaustive enums. `PageFrame`
+gains `background: Option<Paint>`, and `LayoutResult` gains
+`diagnostics: Vec<Diagnostic>`. The two structs are also non-exhaustive and use
+constructors that take their previous required fields, defaulting the new
+fields to `None` and an empty vector. This surface remains staged in unpublished
+`oxml-layout` at version 0.0.0.
 
 ### Why `Group` is the whole design
 

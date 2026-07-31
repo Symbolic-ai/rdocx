@@ -5,6 +5,8 @@ pub mod error;
 pub mod font;
 pub mod line;
 pub mod output;
+pub mod paint;
+pub mod path;
 pub mod transform;
 
 pub use error::{LayoutError, Result};
@@ -14,7 +16,10 @@ pub use line::{
     TabStop, TextSegment, Underline, break_into_lines,
 };
 pub use output::{
-    Color, DocumentMetadata, FieldKind, FontData, FontId, GlyphRun, LayoutResult, OutlineEntry,
-    PageFrame, Point, PositionedElement, Rect,
+    Color, Diagnostic, DocumentMetadata, Effect, FieldKind, FontData, FontId, GlyphRun,
+    GroupElement, LayoutResult, MediaId, OutlineEntry, PageFrame, PathElement, Point,
+    PositionedElement, Rect, walk,
 };
+pub use paint::{GradientStop, LineCap, LineJoin, Paint, Stroke};
+pub use path::{FillRule, Path, PathCommand};
 pub use transform::Transform;

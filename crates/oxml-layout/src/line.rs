@@ -4,7 +4,7 @@
 
 use crate::error::Result;
 use crate::font::FontManager;
-use crate::output::{Color, FieldKind, FontId};
+use crate::output::{Color, FieldKind, FontId, MediaId};
 
 /// A tab stop positioned in typographic points.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -85,7 +85,7 @@ pub enum InlineItem {
     Image {
         width: f64,
         height: f64,
-        embed_id: String,
+        media_id: MediaId,
     },
     /// A numbering marker (rendered before the first line).
     Marker(TextSegment),
@@ -135,7 +135,7 @@ pub enum LineItem {
     Image {
         width: f64,
         height: f64,
-        embed_id: String,
+        media_id: MediaId,
     },
     Marker(TextSegment),
 }
@@ -601,11 +601,11 @@ fn inline_to_line_item(
         InlineItem::Image {
             width,
             height,
-            embed_id,
+            media_id,
         } => LineItem::Image {
             width: *width,
             height: *height,
-            embed_id: embed_id.clone(),
+            media_id: *media_id,
         },
         InlineItem::LineBreak | InlineItem::PageBreak | InlineItem::ColumnBreak => LineItem::Tab {
             width: 0.0,
@@ -992,5 +992,28 @@ mod tests {
         assert!((leader.width - 60.25).abs() < 0.01);
         assert!(!leader.glyph_ids.is_empty());
         assert!(leader.text.chars().all(|ch| ch == '.'));
+    }
+
+    #[test]
+    fn staged_image_types_use_media_id_instead_of_embed_id() {
+        let media_id = crate::MediaId::from_bytes(b"image");
+        let item = inline_to_line_item(
+            &InlineItem::Image {
+                width: 10.0,
+                height: 20.0,
+                media_id,
+            },
+            0.0,
+            &[],
+            &deterministic_font_manager(),
+            None,
+        );
+        let LineItem::Image {
+            media_id: actual, ..
+        } = item
+        else {
+            panic!("image should remain an image");
+        };
+        assert_eq!(actual, media_id);
     }
 }
