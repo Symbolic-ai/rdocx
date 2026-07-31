@@ -1458,3 +1458,129 @@ fallback, plus the integrated full gate.
 
 **Notes for future sessions.** PresentationML parsers should construct this
 format-neutral value. They must not move `p:` parsing into `oxml-drawing`.
+
+### F-057, a:xfrm
+
+**Sprint.** S13
+**Completed.** 2026-07-31
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `oxml-drawing` now models DrawingML transforms with shape
+and child coordinate rectangles, rotation, flips, prefix-tolerant parsing,
+fixed-prefix writing, ordered raw-child preservation, and finite affine
+composition.
+
+**Non-obvious choices.** Child coordinates map into the parent rectangle before
+rotation and flips are composed. Zero child extents return a typed error rather
+than producing non-finite matrix coefficients.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+transform contract in `docs/hld/05-drawingml-model.md`.
+
+**Tests.** `nested_group_transform_composes_to_the_hand_computed_matrix`,
+prefix and schema-order writing, raw-child preservation, zero-extent rejection,
+and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep DrawingML coordinate conversion in this
+format model. Renderer transforms remain backend-neutral values.
+
+### F-058, Guide evaluator
+
+**Sprint.** S13
+**Completed.** 2026-07-31
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `oxml-drawing` now parses and evaluates all 17 DrawingML
+guide formula tokens from an owned seeded environment, applies adjust-value
+overrides in declaration order, evaluates local path commands, and lowers
+clockwise arcs to finite cubic Beziers in segments no larger than 90 degrees.
+
+**Non-obvious choices.** Office interoperability defines `mod` as a Euclidean
+norm and applies `sqrt` to the absolute input. Multi-turn sweeps are valid and
+bounded by a segment-count guard rather than rejected at one full turn.
+
+**Deviations from the design plan.** The approved plan was corrected before
+implementation to use the standard 17 formula tokens. Microscope pass 1 found
+that valid multi-turn arcs were rejected. A 450-degree regression fixed the
+defect, and pass 2 was clean.
+
+**Spec sections touched.** `docs/hld/05-drawingml-model.md`, "Geometry", now
+records the standard formula set, owned environment, Office deviations, and
+arc-lowering semantics.
+
+**Tests.** `hand_written_custom_geometry_guides_produce_expected_path_coordinates`,
+all formula operations, Office deviations, invalid math, finite arc endpoints,
+multi-turn sweeps, unit-angle conversion, truncation riders, and the integrated
+full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep formula operands owned because custom
+geometry supplies document data. Reject every non-finite intermediate before a
+renderer sees it.
+
+### F-059, a:custGeom
+
+**Sprint.** S13
+**Completed.** 2026-07-31
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `oxml-drawing` now parses, writes, and evaluates
+`a:custGeom` adjust lists, guide lists, text rectangles, path lists, and path
+commands. Reads tolerate arbitrary prefixes, writes use the fixed `a:` prefix,
+and unknown subtrees remain byte-for-byte at their schema boundaries.
+
+**Non-obvious choices.** The approved schema-valid custom geometry fixture is
+inline because the repository has no fetched deck corpus. The real corpus gate
+remains at the M7 boundary.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+geometry and preservation contracts in `docs/hld/05-drawingml-model.md`.
+
+**Tests.** `corpus_custom_geometry_round_trips_and_evaluates_to_a_closed_path`,
+prefix and child-order writing, raw-child preservation, malformed-input
+handling, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Replace or supplement the inline fixture when
+the separately fetched M7 deck corpus is available. Do not commit a binary deck
+only to duplicate the same XML boundary test.
+
+### F-060, Fills
+
+**Sprint.** S13
+**Completed.** 2026-07-31
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `oxml-drawing` now models no fill, solid fill, linear and
+path gradients, pattern fill, and stretched or tiled picture fill with source
+rectangles. Gradient stops retain document order, reads tolerate arbitrary
+prefixes, and writers emit fixed-prefix schema order.
+
+**Non-obvious choices.** Picture fills retain relationship identifiers as
+owned strings without introducing an OPC dependency. Modelled leaf elements
+also retain ordered raw children so nested extensions survive round trips.
+
+**Deviations from the design plan.** Microscope pass 1 found that a pattern
+colour wrapper containing only an extension was dropped. Pass 2 found the same
+class of loss in modelled leaf elements. Both were fixed with focused
+regressions, and pass 3 was clean.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+fill module and preservation contracts in `docs/hld/05-drawingml-model.md`.
+
+**Tests.** `every_fill_form_round_trips_and_gradient_stops_keep_document_order`,
+prefix and schema-order writing, nested raw preservation, malformed-value
+rejection, released Word theme isolation, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Resolve picture relationships and media bytes in
+the PresentationML package layer. Do not add an OPC dependency to this crate.

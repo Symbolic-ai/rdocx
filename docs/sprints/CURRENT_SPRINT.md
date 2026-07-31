@@ -29,10 +29,10 @@ form must preserve its schema structure through round trips.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-057 | a:xfrm | M | in-progress | codex |
-| F-058 | Guide evaluator | L | in-progress | codex |
-| F-060 | Fills | L | in-progress | codex |
-| F-059 | a:custGeom | M | in-progress | codex |
+| F-057 | a:xfrm | M | done | - |
+| F-058 | Guide evaluator | L | done | - |
+| F-060 | Fills | L | done | - |
+| F-059 | a:custGeom | M | done | - |
 
 ## Sequencing note
 
