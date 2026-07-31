@@ -1,6 +1,6 @@
 # F-038, Golden-PNG harness
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S08
 **Size**: M
 **Depends on**: F-037, F-001
@@ -98,13 +98,13 @@ and does not alter released rendering behaviour.
 
 ## Implementation checklist
 
-- [ ] Add the approved deterministic PDF entry point.
-- [ ] Add check and reviewed-update modes to the golden harness.
-- [ ] Generate the seven sample PDFs with bundled fonts only.
-- [ ] Rasterise page one at the approved fixed DPI and compare decoded pixels.
-- [ ] Record a readable JSON pixel manifest without binary fixtures.
-- [ ] Prove the unmodified pass and injected one-pixel failure.
-- [ ] Run the hash, package, prose, and rasteriser-version riders.
+- [x] Add the approved deterministic PDF entry point.
+- [x] Add check and reviewed-update modes to the golden harness.
+- [x] Generate the seven sample PDFs with bundled fonts only.
+- [x] Rasterise page one at the approved fixed DPI and compare decoded pixels.
+- [x] Record a readable JSON pixel manifest without binary fixtures.
+- [x] Prove the unmodified pass and injected one-pixel failure.
+- [x] Run the hash, package, prose, and rasteriser-version riders.
 
 ## Open questions
 

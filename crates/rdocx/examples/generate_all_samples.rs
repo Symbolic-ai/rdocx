@@ -71,7 +71,7 @@ fn export_all(dir: &Path, name: &str, mut doc: Document) {
     std::fs::write(&png_path, &png).unwrap();
     println!("  {name}.png ({} bytes)", png.len());
 
-    match doc.to_pdf() {
+    match doc.to_pdf_deterministic() {
         Ok(pdf) => {
             let pdf_path = dir.join(format!("{name}.pdf"));
             std::fs::write(&pdf_path, &pdf).unwrap();

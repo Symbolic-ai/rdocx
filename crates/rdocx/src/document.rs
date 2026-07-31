@@ -2155,6 +2155,16 @@ impl Document {
         Ok(rdocx_pdf::render_to_pdf(&layout))
     }
 
+    /// Render the document to PDF bytes using bundled fonts without system
+    /// font discovery.
+    ///
+    /// The deterministic layout is cached independently from the normal-font
+    /// layout and is suitable for reproducible render baselines.
+    pub fn to_pdf_deterministic(&self) -> Result<Vec<u8>> {
+        let layout = self.cached_deterministic_layout()?;
+        Ok(rdocx_pdf::render_to_pdf(&layout))
+    }
+
     /// Render the document to PDF bytes with user-provided font files.
     ///
     /// User-provided fonts take highest priority in font resolution.
@@ -3214,6 +3224,24 @@ mod tests {
 
         assert!(!inspected.is_empty());
         assert_eq!(facade, inspected);
+    }
+
+    #[test]
+    fn deterministic_pdf_facade_reuses_bundled_font_layout() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Deterministic PDF rendering");
+
+        reset_layout_invocations();
+        let first = doc
+            .to_pdf_deterministic()
+            .expect("deterministic PDF rendering should succeed");
+        let second = doc
+            .to_pdf_deterministic()
+            .expect("cached deterministic PDF rendering should succeed");
+
+        assert!(first.starts_with(b"%PDF-"));
+        assert!(second.starts_with(b"%PDF-"));
+        assert_eq!(layout_invocations(), 1);
     }
 
     #[test]
