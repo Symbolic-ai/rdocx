@@ -1,6 +1,6 @@
 # F-053, OrderedRawChildren
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S12
 **Size**: M
 **Depends on**: none
@@ -86,12 +86,12 @@ Expected to be unchanged. The helper is isolated in the unpublished
 
 ## Implementation checklist
 
-- [ ] Add the concrete schema-boundary and raw-byte representation.
-- [ ] Expose insertion-ordered `push`, `at`, and `is_empty` operations.
-- [ ] Exercise capture and emission through a test-local parent parser.
-- [ ] Add the three-child test gate and byte-preservation regressions.
-- [ ] Keep `oxml-core` and quick-xml as test dependencies only.
-- [ ] Prove no forbidden family dependency was introduced.
+- [x] Add the concrete schema-boundary and raw-byte representation.
+- [x] Expose insertion-ordered `push`, `at`, and `is_empty` operations.
+- [x] Exercise capture and emission through a test-local parent parser.
+- [x] Add the three-child test gate and byte-preservation regressions.
+- [x] Keep `oxml-core` and quick-xml as test dependencies only.
+- [x] Prove no forbidden family dependency was introduced.
 
 ## Open questions
 

@@ -1,4 +1,5 @@
 pub mod namespace;
+pub mod order;
 
 #[cfg(test)]
 mod tests {
@@ -29,17 +30,32 @@ mod tests {
         assert!(output.status.success(), "cargo metadata should succeed");
 
         let metadata = String::from_utf8(output.stdout).expect("metadata should be UTF-8");
-        let package_start = metadata
-            .find("{\"name\":\"oxml-drawing\"")
-            .expect("oxml-drawing should be a workspace package");
-        let package_tail = &metadata[package_start..];
-        let package_end = package_tail
-            .find("},{\"name\":")
-            .unwrap_or(package_tail.len());
-        let package = &package_tail[..package_end];
+        assert!(metadata.contains("{\"name\":\"oxml-drawing\",\"version\":\"0.0.0\""));
 
-        assert!(package.starts_with("{\"name\":\"oxml-drawing\",\"version\":\"0.0.0\""));
-        assert!(package.contains("\"publish\":[]"));
-        assert!(package.contains("\"dependencies\":[]"));
+        let manifest = include_str!("../Cargo.toml");
+        assert!(manifest.contains("version = \"0.0.0\""));
+        assert!(manifest.contains("publish = false"));
+
+        let output = Command::new(env!("CARGO"))
+            .args([
+                "tree",
+                "-p",
+                "oxml-drawing",
+                "--edges",
+                "normal",
+                "--prefix",
+                "none",
+            ])
+            .output()
+            .expect("cargo tree should run");
+        assert!(output.status.success(), "cargo tree should succeed");
+        assert_eq!(
+            String::from_utf8(output.stdout)
+                .expect("cargo tree output should be UTF-8")
+                .lines()
+                .count(),
+            1,
+            "oxml-drawing should have no production dependencies"
+        );
     }
 }

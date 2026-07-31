@@ -424,6 +424,10 @@ dependencies = [
 [[package]]
 name = "oxml-drawing"
 version = "0.0.0"
+dependencies = [
+ "oxml-core",
+ "quick-xml",
+]
 
 [[package]]
 name = "oxml-layout"

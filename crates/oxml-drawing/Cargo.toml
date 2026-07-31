@@ -10,3 +10,7 @@ homepage.workspace = true
 publish = false
 
 [dependencies]
+
+[dev-dependencies]
+oxml-core.workspace = true
+quick-xml.workspace = true
