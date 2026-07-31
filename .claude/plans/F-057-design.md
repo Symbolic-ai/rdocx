@@ -1,6 +1,6 @@
 # F-057, a:xfrm
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S13
 **Size**: M
 **Depends on**: none
@@ -77,10 +77,10 @@ consumer.
 
 ## Implementation checklist
 
-- [ ] Add failing matrix, round-trip, raw-preservation, and invalid-extent tests.
-- [ ] Add transform value types, errors, parsing, and fixed-prefix writing.
-- [ ] Implement finite affine matrix generation and composition.
-- [ ] Export the approved module and run focused checks.
+- [x] Add failing matrix, round-trip, raw-preservation, and invalid-extent tests.
+- [x] Add transform value types, errors, parsing, and fixed-prefix writing.
+- [x] Implement finite affine matrix generation and composition.
+- [x] Export the approved module and run focused checks.
 
 ## Open questions
 

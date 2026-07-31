@@ -1,6 +1,7 @@
 pub mod color;
 pub mod namespace;
 pub mod order;
+pub mod xfrm;
 
 #[cfg(test)]
 mod tests {
