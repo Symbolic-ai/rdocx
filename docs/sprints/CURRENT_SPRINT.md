@@ -1,60 +1,52 @@
-# Current Sprint, S10
+# Current Sprint, S11
 
-**Milestone**: M5 PDF backend.
+**Milestone**: M6 deferred shared publication and rdocx cutover.
 
-**Goal**: Complete the staged PDF backend work owned by F-043 and F-045. Add
-PDF shading resources for linear and radial path gradients, plus
-transform-aware raster groups, paths, clips, gradients, dashes, and page
-backgrounds while keeping released dependencies and every development crate
-publication boundary unchanged.
+**Goal**: Verify the isolated shared crates and continue PowerPoint development
+without publishing them or changing released rdocx dependencies. S11 is the
+staged extraction validation boundary before DrawingML construction begins.
+
+**Validation-only**: yes
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for the format-neutral `oxml-pdf` boundary and
-  its permitted dependencies on `oxml-layout` and `oxml-media` only.
-- `docs/hld/08-rendering-spec.md`, for PDF shading resources, gradient matrices,
-  recursive raster transforms, clip masks, path paint, dashes, and backgrounds.
-- `docs/hld/11-migration-plan.md`, for finishing the staged backend before
-  PowerPoint implementation and deferring every released rdocx cutover.
-- `docs/hld/12-testing-strategy.md`, for sampled gradient pixels, rotated raster
-  geometry, dashed-line gaps, exact golden-PNG comparison, and the hash gate.
-- `docs/hld/13-risks-and-open-questions.md`, for the silent-output-drift risk
-  and the exact rendering evidence required to control it.
-- `docs/hld/14-development-backlog.md`, for the F-043 and F-045 contracts,
-  dependencies, sizes, and test gates.
-- `docs/hld/15-build-and-toolchain.md`, for deterministic rendering and the rule
-  that development crates remain at 0.0.0 with publication disabled.
+- `docs/hld/03-architecture.md`, for the shared-crate dependency direction and
+  the rule that implemented development crates stay at version 0.0.0 with
+  publication disabled.
+- `docs/hld/11-migration-plan.md`, for keeping released rdocx packages on their
+  existing dependency graph until PowerPoint development and a separate shared
+  publication plan are complete.
+- `docs/hld/12-testing-strategy.md`, for the workspace, 28-entry hash, exact
+  golden-PNG, packaging, and supply-chain validation gates.
+- `docs/hld/14-development-backlog.md`, for the deferred M6 publication and
+  consumer-cutover boundary and the M7 DrawingML work that follows it.
+- `docs/hld/15-build-and-toolchain.md`, for deterministic rendering, archive
+  verification, and the prohibition on publishing `oxml-*` or `rpptx*`
+  development crates.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-043 | Gradient shading dictionaries | L | done | - |
-| F-045 | Rasteriser: groups, paths, gradients, dashes | L | done | - |
+
+S11 has no implementation F-IDs. It is an explicit validation boundary.
 
 ## Sequencing note
 
-Rows are listed in dependency order, not F-ID order.
-
-F-043 lands first because F-045 depends on its gradient behaviour as well as
-the completed F-040 group and F-041 path work. The PDF gradient resources must
-therefore establish the shared paint semantics before the raster backend proves
-the same semantics across transforms, clips, dashes, and backgrounds.
+There is no implementation order in S11. F-046 through F-051 remain deferred
+to S32.1 and S32.2 after PowerPoint development and the separately approved
+shared-crate publication. S12 begins M7 DrawingML construction only after this
+staged boundary is confirmed.
 
 ## Definition of done for this sprint
 
-- PDF output emits type 2 axial and type 3 radial shadings with type 3
-  stitching functions, element-local matrices, normalized stops, and a sampled
-  rotated-linear-gradient pixel regression.
-- Raster output recursively composes group transforms, applies clip masks,
-  renders paths and gradients, honours dash patterns, and uses the page
-  background instead of a hardcoded white fill.
-- A rotated rectangle at 72 DPI has the expected interior and empty-corner
-  pixels, and a dashed line contains deterministic gaps.
+- The full workspace, no-default-features, WASM, documentation, packaging, and
+  supply-chain gates pass from a clean tree.
 - All seven golden page-one buffers match exactly, the existing 28-entry hash
   harness remains unchanged, and the injected one-pixel proof still fails
   precisely.
-- `oxml-pdf` remains at version 0.0.0 with publication disabled and without an
-  `rdocx-*` or `rpptx-*` dependency. No crate is published.
-- The full workspace, no-default-features, WASM, documentation, package, and
-  supply-chain gates pass.
+- Each implemented `oxml-*` development crate remains at version 0.0.0 with
+  `publish = false`, and no `oxml-*` crate depends on an `rdocx-*` or `rpptx-*`
+  crate beyond the documented future Theme adapter exception.
+- Released rdocx manifests and dependency edges remain unchanged.
+- No crate is published and no consumer cutover runs.

@@ -12,6 +12,51 @@ from scripts import sprint_workflow as workflow
 
 
 class SprintWorkflowTests(unittest.TestCase):
+    def test_validation_only_sprint_initialises_without_wave_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current = root / "CURRENT_SPRINT.md"
+            scratch = root / "scratch"
+            current.write_text(
+                "# Current Sprint, S11\n\n"
+                "**Validation-only**: yes\n\n"
+                "## The wave\n\n"
+                "| F-ID | Title | Size | Status | Owner |\n"
+                "|---|---|---|---|---|\n",
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                sprint="S11",
+                resume=False,
+                force=False,
+                max_review_passes=3,
+                max_workers=None,
+            )
+
+            with (
+                patch.object(workflow, "CURRENT_SPRINT", current),
+                patch.object(workflow, "SCRATCH", scratch),
+            ):
+                workflow.cmd_init(args)
+
+            saved = json.loads((scratch / "S11-run.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["features"], {})
+            self.assertEqual(saved["phase"], "design")
+
+    def test_empty_sprint_without_validation_marker_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            current = Path(directory) / "CURRENT_SPRINT.md"
+            current.write_text(
+                "# Current Sprint, S11\n\n"
+                "| F-ID | Title | Size | Status | Owner |\n"
+                "|---|---|---|---|---|\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(workflow, "CURRENT_SPRINT", current):
+                with self.assertRaises(SystemExit):
+                    workflow.parse_current_sprint()
+
     def test_workspace_release_versions_move_in_lockstep(self) -> None:
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
         workspace = root["workspace"]

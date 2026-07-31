@@ -39,6 +39,28 @@ exception described below, and it delegates the release tag to `/release`.
 6. Report every F-ID that is not `completed`, with its state, its dependencies,
    and the skills its diff will trigger.
 
+### Validation-only route
+
+When the state contains zero features, first confirm that `CURRENT_SPRINT.md`
+declares `**Validation-only**: yes` and that `SPRINT_PLAN.md` explicitly defines
+the sprint as a validation boundary. Refuse an accidentally empty or malformed
+wave.
+
+For a valid zero-feature sprint:
+
+1. Commit the regenerated `CURRENT_SPRINT.md` as `SNN, open validation sprint`
+   so every later evidence record can bind to a clean, stable HEAD.
+2. Skip design, questions, waves, workers, integration and feature ledgers.
+3. Set the phase directly to `verification` and run step 6, including every
+   boundary-specific gate in the sprint definition of done.
+4. Set the phase to `review` and run step 8. Commit review records before
+   recording the clean review and repeat the full verification if that commit
+   changed HEAD. Review and full verification must both cover the final HEAD.
+5. Continue at step 9. Report zero integrated F-IDs and no retained workers.
+
+Do not manufacture an F-ID, design plan, handoff, tracker row or `AS_BUILT.md`
+entry for a validation-only sprint.
+
 ## 2. Design everything first
 
 1. Run `/design F-XXX --draft` for every unfinished story. **No implementation
@@ -175,6 +197,9 @@ For every other integrated F-ID:
 5. `mark-feature SNN F-XXX completed --clear-owner`.
 6. Commit the ledgers as one `SNN, sprint ledgers` commit. Do not push.
 7. `set-phase SNN review`.
+
+When the sprint is validation-only, skip this section and use the route in
+section 1.
 
 ## 8. Review and remediate
 
