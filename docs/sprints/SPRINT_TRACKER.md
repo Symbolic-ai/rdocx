@@ -65,6 +65,8 @@ defended.
 | F-041 | S09 | M | 2 | 1 | 2026-07-31 | Solid PDF path geometry and paint |
 | F-042 | S09 | M | 2 | 1 | Nested font, image, and link collection |
 | F-044 | S09 | S | 1 | 1 | Reused PDF ExtGState alpha resources |
+| F-043 | S10 | L | 4 | 1 | 2026-07-31 | Deterministic PDF gradient resource graphs |
+| F-045 | S10 | L | 4 | 1 | 2026-07-31 | Recursive raster groups, paths, gradients, and dashes |
 
 ## Velocity
 
