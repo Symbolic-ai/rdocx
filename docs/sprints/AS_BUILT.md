@@ -1301,3 +1301,160 @@ gate, deliberate one-pixel rejection, and full workspace gate also pass.
 **Notes for future sessions.** Preserve recursive draw order and scoped state.
 Flattening groups would lose clip and opacity semantics even though `walk` is
 correct for collection passes.
+
+### F-052, Create oxml-drawing and namespace constants
+
+**Sprint.** S12
+**Completed.** 2026-07-31
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The workspace now contains the unpublished `oxml-drawing`
+crate with the DrawingML, relationships, and package namespace constants used
+by later model stories.
+
+**Non-obvious choices.** The crate remains at version 0.0.0 with publication
+disabled. It started without dependencies so the format-neutral boundary was
+established before parsers were added.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+existing crate boundary in `docs/hld/03-architecture.md` and development
+publication policy in `docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Namespace URI assertions, workspace membership and publication
+state checks, package inspection, dependency inspection, and the integrated
+full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep every `oxml-*` production edge
+format-neutral. The final S12 graph contains no `rdocx-*` or `rpptx-*` edge.
+
+### F-053, OrderedRawChildren
+
+**Sprint.** S12
+**Completed.** 2026-07-31
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `OrderedRawChildren` stores unmodelled XML subtrees at
+caller-defined schema boundaries so modelled children can be written in schema
+order without moving or dropping unknown siblings.
+
+**Non-obvious choices.** The helper is concrete and schema-boundary based. It
+does not own a generic parser policy or hide which child sequence the caller
+implements.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** No HLD file changed. The helper implements the
+existing child-order and verbatim-preservation contracts in
+`docs/hld/05-drawingml-model.md`.
+
+**Tests.** Raw children before, between, and after modelled children, multiple
+children at one boundary, byte-for-byte nested subtree preservation, and the
+integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Owning parsers still decide their schema
+boundaries. Do not append unknown children at the end of a parent.
+
+### F-054, Colour choices
+
+**Sprint.** S12
+**Completed.** 2026-07-31
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `ColorChoice` now models sRGB, scheme, system, and preset
+DrawingML colours with validated RGB values, prefix-tolerant parsing,
+fixed-prefix writing, and ordered raw-child preservation.
+
+**Non-obvious choices.** System colours preserve `lastClr` as their portable
+fallback. Unknown child subtrees remain byte-for-byte raw rather than becoming
+partially modelled data.
+
+**Deviations from the design plan.** Microscope pass 1 corrected the shared
+`OxmlError` conversion so parser errors retain their source contract. Pass 2
+was clean.
+
+**Spec sections touched.** No HLD file changed. The four choices and
+preservation behaviour were already specified in
+`docs/hld/05-drawingml-model.md`.
+
+**Tests.** All four colour forms parse and round-trip, malformed RGB and system
+fallback values fail, unknown nested children retain their exact bytes, and
+the integrated full gate passes.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Parse only children the shared renderer
+consumes. Preserve every other subtree at its original boundary.
+
+### F-055, The colour transform stack
+
+**Sprint.** S12
+**Completed.** 2026-07-31
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** All 28 DrawingML colour transforms parse, serialize, and
+apply in document order. A readable 40-case table records exact RGBA sampled
+from PowerPoint 16.104 build 16.104.25121423.
+
+**Non-obvious choices.** The oracle starts from a PowerPoint-authored native
+shape shell, validates the transformed deck without repair, and captures each
+shape through the native clipboard PNG payload. This replaced the PowerPoint
+`save as picture` command, which returned success without creating a file on
+the pinned build.
+Linear-light, HSL, alpha, and PNG quantization rules are kept explicit.
+
+**Deviations from the design plan.** The approved plan was revised before
+completion to record the clipboard transport. Microscope pass 1 found that
+explicit empty start and end transform pairs were preserved raw instead of
+modelled. The parser now models those pairs while preserving unexpected
+nonempty transform content verbatim. Pass 2 was clean.
+
+**Spec sections touched.** `docs/hld/05-drawingml-model.md`, "Colour, the part
+everyone gets wrong", now lists all 28 transforms and the exact resolution and
+partial-alpha boundary rules.
+
+**Tests.** The 40 exact PowerPoint cases, all 28 XML mappings, transform order,
+linear-gamma conversion, partial alpha, explicit empty pairs, unexpected
+nested content, raw-child order, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Expected oracle values are evidence, not values
+generated from the Rust formulas. Re-run the ignored generator only with the
+pinned PowerPoint build and an explicit native shell.
+
+### F-056, Colour map resolution
+
+**Sprint.** S12
+**Completed.** 2026-07-31
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** A concrete 12-slot `ColorMap` provides the standard Office
+mapping, selective layout or slide overrides, and resolution in map, theme,
+then transform order. Direct RGB, system, and preset choices bypass the map.
+
+**Non-obvious choices.** Semantic and theme slots are validated enums. The
+resolver takes a concrete lookup slice instead of a trait or generic, and a
+missing system name uses its `lastClr` fallback.
+
+**Deviations from the design plan.** Microscope pass 1 strengthened all 12
+default mappings, all 11 untouched override slots, exact direct-colour results,
+and the system fallback path. Pass 2 was clean.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+three-stage resolution contract in `docs/hld/05-drawingml-model.md` and leaves
+`p:clrMap` parsing to F-069.
+
+**Tests.** Standard mapping, selective override composition, the exact dark
+master inversion gate with transforms, direct-colour bypass and system
+fallback, plus the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** PresentationML parsers should construct this
+format-neutral value. They must not move `p:` parsing into `oxml-drawing`.

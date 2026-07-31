@@ -28,11 +28,11 @@ PowerPoint produces without changing the legacy Word colour path.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-052 | Create oxml-drawing and namespace constants | S | in-progress | codex |
-| F-053 | OrderedRawChildren | M | in-progress | codex |
-| F-054 | Colour choices | M | in-progress | codex |
-| F-055 | The colour transform stack | L | in-progress | codex |
-| F-056 | Colour map resolution | M | in-progress | codex |
+| F-052 | Create oxml-drawing and namespace constants | S | done | - |
+| F-053 | OrderedRawChildren | M | done | - |
+| F-054 | Colour choices | M | done | - |
+| F-055 | The colour transform stack | L | done | - |
+| F-056 | Colour map resolution | M | done | - |
 
 ## Sequencing note
 

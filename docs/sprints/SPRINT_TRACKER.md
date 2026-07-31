@@ -69,6 +69,11 @@ defended.
 | F-044 | S09 | S | 1 | 1 | Reused PDF ExtGState alpha resources |
 | F-043 | S10 | L | 4 | 1 | 2026-07-31 | Deterministic PDF gradient resource graphs |
 | F-045 | S10 | L | 4 | 1 | 2026-07-31 | Recursive raster groups, paths, gradients, and dashes |
+| F-052 | S12 | S | 1 | 1 | 2026-07-31 | Unpublished DrawingML crate and namespace constants |
+| F-053 | S12 | M | 2 | 1 | 2026-07-31 | Schema-boundary raw child ordering |
+| F-054 | S12 | M | 2 | 1 | 2026-07-31 | Four DrawingML colour choices with raw preservation |
+| F-055 | S12 | L | 4 | 1 | 2026-07-31 | Exact PowerPoint colour transform stack |
+| F-056 | S12 | M | 2 | 1 | 2026-07-31 | Master colour-map resolution before theme lookup |
 
 ## Velocity
 
