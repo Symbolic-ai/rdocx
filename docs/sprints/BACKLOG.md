@@ -20,7 +20,7 @@ regenerated, never hand-edited.
 | M2, Shared infrastructure extraction        | 10 | 7 | 0 | 3  |
 | M3, Media                                   | 6  | 4 | 0 | 2  |
 | M4, Layout primitives                       | 8  | 8 | 0 | 0  |
-| M5, PDF backend                             | 9  | 3 | 3 | 3  |
+| M5, PDF backend                             | 9  | 3 | 4 | 2  |
 | M6, Shared publication and rdocx cutover     | 6  | 0 | 0 | 6  |
 | M7, DrawingML                               | 15 | 0 | 0 | 15 |
 | M8, PresentationML                          | 14 | 0 | 0 | 14 |
@@ -30,7 +30,7 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **150** | **34** | **3** | **113** |
+| **Total** | **150** | **34** | **4** | **112** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -109,7 +109,7 @@ regenerated, never hand-edited.
 | F-039 | Global CTM flip                              | S08 | L | done |
 | F-040 | Group rendering                              | S09 | M | in-progress |
 | F-041 | Path rendering                               | S09 | M | in-progress |
-| F-042 | Rewrite the three collection passes on walk  | S09 | M | pending |
+| F-042 | Rewrite the three collection passes on walk  | S09 | M | in-progress |
 | F-044 | ExtGState alpha                              | S09 | S | in-progress |
 | F-043 | Gradient shading dictionaries                | S10 | L | pending |
 | F-045 | Rasteriser: groups, paths, gradients, dashes | S10 | L | pending |
