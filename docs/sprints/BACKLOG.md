@@ -22,7 +22,7 @@ regenerated, never hand-edited.
 | M4, Layout primitives                       | 8  | 8 | 0 | 0  |
 | M5, PDF backend                             | 9  | 9 | 0 | 0  |
 | M6, Shared publication and rdocx cutover     | 6  | 0 | 0 | 6  |
-| M7, DrawingML                               | 15 | 5 | 1 | 9  |
+| M7, DrawingML                               | 15 | 5 | 2 | 8  |
 | M8, PresentationML                          | 14 | 0 | 0 | 14 |
 | M9, Inheritance resolver                    | 8  | 0 | 0 | 8  |
 | M10, Renderer                               | 16 | 0 | 0 | 16 |
@@ -30,7 +30,7 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **150** | **45** | **1** | **104** |
+| **Total** | **150** | **45** | **2** | **103** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -139,7 +139,7 @@ regenerated, never hand-edited.
 | F-055 | The colour transform stack                   | S12 | L | done |
 | F-056 | Colour map resolution                        | S12 | M | done |
 | F-057 | a:xfrm                                       | S13 | M | in-progress |
-| F-058 | Guide evaluator                              | S13 | L | pending |
+| F-058 | Guide evaluator                              | S13 | L | in-progress |
 | F-059 | a:custGeom                                   | S13 | M | pending |
 | F-060 | Fills                                        | S13 | L | pending |
 | F-061 | Lines                                        | S14 | M | pending |
