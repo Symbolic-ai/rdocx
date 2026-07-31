@@ -1,6 +1,6 @@
 # F-059, a:custGeom
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S13
 **Size**: M
 **Depends on**: F-058
@@ -72,10 +72,10 @@ current Word consumer.
 
 ## Implementation checklist
 
-- [ ] Add failing inline custom-geometry round-trip, evaluation, raw, and malformed-input tests.
-- [ ] Parse and serialise adjust lists, guide lists, text rectangles, and path lists.
-- [ ] Convert parsed formula and path values into the F-058 evaluator inputs.
-- [ ] Preserve unknown XML at exact schema boundaries and run focused checks.
+- [x] Add failing inline custom-geometry round-trip, evaluation, raw, and malformed-input tests.
+- [x] Parse and serialise adjust lists, guide lists, text rectangles, and path lists.
+- [x] Convert parsed formula and path values into the F-058 evaluator inputs.
+- [x] Preserve unknown XML at exact schema boundaries and run focused checks.
 
 ## Open questions
 
