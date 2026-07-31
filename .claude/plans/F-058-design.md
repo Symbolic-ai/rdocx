@@ -1,6 +1,6 @@
 # F-058, Guide evaluator
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S13
 **Size**: L
 **Depends on**: F-014
@@ -89,11 +89,11 @@ Word consumer.
 
 ## Implementation checklist
 
-- [ ] Add failing guide-operation, seeded-environment, path, and invalid-math tests.
-- [ ] Add owned guide operands, operations, environment, and evaluation errors.
-- [ ] Implement ordered guide and adjust-value evaluation.
-- [ ] Implement finite arc-to-cubic lowering and path evaluation.
-- [ ] Export the approved module and run focused checks.
+- [x] Add failing guide-operation, seeded-environment, path, and invalid-math tests.
+- [x] Add owned guide operands, operations, environment, and evaluation errors.
+- [x] Implement ordered guide and adjust-value evaluation.
+- [x] Implement finite arc-to-cubic lowering and path evaluation.
+- [x] Export the approved module and run focused checks.
 
 ## Open questions
 

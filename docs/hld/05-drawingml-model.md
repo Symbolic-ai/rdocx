@@ -125,21 +125,31 @@ for implementing presets properly rather than hand-writing the common twenty.
 presets are a data problem rather than a code problem.
 
 ```rust
-pub struct Guide { pub name: &'static str, pub op: GuideOp, pub args: [&'static str; 3] }
+pub struct Guide { pub name: String, pub op: GuideOp, pub args: Vec<GuideOperand> }
 pub enum GuideOp {
-    Val, Add, Sub, Mul, Div, MulDiv, Pin, Mod, Sqrt, Abs, Max, Min,
-    Sin, Cos, Tan, AtAn2, SinAtAn2, CosAtAn2, IfElse,
+    MulDiv, AddSub, AddDiv, IfElse, Abs, At2, Cat2, Cos, Max, Min,
+    Mod, Pin, Sat2, Sin, Sqrt, Tan, Val,
 }
 ```
 
-The environment is seeded with `w`, `h`, `ss = min(w, h)`, the standard derived
-guides (`l`, `t`, `r`, `b`, `hc`, `vc`, `wd2`, `hd2`, and so on), and `adj1..adjN`
-taken from `a:avLst` falling back to the preset defaults. Guides evaluate in
-declaration order. All arithmetic in `f64`, angles in 60000ths of a degree.
+The enum maps the 17 formula tokens `*/`, `+-`, `+/`, `?:`, `abs`, `at2`,
+`cat2`, `cos`, `max`, `min`, `mod`, `pin`, `sat2`, `sin`, `sqrt`, `tan`, and
+`val` with their DrawingML argument order. The environment owns guide names and
+operands. It is seeded with `w`, `h`, `ss = min(w, h)`, the edges and centres,
+the standard fractional width and height guides, and the standard circle-angle
+constants. Declared adjust values fall back to their formulas and caller
+overrides replace those defaults. Ordinary guides then evaluate in declaration
+order. All arithmetic uses `f64`, and angles use 60000ths of a degree. Office
+interoperability defines `mod x y z` as the Euclidean norm and `sqrt x` as
+`sqrt(abs(x))`. Division by zero and every non-finite result are errors.
 
-**`a:arcTo` is flattened to cubic Béziers inside the evaluator**, so the wire
-format that reaches a renderer stays at four path commands and neither backend
-ever sees an arc.
+Input paths model move, line, cubic, close, and arc commands. Evaluation emits
+only move, line, cubic, and close commands. **`a:arcTo` is flattened to cubic
+Béziers inside the evaluator**, with each sweep split into segments no larger
+than 90 degrees. Positive sweeps are clockwise in DrawingML's downward y-axis,
+and the ellipse centre is derived so the arc begins at the current pen
+position. A bounded segment count prevents untrusted guide values from forcing
+an unbounded allocation. Neither renderer backend sees an arc.
 
 Presets also carry an `<a:rect>` text rectangle, which is needed to place text
 correctly inside a non-rectangular shape and would otherwise have to be invented.
