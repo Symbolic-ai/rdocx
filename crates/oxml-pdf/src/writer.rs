@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use oxml_layout::{
     FillRule, FontId, LayoutResult, LineCap, LineJoin, Paint, Path, PathCommand, PathElement,
-    PositionedElement, Stroke,
+    PositionedElement, Stroke, walk,
 };
 use pdf_writer::types::{
     ActionType, AnnotationType, CidFontType, FontFlags, LineCapStyle, LineJoinStyle, SystemInfo,
@@ -165,13 +165,16 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
     let mut image_map: HashMap<(usize, usize), usize> = HashMap::new();
 
     for (page_idx, page) in layout.pages.iter().enumerate() {
-        for (elem_idx, element) in page.elements.iter().enumerate() {
+        let mut elem_idx = 0;
+        walk(&page.elements, &mut |element, _| {
+            let current_idx = elem_idx;
+            elem_idx += 1;
             if let PositionedElement::Image {
                 data, content_type, ..
             } = element
             {
                 if data.is_empty() {
-                    continue;
+                    return;
                 }
                 if let Some(decoded) = image::decode_image(data, content_type) {
                     let xobject_ref = alloc();
@@ -186,20 +189,23 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
                         xobject_ref,
                         smask_ref,
                     });
-                    image_map.insert((page_idx, elem_idx), idx);
+                    image_map.insert((page_idx, current_idx), idx);
                 }
             }
-        }
+        });
     }
 
     // ── Annotation refs ──────────────────────────────────────────────
     let mut annotation_refs: HashMap<(usize, usize), Ref> = HashMap::new();
     for (page_idx, page) in layout.pages.iter().enumerate() {
-        for (elem_idx, element) in page.elements.iter().enumerate() {
+        let mut elem_idx = 0;
+        walk(&page.elements, &mut |element, _| {
+            let current_idx = elem_idx;
+            elem_idx += 1;
             if let PositionedElement::LinkAnnotation { .. } = element {
-                annotation_refs.insert((page_idx, elem_idx), alloc());
+                annotation_refs.insert((page_idx, current_idx), alloc());
             }
-        }
+        });
     }
 
     let alpha_states = AlphaStates::new(&layout.pages, &mut alloc);
@@ -460,11 +466,17 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
         resources.finish();
 
         // Annotations (hyperlinks)
-        let page_annotations: Vec<Ref> = annotation_refs
-            .iter()
-            .filter(|((pi, _), _)| *pi == page_idx)
-            .map(|(_, annot_ref)| *annot_ref)
-            .collect();
+        let mut page_annotations = Vec::new();
+        let mut elem_idx = 0;
+        walk(&page.elements, &mut |element, _| {
+            let current_idx = elem_idx;
+            elem_idx += 1;
+            if matches!(element, PositionedElement::LinkAnnotation { .. })
+                && let Some(reference) = annotation_refs.get(&(page_idx, current_idx))
+            {
+                page_annotations.push(*reference);
+            }
+        });
 
         if !page_annotations.is_empty() {
             page_dict.annotations(page_annotations.iter().copied());
@@ -475,10 +487,14 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
 
     // ── Write link annotations ───────────────────────────────────────
     for (page_idx, page) in layout.pages.iter().enumerate() {
-        for (elem_idx, element) in page.elements.iter().enumerate() {
+        let mut elem_idx = 0;
+        walk(&page.elements, &mut |element, transform| {
+            let current_idx = elem_idx;
+            elem_idx += 1;
             if let PositionedElement::LinkAnnotation { rect, url } = element
-                && let Some(&annot_ref) = annotation_refs.get(&(page_idx, elem_idx))
+                && let Some(&annot_ref) = annotation_refs.get(&(page_idx, current_idx))
             {
+                let rect = transform.transform_rect_bbox(*rect);
                 let page_height = page.height;
                 let mut annot = pdf.annotation(annot_ref);
                 annot.subtype(AnnotationType::Link);
@@ -495,7 +511,7 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
                     .uri(Str(url.as_bytes()));
                 annot.finish();
             }
-        }
+        });
     }
 
     // ── Write outlines/bookmarks ─────────────────────────────────────
@@ -527,34 +543,39 @@ fn build_page_content(
     content.save_state();
     content.transform([1.0, 0.0, 0.0, -1.0, 0.0, page_height]);
 
-    emit_elements(
-        &mut content,
+    let mut state = EmitState {
         page_idx,
-        &page.elements,
         prepared_fonts,
         font_refs,
-        Some(image_map),
+        image_map,
         alpha_states,
-    );
+        leaf_index: 0,
+    };
+    emit_elements(&mut content, &page.elements, &mut state);
 
     content.restore_state();
     content.finish().to_vec()
 }
 
-fn emit_elements(
-    content: &mut Content,
+struct EmitState<'a> {
     page_idx: usize,
-    elements: &[PositionedElement],
-    prepared_fonts: &HashMap<FontId, PreparedFont>,
-    font_refs: &HashMap<FontId, (Ref, Ref, Ref, Ref, Ref)>,
-    image_map: Option<&HashMap<(usize, usize), usize>>,
-    alpha_states: &AlphaStates,
-) {
-    for (elem_idx, element) in elements.iter().enumerate() {
+    prepared_fonts: &'a HashMap<FontId, PreparedFont>,
+    font_refs: &'a HashMap<FontId, (Ref, Ref, Ref, Ref, Ref)>,
+    image_map: &'a HashMap<(usize, usize), usize>,
+    alpha_states: &'a AlphaStates,
+    leaf_index: usize,
+}
+
+fn emit_elements(content: &mut Content, elements: &[PositionedElement], state: &mut EmitState<'_>) {
+    for element in elements {
+        let elem_idx = state.leaf_index;
+        if !matches!(element, PositionedElement::Group(_)) {
+            state.leaf_index += 1;
+        }
         match element {
             PositionedElement::Text(run) => {
-                if let Some(prepared) = prepared_fonts.get(&run.font_id)
-                    && font_refs.contains_key(&run.font_id)
+                if let Some(prepared) = state.prepared_fonts.get(&run.font_id)
+                    && state.font_refs.contains_key(&run.font_id)
                 {
                     let font_name = format!("F{}", run.font_id.0);
 
@@ -566,7 +587,7 @@ fn emit_elements(
                         run.color.g as f32,
                         run.color.b as f32,
                     );
-                    apply_alpha(content, run.color.a, alpha_states);
+                    apply_alpha(content, run.color.a, state.alpha_states);
 
                     content.begin_text();
                     content.set_font(Name(font_name.as_bytes()), run.font_size as f32);
@@ -604,7 +625,7 @@ fn emit_elements(
             } => {
                 content.save_state();
                 content.set_stroke_rgb(color.r as f32, color.g as f32, color.b as f32);
-                apply_alpha(content, color.a, alpha_states);
+                apply_alpha(content, color.a, state.alpha_states);
                 content.set_line_width(*width as f32);
                 if let Some((on, off)) = dash_pattern {
                     content.set_dash_pattern([*on as f32, *off as f32], 0.0);
@@ -617,7 +638,7 @@ fn emit_elements(
             PositionedElement::FilledRect { rect, color } => {
                 content.save_state();
                 content.set_fill_rgb(color.r as f32, color.g as f32, color.b as f32);
-                apply_alpha(content, color.a, alpha_states);
+                apply_alpha(content, color.a, state.alpha_states);
                 content.rect(
                     rect.x as f32,
                     rect.y as f32,
@@ -628,10 +649,8 @@ fn emit_elements(
                 content.restore_state();
             }
             PositionedElement::Image { rect, data, .. } => {
-                if !data.is_empty()
-                    && image_map.is_some_and(|images| images.contains_key(&(page_idx, elem_idx)))
-                {
-                    let img_name = format!("Im{}_{}", page_idx, elem_idx);
+                if !data.is_empty() && state.image_map.contains_key(&(state.page_idx, elem_idx)) {
+                    let img_name = format!("Im{}_{}", state.page_idx, elem_idx);
 
                     content.save_state();
                     // Cancel the page flip while preserving the image rectangle.
@@ -651,7 +670,7 @@ fn emit_elements(
                 // Link annotations are written separately, not in the content stream
             }
             PositionedElement::Path(path) => {
-                emit_path(content, path, alpha_states);
+                emit_path(content, path, state.alpha_states);
             }
             PositionedElement::Group(group) => {
                 content.save_state();
@@ -671,16 +690,8 @@ fn emit_elements(
                     };
                     content.end_path();
                 }
-                apply_alpha(content, group.opacity, alpha_states);
-                emit_elements(
-                    content,
-                    page_idx,
-                    &group.children,
-                    prepared_fonts,
-                    font_refs,
-                    None,
-                    alpha_states,
-                );
+                apply_alpha(content, group.opacity, state.alpha_states);
+                emit_elements(content, &group.children, state);
                 content.restore_state();
             }
             _ => {
@@ -1427,6 +1438,135 @@ mod tests {
             content_for(vec![plain]),
             content_for(vec![PositionedElement::Group(with_effect)])
         );
+    }
+
+    #[test]
+    fn grouped_text_is_included_in_font_subsetting() {
+        let font_id = FontId(42);
+        let text = PositionedElement::Text(GlyphRun {
+            origin: Point { x: 0.0, y: 0.0 },
+            font_id,
+            font_size: 12.0,
+            glyph_ids: vec![7],
+            advances: vec![6.0],
+            text: "A".to_owned(),
+            color: Color::BLACK,
+            bold: false,
+            italic: false,
+            field_kind: None,
+            footnote_id: None,
+        });
+        let layout = LayoutResult::new(
+            vec![page_with(vec![group(Transform::IDENTITY, vec![text])])],
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+
+        assert!(font::collect_glyph_usage(&layout).contains_key(&font_id));
+    }
+
+    #[test]
+    fn grouped_image_registers_and_uses_xobject() {
+        let png = tiny_skia::Pixmap::new(1, 1)
+            .expect("one-pixel pixmap")
+            .encode_png()
+            .expect("encode fixture");
+        let image = PositionedElement::Image {
+            rect: Rect {
+                x: 1.0,
+                y: 2.0,
+                width: 3.0,
+                height: 4.0,
+            },
+            data: png,
+            content_type: "image/png".to_owned(),
+            media_id: MediaId(9),
+        };
+        let pdf = pdf_for(vec![group(Transform::IDENTITY, vec![image])]);
+
+        assert!(pdf.contains("/Subtype /Image"), "{pdf}");
+        assert!(pdf.contains("/Im0_0"), "{pdf}");
+    }
+
+    #[test]
+    fn grouped_link_emits_transformed_annotation() {
+        let transform = Transform {
+            e: 10.0,
+            f: 20.0,
+            ..Transform::IDENTITY
+        };
+        let link = PositionedElement::LinkAnnotation {
+            rect: Rect {
+                x: 1.0,
+                y: 2.0,
+                width: 3.0,
+                height: 4.0,
+            },
+            url: "https://example.com".to_owned(),
+        };
+        let pdf = pdf_for(vec![group(transform, vec![link])]);
+
+        assert!(pdf.contains("/Annots ["), "{pdf}");
+        assert!(pdf.contains("/Rect [11 766 14 770]"), "{pdf}");
+    }
+
+    #[test]
+    fn nested_leaf_ordinals_match_content_order() {
+        let png = tiny_skia::Pixmap::new(1, 1)
+            .expect("one-pixel pixmap")
+            .encode_png()
+            .expect("encode fixture");
+        let image = PositionedElement::Image {
+            rect: Rect {
+                x: 1.0,
+                y: 2.0,
+                width: 3.0,
+                height: 4.0,
+            },
+            data: png,
+            content_type: "image/png".to_owned(),
+            media_id: MediaId(10),
+        };
+        let elements = vec![alpha_rect(1.0), group(Transform::IDENTITY, vec![image])];
+        let pdf = pdf_for(elements.clone());
+        let page = page_with(elements);
+        let image_map = HashMap::from([((0, 1), 0)]);
+        let mut next_ref = 100;
+        let alpha_states = AlphaStates::new(std::slice::from_ref(&page), &mut || {
+            let reference = Ref::new(next_ref);
+            next_ref += 1;
+            reference
+        });
+        let content = String::from_utf8(build_page_content(
+            0,
+            &page,
+            &HashMap::new(),
+            &HashMap::new(),
+            &image_map,
+            &alpha_states,
+        ))
+        .expect("PDF content operators are ASCII");
+
+        assert!(pdf.contains("/Im0_1"), "{pdf}");
+        assert!(content.contains("/Im0_1 Do"), "{content}");
+    }
+
+    #[test]
+    fn top_level_collection_output_remains_stable() {
+        let link = PositionedElement::LinkAnnotation {
+            rect: Rect {
+                x: 72.0,
+                y: 100.0,
+                width: 100.0,
+                height: 15.0,
+            },
+            url: "https://example.com".to_owned(),
+        };
+        let pdf = pdf_for(vec![link]);
+
+        assert!(pdf.contains("/Rect [72 677 172 692]"), "{pdf}");
+        assert_eq!(pdf.matches("/Subtype /Link").count(), 1, "{pdf}");
     }
 
     #[test]

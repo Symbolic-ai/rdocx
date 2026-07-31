@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use oxml_layout::{FontData, FontId, LayoutResult, PositionedElement};
+use oxml_layout::{FontData, FontId, LayoutResult, PositionedElement, walk};
 use pdf_writer::types::{SystemInfo, UnicodeCmap};
 use pdf_writer::{Name, Str};
 use subsetter::GlyphRemapper;
@@ -30,7 +30,7 @@ pub(crate) fn collect_glyph_usage(layout: &LayoutResult) -> HashMap<FontId, Font
     let mut usage: HashMap<FontId, FontUsage> = HashMap::new();
 
     for page in &layout.pages {
-        for element in &page.elements {
+        walk(&page.elements, &mut |element, _| {
             if let PositionedElement::Text(run) = element {
                 let entry = usage.entry(run.font_id).or_insert_with(|| FontUsage {
                     glyph_to_unicode: HashMap::new(),
@@ -46,7 +46,7 @@ pub(crate) fn collect_glyph_usage(layout: &LayoutResult) -> HashMap<FontId, Font
                     }
                 }
             }
-        }
+        });
     }
 
     usage

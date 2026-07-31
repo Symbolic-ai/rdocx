@@ -359,7 +359,9 @@ dictionaries remain owned by F-043.
 **Test gate**: fill-only emits `f`, stroke-only `S`, both `B`.
 
 ### F-042, Rewrite the three collection passes on walk (M)
-Font subsetting, XObject registration and link annotations.
+Font subsetting, XObject registration and link annotations use `walk`.
+Depth-first leaf ordinals align resources with recursive emission, and link
+rectangles apply the accumulated group transform.
 **Depends on**: F-035, F-040.
 **Test gate**: three tests, one per pass, each with the target nested inside a
 group. This is the R3 regression gate.

@@ -1,6 +1,6 @@
 # F-042, Rewrite the three collection passes on walk
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S09
 **Size**: M
 **Depends on**: F-035, F-040
@@ -87,15 +87,15 @@ consumer. Do not update `scripts/hash_baseline.json`.
 
 ## Implementation checklist
 
-- [ ] Wait for integrated F-040 recursive content emission.
-- [ ] Rewrite font collection on `walk`.
-- [ ] Rewrite image registration on `walk` and depth-first leaf keys.
-- [ ] Rewrite every annotation pass on `walk`, the same keys, and transformed
+- [x] Wait for integrated F-040 recursive content emission.
+- [x] Rewrite font collection on `walk`.
+- [x] Rewrite image registration on `walk` and depth-first leaf keys.
+- [x] Rewrite every annotation pass on `walk`, the same keys, and transformed
       rectangle bounds.
-- [ ] Add all three R3 nested-target regression tests.
-- [ ] Update exactly the declared HLD files and close the current R3
+- [x] Add all three R3 nested-target regression tests.
+- [x] Update exactly the declared HLD files and close the current R3
       mitigation wording.
-- [ ] Prove the hash and exact golden baselines remain unchanged.
+- [x] Prove the hash and exact golden baselines remain unchanged.
 
 ## Open questions
 

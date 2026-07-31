@@ -180,6 +180,8 @@ cover the cases that matter now.
   recursion hazard.
 - `Group` containing `Image` registers the XObject.
 - `Group` containing `LinkAnnotation` emits it with a transformed rectangle.
+- A preceding leaf proves nested XObject registration and recursive emission
+  use the same depth-first ordinal.
 - Raster: a rotated rectangle at 72 dpi has a filled interior pixel and an empty
   corner. Deterministic, no golden files.
 

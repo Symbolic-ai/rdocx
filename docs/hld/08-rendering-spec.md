@@ -28,9 +28,10 @@ not have to write.
 clip and opacity, its children, and a matching restore. Group effects and the
 raster path remain staged for their owning stories. `Path` emits geometry,
 solid fill and solid stroke operators. Gradient and tile paints remain staged
-for their resource-owning stories. The three font, image, and link collection passes
-also remain flat until they are rewritten on `walk`. The published backend does
-not depend on this staged crate before the shared-crate cutover.
+for their resource-owning stories. The font, image, and link collection passes
+use `walk` and depth-first leaf ordinals so nested content shares stable resource
+identity with recursive emission. The published backend does not depend on this
+staged crate before the shared-crate cutover.
 
 ## Extending `PositionedElement`
 
@@ -119,8 +120,8 @@ need no backend support at all.
 
 ## The recursion hazard
 
-**Three passes in the PDF backend iterate `page.elements` flat and would
-silently skip anything nested inside a `Group`:**
+**Three passes in the PDF backend must visit every leaf nested inside a
+`Group`:**
 
 | Pass | Location | Symptom if missed |
 |---|---|---|
@@ -128,15 +129,17 @@ silently skip anything nested inside a `Group`:**
 | XObject registration | `writer.rs:69` | Grouped images vanish |
 | Link annotations | `writer.rs:99` and `:355` | Grouped hyperlinks are dead |
 
-These fail **only for pptx content**, so rdocx's suite never catches them. The
-mitigation is one helper in `oxml-layout` that flattens groups and accumulates
-the transform:
+These failures appear **only for grouped content**, so the mitigation is one
+helper in `oxml-layout` that flattens groups and accumulates the transform:
 
 ```rust
 pub fn walk(elements: &[PositionedElement], f: &mut impl FnMut(&PositionedElement, &Transform));
 ```
 
-All three passes are rewritten on it, and each gets an explicit test.
+All three passes use it. Image and annotation resources use the callback's
+depth-first leaf ordinal, which recursive content emission matches. Link
+rectangles use the accumulated transform before conversion to PDF page
+coordinates. Each pass has an explicit nested-target regression test.
 
 ## Two remaining defects to fix
 
