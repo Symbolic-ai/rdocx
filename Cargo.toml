@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/oxml-core",
+    "crates/oxml-layout",
     "crates/oxml-media",
     "crates/oxml-opc",
     "crates/rdocx-opc",
@@ -28,6 +29,7 @@ categories = ["parser-implementations", "text-processing"]
 [workspace.dependencies]
 # Internal crates
 oxml-core = { path = "crates/oxml-core", version = "0.0.0" }
+oxml-layout = { path = "crates/oxml-layout", version = "0.0.0" }
 oxml-media = { path = "crates/oxml-media", version = "0.0.0" }
 oxml-opc = { path = "crates/oxml-opc", version = "0.0.0" }
 rdocx-opc = { path = "crates/rdocx-opc", version = "0.4.1" }

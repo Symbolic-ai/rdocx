@@ -50,9 +50,9 @@ load system fonts for library users.
 The hash harness, golden-PNG gate and SSIM harness use the deterministic path.
 The normal rendering API does not change its font-discovery behaviour.
 
-The `--no-default-features` path verifies that deterministic construction fails
-early without bundled fonts. This is also the same font-isolation path the WASM
-build needs.
+The `oxml-layout` `--no-default-features` path disables host system font
+discovery while retaining bundled fonts for deterministic construction. This is
+also the same font-isolation path the WASM build needs.
 
 Builds otherwise stay native. There is no development container. The Linux-only
 work, manylinux wheels, `wasm32` checks and the LibreOffice render oracle, runs

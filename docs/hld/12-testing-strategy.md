@@ -143,8 +143,8 @@ cover the cases that matter now.
 - `Transform` composition order matches the PDF `cm` operator.
 - `walk()` flattens nested groups and accumulates the transform correctly.
 - `FontManager` with no fonts returns an error rather than panicking, and
-  `--no-default-features` is in the CI matrix so the bundled-fonts-off path is
-  actually exercised.
+  `--no-default-features` is in the CI matrix so the system-font-discovery-off
+  path is exercised while bundled deterministic fonts remain available.
 
 **`oxml-pdf`**
 - `Path` with fill only, stroke only, and both, produces `f`, `S` and `B`, and
