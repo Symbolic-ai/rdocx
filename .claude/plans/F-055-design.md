@@ -38,14 +38,18 @@ linear-gamma tint and shade, and RGB-to-HSL operations. Clamp only at the
 boundary each ECMA operation defines, then round final channel bytes
 consistently. Apply the stored vector strictly left to right.
 
-Build a temporary 40-shape oracle deck, render it with installed Microsoft
-PowerPoint 16.104 build 16.104.25121423, and sample the uniform shape centres.
-Commit the resulting input and exact expected RGB values as a readable Rust
+Build a temporary 40-shape oracle deck through a dev-only `oxml-opc`
+dependency, render it with installed Microsoft PowerPoint 16.104 build
+16.104.25121423, and export each named shape directly as PNG. Sample a uniform
+5 by 5 centre block and require all 25 pixels to have identical raw RGBA.
+Commit the resulting input and exact expected RGBA values as a readable Rust
 table, not as a binary fixture. Use 28 single-transform rows, one for each
 schema element, plus 12 ordered stacks covering non-commutativity, channel and
 alpha clamping, HSL operations, and gamma operations. Pin the PowerPoint build
-in a constant consumed by the test harness. PowerPoint remains one-time test
-infrastructure and never becomes a crate dependency.
+in a constant consumed by the test harness. The ignored generator writes only
+temporary deck and PNG files and prints candidate rows for review. It never
+rewrites source. PowerPoint remains one-time test infrastructure and never
+becomes a production dependency.
 
 ## Rejected alternatives
 
@@ -60,7 +64,7 @@ infrastructure and never becomes a crate dependency.
 
 | Category | Test | Asserts |
 |---|---|---|
-| differential | `powerpoint_colour_transform_oracle_matches_all_forty_pairs` | Forty readable input and transform stacks resolve to the exact RGB sampled from PowerPoint 16.104 build 16.104.25121423. |
+| differential | `powerpoint_colour_transform_oracle_matches_all_forty_pairs` | Forty readable input and transform stacks resolve to the exact RGBA sampled from direct PowerPoint shape PNG exports on version 16.104 build 16.104.25121423. |
 | unit | `colour_transforms_apply_in_document_order` | Two non-commuting transforms produce the left-to-right result and not the reversed result. |
 | unit | `linear_gamma_round_trip_preserves_channel_endpoints` | The conversion helpers preserve 0 and 1 and remain within the required tolerance for intermediate values. |
 | unit | `alpha_transforms_clamp_to_the_valid_range` | Alpha, alphaMod, and alphaOff compose and clamp correctly. |
@@ -68,7 +72,7 @@ infrastructure and never becomes a crate dependency.
 | verification | `python3 scripts/hash_harness.py --check` | The released Word implementation is untouched and the 28-entry hash harness stays exact without introducing a forbidden dependency from `oxml-drawing` to `rdocx-oxml`. |
 
 The **test gate** is: a table of 40 (theme colour, transform) pairs sampled
-from real PowerPoint renders resolves to exact RGB.
+from real PowerPoint renders resolves to exact RGBA.
 
 ## HLD impact
 
@@ -88,9 +92,13 @@ from real PowerPoint renders resolves to exact RGB.
   unknown transform children.
 - **External oracle comparison**: read
   `.claude/skills/differential-testing.md`. The extra checks pin PowerPoint
-  16.104 build 16.104.25121423 in the harness, compare exact sampled RGB rather
-  than package bytes, and classify every disagreement before changing an
-  expectation.
+  16.104 build 16.104.25121423 in the harness, compare exact sampled RGBA
+  rather than package bytes, require a uniform centre block, and classify every
+  disagreement before changing an expectation.
+- **Crate dependency graph**: add `oxml-opc` as a dev dependency for the
+  ignored temporary-deck generator only. Inspect normal and development edges,
+  prove the production graph remains limited to `oxml-core` and quick-xml, and
+  prove there is no `rdocx-*` or `rpptx-*` edge.
 
 ## Hash harness
 
@@ -101,7 +109,8 @@ and the deliberately naive Word function remains byte-for-byte unchanged.
 
 - [ ] Add every required transform variant and XML mapping.
 - [ ] Implement ordered resolution with linear-gamma and HSL helpers.
-- [ ] Generate and render 28 single-transform and 12 ordered-stack shapes.
+- [ ] Generate and directly export 28 single-transform and 12 ordered-stack
+  shapes through the dev-only `oxml-opc` oracle helper.
 - [ ] Commit the readable 40-case table with its consumed oracle-build pin.
 - [ ] Add order, alpha, conversion, and mixed raw-child tests.
 - [ ] Prove the Word path and all 28 hashes are unchanged.
