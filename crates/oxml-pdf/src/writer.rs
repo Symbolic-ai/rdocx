@@ -237,6 +237,7 @@ impl GradientRegistry {
         let Some(stops) = normalize_gradient_stops(stops) else {
             return;
         };
+        let stops = complete_gradient_domain(stops);
         let index = self.entries.len();
         let interval_refs = (1..stops.len()).map(|_| alloc()).collect();
         self.entries.push(GradientEntry {
@@ -308,6 +309,28 @@ fn normalize_gradient_stops(stops: &[GradientStop]) -> Option<Vec<GradientStop>>
         ]),
         _ => Some(deduplicated),
     }
+}
+
+fn complete_gradient_domain(mut stops: Vec<GradientStop>) -> Vec<GradientStop> {
+    let first = stops[0];
+    if first.offset > 0.0 {
+        stops.insert(
+            0,
+            GradientStop {
+                offset: 0.0,
+                color: first.color,
+            },
+        );
+    }
+
+    let last = stops[stops.len() - 1];
+    if last.offset < 1.0 {
+        stops.push(GradientStop {
+            offset: 1.0,
+            color: last.color,
+        });
+    }
+    stops
 }
 
 fn normalized_offset(offset: f64) -> f64 {
@@ -783,8 +806,6 @@ fn write_gradient_objects(pdf: &mut Pdf, gradients: &GradientRegistry) {
         ]);
         pattern.finish();
 
-        let first_offset = entry.stops[0].offset as f32;
-        let last_offset = entry.stops[entry.stops.len() - 1].offset as f32;
         let mut shading = pdf.function_shading(entry.shading_ref);
         match entry.geometry {
             GradientGeometry::Linear(coords) => {
@@ -800,13 +821,13 @@ fn write_gradient_objects(pdf: &mut Pdf, gradients: &GradientRegistry) {
         shading
             .insert(Name(b"Domain"))
             .array()
-            .items([first_offset, last_offset]);
+            .items([0.0_f32, 1.0_f32]);
         shading.extend(entry.extend);
         shading.function(entry.stitching_ref);
         shading.finish();
 
         let mut stitching = pdf.stitching_function(entry.stitching_ref);
-        stitching.domain([first_offset, last_offset]);
+        stitching.domain([0.0, 1.0]);
         stitching.functions(entry.interval_refs.iter().copied());
         stitching.bounds(
             entry.stops[1..entry.stops.len() - 1]
@@ -1668,6 +1689,48 @@ mod tests {
         assert!(pdf.contains("/Domain [0 1]"), "{pdf}");
         assert!(pdf.contains("/Bounds [0.5]"), "{pdf}");
         assert!(pdf.contains("/Encode [0 1 0 1]"), "{pdf}");
+    }
+
+    #[test]
+    fn partial_range_gradient_holds_endpoint_colours_over_full_axis() {
+        let red = Color {
+            r: 1.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        };
+        let blue = Color {
+            r: 0.0,
+            g: 0.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        let pdf = pdf_for(vec![path_element(
+            FillRule::NonZero,
+            Some(Paint::Linear {
+                start: Point { x: 0.0, y: 0.0 },
+                end: Point { x: 100.0, y: 0.0 },
+                stops: vec![
+                    GradientStop {
+                        offset: 0.25,
+                        color: red,
+                    },
+                    GradientStop {
+                        offset: 0.75,
+                        color: blue,
+                    },
+                ],
+                extend: (false, false),
+            }),
+            None,
+        )]);
+
+        assert!(pdf.contains("/Domain [0 1]"), "{pdf}");
+        assert!(pdf.contains("/Bounds [0.25 0.75]"), "{pdf}");
+        assert!(pdf.contains("/Encode [0 1 0 1 0 1]"), "{pdf}");
+        assert_eq!(pdf.matches("/FunctionType 2").count(), 3, "{pdf}");
+        assert!(pdf.contains("/C0 [1 0 0]\n  /C1 [1 0 0]"), "{pdf}");
+        assert!(pdf.contains("/C0 [0 0 1]\n  /C1 [0 0 1]"), "{pdf}");
     }
 
     #[test]

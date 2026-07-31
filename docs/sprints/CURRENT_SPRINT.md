@@ -2,11 +2,11 @@
 
 **Milestone**: M5 PDF backend.
 
-**Goal**: Complete the staged PDF backend so PDF and raster output cover every
-paint and element form currently exposed by the shared layout types. Add
-transform-aware gradients, recursive raster groups, paths, clips, dashes, and
-page backgrounds while keeping released dependencies and every development
-crate publication boundary unchanged.
+**Goal**: Complete the staged PDF backend work owned by F-043 and F-045. Add
+PDF shading resources for linear and radial path gradients, plus
+transform-aware raster groups, paths, clips, gradients, dashes, and page
+backgrounds while keeping released dependencies and every development crate
+publication boundary unchanged.
 
 ## Spec references
 
