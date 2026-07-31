@@ -1,0 +1,22 @@
+[package]
+name = "oxml-pdf"
+description = "Format-neutral PDF renderer for staged OOXML layout output"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+oxml-layout = { workspace = true }
+oxml-media = { workspace = true }
+pdf-writer = { workspace = true }
+subsetter = { workspace = true }
+ttf-parser = { workspace = true }
+miniz_oxide = { workspace = true }
+tiny-skia = { workspace = true }

@@ -54,10 +54,30 @@ Rules:
 
 ## The golden-PNG gate
 
-Specifically for the PDF coordinate-system change in M5. Render the `samples/`
-corpus before and after and compare **pixels**. Do not compare PDF bytes: the
-operator stream legitimately changes when the per-element Y flip becomes one
-global CTM, so a byte comparison would be all noise.
+`python3 scripts/golden_png_harness.py --check` generates deterministic PDFs
+for the seven `samples/` documents, rasterises page one at 150 DPI with
+`pdftoppm`, and compares decoded RGBA pixels. The rasteriser is test
+infrastructure only. Its exact version is printed on every run and recorded in
+`scripts/golden_pixel_manifest.json`. The current manifest records
+`pdftoppm version 26.01.0`.
+
+Each readable manifest entry contains the page width, height, and SHA-256 digest
+of the decoded RGBA buffer. There are no committed PNG fixtures. Check mode
+requires identical dimensions and a zero-pixel-difference digest, then reports
+the first differing sample precisely. Reviewed updates use `--update --reason
+<text>`, and an empty reason is rejected.
+
+The gate deliberately compares pixels rather than PDF bytes. The operator
+stream legitimately changes when the per-element Y flip becomes one global
+CTM. The reviewed Poppler 26.01.0 baseline includes exactly four
+stroke-antialias changes. In `invoice`, pixels `(112, 397)` and `(112, 398)`
+swap `fcf5f5ff` and `ffffffff`. In `quote`, pixels `(112, 303)` and
+`(112, 304)` swap `f4fafaff` and `ffffffff`. The other five samples remain
+exact. This is a baseline, not a tolerance, so check mode still requires exact
+equality for all seven buffers. The regression proof runs `--check
+--inject-one-pixel <sample>`, copies that generated PNG to a temporary
+directory, changes exactly one decoded pixel, and requires check mode to fail
+with the sample name.
 
 ## The deck corpus
 

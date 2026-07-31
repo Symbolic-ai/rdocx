@@ -43,9 +43,12 @@ layout inputs, so they are deterministic too.
 
 `Engine::new_deterministic()` and `layout_document_deterministic()` carry that
 database through layout. The public facade exposes
-`Document::render_page_to_png_deterministic()`, which lays out and rasterises a
-page through the same path. Existing constructors and rendering methods still
-load system fonts for library users.
+`Document::render_page_to_png_deterministic()` and
+`Document::to_pdf_deterministic()`. Both reuse the separate cached
+bundled-font-only layout. The PDF facade passes that layout directly to
+`rdocx_pdf::render_to_pdf`, which gives the golden-PNG gate deterministic PDF
+input without changing the normal PDF API. Existing constructors and rendering
+methods still load system fonts for library users.
 
 The hash harness, golden-PNG gate and SSIM harness use the deterministic path.
 The normal rendering API does not change its font-discovery behaviour.

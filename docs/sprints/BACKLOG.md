@@ -20,7 +20,7 @@ regenerated, never hand-edited.
 | M2, Shared infrastructure extraction        | 10 | 7 | 0 | 3  |
 | M3, Media                                   | 6  | 4 | 0 | 2  |
 | M4, Layout primitives                       | 8  | 8 | 0 | 0  |
-| M5, PDF backend                             | 9  | 0 | 0 | 9  |
+| M5, PDF backend                             | 9  | 3 | 0 | 6  |
 | M6, Shared publication and rdocx cutover     | 6  | 0 | 0 | 6  |
 | M7, DrawingML                               | 15 | 0 | 0 | 15 |
 | M8, PresentationML                          | 14 | 0 | 0 | 14 |
@@ -30,7 +30,7 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **150** | **31** | **0** | **119** |
+| **Total** | **150** | **34** | **0** | **116** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -104,9 +104,9 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-M5 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-037 | Create oxml-pdf                              | S08 | S | pending |
-| F-038 | Golden-PNG harness                           | S08 | M | pending |
-| F-039 | Global CTM flip                              | S08 | L | pending |
+| F-037 | Create oxml-pdf                              | S08 | S | done |
+| F-038 | Golden-PNG harness                           | S08 | M | done |
+| F-039 | Global CTM flip                              | S08 | L | done |
 | F-040 | Group rendering                              | S09 | M | pending |
 | F-041 | Path rendering                               | S09 | M | pending |
 | F-042 | Rewrite the three collection passes on walk  | S09 | M | pending |

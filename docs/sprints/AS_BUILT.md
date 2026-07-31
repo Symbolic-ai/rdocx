@@ -1004,3 +1004,102 @@ staged output images use the handle, and line conversion preserves it.
 **Notes for future sessions.** Relationship resolution must happen before
 constructing this renderer key. Part-local relationship names must not cross
 the shared layout boundary.
+
+### F-037, Create oxml-pdf
+
+**Sprint.** S08
+**Completed.** 2026-07-31
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The workspace now contains an unpublished `oxml-pdf`
+backend at version 0.0.0. It consumes `oxml-layout` and `oxml-media`, keeps the
+eight moved backend gates, and removes the copied image-header parsers.
+
+**Non-obvious choices.** The staged crate has no dependency on an `rdocx-*` or
+`rpptx-*` crate. It remains excluded from publication while the PowerPoint
+development line is incomplete.
+
+**Deviations from the design plan.** A normal staged package archive was built,
+but extracted verification resolves the unpublished 0.0.0 dependencies from
+crates.io placeholder packages. The reviewed package rider therefore used
+`cargo package --no-verify`. The 19.6 KiB archive stayed below the 10 MiB gate,
+and no package was published.
+
+**Spec sections touched.** `docs/hld/03-architecture.md` and
+`docs/hld/08-rendering-spec.md` now record the staged backend boundary and its
+dependency direction.
+
+**Tests.** Fifteen staged backend tests, including the eight moved gates,
+dependency-tree inspection, archive inspection and size, and the integrated
+full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep `oxml-pdf` unpublished and independent of
+released format crates until the shared publication and cutover sprint.
+
+### F-038, Golden-PNG harness
+
+**Sprint.** S08
+**Completed.** 2026-07-31
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `Document::to_pdf_deterministic` exposes the bundled-font
+PDF path, and the golden harness rasterises page one of all seven samples at
+150 DPI before comparing decoded RGBA dimensions and SHA-256 digests exactly.
+
+**Non-obvious choices.** The manifest records `pdftoppm version 26.01.0` and
+contains digests rather than binary fixtures. Comparison has no tolerance.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md` and
+`docs/hld/15-build-and-toolchain.md` now define the deterministic facade,
+rasterizer identity, manifest contents, and exact pixel gate.
+
+**Tests.** Four harness unit tests, seven exact sample comparisons, a synthetic
+one-pixel `proposal` failure that names only that sample, facade coverage,
+package checks, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Update the golden manifest only for a declared,
+reviewed rendering change with a non-empty reason. Continue comparing decoded
+pixels exactly.
+
+### F-039, Global CTM flip
+
+**Sprint.** S08
+**Completed.** 2026-07-31
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Both PDF writers now emit one page-level
+`q 1 0 0 -1 0 H cm`. Text and images cancel that outer reflection locally,
+while lines and rectangles use top-left coordinates and link annotations stay
+outside the content transform.
+
+**Non-obvious choices.** The correct image operator is
+`[w 0 0 -h x y+h]`. Omitting the added height moves images outside the page
+under the outer CTM.
+
+**Deviations from the design plan.** The original operator used `y`, which was
+corrected to `y+h` before integration. Poppler 26.01.0 then produced exactly
+four one-pixel vertical antialias swaps at x 112, two in `invoice` and two in
+`quote`. The user approved that exact delta, the manifest changed once with an
+F-039 reason, and all seven buffers now compare exactly.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/13-risks-and-open-questions.md`,
+and `docs/hld/14-development-backlog.md` now record the corrected operator,
+mirrored released-backend exception, and exact rendering evidence.
+
+**Tests.** Page CTM, top-left geometry, upright text and images, unchanged
+annotation coordinates, exact pre-update four-pixel evidence, seven exact
+post-update buffers, one-pixel injection rejection, and the integrated full
+gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Preserve the same page and image matrices in
+both PDF writers until the F-046 cutover removes the released duplicate. Do not
+introduce a pixel tolerance.

@@ -72,9 +72,11 @@ glyph runs, colours and fonts. Its sibling `input.rs` is 100 percent
 docx-specific and stays in `rdocx-layout`. That seam is the reason the PDF
 backend transfers for free.
 
-**`oxml-pdf` consumes only `LayoutResult`.** It depends on `oxml-layout` and
-nothing else in the workspace. A slide is a page with a fixed size, so the same
-crate serves both formats without knowing either exists.
+**`oxml-pdf` consumes `LayoutResult` and shared image metadata.** It depends on
+`oxml-layout` for the rendering contract and on `oxml-media` for byte sniffing
+and header probing. It has no format-specific workspace dependency. A slide is
+a page with a fixed size, so the same crate serves both formats without knowing
+either exists.
 
 **`rpptx-layout` is separate from `rpptx-render`.** The inheritance resolver
 produces a `ResolvedSlide` in which every theme reference, colour transform and

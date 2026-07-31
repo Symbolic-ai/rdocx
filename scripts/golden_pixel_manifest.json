@@ -1,0 +1,45 @@
+{
+  "dpi": 150,
+  "rasterizer": {
+    "command": "pdftoppm",
+    "version": "pdftoppm version 26.01.0"
+  },
+  "reason": "F-039 global CTM, reviewed four-pixel Poppler 26.01.0 antialias delta",
+  "samples": {
+    "contract": {
+      "height": 1650,
+      "rgba_sha256": "1459dfbc120aa609a52a346b3df4700224ff6b2eb7743b528bc1c17042f8428e",
+      "width": 1275
+    },
+    "feature_showcase": {
+      "height": 1650,
+      "rgba_sha256": "0ac0cae173dbfe52550d267ee44697cf53ff55a22c0d74486f5a9d944c2d075e",
+      "width": 1275
+    },
+    "invoice": {
+      "height": 1650,
+      "rgba_sha256": "2e782d310fa4c4d4e99ebcdc0bc9a31fdd37baa7f6806c28d161dc68133a6400",
+      "width": 1275
+    },
+    "letter": {
+      "height": 1650,
+      "rgba_sha256": "bfc79d32bb0f5f2b2515a0ec1d453244ed443caebb68fc2c75aa543ed6f38c73",
+      "width": 1275
+    },
+    "proposal": {
+      "height": 1650,
+      "rgba_sha256": "ec5ac081098ad70f4464a6e3dd3d2efc5d7982e7affd81387cb86a523e22a342",
+      "width": 1275
+    },
+    "quote": {
+      "height": 1650,
+      "rgba_sha256": "db88e32c52f5a02791707780d75cb8d3652cf284ed86c9f8245a7e7ad6449c86",
+      "width": 1275
+    },
+    "report": {
+      "height": 1650,
+      "rgba_sha256": "f46dbf5c337f658d78b1123065749b3ad4e5e9c9a0f4659b5400a9d815f1b2b0",
+      "width": 1275
+    }
+  }
+}

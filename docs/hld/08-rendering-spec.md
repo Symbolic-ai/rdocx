@@ -5,9 +5,12 @@ Owners: `oxml-layout` for the types, `oxml-pdf` for the backends,
 
 ## The seam that makes this cheap
 
-`crates/rdocx-layout/src/output.rs` is already 100 percent docx-free, and
-`crates/rdocx-pdf` depends on the layout crate and nothing else in the
-workspace. It consumes only:
+The staged `crates/oxml-pdf` backend consumes `oxml-layout::LayoutResult` and
+uses `oxml-media` for image format and header metadata. Its writer, font,
+image, and raster modules support the existing text, line, rectangle, image,
+link, metadata, and outline paths. The released `crates/rdocx-pdf` backend
+remains dependency-separate, but carries the approved F-039 global CTM writer
+change until the F-046 cutover removes the duplicate. The shared contract is:
 
 ```rust
 pub struct LayoutResult { pages: Vec<PageFrame>, fonts: Vec<FontData>,
@@ -20,6 +23,11 @@ pub struct PageFrame { page_number: usize, width: f64, height: f64,
 passthrough, PNG inflate, soft masks, PDF assembly and the tiny-skia rasteriser
 all carry over unchanged. That is roughly 1,667 lines the presentation side does
 not have to write.
+
+`Path` and `Group` are explicit unsupported arms in the staged backend until
+their rendering work lands. The three font, image, and link collection passes
+also remain flat until they are rewritten on `walk`. The published backend does
+not depend on this staged crate before the shared-crate cutover.
 
 ## Extending `PositionedElement`
 
@@ -127,13 +135,12 @@ pub fn walk(elements: &[PositionedElement], f: &mut impl FnMut(&PositionedElemen
 
 All three passes are rewritten on it, and each gets an explicit test.
 
-## Four latent defects to fix
+## Three remaining defects to fix
 
 All are forced by pptx, and all improve rdocx:
 
 | Defect | Location |
 |---|---|
-| Y is flipped **per element**, which is incompatible with nested transforms | `writer.rs:424`, `:454`, `:463`, `:479` |
 | `set_fill_rgb` drops `Color.a` everywhere, in both PDF and text | `writer.rs:414` |
 | `dash_pattern: _` means dashes are ignored in **all** PNG output today | `raster.rs:73` |
 | Images keyed `Im{page}_{elem}`, no deduplication, and the full font dictionary is written into every page | `writer.rs` |
@@ -149,14 +156,18 @@ coordinates so group transforms compose naturally.
 
 - Text: `Tm` becomes `[1 0 0 -1 x y]`, the negative `d` cancelling the outer flip
   so glyphs stay upright. Mathematically identical output.
-- Images: `cm [w 0 0 -h x y]`.
+- Images: `cm [w 0 0 -h x y+h]`. The `y+h` translation preserves the original
+  image rectangle after PDF matrix concatenation.
 - Link annotations live in `/Annots`, not the content stream, so that code is
   untouched.
 
 **This is the single highest-risk change in the plan.** Gate it on golden-PNG
 diffs of the existing `samples/` corpus, comparing **pixels, never PDF bytes**,
 because the operator stream legitimately changes. Land it as its own reviewable
-commit before any pptx code exists.
+commit before any pptx code exists. The reviewed Poppler 26.01.0 baseline
+contains four stroke-antialias pixel changes across `invoice` and `quote`. The
+other five samples remain exact, and normal check mode requires exact equality
+against that reviewed baseline.
 
 Then: `Group` becomes `q`, `cm`, optional clip via `W n`, optional `/GS gs` for
 opacity, recurse, `Q`. `Path` becomes `m`/`l`/`c`/`h` followed by `f`, `f*`,
