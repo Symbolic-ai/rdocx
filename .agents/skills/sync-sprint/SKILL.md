@@ -7,6 +7,6 @@ description: "Open a new sprint. Regenerates CURRENT_SPRINT.md and creates the s
 
 Canonical source: `.claude/commands/sync-sprint.md`.
 
-Source SHA-256: `2054bc1ce2c710d3b02caa49120c2cbc04de502ac7bb045eda8596051e369928`.
+Source SHA-256: `4c42859bb54840029e1aa154f39c855e7143856e77481ad1129e88507820a039`.
 
 Read the canonical source in full before acting, and follow it with whatever tools this host provides. Treat any invocation arguments as arguments to that workflow. Where it names another slash command, follow the repository skill of the same name. Where it says to ask with `AskUserQuestion`, ask through this host's own question mechanism. `.claude/WORKFLOW.md` wins on any process question. Do not edit this generated adapter.

@@ -128,7 +128,11 @@ name carries.
 - Sprints are about 2 weeks of focused work.
 - The sprint clock starts at the first `/start-feature` of that sprint, not at a
   fixed calendar date.
-- Each sprint carries 3 to 7 F-IDs from the active milestone.
+- Each implementation sprint carries 3 to 7 F-IDs from the active milestone.
+- A plan-defined validation boundary may carry zero F-IDs. Its
+  `CURRENT_SPRINT.md` must declare `**Validation-only**: yes`, and `/run-sprint`
+  skips design, workers and feature ledgers while retaining the full verify,
+  review and close gates.
 - Long milestones span several sprints. M7 has 4, M10 has 4, M1 has 2.
 - 13 milestones and 36 sprints to v1 per `docs/hld/14-development-backlog.md`.
 

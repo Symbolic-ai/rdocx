@@ -40,6 +40,9 @@ PLANS = REPO / ".claude" / "plans"
 REVIEWS = REPO / ".claude" / "reviews"
 
 SPRINT_RE = re.compile(r"^# Current Sprint, (S\d+(?:\.\d+)?)$", re.MULTILINE)
+VALIDATION_ONLY_RE = re.compile(
+    r"^\*\*Validation-only\*\*:\s*yes\s*$", re.MULTILINE | re.IGNORECASE
+)
 WAVE_ROW_RE = re.compile(
     r"^\|\s*(F-[A-Za-z0-9]+)\s*\|\s*([^|]+?)\s*\|\s*([SMLX]+)\s*\|\s*"
     r"(pending|in-progress|done|archived)\s*\|\s*([^|]*?)\s*\|$",
@@ -173,8 +176,11 @@ def parse_current_sprint() -> tuple[str, list[dict]]:
         {"fid": r[0], "title": r[1], "size": r[2], "tracker_status": r[3], "owner": r[4]}
         for r in WAVE_ROW_RE.findall(text)
     ]
-    if not features:
-        die("CURRENT_SPRINT.md has no parseable wave rows")
+    if not features and not VALIDATION_ONLY_RE.search(text):
+        die(
+            "CURRENT_SPRINT.md has no parseable wave rows. An intentionally "
+            "empty sprint must declare `**Validation-only**: yes`."
+        )
     return m.group(1), features
 
 
@@ -305,7 +311,8 @@ def cmd_status(args: argparse.Namespace) -> int:
             for field in WORKER_FIELDS:
                 if field != "wave" and f.get(field):
                     print(f"      {field:<19} {f[field]}")
-    print("  " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+    print("  " + (summary or "features=0"))
     if data["reviews"]:
         last = data["reviews"][-1]
         print(f"  reviews: {len(data['reviews'])} passes, last blocking={last['blocking']}")

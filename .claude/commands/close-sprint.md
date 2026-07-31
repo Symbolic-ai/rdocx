@@ -40,13 +40,17 @@ publication.
 
 5. **Update the tracker.** Append the per-sprint summary row to
    `docs/sprints/SPRINT_TRACKER.md` with planned, done, carried, estimated and
-   actual days, and recalculate the velocity table.
+   actual days, and recalculate the velocity table. A validation-only sprint
+   records zero planned, done, carried and estimated implementation days. Its
+   actual days record the elapsed validation work, and its velocity is 0.00
+   stories per week.
 
 6. **Merge.** An explicit `--no-ff` merge commit on `main`:
    `Merge sprint/sNN into main`.
 
 7. **Tag.** An annotated tag `sNN` at the merge commit, whose message lists the
-   completed F-IDs.
+   completed F-IDs. For a validation-only sprint with no completed F-IDs, the
+   message says `Validation-only sprint, no F-IDs`.
 
 8. **Push** `main` and the tag.
 
@@ -63,6 +67,8 @@ publication.
    - Never remove a carried worker, a dirty worktree, a remote branch or an
      unrelated worktree. Leave any failed target intact and report the exact
      reason.
+
+   A validation-only sprint has no cleanup targets.
 
 10. **Open the next sprint.** If `--next SMM` was given, run `/sync-sprint SMM`.
 
