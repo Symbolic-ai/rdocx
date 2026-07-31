@@ -156,14 +156,18 @@ coordinates so group transforms compose naturally.
 
 - Text: `Tm` becomes `[1 0 0 -1 x y]`, the negative `d` cancelling the outer flip
   so glyphs stay upright. Mathematically identical output.
-- Images: `cm [w 0 0 -h x y]`.
+- Images: `cm [w 0 0 -h x y+h]`. The `y+h` translation preserves the original
+  image rectangle after PDF matrix concatenation.
 - Link annotations live in `/Annots`, not the content stream, so that code is
   untouched.
 
 **This is the single highest-risk change in the plan.** Gate it on golden-PNG
 diffs of the existing `samples/` corpus, comparing **pixels, never PDF bytes**,
 because the operator stream legitimately changes. Land it as its own reviewable
-commit before any pptx code exists.
+commit before any pptx code exists. The reviewed Poppler 26.01.0 baseline
+contains four stroke-antialias pixel changes across `invoice` and `quote`. The
+other five samples remain exact, and normal check mode requires exact equality
+against that reviewed baseline.
 
 Then: `Group` becomes `q`, `cm`, optional clip via `W n`, optional `/GS gs` for
 opacity, recurse, `Q`. `Path` becomes `m`/`l`/`c`/`h` followed by `f`, `f*`,

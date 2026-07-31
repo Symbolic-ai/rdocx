@@ -315,7 +315,9 @@ Content-addressed media handles replacing `embed_id` as the renderer's key.
 ## Milestone 5, PDF backend (about 2 weeks)
 
 **Goal**: staged `oxml-pdf` renders rotated, clipped, gradient-filled paths and
-nested groups while released rdocx remains unchanged.
+nested groups. Released rdocx keeps its dependency graph and publication state,
+with only the F-039 global CTM source change mirrored into `rdocx-pdf` before
+the F-046 cutover.
 
 **End-of-milestone gate**: golden-PNG diffs of the whole sample corpus show zero
 pixel changes.
@@ -323,7 +325,8 @@ pixel changes.
 ### F-037, Create oxml-pdf (S)
 Copy `rdocx-pdf` into an isolated staged `oxml-pdf`, rewire the copy to
 `oxml-layout` and `oxml-media`, and delete duplicated header parsers from the
-copy. Leave `rdocx-pdf` unchanged until F-046.
+copy. Leave the `rdocx-pdf` dependency cutover and publication until F-046.
+F-039 is the only approved mirrored source change before that cutover.
 **Depends on**: F-029, F-024.
 **Test gate**: the eight moved tests pass.
 
@@ -335,9 +338,11 @@ harness, and specifically for F-039.
 
 ### F-039, Global CTM flip (L)
 Replace the per-element Y flip with one `q 1 0 0 -1 0 H cm`. Text `Tm` becomes
-`[1 0 0 -1 x y]`, images `cm [w 0 0 -h x y]`.
+`[1 0 0 -1 x y]`, images `cm [w 0 0 -h x y+h]`.
 **Depends on**: F-038.
-**Test gate**: golden-PNG diffs show zero changes across the corpus.
+**Test gate**: the old manifest differs only at the four declared Poppler
+26.01.0 antialias pixels in `invoice` and `quote`, then all seven buffers match
+the reviewed manifest exactly.
 
 ### F-040, Group rendering (M)
 `q`, `cm`, optional clip via `W n`, optional `/ExtGState` for opacity, recurse,

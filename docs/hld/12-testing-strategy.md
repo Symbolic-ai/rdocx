@@ -69,8 +69,13 @@ the first differing sample precisely. Reviewed updates use `--update --reason
 
 The gate deliberately compares pixels rather than PDF bytes. The operator
 stream legitimately changes when the per-element Y flip becomes one global
-CTM, while the rendered result must not change. The regression proof runs
-`--check --inject-one-pixel <sample>`, copies that generated PNG to a temporary
+CTM. The reviewed Poppler 26.01.0 baseline includes exactly four
+stroke-antialias changes. In `invoice`, pixels `(112, 397)` and `(112, 398)`
+swap `fcf5f5ff` and `ffffffff`. In `quote`, pixels `(112, 303)` and
+`(112, 304)` swap `f4fafaff` and `ffffffff`. The other five samples remain
+exact. This is a baseline, not a tolerance, so check mode still requires exact
+equality for all seven buffers. The regression proof runs `--check
+--inject-one-pixel <sample>`, copies that generated PNG to a temporary
 directory, changes exactly one decoded pixel, and requires check mode to fail
 with the sample name.
 

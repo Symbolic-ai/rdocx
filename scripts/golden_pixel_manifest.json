@@ -4,7 +4,7 @@
     "command": "pdftoppm",
     "version": "pdftoppm version 26.01.0"
   },
-  "reason": "Initial deterministic PDF page-one pixel baseline for F-038",
+  "reason": "F-039 global CTM, reviewed four-pixel Poppler 26.01.0 antialias delta",
   "samples": {
     "contract": {
       "height": 1650,
@@ -18,7 +18,7 @@
     },
     "invoice": {
       "height": 1650,
-      "rgba_sha256": "725f2ad2766be8c7ae5ac0bd7ac58c6cafde57abd0e8a24172c6c3fca9f7e7d1",
+      "rgba_sha256": "2e782d310fa4c4d4e99ebcdc0bc9a31fdd37baa7f6806c28d161dc68133a6400",
       "width": 1275
     },
     "letter": {
@@ -33,7 +33,7 @@
     },
     "quote": {
       "height": 1650,
-      "rgba_sha256": "47ba75fde31c94070e53b3733543d4c83b66891b08d9a6a92d24a6b0dcf97340",
+      "rgba_sha256": "db88e32c52f5a02791707780d75cb8d3652cf284ed86c9f8245a7e7ad6449c86",
       "width": 1275
     },
     "report": {

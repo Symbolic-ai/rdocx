@@ -50,7 +50,9 @@ Replacing the per-element Y flip with one global CTM touches every element type
 in a shipped, working renderer.
 
 *Mitigation*: its own reviewable commit, landed **before any pptx code exists**,
-gated on golden-PNG diffs comparing pixels rather than PDF bytes.
+gated on golden-PNG diffs comparing pixels rather than PDF bytes. The reviewed
+Poppler 26.01.0 baseline declares exactly four stroke-antialias pixel changes
+across `invoice` and `quote`. Normal check mode remains exact with no tolerance.
 
 ### R3, `Group`-blind collection passes
 

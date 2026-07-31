@@ -399,6 +399,8 @@ fn build_page_content(
 ) -> Vec<u8> {
     let mut content = Content::new();
     let page_height = page.height as f32;
+    content.save_state();
+    content.transform([1.0, 0.0, 0.0, -1.0, 0.0, page_height]);
 
     for (elem_idx, element) in page.elements.iter().enumerate() {
         match element {
@@ -420,9 +422,15 @@ fn build_page_content(
                     content.begin_text();
                     content.set_font(Name(font_name.as_bytes()), run.font_size as f32);
 
-                    // PDF coordinate system: origin at bottom-left
-                    let pdf_y = page_height - run.origin.y as f32;
-                    content.set_text_matrix([1.0, 0.0, 0.0, 1.0, run.origin.x as f32, pdf_y]);
+                    // Cancel the page flip so glyphs remain upright.
+                    content.set_text_matrix([
+                        1.0,
+                        0.0,
+                        0.0,
+                        -1.0,
+                        run.origin.x as f32,
+                        run.origin.y as f32,
+                    ]);
 
                     // Remap glyph IDs and emit with TJ operator
                     emit_glyphs(
@@ -451,8 +459,8 @@ fn build_page_content(
                 if let Some((on, off)) = dash_pattern {
                     content.set_dash_pattern([*on as f32, *off as f32], 0.0);
                 }
-                content.move_to(start.x as f32, page_height - start.y as f32);
-                content.line_to(end.x as f32, page_height - end.y as f32);
+                content.move_to(start.x as f32, start.y as f32);
+                content.line_to(end.x as f32, end.y as f32);
                 content.stroke();
                 content.restore_state();
             }
@@ -461,7 +469,7 @@ fn build_page_content(
                 content.set_fill_rgb(color.r as f32, color.g as f32, color.b as f32);
                 content.rect(
                     rect.x as f32,
-                    page_height - rect.y as f32 - rect.height as f32,
+                    rect.y as f32,
                     rect.width as f32,
                     rect.height as f32,
                 );
@@ -473,17 +481,14 @@ fn build_page_content(
                     let img_name = format!("Im{}_{}", page_idx, elem_idx);
 
                     content.save_state();
-                    // Image transformation matrix: scale and position
-                    // PDF images are 1x1 unit, we need to scale to rect size
-                    // and translate to position (bottom-left origin)
-                    let pdf_y = page_height - rect.y as f32 - rect.height as f32;
+                    // Cancel the page flip while preserving the image rectangle.
                     content.transform([
                         rect.width as f32,
                         0.0,
                         0.0,
-                        rect.height as f32,
+                        -rect.height as f32,
                         rect.x as f32,
-                        pdf_y,
+                        (rect.y + rect.height) as f32,
                     ]);
                     content.x_object(Name(img_name.as_bytes()));
                     content.restore_state();
@@ -501,6 +506,7 @@ fn build_page_content(
         }
     }
 
+    content.restore_state();
     content.finish().to_vec()
 }
 
@@ -698,4 +704,153 @@ fn sanitize_font_name(family: &str, bold: bool, italic: bool) -> String {
     }
 
     name
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxml_layout::{Color, FontData, GlyphRun, MediaId, PageFrame, Point, Rect};
+
+    fn page_with(elements: Vec<PositionedElement>) -> PageFrame {
+        PageFrame::new(1, 612.0, 792.0, elements)
+    }
+
+    fn content_for(elements: Vec<PositionedElement>) -> String {
+        let page = page_with(elements);
+        String::from_utf8(build_page_content(
+            0,
+            &page,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        ))
+        .expect("PDF content operators are ASCII")
+    }
+
+    #[test]
+    fn page_content_uses_one_global_flip() {
+        let content = content_for(Vec::new());
+
+        assert_eq!(content.matches("1 0 0 -1 0 792 cm").count(), 1);
+        assert!(content.starts_with("q\n1 0 0 -1 0 792 cm\n"));
+        assert!(content.ends_with('Q'));
+    }
+
+    #[test]
+    fn text_and_images_cancel_the_outer_flip() {
+        let font_id = FontId(7);
+        let mut remapper = subsetter::GlyphRemapper::new();
+        remapper.remap(1);
+        let prepared = PreparedFont {
+            font_data: FontData {
+                id: font_id,
+                family: "Test".to_owned(),
+                data: Vec::new(),
+                face_index: 0,
+                bold: false,
+                italic: false,
+            },
+            subset_bytes: Vec::new(),
+            remapper,
+            cmap_bytes: Vec::new(),
+            widths: vec![(0, 500.0)],
+        };
+        let elements = vec![
+            PositionedElement::Text(GlyphRun {
+                origin: Point { x: 30.0, y: 40.0 },
+                font_id,
+                font_size: 12.0,
+                glyph_ids: vec![1],
+                advances: vec![6.0],
+                text: "A".to_owned(),
+                color: Color::BLACK,
+                bold: false,
+                italic: false,
+                field_kind: None,
+                footnote_id: None,
+            }),
+            PositionedElement::Image {
+                rect: Rect {
+                    x: 50.0,
+                    y: 60.0,
+                    width: 70.0,
+                    height: 80.0,
+                },
+                data: vec![1],
+                content_type: "image/png".to_owned(),
+                media_id: MediaId(1),
+            },
+        ];
+        let page = page_with(elements);
+        let prepared_fonts = HashMap::from([(font_id, prepared)]);
+        let font_refs = HashMap::from([(
+            font_id,
+            (
+                Ref::new(1),
+                Ref::new(2),
+                Ref::new(3),
+                Ref::new(4),
+                Ref::new(5),
+            ),
+        )]);
+        let image_map = HashMap::from([((0, 1), 0)]);
+        let content = String::from_utf8(build_page_content(
+            0,
+            &page,
+            &prepared_fonts,
+            &font_refs,
+            &image_map,
+        ))
+        .expect("PDF content operators are ASCII");
+
+        assert!(content.contains("1 0 0 -1 30 40 Tm"));
+        assert!(content.contains("70 0 0 -80 50 140 cm"));
+    }
+
+    #[test]
+    fn lines_and_rectangles_use_top_left_coordinates() {
+        let content = content_for(vec![
+            PositionedElement::Line {
+                start: Point { x: 72.0, y: 73.0 },
+                end: Point { x: 540.0, y: 74.0 },
+                width: 1.0,
+                color: Color::BLACK,
+                dash_pattern: None,
+            },
+            PositionedElement::FilledRect {
+                rect: Rect {
+                    x: 75.0,
+                    y: 101.0,
+                    width: 468.0,
+                    height: 20.0,
+                },
+                color: Color::WHITE,
+            },
+        ]);
+
+        assert!(content.contains("72 73 m"));
+        assert!(content.contains("540 74 l"));
+        assert!(content.contains("75 101 468 20 re"));
+    }
+
+    #[test]
+    fn annotations_remain_outside_the_content_transform() {
+        let layout = LayoutResult::new(
+            vec![page_with(vec![PositionedElement::LinkAnnotation {
+                rect: Rect {
+                    x: 72.0,
+                    y: 100.0,
+                    width: 100.0,
+                    height: 15.0,
+                },
+                url: "https://example.com".to_owned(),
+            }])],
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        let pdf = String::from_utf8_lossy(&write_pdf(&layout)).into_owned();
+
+        assert!(pdf.contains("/Rect [72 677 172 692]"), "{pdf}");
+    }
 }

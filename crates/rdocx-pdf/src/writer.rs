@@ -399,6 +399,8 @@ fn build_page_content(
 ) -> Vec<u8> {
     let mut content = Content::new();
     let page_height = page.height as f32;
+    content.save_state();
+    content.transform([1.0, 0.0, 0.0, -1.0, 0.0, page_height]);
 
     for (elem_idx, element) in page.elements.iter().enumerate() {
         match element {
@@ -420,9 +422,15 @@ fn build_page_content(
                     content.begin_text();
                     content.set_font(Name(font_name.as_bytes()), run.font_size as f32);
 
-                    // PDF coordinate system: origin at bottom-left
-                    let pdf_y = page_height - run.origin.y as f32;
-                    content.set_text_matrix([1.0, 0.0, 0.0, 1.0, run.origin.x as f32, pdf_y]);
+                    // Cancel the page flip so glyphs remain upright.
+                    content.set_text_matrix([
+                        1.0,
+                        0.0,
+                        0.0,
+                        -1.0,
+                        run.origin.x as f32,
+                        run.origin.y as f32,
+                    ]);
 
                     // Remap glyph IDs and emit with TJ operator
                     emit_glyphs(
@@ -451,8 +459,8 @@ fn build_page_content(
                 if let Some((on, off)) = dash_pattern {
                     content.set_dash_pattern([*on as f32, *off as f32], 0.0);
                 }
-                content.move_to(start.x as f32, page_height - start.y as f32);
-                content.line_to(end.x as f32, page_height - end.y as f32);
+                content.move_to(start.x as f32, start.y as f32);
+                content.line_to(end.x as f32, end.y as f32);
                 content.stroke();
                 content.restore_state();
             }
@@ -461,7 +469,7 @@ fn build_page_content(
                 content.set_fill_rgb(color.r as f32, color.g as f32, color.b as f32);
                 content.rect(
                     rect.x as f32,
-                    page_height - rect.y as f32 - rect.height as f32,
+                    rect.y as f32,
                     rect.width as f32,
                     rect.height as f32,
                 );
@@ -473,17 +481,14 @@ fn build_page_content(
                     let img_name = format!("Im{}_{}", page_idx, elem_idx);
 
                     content.save_state();
-                    // Image transformation matrix: scale and position
-                    // PDF images are 1x1 unit, we need to scale to rect size
-                    // and translate to position (bottom-left origin)
-                    let pdf_y = page_height - rect.y as f32 - rect.height as f32;
+                    // Cancel the page flip while preserving the image rectangle.
                     content.transform([
                         rect.width as f32,
                         0.0,
                         0.0,
-                        rect.height as f32,
+                        -rect.height as f32,
                         rect.x as f32,
-                        pdf_y,
+                        (rect.y + rect.height) as f32,
                     ]);
                     content.x_object(Name(img_name.as_bytes()));
                     content.restore_state();
@@ -495,6 +500,7 @@ fn build_page_content(
         }
     }
 
+    content.restore_state();
     content.finish().to_vec()
 }
 
