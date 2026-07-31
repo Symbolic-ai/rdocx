@@ -27,7 +27,7 @@ group transforms explicit before the PDF backend migrates.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-032 | Path and PathCommand | M | in-progress | codex |
-| F-036 | MediaId | S | pending | - |
+| F-036 | MediaId | S | in-progress | codex |
 | F-033 | Paint and Stroke | M | pending | - |
 | F-034 | Path and Group arms | M | pending | - |
 | F-035 | The walk helper | S | pending | - |

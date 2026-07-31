@@ -19,7 +19,7 @@ regenerated, never hand-edited.
 | M1, Preparation and safety net              | 12 | 12 | 0 | 0  |
 | M2, Shared infrastructure extraction        | 10 | 7 | 0 | 3  |
 | M3, Media                                   | 6  | 4 | 0 | 2  |
-| M4, Layout primitives                       | 8  | 3 | 1 | 4  |
+| M4, Layout primitives                       | 8  | 3 | 2 | 3  |
 | M5, PDF backend                             | 9  | 0 | 0 | 9  |
 | M6, Shared publication and rdocx cutover     | 6  | 0 | 0 | 6  |
 | M7, DrawingML                               | 15 | 0 | 0 | 15 |
@@ -30,7 +30,7 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **150** | **26** | **1** | **123** |
+| **Total** | **150** | **26** | **2** | **122** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -96,7 +96,7 @@ regenerated, never hand-edited.
 | F-033 | Paint and Stroke                             | S07 | M | pending |
 | F-034 | Path and Group arms                          | S07 | M | pending |
 | F-035 | The walk helper                              | S07 | S | pending |
-| F-036 | MediaId                                      | S07 | S | pending |
+| F-036 | MediaId                                      | S07 | S | in-progress |
 <!-- AUTOGEN:backlog-M4 END -->
 
 ### M5, PDF backend
