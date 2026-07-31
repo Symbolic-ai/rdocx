@@ -414,26 +414,45 @@ mod group_output_tests {
             PositionedElement::Path(actual) if actual == path_element
         ));
 
+        let transform = Transform::rotate_about(15.0, 2.0, 3.0);
+        let clip = Path {
+            commands: Vec::new(),
+            fill_rule: FillRule::EvenOdd,
+        };
+        let effect = Effect::OuterShadow {
+            dx: 1.0,
+            dy: 2.0,
+            blur: 3.0,
+            color: Color::BLACK,
+        };
+        let child_rect = Rect {
+            x: 5.0,
+            y: 6.0,
+            width: 7.0,
+            height: 8.0,
+        };
         let group = GroupElement {
-            transform: Transform::IDENTITY,
-            clip: Some(Path {
-                commands: Vec::new(),
-                fill_rule: FillRule::EvenOdd,
-            }),
+            transform,
+            clip: Some(clip.clone()),
             opacity: 0.5,
-            effects: vec![Effect::OuterShadow {
-                dx: 1.0,
-                dy: 2.0,
-                blur: 3.0,
-                color: Color::BLACK,
+            effects: vec![effect.clone()],
+            children: vec![PositionedElement::FilledRect {
+                rect: child_rect,
+                color: Color::WHITE,
             }],
-            children: Vec::new(),
         };
         let element = PositionedElement::Group(group);
+        let PositionedElement::Group(actual) = element else {
+            panic!("constructed group should remain a group");
+        };
+        assert_eq!(actual.transform, transform);
+        assert_eq!(actual.clip, Some(clip));
+        assert_eq!(actual.opacity, 0.5);
+        assert_eq!(actual.effects, vec![effect]);
         assert!(matches!(
-            element,
-            PositionedElement::Group(actual)
-                if actual.opacity == 0.5 && actual.effects.len() == 1
+            actual.children.as_slice(),
+            [PositionedElement::FilledRect { rect, color }]
+                if *rect == child_rect && *color == Color::WHITE
         ));
     }
 
