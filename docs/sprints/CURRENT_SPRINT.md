@@ -28,7 +28,7 @@ PowerPoint produces without changing the legacy Word colour path.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-052 | Create oxml-drawing and namespace constants | S | pending | - |
+| F-052 | Create oxml-drawing and namespace constants | S | in-progress | codex |
 | F-053 | OrderedRawChildren | M | pending | - |
 | F-054 | Colour choices | M | pending | - |
 | F-055 | The colour transform stack | L | pending | - |
