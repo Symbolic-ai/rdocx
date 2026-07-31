@@ -1,4 +1,5 @@
 pub mod color;
+pub mod fill;
 pub mod geometry;
 pub mod namespace;
 pub mod order;

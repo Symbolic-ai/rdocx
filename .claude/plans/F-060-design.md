@@ -1,6 +1,6 @@
 # F-060, Fills
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S13
 **Size**: L
 **Depends on**: F-054
@@ -78,11 +78,11 @@ consumer.
 
 ## Implementation checklist
 
-- [ ] Add failing fill-family, schema-order, raw-preservation, and malformed-input tests.
-- [ ] Add fill types and errors for every story-requested family.
-- [ ] Implement prefix-tolerant parsing and fixed-prefix serialisation.
-- [ ] Preserve gradient stop order and unknown XML boundaries.
-- [ ] Export the approved module and run focused checks.
+- [x] Add failing fill-family, schema-order, raw-preservation, and malformed-input tests.
+- [x] Add fill types and errors for every story-requested family.
+- [x] Implement prefix-tolerant parsing and fixed-prefix serialisation.
+- [x] Preserve gradient stop order and unknown XML boundaries.
+- [x] Export the approved module and run focused checks.
 
 ## Open questions
 
