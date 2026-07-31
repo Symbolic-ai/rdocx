@@ -29,7 +29,7 @@ or their rendered output.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-029 | Create oxml-layout | M | in-progress | codex |
-| F-030 | Decouple line.rs | L | pending | - |
+| F-030 | Decouple line.rs | L | in-progress | codex |
 | F-031 | Transform | M | pending | - |
 
 ## Sequencing note
