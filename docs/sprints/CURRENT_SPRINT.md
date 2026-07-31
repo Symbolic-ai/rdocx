@@ -29,7 +29,7 @@ crate publication boundary unchanged.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-043 | Gradient shading dictionaries | L | pending | - |
+| F-043 | Gradient shading dictionaries | L | in-progress | codex |
 | F-045 | Rasteriser: groups, paths, gradients, dashes | L | pending | - |
 
 ## Sequencing note
