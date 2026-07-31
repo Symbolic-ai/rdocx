@@ -1,6 +1,6 @@
 # F-041, Path rendering
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S09
 **Size**: M
 **Depends on**: F-039
@@ -87,13 +87,13 @@ consumer. Do not update `scripts/hash_baseline.json`.
 
 ## Implementation checklist
 
-- [ ] Add one private geometry emitter in the existing writer.
-- [ ] Map solid fill and stroke state to PDF operators.
-- [ ] Select `f`, `f*`, `S`, `B`, or `B*` from supported paint components.
-- [ ] Leave gradient and tile resources to their owning stories.
-- [ ] Add the three backlog gate tests and focused operator tests.
-- [ ] Update exactly the declared HLD files to current intent.
-- [ ] Prove the hash and exact golden baselines remain unchanged.
+- [x] Add one private geometry emitter in the existing writer.
+- [x] Map solid fill and stroke state to PDF operators.
+- [x] Select `f`, `f*`, `S`, `B`, or `B*` from supported paint components.
+- [x] Leave gradient and tile resources to their owning stories.
+- [x] Add the three backlog gate tests and focused operator tests.
+- [x] Update exactly the declared HLD files to current intent.
+- [x] Prove the hash and exact golden baselines remain unchanged.
 
 ## Open questions
 

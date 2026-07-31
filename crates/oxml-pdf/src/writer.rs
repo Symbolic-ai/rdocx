@@ -2,8 +2,13 @@
 
 use std::collections::HashMap;
 
-use oxml_layout::{FontId, LayoutResult, PositionedElement};
-use pdf_writer::types::{ActionType, AnnotationType, CidFontType, FontFlags, SystemInfo};
+use oxml_layout::{
+    FillRule, FontId, LayoutResult, LineCap, LineJoin, Paint, Path, PathCommand, PathElement,
+    PositionedElement, Stroke,
+};
+use pdf_writer::types::{
+    ActionType, AnnotationType, CidFontType, FontFlags, LineCapStyle, LineJoinStyle, SystemInfo,
+};
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
 use crate::font::{self, PreparedFont};
@@ -497,8 +502,11 @@ fn build_page_content(
             PositionedElement::LinkAnnotation { .. } => {
                 // Link annotations are written separately, not in the content stream
             }
-            PositionedElement::Path(_) | PositionedElement::Group(_) => {
-                // F-040 and F-041 add staged group and path rendering.
+            PositionedElement::Path(path) => {
+                emit_path(&mut content, path);
+            }
+            PositionedElement::Group(_) => {
+                // F-040 adds staged group rendering.
             }
             _ => {
                 // Later oxml-layout elements remain unsupported until assigned.
@@ -508,6 +516,110 @@ fn build_page_content(
 
     content.restore_state();
     content.finish().to_vec()
+}
+
+fn emit_path(content: &mut Content, element: &PathElement) {
+    let fill = element.fill.as_ref().and_then(solid_color);
+    let stroke = element
+        .stroke
+        .as_ref()
+        .filter(|stroke| solid_color(&stroke.paint).is_some());
+
+    if fill.is_none() && stroke.is_none() {
+        return;
+    }
+
+    content.save_state();
+
+    if let Some(color) = fill {
+        content.set_fill_rgb(color.r as f32, color.g as f32, color.b as f32);
+    }
+    if let Some(stroke) = stroke {
+        emit_stroke_state(content, stroke);
+    }
+
+    emit_path_geometry(content, &element.path);
+    match (fill.is_some(), stroke.is_some(), element.path.fill_rule) {
+        (true, true, FillRule::NonZero) => {
+            content.fill_nonzero_and_stroke();
+        }
+        (true, true, FillRule::EvenOdd) => {
+            content.fill_even_odd_and_stroke();
+        }
+        (true, false, FillRule::NonZero) => {
+            content.fill_nonzero();
+        }
+        (true, false, FillRule::EvenOdd) => {
+            content.fill_even_odd();
+        }
+        (false, true, _) => {
+            content.stroke();
+        }
+        (false, false, _) => unreachable!("unsupported paint returned before path emission"),
+    }
+
+    content.restore_state();
+}
+
+fn solid_color(paint: &Paint) -> Option<oxml_layout::Color> {
+    match paint {
+        Paint::Solid(color) => Some(*color),
+        Paint::Linear { .. } | Paint::Radial { .. } | Paint::Tile { .. } => None,
+    }
+}
+
+fn emit_stroke_state(content: &mut Content, stroke: &Stroke) {
+    let Some(color) = solid_color(&stroke.paint) else {
+        return;
+    };
+    let width = if stroke.width.is_finite() {
+        stroke.width.max(0.0) as f32
+    } else {
+        0.0
+    };
+
+    content.set_stroke_rgb(color.r as f32, color.g as f32, color.b as f32);
+    content.set_line_width(width);
+    content.set_line_cap(match stroke.cap {
+        LineCap::Butt => LineCapStyle::ButtCap,
+        LineCap::Round => LineCapStyle::RoundCap,
+        LineCap::Square => LineCapStyle::ProjectingSquareCap,
+    });
+    content.set_line_join(match stroke.join {
+        LineJoin::Miter => LineJoinStyle::MiterJoin,
+        LineJoin::Round => LineJoinStyle::RoundJoin,
+        LineJoin::Bevel => LineJoinStyle::BevelJoin,
+    });
+    content.set_miter_limit(10.0);
+    if let Some(dash) = &stroke.dash {
+        content.set_dash_pattern(dash.iter().map(|value| *value as f32), 0.0);
+    }
+}
+
+fn emit_path_geometry(content: &mut Content, path: &Path) {
+    for command in &path.commands {
+        match command {
+            PathCommand::MoveTo(point) => {
+                content.move_to(point.x as f32, point.y as f32);
+            }
+            PathCommand::LineTo(point) => {
+                content.line_to(point.x as f32, point.y as f32);
+            }
+            PathCommand::CurveTo { c1, c2, to } => {
+                content.cubic_to(
+                    c1.x as f32,
+                    c1.y as f32,
+                    c2.x as f32,
+                    c2.y as f32,
+                    to.x as f32,
+                    to.y as f32,
+                );
+            }
+            PathCommand::Close => {
+                content.close_path();
+            }
+        }
+    }
 }
 
 /// Emit glyph IDs using the TJ operator with per-glyph positioning.
@@ -709,7 +821,10 @@ fn sanitize_font_name(family: &str, bold: bool, italic: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oxml_layout::{Color, FontData, GlyphRun, MediaId, PageFrame, Point, Rect};
+    use oxml_layout::{
+        Color, FillRule, FontData, GlyphRun, LineCap, LineJoin, MediaId, PageFrame, Paint, Path,
+        PathCommand, PathElement, Point, Rect, Stroke,
+    };
 
     fn page_with(elements: Vec<PositionedElement>) -> PageFrame {
         PageFrame::new(1, 612.0, 792.0, elements)
@@ -725,6 +840,142 @@ mod tests {
             &HashMap::new(),
         ))
         .expect("PDF content operators are ASCII")
+    }
+
+    fn path_element(
+        fill_rule: FillRule,
+        fill: Option<Paint>,
+        stroke: Option<Stroke>,
+    ) -> PositionedElement {
+        PositionedElement::Path(PathElement {
+            path: Path {
+                commands: vec![
+                    PathCommand::MoveTo(Point { x: 10.0, y: 20.0 }),
+                    PathCommand::LineTo(Point { x: 30.0, y: 40.0 }),
+                    PathCommand::CurveTo {
+                        c1: Point { x: 50.0, y: 60.0 },
+                        c2: Point { x: 70.0, y: 80.0 },
+                        to: Point { x: 90.0, y: 100.0 },
+                    },
+                    PathCommand::Close,
+                ],
+                fill_rule,
+            },
+            fill,
+            stroke,
+        })
+    }
+
+    fn solid_stroke() -> Stroke {
+        Stroke {
+            paint: Paint::Solid(Color::BLACK),
+            width: 2.0,
+            cap: LineCap::Round,
+            join: LineJoin::Bevel,
+            dash: Some(vec![3.0, 4.0]),
+        }
+    }
+
+    fn has_operator(content: &str, operator: &str) -> bool {
+        content.lines().any(|line| line == operator)
+    }
+
+    #[test]
+    fn path_fill_only_emits_f() {
+        let content = content_for(vec![path_element(
+            FillRule::NonZero,
+            Some(Paint::Solid(Color::BLACK)),
+            None,
+        )]);
+
+        assert!(has_operator(&content, "f"), "{content}");
+    }
+
+    #[test]
+    fn path_stroke_only_emits_s() {
+        let content = content_for(vec![path_element(
+            FillRule::NonZero,
+            None,
+            Some(solid_stroke()),
+        )]);
+
+        assert!(has_operator(&content, "S"), "{content}");
+    }
+
+    #[test]
+    fn path_fill_and_stroke_emit_b() {
+        let content = content_for(vec![path_element(
+            FillRule::NonZero,
+            Some(Paint::Solid(Color::BLACK)),
+            Some(solid_stroke()),
+        )]);
+
+        assert!(has_operator(&content, "B"), "{content}");
+        assert_eq!(content.lines().filter(|line| *line == "q").count(), 2);
+        assert_eq!(content.lines().filter(|line| *line == "Q").count(), 2);
+    }
+
+    #[test]
+    fn even_odd_paths_use_starred_operators() {
+        let fill = content_for(vec![path_element(
+            FillRule::EvenOdd,
+            Some(Paint::Solid(Color::BLACK)),
+            None,
+        )]);
+        let both = content_for(vec![path_element(
+            FillRule::EvenOdd,
+            Some(Paint::Solid(Color::BLACK)),
+            Some(solid_stroke()),
+        )]);
+
+        assert!(has_operator(&fill, "f*"), "{fill}");
+        assert!(has_operator(&both, "B*"), "{both}");
+    }
+
+    #[test]
+    fn path_geometry_preserves_command_order() {
+        let content = content_for(vec![path_element(
+            FillRule::NonZero,
+            Some(Paint::Solid(Color::BLACK)),
+            None,
+        )]);
+
+        assert!(
+            content.contains("10 20 m\n30 40 l\n50 60 70 80 90 100 c\nh\nf"),
+            "{content}"
+        );
+    }
+
+    #[test]
+    fn stroke_state_maps_cap_join_miter_and_dash() {
+        let content = content_for(vec![path_element(
+            FillRule::NonZero,
+            None,
+            Some(solid_stroke()),
+        )]);
+
+        assert!(content.contains("2 w"), "{content}");
+        assert!(content.contains("1 J"), "{content}");
+        assert!(content.contains("2 j"), "{content}");
+        assert!(content.contains("10 M"), "{content}");
+        assert!(content.contains("[3 4] 0 d"), "{content}");
+    }
+
+    #[test]
+    fn staged_gradient_component_does_not_block_solid_component() {
+        let content = content_for(vec![path_element(
+            FillRule::NonZero,
+            Some(Paint::Linear {
+                start: Point { x: 0.0, y: 0.0 },
+                end: Point { x: 100.0, y: 0.0 },
+                stops: Vec::new(),
+                extend: (false, false),
+            }),
+            Some(solid_stroke()),
+        )]);
+
+        assert!(has_operator(&content, "S"), "{content}");
+        assert!(!content.contains("/Pattern"), "{content}");
     }
 
     #[test]

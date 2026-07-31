@@ -353,7 +353,8 @@ nesting.
 
 ### F-041, Path rendering (M)
 `m`, `l`, `c`, `h` then `f`, `f*`, `S`, `B` or `B*`. Stroke state via `w`, `J`,
-`j`, `M`, `d`.
+`j`, `M`, `d`. This story renders solid paint components. Gradient shading
+dictionaries remain owned by F-043.
 **Depends on**: F-039.
 **Test gate**: fill-only emits `f`, stroke-only `S`, both `B`.
 

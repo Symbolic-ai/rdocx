@@ -167,9 +167,9 @@ cover the cases that matter now.
   path is exercised while bundled deterministic fonts remain available.
 
 **`oxml-pdf`**
-- `Path` with fill only, stroke only, and both, produces `f`, `S` and `B`, and
-  `q`/`Q` counts balance. One assertion that catches the classic unbalanced
-  graphics-state bug.
+- `Path` with solid fill only, solid stroke only, and both, produces `f`, `S`
+  and `B`. The combined case also proves `q`/`Q` counts balance, which catches
+  the classic unbalanced graphics-state bug.
 - **`Group` containing `Text` finds the font.** The regression test for the
   recursion hazard.
 - `Group` containing `Image` registers the XObject.

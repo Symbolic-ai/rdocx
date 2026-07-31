@@ -24,8 +24,10 @@ passthrough, PNG inflate, soft masks, PDF assembly and the tiny-skia rasteriser
 all carry over unchanged. That is roughly 1,667 lines the presentation side does
 not have to write.
 
-`Path` and `Group` are explicit unsupported arms in the staged backend until
-their rendering work lands. The three font, image, and link collection passes
+`Group` is an explicit unsupported arm in the staged backend until its
+rendering work lands. `Path` emits geometry, solid fill and solid stroke
+operators. Gradient and tile paints remain staged for their resource-owning
+stories. The three font, image, and link collection passes
 also remain flat until they are rewritten on `walk`. The published backend does
 not depend on this staged crate before the shared-crate cutover.
 
@@ -169,9 +171,10 @@ contains four stroke-antialias pixel changes across `invoice` and `quote`. The
 other five samples remain exact, and normal check mode requires exact equality
 against that reviewed baseline.
 
-Then: `Group` becomes `q`, `cm`, optional clip via `W n`, optional `/GS gs` for
-opacity, recurse, `Q`. `Path` becomes `m`/`l`/`c`/`h` followed by `f`, `f*`,
-`S`, `B` or `B*` by fill, stroke and rule.
+`Path` is `m`/`l`/`c`/`h` followed by `f`, `f*`, `S`, `B` or `B*` by supported
+fill, stroke and rule. Stroke state uses `w`, `J`, `j`, `M` and `d`. `Group`
+remains the next step and becomes `q`, `cm`, optional clip via `W n`, optional
+`/GS gs` for opacity, recurse, `Q`.
 
 **Gradients** are the real work: `/Pattern cs /P scn`, a pattern dictionary of
 type 2 whose `/Matrix` is the element-local transform so gradients rotate with
