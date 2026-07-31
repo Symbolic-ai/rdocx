@@ -22,7 +22,7 @@ regenerated, never hand-edited.
 | M4, Layout primitives                       | 8  | 8 | 0 | 0  |
 | M5, PDF backend                             | 9  | 9 | 0 | 0  |
 | M6, Shared publication and rdocx cutover     | 6  | 0 | 0 | 6  |
-| M7, DrawingML                               | 15 | 0 | 2 | 13 |
+| M7, DrawingML                               | 15 | 0 | 3 | 12 |
 | M8, PresentationML                          | 14 | 0 | 0 | 14 |
 | M9, Inheritance resolver                    | 8  | 0 | 0 | 8  |
 | M10, Renderer                               | 16 | 0 | 0 | 16 |
@@ -30,7 +30,7 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **150** | **40** | **2** | **108** |
+| **Total** | **150** | **40** | **3** | **107** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -135,7 +135,7 @@ regenerated, never hand-edited.
 |------|-------|--------|------|--------|
 | F-052 | Create oxml-drawing and namespace constants  | S12 | S | in-progress |
 | F-053 | OrderedRawChildren                           | S12 | M | in-progress |
-| F-054 | Colour choices                               | S12 | M | pending |
+| F-054 | Colour choices                               | S12 | M | in-progress |
 | F-055 | The colour transform stack                   | S12 | L | pending |
 | F-056 | Colour map resolution                        | S12 | M | pending |
 | F-057 | a:xfrm                                       | S13 | M | pending |
