@@ -1,6 +1,6 @@
 # F-054, Colour choices
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S12
 **Size**: M
 **Depends on**: none
@@ -82,13 +82,13 @@ untouched.
 
 ## Implementation checklist
 
-- [ ] Add the concrete colour choice and RGB value types.
-- [ ] Parse all four colour elements with local-name matching.
-- [ ] Write all four forms with the fixed `a:` prefix.
-- [ ] Preserve unknown child XML in its original slot.
-- [ ] Keep raw children in a simple ordered vector until F-055 integrates
+- [x] Add the concrete colour choice and RGB value types.
+- [x] Parse all four colour elements with local-name matching.
+- [x] Write all four forms with the fixed `a:` prefix.
+- [x] Preserve unknown child XML in its original slot.
+- [x] Keep raw children in a simple ordered vector until F-055 integrates
   F-053's helper.
-- [ ] Reject malformed RGB values and add all round-trip tests.
+- [x] Reject malformed RGB values and add all round-trip tests.
 
 ## Open questions
 
