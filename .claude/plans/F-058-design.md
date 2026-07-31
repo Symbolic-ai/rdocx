@@ -20,19 +20,24 @@ commands into renderer-neutral cubic segments.
   provenance".
 - `docs/hld/01-glossary.md`, "Units and coordinate systems".
 - `docs/hld/14-development-backlog.md`, "F-058, Guide evaluator".
+- ISO/IEC 29500-1, `gd (Shape Guide)`, for the 17 recognised formula tokens
+  and their argument order.
 - Microsoft `[MS-OE376]`, Part 4 Section 5.1.11.11, for Office's `mod` and
   negative-input `sqrt` guide behaviour.
 
 ## Approach
 
 Add the HLD-defined `crates/oxml-drawing/src/geometry.rs` module with owned
-guide names and operands, the full `GuideOp` enum, a seeded evaluation
-environment, adjust-value overrides, and local evaluated path commands. The
-environment contains `w`, `h`, `ss`, edges, centres, standard fractional width
-and height guides, and declared adjust values. Guides evaluate in declaration
-order with `f64` arithmetic and angles in 60000ths of a degree. Office's
-interoperability behaviour applies `mod x y z` as the Euclidean norm and
-`sqrt x` as `sqrt(abs(x))`.
+guide names and operands, the full 17-operation `GuideOp` enum, a seeded
+evaluation environment, adjust-value overrides, and local evaluated path
+commands. The enum maps the formula tokens `*/`, `+-`, `+/`, `?:`, `abs`,
+`at2`, `cat2`, `cos`, `max`, `min`, `mod`, `pin`, `sat2`, `sin`, `sqrt`, `tan`,
+and `val` without splitting the compound operations into invented variants.
+The environment contains `w`, `h`, `ss`, edges, centres, standard fractional
+width and height guides, and declared adjust values. Guides evaluate in
+declaration order with `f64` arithmetic and angles in 60000ths of a degree.
+Office's interoperability behaviour applies `mod x y z` as the Euclidean norm
+and `sqrt x` as `sqrt(abs(x))`.
 
 Model move, line, cubic, close, and arc input commands. Evaluation emits only
 move, line, cubic, and close output commands. Arc lowering splits sweeps into
@@ -55,7 +60,7 @@ PresentationML lowering layer consumes it.
 | Category | Test | Asserts |
 |---|---|---|
 | unit | `hand_written_custom_geometry_guides_produce_expected_path_coordinates` | The backlog test gate across seeded values, adjust overrides, ordered guides, and path commands |
-| unit | `every_guide_operation_matches_its_drawingml_formula` | Every `GuideOp` variant evaluates its documented operation |
+| unit | `all_seventeen_formula_tokens_parse_and_evaluate_with_drawingml_argument_order` | Every recognised formula token maps to its compound operation and argument order |
 | regression | `arc_to_is_flattened_to_finite_cubics_with_matching_endpoints` | Arc lowering emits only finite cubic commands and lands on the expected endpoint |
 | regression | `office_mod_and_negative_sqrt_semantics_produce_finite_values` | The Office interoperability rules for Euclidean `mod` and `sqrt(abs(x))` are pinned |
 | regression | `division_by_zero_returns_an_error_instead_of_non_finite_coordinates` | Division by zero is an explicit error |
@@ -65,8 +70,8 @@ The test gate is
 
 ## HLD impact
 
-None. The existing geometry and preset sections already define the evaluator
-contract and provenance boundary.
+- `docs/hld/05-drawingml-model.md`, "Geometry", to replace the inaccurate
+  split arithmetic variants with the 17 formula operations DrawingML defines.
 
 ## Risk routing
 
