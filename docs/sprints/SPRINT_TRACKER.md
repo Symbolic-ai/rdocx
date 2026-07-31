@@ -21,6 +21,7 @@ defended.
 | S06 | M4 | 3 | 3 | 0 | 8 | 3 | Completed unpublished oxml-layout staging, with M4 continuing in S07 |
 | S07 | M4 | 5 | 5 | 0 | 8 | 5 | Completed M4 in unpublished oxml-layout with all 28 hashes unchanged |
 | S08 | M5 | 3 | 3 | 0 | 7 | 3 | Staged unpublished oxml-pdf, installed the exact golden gate, and completed the global CTM rewrite |
+| S09 | M5 | 4 | 4 | 0 | 7 | 4 | Completed nested groups, solid paths, transform-aware collection, and reusable alpha in unpublished oxml-pdf |
 
 ## Completed features
 
@@ -60,6 +61,10 @@ defended.
 | F-037 | S08 | S | 1 | 1 | 2026-07-31 | Unpublished shared PDF backend staging |
 | F-038 | S08 | M | 2 | 1 | 2026-07-31 | Exact deterministic golden-PNG gate |
 | F-039 | S08 | L | 4 | 1 | 2026-07-31 | Global page CTM with reviewed pixel delta |
+| F-040 | S09 | M | 2 | 1 | 2026-07-31 | Recursive PDF group graphics states |
+| F-041 | S09 | M | 2 | 1 | 2026-07-31 | Solid PDF path geometry and paint |
+| F-042 | S09 | M | 2 | 1 | Nested font, image, and link collection |
+| F-044 | S09 | S | 1 | 1 | Reused PDF ExtGState alpha resources |
 
 ## Velocity
 
@@ -81,6 +86,7 @@ five working days.
 | S06 | 3 | 3 | 5.00 |
 | S07 | 5 | 5 | 5.00 |
 | S08 | 3 | 3 | 5.00 |
+| S09 | 4 | 4 | 5.00 |
 
 ## Escalation record
 
@@ -94,3 +100,4 @@ was done about it. Empty is the expected state.
 | 2026-07-31 | Sprint estimate variance exceeded 30 percent | S06 | Reforecast 124 remaining stories at the observed five stories per active week to about 25 active weeks, while retaining dependency-defined sprint boundaries |
 | 2026-07-31 | Sprint estimate variance exceeded 30 percent | S07 | Record 5 actual days against 8 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
 | 2026-07-31 | Sprint estimate variance exceeded 30 percent | S08 | Record 3 actual days against 7 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
+| 2026-07-31 | Sprint estimate variance exceeded 30 percent | S09 | Record 4 actual days against 7 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |

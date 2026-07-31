@@ -24,10 +24,14 @@ passthrough, PNG inflate, soft masks, PDF assembly and the tiny-skia rasteriser
 all carry over unchanged. That is roughly 1,667 lines the presentation side does
 not have to write.
 
-`Path` and `Group` are explicit unsupported arms in the staged backend until
-their rendering work lands. The three font, image, and link collection passes
-also remain flat until they are rewritten on `walk`. The published backend does
-not depend on this staged crate before the shared-crate cutover.
+`Group` recursively emits a saved graphics state, its local matrix, optional
+clip and opacity, its children, and a matching restore. Group effects and the
+raster path remain staged for their owning stories. `Path` emits geometry,
+solid fill and solid stroke operators. Gradient and tile paints remain staged
+for their resource-owning stories. The font, image, and link collection passes
+use `walk` and depth-first leaf ordinals so nested content shares stable resource
+identity with recursive emission. The published backend does not depend on this
+staged crate before the shared-crate cutover.
 
 ## Extending `PositionedElement`
 
@@ -116,32 +120,33 @@ need no backend support at all.
 
 ## The recursion hazard
 
-**Three passes in the PDF backend iterate `page.elements` flat and would
-silently skip anything nested inside a `Group`:**
+**Three passes in the PDF backend must visit every leaf nested inside a
+`Group`:**
 
-| Pass | Location | Symptom if missed |
+| Pass | Implementation | Symptom if missed |
 |---|---|---|
-| Font subsetting | `font.rs:34` | Grouped text renders with no font |
-| XObject registration | `writer.rs:69` | Grouped images vanish |
-| Link annotations | `writer.rs:99` and `:355` | Grouped hyperlinks are dead |
+| Font subsetting | `collect_glyph_usage` in `font.rs` | Grouped text renders with no font |
+| XObject registration | Image collection in `write_pdf` | Grouped images vanish |
+| Link annotations | Allocation, page assembly, and dictionary writing in `write_pdf` | Grouped hyperlinks are dead |
 
-These fail **only for pptx content**, so rdocx's suite never catches them. The
-mitigation is one helper in `oxml-layout` that flattens groups and accumulates
-the transform:
+These failures appear **only for grouped content**, so the mitigation is one
+helper in `oxml-layout` that flattens groups and accumulates the transform:
 
 ```rust
 pub fn walk(elements: &[PositionedElement], f: &mut impl FnMut(&PositionedElement, &Transform));
 ```
 
-All three passes are rewritten on it, and each gets an explicit test.
+All three passes use it. Image and annotation resources use the callback's
+depth-first leaf ordinal, which recursive content emission matches. Link
+rectangles use the accumulated transform before conversion to PDF page
+coordinates. Each pass has an explicit nested-target regression test.
 
-## Three remaining defects to fix
+## Two remaining defects to fix
 
 All are forced by pptx, and all improve rdocx:
 
 | Defect | Location |
 |---|---|
-| `set_fill_rgb` drops `Color.a` everywhere, in both PDF and text | `writer.rs:414` |
 | `dash_pattern: _` means dashes are ignored in **all** PNG output today | `raster.rs:73` |
 | Images keyed `Im{page}_{elem}`, no deduplication, and the full font dictionary is written into every page | `writer.rs` |
 
@@ -169,9 +174,10 @@ contains four stroke-antialias pixel changes across `invoice` and `quote`. The
 other five samples remain exact, and normal check mode requires exact equality
 against that reviewed baseline.
 
-Then: `Group` becomes `q`, `cm`, optional clip via `W n`, optional `/GS gs` for
-opacity, recurse, `Q`. `Path` becomes `m`/`l`/`c`/`h` followed by `f`, `f*`,
-`S`, `B` or `B*` by fill, stroke and rule.
+`Path` is `m`/`l`/`c`/`h` followed by `f`, `f*`, `S`, `B` or `B*` by supported
+fill, stroke and rule. Stroke state uses `w`, `J`, `j`, `M` and `d`. `Group` is
+`q`, `cm`, optional clip via `W n`, optional `/GS gs` for opacity, recurse,
+`Q`.
 
 **Gradients** are the real work: `/Pattern cs /P scn`, a pattern dictionary of
 type 2 whose `/Matrix` is the element-local transform so gradients rotate with
@@ -181,8 +187,11 @@ sorted, deduplicated and clamped, and a single-stop gradient degrades to a solid
 at build time. **Stop alpha needs a luminosity soft mask and is out of scope for
 v1**: composite the colour, drop the alpha, record a diagnostic.
 
-**Alpha** becomes one `/ExtGState` per distinct value, which also fixes the
-existing dropped-alpha bug for rdocx.
+**Alpha** uses one document-wide `/ExtGState` per distinct normalized value.
+Each state sets both `CA` and `ca`, and each page references only the states its
+elements use. Text, lines, rectangles, solid paths, and group opacity share the
+same private registry. A path whose fill and stroke alpha differ repeats its
+geometry so each paint operation selects the right state.
 
 ## The rasteriser
 

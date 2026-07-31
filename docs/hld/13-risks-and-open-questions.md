@@ -42,7 +42,8 @@ the existing 320 tests cannot see it.
 
 *Mitigation*: the hash harness, built first and gating every PR. Every
 intentional change lands as its own labelled commit with a reviewed delta. Do
-not fold behaviour changes into moves.
+not fold behaviour changes into moves. PDF alpha is additionally gated on
+ExtGState structure and a deterministic midpoint compositing pixel.
 
 ### R2, the PDF coordinate-system flip
 
@@ -56,12 +57,14 @@ across `invoice` and `quote`. Normal check mode remains exact with no tolerance.
 
 ### R3, `Group`-blind collection passes
 
-Three passes in the PDF backend iterate elements flat. Missing one produces PDFs
-with absent fonts, images or link annotations, **and only for pptx content**, so
-rdocx's suite never catches it.
+Three passes in the PDF backend must stay aligned with recursive content
+emission. Missing one produces PDFs with absent fonts, images or link
+annotations for grouped content.
 
-*Mitigation*: the `walk()` helper is mandatory, all three passes are rewritten
-on it, and each gets an explicit test.
+*Mitigation*: all three passes use the mandatory `walk()` helper. Image and
+annotation resources share depth-first leaf ordinals with recursive emission,
+link rectangles apply the accumulated transform, and each pass has an explicit
+nested-target regression test.
 
 ### R4, inheritance correctness
 

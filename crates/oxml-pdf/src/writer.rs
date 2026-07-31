@@ -1,13 +1,113 @@
 //! PDF document writer: assembles pages, fonts, images, metadata, and outlines.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
-use oxml_layout::{FontId, LayoutResult, PositionedElement};
-use pdf_writer::types::{ActionType, AnnotationType, CidFontType, FontFlags, SystemInfo};
+use oxml_layout::{
+    FillRule, FontId, LayoutResult, LineCap, LineJoin, Paint, Path, PathCommand, PathElement,
+    PositionedElement, Stroke, walk,
+};
+use pdf_writer::types::{
+    ActionType, AnnotationType, CidFontType, FontFlags, LineCapStyle, LineJoinStyle, SystemInfo,
+};
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
 use crate::font::{self, PreparedFont};
 use crate::image;
+
+struct AlphaEntry {
+    key: u32,
+    alpha: f32,
+    name: String,
+    reference: Ref,
+}
+
+struct AlphaStates {
+    entries: Vec<AlphaEntry>,
+    by_key: HashMap<u32, usize>,
+}
+
+impl AlphaStates {
+    fn new(pages: &[oxml_layout::PageFrame], alloc: &mut impl FnMut() -> Ref) -> Self {
+        let mut keys = BTreeSet::new();
+        for page in pages {
+            collect_alpha_keys(&page.elements, &mut keys);
+        }
+
+        let entries: Vec<AlphaEntry> = keys
+            .into_iter()
+            .enumerate()
+            .map(|(index, key)| AlphaEntry {
+                key,
+                alpha: f32::from_bits(key),
+                name: format!("GS{index}"),
+                reference: alloc(),
+            })
+            .collect();
+        let by_key = entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| (entry.key, index))
+            .collect();
+        Self { entries, by_key }
+    }
+
+    fn entry(&self, alpha: f64) -> Option<&AlphaEntry> {
+        let key = alpha_key(alpha)?;
+        self.by_key.get(&key).map(|index| &self.entries[*index])
+    }
+
+    fn page_entries(&self, page: &oxml_layout::PageFrame) -> Vec<&AlphaEntry> {
+        let mut keys = BTreeSet::new();
+        collect_alpha_keys(&page.elements, &mut keys);
+        keys.into_iter()
+            .filter_map(|key| self.by_key.get(&key).map(|index| &self.entries[*index]))
+            .collect()
+    }
+}
+
+fn alpha_key(alpha: f64) -> Option<u32> {
+    let normalized = if alpha.is_finite() {
+        alpha.clamp(0.0, 1.0) as f32
+    } else {
+        1.0
+    };
+    let normalized = if normalized == 0.0 { 0.0 } else { normalized };
+    (normalized < 1.0).then(|| normalized.to_bits())
+}
+
+fn collect_alpha_keys(elements: &[PositionedElement], keys: &mut BTreeSet<u32>) {
+    for element in elements {
+        match element {
+            PositionedElement::Text(run) => insert_alpha(keys, run.color.a),
+            PositionedElement::Line { color, .. } | PositionedElement::FilledRect { color, .. } => {
+                insert_alpha(keys, color.a)
+            }
+            PositionedElement::Path(path) => {
+                if let Some(Paint::Solid(color)) = &path.fill {
+                    insert_alpha(keys, color.a);
+                }
+                if let Some(Stroke {
+                    paint: Paint::Solid(color),
+                    ..
+                }) = &path.stroke
+                {
+                    insert_alpha(keys, color.a);
+                }
+            }
+            PositionedElement::Group(group) => {
+                insert_alpha(keys, group.opacity);
+                collect_alpha_keys(&group.children, keys);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn insert_alpha(keys: &mut BTreeSet<u32>, alpha: f64) {
+    if let Some(key) = alpha_key(alpha) {
+        keys.insert(key);
+    }
+}
 
 /// Write a complete PDF document from layout results.
 pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
@@ -65,13 +165,16 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
     let mut image_map: HashMap<(usize, usize), usize> = HashMap::new();
 
     for (page_idx, page) in layout.pages.iter().enumerate() {
-        for (elem_idx, element) in page.elements.iter().enumerate() {
+        let mut elem_idx = 0;
+        walk(&page.elements, &mut |element, _| {
+            let current_idx = elem_idx;
+            elem_idx += 1;
             if let PositionedElement::Image {
                 data, content_type, ..
             } = element
             {
                 if data.is_empty() {
-                    continue;
+                    return;
                 }
                 if let Some(decoded) = image::decode_image(data, content_type) {
                     let xobject_ref = alloc();
@@ -86,21 +189,26 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
                         xobject_ref,
                         smask_ref,
                     });
-                    image_map.insert((page_idx, elem_idx), idx);
+                    image_map.insert((page_idx, current_idx), idx);
                 }
             }
-        }
+        });
     }
 
     // ── Annotation refs ──────────────────────────────────────────────
     let mut annotation_refs: HashMap<(usize, usize), Ref> = HashMap::new();
     for (page_idx, page) in layout.pages.iter().enumerate() {
-        for (elem_idx, element) in page.elements.iter().enumerate() {
+        let mut elem_idx = 0;
+        walk(&page.elements, &mut |element, _| {
+            let current_idx = elem_idx;
+            elem_idx += 1;
             if let PositionedElement::LinkAnnotation { .. } = element {
-                annotation_refs.insert((page_idx, elem_idx), alloc());
+                annotation_refs.insert((page_idx, current_idx), alloc());
             }
-        }
+        });
     }
+
+    let alpha_states = AlphaStates::new(&layout.pages, &mut alloc);
 
     // ── Outline item refs ────────────────────────────────────────────
     let outline_item_ids: Vec<Ref> = layout.outlines.iter().map(|_| alloc()).collect();
@@ -279,14 +387,27 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
         }
     }
 
+    for entry in &alpha_states.entries {
+        let mut state = pdf.ext_graphics(entry.reference);
+        state.stroking_alpha(entry.alpha);
+        state.non_stroking_alpha(entry.alpha);
+        state.finish();
+    }
+
     // ── Write pages ──────────────────────────────────────────────────
     for (page_idx, page) in layout.pages.iter().enumerate() {
         let page_id = page_ids[page_idx];
         let content_id = content_ids[page_idx];
 
         // Build content stream
-        let content_bytes =
-            build_page_content(page_idx, page, &prepared_fonts, &font_refs, &image_map);
+        let content_bytes = build_page_content(
+            page_idx,
+            page,
+            &prepared_fonts,
+            &font_refs,
+            &image_map,
+            &alpha_states,
+        );
 
         // Compress and write content stream
         let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&content_bytes, 6);
@@ -333,14 +454,29 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
             xobjects.finish();
         }
 
+        let page_alpha_states = alpha_states.page_entries(page);
+        if !page_alpha_states.is_empty() {
+            let mut states = resources.ext_g_states();
+            for entry in page_alpha_states {
+                states.pair(Name(entry.name.as_bytes()), entry.reference);
+            }
+            states.finish();
+        }
+
         resources.finish();
 
         // Annotations (hyperlinks)
-        let page_annotations: Vec<Ref> = annotation_refs
-            .iter()
-            .filter(|((pi, _), _)| *pi == page_idx)
-            .map(|(_, annot_ref)| *annot_ref)
-            .collect();
+        let mut page_annotations = Vec::new();
+        let mut elem_idx = 0;
+        walk(&page.elements, &mut |element, _| {
+            let current_idx = elem_idx;
+            elem_idx += 1;
+            if matches!(element, PositionedElement::LinkAnnotation { .. })
+                && let Some(reference) = annotation_refs.get(&(page_idx, current_idx))
+            {
+                page_annotations.push(*reference);
+            }
+        });
 
         if !page_annotations.is_empty() {
             page_dict.annotations(page_annotations.iter().copied());
@@ -351,10 +487,14 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
 
     // ── Write link annotations ───────────────────────────────────────
     for (page_idx, page) in layout.pages.iter().enumerate() {
-        for (elem_idx, element) in page.elements.iter().enumerate() {
+        let mut elem_idx = 0;
+        walk(&page.elements, &mut |element, transform| {
+            let current_idx = elem_idx;
+            elem_idx += 1;
             if let PositionedElement::LinkAnnotation { rect, url } = element
-                && let Some(&annot_ref) = annotation_refs.get(&(page_idx, elem_idx))
+                && let Some(&annot_ref) = annotation_refs.get(&(page_idx, current_idx))
             {
+                let rect = transform.transform_rect_bbox(*rect);
                 let page_height = page.height;
                 let mut annot = pdf.annotation(annot_ref);
                 annot.subtype(AnnotationType::Link);
@@ -371,7 +511,7 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
                     .uri(Str(url.as_bytes()));
                 annot.finish();
             }
-        }
+        });
     }
 
     // ── Write outlines/bookmarks ─────────────────────────────────────
@@ -396,17 +536,46 @@ fn build_page_content(
     prepared_fonts: &HashMap<FontId, PreparedFont>,
     font_refs: &HashMap<FontId, (Ref, Ref, Ref, Ref, Ref)>,
     image_map: &HashMap<(usize, usize), usize>,
+    alpha_states: &AlphaStates,
 ) -> Vec<u8> {
     let mut content = Content::new();
     let page_height = page.height as f32;
     content.save_state();
     content.transform([1.0, 0.0, 0.0, -1.0, 0.0, page_height]);
 
-    for (elem_idx, element) in page.elements.iter().enumerate() {
+    let mut state = EmitState {
+        page_idx,
+        prepared_fonts,
+        font_refs,
+        image_map,
+        alpha_states,
+        leaf_index: 0,
+    };
+    emit_elements(&mut content, &page.elements, &mut state);
+
+    content.restore_state();
+    content.finish().to_vec()
+}
+
+struct EmitState<'a> {
+    page_idx: usize,
+    prepared_fonts: &'a HashMap<FontId, PreparedFont>,
+    font_refs: &'a HashMap<FontId, (Ref, Ref, Ref, Ref, Ref)>,
+    image_map: &'a HashMap<(usize, usize), usize>,
+    alpha_states: &'a AlphaStates,
+    leaf_index: usize,
+}
+
+fn emit_elements(content: &mut Content, elements: &[PositionedElement], state: &mut EmitState<'_>) {
+    for element in elements {
+        let elem_idx = state.leaf_index;
+        if !matches!(element, PositionedElement::Group(_)) {
+            state.leaf_index += 1;
+        }
         match element {
             PositionedElement::Text(run) => {
-                if let Some(prepared) = prepared_fonts.get(&run.font_id)
-                    && font_refs.contains_key(&run.font_id)
+                if let Some(prepared) = state.prepared_fonts.get(&run.font_id)
+                    && state.font_refs.contains_key(&run.font_id)
                 {
                     let font_name = format!("F{}", run.font_id.0);
 
@@ -418,6 +587,7 @@ fn build_page_content(
                         run.color.g as f32,
                         run.color.b as f32,
                     );
+                    apply_alpha(content, run.color.a, state.alpha_states);
 
                     content.begin_text();
                     content.set_font(Name(font_name.as_bytes()), run.font_size as f32);
@@ -434,7 +604,7 @@ fn build_page_content(
 
                     // Remap glyph IDs and emit with TJ operator
                     emit_glyphs(
-                        &mut content,
+                        content,
                         &run.glyph_ids,
                         &run.advances,
                         run.font_size,
@@ -455,6 +625,7 @@ fn build_page_content(
             } => {
                 content.save_state();
                 content.set_stroke_rgb(color.r as f32, color.g as f32, color.b as f32);
+                apply_alpha(content, color.a, state.alpha_states);
                 content.set_line_width(*width as f32);
                 if let Some((on, off)) = dash_pattern {
                     content.set_dash_pattern([*on as f32, *off as f32], 0.0);
@@ -467,6 +638,7 @@ fn build_page_content(
             PositionedElement::FilledRect { rect, color } => {
                 content.save_state();
                 content.set_fill_rgb(color.r as f32, color.g as f32, color.b as f32);
+                apply_alpha(content, color.a, state.alpha_states);
                 content.rect(
                     rect.x as f32,
                     rect.y as f32,
@@ -477,8 +649,8 @@ fn build_page_content(
                 content.restore_state();
             }
             PositionedElement::Image { rect, data, .. } => {
-                if !data.is_empty() && image_map.contains_key(&(page_idx, elem_idx)) {
-                    let img_name = format!("Im{}_{}", page_idx, elem_idx);
+                if !data.is_empty() && state.image_map.contains_key(&(state.page_idx, elem_idx)) {
+                    let img_name = format!("Im{}_{}", state.page_idx, elem_idx);
 
                     content.save_state();
                     // Cancel the page flip while preserving the image rectangle.
@@ -497,17 +669,172 @@ fn build_page_content(
             PositionedElement::LinkAnnotation { .. } => {
                 // Link annotations are written separately, not in the content stream
             }
-            PositionedElement::Path(_) | PositionedElement::Group(_) => {
-                // F-040 and F-041 add staged group and path rendering.
+            PositionedElement::Path(path) => {
+                emit_path(content, path, state.alpha_states);
+            }
+            PositionedElement::Group(group) => {
+                content.save_state();
+                content.transform([
+                    group.transform.a as f32,
+                    group.transform.b as f32,
+                    group.transform.c as f32,
+                    group.transform.d as f32,
+                    group.transform.e as f32,
+                    group.transform.f as f32,
+                ]);
+                if let Some(clip) = &group.clip {
+                    emit_path_geometry(content, clip);
+                    match clip.fill_rule {
+                        FillRule::NonZero => content.clip_nonzero(),
+                        FillRule::EvenOdd => content.clip_even_odd(),
+                    };
+                    content.end_path();
+                }
+                apply_alpha(content, group.opacity, state.alpha_states);
+                emit_elements(content, &group.children, state);
+                content.restore_state();
             }
             _ => {
                 // Later oxml-layout elements remain unsupported until assigned.
             }
         }
     }
+}
+
+fn apply_alpha(content: &mut Content, alpha: f64, states: &AlphaStates) {
+    if let Some(entry) = states.entry(alpha) {
+        content.set_parameters(Name(entry.name.as_bytes()));
+    }
+}
+
+fn emit_path(content: &mut Content, element: &PathElement, alpha_states: &AlphaStates) {
+    let fill = element.fill.as_ref().and_then(solid_color);
+    let stroke = element
+        .stroke
+        .as_ref()
+        .and_then(|stroke| solid_color(&stroke.paint).map(|color| (stroke, color)));
+
+    if fill.is_none() && stroke.is_none() {
+        return;
+    }
+
+    content.save_state();
+
+    match (fill, stroke) {
+        (Some(fill), Some((stroke, stroke_color)))
+            if alpha_key(fill.a) == alpha_key(stroke_color.a) =>
+        {
+            set_fill_color(content, fill, alpha_states);
+            emit_stroke_style(content, stroke, stroke_color);
+            emit_path_geometry(content, &element.path);
+            match element.path.fill_rule {
+                FillRule::NonZero => content.fill_nonzero_and_stroke(),
+                FillRule::EvenOdd => content.fill_even_odd_and_stroke(),
+            };
+        }
+        (Some(fill), Some((stroke, _))) => {
+            content.save_state();
+            set_fill_color(content, fill, alpha_states);
+            emit_path_geometry(content, &element.path);
+            match element.path.fill_rule {
+                FillRule::NonZero => content.fill_nonzero(),
+                FillRule::EvenOdd => content.fill_even_odd(),
+            };
+            content.restore_state();
+            content.save_state();
+            emit_stroke_state(content, stroke, alpha_states);
+            emit_path_geometry(content, &element.path);
+            content.stroke();
+            content.restore_state();
+        }
+        (Some(fill), None) => {
+            set_fill_color(content, fill, alpha_states);
+            emit_path_geometry(content, &element.path);
+            match element.path.fill_rule {
+                FillRule::NonZero => content.fill_nonzero(),
+                FillRule::EvenOdd => content.fill_even_odd(),
+            };
+        }
+        (None, Some((stroke, _))) => {
+            emit_stroke_state(content, stroke, alpha_states);
+            emit_path_geometry(content, &element.path);
+            content.stroke();
+        }
+        (None, None) => {}
+    }
 
     content.restore_state();
-    content.finish().to_vec()
+}
+
+fn solid_color(paint: &Paint) -> Option<oxml_layout::Color> {
+    match paint {
+        Paint::Solid(color) => Some(*color),
+        Paint::Linear { .. } | Paint::Radial { .. } | Paint::Tile { .. } => None,
+    }
+}
+
+fn set_fill_color(content: &mut Content, color: oxml_layout::Color, alpha_states: &AlphaStates) {
+    content.set_fill_rgb(color.r as f32, color.g as f32, color.b as f32);
+    apply_alpha(content, color.a, alpha_states);
+}
+
+fn emit_stroke_state(content: &mut Content, stroke: &Stroke, alpha_states: &AlphaStates) {
+    let Some(color) = solid_color(&stroke.paint) else {
+        return;
+    };
+    emit_stroke_style(content, stroke, color);
+    apply_alpha(content, color.a, alpha_states);
+}
+
+fn emit_stroke_style(content: &mut Content, stroke: &Stroke, color: oxml_layout::Color) {
+    let width = if stroke.width.is_finite() {
+        stroke.width.max(0.0) as f32
+    } else {
+        0.0
+    };
+
+    content.set_stroke_rgb(color.r as f32, color.g as f32, color.b as f32);
+    content.set_line_width(width);
+    content.set_line_cap(match stroke.cap {
+        LineCap::Butt => LineCapStyle::ButtCap,
+        LineCap::Round => LineCapStyle::RoundCap,
+        LineCap::Square => LineCapStyle::ProjectingSquareCap,
+    });
+    content.set_line_join(match stroke.join {
+        LineJoin::Miter => LineJoinStyle::MiterJoin,
+        LineJoin::Round => LineJoinStyle::RoundJoin,
+        LineJoin::Bevel => LineJoinStyle::BevelJoin,
+    });
+    content.set_miter_limit(10.0);
+    if let Some(dash) = &stroke.dash {
+        content.set_dash_pattern(dash.iter().map(|value| *value as f32), 0.0);
+    }
+}
+
+fn emit_path_geometry(content: &mut Content, path: &Path) {
+    for command in &path.commands {
+        match command {
+            PathCommand::MoveTo(point) => {
+                content.move_to(point.x as f32, point.y as f32);
+            }
+            PathCommand::LineTo(point) => {
+                content.line_to(point.x as f32, point.y as f32);
+            }
+            PathCommand::CurveTo { c1, c2, to } => {
+                content.cubic_to(
+                    c1.x as f32,
+                    c1.y as f32,
+                    c2.x as f32,
+                    c2.y as f32,
+                    to.x as f32,
+                    to.y as f32,
+                );
+            }
+            PathCommand::Close => {
+                content.close_path();
+            }
+        }
+    }
 }
 
 /// Emit glyph IDs using the TJ operator with per-glyph positioning.
@@ -709,7 +1036,10 @@ fn sanitize_font_name(family: &str, bold: bool, italic: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oxml_layout::{Color, FontData, GlyphRun, MediaId, PageFrame, Point, Rect};
+    use oxml_layout::{
+        Color, Effect, FillRule, FontData, GlyphRun, GroupElement, LineCap, LineJoin, MediaId,
+        PageFrame, Paint, Path, PathCommand, PathElement, Point, Rect, Stroke, Transform,
+    };
 
     fn page_with(elements: Vec<PositionedElement>) -> PageFrame {
         PageFrame::new(1, 612.0, 792.0, elements)
@@ -717,14 +1047,526 @@ mod tests {
 
     fn content_for(elements: Vec<PositionedElement>) -> String {
         let page = page_with(elements);
+        let mut next_ref = 100;
+        let alpha_states = AlphaStates::new(std::slice::from_ref(&page), &mut || {
+            let reference = Ref::new(next_ref);
+            next_ref += 1;
+            reference
+        });
         String::from_utf8(build_page_content(
             0,
             &page,
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
+            &alpha_states,
         ))
         .expect("PDF content operators are ASCII")
+    }
+
+    fn path_element(
+        fill_rule: FillRule,
+        fill: Option<Paint>,
+        stroke: Option<Stroke>,
+    ) -> PositionedElement {
+        PositionedElement::Path(PathElement {
+            path: Path {
+                commands: vec![
+                    PathCommand::MoveTo(Point { x: 10.0, y: 20.0 }),
+                    PathCommand::LineTo(Point { x: 30.0, y: 40.0 }),
+                    PathCommand::CurveTo {
+                        c1: Point { x: 50.0, y: 60.0 },
+                        c2: Point { x: 70.0, y: 80.0 },
+                        to: Point { x: 90.0, y: 100.0 },
+                    },
+                    PathCommand::Close,
+                ],
+                fill_rule,
+            },
+            fill,
+            stroke,
+        })
+    }
+
+    fn solid_stroke() -> Stroke {
+        Stroke {
+            paint: Paint::Solid(Color::BLACK),
+            width: 2.0,
+            cap: LineCap::Round,
+            join: LineJoin::Bevel,
+            dash: Some(vec![3.0, 4.0]),
+        }
+    }
+
+    fn has_operator(content: &str, operator: &str) -> bool {
+        content.lines().any(|line| line == operator)
+    }
+
+    #[test]
+    fn path_fill_only_emits_f() {
+        let content = content_for(vec![path_element(
+            FillRule::NonZero,
+            Some(Paint::Solid(Color::BLACK)),
+            None,
+        )]);
+
+        assert!(has_operator(&content, "f"), "{content}");
+    }
+
+    #[test]
+    fn path_stroke_only_emits_s() {
+        let content = content_for(vec![path_element(
+            FillRule::NonZero,
+            None,
+            Some(solid_stroke()),
+        )]);
+
+        assert!(has_operator(&content, "S"), "{content}");
+    }
+
+    #[test]
+    fn path_fill_and_stroke_emit_b() {
+        let content = content_for(vec![path_element(
+            FillRule::NonZero,
+            Some(Paint::Solid(Color::BLACK)),
+            Some(solid_stroke()),
+        )]);
+
+        assert!(has_operator(&content, "B"), "{content}");
+        assert_eq!(content.lines().filter(|line| *line == "q").count(), 2);
+        assert_eq!(content.lines().filter(|line| *line == "Q").count(), 2);
+    }
+
+    #[test]
+    fn even_odd_paths_use_starred_operators() {
+        let fill = content_for(vec![path_element(
+            FillRule::EvenOdd,
+            Some(Paint::Solid(Color::BLACK)),
+            None,
+        )]);
+        let both = content_for(vec![path_element(
+            FillRule::EvenOdd,
+            Some(Paint::Solid(Color::BLACK)),
+            Some(solid_stroke()),
+        )]);
+
+        assert!(has_operator(&fill, "f*"), "{fill}");
+        assert!(has_operator(&both, "B*"), "{both}");
+    }
+
+    #[test]
+    fn path_geometry_preserves_command_order() {
+        let content = content_for(vec![path_element(
+            FillRule::NonZero,
+            Some(Paint::Solid(Color::BLACK)),
+            None,
+        )]);
+
+        assert!(
+            content.contains("10 20 m\n30 40 l\n50 60 70 80 90 100 c\nh\nf"),
+            "{content}"
+        );
+    }
+
+    #[test]
+    fn stroke_state_maps_cap_join_miter_and_dash() {
+        let content = content_for(vec![path_element(
+            FillRule::NonZero,
+            None,
+            Some(solid_stroke()),
+        )]);
+
+        assert!(content.contains("2 w"), "{content}");
+        assert!(content.contains("1 J"), "{content}");
+        assert!(content.contains("2 j"), "{content}");
+        assert!(content.contains("10 M"), "{content}");
+        assert!(content.contains("[3 4] 0 d"), "{content}");
+    }
+
+    #[test]
+    fn staged_gradient_component_does_not_block_solid_component() {
+        let content = content_for(vec![path_element(
+            FillRule::NonZero,
+            Some(Paint::Linear {
+                start: Point { x: 0.0, y: 0.0 },
+                end: Point { x: 100.0, y: 0.0 },
+                stops: Vec::new(),
+                extend: (false, false),
+            }),
+            Some(solid_stroke()),
+        )]);
+
+        assert!(has_operator(&content, "S"), "{content}");
+        assert!(!content.contains("/Pattern"), "{content}");
+    }
+
+    fn alpha_rect(alpha: f64) -> PositionedElement {
+        PositionedElement::FilledRect {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            color: Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: alpha,
+            },
+        }
+    }
+
+    fn pdf_for(elements: Vec<PositionedElement>) -> String {
+        let layout = LayoutResult::new(vec![page_with(elements)], Vec::new(), None, Vec::new());
+        String::from_utf8_lossy(&write_pdf(&layout)).into_owned()
+    }
+
+    #[test]
+    fn same_alpha_reuses_one_extgstate() {
+        let pdf = pdf_for(vec![alpha_rect(0.5), alpha_rect(0.5)]);
+
+        assert!(pdf.contains("/ExtGState"), "{pdf}");
+        assert_eq!(pdf.matches("/CA 0.5").count(), 1, "{pdf}");
+        assert_eq!(pdf.matches("/ca 0.5").count(), 1, "{pdf}");
+    }
+
+    #[test]
+    fn distinct_alpha_values_create_distinct_states() {
+        let pdf = pdf_for(vec![alpha_rect(0.5), alpha_rect(0.25)]);
+
+        assert_eq!(pdf.matches("/CA ").count(), 2, "{pdf}");
+        assert_eq!(pdf.matches("/ca ").count(), 2, "{pdf}");
+    }
+
+    #[test]
+    fn opaque_elements_emit_no_alpha_state() {
+        let pdf = pdf_for(vec![alpha_rect(1.0)]);
+
+        assert!(!pdf.contains("/ExtGState"), "{pdf}");
+        assert!(!pdf.contains("/CA "), "{pdf}");
+        assert!(!pdf.contains("/ca "), "{pdf}");
+    }
+
+    #[test]
+    fn alpha_state_sets_fill_and_stroke_constants() {
+        let content = content_for(vec![alpha_rect(0.5)]);
+        let pdf = pdf_for(vec![alpha_rect(0.5)]);
+
+        assert!(content.contains("/GS0 gs"), "{content}");
+        assert!(pdf.contains("/CA 0.5"), "{pdf}");
+        assert!(pdf.contains("/ca 0.5"), "{pdf}");
+    }
+
+    #[test]
+    fn solid_path_alpha_uses_shared_registry() {
+        let half_black = Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.5,
+        };
+        let path = path_element(
+            FillRule::NonZero,
+            Some(Paint::Solid(half_black)),
+            Some(Stroke {
+                paint: Paint::Solid(half_black),
+                ..solid_stroke()
+            }),
+        );
+        let content = content_for(vec![alpha_rect(0.5), path]);
+        let pdf = pdf_for(vec![
+            alpha_rect(0.5),
+            path_element(
+                FillRule::NonZero,
+                Some(Paint::Solid(half_black)),
+                Some(Stroke {
+                    paint: Paint::Solid(half_black),
+                    ..solid_stroke()
+                }),
+            ),
+        ]);
+
+        assert_eq!(pdf.matches("/CA 0.5").count(), 1, "{pdf}");
+        assert_eq!(content.matches("/GS0 gs").count(), 2, "{content}");
+        assert!(has_operator(&content, "B"), "{content}");
+    }
+
+    #[test]
+    fn different_fill_and_stroke_alpha_repeat_path_geometry() {
+        let fill = Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.25,
+        };
+        let stroke = Color { a: 0.5, ..fill };
+        let content = content_for(vec![path_element(
+            FillRule::NonZero,
+            Some(Paint::Solid(fill)),
+            Some(Stroke {
+                paint: Paint::Solid(stroke),
+                ..solid_stroke()
+            }),
+        )]);
+
+        assert_eq!(content.matches("10 20 m").count(), 2, "{content}");
+        assert!(has_operator(&content, "f"), "{content}");
+        assert!(has_operator(&content, "S"), "{content}");
+        assert!(!has_operator(&content, "B"), "{content}");
+    }
+
+    #[test]
+    fn opaque_stroke_restores_after_transparent_fill() {
+        let fill = Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.25,
+        };
+        let content = content_for(vec![path_element(
+            FillRule::NonZero,
+            Some(Paint::Solid(fill)),
+            Some(Stroke {
+                paint: Paint::Solid(Color::BLACK),
+                ..solid_stroke()
+            }),
+        )]);
+
+        assert_eq!(content.matches("/GS0 gs").count(), 1, "{content}");
+        assert_eq!(content.lines().filter(|line| *line == "q").count(), 4);
+        assert_eq!(content.lines().filter(|line| *line == "Q").count(), 4);
+    }
+
+    fn group(transform: Transform, children: Vec<PositionedElement>) -> PositionedElement {
+        PositionedElement::Group(GroupElement {
+            transform,
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children,
+        })
+    }
+
+    #[test]
+    fn three_deep_groups_balance_graphics_state() {
+        let content = content_for(vec![group(
+            Transform::IDENTITY,
+            vec![group(
+                Transform::IDENTITY,
+                vec![group(Transform::IDENTITY, vec![alpha_rect(1.0)])],
+            )],
+        )]);
+
+        assert_eq!(
+            content.lines().filter(|line| *line == "q").count(),
+            content.lines().filter(|line| *line == "Q").count(),
+            "{content}"
+        );
+        assert_eq!(content.lines().filter(|line| *line == "q").count(), 5);
+    }
+
+    #[test]
+    fn group_emits_transform_before_children() {
+        let transform = Transform {
+            a: 1.0,
+            b: 2.0,
+            c: 3.0,
+            d: 4.0,
+            e: 5.0,
+            f: 6.0,
+        };
+        let content = content_for(vec![group(transform, vec![alpha_rect(1.0)])]);
+
+        let matrix = content.find("1 2 3 4 5 6 cm").expect("group matrix");
+        let child = content.find("0 0 10 10 re").expect("child rectangle");
+        assert!(matrix < child, "{content}");
+    }
+
+    #[test]
+    fn group_clip_uses_declared_fill_rule() {
+        let mut nonzero = match group(Transform::IDENTITY, Vec::new()) {
+            PositionedElement::Group(group) => group,
+            _ => unreachable!(),
+        };
+        nonzero.clip = Some(Path::rect(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        }));
+        let mut even_odd = nonzero.clone();
+        even_odd.clip.as_mut().expect("clip").fill_rule = FillRule::EvenOdd;
+        let content = content_for(vec![
+            PositionedElement::Group(nonzero),
+            PositionedElement::Group(even_odd),
+        ]);
+
+        assert!(content.contains("W\nn"), "{content}");
+        assert!(content.contains("W*\nn"), "{content}");
+    }
+
+    #[test]
+    fn group_opacity_uses_registered_graphics_state() {
+        let mut transparent = match group(Transform::IDENTITY, vec![alpha_rect(1.0)]) {
+            PositionedElement::Group(group) => group,
+            _ => unreachable!(),
+        };
+        transparent.opacity = 0.5;
+        let content = content_for(vec![PositionedElement::Group(transparent)]);
+
+        let alpha = content.find("/GS0 gs").expect("group opacity state");
+        let child = content.find("0 0 10 10 re").expect("child rectangle");
+        assert!(alpha < child, "{content}");
+    }
+
+    #[test]
+    fn group_effects_do_not_change_pdf_output_yet() {
+        let plain = group(Transform::IDENTITY, vec![alpha_rect(1.0)]);
+        let mut with_effect = match plain.clone() {
+            PositionedElement::Group(group) => group,
+            _ => unreachable!(),
+        };
+        with_effect.effects.push(Effect::OuterShadow {
+            dx: 1.0,
+            dy: 2.0,
+            blur: 3.0,
+            color: Color::BLACK,
+        });
+
+        assert_eq!(
+            content_for(vec![plain]),
+            content_for(vec![PositionedElement::Group(with_effect)])
+        );
+    }
+
+    #[test]
+    fn grouped_text_is_included_in_font_subsetting() {
+        let font_id = FontId(42);
+        let text = PositionedElement::Text(GlyphRun {
+            origin: Point { x: 0.0, y: 0.0 },
+            font_id,
+            font_size: 12.0,
+            glyph_ids: vec![7],
+            advances: vec![6.0],
+            text: "A".to_owned(),
+            color: Color::BLACK,
+            bold: false,
+            italic: false,
+            field_kind: None,
+            footnote_id: None,
+        });
+        let layout = LayoutResult::new(
+            vec![page_with(vec![group(Transform::IDENTITY, vec![text])])],
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+
+        assert!(font::collect_glyph_usage(&layout).contains_key(&font_id));
+    }
+
+    #[test]
+    fn grouped_image_registers_and_uses_xobject() {
+        let png = tiny_skia::Pixmap::new(1, 1)
+            .expect("one-pixel pixmap")
+            .encode_png()
+            .expect("encode fixture");
+        let image = PositionedElement::Image {
+            rect: Rect {
+                x: 1.0,
+                y: 2.0,
+                width: 3.0,
+                height: 4.0,
+            },
+            data: png,
+            content_type: "image/png".to_owned(),
+            media_id: MediaId(9),
+        };
+        let pdf = pdf_for(vec![group(Transform::IDENTITY, vec![image])]);
+
+        assert!(pdf.contains("/Subtype /Image"), "{pdf}");
+        assert!(pdf.contains("/Im0_0"), "{pdf}");
+    }
+
+    #[test]
+    fn grouped_link_emits_transformed_annotation() {
+        let transform = Transform {
+            e: 10.0,
+            f: 20.0,
+            ..Transform::IDENTITY
+        };
+        let link = PositionedElement::LinkAnnotation {
+            rect: Rect {
+                x: 1.0,
+                y: 2.0,
+                width: 3.0,
+                height: 4.0,
+            },
+            url: "https://example.com".to_owned(),
+        };
+        let pdf = pdf_for(vec![group(transform, vec![link])]);
+
+        assert!(pdf.contains("/Annots ["), "{pdf}");
+        assert!(pdf.contains("/Rect [11 766 14 770]"), "{pdf}");
+    }
+
+    #[test]
+    fn nested_leaf_ordinals_match_content_order() {
+        let png = tiny_skia::Pixmap::new(1, 1)
+            .expect("one-pixel pixmap")
+            .encode_png()
+            .expect("encode fixture");
+        let image = PositionedElement::Image {
+            rect: Rect {
+                x: 1.0,
+                y: 2.0,
+                width: 3.0,
+                height: 4.0,
+            },
+            data: png,
+            content_type: "image/png".to_owned(),
+            media_id: MediaId(10),
+        };
+        let elements = vec![alpha_rect(1.0), group(Transform::IDENTITY, vec![image])];
+        let pdf = pdf_for(elements.clone());
+        let page = page_with(elements);
+        let image_map = HashMap::from([((0, 1), 0)]);
+        let mut next_ref = 100;
+        let alpha_states = AlphaStates::new(std::slice::from_ref(&page), &mut || {
+            let reference = Ref::new(next_ref);
+            next_ref += 1;
+            reference
+        });
+        let content = String::from_utf8(build_page_content(
+            0,
+            &page,
+            &HashMap::new(),
+            &HashMap::new(),
+            &image_map,
+            &alpha_states,
+        ))
+        .expect("PDF content operators are ASCII");
+
+        assert!(pdf.contains("/Im0_1"), "{pdf}");
+        assert!(content.contains("/Im0_1 Do"), "{content}");
+    }
+
+    #[test]
+    fn top_level_collection_output_remains_stable() {
+        let link = PositionedElement::LinkAnnotation {
+            rect: Rect {
+                x: 72.0,
+                y: 100.0,
+                width: 100.0,
+                height: 15.0,
+            },
+            url: "https://example.com".to_owned(),
+        };
+        let pdf = pdf_for(vec![link]);
+
+        assert!(pdf.contains("/Rect [72 677 172 692]"), "{pdf}");
+        assert_eq!(pdf.matches("/Subtype /Link").count(), 1, "{pdf}");
     }
 
     #[test]
@@ -794,12 +1636,19 @@ mod tests {
             ),
         )]);
         let image_map = HashMap::from([((0, 1), 0)]);
+        let mut next_ref = 100;
+        let alpha_states = AlphaStates::new(std::slice::from_ref(&page), &mut || {
+            let reference = Ref::new(next_ref);
+            next_ref += 1;
+            reference
+        });
         let content = String::from_utf8(build_page_content(
             0,
             &page,
             &prepared_fonts,
             &font_refs,
             &image_map,
+            &alpha_states,
         ))
         .expect("PDF content operators are ASCII");
 

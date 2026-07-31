@@ -290,3 +290,36 @@ fn render_image(
         pixmap.fill_rect(fill_rect, &paint, img_transform, None);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::render_page_to_pixmap;
+    use oxml_layout::{Color, PageFrame, PositionedElement, Rect};
+
+    #[test]
+    fn half_alpha_over_white_rasterises_to_midpoint() {
+        let page = PageFrame::new(
+            1,
+            1.0,
+            1.0,
+            vec![PositionedElement::FilledRect {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+                color: Color {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 0.5,
+                },
+            }],
+        );
+
+        let pixmap = render_page_to_pixmap(&page, &[], 72.0).expect("one-pixel page");
+        let pixel = pixmap.pixel(0, 0).expect("one-pixel page has one pixel");
+        assert_eq!((pixel.red(), pixel.green(), pixel.blue()), (128, 128, 128));
+    }
+}

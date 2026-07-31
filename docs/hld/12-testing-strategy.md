@@ -167,13 +167,21 @@ cover the cases that matter now.
   path is exercised while bundled deterministic fonts remain available.
 
 **`oxml-pdf`**
-- `Path` with fill only, stroke only, and both, produces `f`, `S` and `B`, and
-  `q`/`Q` counts balance. One assertion that catches the classic unbalanced
-  graphics-state bug.
+- Three-deep groups balance `q` and `Q`, emit each `cm` before child content,
+  and apply the declared clip rule and shared opacity state before recursion.
+- `Path` with solid fill only, solid stroke only, and both, produces `f`, `S`
+  and `B`. The combined case also proves `q`/`Q` counts balance, which catches
+  the classic unbalanced graphics-state bug.
+- Repeated equal alpha values produce one ExtGState with matching `CA` and
+  `ca`, while distinct values remain distinct and opaque content emits none.
+- A 50 percent black fill over white produces the exact midpoint pixel in the
+  deterministic raster path.
 - **`Group` containing `Text` finds the font.** The regression test for the
   recursion hazard.
 - `Group` containing `Image` registers the XObject.
 - `Group` containing `LinkAnnotation` emits it with a transformed rectangle.
+- A preceding leaf proves nested XObject registration and recursive emission
+  use the same depth-first ordinal.
 - Raster: a rotated rectangle at 72 dpi has a filled interior pixel and an empty
   corner. Deterministic, no golden files.
 

@@ -1103,3 +1103,128 @@ gate.
 **Notes for future sessions.** Preserve the same page and image matrices in
 both PDF writers until the F-046 cutover removes the released duplicate. Do not
 introduce a pixel tolerance.
+
+### F-040, Group rendering
+
+**Sprint.** S09
+**Completed.** 2026-07-31
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The staged PDF writer recursively emits nested groups with
+balanced graphics-state saves and restores, local matrices, optional clipping,
+shared opacity states, and children in document order.
+
+**Non-obvious choices.** Group clips reuse F-041's private geometry emitter and
+group opacity reuses F-044's document-wide alpha registry. Effects remain
+staged, and the raster group path remains owned by F-045.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and `docs/hld/14-development-backlog.md` now
+describe recursive group emission and its exact ordering.
+
+**Tests.** `three_deep_groups_balance_graphics_state`, transform ordering,
+non-zero and even-odd clipping, shared group opacity, staged effects, the exact
+seven-sample golden gate, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Content emission must preserve group boundaries.
+Flattening with `walk` is correct for collection passes but would lose clip and
+opacity scope here.
+
+### F-041, Path rendering
+
+**Sprint.** S09
+**Completed.** 2026-07-31
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Staged PDF paths now emit move, line, cubic, and close
+geometry plus solid fill and stroke state. Paint selection covers `f`, `f*`,
+`S`, `B`, and `B*` with balanced graphics state.
+
+**Non-obvious choices.** The private geometry emitter also serves group clips.
+Gradient and tile components remain staged, while a supported solid component
+still renders when the other paint component is not yet supported.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and `docs/hld/14-development-backlog.md` now
+state the supported geometry, stroke state, and paint operators.
+
+**Tests.** Fill-only, stroke-only, combined, even-odd, command-order, cap, join,
+miter, dash, staged-component, exact seven-sample golden, and integrated full
+gates.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** F-043 owns gradient resources. Preserve the
+single geometry emitter so visible paths and group clips cannot diverge.
+
+### F-042, Rewrite the three collection passes on walk
+
+**Sprint.** S09
+**Completed.** 2026-07-31
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Font usage, image registration, and every link annotation
+pass now traverse nested leaves through `walk`. Image resources, annotations,
+and recursive emission share depth-first leaf ordinals, and grouped link
+rectangles apply the accumulated transform before PDF page conversion.
+
+**Non-obvious choices.** A private per-page emission state carries the resource
+maps and leaf ordinal through recursion. It keeps identity aligned without
+public model fields, pointer keys, or parallel traversal implementations.
+
+**Deviations from the design plan.** None. Microscope pass 1 strengthened the
+grouped-link test to prove the page `/Annots` reference as well as the
+transformed annotation dictionary.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/13-risks-and-open-questions.md`,
+and `docs/hld/14-development-backlog.md` now close the R3 mitigation with the
+implemented traversal and identity contract.
+
+**Tests.** Nested font subsetting, nested XObject registration and use, nested
+transformed link annotations, depth-first leaf identity, top-level stability,
+the exact seven-sample golden gate, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Any new resource collection pass must use the
+same depth-first leaf contract as recursive content emission.
+
+### F-044, ExtGState alpha
+
+**Sprint.** S09
+**Completed.** 2026-07-31
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The staged PDF writer allocates one document-wide
+`/ExtGState` for each normalized non-opaque alpha value, writes matching `CA`
+and `ca`, and exposes only the states each page uses. Text, lines, rectangles,
+solid paths, and group opacity share the registry.
+
+**Non-obvious choices.** Keys use the serialized `f32` value, finite inputs are
+clamped, negative zero is normalized, and non-finite values remain opaque. A
+path with different fill and stroke alpha repeats its geometry so each paint
+operation can select the correct state.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/13-risks-and-open-questions.md`,
+and `docs/hld/14-development-backlog.md` now describe shared PDF alpha and its
+deterministic raster gate.
+
+**Tests.** Equal-state reuse, distinct states, matching `CA` and `ca`, opaque
+content, shared path alpha, differing fill and stroke alpha, exact midpoint
+raster compositing, the exact seven-sample golden gate, and the integrated full
+gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Reuse this private registry for any new PDF
+primitive with alpha. Do not allocate graphics states per element.

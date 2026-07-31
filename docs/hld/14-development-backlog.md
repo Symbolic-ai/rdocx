@@ -346,19 +346,22 @@ the reviewed manifest exactly.
 
 ### F-040, Group rendering (M)
 `q`, `cm`, optional clip via `W n`, optional `/ExtGState` for opacity, recurse,
-`Q`.
+`Q`. Effects and raster group support remain owned by later renderer work.
 **Depends on**: F-039.
 **Test gate**: `q`/`Q` counts balance in the content stream for a three-deep
 nesting.
 
 ### F-041, Path rendering (M)
 `m`, `l`, `c`, `h` then `f`, `f*`, `S`, `B` or `B*`. Stroke state via `w`, `J`,
-`j`, `M`, `d`.
+`j`, `M`, `d`. This story renders solid paint components. Gradient shading
+dictionaries remain owned by F-043.
 **Depends on**: F-039.
 **Test gate**: fill-only emits `f`, stroke-only `S`, both `B`.
 
 ### F-042, Rewrite the three collection passes on walk (M)
-Font subsetting, XObject registration and link annotations.
+Font subsetting, XObject registration and link annotations use `walk`.
+Depth-first leaf ordinals align resources with recursive emission, and link
+rectangles apply the accumulated group transform.
 **Depends on**: F-035, F-040.
 **Test gate**: three tests, one per pass, each with the target nested inside a
 group. This is the R3 regression gate.
@@ -371,7 +374,8 @@ exponentials, and a `/Matrix` so gradients rotate with their shape.
 on sampled raster pixels.
 
 ### F-044, ExtGState alpha (S)
-One state per distinct alpha. Fixes the existing dropped-alpha bug.
+One document-wide state per distinct normalized alpha, with page-local resource
+references. Differing fill and stroke alpha paint the path in two operations.
 **Depends on**: F-039.
 **Test gate**: a 50 percent alpha fill over white rasterises to the midpoint colour.
 
