@@ -25,3 +25,4 @@ thiserror = { workspace = true }
 fontdb = { version = "0.23", default-features = false, features = ["std"] }
 harfrust = { workspace = true }
 ttf-parser = { workspace = true }
+unicode-linebreak = { workspace = true }

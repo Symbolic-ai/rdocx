@@ -1,6 +1,6 @@
 # F-030, Decouple line.rs
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S06
 **Size**: L
 **Depends on**: F-029
@@ -103,12 +103,12 @@ Expected to remain unchanged. No released call site consumes staged `line.rs`.
 
 ## Implementation checklist
 
-- [ ] Copy `line.rs` into the staged crate and add its existing dependency.
-- [ ] Replace all docx types with the approved concrete layout types.
-- [ ] Replace twips and string spacing rules with `LineSpacing`.
-- [ ] Add `wrap: bool` with true as the compatibility default.
-- [ ] Rewrite all 11 copied tests and add spacing and no-wrap coverage.
-- [ ] Confirm no released consumer change and run dependency, package, and hash
+- [x] Copy `line.rs` into the staged crate and add its existing dependency.
+- [x] Replace all docx types with the approved concrete layout types.
+- [x] Replace twips and string spacing rules with `LineSpacing`.
+- [x] Add `wrap: bool` with true as the compatibility default.
+- [x] Rewrite all 11 copied tests and add spacing and no-wrap coverage.
+- [x] Confirm no released consumer change and run dependency, package, and hash
       riders.
 
 ## Open questions

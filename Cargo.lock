@@ -429,6 +429,7 @@ dependencies = [
  "harfrust",
  "thiserror",
  "ttf-parser",
+ "unicode-linebreak",
 ]
 
 [[package]]
