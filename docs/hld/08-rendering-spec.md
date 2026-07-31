@@ -123,11 +123,11 @@ need no backend support at all.
 **Three passes in the PDF backend must visit every leaf nested inside a
 `Group`:**
 
-| Pass | Location | Symptom if missed |
+| Pass | Implementation | Symptom if missed |
 |---|---|---|
-| Font subsetting | `font.rs:34` | Grouped text renders with no font |
-| XObject registration | `writer.rs:69` | Grouped images vanish |
-| Link annotations | `writer.rs:99` and `:355` | Grouped hyperlinks are dead |
+| Font subsetting | `collect_glyph_usage` in `font.rs` | Grouped text renders with no font |
+| XObject registration | Image collection in `write_pdf` | Grouped images vanish |
+| Link annotations | Allocation, page assembly, and dictionary writing in `write_pdf` | Grouped hyperlinks are dead |
 
 These failures appear **only for grouped content**, so the mitigation is one
 helper in `oxml-layout` that flattens groups and accumulates the transform:
