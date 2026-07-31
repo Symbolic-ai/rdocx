@@ -27,7 +27,7 @@ before the coordinate-system rewrite so any regression has one possible cause.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-037 | Create oxml-pdf | S | pending | - |
+| F-037 | Create oxml-pdf | S | in-progress | codex |
 | F-038 | Golden-PNG harness | M | pending | - |
 | F-039 | Global CTM flip | L | pending | - |
 
