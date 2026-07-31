@@ -1,7 +1,12 @@
 //! Page-to-image rendering using tiny-skia software rasterizer.
 
-use oxml_layout::{LayoutResult, PageFrame, PositionedElement};
-use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use oxml_layout::{
+    LayoutResult, LineCap, LineJoin, PageFrame, Paint as LayoutPaint, Path as LayoutPath,
+    PathCommand, PositionedElement, Stroke as LayoutStroke,
+};
+use tiny_skia::{
+    FillRule, Mask, Paint, PathBuilder, Pixmap, PixmapPaint, Stroke, StrokeDash, Transform,
+};
 
 /// Render a single page to PNG bytes.
 ///
@@ -39,63 +44,71 @@ fn render_page_to_pixmap(
 
     let mut pixmap = Pixmap::new(width, height)?;
 
-    // Fill with white background
     pixmap.fill(tiny_skia::Color::WHITE);
 
     let transform = Transform::from_scale(scale as f32, scale as f32);
 
-    for element in &page.elements {
+    if let Some(background) = &page.background {
+        let path = LayoutPath::rect(oxml_layout::Rect {
+            x: 0.0,
+            y: 0.0,
+            width: page.width,
+            height: page.height,
+        });
+        render_path(&mut pixmap, &path, Some(background), None, transform, None);
+    }
+    render_elements(&mut pixmap, fonts, &page.elements, transform, None);
+
+    Some(pixmap)
+}
+
+fn render_elements(
+    pixmap: &mut Pixmap,
+    fonts: &[oxml_layout::FontData],
+    elements: &[PositionedElement],
+    transform: Transform,
+    mask: Option<&Mask>,
+) {
+    for element in elements {
         match element {
             PositionedElement::FilledRect { rect, color } => {
-                let sk_rect = tiny_skia::Rect::from_xywh(
+                let Some(rect) = tiny_skia::Rect::from_xywh(
                     rect.x as f32,
                     rect.y as f32,
                     rect.width as f32,
                     rect.height as f32,
-                );
-                if let Some(sk_rect) = sk_rect {
-                    let mut paint = Paint::default();
-                    paint.set_color_rgba8(
-                        (color.r * 255.0) as u8,
-                        (color.g * 255.0) as u8,
-                        (color.b * 255.0) as u8,
-                        (color.a * 255.0) as u8,
-                    );
-                    paint.anti_alias = false;
-                    pixmap.fill_rect(sk_rect, &paint, transform, None);
-                }
+                ) else {
+                    continue;
+                };
+                let mut paint = solid_paint(*color);
+                paint.anti_alias = false;
+                pixmap.fill_rect(rect, &paint, transform, mask);
             }
             PositionedElement::Line {
                 start,
                 end,
-                width: line_width,
+                width,
                 color,
-                dash_pattern: _,
+                dash_pattern,
             } => {
-                let mut pb = PathBuilder::new();
-                pb.move_to(start.x as f32, start.y as f32);
-                pb.line_to(end.x as f32, end.y as f32);
-                if let Some(path) = pb.finish() {
-                    let mut paint = Paint::default();
-                    paint.set_color_rgba8(
-                        (color.r * 255.0) as u8,
-                        (color.g * 255.0) as u8,
-                        (color.b * 255.0) as u8,
-                        (color.a * 255.0) as u8,
-                    );
-                    paint.anti_alias = true;
-                    let stroke = Stroke {
-                        width: *line_width as f32,
-                        ..Stroke::default()
-                    };
-                    pixmap.stroke_path(&path, &paint, &stroke, transform, None);
-                }
+                let mut builder = PathBuilder::new();
+                builder.move_to(start.x as f32, start.y as f32);
+                builder.line_to(end.x as f32, end.y as f32);
+                let Some(path) = builder.finish() else {
+                    continue;
+                };
+                let dash = dash_pattern
+                    .and_then(|(on, off)| StrokeDash::new(vec![on as f32, off as f32], 0.0));
+                let stroke = Stroke {
+                    width: *width as f32,
+                    dash,
+                    ..Stroke::default()
+                };
+                pixmap.stroke_path(&path, &solid_paint(*color), &stroke, transform, mask);
             }
             PositionedElement::Text(glyph_run) => {
-                // Render text by extracting glyph outlines from the font
-                let font_data = fonts.iter().find(|f| f.id == glyph_run.font_id);
-                if let Some(font_data) = font_data {
-                    render_glyph_run(&mut pixmap, glyph_run, font_data, transform);
+                if let Some(font_data) = fonts.iter().find(|font| font.id == glyph_run.font_id) {
+                    render_glyph_run(pixmap, glyph_run, font_data, transform, mask);
                 }
             }
             PositionedElement::Image {
@@ -105,22 +118,390 @@ fn render_page_to_pixmap(
                 ..
             } => {
                 if !data.is_empty() {
-                    render_image(&mut pixmap, rect, data, content_type, transform);
+                    render_image(pixmap, rect, data, content_type, transform, mask);
                 }
             }
-            PositionedElement::LinkAnnotation { .. } => {
-                // Link annotations are not visual elements in raster output
+            PositionedElement::LinkAnnotation { .. } => {}
+            PositionedElement::Path(element) => render_path(
+                pixmap,
+                &element.path,
+                element.fill.as_ref(),
+                element.stroke.as_ref(),
+                transform,
+                mask,
+            ),
+            PositionedElement::Group(group) => {
+                let child_transform = transform.pre_concat(layout_transform(group.transform));
+                let child_mask = match group.clip.as_ref() {
+                    Some(clip) => {
+                        let Some(path) = build_path(clip) else {
+                            continue;
+                        };
+                        let mut child_mask = match mask {
+                            Some(parent) => parent.clone(),
+                            None => {
+                                let Some(mask) = Mask::new(pixmap.width(), pixmap.height()) else {
+                                    continue;
+                                };
+                                mask
+                            }
+                        };
+                        if mask.is_some() {
+                            child_mask.intersect_path(
+                                &path,
+                                fill_rule(clip.fill_rule),
+                                true,
+                                child_transform,
+                            );
+                        } else {
+                            child_mask.fill_path(
+                                &path,
+                                fill_rule(clip.fill_rule),
+                                true,
+                                child_transform,
+                            );
+                        }
+                        Some(child_mask)
+                    }
+                    None => None,
+                };
+                let child_mask_ref = child_mask.as_ref().or(mask);
+                let opacity = if group.opacity.is_finite() {
+                    group.opacity.clamp(0.0, 1.0) as f32
+                } else {
+                    1.0
+                };
+                if opacity == 0.0 {
+                    continue;
+                }
+                if opacity == 1.0 {
+                    render_elements(
+                        pixmap,
+                        fonts,
+                        &group.children,
+                        child_transform,
+                        child_mask_ref,
+                    );
+                } else if let Some(mut layer) = Pixmap::new(pixmap.width(), pixmap.height()) {
+                    render_elements(
+                        &mut layer,
+                        fonts,
+                        &group.children,
+                        child_transform,
+                        child_mask_ref,
+                    );
+                    pixmap.draw_pixmap(
+                        0,
+                        0,
+                        layer.as_ref(),
+                        &PixmapPaint {
+                            opacity,
+                            ..PixmapPaint::default()
+                        },
+                        Transform::identity(),
+                        None,
+                    );
+                }
             }
-            PositionedElement::Path(_) | PositionedElement::Group(_) => {
-                // F-040 and F-041 add staged group and path rendering.
-            }
-            _ => {
-                // Later oxml-layout elements remain unsupported until assigned.
-            }
+            _ => {}
+        }
+    }
+}
+
+fn render_path(
+    pixmap: &mut Pixmap,
+    path: &LayoutPath,
+    fill: Option<&LayoutPaint>,
+    stroke: Option<&LayoutStroke>,
+    transform: Transform,
+    mask: Option<&Mask>,
+) {
+    let Some(path_geometry) = build_path(path) else {
+        return;
+    };
+    if let Some(paint) = fill.and_then(|paint| raster_paint(paint, transform)) {
+        let paint_mask =
+            fill.and_then(|paint| gradient_domain_mask(pixmap, paint, transform, mask));
+        pixmap.fill_path(
+            &path_geometry,
+            &paint,
+            fill_rule(path.fill_rule),
+            transform,
+            paint_mask.as_ref().or(mask),
+        );
+    }
+    if let Some(stroke) = stroke
+        && let Some(paint) = raster_paint(&stroke.paint, transform)
+    {
+        let paint_mask = gradient_domain_mask(pixmap, &stroke.paint, transform, mask);
+        let stroke = raster_stroke(stroke);
+        pixmap.stroke_path(
+            &path_geometry,
+            &paint,
+            &stroke,
+            transform,
+            paint_mask.as_ref().or(mask),
+        );
+    }
+}
+
+fn build_path(path: &LayoutPath) -> Option<tiny_skia::Path> {
+    let mut builder = PathBuilder::new();
+    for command in &path.commands {
+        match command {
+            PathCommand::MoveTo(point) => builder.move_to(point.x as f32, point.y as f32),
+            PathCommand::LineTo(point) => builder.line_to(point.x as f32, point.y as f32),
+            PathCommand::CurveTo { c1, c2, to } => builder.cubic_to(
+                c1.x as f32,
+                c1.y as f32,
+                c2.x as f32,
+                c2.y as f32,
+                to.x as f32,
+                to.y as f32,
+            ),
+            PathCommand::Close => builder.close(),
+        }
+    }
+    builder.finish()
+}
+
+fn fill_rule(rule: oxml_layout::FillRule) -> FillRule {
+    match rule {
+        oxml_layout::FillRule::NonZero => FillRule::Winding,
+        oxml_layout::FillRule::EvenOdd => FillRule::EvenOdd,
+    }
+}
+
+fn raster_paint(paint: &LayoutPaint, transform: Transform) -> Option<Paint<'static>> {
+    match paint {
+        LayoutPaint::Solid(color) => Some(solid_paint(*color)),
+        LayoutPaint::Linear {
+            start, end, stops, ..
+        } => {
+            let shader = tiny_skia::LinearGradient::new(
+                tiny_skia::Point::from_xy(start.x as f32, start.y as f32),
+                tiny_skia::Point::from_xy(end.x as f32, end.y as f32),
+                gradient_stops(stops),
+                tiny_skia::SpreadMode::Pad,
+                transform,
+            )?;
+            Some(Paint {
+                shader,
+                ..Paint::default()
+            })
+        }
+        LayoutPaint::Radial {
+            center,
+            radius,
+            focal,
+            stops,
+            ..
+        } => {
+            let shader = tiny_skia::RadialGradient::new(
+                tiny_skia::Point::from_xy(focal.x as f32, focal.y as f32),
+                0.0,
+                tiny_skia::Point::from_xy(center.x as f32, center.y as f32),
+                *radius as f32,
+                gradient_stops(stops),
+                tiny_skia::SpreadMode::Pad,
+                transform,
+            )?;
+            Some(Paint {
+                shader,
+                ..Paint::default()
+            })
+        }
+        LayoutPaint::Tile { .. } => None,
+    }
+}
+
+fn gradient_domain_mask(
+    pixmap: &Pixmap,
+    paint: &LayoutPaint,
+    transform: Transform,
+    parent: Option<&Mask>,
+) -> Option<Mask> {
+    let path = match paint {
+        LayoutPaint::Linear {
+            start, end, extend, ..
+        } if *extend != (true, true) => linear_domain_path(
+            pixmap.width(),
+            pixmap.height(),
+            *start,
+            *end,
+            *extend,
+            transform,
+        )?,
+        LayoutPaint::Radial {
+            center,
+            radius,
+            extend,
+            ..
+        } if !extend.1 => build_path(&LayoutPath::ellipse(oxml_layout::Rect {
+            x: center.x - radius,
+            y: center.y - radius,
+            width: radius * 2.0,
+            height: radius * 2.0,
+        }))?,
+        _ => return None,
+    };
+    let mut domain = match parent {
+        Some(parent) => parent.clone(),
+        None => Mask::new(pixmap.width(), pixmap.height())?,
+    };
+    if parent.is_some() {
+        domain.intersect_path(&path, FillRule::Winding, true, transform);
+    } else {
+        domain.fill_path(&path, FillRule::Winding, true, transform);
+    }
+    Some(domain)
+}
+
+fn linear_domain_path(
+    width: u32,
+    height: u32,
+    start: oxml_layout::Point,
+    end: oxml_layout::Point,
+    extend: (bool, bool),
+    transform: Transform,
+) -> Option<tiny_skia::Path> {
+    let inverse = transform.invert()?;
+    let mut corners = [
+        tiny_skia::Point::from_xy(0.0, 0.0),
+        tiny_skia::Point::from_xy(width as f32, 0.0),
+        tiny_skia::Point::from_xy(width as f32, height as f32),
+        tiny_skia::Point::from_xy(0.0, height as f32),
+    ];
+    inverse.map_points(&mut corners);
+
+    let dx = (end.x - start.x) as f32;
+    let dy = (end.y - start.y) as f32;
+    let length_squared = dx * dx + dy * dy;
+    if !length_squared.is_finite() || length_squared <= f32::EPSILON {
+        return None;
+    }
+    let length = length_squared.sqrt();
+    let normal_x = -dy / length;
+    let normal_y = dx / length;
+    let mut min_t = f32::INFINITY;
+    let mut max_t = f32::NEG_INFINITY;
+    let mut min_normal = f32::INFINITY;
+    let mut max_normal = f32::NEG_INFINITY;
+    for corner in corners {
+        let x = corner.x - start.x as f32;
+        let y = corner.y - start.y as f32;
+        let t = (x * dx + y * dy) / length_squared;
+        let normal = x * normal_x + y * normal_y;
+        min_t = min_t.min(t);
+        max_t = max_t.max(t);
+        min_normal = min_normal.min(normal);
+        max_normal = max_normal.max(normal);
+    }
+    let min_t = if extend.0 { min_t - 1.0 } else { 0.0 };
+    let max_t = if extend.1 { max_t + 1.0 } else { 1.0 };
+    let min_normal = min_normal - 1.0;
+    let max_normal = max_normal + 1.0;
+    let point = |t: f32, normal: f32| {
+        tiny_skia::Point::from_xy(
+            start.x as f32 + dx * t + normal_x * normal,
+            start.y as f32 + dy * t + normal_y * normal,
+        )
+    };
+    let mut builder = PathBuilder::new();
+    let first = point(min_t, min_normal);
+    builder.move_to(first.x, first.y);
+    for corner in [
+        point(max_t, min_normal),
+        point(max_t, max_normal),
+        point(min_t, max_normal),
+    ] {
+        builder.line_to(corner.x, corner.y);
+    }
+    builder.close();
+    builder.finish()
+}
+
+fn gradient_stops(stops: &[oxml_layout::GradientStop]) -> Vec<tiny_skia::GradientStop> {
+    let mut normalized: Vec<(f64, oxml_layout::Color)> = stops
+        .iter()
+        .map(|stop| {
+            let offset = if stop.offset.is_nan() {
+                0.0
+            } else {
+                stop.offset.clamp(0.0, 1.0)
+            };
+            (offset, stop.color)
+        })
+        .collect();
+    normalized.sort_by(|left, right| left.0.total_cmp(&right.0));
+
+    let mut deduplicated: Vec<(f64, oxml_layout::Color)> = Vec::with_capacity(normalized.len());
+    for stop in normalized {
+        if let Some(previous) = deduplicated.last_mut()
+            && previous.0 == stop.0
+        {
+            *previous = stop;
+        } else {
+            deduplicated.push(stop);
         }
     }
 
-    Some(pixmap)
+    deduplicated
+        .into_iter()
+        .map(|(offset, color)| tiny_skia::GradientStop::new(offset as f32, skia_color(color)))
+        .collect()
+}
+
+fn solid_paint(color: oxml_layout::Color) -> Paint<'static> {
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(
+        (color.r.clamp(0.0, 1.0) * 255.0) as u8,
+        (color.g.clamp(0.0, 1.0) * 255.0) as u8,
+        (color.b.clamp(0.0, 1.0) * 255.0) as u8,
+        (color.a.clamp(0.0, 1.0) * 255.0) as u8,
+    );
+    paint
+}
+
+fn skia_color(color: oxml_layout::Color) -> tiny_skia::Color {
+    tiny_skia::Color::from_rgba(
+        color.r.clamp(0.0, 1.0) as f32,
+        color.g.clamp(0.0, 1.0) as f32,
+        color.b.clamp(0.0, 1.0) as f32,
+        color.a.clamp(0.0, 1.0) as f32,
+    )
+    .unwrap_or(tiny_skia::Color::TRANSPARENT)
+}
+
+fn raster_stroke(stroke: &LayoutStroke) -> Stroke {
+    Stroke {
+        width: stroke.width as f32,
+        line_cap: match stroke.cap {
+            LineCap::Butt => tiny_skia::LineCap::Butt,
+            LineCap::Round => tiny_skia::LineCap::Round,
+            LineCap::Square => tiny_skia::LineCap::Square,
+        },
+        line_join: match stroke.join {
+            LineJoin::Miter => tiny_skia::LineJoin::Miter,
+            LineJoin::Round => tiny_skia::LineJoin::Round,
+            LineJoin::Bevel => tiny_skia::LineJoin::Bevel,
+        },
+        dash: stroke.dash.as_ref().and_then(|dash| {
+            StrokeDash::new(dash.iter().map(|value| *value as f32).collect(), 0.0)
+        }),
+        ..Stroke::default()
+    }
+}
+
+fn layout_transform(transform: oxml_layout::Transform) -> Transform {
+    Transform::from_row(
+        transform.a as f32,
+        transform.b as f32,
+        transform.c as f32,
+        transform.d as f32,
+        transform.e as f32,
+        transform.f as f32,
+    )
 }
 
 /// Render a glyph run by extracting glyph outlines from the font.
@@ -129,6 +510,7 @@ fn render_glyph_run(
     glyph_run: &oxml_layout::GlyphRun,
     font_data: &oxml_layout::FontData,
     transform: Transform,
+    mask: Option<&Mask>,
 ) {
     let Ok(face) = ttf_parser::Face::parse(&font_data.data, font_data.face_index) else {
         return;
@@ -163,7 +545,7 @@ fn render_glyph_run(
                 .pre_translate(x as f32, y as f32)
                 .pre_scale(scale as f32, -(scale as f32));
 
-            pixmap.fill_path(&path, &paint, FillRule::Winding, glyph_transform, None);
+            pixmap.fill_path(&path, &paint, FillRule::Winding, glyph_transform, mask);
         }
 
         if i < glyph_run.advances.len() {
@@ -218,6 +600,7 @@ fn render_image(
     data: &[u8],
     _content_type: &str,
     transform: Transform,
+    mask: Option<&Mask>,
 ) {
     // Decode the image
     let decoded = crate::image::decode_image(data, _content_type);
@@ -287,14 +670,33 @@ fn render_image(
     let fill_rect =
         tiny_skia::Rect::from_xywh(0.0, 0.0, decoded.width as f32, decoded.height as f32);
     if let Some(fill_rect) = fill_rect {
-        pixmap.fill_rect(fill_rect, &paint, img_transform, None);
+        pixmap.fill_rect(fill_rect, &paint, img_transform, mask);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::render_page_to_pixmap;
-    use oxml_layout::{Color, PageFrame, PositionedElement, Rect};
+    use oxml_layout::{
+        Color, FillRule, GradientStop, GroupElement, PageFrame, Paint, Path, PathCommand,
+        PathElement, Point, PositionedElement, Rect, Stroke, Transform,
+    };
+
+    fn rgb(pixel: tiny_skia::PremultipliedColorU8) -> (u8, u8, u8) {
+        (pixel.red(), pixel.green(), pixel.blue())
+    }
+
+    fn solid_path(path: Path, color: Color) -> PositionedElement {
+        PositionedElement::Path(PathElement {
+            path,
+            fill: Some(Paint::Solid(color)),
+            stroke: None,
+        })
+    }
+
+    fn page(elements: Vec<PositionedElement>) -> PageFrame {
+        PageFrame::new(1, 32.0, 32.0, elements)
+    }
 
     #[test]
     fn half_alpha_over_white_rasterises_to_midpoint() {
@@ -321,5 +723,421 @@ mod tests {
         let pixmap = render_page_to_pixmap(&page, &[], 72.0).expect("one-pixel page");
         let pixel = pixmap.pixel(0, 0).expect("one-pixel page has one pixel");
         assert_eq!((pixel.red(), pixel.green(), pixel.blue()), (128, 128, 128));
+    }
+
+    #[test]
+    fn rotated_rectangle_has_a_filled_interior_and_empty_corner() {
+        let element = PositionedElement::Group(GroupElement {
+            transform: Transform::rotate_about(45.0, 16.0, 16.0),
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children: vec![solid_path(
+                Path::rect(Rect {
+                    x: 10.0,
+                    y: 12.0,
+                    width: 12.0,
+                    height: 8.0,
+                }),
+                Color::BLACK,
+            )],
+        });
+        let pixmap = render_page_to_pixmap(&page(vec![element]), &[], 72.0).unwrap();
+
+        assert_eq!(rgb(pixmap.pixel(16, 16).unwrap()), (0, 0, 0));
+        assert_eq!(rgb(pixmap.pixel(9, 9).unwrap()), (255, 255, 255));
+    }
+
+    #[test]
+    fn dashed_line_contains_deterministic_gaps() {
+        let element = PositionedElement::Line {
+            start: Point { x: 2.0, y: 4.5 },
+            end: Point { x: 30.0, y: 4.5 },
+            width: 1.0,
+            color: Color::BLACK,
+            dash_pattern: Some((4.0, 4.0)),
+        };
+        let pixmap = render_page_to_pixmap(&page(vec![element]), &[], 72.0).unwrap();
+
+        assert_eq!(rgb(pixmap.pixel(3, 4).unwrap()), (0, 0, 0));
+        assert_eq!(rgb(pixmap.pixel(7, 4).unwrap()), (255, 255, 255));
+        assert_eq!(rgb(pixmap.pixel(11, 4).unwrap()), (0, 0, 0));
+    }
+
+    #[test]
+    fn nested_group_transforms_apply_child_before_parent() {
+        let translated = |transform, children| {
+            PositionedElement::Group(GroupElement {
+                transform,
+                clip: None,
+                opacity: 1.0,
+                effects: Vec::new(),
+                children,
+            })
+        };
+        let leaf = solid_path(
+            Path::rect(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 2.0,
+                height: 2.0,
+            }),
+            Color::BLACK,
+        );
+        let element = translated(
+            Transform {
+                e: 4.0,
+                ..Transform::IDENTITY
+            },
+            vec![translated(
+                Transform {
+                    e: 3.0,
+                    ..Transform::IDENTITY
+                },
+                vec![translated(
+                    Transform {
+                        f: 5.0,
+                        ..Transform::IDENTITY
+                    },
+                    vec![leaf],
+                )],
+            )],
+        );
+        let pixmap = render_page_to_pixmap(&page(vec![element]), &[], 72.0).unwrap();
+
+        assert_eq!(rgb(pixmap.pixel(7, 5).unwrap()), (0, 0, 0));
+        assert_eq!(rgb(pixmap.pixel(1, 1).unwrap()), (255, 255, 255));
+    }
+
+    #[test]
+    fn group_clip_masks_children_and_preserves_outside_pixels() {
+        let element = PositionedElement::Group(GroupElement {
+            transform: Transform::IDENTITY,
+            clip: Some(Path::rect(Rect {
+                x: 4.0,
+                y: 4.0,
+                width: 8.0,
+                height: 12.0,
+            })),
+            opacity: 1.0,
+            effects: Vec::new(),
+            children: vec![PositionedElement::Group(GroupElement {
+                transform: Transform::IDENTITY,
+                clip: Some(Path::rect(Rect {
+                    x: 8.0,
+                    y: 4.0,
+                    width: 8.0,
+                    height: 12.0,
+                })),
+                opacity: 1.0,
+                effects: Vec::new(),
+                children: vec![solid_path(
+                    Path::rect(Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 24.0,
+                        height: 24.0,
+                    }),
+                    Color::BLACK,
+                )],
+            })],
+        });
+        let pixmap = render_page_to_pixmap(&page(vec![element]), &[], 72.0).unwrap();
+
+        assert_eq!(rgb(pixmap.pixel(10, 10).unwrap()), (0, 0, 0));
+        assert_eq!(rgb(pixmap.pixel(6, 10).unwrap()), (255, 255, 255));
+        assert_eq!(rgb(pixmap.pixel(14, 10).unwrap()), (255, 255, 255));
+    }
+
+    #[test]
+    fn group_opacity_is_applied_once_to_the_composited_subtree() {
+        let element = PositionedElement::Group(GroupElement {
+            transform: Transform::IDENTITY,
+            clip: None,
+            opacity: 0.5,
+            effects: Vec::new(),
+            children: vec![
+                solid_path(
+                    Path::rect(Rect {
+                        x: 2.0,
+                        y: 2.0,
+                        width: 12.0,
+                        height: 12.0,
+                    }),
+                    Color::BLACK,
+                ),
+                solid_path(
+                    Path::rect(Rect {
+                        x: 8.0,
+                        y: 2.0,
+                        width: 12.0,
+                        height: 12.0,
+                    }),
+                    Color::BLACK,
+                ),
+            ],
+        });
+        let pixmap = render_page_to_pixmap(&page(vec![element]), &[], 72.0).unwrap();
+
+        assert_eq!(rgb(pixmap.pixel(4, 4).unwrap()), (128, 128, 128));
+        assert_eq!(rgb(pixmap.pixel(10, 4).unwrap()), (128, 128, 128));
+    }
+
+    #[test]
+    fn path_fill_rule_selects_the_tiny_skia_rule() {
+        let nested = |fill_rule| Path {
+            commands: vec![
+                PathCommand::MoveTo(Point { x: 2.0, y: 2.0 }),
+                PathCommand::LineTo(Point { x: 14.0, y: 2.0 }),
+                PathCommand::LineTo(Point { x: 14.0, y: 14.0 }),
+                PathCommand::LineTo(Point { x: 2.0, y: 14.0 }),
+                PathCommand::Close,
+                PathCommand::MoveTo(Point { x: 5.0, y: 5.0 }),
+                PathCommand::LineTo(Point { x: 11.0, y: 5.0 }),
+                PathCommand::LineTo(Point { x: 11.0, y: 11.0 }),
+                PathCommand::LineTo(Point { x: 5.0, y: 11.0 }),
+                PathCommand::Close,
+            ],
+            fill_rule,
+        };
+        let nonzero = render_page_to_pixmap(
+            &page(vec![solid_path(nested(FillRule::NonZero), Color::BLACK)]),
+            &[],
+            72.0,
+        )
+        .unwrap();
+        let evenodd = render_page_to_pixmap(
+            &page(vec![solid_path(nested(FillRule::EvenOdd), Color::BLACK)]),
+            &[],
+            72.0,
+        )
+        .unwrap();
+
+        assert_eq!(rgb(nonzero.pixel(8, 8).unwrap()), (0, 0, 0));
+        assert_eq!(rgb(evenodd.pixel(8, 8).unwrap()), (255, 255, 255));
+    }
+
+    #[test]
+    fn linear_and_radial_gradients_sample_expected_colours() {
+        let stops = vec![
+            GradientStop {
+                offset: 0.0,
+                color: Color {
+                    r: 1.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+            },
+            GradientStop {
+                offset: 1.0,
+                color: Color {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+            },
+        ];
+        let linear = PositionedElement::Path(PathElement {
+            path: Path::rect(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 16.0,
+                height: 8.0,
+            }),
+            fill: Some(Paint::linear(
+                Point { x: 0.0, y: 0.0 },
+                Point { x: 16.0, y: 0.0 },
+                stops.clone(),
+                (true, true),
+            )),
+            stroke: None,
+        });
+        let radial = PositionedElement::Path(PathElement {
+            path: Path::rect(Rect {
+                x: 0.0,
+                y: 16.0,
+                width: 16.0,
+                height: 16.0,
+            }),
+            fill: Some(Paint::radial(
+                Point { x: 8.0, y: 24.0 },
+                8.0,
+                Point { x: 8.0, y: 24.0 },
+                stops,
+                (true, true),
+            )),
+            stroke: None,
+        });
+        let pixmap = render_page_to_pixmap(&page(vec![linear, radial]), &[], 72.0).unwrap();
+
+        let linear_start = rgb(pixmap.pixel(1, 4).unwrap());
+        let linear_end = rgb(pixmap.pixel(14, 4).unwrap());
+        assert!(linear_start.0 > linear_start.2);
+        assert!(linear_end.2 > linear_end.0);
+        let radial_center = rgb(pixmap.pixel(8, 24).unwrap());
+        let radial_edge = rgb(pixmap.pixel(1, 24).unwrap());
+        assert!(radial_center.0 > radial_center.2);
+        assert!(radial_edge.2 > radial_edge.0);
+    }
+
+    #[test]
+    fn gradient_extend_flags_leave_outside_regions_unpainted() {
+        let stops = vec![
+            GradientStop {
+                offset: 0.0,
+                color: Color::BLACK,
+            },
+            GradientStop {
+                offset: 1.0,
+                color: Color::WHITE,
+            },
+        ];
+        let linear = PositionedElement::Path(PathElement {
+            path: Path::rect(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 32.0,
+                height: 12.0,
+            }),
+            fill: Some(Paint::linear(
+                Point { x: 8.0, y: 0.0 },
+                Point { x: 24.0, y: 0.0 },
+                stops.clone(),
+                (false, false),
+            )),
+            stroke: None,
+        });
+        let radial = PositionedElement::Path(PathElement {
+            path: Path::rect(Rect {
+                x: 0.0,
+                y: 16.0,
+                width: 32.0,
+                height: 16.0,
+            }),
+            fill: Some(Paint::radial(
+                Point { x: 16.0, y: 24.0 },
+                6.0,
+                Point { x: 16.0, y: 24.0 },
+                stops,
+                (false, false),
+            )),
+            stroke: None,
+        });
+        let pixmap = render_page_to_pixmap(&page(vec![linear, radial]), &[], 72.0).unwrap();
+
+        assert_eq!(rgb(pixmap.pixel(4, 6).unwrap()), (255, 255, 255));
+        assert_ne!(rgb(pixmap.pixel(12, 6).unwrap()), (255, 255, 255));
+        assert_ne!(rgb(pixmap.pixel(16, 24).unwrap()), (255, 255, 255));
+        assert_eq!(rgb(pixmap.pixel(24, 24).unwrap()), (255, 255, 255));
+    }
+
+    #[test]
+    fn gradient_stops_are_sorted_clamped_and_last_repeated_offset_wins() {
+        let element = PositionedElement::Path(PathElement {
+            path: Path::rect(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 16.0,
+                height: 8.0,
+            }),
+            fill: Some(Paint::linear(
+                Point { x: 0.0, y: 0.0 },
+                Point { x: 16.0, y: 0.0 },
+                vec![
+                    GradientStop {
+                        offset: 2.0,
+                        color: Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 1.0,
+                            a: 1.0,
+                        },
+                    },
+                    GradientStop {
+                        offset: -1.0,
+                        color: Color {
+                            r: 1.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 1.0,
+                        },
+                    },
+                    GradientStop {
+                        offset: f64::NAN,
+                        color: Color {
+                            r: 0.0,
+                            g: 1.0,
+                            b: 0.0,
+                            a: 1.0,
+                        },
+                    },
+                ],
+                (true, true),
+            )),
+            stroke: None,
+        });
+        let pixmap = render_page_to_pixmap(&page(vec![element]), &[], 72.0).unwrap();
+
+        let start = rgb(pixmap.pixel(1, 4).unwrap());
+        let end = rgb(pixmap.pixel(14, 4).unwrap());
+        assert!(start.1 > start.0 && start.1 > start.2);
+        assert!(end.2 > end.0 && end.2 > end.1);
+    }
+
+    #[test]
+    fn page_background_replaces_the_white_default() {
+        let mut painted = page(Vec::new());
+        painted.background = Some(Paint::Solid(Color {
+            r: 0.0,
+            g: 1.0,
+            b: 0.0,
+            a: 1.0,
+        }));
+        let painted = render_page_to_pixmap(&painted, &[], 72.0).unwrap();
+        let defaulted = render_page_to_pixmap(&page(Vec::new()), &[], 72.0).unwrap();
+        let mut gradient = page(Vec::new());
+        gradient.background = Some(Paint::linear(
+            Point { x: 0.0, y: 0.0 },
+            Point { x: 32.0, y: 0.0 },
+            vec![
+                GradientStop {
+                    offset: 0.0,
+                    color: Color::BLACK,
+                },
+                GradientStop {
+                    offset: 1.0,
+                    color: Color::WHITE,
+                },
+            ],
+            (true, true),
+        ));
+        let gradient = render_page_to_pixmap(&gradient, &[], 72.0).unwrap();
+
+        assert_eq!(rgb(painted.pixel(4, 4).unwrap()), (0, 255, 0));
+        assert_eq!(rgb(defaulted.pixel(4, 4).unwrap()), (255, 255, 255));
+        assert!(gradient.pixel(4, 4).unwrap().red() < gradient.pixel(28, 4).unwrap().red());
+    }
+
+    #[test]
+    fn path_dash_array_contains_deterministic_gaps() {
+        let mut stroke = Stroke::new(Paint::Solid(Color::BLACK), 1.0);
+        stroke.dash = Some(vec![4.0, 4.0]);
+        let element = PositionedElement::Path(PathElement {
+            path: Path {
+                commands: vec![
+                    PathCommand::MoveTo(Point { x: 2.0, y: 8.5 }),
+                    PathCommand::LineTo(Point { x: 30.0, y: 8.5 }),
+                ],
+                fill_rule: FillRule::NonZero,
+            },
+            fill: None,
+            stroke: Some(stroke),
+        });
+        let pixmap = render_page_to_pixmap(&page(vec![element]), &[], 72.0).unwrap();
+
+        assert_eq!(rgb(pixmap.pixel(3, 8).unwrap()), (0, 0, 0));
+        assert_eq!(rgb(pixmap.pixel(7, 8).unwrap()), (255, 255, 255));
     }
 }

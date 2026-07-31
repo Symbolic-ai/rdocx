@@ -200,17 +200,22 @@ geometry so each paint operation selects the right state.
 
 ## The rasteriser
 
-A recursive walk carrying an accumulated `tiny_skia::Transform` rather than the
-single page scale. `Group` pre-concatenates and builds a `Mask` from the clip
-path, threading it into the currently always-`None` mask argument. `Path` maps
-almost directly onto `PathBuilder`, `fill_path` and `stroke_path`, **which
-finally wires up dashes**. Gradients map near-directly onto tiny-skia's own
-`LinearGradient` and `RadialGradient`, making this the easiest part of the job.
-The hardcoded white page fill is replaced by `PageFrame.background`.
+Raster output uses one recursive renderer carrying the accumulated
+`tiny_skia::Transform` and current clip mask. A group pre-concatenates its local
+transform, intersects its optional path clip with the parent mask, and draws
+children in order. Non-opaque group content is composited through one scratch
+pixmap so overlapping children receive group opacity once rather than per
+primitive.
 
-Outer shadow renders as an offset silhouette: children to a scratch pixmap,
-tinted, drawn at the offset, then the real children on top. A separable box blur
-can land later, and the type already carries `blur`.
+Backend-neutral path commands map to `PathBuilder`, with non-zero and even-odd
+fill rules passed to `fill_path`. Solid, linear, and radial paint can fill or
+stroke paths. Gradient geometry follows the accumulated transform, and a
+non-extended gradient domain is clipped before painting. Line and path dash
+arrays use tiny-skia's phase-zero stroke dash support. Page background paint is
+drawn over the white default before page elements.
+
+Tile paint and group effects are not rendered by the raster backend. In
+particular, the `blur` field on an outer shadow has no raster approximation.
 
 ## Preset geometry
 

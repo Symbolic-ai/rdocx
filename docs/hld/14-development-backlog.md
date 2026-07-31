@@ -382,8 +382,9 @@ references. Differing fill and stroke alpha paint the path in two operations.
 **Test gate**: a 50 percent alpha fill over white rasterises to the midpoint colour.
 
 ### F-045, Rasteriser: groups, paths, gradients, dashes, background (L)
-Recursive transform walk, clip masks, tiny-skia gradients, and the dash pattern
-that is currently discarded at `raster.rs:73`.
+The raster backend recursively composes group transforms, intersects clip
+masks, composites group opacity, translates path geometry and paint to
+tiny-skia, honours line and path dashes, and paints supported page backgrounds.
 **Depends on**: F-040, F-041, F-043.
 **Test gate**: a rotated rectangle at 72 dpi has a filled interior pixel and an
 empty corner, and a dashed line has gaps.

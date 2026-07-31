@@ -1,6 +1,6 @@
 # F-045, Rasteriser groups, paths, gradients, dashes, and background
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S10
 **Size**: L
 **Depends on**: F-040, F-041, F-043
@@ -92,15 +92,15 @@ sample consumer. Do not update `scripts/hash_baseline.json`.
 
 ## Implementation checklist
 
-- [ ] Add one private recursive raster element renderer.
-- [ ] Compose group transforms and intersect clip masks.
-- [ ] Translate backend-neutral paths and fill rules to tiny-skia.
-- [ ] Translate solid and gradient fills and strokes.
-- [ ] Honor existing line and path dash patterns.
-- [ ] Render supported page backgrounds with a white default.
-- [ ] Add the rotated rectangle, dashed line, clip, gradient, and background tests.
-- [ ] Update exactly the declared HLD files to current intent.
-- [ ] Prove the hash and exact golden baselines remain unchanged.
+- [x] Add one private recursive raster element renderer.
+- [x] Compose group transforms and intersect clip masks.
+- [x] Translate backend-neutral paths and fill rules to tiny-skia.
+- [x] Translate solid and gradient fills and strokes.
+- [x] Honor existing line and path dash patterns.
+- [x] Render supported page backgrounds with a white default.
+- [x] Add the rotated rectangle, dashed line, clip, gradient, and background tests.
+- [x] Update exactly the declared HLD files to current intent.
+- [x] Prove the hash and exact golden baselines remain unchanged.
 
 ## Open questions
 

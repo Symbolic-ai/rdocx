@@ -189,7 +189,11 @@ cover the cases that matter now.
 - A preceding leaf proves nested XObject registration and recursive emission
   use the same depth-first ordinal.
 - Raster: a rotated rectangle at 72 dpi has a filled interior pixel and an empty
-  corner. Deterministic, no golden files.
+  corner, and phase-zero line and path dashes have exact painted runs and gaps.
+  Nested group samples pin transform order, clip intersection, and subtree
+  opacity. Fill-rule, linear and radial gradient, gradient-domain, and page
+  background samples pin the remaining paint translations. These are
+  deterministic unit tests with no golden files.
 
 ## Binding tests
 
