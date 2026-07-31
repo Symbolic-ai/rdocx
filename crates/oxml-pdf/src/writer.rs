@@ -3,11 +3,12 @@
 use std::collections::{BTreeSet, HashMap};
 
 use oxml_layout::{
-    FillRule, FontId, LayoutResult, LineCap, LineJoin, Paint, Path, PathCommand, PathElement,
-    PositionedElement, Stroke, walk,
+    Color, FillRule, FontId, GradientStop, LayoutResult, LineCap, LineJoin, Paint, Path,
+    PathCommand, PathElement, PositionedElement, Stroke, Transform, walk,
 };
 use pdf_writer::types::{
-    ActionType, AnnotationType, CidFontType, FontFlags, LineCapStyle, LineJoinStyle, SystemInfo,
+    ActionType, AnnotationType, CidFontType, ColorSpaceOperand, FontFlags, FunctionShadingType,
+    LineCapStyle, LineJoinStyle, SystemInfo,
 };
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
@@ -107,6 +108,232 @@ fn insert_alpha(keys: &mut BTreeSet<u32>, alpha: f64) {
     if let Some(key) = alpha_key(alpha) {
         keys.insert(key);
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum GradientTarget {
+    Fill,
+    Stroke,
+}
+
+enum GradientGeometry {
+    Linear([f32; 4]),
+    Radial([f32; 6]),
+}
+
+struct GradientEntry {
+    page_idx: usize,
+    name: String,
+    pattern_ref: Ref,
+    shading_ref: Ref,
+    stitching_ref: Ref,
+    interval_refs: Vec<Ref>,
+    matrix: Transform,
+    geometry: GradientGeometry,
+    stops: Vec<GradientStop>,
+    extend: [bool; 2],
+}
+
+struct GradientRegistry {
+    entries: Vec<GradientEntry>,
+    by_occurrence: HashMap<(usize, usize, GradientTarget), usize>,
+}
+
+impl GradientRegistry {
+    fn new(pages: &[oxml_layout::PageFrame], alloc: &mut impl FnMut() -> Ref) -> Self {
+        let mut registry = Self {
+            entries: Vec::new(),
+            by_occurrence: HashMap::new(),
+        };
+
+        for (page_idx, page) in pages.iter().enumerate() {
+            let mut leaf_idx = 0;
+            let page_flip = Transform {
+                a: 1.0,
+                b: 0.0,
+                c: 0.0,
+                d: -1.0,
+                e: 0.0,
+                f: page.height,
+            };
+            walk(&page.elements, &mut |element, transform| {
+                let current_idx = leaf_idx;
+                leaf_idx += 1;
+                let PositionedElement::Path(path) = element else {
+                    return;
+                };
+                if let Some(fill) = &path.fill {
+                    registry.collect(
+                        fill,
+                        page_idx,
+                        current_idx,
+                        GradientTarget::Fill,
+                        transform.then(page_flip),
+                        alloc,
+                    );
+                }
+                if let Some(stroke) = &path.stroke {
+                    registry.collect(
+                        &stroke.paint,
+                        page_idx,
+                        current_idx,
+                        GradientTarget::Stroke,
+                        transform.then(page_flip),
+                        alloc,
+                    );
+                }
+            });
+        }
+
+        registry
+    }
+
+    fn collect(
+        &mut self,
+        paint: &Paint,
+        page_idx: usize,
+        leaf_idx: usize,
+        target: GradientTarget,
+        matrix: Transform,
+        alloc: &mut impl FnMut() -> Ref,
+    ) {
+        let (geometry, stops, extend) = match paint {
+            Paint::Linear {
+                start,
+                end,
+                stops,
+                extend,
+            } => (
+                GradientGeometry::Linear([
+                    start.x as f32,
+                    start.y as f32,
+                    end.x as f32,
+                    end.y as f32,
+                ]),
+                stops,
+                *extend,
+            ),
+            Paint::Radial {
+                center,
+                radius,
+                focal,
+                stops,
+                extend,
+            } => (
+                GradientGeometry::Radial([
+                    focal.x as f32,
+                    focal.y as f32,
+                    0.0,
+                    center.x as f32,
+                    center.y as f32,
+                    finite_f32(*radius).max(0.0),
+                ]),
+                stops,
+                *extend,
+            ),
+            Paint::Solid(_) | Paint::Tile { .. } => return,
+        };
+
+        let Some(stops) = normalize_gradient_stops(stops) else {
+            return;
+        };
+        let index = self.entries.len();
+        let interval_refs = (1..stops.len()).map(|_| alloc()).collect();
+        self.entries.push(GradientEntry {
+            page_idx,
+            name: format!("P{index}"),
+            pattern_ref: alloc(),
+            shading_ref: alloc(),
+            stitching_ref: alloc(),
+            interval_refs,
+            matrix,
+            geometry,
+            stops,
+            extend: [extend.0, extend.1],
+        });
+        self.by_occurrence
+            .insert((page_idx, leaf_idx, target), index);
+    }
+
+    fn entry(
+        &self,
+        page_idx: usize,
+        leaf_idx: usize,
+        target: GradientTarget,
+    ) -> Option<&GradientEntry> {
+        self.by_occurrence
+            .get(&(page_idx, leaf_idx, target))
+            .map(|index| &self.entries[*index])
+    }
+
+    fn page_entries(&self, page_idx: usize) -> impl Iterator<Item = &GradientEntry> {
+        self.entries
+            .iter()
+            .filter(move |entry| entry.page_idx == page_idx)
+    }
+}
+
+fn normalize_gradient_stops(stops: &[GradientStop]) -> Option<Vec<GradientStop>> {
+    let mut normalized: Vec<GradientStop> = stops
+        .iter()
+        .map(|stop| GradientStop {
+            offset: normalized_offset(stop.offset),
+            color: composite_stop_alpha(stop.color),
+        })
+        .collect();
+    normalized.sort_by(|left, right| left.offset.total_cmp(&right.offset));
+
+    let mut deduplicated: Vec<GradientStop> = Vec::with_capacity(normalized.len());
+    for stop in normalized {
+        if let Some(previous) = deduplicated.last_mut()
+            && previous.offset == stop.offset
+        {
+            *previous = stop;
+        } else {
+            deduplicated.push(stop);
+        }
+    }
+
+    match deduplicated.as_slice() {
+        [] => None,
+        [stop] => Some(vec![
+            GradientStop {
+                offset: 0.0,
+                color: stop.color,
+            },
+            GradientStop {
+                offset: 1.0,
+                color: stop.color,
+            },
+        ]),
+        _ => Some(deduplicated),
+    }
+}
+
+fn normalized_offset(offset: f64) -> f64 {
+    if offset.is_nan() {
+        0.0
+    } else {
+        offset.clamp(0.0, 1.0)
+    }
+}
+
+fn composite_stop_alpha(color: Color) -> Color {
+    let alpha = if color.a.is_finite() {
+        color.a.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    Color {
+        r: color.r * alpha + (1.0 - alpha),
+        g: color.g * alpha + (1.0 - alpha),
+        b: color.b * alpha + (1.0 - alpha),
+        a: 1.0,
+    }
+}
+
+fn finite_f32(value: f64) -> f32 {
+    if value.is_finite() { value as f32 } else { 0.0 }
 }
 
 /// Write a complete PDF document from layout results.
@@ -209,6 +436,7 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
     }
 
     let alpha_states = AlphaStates::new(&layout.pages, &mut alloc);
+    let gradients = GradientRegistry::new(&layout.pages, &mut alloc);
 
     // ── Outline item refs ────────────────────────────────────────────
     let outline_item_ids: Vec<Ref> = layout.outlines.iter().map(|_| alloc()).collect();
@@ -394,6 +622,8 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
         state.finish();
     }
 
+    write_gradient_objects(&mut pdf, &gradients);
+
     // ── Write pages ──────────────────────────────────────────────────
     for (page_idx, page) in layout.pages.iter().enumerate() {
         let page_id = page_ids[page_idx];
@@ -407,6 +637,7 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
             &font_refs,
             &image_map,
             &alpha_states,
+            &gradients,
         );
 
         // Compress and write content stream
@@ -461,6 +692,15 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
                 states.pair(Name(entry.name.as_bytes()), entry.reference);
             }
             states.finish();
+        }
+
+        let page_gradients: Vec<_> = gradients.page_entries(page_idx).collect();
+        if !page_gradients.is_empty() {
+            let mut patterns = resources.patterns();
+            for entry in page_gradients {
+                patterns.pair(Name(entry.name.as_bytes()), entry.pattern_ref);
+            }
+            patterns.finish();
         }
 
         resources.finish();
@@ -529,6 +769,73 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
     pdf.finish()
 }
 
+fn write_gradient_objects(pdf: &mut Pdf, gradients: &GradientRegistry) {
+    for entry in &gradients.entries {
+        let mut pattern = pdf.shading_pattern(entry.pattern_ref);
+        pattern.shading_ref(entry.shading_ref);
+        pattern.matrix([
+            entry.matrix.a as f32,
+            entry.matrix.b as f32,
+            entry.matrix.c as f32,
+            entry.matrix.d as f32,
+            entry.matrix.e as f32,
+            entry.matrix.f as f32,
+        ]);
+        pattern.finish();
+
+        let first_offset = entry.stops[0].offset as f32;
+        let last_offset = entry.stops[entry.stops.len() - 1].offset as f32;
+        let mut shading = pdf.function_shading(entry.shading_ref);
+        match entry.geometry {
+            GradientGeometry::Linear(coords) => {
+                shading.shading_type(FunctionShadingType::Axial);
+                shading.coords(coords);
+            }
+            GradientGeometry::Radial(coords) => {
+                shading.shading_type(FunctionShadingType::Radial);
+                shading.coords(coords);
+            }
+        }
+        shading.color_space().device_rgb();
+        shading
+            .insert(Name(b"Domain"))
+            .array()
+            .items([first_offset, last_offset]);
+        shading.extend(entry.extend);
+        shading.function(entry.stitching_ref);
+        shading.finish();
+
+        let mut stitching = pdf.stitching_function(entry.stitching_ref);
+        stitching.domain([first_offset, last_offset]);
+        stitching.functions(entry.interval_refs.iter().copied());
+        stitching.bounds(
+            entry.stops[1..entry.stops.len() - 1]
+                .iter()
+                .map(|stop| stop.offset as f32),
+        );
+        stitching.encode(entry.interval_refs.iter().flat_map(|_| [0.0_f32, 1.0_f32]));
+        stitching.finish();
+
+        for ((start, end), reference) in entry
+            .stops
+            .windows(2)
+            .map(|pair| (&pair[0], &pair[1]))
+            .zip(entry.interval_refs.iter())
+        {
+            let mut function = pdf.exponential_function(*reference);
+            function.domain([0.0, 1.0]);
+            function.c0([
+                start.color.r as f32,
+                start.color.g as f32,
+                start.color.b as f32,
+            ]);
+            function.c1([end.color.r as f32, end.color.g as f32, end.color.b as f32]);
+            function.n(1.0);
+            function.finish();
+        }
+    }
+}
+
 /// Build the content stream for a single page.
 fn build_page_content(
     page_idx: usize,
@@ -537,6 +844,7 @@ fn build_page_content(
     font_refs: &HashMap<FontId, (Ref, Ref, Ref, Ref, Ref)>,
     image_map: &HashMap<(usize, usize), usize>,
     alpha_states: &AlphaStates,
+    gradients: &GradientRegistry,
 ) -> Vec<u8> {
     let mut content = Content::new();
     let page_height = page.height as f32;
@@ -549,6 +857,7 @@ fn build_page_content(
         font_refs,
         image_map,
         alpha_states,
+        gradients,
         leaf_index: 0,
     };
     emit_elements(&mut content, &page.elements, &mut state);
@@ -563,6 +872,7 @@ struct EmitState<'a> {
     font_refs: &'a HashMap<FontId, (Ref, Ref, Ref, Ref, Ref)>,
     image_map: &'a HashMap<(usize, usize), usize>,
     alpha_states: &'a AlphaStates,
+    gradients: &'a GradientRegistry,
     leaf_index: usize,
 }
 
@@ -670,7 +980,14 @@ fn emit_elements(content: &mut Content, elements: &[PositionedElement], state: &
                 // Link annotations are written separately, not in the content stream
             }
             PositionedElement::Path(path) => {
-                emit_path(content, path, state.alpha_states);
+                emit_path(
+                    content,
+                    path,
+                    state.page_idx,
+                    elem_idx,
+                    state.alpha_states,
+                    state.gradients,
+                );
             }
             PositionedElement::Group(group) => {
                 content.save_state();
@@ -707,12 +1024,32 @@ fn apply_alpha(content: &mut Content, alpha: f64, states: &AlphaStates) {
     }
 }
 
-fn emit_path(content: &mut Content, element: &PathElement, alpha_states: &AlphaStates) {
-    let fill = element.fill.as_ref().and_then(solid_color);
-    let stroke = element
-        .stroke
-        .as_ref()
-        .and_then(|stroke| solid_color(&stroke.paint).map(|color| (stroke, color)));
+enum ResolvedPaint<'a> {
+    Solid(Color),
+    Gradient(&'a GradientEntry),
+}
+
+fn emit_path(
+    content: &mut Content,
+    element: &PathElement,
+    page_idx: usize,
+    leaf_idx: usize,
+    alpha_states: &AlphaStates,
+    gradients: &GradientRegistry,
+) {
+    let fill = element.fill.as_ref().and_then(|paint| {
+        resolve_paint(paint, page_idx, leaf_idx, GradientTarget::Fill, gradients)
+    });
+    let stroke = element.stroke.as_ref().and_then(|stroke| {
+        resolve_paint(
+            &stroke.paint,
+            page_idx,
+            leaf_idx,
+            GradientTarget::Stroke,
+            gradients,
+        )
+        .map(|paint| (stroke, paint))
+    });
 
     if fill.is_none() && stroke.is_none() {
         return;
@@ -721,7 +1058,7 @@ fn emit_path(content: &mut Content, element: &PathElement, alpha_states: &AlphaS
     content.save_state();
 
     match (fill, stroke) {
-        (Some(fill), Some((stroke, stroke_color)))
+        (Some(ResolvedPaint::Solid(fill)), Some((stroke, ResolvedPaint::Solid(stroke_color))))
             if alpha_key(fill.a) == alpha_key(stroke_color.a) =>
         {
             set_fill_color(content, fill, alpha_states);
@@ -732,9 +1069,9 @@ fn emit_path(content: &mut Content, element: &PathElement, alpha_states: &AlphaS
                 FillRule::EvenOdd => content.fill_even_odd_and_stroke(),
             };
         }
-        (Some(fill), Some((stroke, _))) => {
+        (Some(fill), Some((stroke, stroke_paint))) => {
             content.save_state();
-            set_fill_color(content, fill, alpha_states);
+            set_fill_paint(content, fill, alpha_states);
             emit_path_geometry(content, &element.path);
             match element.path.fill_rule {
                 FillRule::NonZero => content.fill_nonzero(),
@@ -742,21 +1079,21 @@ fn emit_path(content: &mut Content, element: &PathElement, alpha_states: &AlphaS
             };
             content.restore_state();
             content.save_state();
-            emit_stroke_state(content, stroke, alpha_states);
+            emit_stroke_paint(content, stroke, stroke_paint, alpha_states);
             emit_path_geometry(content, &element.path);
             content.stroke();
             content.restore_state();
         }
         (Some(fill), None) => {
-            set_fill_color(content, fill, alpha_states);
+            set_fill_paint(content, fill, alpha_states);
             emit_path_geometry(content, &element.path);
             match element.path.fill_rule {
                 FillRule::NonZero => content.fill_nonzero(),
                 FillRule::EvenOdd => content.fill_even_odd(),
             };
         }
-        (None, Some((stroke, _))) => {
-            emit_stroke_state(content, stroke, alpha_states);
+        (None, Some((stroke, stroke_paint))) => {
+            emit_stroke_paint(content, stroke, stroke_paint, alpha_states);
             emit_path_geometry(content, &element.path);
             content.stroke();
         }
@@ -766,10 +1103,48 @@ fn emit_path(content: &mut Content, element: &PathElement, alpha_states: &AlphaS
     content.restore_state();
 }
 
-fn solid_color(paint: &Paint) -> Option<oxml_layout::Color> {
+fn resolve_paint<'a>(
+    paint: &Paint,
+    page_idx: usize,
+    leaf_idx: usize,
+    target: GradientTarget,
+    gradients: &'a GradientRegistry,
+) -> Option<ResolvedPaint<'a>> {
     match paint {
-        Paint::Solid(color) => Some(*color),
-        Paint::Linear { .. } | Paint::Radial { .. } | Paint::Tile { .. } => None,
+        Paint::Solid(color) => Some(ResolvedPaint::Solid(*color)),
+        Paint::Linear { .. } | Paint::Radial { .. } => gradients
+            .entry(page_idx, leaf_idx, target)
+            .map(ResolvedPaint::Gradient),
+        Paint::Tile { .. } => None,
+    }
+}
+
+fn set_fill_paint(content: &mut Content, paint: ResolvedPaint<'_>, alpha_states: &AlphaStates) {
+    match paint {
+        ResolvedPaint::Solid(color) => set_fill_color(content, color, alpha_states),
+        ResolvedPaint::Gradient(entry) => {
+            content.set_fill_color_space(ColorSpaceOperand::Pattern);
+            content.set_fill_pattern([], Name(entry.name.as_bytes()));
+        }
+    }
+}
+
+fn emit_stroke_paint(
+    content: &mut Content,
+    stroke: &Stroke,
+    paint: ResolvedPaint<'_>,
+    alpha_states: &AlphaStates,
+) {
+    match paint {
+        ResolvedPaint::Solid(color) => {
+            emit_stroke_style(content, stroke, color);
+            apply_alpha(content, color.a, alpha_states);
+        }
+        ResolvedPaint::Gradient(entry) => {
+            emit_stroke_geometry_style(content, stroke);
+            content.set_stroke_color_space(ColorSpaceOperand::Pattern);
+            content.set_stroke_pattern([], Name(entry.name.as_bytes()));
+        }
     }
 }
 
@@ -778,22 +1153,18 @@ fn set_fill_color(content: &mut Content, color: oxml_layout::Color, alpha_states
     apply_alpha(content, color.a, alpha_states);
 }
 
-fn emit_stroke_state(content: &mut Content, stroke: &Stroke, alpha_states: &AlphaStates) {
-    let Some(color) = solid_color(&stroke.paint) else {
-        return;
-    };
-    emit_stroke_style(content, stroke, color);
-    apply_alpha(content, color.a, alpha_states);
+fn emit_stroke_style(content: &mut Content, stroke: &Stroke, color: oxml_layout::Color) {
+    emit_stroke_geometry_style(content, stroke);
+    content.set_stroke_rgb(color.r as f32, color.g as f32, color.b as f32);
 }
 
-fn emit_stroke_style(content: &mut Content, stroke: &Stroke, color: oxml_layout::Color) {
+fn emit_stroke_geometry_style(content: &mut Content, stroke: &Stroke) {
     let width = if stroke.width.is_finite() {
         stroke.width.max(0.0) as f32
     } else {
         0.0
     };
 
-    content.set_stroke_rgb(color.r as f32, color.g as f32, color.b as f32);
     content.set_line_width(width);
     content.set_line_cap(match stroke.cap {
         LineCap::Butt => LineCapStyle::ButtCap,
@@ -1037,8 +1408,8 @@ fn sanitize_font_name(family: &str, bold: bool, italic: bool) -> String {
 mod tests {
     use super::*;
     use oxml_layout::{
-        Color, Effect, FillRule, FontData, GlyphRun, GroupElement, LineCap, LineJoin, MediaId,
-        PageFrame, Paint, Path, PathCommand, PathElement, Point, Rect, Stroke, Transform,
+        Color, Effect, FillRule, FontData, GlyphRun, GradientStop, GroupElement, LineCap, LineJoin,
+        MediaId, PageFrame, Paint, Path, PathCommand, PathElement, Point, Rect, Stroke, Transform,
     };
 
     fn page_with(elements: Vec<PositionedElement>) -> PageFrame {
@@ -1053,6 +1424,11 @@ mod tests {
             next_ref += 1;
             reference
         });
+        let gradients = GradientRegistry::new(std::slice::from_ref(&page), &mut || {
+            let reference = Ref::new(next_ref);
+            next_ref += 1;
+            reference
+        });
         String::from_utf8(build_page_content(
             0,
             &page,
@@ -1060,6 +1436,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &alpha_states,
+            &gradients,
         ))
         .expect("PDF content operators are ASCII")
     }
@@ -1183,21 +1560,240 @@ mod tests {
         assert!(content.contains("[3 4] 0 d"), "{content}");
     }
 
+    fn gradient_stops() -> Vec<GradientStop> {
+        vec![
+            GradientStop {
+                offset: 0.0,
+                color: Color {
+                    r: 1.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+            },
+            GradientStop {
+                offset: 1.0,
+                color: Color {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+            },
+        ]
+    }
+
+    fn linear_gradient() -> Paint {
+        Paint::Linear {
+            start: Point { x: 10.0, y: 20.0 },
+            end: Point { x: 90.0, y: 20.0 },
+            stops: gradient_stops(),
+            extend: (true, false),
+        }
+    }
+
     #[test]
-    fn staged_gradient_component_does_not_block_solid_component() {
-        let content = content_for(vec![path_element(
+    fn linear_gradient_writes_pattern_shading_and_stitching_resources() {
+        let pdf = pdf_for(vec![path_element(
+            FillRule::NonZero,
+            Some(linear_gradient()),
+            None,
+        )]);
+
+        assert!(pdf.contains("/PatternType 2"), "{pdf}");
+        assert!(pdf.contains("/ShadingType 2"), "{pdf}");
+        assert!(pdf.contains("/FunctionType 3"), "{pdf}");
+        assert!(pdf.contains("/FunctionType 2"), "{pdf}");
+    }
+
+    #[test]
+    fn radial_gradient_writes_type_three_shading() {
+        let pdf = pdf_for(vec![path_element(
+            FillRule::NonZero,
+            Some(Paint::Radial {
+                center: Point { x: 50.0, y: 50.0 },
+                radius: 40.0,
+                focal: Point { x: 40.0, y: 45.0 },
+                stops: gradient_stops(),
+                extend: (false, true),
+            }),
+            None,
+        )]);
+
+        assert!(pdf.contains("/ShadingType 3"), "{pdf}");
+        assert!(pdf.contains("/Coords [40 45 0 50 50 40]"), "{pdf}");
+        assert!(pdf.contains("/Extend [false true]"), "{pdf}");
+    }
+
+    #[test]
+    fn gradient_stops_are_sorted_deduplicated_and_clamped() {
+        let stops = vec![
+            GradientStop {
+                offset: 2.0,
+                color: Color::WHITE,
+            },
+            GradientStop {
+                offset: -1.0,
+                color: Color::BLACK,
+            },
+            GradientStop {
+                offset: 0.5,
+                color: Color::BLACK,
+            },
+            GradientStop {
+                offset: 0.5,
+                color: Color::WHITE,
+            },
+        ];
+        let normalized = normalize_gradient_stops(&stops).expect("non-empty gradient");
+        assert_eq!(
+            normalized
+                .iter()
+                .map(|stop| stop.offset)
+                .collect::<Vec<_>>(),
+            vec![0.0, 0.5, 1.0]
+        );
+        assert_eq!(normalized[1].color, Color::WHITE);
+        let pdf = pdf_for(vec![path_element(
             FillRule::NonZero,
             Some(Paint::Linear {
                 start: Point { x: 0.0, y: 0.0 },
                 end: Point { x: 100.0, y: 0.0 },
-                stops: Vec::new(),
+                stops,
                 extend: (false, false),
             }),
+            None,
+        )]);
+
+        assert!(pdf.contains("/Domain [0 1]"), "{pdf}");
+        assert!(pdf.contains("/Bounds [0.5]"), "{pdf}");
+        assert!(pdf.contains("/Encode [0 1 0 1]"), "{pdf}");
+    }
+
+    #[test]
+    fn gradient_fill_and_solid_stroke_both_render() {
+        let content = content_for(vec![path_element(
+            FillRule::NonZero,
+            Some(linear_gradient()),
             Some(solid_stroke()),
         )]);
 
+        assert!(content.contains("/Pattern cs"), "{content}");
+        assert!(has_operator(&content, "f"), "{content}");
         assert!(has_operator(&content, "S"), "{content}");
-        assert!(!content.contains("/Pattern"), "{content}");
+    }
+
+    #[test]
+    fn gradient_stroke_uses_pattern_stroke_operators() {
+        let content = content_for(vec![path_element(
+            FillRule::NonZero,
+            None,
+            Some(Stroke {
+                paint: linear_gradient(),
+                ..solid_stroke()
+            }),
+        )]);
+
+        assert!(content.contains("/Pattern CS"), "{content}");
+        assert!(content.contains("/P0 SCN"), "{content}");
+        assert!(has_operator(&content, "S"), "{content}");
+    }
+
+    #[test]
+    fn page_patterns_include_only_gradients_used_on_that_page() {
+        let first = page_with(vec![path_element(
+            FillRule::NonZero,
+            Some(linear_gradient()),
+            None,
+        )]);
+        let second = PageFrame::new(
+            2,
+            612.0,
+            792.0,
+            vec![path_element(
+                FillRule::NonZero,
+                Some(Paint::Radial {
+                    center: Point { x: 50.0, y: 50.0 },
+                    radius: 40.0,
+                    focal: Point { x: 50.0, y: 50.0 },
+                    stops: gradient_stops(),
+                    extend: (false, false),
+                }),
+                None,
+            )],
+        );
+        let layout = LayoutResult::new(vec![first, second], Vec::new(), None, Vec::new());
+        let pdf = String::from_utf8_lossy(&write_pdf(&layout)).into_owned();
+
+        let pattern_resources: Vec<_> = pdf
+            .split("/Pattern <<")
+            .skip(1)
+            .map(|tail| tail.split(">>").next().expect("pattern dictionary end"))
+            .collect();
+        assert_eq!(pattern_resources.len(), 2, "{pdf}");
+        assert!(pattern_resources[0].contains("/P0"), "{pdf}");
+        assert!(!pattern_resources[0].contains("/P1"), "{pdf}");
+        assert!(pattern_resources[1].contains("/P1"), "{pdf}");
+        assert!(!pattern_resources[1].contains("/P0"), "{pdf}");
+    }
+
+    #[test]
+    fn rotated_linear_gradient_renders_with_its_axis_rotated() {
+        let gradient_path = PositionedElement::Path(PathElement {
+            path: Path::rect(Rect {
+                x: 20.0,
+                y: 40.0,
+                width: 80.0,
+                height: 40.0,
+            }),
+            fill: Some(Paint::Linear {
+                start: Point { x: 20.0, y: 60.0 },
+                end: Point { x: 100.0, y: 60.0 },
+                stops: gradient_stops(),
+                extend: (false, false),
+            }),
+            stroke: None,
+        });
+        let rotated = group(
+            Transform::rotate_about(90.0, 60.0, 60.0),
+            vec![gradient_path],
+        );
+        let pdf = write_pdf(&LayoutResult::new(
+            vec![PageFrame::new(1, 120.0, 120.0, vec![rotated])],
+            Vec::new(),
+            None,
+            Vec::new(),
+        ));
+        let base = std::env::temp_dir().join(format!("oxml-pdf-f043-{}", std::process::id()));
+        let pdf_path = base.with_extension("pdf");
+        let png_path = base.with_extension("png");
+        std::fs::write(&pdf_path, pdf).expect("write PDF fixture");
+        let version = std::process::Command::new("pdftoppm")
+            .arg("-v")
+            .output()
+            .expect("pdftoppm is required for the F-043 gate");
+        let version = String::from_utf8_lossy(&version.stderr);
+        assert!(version.starts_with("pdftoppm version 26.01.0"), "{version}");
+        let status = std::process::Command::new("pdftoppm")
+            .args(["-png", "-r", "72", "-f", "1", "-singlefile"])
+            .arg(&pdf_path)
+            .arg(&base)
+            .status()
+            .expect("rasterise F-043 fixture");
+        assert!(status.success());
+        let pixmap = tiny_skia::Pixmap::load_png(&png_path).expect("decode raster fixture");
+        let top = pixmap.pixel(60, 30).expect("top sample");
+        let bottom = pixmap.pixel(60, 90).expect("bottom sample");
+        assert_eq!(
+            (top.red(), top.green(), top.blue(), top.alpha()),
+            (223, 0, 32, 255)
+        );
+        assert_eq!(
+            (bottom.red(), bottom.green(), bottom.blue(), bottom.alpha()),
+            (32, 0, 223, 255)
+        );
+        let _ = std::fs::remove_file(pdf_path);
+        let _ = std::fs::remove_file(png_path);
     }
 
     fn alpha_rect(alpha: f64) -> PositionedElement {
@@ -1538,6 +2134,11 @@ mod tests {
             next_ref += 1;
             reference
         });
+        let gradients = GradientRegistry::new(std::slice::from_ref(&page), &mut || {
+            let reference = Ref::new(next_ref);
+            next_ref += 1;
+            reference
+        });
         let content = String::from_utf8(build_page_content(
             0,
             &page,
@@ -1545,6 +2146,7 @@ mod tests {
             &HashMap::new(),
             &image_map,
             &alpha_states,
+            &gradients,
         ))
         .expect("PDF content operators are ASCII");
 
@@ -1642,6 +2244,11 @@ mod tests {
             next_ref += 1;
             reference
         });
+        let gradients = GradientRegistry::new(std::slice::from_ref(&page), &mut || {
+            let reference = Ref::new(next_ref);
+            next_ref += 1;
+            reference
+        });
         let content = String::from_utf8(build_page_content(
             0,
             &page,
@@ -1649,6 +2256,7 @@ mod tests {
             &font_refs,
             &image_map,
             &alpha_states,
+            &gradients,
         ))
         .expect("PDF content operators are ASCII");
 

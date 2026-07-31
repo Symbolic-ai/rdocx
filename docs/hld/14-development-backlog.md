@@ -368,10 +368,12 @@ group. This is the R3 regression gate.
 
 ### F-043, Gradient shading dictionaries (L)
 Type 2 axial and type 3 radial, with a type 3 stitching function over type 2
-exponentials, and a `/Matrix` so gradients rotate with their shape.
+exponentials, deterministic occurrence names, page-local pattern resources,
+and an accumulated `/Matrix` so gradients rotate with their shape. Fill and
+stroke pattern operators preserve the supported solid half of mixed paint.
 **Depends on**: F-041.
 **Test gate**: a rotated linear gradient renders with its axis rotated, asserted
-on sampled raster pixels.
+on sampled raster pixels at 72 dpi with Poppler 26.01.0.
 
 ### F-044, ExtGState alpha (S)
 One document-wide state per distinct normalized alpha, with page-local resource

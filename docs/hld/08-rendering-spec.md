@@ -179,13 +179,18 @@ fill, stroke and rule. Stroke state uses `w`, `J`, `j`, `M` and `d`. `Group` is
 `q`, `cm`, optional clip via `W n`, optional `/GS gs` for opacity, recurse,
 `Q`.
 
-**Gradients** are the real work: `/Pattern cs /P scn`, a pattern dictionary of
-type 2 whose `/Matrix` is the element-local transform so gradients rotate with
-their shape, a type 2 axial or type 3 radial shading, and a **type 3 stitching
-function over type 2 exponential functions**, one per stop interval. Stops are
-sorted, deduplicated and clamped, and a single-stop gradient degrades to a solid
-at build time. **Stop alpha needs a luminosity soft mask and is out of scope for
-v1**: composite the colour, drop the alpha, record a diagnostic.
+**Gradients** use `/Pattern cs /P scn` for fills and `/Pattern CS /P SCN` for
+strokes. One private registry pre-scans path paint in depth-first order,
+allocates one deterministic pattern per gradient occurrence, and gives each
+page only the pattern names that it uses. A type 2 pattern dictionary composes
+the accumulated element transform with the global page flip in `/Matrix` so
+the gradient rotates with its shape in the same top-left coordinate space as
+the path. It references a type 2 axial or type 3 radial shading and a **type 3
+stitching function over type 2 exponential functions**, one per stop interval.
+Stops are sorted and clamped, and the last stop at a repeated offset wins.
+Single-stop gradients degrade to a solid at build time. **Stop alpha needs a
+luminosity soft mask and is out of scope for v1**. The PDF fallback composites
+each stop over white and emits opaque DeviceRGB values.
 
 **Alpha** uses one document-wide `/ExtGState` per distinct normalized value.
 Each state sets both `CA` and `ca`, and each page references only the states its

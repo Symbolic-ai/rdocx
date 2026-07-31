@@ -1,6 +1,6 @@
 # F-043, Gradient shading dictionaries
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S10
 **Size**: L
 **Depends on**: F-041
@@ -92,14 +92,14 @@ consumer. Do not update `scripts/hash_baseline.json`.
 
 ## Implementation checklist
 
-- [ ] Add one private deterministic gradient registry in `writer.rs`.
-- [ ] Normalize gradient stops without changing the public layout model.
-- [ ] Write linear and radial shading dictionaries and stitching functions.
-- [ ] Write shading patterns with element-local matrices and page resources.
-- [ ] Apply gradient patterns to path fills and strokes.
-- [ ] Add structural resource tests and the sampled rotated-axis gate.
-- [ ] Update exactly the declared HLD files to current intent.
-- [ ] Prove the hash and exact golden baselines remain unchanged.
+- [x] Add one private deterministic gradient registry in `writer.rs`.
+- [x] Normalize gradient stops without changing the public layout model.
+- [x] Write linear and radial shading dictionaries and stitching functions.
+- [x] Write shading patterns with element-local matrices and page resources.
+- [x] Apply gradient patterns to path fills and strokes.
+- [x] Add structural resource tests and the sampled rotated-axis gate.
+- [x] Update exactly the declared HLD files to current intent.
+- [x] Prove the hash and exact golden baselines remain unchanged.
 
 ## Open questions
 
