@@ -15,6 +15,9 @@ use crate::order::OrderedRawChildren;
 pub enum ColorError {
     Xml(OxmlError),
     InvalidRgb(String),
+    InvalidColorMapSlot(String),
+    InvalidThemeColorSlot(String),
+    UnresolvedColor(String),
     MissingAttribute { element: String, attribute: String },
     UnexpectedElement(String),
     InvalidTransformValue { element: String, value: String },
@@ -28,6 +31,15 @@ impl fmt::Display for ColorError {
                 formatter,
                 "DrawingML RGB colour must be exactly six hexadecimal digits: {value}"
             ),
+            Self::InvalidColorMapSlot(value) => {
+                write!(formatter, "invalid DrawingML colour-map slot: {value}")
+            }
+            Self::InvalidThemeColorSlot(value) => {
+                write!(formatter, "invalid DrawingML theme colour slot: {value}")
+            }
+            Self::UnresolvedColor(value) => {
+                write!(formatter, "no concrete colour is available for: {value}")
+            }
             Self::MissingAttribute { element, attribute } => {
                 write!(formatter, "DrawingML {element} requires @{attribute}")
             }
@@ -235,6 +247,202 @@ impl ResolvedColor {
     }
 }
 
+/// One of the twelve semantic slots selected by a DrawingML colour map.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ColorMapSlot {
+    Background1,
+    Text1,
+    Background2,
+    Text2,
+    Accent1,
+    Accent2,
+    Accent3,
+    Accent4,
+    Accent5,
+    Accent6,
+    Hyperlink,
+    FollowedHyperlink,
+}
+
+impl ColorMapSlot {
+    /// Parses an `ST_ColorSchemeIndex` source name used by `p:clrMap`.
+    pub fn parse(value: &str) -> Result<Self> {
+        Self::from_value(value).ok_or_else(|| ColorError::InvalidColorMapSlot(value.to_owned()))
+    }
+
+    fn from_value(value: &str) -> Option<Self> {
+        match value {
+            "bg1" => Some(Self::Background1),
+            "tx1" => Some(Self::Text1),
+            "bg2" => Some(Self::Background2),
+            "tx2" => Some(Self::Text2),
+            "accent1" => Some(Self::Accent1),
+            "accent2" => Some(Self::Accent2),
+            "accent3" => Some(Self::Accent3),
+            "accent4" => Some(Self::Accent4),
+            "accent5" => Some(Self::Accent5),
+            "accent6" => Some(Self::Accent6),
+            "hlink" => Some(Self::Hyperlink),
+            "folHlink" => Some(Self::FollowedHyperlink),
+            _ => None,
+        }
+    }
+
+    const fn index(self) -> usize {
+        match self {
+            Self::Background1 => 0,
+            Self::Text1 => 1,
+            Self::Background2 => 2,
+            Self::Text2 => 3,
+            Self::Accent1 => 4,
+            Self::Accent2 => 5,
+            Self::Accent3 => 6,
+            Self::Accent4 => 7,
+            Self::Accent5 => 8,
+            Self::Accent6 => 9,
+            Self::Hyperlink => 10,
+            Self::FollowedHyperlink => 11,
+        }
+    }
+}
+
+/// One of the twelve concrete slots in a DrawingML theme colour scheme.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ThemeColorSlot {
+    Dark1,
+    Light1,
+    Dark2,
+    Light2,
+    Accent1,
+    Accent2,
+    Accent3,
+    Accent4,
+    Accent5,
+    Accent6,
+    Hyperlink,
+    FollowedHyperlink,
+}
+
+impl ThemeColorSlot {
+    /// Parses an `ST_ColorSchemeIndex` destination used by `p:clrMap`.
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "dk1" => Ok(Self::Dark1),
+            "lt1" => Ok(Self::Light1),
+            "dk2" => Ok(Self::Dark2),
+            "lt2" => Ok(Self::Light2),
+            "accent1" => Ok(Self::Accent1),
+            "accent2" => Ok(Self::Accent2),
+            "accent3" => Ok(Self::Accent3),
+            "accent4" => Ok(Self::Accent4),
+            "accent5" => Ok(Self::Accent5),
+            "accent6" => Ok(Self::Accent6),
+            "hlink" => Ok(Self::Hyperlink),
+            "folHlink" => Ok(Self::FollowedHyperlink),
+            _ => Err(ColorError::InvalidThemeColorSlot(value.to_owned())),
+        }
+    }
+
+    /// Returns the DrawingML theme slot name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Dark1 => "dk1",
+            Self::Light1 => "lt1",
+            Self::Dark2 => "dk2",
+            Self::Light2 => "lt2",
+            Self::Accent1 => "accent1",
+            Self::Accent2 => "accent2",
+            Self::Accent3 => "accent3",
+            Self::Accent4 => "accent4",
+            Self::Accent5 => "accent5",
+            Self::Accent6 => "accent6",
+            Self::Hyperlink => "hlink",
+            Self::FollowedHyperlink => "folHlink",
+        }
+    }
+}
+
+/// The twelve master-controlled mappings applied before theme colour lookup.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ColorMap {
+    slots: [ThemeColorSlot; 12],
+}
+
+impl ColorMap {
+    /// Creates a colour map from parsed master values in schema attribute order.
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new(
+        background1: ThemeColorSlot,
+        text1: ThemeColorSlot,
+        background2: ThemeColorSlot,
+        text2: ThemeColorSlot,
+        accent1: ThemeColorSlot,
+        accent2: ThemeColorSlot,
+        accent3: ThemeColorSlot,
+        accent4: ThemeColorSlot,
+        accent5: ThemeColorSlot,
+        accent6: ThemeColorSlot,
+        hyperlink: ThemeColorSlot,
+        followed_hyperlink: ThemeColorSlot,
+    ) -> Self {
+        Self {
+            slots: [
+                background1,
+                text1,
+                background2,
+                text2,
+                accent1,
+                accent2,
+                accent3,
+                accent4,
+                accent5,
+                accent6,
+                hyperlink,
+                followed_hyperlink,
+            ],
+        }
+    }
+
+    /// Returns the concrete theme slot selected for one semantic map slot.
+    pub const fn theme_slot(&self, slot: ColorMapSlot) -> ThemeColorSlot {
+        self.slots[slot.index()]
+    }
+
+    /// Returns a copy with only the named layout or slide overrides replaced.
+    pub fn with_overrides(&self, overrides: &[(ColorMapSlot, ThemeColorSlot)]) -> Self {
+        let mut resolved = self.clone();
+        for (source, destination) in overrides {
+            resolved.slots[source.index()] = *destination;
+        }
+        resolved
+    }
+
+    fn mapped_name<'a>(&self, value: &'a str) -> &'a str {
+        ColorMapSlot::from_value(value)
+            .map(|slot| self.theme_slot(slot).as_str())
+            .unwrap_or(value)
+    }
+}
+
+impl Default for ColorMap {
+    fn default() -> Self {
+        Self::new(
+            ThemeColorSlot::Light1,
+            ThemeColorSlot::Dark1,
+            ThemeColorSlot::Light2,
+            ThemeColorSlot::Dark2,
+            ThemeColorSlot::Accent1,
+            ThemeColorSlot::Accent2,
+            ThemeColorSlot::Accent3,
+            ThemeColorSlot::Accent4,
+            ThemeColorSlot::Accent5,
+            ThemeColorSlot::Accent6,
+            ThemeColorSlot::Hyperlink,
+            ThemeColorSlot::FollowedHyperlink,
+        )
+    }
+}
+
 /// One of the four DrawingML colour choice elements.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ColorChoice {
@@ -400,6 +608,55 @@ impl ColorChoice {
             | Self::Preset { transforms, .. } => transforms,
         }
     }
+}
+
+/// Resolves a colour through the master map, lookup table, and transform stack.
+///
+/// Theme slots, system colour names, and preset colour names share the concrete
+/// lookup table. Only scheme colours pass through `color_map`. A system colour
+/// falls back to its `lastClr` value when its name is absent from the lookup.
+pub fn resolve_color(
+    choice: &ColorChoice,
+    color_map: &ColorMap,
+    lookup: &[(&str, RgbColor)],
+) -> Result<ResolvedColor> {
+    let find = |name: &str| {
+        lookup
+            .iter()
+            .find_map(|(candidate, colour)| (*candidate == name).then_some(*colour))
+    };
+    let (base, transforms) = match choice {
+        ColorChoice::Srgb {
+            value, transforms, ..
+        } => (*value, transforms.as_slice()),
+        ColorChoice::Scheme {
+            value, transforms, ..
+        } => {
+            let mapped = color_map.mapped_name(value);
+            (
+                find(mapped).ok_or_else(|| ColorError::UnresolvedColor(mapped.to_owned()))?,
+                transforms.as_slice(),
+            )
+        }
+        ColorChoice::System {
+            value,
+            last_color,
+            transforms,
+            ..
+        } => (
+            find(value)
+                .or(*last_color)
+                .ok_or_else(|| ColorError::UnresolvedColor(value.clone()))?,
+            transforms.as_slice(),
+        ),
+        ColorChoice::Preset {
+            value, transforms, ..
+        } => (
+            find(value).ok_or_else(|| ColorError::UnresolvedColor(value.clone()))?,
+            transforms.as_slice(),
+        ),
+    };
+    Ok(apply_color_transforms(base, transforms))
 }
 
 fn required_attr(element: &BytesStart<'_>, name: &[u8]) -> Result<String> {
@@ -790,8 +1047,8 @@ mod tests {
     use quick_xml::events::Event;
 
     use super::{
-        ColorChoice, ColorError, ColorTransform, ResolvedColor, RgbColor, apply_color_transforms,
-        linear_to_srgb, srgb_to_linear,
+        ColorChoice, ColorError, ColorMap, ColorMapSlot, ColorTransform, ResolvedColor, RgbColor,
+        ThemeColorSlot, apply_color_transforms, linear_to_srgb, resolve_color, srgb_to_linear,
     };
     use crate::order::OrderedRawChildren;
     use quick_xml::{Reader, Writer};
@@ -1204,6 +1461,136 @@ mod tests {
             panic!("expected empty system colour");
         };
         assert!(ColorChoice::from_empty_xml(&element).is_err());
+    }
+
+    #[test]
+    fn standard_colour_map_uses_office_theme_slots() {
+        let map = ColorMap::default();
+        let expected = [
+            (ColorMapSlot::Background1, ThemeColorSlot::Light1),
+            (ColorMapSlot::Text1, ThemeColorSlot::Dark1),
+            (ColorMapSlot::Background2, ThemeColorSlot::Light2),
+            (ColorMapSlot::Text2, ThemeColorSlot::Dark2),
+            (ColorMapSlot::Accent1, ThemeColorSlot::Accent1),
+            (ColorMapSlot::Accent2, ThemeColorSlot::Accent2),
+            (ColorMapSlot::Accent3, ThemeColorSlot::Accent3),
+            (ColorMapSlot::Accent4, ThemeColorSlot::Accent4),
+            (ColorMapSlot::Accent5, ThemeColorSlot::Accent5),
+            (ColorMapSlot::Accent6, ThemeColorSlot::Accent6),
+            (ColorMapSlot::Hyperlink, ThemeColorSlot::Hyperlink),
+            (
+                ColorMapSlot::FollowedHyperlink,
+                ThemeColorSlot::FollowedHyperlink,
+            ),
+        ];
+
+        for (source, destination) in expected {
+            assert_eq!(map.theme_slot(source), destination);
+        }
+    }
+
+    #[test]
+    fn dark_master_colour_map_inverts_background_and_text() {
+        let map = ColorMap::default().with_overrides(&[
+            (ColorMapSlot::Background1, ThemeColorSlot::Dark1),
+            (ColorMapSlot::Text1, ThemeColorSlot::Light1),
+        ]);
+        let theme = [
+            ("dk1", RgbColor::new(0x1F, 0x49, 0x7D)),
+            ("lt1", RgbColor::new(0xEE, 0xDD, 0xCC)),
+        ];
+
+        assert_eq!(
+            resolve_color(
+                &parse(br#"<a:schemeClr val="bg1"><a:tint val="62000"/></a:schemeClr>"#),
+                &map,
+                &theme,
+            )
+            .unwrap(),
+            ResolvedColor::new(167, 174, 189, 255)
+        );
+        assert_eq!(
+            resolve_color(&parse(br#"<a:schemeClr val="tx1"/>"#), &map, &theme).unwrap(),
+            ResolvedColor::new(0xEE, 0xDD, 0xCC, 255)
+        );
+    }
+
+    #[test]
+    fn colour_map_override_wins_before_theme_lookup() {
+        let master = ColorMap::new(
+            ThemeColorSlot::Dark2,
+            ThemeColorSlot::Light2,
+            ThemeColorSlot::Accent3,
+            ThemeColorSlot::Accent4,
+            ThemeColorSlot::Accent5,
+            ThemeColorSlot::Accent6,
+            ThemeColorSlot::Accent1,
+            ThemeColorSlot::Accent2,
+            ThemeColorSlot::Dark1,
+            ThemeColorSlot::Light1,
+            ThemeColorSlot::FollowedHyperlink,
+            ThemeColorSlot::Hyperlink,
+        );
+        let map = master.with_overrides(&[(ColorMapSlot::Background1, ThemeColorSlot::Accent6)]);
+        let expected = ColorMap::new(
+            ThemeColorSlot::Accent6,
+            ThemeColorSlot::Light2,
+            ThemeColorSlot::Accent3,
+            ThemeColorSlot::Accent4,
+            ThemeColorSlot::Accent5,
+            ThemeColorSlot::Accent6,
+            ThemeColorSlot::Accent1,
+            ThemeColorSlot::Accent2,
+            ThemeColorSlot::Dark1,
+            ThemeColorSlot::Light1,
+            ThemeColorSlot::FollowedHyperlink,
+            ThemeColorSlot::Hyperlink,
+        );
+
+        assert_eq!(map, expected);
+        assert_eq!(
+            master.theme_slot(ColorMapSlot::Background1),
+            ThemeColorSlot::Dark2
+        );
+    }
+
+    #[test]
+    fn direct_colours_bypass_the_master_colour_map() {
+        let standard = ColorMap::default();
+        let dark = standard.with_overrides(&[
+            (ColorMapSlot::Background1, ThemeColorSlot::Dark1),
+            (ColorMapSlot::Text1, ThemeColorSlot::Light1),
+        ]);
+        let lookup = [
+            ("windowText", RgbColor::new(0x10, 0x20, 0x30)),
+            ("aliceBlue", RgbColor::new(0xF0, 0xF8, 0xFF)),
+        ];
+        let direct = [
+            (
+                parse(br#"<a:srgbClr val="EEECE1"><a:shade val="58000"/></a:srgbClr>"#),
+                ResolvedColor::new(187, 185, 176, 255),
+            ),
+            (
+                parse(br#"<a:sysClr val="windowText" lastClr="FFFFFF"/>"#),
+                ResolvedColor::new(0x10, 0x20, 0x30, 255),
+            ),
+            (
+                parse(br#"<a:sysClr val="missing" lastClr="AABBCC"/>"#),
+                ResolvedColor::new(0xAA, 0xBB, 0xCC, 255),
+            ),
+            (
+                parse(br#"<a:prstClr val="aliceBlue"/>"#),
+                ResolvedColor::new(0xF0, 0xF8, 0xFF, 255),
+            ),
+        ];
+
+        for (colour, expected) in direct {
+            assert_eq!(
+                resolve_color(&colour, &standard, &lookup).unwrap(),
+                expected
+            );
+            assert_eq!(resolve_color(&colour, &dark, &lookup).unwrap(), expected);
+        }
     }
 
     #[test]

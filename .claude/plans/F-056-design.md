@@ -1,6 +1,6 @@
 # F-056, Colour map resolution
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S12
 **Size**: M
 **Depends on**: F-055
@@ -73,11 +73,11 @@ does not alter the released Word rendering path.
 
 ## Implementation checklist
 
-- [ ] Add the concrete `ColorMap` representation and standard mapping.
-- [ ] Add master-map override composition without PresentationML parsing.
-- [ ] Resolve scheme colours through map, theme, then transforms.
-- [ ] Keep direct colour choices independent of the map.
-- [ ] Add the dark-master, override, and direct-colour tests.
+- [x] Add the concrete `ColorMap` representation and standard mapping.
+- [x] Add master-map override composition without PresentationML parsing.
+- [x] Resolve scheme colours through map, theme, then transforms.
+- [x] Keep direct colour choices independent of the map.
+- [x] Add the dark-master, override, and direct-colour tests.
 
 ## Open questions
 
