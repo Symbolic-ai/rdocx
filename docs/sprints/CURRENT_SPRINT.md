@@ -30,7 +30,7 @@ group transforms explicit before the PDF backend migrates.
 | F-036 | MediaId | S | in-progress | codex |
 | F-033 | Paint and Stroke | M | in-progress | codex |
 | F-034 | Path and Group arms | M | in-progress | codex |
-| F-035 | The walk helper | S | pending | - |
+| F-035 | The walk helper | S | in-progress | codex |
 
 ## Sequencing note
 
