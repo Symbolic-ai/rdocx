@@ -1,6 +1,6 @@
 # F-035, The walk helper
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S07
 **Size**: S
 **Depends on**: F-034
@@ -91,11 +91,11 @@ Expected to remain unchanged. The helper has no released consumer.
 
 ## Implementation checklist
 
-- [ ] Wait for integrated F-034.
-- [ ] Add and export the callback-based leaf traversal helper.
-- [ ] Accumulate child-local transforms in the documented order.
-- [ ] Add the three-deep regression and focused traversal tests.
-- [ ] Run the scoped checks and consolidated sprint riders.
+- [x] Wait for integrated F-034.
+- [x] Add and export the callback-based leaf traversal helper.
+- [x] Accumulate child-local transforms in the documented order.
+- [x] Add the three-deep regression and focused traversal tests.
+- [x] Run the scoped checks and consolidated sprint riders.
 
 ## Open questions
 

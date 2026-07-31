@@ -184,6 +184,27 @@ pub struct GroupElement {
     pub children: Vec<PositionedElement>,
 }
 
+/// Visit every non-group element in depth-first document order.
+pub fn walk(elements: &[PositionedElement], f: &mut impl FnMut(&PositionedElement, &Transform)) {
+    fn visit(
+        elements: &[PositionedElement],
+        accumulated: Transform,
+        f: &mut dyn FnMut(&PositionedElement, &Transform),
+    ) {
+        for element in elements {
+            match element {
+                PositionedElement::Group(group) => {
+                    let child_to_page = group.transform.then(accumulated);
+                    visit(&group.children, child_to_page, f);
+                }
+                leaf => f(leaf, &accumulated),
+            }
+        }
+    }
+
+    visit(elements, Transform::IDENTITY, f);
+}
+
 /// A single page of laid-out content.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -450,5 +471,124 @@ mod group_output_tests {
             group.transform.apply(super::Point { x: 1.0, y: 2.0 }),
             super::Point { x: 11.0, y: 22.0 }
         );
+    }
+}
+
+#[cfg(test)]
+mod walk_tests {
+    use super::{Color, GroupElement, PositionedElement, Rect, walk};
+    use crate::{Point, Transform};
+
+    fn translate(x: f64, y: f64) -> Transform {
+        Transform {
+            e: x,
+            f: y,
+            ..Transform::IDENTITY
+        }
+    }
+
+    fn scale(value: f64) -> Transform {
+        Transform {
+            a: value,
+            d: value,
+            ..Transform::IDENTITY
+        }
+    }
+
+    fn leaf(id: f64) -> PositionedElement {
+        PositionedElement::FilledRect {
+            rect: Rect {
+                x: id,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            color: Color::BLACK,
+        }
+    }
+
+    #[test]
+    fn three_deep_groups_yield_every_leaf_once_with_the_correct_accumulated_transform() {
+        let elements = vec![
+            leaf(1.0),
+            PositionedElement::Group(GroupElement {
+                transform: translate(10.0, 0.0),
+                clip: None,
+                opacity: 1.0,
+                effects: Vec::new(),
+                children: vec![PositionedElement::Group(GroupElement {
+                    transform: scale(2.0),
+                    clip: None,
+                    opacity: 1.0,
+                    effects: Vec::new(),
+                    children: vec![PositionedElement::Group(GroupElement {
+                        transform: translate(0.0, 5.0),
+                        clip: None,
+                        opacity: 1.0,
+                        effects: Vec::new(),
+                        children: vec![leaf(2.0)],
+                    })],
+                })],
+            }),
+            leaf(3.0),
+        ];
+        let mut visited = Vec::new();
+        walk(&elements, &mut |element, transform| {
+            let PositionedElement::FilledRect { rect, .. } = element else {
+                panic!("walk should yield leaves only");
+            };
+            visited.push((rect.x, transform.apply(Point { x: 1.0, y: 1.0 })));
+        });
+        assert_eq!(
+            visited,
+            vec![
+                (1.0, Point { x: 1.0, y: 1.0 }),
+                (2.0, Point { x: 12.0, y: 12.0 }),
+                (3.0, Point { x: 1.0, y: 1.0 }),
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_group_transform_order_applies_child_before_parent() {
+        let group = PositionedElement::Group(GroupElement {
+            transform: translate(10.0, 0.0),
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children: vec![PositionedElement::Group(GroupElement {
+                transform: scale(2.0),
+                clip: None,
+                opacity: 1.0,
+                effects: Vec::new(),
+                children: vec![leaf(1.0)],
+            })],
+        });
+        let mut points = Vec::new();
+        walk(&[group], &mut |_, transform| {
+            points.push(transform.apply(Point { x: 1.0, y: 1.0 }));
+        });
+        assert_eq!(points, vec![Point { x: 12.0, y: 2.0 }]);
+    }
+
+    #[test]
+    fn walk_does_not_yield_group_nodes() {
+        let group = PositionedElement::Group(GroupElement {
+            transform: Transform::IDENTITY,
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children: vec![leaf(1.0)],
+        });
+        walk(&[group], &mut |element, _| {
+            assert!(!matches!(element, PositionedElement::Group(_)));
+        });
+    }
+
+    #[test]
+    fn walk_passes_identity_for_root_leaves() {
+        walk(&[leaf(1.0)], &mut |_, transform| {
+            assert_eq!(*transform, Transform::IDENTITY);
+        });
     }
 }
