@@ -765,3 +765,97 @@ tests, and the integrated full gate.
 
 **Notes for future sessions.** The later consumer cutover must supply its own
 default DPI and convert no units outside this API.
+
+### F-029, Create oxml-layout
+
+**Sprint.** S06
+**Completed.** 2026-07-31
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The unpublished `oxml-layout` crate now stages
+format-neutral layout output, font management, bundled deterministic fonts,
+and layout errors without changing a released consumer.
+
+**Non-obvious choices.** Bundled fonts are always available for deterministic
+rendering. The default `system-fonts` feature controls only host font discovery,
+and the no-default path keeps the same bundled archive.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** None. The existing architecture, rendering,
+migration, testing, risk, backlog, and toolchain contracts already specify the
+staged crate boundary.
+
+**Tests.** Default and no-default font-manager tests, empty-font error handling,
+bundled-font licence coverage, dependency isolation, archive contents and size,
+released-crate isolation, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep deterministic fonts inside `oxml-layout`
+when consumers migrate. System discovery remains an optional capability, not a
+determinism requirement.
+
+### F-030, Decouple line.rs
+
+**Sprint.** S06
+**Completed.** 2026-07-31
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `oxml-layout` now has a greedy line breaker with owned
+layout types for alignment, tabs, leaders, underline, and spacing. Explicit
+wrapping control can retain width overflow while forced line, page, and column
+breaks continue to split content.
+
+**Non-obvious choices.** Tab positions and exact or minimum spacing are stored
+in points. Multiple spacing stores a factor, and the staged boundary contains
+neither twips nor stringly line rules.
+
+**Deviations from the design plan.** Microscope pass 1 strengthened the copied
+tests to use deterministic bundled fonts and made the leader regression prove
+real glyph shaping. Production behavior remained on the approved design.
+
+**Spec sections touched.** None. The existing migration and rendering contracts
+already define the owned line-breaking boundary and deferred rdocx converter.
+
+**Tests.** All 11 copied compatibility tests, four owned spacing and wrapping
+regressions, deterministic leader shaping, both feature modes, dependency and
+package riders, released-line-breaker isolation, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** The later rdocx cutover must perform schema-unit
+conversion before constructing these types. Do not move Word-specific enums
+back across this boundary.
+
+### F-031, Transform
+
+**Sprint.** S06
+**Completed.** 2026-07-31
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `oxml-layout` now exports a concrete six-coefficient affine
+transform with rotation about a point, self-first composition, point
+application, exact identity checks, and four-corner rectangle bounds.
+
+**Non-obvious choices.** `self.then(next)` applies `self` first and `next`
+second, matching the point equations and PDF `cm` concatenation order. Identity
+comparison is exact so small intentional transforms are never discarded.
+
+**Deviations from the design plan.** Microscope pass 1 strengthened the
+composition gate with fully nonzero matrices and replaced an exact quarter-turn
+bounds case with a negative 30-degree rotation. Production algebra was already
+correct.
+
+**Spec sections touched.** None. The existing rendering and testing contracts
+already specify the matrix representation and composition order.
+
+**Tests.** Identity neutrality, fractional and positive rotation, fully nonzero
+hand-computed PDF composition, negative-rotation four-corner bounds, exact
+identity, package and dependency riders, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Convert DrawingML rotation units to degrees
+before this boundary, and preserve self-first composition when group transforms
+begin consuming the type.

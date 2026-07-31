@@ -46,6 +46,9 @@ defended.
 | F-024 | S05 | L | 4 | 1 | 2026-07-30 | Safe image metadata and DPI probing |
 | F-025 | S05 | S | 1 | 1 | 2026-07-30 | Collision-free shared media naming |
 | F-026 | S05 | S | 1 | 1 | 2026-07-30 | Dependency-free native EMU sizing |
+| F-029 | S06 | M | 2 | 1 | 2026-07-31 | Unpublished layout output and font staging |
+| F-030 | S06 | L | 4 | 1 | 2026-07-31 | Owned format-neutral line-breaking boundary |
+| F-031 | S06 | M | 2 | 1 | 2026-07-31 | Six-coefficient affine transforms |
 
 ## Velocity
 
