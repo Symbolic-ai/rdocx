@@ -137,13 +137,12 @@ pub fn walk(elements: &[PositionedElement], f: &mut impl FnMut(&PositionedElemen
 
 All three passes are rewritten on it, and each gets an explicit test.
 
-## Three remaining defects to fix
+## Two remaining defects to fix
 
 All are forced by pptx, and all improve rdocx:
 
 | Defect | Location |
 |---|---|
-| `set_fill_rgb` drops `Color.a` everywhere, in both PDF and text | `writer.rs:414` |
 | `dash_pattern: _` means dashes are ignored in **all** PNG output today | `raster.rs:73` |
 | Images keyed `Im{page}_{elem}`, no deduplication, and the full font dictionary is written into every page | `writer.rs` |
 
@@ -184,8 +183,11 @@ sorted, deduplicated and clamped, and a single-stop gradient degrades to a solid
 at build time. **Stop alpha needs a luminosity soft mask and is out of scope for
 v1**: composite the colour, drop the alpha, record a diagnostic.
 
-**Alpha** becomes one `/ExtGState` per distinct value, which also fixes the
-existing dropped-alpha bug for rdocx.
+**Alpha** uses one document-wide `/ExtGState` per distinct normalized value.
+Each state sets both `CA` and `ca`, and each page references only the states its
+elements use. Text, lines, rectangles, solid paths, and group opacity share the
+same private registry. A path whose fill and stroke alpha differ repeats its
+geometry so each paint operation selects the right state.
 
 ## The rasteriser
 

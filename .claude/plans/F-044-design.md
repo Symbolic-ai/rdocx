@@ -1,6 +1,6 @@
 # F-044, ExtGState alpha
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S09
 **Size**: S
 **Depends on**: F-039
@@ -35,6 +35,11 @@ Expose the registry only through private writer helpers. Add the states used by
 a page to that page's `/ExtGState` resources, write each dictionary once, and
 emit `gs` before text, line, rectangle, and supported solid path paint when its
 alpha is below one. Opaque elements do not allocate or emit a state.
+
+When one path has different fill and stroke alpha, emit its geometry once for
+fill and once for stroke so each paint operation selects the correct shared
+state. Keep the combined `B` or `B*` operator when both alpha values normalize
+to the same key.
 
 Keep the Rust unit gate independent of an external Poppler subprocess. Assert
 the PDF resources and operators structurally, then use the existing
@@ -90,14 +95,14 @@ colors through this staged backend. Do not update `scripts/hash_baseline.json`.
 
 ## Implementation checklist
 
-- [ ] Wait for F-041 so all supported solid paint consumers use one registry.
-- [ ] Pre-scan and allocate deterministic document-wide alpha states.
-- [ ] Write reused ExtGState dictionaries and page resource entries.
-- [ ] Apply alpha to text, lines, rectangles, and supported solid paths.
-- [ ] Add reuse, PDF structure, opacity, and midpoint raster tests.
-- [ ] Make the registry available to F-040 group opacity without a public API.
-- [ ] Update exactly the declared HLD files to current intent.
-- [ ] Prove the hash and exact golden baselines remain unchanged.
+- [x] Wait for F-041 so all supported solid paint consumers use one registry.
+- [x] Pre-scan and allocate deterministic document-wide alpha states.
+- [x] Write reused ExtGState dictionaries and page resource entries.
+- [x] Apply alpha to text, lines, rectangles, and supported solid paths.
+- [x] Add reuse, PDF structure, opacity, and midpoint raster tests.
+- [x] Make the registry available to F-040 group opacity without a public API.
+- [x] Update exactly the declared HLD files to current intent.
+- [x] Prove the hash and exact golden baselines remain unchanged.
 
 ## Open questions
 

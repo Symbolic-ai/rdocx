@@ -170,6 +170,10 @@ cover the cases that matter now.
 - `Path` with solid fill only, solid stroke only, and both, produces `f`, `S`
   and `B`. The combined case also proves `q`/`Q` counts balance, which catches
   the classic unbalanced graphics-state bug.
+- Repeated equal alpha values produce one ExtGState with matching `CA` and
+  `ca`, while distinct values remain distinct and opaque content emits none.
+- A 50 percent black fill over white produces the exact midpoint pixel in the
+  deterministic raster path.
 - **`Group` containing `Text` finds the font.** The regression test for the
   recursion hazard.
 - `Group` containing `Image` registers the XObject.

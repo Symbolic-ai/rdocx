@@ -42,7 +42,8 @@ the existing 320 tests cannot see it.
 
 *Mitigation*: the hash harness, built first and gating every PR. Every
 intentional change lands as its own labelled commit with a reviewed delta. Do
-not fold behaviour changes into moves.
+not fold behaviour changes into moves. PDF alpha is additionally gated on
+ExtGState structure and a deterministic midpoint compositing pixel.
 
 ### R2, the PDF coordinate-system flip
 

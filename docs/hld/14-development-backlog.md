@@ -372,7 +372,8 @@ exponentials, and a `/Matrix` so gradients rotate with their shape.
 on sampled raster pixels.
 
 ### F-044, ExtGState alpha (S)
-One state per distinct alpha. Fixes the existing dropped-alpha bug.
+One document-wide state per distinct normalized alpha, with page-local resource
+references. Differing fill and stroke alpha paint the path in two operations.
 **Depends on**: F-039.
 **Test gate**: a 50 percent alpha fill over white rasterises to the midpoint colour.
 
