@@ -32,7 +32,7 @@ PowerPoint produces without changing the legacy Word colour path.
 | F-053 | OrderedRawChildren | M | in-progress | codex |
 | F-054 | Colour choices | M | in-progress | codex |
 | F-055 | The colour transform stack | L | in-progress | codex |
-| F-056 | Colour map resolution | M | pending | - |
+| F-056 | Colour map resolution | M | in-progress | codex |
 
 ## Sequencing note
 
