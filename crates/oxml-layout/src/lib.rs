@@ -5,6 +5,7 @@ pub mod error;
 pub mod font;
 pub mod line;
 pub mod output;
+pub mod transform;
 
 pub use error::{LayoutError, Result};
 pub use font::{FontFile, FontManager, FontMetrics, ShapedText};
@@ -16,3 +17,4 @@ pub use output::{
     Color, DocumentMetadata, FieldKind, FontData, FontId, GlyphRun, LayoutResult, OutlineEntry,
     PageFrame, Point, PositionedElement, Rect,
 };
+pub use transform::Transform;

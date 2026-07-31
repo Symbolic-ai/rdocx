@@ -1,6 +1,6 @@
 # F-031, Transform
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S06
 **Size**: M
 **Depends on**: F-029
@@ -105,11 +105,11 @@ S06.
 
 ## Implementation checklist
 
-- [ ] Add and export the exact six-coefficient `Transform`.
-- [ ] Implement rotation about a point and documented composition order.
-- [ ] Implement point application, exact identity, and rectangle bounds.
-- [ ] Add the hand-computed PDF order gate and focused geometry tests.
-- [ ] Run package, public-surface, deterministic-hash, and dependency riders.
+- [x] Add and export the exact six-coefficient `Transform`.
+- [x] Implement rotation about a point and documented composition order.
+- [x] Implement point application, exact identity, and rectangle bounds.
+- [x] Add the hand-computed PDF order gate and focused geometry tests.
+- [x] Run package, public-surface, deterministic-hash, and dependency riders.
 
 ## Open questions
 
