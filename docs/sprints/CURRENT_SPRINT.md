@@ -1,60 +1,58 @@
-# Current Sprint, S05
+# Current Sprint, S06
 
-**Milestone**: M3 Media.
+**Milestone**: M4 Layout primitives.
 
-**Goal**: Stage and prove `oxml-media` as the single owner of image format
-sniffing, dimensions, DPI, intrinsic sizing, and media naming. Keep the crate
-isolated and unpublished, with every released rdocx dependency and output
-unchanged until the post-PowerPoint cutover.
+**Goal**: Stage the format-neutral layout output, font, and line-breaking types
+inside an isolated `oxml-layout` crate. Resolve the one genuine API boundary in
+`line.rs` and add affine transforms without changing released rdocx consumers
+or their rendered output.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for the dependency rule that `oxml-media` is
-  a dependency-free format-neutral leaf.
-- `docs/hld/04-opc-and-packaging.md`, for the media API, sniffing precedence,
-  DPI semantics, native-size calculation, naming contract, and safe header
-  parsing invariants.
-- `docs/hld/11-migration-plan.md`, for staging `oxml-media` without changing
-  released consumers before PowerPoint development is complete.
-- `docs/hld/12-testing-strategy.md`, for magic-byte, DPI, truncation-loop, and
-  highest-existing-suffix regression coverage.
-- `docs/hld/14-development-backlog.md`, for the F-023 through F-026 contracts,
-  dependencies, and story test gates.
-- `docs/hld/15-build-and-toolchain.md`, for keeping development crates at
-  version 0.0.0 and outside the seven-package rdocx publication allowlist.
+- `docs/hld/03-architecture.md`, for the format-neutral layout boundary, the
+  acyclic dependency rule, and the unpublished 0.0.0 staging policy.
+- `docs/hld/08-rendering-spec.md`, for the existing output seam, the 2x3 affine
+  `Transform` contract, and the layout-specific regression obligations.
+- `docs/hld/11-migration-plan.md`, for the staging order, the exact docx types
+  that `line.rs` must replace, and the unchanged-output migration rule.
+- `docs/hld/12-testing-strategy.md`, for transform composition, font-manager,
+  no-default-features, workspace, hash, and packaging gates.
+- `docs/hld/13-risks-and-open-questions.md`, for the bundled-font archive risk
+  that the staged crate must preserve and measure.
+- `docs/hld/14-development-backlog.md`, for the F-029 through F-031 contracts,
+  dependencies, sizes, and story test gates.
+- `docs/hld/15-build-and-toolchain.md`, for the `system-fonts` feature,
+  bundled-font packaging, archive-size limit, and publication boundary.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-023 | oxml-media format sniffing | M | done | - |
-| F-025 | MediaNamer | S | done | - |
-| F-024 | Image probing and DPI | L | done | - |
-| F-026 | native_size with explicit DPI | S | done | - |
+| F-029 | Create oxml-layout | M | pending | - |
+| F-030 | Decouple line.rs | L | pending | - |
+| F-031 | Transform | M | pending | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-F-023 establishes `ImageFormat` and blocks F-024. F-024 establishes
-`ImageInfo` and blocks F-026. F-025 is independent of that parser chain and can
-run in parallel once the crate exists. F-027 and F-028 remain deferred to
-S32.2, so S05 does not alter released rdocx consumers or the hash baseline.
+F-029 creates the staged crate and blocks both later stories. F-030 then owns
+the high-drift `line.rs` API decoupling as its own reviewed change. F-031 can
+proceed independently after F-029 because its affine implementation does not
+depend on the line-breaking conversion.
 
 ## Definition of done for this sprint
 
-- `oxml-media` exists at version 0.0.0 with publication disabled and no crate
-  dependencies.
-- Every supported format is identified from magic bytes, and sniffing a JPEG
-  overrides a misleading `.png` extension.
-- PNG, JPEG, GIF, BMP, and WebP dimensions and DPI metadata are probed safely,
-  including PNG unit modes, JFIF density units, EXIF before SOF, progressive
-  JPEG, and every truncated prefix.
-- `MediaNamer` allocates after the highest existing numeric suffix rather than
-  counting parts.
-- `native_size(default_dpi)` uses declared DPI when present and the explicit
-  caller default otherwise.
-- The full workspace, package, supply-chain, and hash gates pass with all 28
-  existing hash entries unchanged.
-- No `oxml-*` or `rpptx*` development crate is published, and no released
-  rdocx dependency changes.
+- `oxml-layout` exists at version 0.0.0 with publication disabled, and released
+  rdocx manifests and consumers remain unchanged.
+- The staged output, font, bundled-font, and error implementation passes its
+  copied tests, while `Document::load_fonts_from_dir` remains unchanged.
+- Staged `line.rs` uses owned `TabStop`, `Align`, `TabAlign`, `Underline`, and
+  `LineSpacing` types plus explicit wrapping, with all 11 rewritten tests green.
+- The 2x3 affine `Transform` supports rotation, composition, application,
+  identity checks, and rectangle bounds with PDF `cm` composition order proven
+  against a hand-computed matrix.
+- The staged crate passes its normal and no-default-features paths, package and
+  supply-chain gates, and remains within the crates.io archive limit.
+- The full workspace passes with all 28 hash-harness entries unchanged, no
+  development crate is published, and no released rdocx dependency changes.
