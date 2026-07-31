@@ -9,7 +9,8 @@ The staged `crates/oxml-pdf` backend consumes `oxml-layout::LayoutResult` and
 uses `oxml-media` for image format and header metadata. Its writer, font,
 image, and raster modules support the existing text, line, rectangle, image,
 link, metadata, and outline paths. The released `crates/rdocx-pdf` backend
-remains separate and unchanged. The shared contract is:
+remains dependency-separate, but carries the approved F-039 global CTM writer
+change until the F-046 cutover removes the duplicate. The shared contract is:
 
 ```rust
 pub struct LayoutResult { pages: Vec<PageFrame>, fonts: Vec<FontData>,
@@ -134,13 +135,12 @@ pub fn walk(elements: &[PositionedElement], f: &mut impl FnMut(&PositionedElemen
 
 All three passes are rewritten on it, and each gets an explicit test.
 
-## Four latent defects to fix
+## Three remaining defects to fix
 
 All are forced by pptx, and all improve rdocx:
 
 | Defect | Location |
 |---|---|
-| Y is flipped **per element**, which is incompatible with nested transforms | `writer.rs:424`, `:454`, `:463`, `:479` |
 | `set_fill_rgb` drops `Color.a` everywhere, in both PDF and text | `writer.rs:414` |
 | `dash_pattern: _` means dashes are ignored in **all** PNG output today | `raster.rs:73` |
 | Images keyed `Im{page}_{elem}`, no deduplication, and the full font dictionary is written into every page | `writer.rs` |
