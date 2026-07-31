@@ -15,8 +15,6 @@ use crate::order::OrderedRawChildren;
 pub enum ColorError {
     Xml(OxmlError),
     InvalidRgb(String),
-    InvalidColorMapSlot(String),
-    InvalidThemeColorSlot(String),
     UnresolvedColor(String),
     MissingAttribute { element: String, attribute: String },
     UnexpectedElement(String),
@@ -31,12 +29,6 @@ impl fmt::Display for ColorError {
                 formatter,
                 "DrawingML RGB colour must be exactly six hexadecimal digits: {value}"
             ),
-            Self::InvalidColorMapSlot(value) => {
-                write!(formatter, "invalid DrawingML colour-map slot: {value}")
-            }
-            Self::InvalidThemeColorSlot(value) => {
-                write!(formatter, "invalid DrawingML theme colour slot: {value}")
-            }
             Self::UnresolvedColor(value) => {
                 write!(formatter, "no concrete colour is available for: {value}")
             }
@@ -265,11 +257,6 @@ pub enum ColorMapSlot {
 }
 
 impl ColorMapSlot {
-    /// Parses an `ST_ColorSchemeIndex` source name used by `p:clrMap`.
-    pub fn parse(value: &str) -> Result<Self> {
-        Self::from_value(value).ok_or_else(|| ColorError::InvalidColorMapSlot(value.to_owned()))
-    }
-
     fn from_value(value: &str) -> Option<Self> {
         match value {
             "bg1" => Some(Self::Background1),
@@ -324,25 +311,6 @@ pub enum ThemeColorSlot {
 }
 
 impl ThemeColorSlot {
-    /// Parses an `ST_ColorSchemeIndex` destination used by `p:clrMap`.
-    pub fn parse(value: &str) -> Result<Self> {
-        match value {
-            "dk1" => Ok(Self::Dark1),
-            "lt1" => Ok(Self::Light1),
-            "dk2" => Ok(Self::Dark2),
-            "lt2" => Ok(Self::Light2),
-            "accent1" => Ok(Self::Accent1),
-            "accent2" => Ok(Self::Accent2),
-            "accent3" => Ok(Self::Accent3),
-            "accent4" => Ok(Self::Accent4),
-            "accent5" => Ok(Self::Accent5),
-            "accent6" => Ok(Self::Accent6),
-            "hlink" => Ok(Self::Hyperlink),
-            "folHlink" => Ok(Self::FollowedHyperlink),
-            _ => Err(ColorError::InvalidThemeColorSlot(value.to_owned())),
-        }
-    }
-
     /// Returns the DrawingML theme slot name.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -738,12 +706,25 @@ fn is_explicit_empty_element(xml: &[u8]) -> bool {
     if !matches!(reader.read_event_into(&mut buffer), Ok(Event::Start(_))) {
         return false;
     }
-    buffer.clear();
-    if !matches!(reader.read_event_into(&mut buffer), Ok(Event::End(_))) {
-        return false;
+    loop {
+        buffer.clear();
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Text(text)) if is_xml_whitespace(text.as_ref()) => {}
+            Ok(Event::CData(text)) if is_xml_whitespace(text.as_ref()) => {}
+            Ok(Event::Comment(_) | Event::PI(_)) => {}
+            Ok(Event::End(_)) => {
+                buffer.clear();
+                return matches!(reader.read_event_into(&mut buffer), Ok(Event::Eof));
+            }
+            _ => return false,
+        }
     }
-    buffer.clear();
-    matches!(reader.read_event_into(&mut buffer), Ok(Event::Eof))
+}
+
+fn is_xml_whitespace(bytes: &[u8]) -> bool {
+    bytes
+        .iter()
+        .all(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
 }
 
 /// Applies a DrawingML transform stack from left to right.
@@ -2003,5 +1984,22 @@ mod tests {
         assert!(output.contains("<a:hue val=\"60000\"/>"));
         assert!(output.contains("<a:hueOff val=\"-120000\"/>"));
         assert!(output.contains("<a:invGamma/>"));
+    }
+
+    #[test]
+    fn whitespace_and_comments_in_empty_transform_pairs_are_modelled() {
+        let input = br#"<x:srgbClr val="336699"><x:tint val="65000">
+            <!-- formatting only -->
+        </x:tint></x:srgbClr>"#;
+        let colour = parse(input);
+
+        assert_eq!(
+            colour.transforms(),
+            &[ColorTransform::Tint(Percent1000(65_000))]
+        );
+        assert_eq!(
+            write(&colour),
+            br#"<a:srgbClr val="336699"><a:tint val="65000"/></a:srgbClr>"#
+        );
     }
 }
