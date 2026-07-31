@@ -780,11 +780,14 @@ and layout errors without changing a released consumer.
 rendering. The default `system-fonts` feature controls only host font discovery,
 and the no-default path keeps the same bundled archive.
 
-**Deviations from the design plan.** None.
+**Deviations from the design plan.** Sprint review pass 1 found that two HLD
+passages still described an older bundled-fonts-off no-default path. The
+implementation followed the intended boundary, and the stale current-intent
+wording was corrected during sprint remediation.
 
-**Spec sections touched.** None. The existing architecture, rendering,
-migration, testing, risk, backlog, and toolchain contracts already specify the
-staged crate boundary.
+**Spec sections touched.** `docs/hld/12-testing-strategy.md` and
+`docs/hld/15-build-and-toolchain.md` now state that the no-default path disables
+system discovery while retaining bundled deterministic fonts.
 
 **Tests.** Default and no-default font-manager tests, empty-font error handling,
 bundled-font licence coverage, dependency isolation, archive contents and size,
