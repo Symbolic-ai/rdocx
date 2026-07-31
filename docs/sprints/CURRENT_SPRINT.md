@@ -32,7 +32,7 @@ form must preserve its schema structure through round trips.
 | F-057 | a:xfrm | M | in-progress | codex |
 | F-058 | Guide evaluator | L | in-progress | codex |
 | F-060 | Fills | L | pending | - |
-| F-059 | a:custGeom | M | pending | - |
+| F-059 | a:custGeom | M | in-progress | codex |
 
 ## Sequencing note
 
