@@ -1,6 +1,6 @@
 # F-029, Create oxml-layout
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S06
 **Size**: M
 **Depends on**: none
@@ -104,11 +104,11 @@ any output delta blocks the sprint.
 
 ## Implementation checklist
 
-- [ ] Add the unpublished `oxml-layout` workspace member and local feature.
-- [ ] Copy only the approved format-neutral source and bundled font assets.
-- [ ] Move staged `FontFile` into the font module without touching rdocx.
-- [ ] Add the empty-font regression and preserve copied font and output tests.
-- [ ] Run both feature modes, dependency, archive-content, size, release, and
+- [x] Add the unpublished `oxml-layout` workspace member and local feature.
+- [x] Copy only the approved format-neutral source and bundled font assets.
+- [x] Move staged `FontFile` into the font module without touching rdocx.
+- [x] Add the empty-font regression and preserve copied font and output tests.
+- [x] Run both feature modes, dependency, archive-content, size, release, and
       unchanged-hash riders.
 
 ## Open questions
