@@ -346,7 +346,7 @@ the reviewed manifest exactly.
 
 ### F-040, Group rendering (M)
 `q`, `cm`, optional clip via `W n`, optional `/ExtGState` for opacity, recurse,
-`Q`.
+`Q`. Effects and raster group support remain owned by later renderer work.
 **Depends on**: F-039.
 **Test gate**: `q`/`Q` counts balance in the content stream for a three-deep
 nesting.

@@ -167,6 +167,8 @@ cover the cases that matter now.
   path is exercised while bundled deterministic fonts remain available.
 
 **`oxml-pdf`**
+- Three-deep groups balance `q` and `Q`, emit each `cm` before child content,
+  and apply the declared clip rule and shared opacity state before recursion.
 - `Path` with solid fill only, solid stroke only, and both, produces `f`, `S`
   and `B`. The combined case also proves `q`/`Q` counts balance, which catches
   the classic unbalanced graphics-state bug.

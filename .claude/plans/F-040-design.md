@@ -1,6 +1,6 @@
 # F-040, Group rendering
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S09
 **Size**: M
 **Depends on**: F-039
@@ -88,14 +88,14 @@ consumer. Do not update `scripts/hash_baseline.json`.
 
 ## Implementation checklist
 
-- [ ] Wait for the approved path and ExtGState prerequisites in this sprint.
-- [ ] Introduce private recursive element emission in the existing writer.
-- [ ] Emit group save, matrix, optional clip, optional opacity, children, and
+- [x] Wait for the approved path and ExtGState prerequisites in this sprint.
+- [x] Introduce private recursive element emission in the existing writer.
+- [x] Emit group save, matrix, optional clip, optional opacity, children, and
       restore in that order.
-- [ ] Leave effects and raster group support staged for their owning stories.
-- [ ] Add the three-deep balance gate and focused ordering tests.
-- [ ] Update exactly the declared HLD files to current intent.
-- [ ] Prove the hash and exact golden baselines remain unchanged.
+- [x] Leave effects and raster group support staged for their owning stories.
+- [x] Add the three-deep balance gate and focused ordering tests.
+- [x] Update exactly the declared HLD files to current intent.
+- [x] Prove the hash and exact golden baselines remain unchanged.
 
 ## Open questions
 

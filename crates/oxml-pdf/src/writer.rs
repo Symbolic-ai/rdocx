@@ -527,7 +527,30 @@ fn build_page_content(
     content.save_state();
     content.transform([1.0, 0.0, 0.0, -1.0, 0.0, page_height]);
 
-    for (elem_idx, element) in page.elements.iter().enumerate() {
+    emit_elements(
+        &mut content,
+        page_idx,
+        &page.elements,
+        prepared_fonts,
+        font_refs,
+        Some(image_map),
+        alpha_states,
+    );
+
+    content.restore_state();
+    content.finish().to_vec()
+}
+
+fn emit_elements(
+    content: &mut Content,
+    page_idx: usize,
+    elements: &[PositionedElement],
+    prepared_fonts: &HashMap<FontId, PreparedFont>,
+    font_refs: &HashMap<FontId, (Ref, Ref, Ref, Ref, Ref)>,
+    image_map: Option<&HashMap<(usize, usize), usize>>,
+    alpha_states: &AlphaStates,
+) {
+    for (elem_idx, element) in elements.iter().enumerate() {
         match element {
             PositionedElement::Text(run) => {
                 if let Some(prepared) = prepared_fonts.get(&run.font_id)
@@ -543,7 +566,7 @@ fn build_page_content(
                         run.color.g as f32,
                         run.color.b as f32,
                     );
-                    apply_alpha(&mut content, run.color.a, alpha_states);
+                    apply_alpha(content, run.color.a, alpha_states);
 
                     content.begin_text();
                     content.set_font(Name(font_name.as_bytes()), run.font_size as f32);
@@ -560,7 +583,7 @@ fn build_page_content(
 
                     // Remap glyph IDs and emit with TJ operator
                     emit_glyphs(
-                        &mut content,
+                        content,
                         &run.glyph_ids,
                         &run.advances,
                         run.font_size,
@@ -581,7 +604,7 @@ fn build_page_content(
             } => {
                 content.save_state();
                 content.set_stroke_rgb(color.r as f32, color.g as f32, color.b as f32);
-                apply_alpha(&mut content, color.a, alpha_states);
+                apply_alpha(content, color.a, alpha_states);
                 content.set_line_width(*width as f32);
                 if let Some((on, off)) = dash_pattern {
                     content.set_dash_pattern([*on as f32, *off as f32], 0.0);
@@ -594,7 +617,7 @@ fn build_page_content(
             PositionedElement::FilledRect { rect, color } => {
                 content.save_state();
                 content.set_fill_rgb(color.r as f32, color.g as f32, color.b as f32);
-                apply_alpha(&mut content, color.a, alpha_states);
+                apply_alpha(content, color.a, alpha_states);
                 content.rect(
                     rect.x as f32,
                     rect.y as f32,
@@ -605,7 +628,9 @@ fn build_page_content(
                 content.restore_state();
             }
             PositionedElement::Image { rect, data, .. } => {
-                if !data.is_empty() && image_map.contains_key(&(page_idx, elem_idx)) {
+                if !data.is_empty()
+                    && image_map.is_some_and(|images| images.contains_key(&(page_idx, elem_idx)))
+                {
                     let img_name = format!("Im{}_{}", page_idx, elem_idx);
 
                     content.save_state();
@@ -626,19 +651,43 @@ fn build_page_content(
                 // Link annotations are written separately, not in the content stream
             }
             PositionedElement::Path(path) => {
-                emit_path(&mut content, path, alpha_states);
+                emit_path(content, path, alpha_states);
             }
-            PositionedElement::Group(_) => {
-                // F-040 adds staged group rendering.
+            PositionedElement::Group(group) => {
+                content.save_state();
+                content.transform([
+                    group.transform.a as f32,
+                    group.transform.b as f32,
+                    group.transform.c as f32,
+                    group.transform.d as f32,
+                    group.transform.e as f32,
+                    group.transform.f as f32,
+                ]);
+                if let Some(clip) = &group.clip {
+                    emit_path_geometry(content, clip);
+                    match clip.fill_rule {
+                        FillRule::NonZero => content.clip_nonzero(),
+                        FillRule::EvenOdd => content.clip_even_odd(),
+                    };
+                    content.end_path();
+                }
+                apply_alpha(content, group.opacity, alpha_states);
+                emit_elements(
+                    content,
+                    page_idx,
+                    &group.children,
+                    prepared_fonts,
+                    font_refs,
+                    None,
+                    alpha_states,
+                );
+                content.restore_state();
             }
             _ => {
                 // Later oxml-layout elements remain unsupported until assigned.
             }
         }
     }
-
-    content.restore_state();
-    content.finish().to_vec()
 }
 
 fn apply_alpha(content: &mut Content, alpha: f64, states: &AlphaStates) {
@@ -977,8 +1026,8 @@ fn sanitize_font_name(family: &str, bold: bool, italic: bool) -> String {
 mod tests {
     use super::*;
     use oxml_layout::{
-        Color, FillRule, FontData, GlyphRun, LineCap, LineJoin, MediaId, PageFrame, Paint, Path,
-        PathCommand, PathElement, Point, Rect, Stroke,
+        Color, Effect, FillRule, FontData, GlyphRun, GroupElement, LineCap, LineJoin, MediaId,
+        PageFrame, Paint, Path, PathCommand, PathElement, Point, Rect, Stroke, Transform,
     };
 
     fn page_with(elements: Vec<PositionedElement>) -> PageFrame {
@@ -1276,6 +1325,108 @@ mod tests {
         assert_eq!(content.matches("/GS0 gs").count(), 1, "{content}");
         assert_eq!(content.lines().filter(|line| *line == "q").count(), 4);
         assert_eq!(content.lines().filter(|line| *line == "Q").count(), 4);
+    }
+
+    fn group(transform: Transform, children: Vec<PositionedElement>) -> PositionedElement {
+        PositionedElement::Group(GroupElement {
+            transform,
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children,
+        })
+    }
+
+    #[test]
+    fn three_deep_groups_balance_graphics_state() {
+        let content = content_for(vec![group(
+            Transform::IDENTITY,
+            vec![group(
+                Transform::IDENTITY,
+                vec![group(Transform::IDENTITY, vec![alpha_rect(1.0)])],
+            )],
+        )]);
+
+        assert_eq!(
+            content.lines().filter(|line| *line == "q").count(),
+            content.lines().filter(|line| *line == "Q").count(),
+            "{content}"
+        );
+        assert_eq!(content.lines().filter(|line| *line == "q").count(), 5);
+    }
+
+    #[test]
+    fn group_emits_transform_before_children() {
+        let transform = Transform {
+            a: 1.0,
+            b: 2.0,
+            c: 3.0,
+            d: 4.0,
+            e: 5.0,
+            f: 6.0,
+        };
+        let content = content_for(vec![group(transform, vec![alpha_rect(1.0)])]);
+
+        let matrix = content.find("1 2 3 4 5 6 cm").expect("group matrix");
+        let child = content.find("0 0 10 10 re").expect("child rectangle");
+        assert!(matrix < child, "{content}");
+    }
+
+    #[test]
+    fn group_clip_uses_declared_fill_rule() {
+        let mut nonzero = match group(Transform::IDENTITY, Vec::new()) {
+            PositionedElement::Group(group) => group,
+            _ => unreachable!(),
+        };
+        nonzero.clip = Some(Path::rect(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        }));
+        let mut even_odd = nonzero.clone();
+        even_odd.clip.as_mut().expect("clip").fill_rule = FillRule::EvenOdd;
+        let content = content_for(vec![
+            PositionedElement::Group(nonzero),
+            PositionedElement::Group(even_odd),
+        ]);
+
+        assert!(content.contains("W\nn"), "{content}");
+        assert!(content.contains("W*\nn"), "{content}");
+    }
+
+    #[test]
+    fn group_opacity_uses_registered_graphics_state() {
+        let mut transparent = match group(Transform::IDENTITY, vec![alpha_rect(1.0)]) {
+            PositionedElement::Group(group) => group,
+            _ => unreachable!(),
+        };
+        transparent.opacity = 0.5;
+        let content = content_for(vec![PositionedElement::Group(transparent)]);
+
+        let alpha = content.find("/GS0 gs").expect("group opacity state");
+        let child = content.find("0 0 10 10 re").expect("child rectangle");
+        assert!(alpha < child, "{content}");
+    }
+
+    #[test]
+    fn group_effects_do_not_change_pdf_output_yet() {
+        let plain = group(Transform::IDENTITY, vec![alpha_rect(1.0)]);
+        let mut with_effect = match plain.clone() {
+            PositionedElement::Group(group) => group,
+            _ => unreachable!(),
+        };
+        with_effect.effects.push(Effect::OuterShadow {
+            dx: 1.0,
+            dy: 2.0,
+            blur: 3.0,
+            color: Color::BLACK,
+        });
+
+        assert_eq!(
+            content_for(vec![plain]),
+            content_for(vec![PositionedElement::Group(with_effect)])
+        );
     }
 
     #[test]
