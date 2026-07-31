@@ -1,6 +1,6 @@
 # F-052, Create oxml-drawing and namespace constants
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S12
 **Size**: S
 **Depends on**: none
@@ -81,11 +81,11 @@ released Word path.
 
 ## Implementation checklist
 
-- [ ] Add the workspace member and workspace dependency.
-- [ ] Add the minimal unpublished crate manifest.
-- [ ] Add the crate root and namespace module.
-- [ ] Define and test the `a` and `pic` namespace constants and prefixes.
-- [ ] Prove the crate has no forbidden or unused dependency.
+- [x] Add the workspace member and workspace dependency.
+- [x] Add the minimal unpublished crate manifest.
+- [x] Add the crate root and namespace module.
+- [x] Define and test the `a` and `pic` namespace constants and prefixes.
+- [x] Prove the crate has no forbidden or unused dependency.
 
 ## Open questions
 
