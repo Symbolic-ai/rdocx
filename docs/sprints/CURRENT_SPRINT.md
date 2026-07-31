@@ -30,7 +30,7 @@ or their rendered output.
 |------|-------|------|--------|-------|
 | F-029 | Create oxml-layout | M | in-progress | codex |
 | F-030 | Decouple line.rs | L | in-progress | codex |
-| F-031 | Transform | M | pending | - |
+| F-031 | Transform | M | in-progress | codex |
 
 ## Sequencing note
 
