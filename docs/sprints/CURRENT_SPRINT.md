@@ -34,7 +34,7 @@ and every development-crate publication boundary unchanged.
 | F-040 | Group rendering | M | pending | - |
 | F-041 | Path rendering | M | in-progress | codex |
 | F-042 | Rewrite the three collection passes on walk | M | pending | - |
-| F-044 | ExtGState alpha | S | pending | - |
+| F-044 | ExtGState alpha | S | in-progress | codex |
 
 ## Sequencing note
 
