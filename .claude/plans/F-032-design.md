@@ -1,6 +1,6 @@
 # F-032, Path and PathCommand
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S07
 **Size**: M
 **Depends on**: F-029
@@ -109,12 +109,12 @@ Expected to remain unchanged. The path model has no released consumer.
 
 ## Implementation checklist
 
-- [ ] Add and export the exact path types and command variants.
-- [ ] Implement conservative point and control-point bounds.
-- [ ] Implement closed rectangle and rounded-rectangle constructors.
-- [ ] Implement the four-cubic ellipse constructor.
-- [ ] Add the focused geometry tests to the existing crate test target.
-- [ ] Run the scoped checks and the consolidated sprint riders.
+- [x] Add and export the exact path types and command variants.
+- [x] Implement conservative point and control-point bounds.
+- [x] Implement closed rectangle and rounded-rectangle constructors.
+- [x] Implement the four-cubic ellipse constructor.
+- [x] Add the focused geometry tests to the existing crate test target.
+- [x] Run the scoped checks and the consolidated sprint riders.
 
 ## Open questions
 
