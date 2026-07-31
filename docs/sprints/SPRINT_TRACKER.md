@@ -60,6 +60,10 @@ defended.
 | F-037 | S08 | S | 1 | 1 | 2026-07-31 | Unpublished shared PDF backend staging |
 | F-038 | S08 | M | 2 | 1 | 2026-07-31 | Exact deterministic golden-PNG gate |
 | F-039 | S08 | L | 4 | 1 | 2026-07-31 | Global page CTM with reviewed pixel delta |
+| F-040 | S09 | M | 2 | 1 | 2026-07-31 | Recursive PDF group graphics states |
+| F-041 | S09 | M | 2 | 1 | 2026-07-31 | Solid PDF path geometry and paint |
+| F-042 | S09 | M | 2 | 1 | Nested font, image, and link collection |
+| F-044 | S09 | S | 1 | 1 | Reused PDF ExtGState alpha resources |
 
 ## Velocity
 
