@@ -57,6 +57,24 @@ impl Color {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FontId(pub u32);
 
+/// Stable content-addressed media key for renderer-local reuse.
+///
+/// This compact key is not a collision-free content guarantee.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MediaId(pub u64);
+
+impl MediaId {
+    /// Derive a stable key from raw media bytes using 64-bit FNV-1a.
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        Self(hash)
+    }
+}
+
 /// Kind of field for post-pagination substitution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldKind {
@@ -114,8 +132,7 @@ pub enum PositionedElement {
         rect: Rect,
         data: Vec<u8>,
         content_type: String,
-        /// Embed relationship ID (used to resolve image data post-pagination).
-        embed_id: Option<String>,
+        media_id: MediaId,
     },
     /// A link annotation (hyperlink).
     LinkAnnotation { rect: Rect, url: String },
@@ -190,4 +207,59 @@ pub struct LayoutResult {
     pub metadata: Option<DocumentMetadata>,
     /// Outline/bookmark entries from headings.
     pub outlines: Vec<OutlineEntry>,
+}
+
+#[cfg(test)]
+mod media_id_tests {
+    use std::collections::HashSet;
+
+    use super::{MediaId, PositionedElement, Rect};
+
+    #[test]
+    fn the_same_image_bytes_inserted_twice_produce_one_media_id() {
+        let ids = HashSet::from([
+            MediaId::from_bytes(b"same image"),
+            MediaId::from_bytes(b"same image"),
+        ]);
+        assert_eq!(ids.len(), 1);
+    }
+
+    #[test]
+    fn media_id_depends_on_bytes_not_relationship_context() {
+        assert_eq!(
+            MediaId::from_bytes(b"image bytes"),
+            MediaId::from_bytes(b"image bytes")
+        );
+    }
+
+    #[test]
+    fn different_image_bytes_have_different_fixture_ids() {
+        assert_ne!(
+            MediaId::from_bytes(b"first image"),
+            MediaId::from_bytes(b"second image")
+        );
+    }
+
+    #[test]
+    fn staged_output_image_uses_media_id_instead_of_embed_id() {
+        let media_id = MediaId::from_bytes(b"image bytes");
+        let image = PositionedElement::Image {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 20.0,
+            },
+            data: b"image bytes".to_vec(),
+            content_type: "image/png".to_owned(),
+            media_id,
+        };
+        let PositionedElement::Image {
+            media_id: actual, ..
+        } = image
+        else {
+            panic!("constructed image should remain an image");
+        };
+        assert_eq!(actual, media_id);
+    }
 }

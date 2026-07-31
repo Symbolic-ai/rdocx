@@ -1,6 +1,6 @@
 # F-036, MediaId
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S07
 **Size**: S
 **Depends on**: F-029
@@ -99,12 +99,12 @@ released rdocx image relationship handling stays intact.
 
 ## Implementation checklist
 
-- [ ] Add and export the stable content-addressed `MediaId`.
-- [ ] Replace staged output and line image relationship keys.
-- [ ] Preserve the handle through inline-to-line conversion.
-- [ ] Add the content identity and staged-type tests.
-- [ ] Confirm released rdocx source and manifests are unchanged.
-- [ ] Run the scoped checks and consolidated sprint riders.
+- [x] Add and export the stable content-addressed `MediaId`.
+- [x] Replace staged output and line image relationship keys.
+- [x] Preserve the handle through inline-to-line conversion.
+- [x] Add the content identity and staged-type tests.
+- [x] Confirm released rdocx source and manifests are unchanged.
+- [x] Run the scoped checks and consolidated sprint riders.
 
 ## Open questions
 

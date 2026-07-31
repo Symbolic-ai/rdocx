@@ -15,8 +15,8 @@ pub use line::{
     TabStop, TextSegment, Underline, break_into_lines,
 };
 pub use output::{
-    Color, DocumentMetadata, FieldKind, FontData, FontId, GlyphRun, LayoutResult, OutlineEntry,
-    PageFrame, Point, PositionedElement, Rect,
+    Color, DocumentMetadata, FieldKind, FontData, FontId, GlyphRun, LayoutResult, MediaId,
+    OutlineEntry, PageFrame, Point, PositionedElement, Rect,
 };
 pub use path::{FillRule, Path, PathCommand};
 pub use transform::Transform;
