@@ -50,6 +50,11 @@ defended.
 | F-029 | S06 | M | 2 | 1 | 2026-07-31 | Unpublished layout output and font staging |
 | F-030 | S06 | L | 4 | 1 | 2026-07-31 | Owned format-neutral line-breaking boundary |
 | F-031 | S06 | M | 2 | 1 | 2026-07-31 | Six-coefficient affine transforms |
+| F-032 | S07 | M | 2 | 1 | 2026-07-31 | Backend-neutral path geometry |
+| F-033 | S07 | M | 2 | 1 | 2026-07-31 | Gradient, tile, and stroke paint model |
+| F-034 | S07 | M | 2 | 1 | 2026-07-31 | Nested group and path output arms |
+| F-035 | S07 | S | 1 | 1 | 2026-07-31 | Transform-aware nested leaf traversal |
+| F-036 | S07 | S | 1 | 1 | 2026-07-31 | Content-addressed staged image keys |
 
 ## Velocity
 

@@ -26,11 +26,11 @@ group transforms explicit before the PDF backend migrates.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-032 | Path and PathCommand | M | in-progress | codex |
-| F-036 | MediaId | S | in-progress | codex |
-| F-033 | Paint and Stroke | M | in-progress | codex |
-| F-034 | Path and Group arms | M | in-progress | codex |
-| F-035 | The walk helper | S | in-progress | codex |
+| F-032 | Path and PathCommand | M | done | - |
+| F-036 | MediaId | S | done | - |
+| F-033 | Paint and Stroke | M | done | - |
+| F-034 | Path and Group arms | M | done | - |
+| F-035 | The walk helper | S | done | - |
 
 ## Sequencing note
 

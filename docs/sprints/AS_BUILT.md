@@ -862,3 +862,145 @@ identity, package and dependency riders, and the integrated full gate.
 **Notes for future sessions.** Convert DrawingML rotation units to degrees
 before this boundary, and preserve self-first composition when group transforms
 begin consuming the type.
+
+### F-032, Path and PathCommand
+
+**Sprint.** S07
+**Completed.** 2026-07-31
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `oxml-layout` now exports backend-neutral path commands,
+fill rules, conservative bounds, and constructors for rectangles, rounded
+rectangles, and four-cubic ellipses.
+
+**Non-obvious choices.** Bounds include cubic control points without solving
+curve extrema. Rounded rectangles use one circular radius clamped from zero to
+half the shorter side.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** None. The existing rendering contract already
+defines the path representation and conservative bounds.
+
+**Tests.** Ellipse bounds within the control hull, cubic control-point bounds,
+empty paths, fill-rule independence, closure, and radius clamping.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Backend path conversion must preserve command
+order and choose the fill operator from `FillRule`.
+
+### F-033, Paint and Stroke
+
+**Sprint.** S07
+**Completed.** 2026-07-31
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `oxml-layout` now exports solid, linear, radial, and tiled
+paint plus gradient stops, line caps, line joins, and arbitrary dash arrays for
+strokes.
+
+**Non-obvious choices.** Only a one-stop gradient is normalized at
+construction, becoming solid paint. Empty and multi-stop gradients remain
+unchanged for the later backend normalization stage.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/14-development-backlog.md` now records
+F-036 as an explicit dependency because tiled paint stores `MediaId`.
+
+**Tests.** Single-stop linear and radial degradation, multi-stop preservation,
+stroke defaults, tile media identity, package, dependency, and feature-mode
+checks.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Sorting, clamping, and duplicate-stop precedence
+remain backend construction work and must not be moved silently into this
+model.
+
+### F-034, Path and Group arms
+
+**Sprint.** S07
+**Completed.** 2026-07-31
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The staged positioned-element model now carries painted
+paths and nested groups with transforms, clips, opacity, effects, and children.
+Page backgrounds, layout diagnostics, and constructors for the two
+non-exhaustive result structs are also available.
+
+**Non-obvious choices.** `Diagnostic` initially carries one message.
+`PositionedElement` and `Effect` are non-exhaustive enums, while `PageFrame`
+and `LayoutResult` are non-exhaustive structs with neutral constructor defaults.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md` and
+`docs/hld/14-development-backlog.md` now state the exact non-exhaustive targets,
+minimal diagnostic shape, constructor contract, and unpublished staging
+boundary.
+
+**Tests.** Path and group payload preservation, transform direction, neutral
+page and result defaults, external constructor doctests, and the integrated
+full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Group transforms map child-local coordinates
+into their parent. Preserve that direction in every recursive backend.
+
+### F-035, The walk helper
+
+**Sprint.** S07
+**Completed.** 2026-07-31
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** `oxml-layout::walk` visits every non-group element once in
+depth-first document order while carrying its accumulated child-to-page
+transform.
+
+**Non-obvious choices.** Group containers are not yielded. With self-first
+composition, each group transform is composed before the accumulated parent
+transform.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** None. The existing recursion-hazard contract already
+defines the helper and its consumers.
+
+**Tests.** Three-deep traversal with three ordered leaves, hand-computed nested
+transform order, group exclusion, and root identity.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Font, image, and link collection passes must use
+this helper when the PDF backend migrates.
+
+### F-036, MediaId
+
+**Sprint.** S07
+**Completed.** 2026-07-31
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Staged output and line image values now use a stable
+content-addressed `MediaId` derived from raw bytes instead of relationship-local
+embed identifiers.
+
+**Non-obvious choices.** The compact handle uses fixed 64-bit FNV-1a and is
+documented as a renderer key rather than a collision-free content guarantee.
+This story adds no media store.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** None. The existing rendering contract already
+defines the content-addressed handle and replacement boundary.
+
+**Tests.** Equal bytes collapse to one set key, different fixtures differ,
+staged output images use the handle, and line conversion preserves it.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Relationship resolution must happen before
+constructing this renderer key. Part-local relationship names must not cross
+the shared layout boundary.
