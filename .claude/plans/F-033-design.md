@@ -1,6 +1,6 @@
 # F-033, Paint and Stroke
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S07
 **Size**: M
 **Depends on**: F-032, F-036
@@ -156,13 +156,13 @@ Expected to remain unchanged. The paint model has no released consumer.
 
 ## Implementation checklist
 
-- [ ] Wait for integrated F-032 and F-036.
-- [ ] Add and export the exact paint, stop, line cap, line join, and stroke types.
-- [ ] Implement the single-stop gradient degradation constructors.
-- [ ] Implement the minimal stroke constructor and defaults.
-- [ ] Add the focused paint and stroke tests to the existing crate test target.
-- [ ] Correct F-033's dependency in the backlog HLD.
-- [ ] Run the scoped checks and consolidated sprint riders.
+- [x] Wait for integrated F-032 and F-036.
+- [x] Add and export the exact paint, stop, line cap, line join, and stroke types.
+- [x] Implement the single-stop gradient degradation constructors.
+- [x] Implement the minimal stroke constructor and defaults.
+- [x] Add the focused paint and stroke tests to the existing crate test target.
+- [x] Correct F-033's dependency in the backlog HLD.
+- [x] Run the scoped checks and consolidated sprint riders.
 
 ## Open questions
 

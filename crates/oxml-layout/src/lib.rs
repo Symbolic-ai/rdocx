@@ -5,6 +5,7 @@ pub mod error;
 pub mod font;
 pub mod line;
 pub mod output;
+pub mod paint;
 pub mod path;
 pub mod transform;
 
@@ -18,5 +19,6 @@ pub use output::{
     Color, DocumentMetadata, FieldKind, FontData, FontId, GlyphRun, LayoutResult, MediaId,
     OutlineEntry, PageFrame, Point, PositionedElement, Rect,
 };
+pub use paint::{GradientStop, LineCap, LineJoin, Paint, Stroke};
 pub use path::{FillRule, Path, PathCommand};
 pub use transform::Transform;
