@@ -1,6 +1,6 @@
 # F-068, presentation.xml
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S16
 **Size**: M
 **Depends on**: none
@@ -90,12 +90,12 @@ Word facade, layout, or sample paths.
 
 ## Implementation checklist
 
-- [ ] Add the PresentationML root and child value types.
-- [ ] Parse typed children and retain unsupported attributes and child slots.
-- [ ] Write fixed prefixes and schema child order.
-- [ ] Validate slide-id uniqueness and bounds.
-- [ ] Add focused fixtures and the all-corpus presentation gate.
-- [ ] Run crate, dependency-tree, prose, and hash checks.
+- [x] Add the PresentationML root and child value types.
+- [x] Parse typed children and retain unsupported attributes and child slots.
+- [x] Write fixed prefixes and schema child order.
+- [x] Validate slide-id uniqueness and bounds.
+- [x] Add focused fixtures and the all-corpus presentation gate.
+- [x] Run crate, dependency-tree, prose, and hash checks.
 
 ## Open questions
 

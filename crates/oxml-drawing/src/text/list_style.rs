@@ -29,7 +29,8 @@ pub struct CT_TextListStyle {
 }
 
 impl CT_TextListStyle {
-    /// Parses a complete `a:lstStyle` element with any prefix.
+    /// Parses a complete `a:lstStyle` or PresentationML `defaultTextStyle`
+    /// element with any prefix.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         let mut reader = Reader::from_reader(xml);
         let mut buffer = Vec::new();
@@ -38,14 +39,10 @@ impl CT_TextListStyle {
                 .read_event_into(&mut buffer)
                 .map_err(OxmlError::from)?
             {
-                Event::Start(element)
-                    if matches_local_name(element.name().as_ref(), b"lstStyle") =>
-                {
+                Event::Start(element) if is_list_style_root(element.name().as_ref()) => {
                     return Self::from_element(&mut reader, &element);
                 }
-                Event::Empty(element)
-                    if matches_local_name(element.name().as_ref(), b"lstStyle") =>
-                {
+                Event::Empty(element) if is_list_style_root(element.name().as_ref()) => {
                     return Self::from_start(&element);
                 }
                 Event::Start(element) | Event::Empty(element) => {
@@ -71,6 +68,7 @@ impl CT_TextListStyle {
 
     fn from_element(reader: &mut Reader<&[u8]>, start: &BytesStart<'_>) -> Result<Self> {
         let mut style = Self::from_start(start)?;
+        let root_name = local_name(start.name().as_ref()).to_vec();
         let mut boundary = 0;
         let mut buffer = Vec::new();
         loop {
@@ -88,10 +86,16 @@ impl CT_TextListStyle {
                     let raw = capture_empty_element(&element)?;
                     style.capture_child(&name, raw, &mut boundary)?;
                 }
-                Event::End(element) if matches_local_name(element.name().as_ref(), b"lstStyle") => {
+                Event::End(element)
+                    if local_name(element.name().as_ref()) == root_name.as_slice() =>
+                {
                     return Ok(style);
                 }
-                Event::Eof => return Err(missing_end("lstStyle")),
+                Event::Eof => {
+                    return Err(missing_end(
+                        std::str::from_utf8(&root_name).unwrap_or("list style"),
+                    ));
+                }
                 _ => {}
             }
             buffer.clear();
@@ -123,7 +127,12 @@ impl CT_TextListStyle {
 
     /// Writes the list style with fixed prefixes and ascending level order.
     pub fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        let mut start = BytesStart::new("a:lstStyle");
+        self.write_xml_as(writer, "a:lstStyle")
+    }
+
+    /// Writes the list style using a caller-selected OOXML wrapper tag.
+    pub fn write_xml_as<W: Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
+        let mut start = BytesStart::new(tag);
         push_raw_attributes(&mut start, &self.raw_attributes);
         let has_levels = (1..=9).any(|level| self.level(level).is_some());
         if !has_levels && self.raw_children.is_empty() {
@@ -140,7 +149,7 @@ impl CT_TextListStyle {
             }
             emit_raw(writer, self.raw_children.at(level))?;
         }
-        write_end(writer, "a:lstStyle")
+        write_end(writer, tag)
     }
 
     /// Serialises a complete list-style fragment.
@@ -185,6 +194,10 @@ impl CT_TextListStyle {
         };
         *slot = Some(properties);
     }
+}
+
+fn is_list_style_root(name: &[u8]) -> bool {
+    matches_local_name(name, b"lstStyle") || matches_local_name(name, b"defaultTextStyle")
 }
 
 fn list_level(name: &[u8]) -> Result<Option<usize>> {

@@ -11,6 +11,7 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 use rpptx_oxml::PRESENTATION_PART;
 use rpptx_oxml::namespace::{P_NS, P_PREFIX, R_NS, R_PREFIX};
+use rpptx_oxml::presentation::CT_Presentation;
 
 const MANIFEST: &str = include_str!("../../../scripts/pptx-corpus-manifest.tsv");
 const EXPECTED_DECKS: usize = 50;
@@ -337,4 +338,168 @@ fn drawing_elements(xml: &[u8]) -> Result<DrawingElements, String> {
 
 fn local_name(name: &[u8]) -> &[u8] {
     name.rsplit(|byte| *byte == b':').next().unwrap_or(name)
+}
+
+#[test]
+fn presentation_reads_any_prefix_and_writes_fixed_prefixes_in_schema_order() {
+    let xml = format!(
+        r#"<q:presentation xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:rel="{R_NS}" xmlns:v="urn:producer" marker="yes"><q:sldMasterIdLst><q:sldMasterId id="2147483648" rel:id="rId1"/></q:sldMasterIdLst><q:notesMasterIdLst><q:notesMasterId rel:id="rIdNotes"/></q:notesMasterIdLst><v:sldIdLst><v:sldId id="not-a-slide"/></v:sldIdLst><q:sldIdLst keep="list"><q:before/><q:sldId id="256" rel:id="rId2" v:id="producer-id"/><q:between/><q:sldId id="300" rel:id="rId3"/><q:after/></q:sldIdLst><q:sldSz cx="12192000" cy="6858000" type="screen16x9"/><q:notesSz cx="6858000" cy="9144000"/><q:custom value="a &amp; b"><q:n/></q:custom><q:defaultTextStyle/><q:extLst><q:ext uri="raw"/></q:extLst></q:presentation>"#
+    );
+    let parsed = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+    assert_eq!(parsed.slide_master_ids.len(), 1);
+    assert_eq!(parsed.slide_master_ids[0].id, Some(2_147_483_648));
+    assert_eq!(parsed.slide_master_ids[0].relationship_id, "rId1");
+    assert_eq!(
+        parsed
+            .slide_ids
+            .iter()
+            .map(|slide| (slide.id, slide.relationship_id.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(256, "rId2"), (300, "rId3")]
+    );
+    assert_eq!(parsed.slide_size.as_ref().unwrap().cx.0, 12_192_000);
+    assert_eq!(parsed.notes_size.cy.0, 9_144_000);
+    assert!(parsed.default_text_style.is_some());
+
+    let written = parsed.to_xml().unwrap();
+    let written_text = std::str::from_utf8(&written).unwrap();
+    assert!(written_text.starts_with(&format!(
+        r#"<p:presentation xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="{R_NS}""#
+    )));
+    assert!(written_text.contains(r#"<p:sldMasterId id="2147483648" r:id="rId1"/>"#));
+    assert!(written_text.contains(r#"<p:sldId id="256" r:id="rId2" v:id="producer-id"/>"#));
+    assert!(written_text.contains(r#"<p:defaultTextStyle/>"#));
+    assert!(written_text.contains(r#"<q:custom value="a &amp; b"><q:n/></q:custom>"#));
+    assert!(written_text.contains(
+        r#"<q:notesMasterIdLst><q:notesMasterId rel:id="rIdNotes"/></q:notesMasterIdLst>"#
+    ));
+    assert!(written_text.contains(r#"<v:sldIdLst><v:sldId id="not-a-slide"/></v:sldIdLst>"#));
+    assert!(written_text.contains(
+        r#"<q:before/><p:sldId id="256" r:id="rId2" v:id="producer-id"/><q:between/><p:sldId id="300" r:id="rId3"/><q:after/>"#
+    ));
+    let master = written_text.find("<p:sldMasterIdLst").unwrap();
+    let notes_master = written_text.find("<q:notesMasterIdLst").unwrap();
+    let slides = written_text.find("<p:sldIdLst").unwrap();
+    let slide_size = written_text.find("<p:sldSz").unwrap();
+    let notes_size = written_text.find("<p:notesSz").unwrap();
+    let defaults = written_text.find("<p:defaultTextStyle").unwrap();
+    let extensions = written_text.find("<q:extLst").unwrap();
+    assert!(
+        master < notes_master
+            && notes_master < slides
+            && slides < slide_size
+            && slide_size < notes_size
+            && notes_size < defaults
+            && defaults < extensions
+    );
+    assert_eq!(parsed, CT_Presentation::from_xml(&written).unwrap());
+}
+
+#[test]
+fn slide_ids_preserve_order_and_enforce_powerpoint_bounds() {
+    let valid = format!(
+        r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:sldIdLst><p:sldId id="2147483647" r:id="last"/><p:sldId id="256" r:id="first"/></p:sldIdLst><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
+    );
+    let parsed = CT_Presentation::from_xml(valid.as_bytes()).unwrap();
+    assert_eq!(
+        parsed
+            .slide_ids
+            .iter()
+            .map(|slide| slide.id)
+            .collect::<Vec<_>>(),
+        vec![2_147_483_647, 256]
+    );
+
+    for invalid in [
+        r#"<p:sldId id="255" r:id="rId1"/>"#,
+        r#"<p:sldId id="2147483648" r:id="rId1"/>"#,
+        r#"<p:sldId id="not-an-integer" r:id="rId1"/>"#,
+    ] {
+        let xml = format!(
+            r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:sldIdLst>{invalid}</p:sldIdLst><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
+        );
+        assert!(
+            CT_Presentation::from_xml(xml.as_bytes()).is_err(),
+            "{invalid}"
+        );
+    }
+
+    let duplicate = format!(
+        r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:sldIdLst><p:sldId id="256" r:id="rId1"/><p:sldId id="256" r:id="rId2"/></p:sldIdLst><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
+    );
+    assert!(CT_Presentation::from_xml(duplicate.as_bytes()).is_err());
+
+    for invalid_size in [
+        r#"<p:notesSz cy="9144000"/>"#,
+        r#"<p:notesSz cx="broken" cy="9144000"/>"#,
+        r#"<p:notesSz cx="0" cy="9144000"/>"#,
+    ] {
+        let xml = format!(r#"<p:presentation xmlns:p="{P_NS}">{invalid_size}</p:presentation>"#);
+        assert!(
+            CT_Presentation::from_xml(xml.as_bytes()).is_err(),
+            "{invalid_size}"
+        );
+    }
+
+    let wrong_root_namespace =
+        br#"<x:presentation xmlns:x="urn:not-presentationml"><x:notesSz cx="1" cy="1"/></x:presentation>"#;
+    assert!(CT_Presentation::from_xml(wrong_root_namespace).is_err());
+
+    let conflicting_fixed_prefix = format!(
+        r#"<q:presentation xmlns:q="{P_NS}" xmlns:p="urn:producer"><q:notesSz cx="6858000" cy="9144000"/></q:presentation>"#
+    );
+    assert!(CT_Presentation::from_xml(conflicting_fixed_prefix.as_bytes()).is_err());
+
+    let nested_conflicting_prefix = format!(
+        r#"<q:presentation xmlns:q="{P_NS}" xmlns:rel="{R_NS}"><q:sldIdLst xmlns:r="urn:producer"><q:sldId id="256" rel:id="rId1"/></q:sldIdLst><q:notesSz cx="6858000" cy="9144000"/></q:presentation>"#
+    );
+    assert!(CT_Presentation::from_xml(nested_conflicting_prefix.as_bytes()).is_err());
+}
+
+#[test]
+fn zero_slide_template_round_trips() {
+    let xml = format!(
+        r#"<p:presentation xmlns:p="{P_NS}"><p:sldIdLst/><p:sldSz cx="12192000" cy="6858000"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
+    );
+    let parsed = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+    assert!(parsed.slide_ids.is_empty());
+    let written = parsed.to_xml().unwrap();
+    assert!(
+        std::str::from_utf8(&written)
+            .unwrap()
+            .contains("<p:sldIdLst/>")
+    );
+    assert_eq!(parsed, CT_Presentation::from_xml(&written).unwrap());
+}
+
+#[test]
+fn every_corpus_presentation_part_round_trips_structurally() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut presentation_count = 0usize;
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path))
+            .unwrap_or_else(|error| panic!("{}: open failed: {error}", entry.path));
+        let xml = package
+            .get_part(PRESENTATION_PART)
+            .unwrap_or_else(|| panic!("{}: presentation part missing", entry.path));
+        let parsed = CT_Presentation::from_xml(xml)
+            .unwrap_or_else(|error| panic!("{}: presentation parse failed: {error}", entry.path));
+        let written = parsed
+            .to_xml()
+            .unwrap_or_else(|error| panic!("{}: presentation write failed: {error}", entry.path));
+        let reparsed = CT_Presentation::from_xml(&written).unwrap_or_else(|error| {
+            panic!("{}: written presentation parse failed: {error}", entry.path)
+        });
+        assert_eq!(
+            parsed, reparsed,
+            "{}: presentation changed structurally",
+            entry.path
+        );
+        presentation_count += 1;
+    }
+    assert_eq!(presentation_count, EXPECTED_DECKS);
+    eprintln!("PresentationML corpus gate checked {presentation_count} presentation parts");
 }
