@@ -11,6 +11,7 @@ use crate::fill::Fill;
 use crate::order::OrderedRawChildren;
 
 use super::body::{Result, TextError, missing_end};
+use super::bullet::TextBullet;
 
 const MAX_TEXT_MARGIN: i32 = 51_206_400;
 const MAX_TEXT_POINT: i32 = 400_000;
@@ -384,7 +385,18 @@ pub struct TextFont {
 }
 
 impl TextFont {
-    fn from_xml(xml: &[u8], expected: &[u8]) -> Result<Self> {
+    pub fn new(typeface: impl Into<String>) -> Result<Self> {
+        let typeface = typeface.into();
+        if typeface.is_empty() {
+            return Err(invalid_attribute("font", "typeface", ""));
+        }
+        Ok(Self {
+            typeface,
+            raw_attributes: Vec::new(),
+        })
+    }
+
+    pub(crate) fn from_xml(xml: &[u8], expected: &[u8]) -> Result<Self> {
         parse_complete(
             xml,
             expected,
@@ -404,7 +416,7 @@ impl TextFont {
         })
     }
 
-    fn write_xml<W: Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
+    pub(crate) fn write_xml<W: Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
         if self.typeface.is_empty() {
             return Err(invalid_attribute(tag, "typeface", ""));
         }
@@ -805,6 +817,7 @@ pub struct CT_TextParagraphProperties {
     pub line_spacing: Option<TextSpacing>,
     pub space_before: Option<TextSpacing>,
     pub space_after: Option<TextSpacing>,
+    pub bullet: Option<TextBullet>,
     pub default_run_properties: Option<CT_TextCharacterProperties>,
     raw_attributes: Vec<(String, String)>,
     raw_children: OrderedRawChildren,
@@ -893,10 +906,20 @@ impl CT_TextParagraphProperties {
             b"defRPr" => {
                 self.default_run_properties = Some(CT_TextCharacterProperties::from_xml(&raw)?)
             }
-            _ => self.raw_children.push(
-                slot.map_or(*boundary, |slot| (*boundary).max(slot - 1)),
-                raw,
-            ),
+            _ => {
+                let mut bullet = self.bullet.take().unwrap_or_default();
+                if bullet.capture_component(name, &raw)? {
+                    self.bullet = Some(bullet);
+                } else {
+                    if !bullet.is_empty() {
+                        self.bullet = Some(bullet);
+                    }
+                    self.raw_children.push(
+                        slot.map_or(*boundary, |slot| (*boundary).max(slot - 1)),
+                        raw,
+                    );
+                }
+            }
         }
         if let Some(slot) = slot {
             *boundary = (*boundary).max(slot);
@@ -939,6 +962,7 @@ impl CT_TextParagraphProperties {
         let modelled = self.line_spacing.is_some()
             || self.space_before.is_some()
             || self.space_after.is_some()
+            || self.bullet.is_some()
             || self.default_run_properties.is_some();
         if !modelled && self.raw_children.is_empty() {
             return write_empty(writer, start);
@@ -956,9 +980,24 @@ impl CT_TextParagraphProperties {
         if let Some(spacing) = &self.space_after {
             spacing.write_xml(writer, "a:spcAft")?;
         }
-        for boundary in 3..=8 {
-            emit_raw(writer, self.raw_children.at(boundary))?;
+        emit_raw(writer, self.raw_children.at(3))?;
+        if let Some(bullet) = &self.bullet {
+            bullet.write_color(writer)?;
         }
+        emit_raw(writer, self.raw_children.at(4))?;
+        if let Some(bullet) = &self.bullet {
+            bullet.write_size(writer)?;
+        }
+        emit_raw(writer, self.raw_children.at(5))?;
+        if let Some(bullet) = &self.bullet {
+            bullet.write_font(writer)?;
+        }
+        emit_raw(writer, self.raw_children.at(6))?;
+        if let Some(bullet) = &self.bullet {
+            bullet.write_choice(writer)?;
+        }
+        emit_raw(writer, self.raw_children.at(7))?;
+        emit_raw(writer, self.raw_children.at(8))?;
         if let Some(properties) = &self.default_run_properties {
             properties.write_xml(writer, "a:defRPr")?;
         }
@@ -1795,7 +1834,9 @@ mod tests {
         CT_TextCharacterProperties, CT_TextParagraph, CT_TextParagraphProperties, TextRun,
         TextSpace, TextSpacing,
     };
+    use crate::color::ColorChoice;
     use crate::text::CT_TextBody;
+    use crate::text::{TextAutoNumberScheme, TextBulletChoice, TextBulletSizeValue};
 
     #[test]
     fn leading_and_trailing_text_whitespace_survives_via_xml_space_preserve() {
@@ -1868,7 +1909,7 @@ mod tests {
                 .unwrap();
             writer.into_inner()
         };
-        assert_eq!(written, br#"<a:pPr marL="0" marR="51206400" lvl="8" indent="-51206400" algn="thaiDist" rtl="1" defTabSz="914400"><x:before/><a:lnSpc><a:spcPct val="100000"/></a:lnSpc><a:spcBef><a:spcPts val="158400"/></a:spcBef><a:spcAft><a:spcPct val="125.5%"/></a:spcAft><q:buChar char="*"/><x:afterBullet/><a:defRPr sz="400000" b="1" i="0" u="wavyDbl" strike="dblStrike" spc="-400000" baseline="25%" xmlns:b="urn:test" lang="en-US" kern="1200"><a:solidFill><a:srgbClr val="AABBCC"/></a:solidFill><a:latin typeface="Aptos" pitchFamily="34" charset="0"/><a:ea typeface="Yu Gothic"/><a:cs typeface="Arial"/><a:sym typeface="Symbol"/><a:hlinkMouseOver r:id="rId8" invalidUrl="bad" tgtFrame="_blank"/></a:defRPr><x:last/></a:pPr>"#);
+        assert_eq!(written, br#"<a:pPr marL="0" marR="51206400" lvl="8" indent="-51206400" algn="thaiDist" rtl="1" defTabSz="914400"><x:before/><a:lnSpc><a:spcPct val="100000"/></a:lnSpc><a:spcBef><a:spcPts val="158400"/></a:spcBef><a:spcAft><a:spcPct val="125.5%"/></a:spcAft><a:buChar char="*"/><x:afterBullet/><a:defRPr sz="400000" b="1" i="0" u="wavyDbl" strike="dblStrike" spc="-400000" baseline="25%" xmlns:b="urn:test" lang="en-US" kern="1200"><a:solidFill><a:srgbClr val="AABBCC"/></a:solidFill><a:latin typeface="Aptos" pitchFamily="34" charset="0"/><a:ea typeface="Yu Gothic"/><a:cs typeface="Arial"/><a:sym typeface="Symbol"/><a:hlinkMouseOver r:id="rId8" invalidUrl="bad" tgtFrame="_blank"/></a:defRPr><x:last/></a:pPr>"#);
 
         let run_properties = CT_TextCharacterProperties::from_xml(
             br#"<q:rPr sz="100" spc="1.25pt" baseline="-100000"/>"#,
@@ -1889,8 +1930,134 @@ mod tests {
         inserted_spacing.write_xml(&mut writer, "a:pPr").unwrap();
         assert_eq!(
             writer.into_inner(),
-            br#"<a:pPr><a:lnSpc><a:spcPct val="100000"/></a:lnSpc><q:buChar char="*"/></a:pPr>"#
+            br#"<a:pPr><a:lnSpc><a:spcPct val="100000"/></a:lnSpc><a:buChar char="*"/></a:pPr>"#
         );
+    }
+
+    #[test]
+    fn every_modelled_bullet_form_round_trips_in_schema_order() {
+        let cases: &[(&[u8], &[u8])] = &[
+            (
+                br#"<q:pPr><q:buClr><q:srgbClr val="AABBCC"/></q:buClr><q:buSzPct val="125000"/><q:buFont typeface="Wingdings"/><q:buChar char="*"/></q:pPr>"#,
+                br#"<a:pPr><a:buClr><a:srgbClr val="AABBCC"/></a:buClr><a:buSzPct val="125000"/><a:buFont typeface="Wingdings"/><a:buChar char="*"/></a:pPr>"#,
+            ),
+            (
+                br#"<q:pPr><q:buSzPts val="1800"/><q:buAutoNum type="arabicPeriod" startAt="3"/></q:pPr>"#,
+                br#"<a:pPr><a:buSzPts val="1800"/><a:buAutoNum type="arabicPeriod" startAt="3"/></a:pPr>"#,
+            ),
+            (br#"<q:pPr><q:buNone/></q:pPr>"#, br#"<a:pPr><a:buNone/></a:pPr>"#),
+        ];
+
+        for (xml, expected) in cases {
+            let properties = CT_TextParagraphProperties::from_xml(xml).unwrap();
+            let mut writer = quick_xml::Writer::new(Vec::new());
+            properties.write_xml(&mut writer, "a:pPr").unwrap();
+            let written = writer.into_inner();
+            assert_eq!(written, *expected);
+            assert_eq!(
+                CT_TextParagraphProperties::from_xml(&written).unwrap(),
+                properties
+            );
+        }
+
+        let character = CT_TextParagraphProperties::from_xml(cases[0].0).unwrap();
+        let bullet = character.bullet.as_ref().unwrap();
+        assert!(matches!(
+            bullet.choice,
+            Some(TextBulletChoice::Character(_))
+        ));
+        assert_eq!(bullet.font.as_ref().unwrap().typeface, "Wingdings");
+        assert!(matches!(
+            bullet.size.as_ref().unwrap().value,
+            TextBulletSizeValue::Percent(ref value) if value == "125000"
+        ));
+        assert!(matches!(
+            bullet.color.as_ref().unwrap().color,
+            ColorChoice::Srgb { .. }
+        ));
+
+        let automatic = CT_TextParagraphProperties::from_xml(cases[1].0).unwrap();
+        let Some(TextBulletChoice::AutoNumber(numbering)) =
+            automatic.bullet.as_ref().unwrap().choice.as_ref()
+        else {
+            panic!("expected automatic-number bullet");
+        };
+        assert_eq!(numbering.scheme, TextAutoNumberScheme::ArabicPeriod);
+        assert_eq!(numbering.start_at, Some(3));
+        assert!(matches!(
+            automatic
+                .bullet
+                .as_ref()
+                .unwrap()
+                .size
+                .as_ref()
+                .unwrap()
+                .value,
+            TextBulletSizeValue::Points(1800)
+        ));
+
+        let none = CT_TextParagraphProperties::from_xml(cases[2].0).unwrap();
+        assert!(matches!(
+            none.bullet.as_ref().unwrap().choice,
+            Some(TextBulletChoice::None(_))
+        ));
+    }
+
+    #[test]
+    fn bullet_font_size_and_colour_keep_their_schema_positions() {
+        let properties = CT_TextParagraphProperties::from_xml(
+            br#"<q:pPr><q:buFont typeface="Aptos"/><q:buChar char="*"/><q:buClr><q:schemeClr val="accent1"/></q:buClr><q:buSzPct val="80%"/><q:defRPr b="1"/></q:pPr>"#,
+        )
+        .unwrap();
+        let mut writer = quick_xml::Writer::new(Vec::new());
+        properties.write_xml(&mut writer, "a:pPr").unwrap();
+        assert_eq!(
+            writer.into_inner(),
+            br#"<a:pPr><a:buClr><a:schemeClr val="accent1"/></a:buClr><a:buSzPct val="80%"/><a:buFont typeface="Aptos"/><a:buChar char="*"/><a:defRPr b="1"/></a:pPr>"#
+        );
+    }
+
+    #[test]
+    fn unknown_bullet_children_round_trip_byte_for_byte() {
+        let properties = CT_TextParagraphProperties::from_xml(
+            br#"<q:pPr><q:buClrTx x:mode="stay"><x:nested>one &amp; two</x:nested><!--note--></q:buClrTx><q:buChar char="*"/><x:after/></q:pPr>"#,
+        )
+        .unwrap();
+        let mut writer = quick_xml::Writer::new(Vec::new());
+        properties.write_xml(&mut writer, "a:pPr").unwrap();
+        assert_eq!(
+            writer.into_inner(),
+            br#"<a:pPr><q:buClrTx x:mode="stay"><x:nested>one &amp; two</x:nested><!--note--></q:buClrTx><a:buChar char="*"/><x:after/></a:pPr>"#
+        );
+    }
+
+    #[test]
+    fn malformed_bullet_values_return_errors_without_panicking() {
+        let cases: &[&[u8]] = &[
+            br#"<q:pPr><q:buChar/></q:pPr>"#,
+            br#"<q:pPr><q:buChar char=""/></q:pPr>"#,
+            br#"<q:pPr><q:buSzPct val="24999"/></q:pPr>"#,
+            br#"<q:pPr><q:buSzPct val="400001"/></q:pPr>"#,
+            br#"<q:pPr><q:buSzPts val="99"/></q:pPr>"#,
+            br#"<q:pPr><q:buSzPts val="400001"/></q:pPr>"#,
+            br#"<q:pPr><q:buAutoNum type="unknown"/></q:pPr>"#,
+            br#"<q:pPr><q:buAutoNum/></q:pPr>"#,
+            br#"<q:pPr><q:buAutoNum type="arabicPeriod" startAt="0"/></q:pPr>"#,
+            br#"<q:pPr><q:buAutoNum type="arabicPeriod" startAt="32768"/></q:pPr>"#,
+            br#"<q:pPr><q:buFont/></q:pPr>"#,
+            br#"<q:pPr><q:buClr/></q:pPr>"#,
+            br#"<q:pPr><q:buClr><q:srgbClr x:val="AABBCC"/></q:buClr></q:pPr>"#,
+            br#"<q:pPr><q:buClr><q:srgbClr val="GGGGGG"/></q:buClr></q:pPr>"#,
+            br#"<q:pPr><q:buClr><q:srgbClr val="AABBCC"/><q:schemeClr val="accent1"/></q:buClr></q:pPr>"#,
+            br#"<q:pPr><q:buChar char="*"/><q:buNone/></q:pPr>"#,
+            br#"<q:pPr><q:buSzPct val="100000"/><q:buSzPts val="1200"/></q:pPr>"#,
+        ];
+
+        for xml in cases {
+            let result = panic::catch_unwind(|| CT_TextParagraphProperties::from_xml(xml));
+            assert!(result.is_ok(), "bullet parser panicked");
+            assert!(result.unwrap().is_err(), "malformed bullet parsed");
+        }
     }
 
     #[test]

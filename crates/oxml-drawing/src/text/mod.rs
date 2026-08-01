@@ -9,11 +9,16 @@ use quick_xml::{Reader, Writer};
 use crate::order::OrderedRawChildren;
 
 pub mod body;
+pub mod bullet;
 pub mod paragraph;
 
 pub use body::{
     CT_TextBodyProperties, Coordinate32Value, NormalAutofit, TextAnchor, TextAutofit, TextError,
     TextVertical, TextWrap,
+};
+pub use bullet::{
+    TextAutoNumber, TextAutoNumberScheme, TextBullet, TextBulletCharacter, TextBulletChoice,
+    TextBulletColor, TextBulletSize, TextBulletSizeValue, TextNoBullet,
 };
 pub use paragraph::{
     CT_RegularTextRun, CT_TextCharacterProperties, CT_TextField, CT_TextLineBreak,

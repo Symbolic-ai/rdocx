@@ -1,6 +1,6 @@
 # F-064c, Text bullets
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S14
 **Size**: S
 **Depends on**: F-064b
@@ -64,11 +64,11 @@ Expected to be unchanged. The unpublished DrawingML model has no Word consumer.
 
 ## Implementation checklist
 
-- [ ] Add failing bullet-family, order, raw-preservation, and malformed-input tests.
-- [ ] Add bullet choice, font, size, colour, and numbering types.
-- [ ] Integrate bullets into paragraph properties in schema order.
-- [ ] Preserve unsupported bullet XML at exact boundaries.
-- [ ] Run focused checks.
+- [x] Add failing bullet-family, order, raw-preservation, and malformed-input tests.
+- [x] Add bullet choice, font, size, colour, and numbering types.
+- [x] Integrate bullets into paragraph properties in schema order.
+- [x] Preserve unsupported bullet XML at exact boundaries.
+- [x] Run focused checks.
 
 ## Open questions
 
