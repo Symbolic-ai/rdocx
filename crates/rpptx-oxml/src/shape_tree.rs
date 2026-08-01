@@ -30,7 +30,7 @@ pub enum ShapeTreeChild {
     GraphicFrame(Box<CT_GraphicFrame>),
     GroupShape(Box<CT_GroupShape>),
     Connector(CT_ConnectionShape),
-    AlternateContent(Vec<u8>),
+    AlternateContent(Box<CT_AlternateContent>),
 }
 
 impl ShapeTreeChild {
@@ -40,11 +40,129 @@ impl ShapeTreeChild {
             Self::Picture(picture) => picture.write_xml_internal(writer, false)?,
             Self::GraphicFrame(frame) => frame.write_xml_internal(writer, false)?,
             Self::Connector(connector) => connector.write_xml_internal(writer, false)?,
-            Self::AlternateContent(xml) => writer.get_mut().write_all(xml)?,
+            Self::AlternateContent(alternate) => alternate.write_xml(writer)?,
             Self::GroupShape(group) => group.write_xml_internal(writer, false)?,
         }
         Ok(())
     }
+}
+
+/// One preserved `mc:AlternateContent` subtree with its render fallback.
+#[allow(non_camel_case_types)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CT_AlternateContent {
+    raw_xml: Vec<u8>,
+    selected_fallback: Option<Vec<ShapeTreeChild>>,
+}
+
+impl CT_AlternateContent {
+    /// Returns the original subtree used as the sole serialisation source.
+    pub fn raw_xml(&self) -> &[u8] {
+        &self.raw_xml
+    }
+
+    /// Returns ordered typed members from the immediate `mc:Fallback` branch.
+    pub fn selected_fallback(&self) -> Option<&[ShapeTreeChild]> {
+        self.selected_fallback.as_deref()
+    }
+
+    fn from_fragment(xml: &[u8], inherited: &[(String, String)]) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(start) => {
+                    let namespaces =
+                        NamespaceBindings::from_entries(inherited).with_start(&start)?;
+                    if local_name(start.name().as_ref()) != b"AlternateContent"
+                        || namespaces.element_uri(start.name().as_ref()) != Some(MC_NS)
+                    {
+                        return Err(unexpected(&start));
+                    }
+                    return Self::from_reader(&mut reader, &namespaces, xml);
+                }
+                Event::Empty(start) => {
+                    let namespaces =
+                        NamespaceBindings::from_entries(inherited).with_start(&start)?;
+                    if local_name(start.name().as_ref()) != b"AlternateContent"
+                        || namespaces.element_uri(start.name().as_ref()) != Some(MC_NS)
+                    {
+                        return Err(unexpected(&start));
+                    }
+                    return Ok(Self {
+                        raw_xml: xml.to_vec(),
+                        selected_fallback: None,
+                    });
+                }
+                Event::Eof => {
+                    return Err(OxmlError::MissingElement("mc:AlternateContent".to_owned()));
+                }
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn from_reader(
+        reader: &mut Reader<&[u8]>,
+        namespaces: &NamespaceBindings,
+        raw_xml: &[u8],
+    ) -> Result<Self> {
+        let mut selected_fallback = None;
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(child) => {
+                    let child_namespaces = namespaces.with_start(&child)?;
+                    let is_fallback = local_name(child.name().as_ref()) == b"Fallback"
+                        && child_namespaces.element_uri(child.name().as_ref()) == Some(MC_NS);
+                    let raw = capture_element(reader, &child)?;
+                    if is_fallback {
+                        if selected_fallback.is_some() {
+                            return Err(duplicate_fallback());
+                        }
+                        selected_fallback =
+                            Some(parse_fallback_members(&raw, &child_namespaces.entries())?);
+                    }
+                }
+                Event::Empty(child) => {
+                    let child_namespaces = namespaces.with_start(&child)?;
+                    if local_name(child.name().as_ref()) == b"Fallback"
+                        && child_namespaces.element_uri(child.name().as_ref()) == Some(MC_NS)
+                    {
+                        if selected_fallback.is_some() {
+                            return Err(duplicate_fallback());
+                        }
+                        selected_fallback = Some(Vec::new());
+                    }
+                }
+                Event::End(end) if local_name(end.name().as_ref()) == b"AlternateContent" => {
+                    return Ok(Self {
+                        raw_xml: raw_xml.to_vec(),
+                        selected_fallback,
+                    });
+                }
+                Event::Eof => {
+                    return Err(OxmlError::MissingElement(
+                        "closing mc:AlternateContent".to_owned(),
+                    ));
+                }
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        writer.get_mut().write_all(&self.raw_xml)?;
+        Ok(())
+    }
+}
+
+fn duplicate_fallback() -> OxmlError {
+    OxmlError::InvalidValue(
+        "mc:AlternateContent may contain at most one immediate mc:Fallback".to_owned(),
+    )
 }
 
 /// A partial typed `p:sp` model that owns its placeholder identity.
@@ -719,32 +837,112 @@ fn capture_group_child(
         )));
     }
 
-    match (uri, name) {
-        (Some(P_NS), b"sp") => children.push(ShapeTreeChild::Shape(CT_Shape::from_fragment(
-            &raw,
-            &namespaces.entries(),
-        )?)),
-        (Some(P_NS), b"pic") => children.push(ShapeTreeChild::Picture(CT_Picture::from_fragment(
-            &raw,
-            &namespaces.entries(),
-        )?)),
-        (Some(P_NS), b"graphicFrame") => {
-            children.push(ShapeTreeChild::GraphicFrame(Box::new(
-                CT_GraphicFrame::from_fragment(&raw, &namespaces.entries())?,
-            )));
-        }
-        (Some(P_NS), b"grpSp") => children.push(ShapeTreeChild::GroupShape(Box::new(
-            CT_GroupShape::from_fragment(&raw, &namespaces.entries())?,
-        ))),
-        (Some(P_NS), b"cxnSp") => children.push(ShapeTreeChild::Connector(
-            CT_ConnectionShape::from_fragment(&raw, &namespaces.entries())?,
-        )),
-        (Some(MC_NS), b"AlternateContent") => {
-            children.push(ShapeTreeChild::AlternateContent(raw));
-        }
-        _ => raw_children.push(children.len(), raw),
+    if let Some(child) = parse_shape_tree_child(name, uri, &raw, namespaces)? {
+        children.push(child);
+    } else {
+        raw_children.push(children.len(), raw);
     }
     Ok(())
+}
+
+fn parse_fallback_members(
+    xml: &[u8],
+    inherited: &[(String, String)],
+) -> Result<Vec<ShapeTreeChild>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) => {
+                let namespaces = NamespaceBindings::from_entries(inherited).with_start(&start)?;
+                if local_name(start.name().as_ref()) != b"Fallback"
+                    || namespaces.element_uri(start.name().as_ref()) != Some(MC_NS)
+                {
+                    return Err(unexpected(&start));
+                }
+                return parse_fallback_reader(&mut reader, &namespaces);
+            }
+            Event::Empty(start) => {
+                let namespaces = NamespaceBindings::from_entries(inherited).with_start(&start)?;
+                if local_name(start.name().as_ref()) != b"Fallback"
+                    || namespaces.element_uri(start.name().as_ref()) != Some(MC_NS)
+                {
+                    return Err(unexpected(&start));
+                }
+                return Ok(Vec::new());
+            }
+            Event::Eof => return Err(OxmlError::MissingElement("mc:Fallback".to_owned())),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn parse_fallback_reader(
+    reader: &mut Reader<&[u8]>,
+    namespaces: &NamespaceBindings,
+) -> Result<Vec<ShapeTreeChild>> {
+    let mut children = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(child) => {
+                let child_namespaces = namespaces.with_start(&child)?;
+                let name = local_name(child.name().as_ref()).to_vec();
+                let uri = child_namespaces.element_uri(child.name().as_ref());
+                let raw = capture_element(reader, &child)?;
+                if let Some(child) = parse_shape_tree_child(&name, uri, &raw, &child_namespaces)? {
+                    children.push(child);
+                }
+            }
+            Event::Empty(child) => {
+                let child_namespaces = namespaces.with_start(&child)?;
+                let name = local_name(child.name().as_ref()).to_vec();
+                let uri = child_namespaces.element_uri(child.name().as_ref());
+                let raw = capture_empty_element(&child)?;
+                if let Some(child) = parse_shape_tree_child(&name, uri, &raw, &child_namespaces)? {
+                    children.push(child);
+                }
+            }
+            Event::End(end) if local_name(end.name().as_ref()) == b"Fallback" => {
+                return Ok(children);
+            }
+            Event::Eof => {
+                return Err(OxmlError::MissingElement("closing mc:Fallback".to_owned()));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn parse_shape_tree_child(
+    name: &[u8],
+    uri: Option<&str>,
+    raw: &[u8],
+    namespaces: &NamespaceBindings,
+) -> Result<Option<ShapeTreeChild>> {
+    let inherited = namespaces.entries();
+    let child = match (uri, name) {
+        (Some(P_NS), b"sp") => ShapeTreeChild::Shape(CT_Shape::from_fragment(raw, &inherited)?),
+        (Some(P_NS), b"pic") => {
+            ShapeTreeChild::Picture(CT_Picture::from_fragment(raw, &inherited)?)
+        }
+        (Some(P_NS), b"graphicFrame") => {
+            ShapeTreeChild::GraphicFrame(Box::new(CT_GraphicFrame::from_fragment(raw, &inherited)?))
+        }
+        (Some(P_NS), b"grpSp") => {
+            ShapeTreeChild::GroupShape(Box::new(CT_GroupShape::from_fragment(raw, &inherited)?))
+        }
+        (Some(P_NS), b"cxnSp") => {
+            ShapeTreeChild::Connector(CT_ConnectionShape::from_fragment(raw, &inherited)?)
+        }
+        (Some(MC_NS), b"AlternateContent") => ShapeTreeChild::AlternateContent(Box::new(
+            CT_AlternateContent::from_fragment(raw, &inherited)?,
+        )),
+        _ => return Ok(None),
+    };
+    Ok(Some(child))
 }
 
 #[allow(clippy::too_many_arguments)]

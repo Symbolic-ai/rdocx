@@ -10,12 +10,12 @@ use oxml_drawing::table::CT_Table;
 use oxml_drawing::text::CT_TextBody;
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
-use quick_xml::events::{BytesStart, Event};
-use quick_xml::{Reader, XmlVersion};
+use quick_xml::events::{BytesEnd, BytesStart, Event};
+use quick_xml::{Reader, Writer, XmlVersion};
 use rpptx_oxml::PRESENTATION_PART;
 use rpptx_oxml::connector::CT_ConnectionShape;
 use rpptx_oxml::graphic_frame::{CT_GraphicFrame, GraphicDataPayload};
-use rpptx_oxml::namespace::{P_NS, P_PREFIX, R_NS, R_PREFIX};
+use rpptx_oxml::namespace::{MC_NS, P_NS, P_PREFIX, R_NS, R_PREFIX};
 use rpptx_oxml::picture::CT_Picture;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType, PlaceholderKey};
 use rpptx_oxml::presentation::CT_Presentation;
@@ -1053,6 +1053,272 @@ fn all_six_child_variants_keep_document_order() {
 }
 
 #[test]
+fn alternate_content_selects_fallback_without_parsing_choices() {
+    let raw = r#"<mc:AlternateContent marker="selected"><mc:Choice Requires="p14"><p:sp/></mc:Choice><mc:Fallback><p:sp marker="fallback-shape"><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><x:ignored/><p:pic marker="fallback-picture"><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill/><p:spPr/></p:pic><p:cxnSp marker="fallback-connector"><p:nvCxnSpPr><p:cNvPr/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp></mc:Fallback></mc:AlternateContent>"#;
+    let tree = alternate_content_tree(raw.as_bytes(), &[]).unwrap();
+    let ShapeTreeChild::AlternateContent(alternate) = &tree.children[0] else {
+        panic!("expected typed AlternateContent");
+    };
+    let selected = alternate.selected_fallback().unwrap();
+    assert_eq!(selected.len(), 3);
+    assert!(matches!(selected[0], ShapeTreeChild::Shape(_)));
+    assert!(matches!(selected[1], ShapeTreeChild::Picture(_)));
+    assert!(matches!(selected[2], ShapeTreeChild::Connector(_)));
+}
+
+#[test]
+fn alternate_content_without_fallback_preserves_choices_and_selects_none() {
+    let raw = r#"<mc:AlternateContent marker="choice-only"><mc:Choice Requires="p14"><p:sp/></mc:Choice></mc:AlternateContent>"#;
+    let tree = alternate_content_tree(raw.as_bytes(), &[]).unwrap();
+    let ShapeTreeChild::AlternateContent(alternate) = &tree.children[0] else {
+        panic!("expected typed AlternateContent");
+    };
+    assert_eq!(alternate.raw_xml(), raw.as_bytes());
+    assert_eq!(alternate.selected_fallback(), None);
+    assert!(
+        tree.to_xml()
+            .unwrap()
+            .windows(raw.len())
+            .any(|part| part == raw.as_bytes())
+    );
+}
+
+#[test]
+fn alternate_content_resolves_branch_namespaces_and_rejects_duplicate_fallbacks() {
+    let raw = r#"<m:AlternateContent><m:Choice Requires="q"><m:Fallback><q:sp/></m:Fallback></m:Choice><x:Fallback><q:sp/></x:Fallback><m:Fallback><q:sp marker="alias"><q:nvSpPr><q:cNvPr/><q:cNvSpPr/><q:nvPr/></q:nvSpPr><q:spPr/></q:sp></m:Fallback></m:AlternateContent>"#;
+    let inherited = [
+        (
+            "m",
+            "http://schemas.openxmlformats.org/markup-compatibility/2006",
+        ),
+        ("q", P_NS),
+        ("x", "urn:not-mc"),
+    ];
+    let tree = alternate_content_tree(raw.as_bytes(), &inherited).unwrap();
+    let ShapeTreeChild::AlternateContent(alternate) = &tree.children[0] else {
+        panic!("expected typed AlternateContent");
+    };
+    let selected = alternate.selected_fallback().unwrap();
+    assert_eq!(selected.len(), 1);
+    assert!(matches!(selected[0], ShapeTreeChild::Shape(_)));
+
+    let empty = r#"<m:AlternateContent><m:Fallback/></m:AlternateContent>"#;
+    let empty_tree = alternate_content_tree(empty.as_bytes(), &inherited).unwrap();
+    let ShapeTreeChild::AlternateContent(empty_alternate) = &empty_tree.children[0] else {
+        panic!("expected empty typed AlternateContent fallback");
+    };
+    assert_eq!(empty_alternate.selected_fallback(), Some(&[][..]));
+
+    let duplicate = r#"<m:AlternateContent><m:Fallback/><m:Fallback/></m:AlternateContent>"#;
+    assert!(alternate_content_tree(duplicate.as_bytes(), &inherited).is_err());
+}
+
+#[test]
+fn alternate_content_fallback_selection_does_not_change_stored_alternatives() {
+    let raw = r#"<mc:AlternateContent x:marker="a &amp; b">
+  <?producer keep?>
+  <!-- choice stays opaque -->
+  <mc:Choice Requires="p14"><p:sp x:data="&quot;raw&quot;"/></mc:Choice>
+  <mc:Fallback><x:before/><p:sp marker="selected"><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><x:after/></mc:Fallback>
+</mc:AlternateContent>"#;
+    let tree = alternate_content_tree(raw.as_bytes(), &[]).unwrap();
+    let ShapeTreeChild::AlternateContent(alternate) = &tree.children[0] else {
+        panic!("expected typed AlternateContent");
+    };
+    assert_eq!(alternate.raw_xml(), raw.as_bytes());
+    assert_eq!(alternate.selected_fallback().unwrap().len(), 1);
+    let written = tree.to_xml().unwrap();
+    assert!(
+        written
+            .windows(raw.len())
+            .any(|part| part == raw.as_bytes())
+    );
+    let reparsed = CT_ShapeTree::from_xml(&written).unwrap();
+    let ShapeTreeChild::AlternateContent(reparsed_alternate) = &reparsed.children[0] else {
+        panic!("expected typed AlternateContent after round-trip");
+    };
+    assert_eq!(reparsed_alternate.raw_xml(), raw.as_bytes());
+}
+
+#[test]
+fn alternate_content_fallback_keeps_shape_tree_order_inside_nested_groups() {
+    let raw = r#"<mc:AlternateContent marker="alternate"><mc:Fallback><p:sp marker="first"><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:grpSp marker="second"><p:nvGrpSpPr/><p:grpSpPr/><p:pic marker="nested-picture"><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill/><p:spPr/></p:pic></p:grpSp><p:cxnSp marker="third"><p:nvCxnSpPr><p:cNvPr/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp></mc:Fallback></mc:AlternateContent>"#;
+    let outer = format!(
+        r#"<p:spTree xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><p:nvGrpSpPr/><p:grpSpPr/><p:grpSp marker="outer"><p:nvGrpSpPr/><p:grpSpPr/>{raw}</p:grpSp><p:sp marker="after"><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp></p:spTree>"#
+    );
+    let tree = CT_ShapeTree::from_xml(outer.as_bytes()).unwrap();
+    let ShapeTreeChild::GroupShape(group) = &tree.children[0] else {
+        panic!("expected outer group");
+    };
+    let ShapeTreeChild::AlternateContent(alternate) = &group.children[0] else {
+        panic!("expected AlternateContent inside group");
+    };
+    let selected = alternate.selected_fallback().unwrap();
+    assert!(matches!(selected[0], ShapeTreeChild::Shape(_)));
+    let ShapeTreeChild::GroupShape(selected_group) = &selected[1] else {
+        panic!("expected selected nested group");
+    };
+    assert!(matches!(
+        selected_group.children[0],
+        ShapeTreeChild::Picture(_)
+    ));
+    assert!(matches!(selected[2], ShapeTreeChild::Connector(_)));
+    assert!(matches!(tree.children[1], ShapeTreeChild::Shape(_)));
+    let written = tree.to_xml().unwrap();
+    assert_order(
+        &written,
+        &[
+            "marker=\"outer\"",
+            "marker=\"alternate\"",
+            "marker=\"after\"",
+        ],
+    );
+    assert_eq!(tree, CT_ShapeTree::from_xml(&written).unwrap());
+}
+
+#[test]
+fn every_corpus_alternate_content_subtree_round_trips_byte_identically() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut coverage = 0usize;
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, xml) in &package.parts {
+            if !part.ends_with(".xml") {
+                continue;
+            }
+            for alternate in alternate_content_subtrees(xml)
+                .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path))
+            {
+                let inherited: Vec<_> = alternate
+                    .inherited_namespaces
+                    .iter()
+                    .map(|(prefix, uri)| (prefix.as_str(), uri.as_str()))
+                    .collect();
+                let tree = alternate_content_tree(&alternate.xml, &inherited)
+                    .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                let ShapeTreeChild::AlternateContent(model) = &tree.children[0] else {
+                    panic!("{} {part}: expected typed AlternateContent", entry.path);
+                };
+                assert_eq!(model.raw_xml(), alternate.xml);
+                let written = tree.to_xml().unwrap();
+                assert!(
+                    written
+                        .windows(alternate.xml.len())
+                        .any(|part| part == alternate.xml)
+                );
+                assert_eq!(tree, CT_ShapeTree::from_xml(&written).unwrap());
+                coverage += 1;
+            }
+        }
+    }
+    assert!(
+        coverage > 0,
+        "the pinned corpus contained no MC AlternateContent"
+    );
+    eprintln!("AlternateContent corpus gate checked {coverage} subtrees");
+}
+
+fn alternate_content_tree(
+    raw: &[u8],
+    inherited: &[(&str, &str)],
+) -> Result<CT_ShapeTree, oxml_core::OxmlError> {
+    let mut attributes = vec![
+        ("xmlns:p".to_owned(), P_NS.to_owned()),
+        (
+            "xmlns:a".to_owned(),
+            oxml_drawing::namespace::A_NS.to_owned(),
+        ),
+        ("xmlns:r".to_owned(), R_NS.to_owned()),
+        ("xmlns:mc".to_owned(), MC_NS.to_owned()),
+    ];
+    for (prefix, uri) in inherited {
+        if matches!(*prefix, "p" | "a" | "r" | "mc") {
+            continue;
+        }
+        let name = if prefix.is_empty() {
+            "xmlns".to_owned()
+        } else {
+            format!("xmlns:{prefix}")
+        };
+        attributes.push((name, (*uri).to_owned()));
+    }
+
+    let mut writer = Writer::new(Vec::new());
+    let mut root = BytesStart::new("p:spTree");
+    for (name, value) in &attributes {
+        root.push_attribute((name.as_str(), value.as_str()));
+    }
+    writer.write_event(Event::Start(root))?;
+    writer.write_event(Event::Empty(BytesStart::new("p:nvGrpSpPr")))?;
+    writer.write_event(Event::Empty(BytesStart::new("p:grpSpPr")))?;
+    writer.get_mut().extend_from_slice(raw);
+    writer.write_event(Event::End(BytesEnd::new("p:spTree")))?;
+    CT_ShapeTree::from_xml(&writer.into_inner())
+}
+
+struct ExtractedAlternateContent {
+    xml: Vec<u8>,
+    inherited_namespaces: Vec<(String, String)>,
+}
+
+fn alternate_content_subtrees(xml: &[u8]) -> Result<Vec<ExtractedAlternateContent>, String> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut alternatives = Vec::new();
+    let mut namespace_frames = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                let local_declarations = namespace_declarations(&element)?;
+                if local_name(element.name().as_ref()) == b"AlternateContent"
+                    && element_namespace(
+                        element.name().as_ref(),
+                        &namespace_frames,
+                        &local_declarations,
+                    ) == Some(MC_NS)
+                {
+                    alternatives.push(ExtractedAlternateContent {
+                        xml: capture_element(&mut reader, &element)
+                            .map_err(|error| format!("AlternateContent scan failed: {error}"))?,
+                        inherited_namespaces: effective_namespaces(&namespace_frames),
+                    });
+                } else {
+                    namespace_frames.push(local_declarations);
+                }
+            }
+            Ok(Event::Empty(element)) => {
+                let local_declarations = namespace_declarations(&element)?;
+                if local_name(element.name().as_ref()) == b"AlternateContent"
+                    && element_namespace(
+                        element.name().as_ref(),
+                        &namespace_frames,
+                        &local_declarations,
+                    ) == Some(MC_NS)
+                {
+                    alternatives.push(ExtractedAlternateContent {
+                        xml: capture_empty_element(&element)
+                            .map_err(|error| format!("AlternateContent scan failed: {error}"))?,
+                        inherited_namespaces: effective_namespaces(&namespace_frames),
+                    });
+                }
+            }
+            Ok(Event::End(_)) => {
+                namespace_frames
+                    .pop()
+                    .ok_or_else(|| "namespace stack underflow".to_owned())?;
+            }
+            Ok(Event::Eof) => return Ok(alternatives),
+            Ok(_) => {}
+            Err(error) => return Err(format!("XML scan failed: {error}")),
+        }
+        buffer.clear();
+    }
+}
+
+#[test]
 fn connector_with_start_and_end_connections_round_trips() {
     let xml = format!(
         r#"<p:cxnSp xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:nvCxnSpPr><p:cNvPr id="2" name="Connector 1"/><p:cNvCxnSpPr><a:stCxn id="3" idx="0"/><a:endCxn id="4" idx="1"/></p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp>"#
@@ -1602,9 +1868,10 @@ fn verify_pictures(
                 coverage.opaque += count_picture_elements(&xml);
                 coverage.opaque_cropped += count_pictures_with_descendant(&xml, b"srcRect");
             }
-            ShapeTreeChild::AlternateContent(xml) => {
-                coverage.opaque += count_picture_elements(xml);
-                coverage.opaque_cropped += count_pictures_with_descendant(xml, b"srcRect");
+            ShapeTreeChild::AlternateContent(alternate) => {
+                coverage.opaque += count_picture_elements(alternate.raw_xml());
+                coverage.opaque_cropped +=
+                    count_pictures_with_descendant(alternate.raw_xml(), b"srcRect");
             }
             _ => {}
         }

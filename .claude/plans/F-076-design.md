@@ -1,6 +1,6 @@
 # F-076, mc:AlternateContent
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S18
 **Size**: M
 **Depends on**: F-070
@@ -118,15 +118,15 @@ unpublished PowerPoint development model and does not affect Word rendering.
 
 ## Implementation checklist
 
-- [ ] Replace the raw alternate-content arm with the raw-plus-selected model.
-- [ ] Reuse one shape-tree member parser for ordinary and fallback members.
-- [ ] Select only an immediate MC fallback using namespace URI resolution.
-- [ ] Preserve every alternative and serialise only the original raw subtree.
-- [ ] Add focused fallback, namespace, recursive-order, and preservation tests.
-- [ ] Add the required pinned-corpus byte-identity gate.
-- [ ] Update the approved HLD impact file.
-- [ ] Confirm every PowerPoint development crate remains version 0.0.0 and unpublished.
-- [ ] Confirm all deterministic hashes remain unchanged.
+- [x] Replace the raw alternate-content arm with the raw-plus-selected model.
+- [x] Reuse one shape-tree member parser for ordinary and fallback members.
+- [x] Select only an immediate MC fallback using namespace URI resolution.
+- [x] Preserve every alternative and serialise only the original raw subtree.
+- [x] Add focused fallback, namespace, recursive-order, and preservation tests.
+- [x] Add the required pinned-corpus byte-identity gate.
+- [x] Update the approved HLD impact file.
+- [x] Confirm every PowerPoint development crate remains version 0.0.0 and unpublished.
+- [x] Confirm all deterministic hashes remain unchanged.
 
 ## Open questions
 

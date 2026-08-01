@@ -57,9 +57,26 @@ pub enum ShapeTreeChild {
     GraphicFrame(CT_GraphicFrame),   // tables, charts, SmartArt, OLE
     GroupShape(CT_GroupShape),       // recursive
     Connector(CT_ConnectionShape),
-    AlternateContent(Vec<u8>),       // preserved verbatim
+    AlternateContent(Box<CT_AlternateContent>),
+}
+
+pub struct CT_AlternateContent {
+    raw_xml: Vec<u8>,
+    selected_fallback: Option<Vec<ShapeTreeChild>>,
 }
 ```
+
+`CT_AlternateContent` selects ordered typed members only from its one immediate
+`mc:Fallback` child. It resolves the branch by namespace URI and uses the same
+shape-tree dispatch as `p:spTree` and `p:grpSp`. Every `mc:Choice` stays opaque
+and is not evaluated. No fallback is valid and produces no selection. An empty
+fallback produces an empty selection, while more than one immediate MC
+fallback is invalid.
+
+The captured `raw_xml` subtree is the only serialisation source. The selected
+fallback is a read-only rendering view and is never written back in place of
+the producer XML, so choices, comments, processing instructions, attributes,
+entities, whitespace, and fallback content remain byte-identical.
 
 `CT_ConnectionShape` types the connector's required `p:spPr` and its optional
 start and end connections. Each present `a:stCxn` or `a:endCxn` carries the
@@ -106,6 +123,10 @@ through `oxml_core::raw_xml::capture_element`.
 Preserved as opaque bytes in v1: `p:timing`, `p:transition`, `p:custShowLst`,
 `p14:sectionLst`, comments, ink, `p:contentPart`, SmartArt `dgm:` payloads, OLE
 and ActiveX, and every `mc:AlternateContent` alternative.
+
+An `mc:AlternateContent` model may inspect its selected fallback, but the full
+captured subtree remains opaque for serialisation and round-trips
+byte-identically.
 
 The gate on this is a full-corpus round-trip: parse, serialise, reparse, compare
 structurally, and separately compare the saved package part-by-part against the
