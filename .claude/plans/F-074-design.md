@@ -1,6 +1,6 @@
 # F-074, DrawingML tables
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S17
 **Size**: L
 **Depends on**: F-064
@@ -82,6 +82,12 @@ unmodelled attributes and subtrees are preserved at their schema boundary.
 This includes unsupported table and cell styling without attempting to render
 it.
 
+The public grid contract stores widths without column identities. When an edit
+makes association of preserved per-column metadata ambiguous, `to_xml` returns
+a typed error instead of silently attaching metadata to the wrong column. This
+is the approved API's safe behavior for combined reorder, insertion, deletion,
+and width edits.
+
 The worker adds focused model tests in the new module and extends the existing
 `rpptx-oxml/tests/integration.rs` binary to extract every `a:tbl` payload from
 the pinned corpus, parse it as `CT_Table`, serialise it, and compare the
@@ -141,15 +147,15 @@ development crates and does not modify the released Word path.
 
 ## Implementation checklist
 
-- [ ] Add and export the DrawingML table module and concrete schema types.
-- [ ] Parse and write table properties, style id, grid widths, rows, and cells.
-- [ ] Retain merge-origin spans and horizontal and vertical continuation flags.
-- [ ] Reuse `CT_TextBody` for cell text and preserve unsupported table styling.
-- [ ] Add focused schema-order, prefix, merge, banding, and preservation tests.
-- [ ] Add the all-corpus table round-trip gate to the existing integration test binary.
-- [ ] Update the approved HLD impact file to describe the shipped table model.
-- [ ] Confirm all PowerPoint development crates remain version 0.0.0 and unpublished.
-- [ ] Confirm all 28 deterministic hashes remain unchanged.
+- [x] Add and export the DrawingML table module and concrete schema types.
+- [x] Parse and write table properties, style id, grid widths, rows, and cells.
+- [x] Retain merge-origin spans and horizontal and vertical continuation flags.
+- [x] Reuse `CT_TextBody` for cell text and preserve unsupported table styling.
+- [x] Add focused schema-order, prefix, merge, banding, and preservation tests.
+- [x] Add the all-corpus table round-trip gate to the existing integration test binary.
+- [x] Update the approved HLD impact file to describe the shipped table model.
+- [x] Confirm all PowerPoint development crates remain version 0.0.0 and unpublished.
+- [x] Confirm all 28 deterministic hashes remain unchanged.
 
 ## Open questions
 

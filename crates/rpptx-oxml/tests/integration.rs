@@ -6,11 +6,12 @@ use std::process::Command;
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
 use oxml_drawing::color::{ColorMapSlot, ThemeColorSlot};
 use oxml_drawing::shape_props::CT_ShapeProperties;
+use oxml_drawing::table::CT_Table;
 use oxml_drawing::text::CT_TextBody;
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
-use quick_xml::Reader;
-use quick_xml::events::Event;
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::{Reader, XmlVersion};
 use rpptx_oxml::PRESENTATION_PART;
 use rpptx_oxml::namespace::{P_NS, P_PREFIX, R_NS, R_PREFIX};
 use rpptx_oxml::picture::CT_Picture;
@@ -176,6 +177,207 @@ fn code_built_presentation_package_round_trips_without_external_corpus() {
         reopened.get_part(PRESENTATION_PART),
         Some(br#"<p:presentation/>"#.as_slice())
     );
+}
+
+#[test]
+fn every_corpus_drawingml_table_round_trips_structurally() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut coverage = TableCoverage::default();
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, xml) in &package.parts {
+            if !part.ends_with(".xml") {
+                continue;
+            }
+            for extracted in drawingml_tables(xml)
+                .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path))
+            {
+                let table = CT_Table::from_xml_with_inherited_namespaces(
+                    &extracted.xml,
+                    &extracted.inherited_namespaces,
+                )
+                .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                let written = table.to_xml().unwrap();
+                assert_eq!(
+                    table,
+                    CT_Table::from_xml(&written)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path))
+                );
+                coverage.add(&table);
+            }
+        }
+    }
+    assert_eq!(coverage.tables, 26);
+    assert_eq!(coverage.rows, 152);
+    assert_eq!(coverage.cells, 724);
+    assert_eq!(coverage.merge_origins, 21);
+    assert_eq!(coverage.horizontal_continuations, 126);
+    assert_eq!(coverage.vertical_continuations, 9);
+    eprintln!("DrawingML table corpus gate checked {coverage:?}");
+}
+
+#[derive(Debug, Default)]
+struct TableCoverage {
+    tables: usize,
+    rows: usize,
+    cells: usize,
+    merge_origins: usize,
+    horizontal_continuations: usize,
+    vertical_continuations: usize,
+}
+
+impl TableCoverage {
+    fn add(&mut self, table: &CT_Table) {
+        self.tables += 1;
+        self.rows += table.rows.len();
+        for row in &table.rows {
+            self.cells += row.cells.len();
+            for cell in &row.cells {
+                self.merge_origins += usize::from(cell.row_span > 1 || cell.grid_span > 1);
+                self.horizontal_continuations += usize::from(cell.horizontal_merge);
+                self.vertical_continuations += usize::from(cell.vertical_merge);
+            }
+        }
+    }
+}
+
+struct ExtractedTable {
+    xml: Vec<u8>,
+    inherited_namespaces: Vec<(String, String)>,
+}
+
+fn drawingml_tables(xml: &[u8]) -> Result<Vec<ExtractedTable>, String> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut tables = Vec::new();
+    let mut namespace_frames = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                let local_declarations = namespace_declarations(&element)?;
+                if local_name(element.name().as_ref()) == b"tbl"
+                    && element_namespace(
+                        element.name().as_ref(),
+                        &namespace_frames,
+                        &local_declarations,
+                    ) == Some(oxml_drawing::namespace::A_NS)
+                {
+                    tables.push(ExtractedTable {
+                        xml: capture_element(&mut reader, &element)
+                            .map_err(|error| format!("table scan failed: {error}"))?,
+                        inherited_namespaces: effective_namespaces(&namespace_frames),
+                    });
+                } else {
+                    namespace_frames.push(local_declarations);
+                }
+            }
+            Ok(Event::Empty(element)) => {
+                let local_declarations = namespace_declarations(&element)?;
+                if local_name(element.name().as_ref()) == b"tbl"
+                    && element_namespace(
+                        element.name().as_ref(),
+                        &namespace_frames,
+                        &local_declarations,
+                    ) == Some(oxml_drawing::namespace::A_NS)
+                {
+                    tables.push(ExtractedTable {
+                        xml: capture_empty_element(&element)
+                            .map_err(|error| format!("table scan failed: {error}"))?,
+                        inherited_namespaces: effective_namespaces(&namespace_frames),
+                    });
+                }
+            }
+            Ok(Event::End(_)) => {
+                namespace_frames
+                    .pop()
+                    .ok_or_else(|| "namespace stack underflow".to_owned())?;
+            }
+            Ok(Event::Eof) => return Ok(tables),
+            Ok(_) => {}
+            Err(error) => return Err(format!("XML scan failed: {error}")),
+        }
+        buffer.clear();
+    }
+}
+
+fn namespace_declarations(element: &BytesStart<'_>) -> Result<Vec<(String, String)>, String> {
+    let mut declarations = Vec::new();
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| format!("namespace scan failed: {error}"))?;
+        let key = attribute.key.as_ref();
+        let prefix = if key == b"xmlns" {
+            Some("")
+        } else {
+            key.strip_prefix(b"xmlns:")
+                .map(|value| std::str::from_utf8(value))
+                .transpose()
+                .map_err(|error| format!("namespace prefix is not UTF-8: {error}"))?
+        };
+        if let Some(prefix) = prefix {
+            let uri = attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+                .map_err(|error| format!("namespace URI decode failed: {error}"))?
+                .into_owned();
+            declarations.push((prefix.to_owned(), uri));
+        }
+    }
+    Ok(declarations)
+}
+
+fn element_namespace<'a>(
+    name: &[u8],
+    frames: &'a [Vec<(String, String)>],
+    local_declarations: &'a [(String, String)],
+) -> Option<&'a str> {
+    let prefix = name
+        .iter()
+        .position(|byte| *byte == b':')
+        .map_or(&[][..], |position| &name[..position]);
+    let prefix = std::str::from_utf8(prefix).ok()?;
+    local_declarations
+        .iter()
+        .rev()
+        .chain(frames.iter().rev().flat_map(|frame| frame.iter().rev()))
+        .find(|(candidate, _)| candidate == prefix)
+        .map(|(_, uri)| uri.as_str())
+}
+
+fn effective_namespaces(frames: &[Vec<(String, String)>]) -> Vec<(String, String)> {
+    let mut effective = Vec::new();
+    for (prefix, uri) in frames.iter().flatten() {
+        if let Some((_, existing_uri)) = effective
+            .iter_mut()
+            .find(|(existing_prefix, _)| existing_prefix == prefix)
+        {
+            *existing_uri = uri.clone();
+        } else {
+            effective.push((prefix.clone(), uri.clone()));
+        }
+    }
+    effective
+}
+
+#[test]
+fn drawingml_table_extraction_carries_ancestor_namespaces() {
+    let xml = format!(
+        r#"<p:sld xmlns:p="{P_NS}" xmlns:d="{}" xmlns:x="urn:producer" xmlns:a="urn:ancestor-producer"><p:cSld><d:tbl xmlns:a="{}"><d:tblGrid><d:gridCol w="100"/></d:tblGrid><d:tr h="200"><d:tc><x:extension/></d:tc></d:tr></d:tbl><x:tbl/></p:cSld></p:sld>"#,
+        oxml_drawing::namespace::A_NS,
+        oxml_drawing::namespace::A_NS
+    );
+    let extracted = drawingml_tables(xml.as_bytes()).unwrap();
+    assert_eq!(extracted.len(), 1);
+    let table = CT_Table::from_xml_with_inherited_namespaces(
+        &extracted[0].xml,
+        &extracted[0].inherited_namespaces,
+    )
+    .unwrap();
+    let written = table.to_xml().unwrap();
+    let text = std::str::from_utf8(&written).unwrap();
+    assert!(text.contains(r#"xmlns:x="urn:producer""#));
+    assert!(text.contains("<x:extension/>"));
 }
 
 #[test]

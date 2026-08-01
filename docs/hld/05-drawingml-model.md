@@ -32,6 +32,7 @@ rdocx adopts it later through the `From` adapter.
 | `effect.rs` | `a:effectLst`, outer shadow modelled, the rest preserved |
 | `shape_props.rs` | `a:spPr` and the group equivalent |
 | `style_ref.rs` | `a:lnRef`, `a:fillRef`, `a:effectRef`, `a:fontRef` |
+| `table.rs` | `a:tbl`, properties, grid widths, rows, cells, merge spans and continuation flags |
 | `text/` | `a:txBody`, `a:bodyPr`, `a:lstStyle`, `a:p`, `a:pPr`, `a:r`, `a:rPr`, `a:t`, `a:fld`, `a:br`, bullets |
 | `theme.rs` | `CT_OfficeStyleSheet`, read and write, plus `office_default()` |
 
@@ -177,6 +178,26 @@ plain percentage rather than 240ths of a line.
 
 Bullets are `a:buChar`, `a:buAutoNum`, `a:buNone`, with `a:buFont`, `a:buSzPct`
 or `a:buSzPts`, and `a:buClr`.
+
+## Tables
+
+`CT_Table` models optional table properties, the required column grid, and one
+or more rows. Each row retains its stored height and ordered cells. Each cell
+owns an optional `CT_TextBody`, defaults `rowSpan` and `gridSpan` to one, and
+retains `hMerge` and `vMerge` independently. A merge origin is the
+non-continuation cell whose row or grid span is greater than one. Continuation
+cells stay explicit, including cells that continue a two-dimensional merge in
+both directions.
+
+Table properties expose right-to-left order, first and last row and column
+flags, row and column banding, and the optional table style id. Unsupported
+fills, borders, margins, effects, extensions, attributes, and child elements
+remain raw XML at their schema boundary. Writers use fixed `a:` prefixes and
+emit `a:tblPr`, `a:tblGrid`, then `a:tr`, with cell text before cell
+properties. A caller that extracts `a:tbl` from a larger XML part passes the
+ancestor namespace bindings to `from_xml_with_inherited_namespaces`, which
+keeps opaque producer-prefixed content namespace-complete in standalone
+output.
 
 ## Theme
 
