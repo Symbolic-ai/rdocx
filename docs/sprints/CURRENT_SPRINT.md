@@ -28,10 +28,10 @@ PowerPoint development crate.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-071 | Placeholders | M | in-progress | codex |
-| F-072 | Pictures | M | in-progress | codex |
-| F-073 | Graphic frames | M | in-progress | codex |
-| F-074 | DrawingML tables | L | in-progress | codex |
+| F-071 | Placeholders | M | done | - |
+| F-072 | Pictures | M | done | - |
+| F-073 | Graphic frames | M | done | - |
+| F-074 | DrawingML tables | L | done | - |
 
 ## Sequencing note
 

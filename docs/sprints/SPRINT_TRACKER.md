@@ -97,6 +97,10 @@ defended.
 | F-068 | S16 | M | 2 | 1 | 2026-08-01 | Presentation root, sizes, identifiers, and default text style |
 | F-069 | S16 | L | 4 | 1 | 2026-08-01 | Slide, layout, master, colour-map, and text-style models |
 | F-070 | S16 | L | 4 | 1 | 2026-08-01 | Recursive ordered shape tree with opaque child payloads |
+| F-071 | S17 | M | 2 | 1 | 2026-08-01 | Presence-sensitive placeholder keys and typed partial shapes |
+| F-072 | S17 | M | 2 | 1 | 2026-08-01 | Typed pictures with crops, relationships, and placeholders |
+| F-073 | S17 | M | 2 | 1 | 2026-08-01 | Graphic-frame URI dispatch with typed tables and opaque payloads |
+| F-074 | S17 | L | 4 | 1 | 2026-08-01 | DrawingML tables with merges, banding, and preserved content |
 
 ## Velocity
 
