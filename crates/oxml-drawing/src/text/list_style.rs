@@ -29,8 +29,8 @@ pub struct CT_TextListStyle {
 }
 
 impl CT_TextListStyle {
-    /// Parses a complete `a:lstStyle` or PresentationML `defaultTextStyle`
-    /// element with any prefix.
+    /// Parses a complete list-style element with any prefix, including the
+    /// PresentationML wrappers that share this DrawingML content model.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         let mut reader = Reader::from_reader(xml);
         let mut buffer = Vec::new();
@@ -197,7 +197,11 @@ impl CT_TextListStyle {
 }
 
 fn is_list_style_root(name: &[u8]) -> bool {
-    matches_local_name(name, b"lstStyle") || matches_local_name(name, b"defaultTextStyle")
+    matches_local_name(name, b"lstStyle")
+        || matches_local_name(name, b"defaultTextStyle")
+        || matches_local_name(name, b"titleStyle")
+        || matches_local_name(name, b"bodyStyle")
+        || matches_local_name(name, b"otherStyle")
 }
 
 fn list_level(name: &[u8]) -> Result<Option<usize>> {

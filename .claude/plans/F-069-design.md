@@ -1,6 +1,6 @@
 # F-069, Slide, layout and master parts
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S16
 **Size**: L
 **Depends on**: F-064
@@ -91,13 +91,13 @@ sample generation.
 
 ## Implementation checklist
 
-- [ ] Add slide, layout, master, and common-slide-data root models.
-- [ ] Add typed PresentationML colour-map and colour-map-override forms.
-- [ ] Add typed master text styles with ordered raw preservation.
-- [ ] Retain the shape tree as one raw subtree for the F-070 boundary.
-- [ ] Add focused fixtures and corpus-wide structural tests.
-- [ ] Validate required relationship counts through the OPC layer.
-- [ ] Run crate, dependency-tree, prose, and hash checks.
+- [x] Add slide, layout, master, and common-slide-data root models.
+- [x] Add typed PresentationML colour-map and colour-map-override forms.
+- [x] Add typed master text styles with ordered raw preservation.
+- [x] Retain the shape tree as one raw subtree for the F-070 boundary.
+- [x] Add focused fixtures and corpus-wide structural tests.
+- [x] Validate required relationship counts through the OPC layer.
+- [x] Run crate, dependency-tree, prose, and hash checks.
 
 ## Open questions
 

@@ -4,14 +4,17 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
+use oxml_drawing::color::{ColorMapSlot, ThemeColorSlot};
 use oxml_drawing::shape_props::CT_ShapeProperties;
 use oxml_drawing::text::CT_TextBody;
-use oxml_opc::OpcPackage;
+use oxml_opc::relationship::rel_types;
+use oxml_opc::{OpcPackage, content_types};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use rpptx_oxml::PRESENTATION_PART;
 use rpptx_oxml::namespace::{P_NS, P_PREFIX, R_NS, R_PREFIX};
 use rpptx_oxml::presentation::CT_Presentation;
+use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind};
 
 const MANIFEST: &str = include_str!("../../../scripts/pptx-corpus-manifest.tsv");
 const EXPECTED_DECKS: usize = 50;
@@ -502,4 +505,208 @@ fn every_corpus_presentation_part_round_trips_structurally() {
     }
     assert_eq!(presentation_count, EXPECTED_DECKS);
     eprintln!("PresentationML corpus gate checked {presentation_count} presentation parts");
+}
+
+#[test]
+fn slide_layout_and_master_write_their_own_schema_order() {
+    let slide = format!(
+        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><x:transition/><p:cSld><p:spTree/></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr><p:transition/><p:timing/><p:extLst/></p:sld>"#
+    );
+    let layout = format!(
+        r#"<p:sldLayout xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree/></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr><p:hf/><p:timing/><p:transition/><p:extLst/></p:sldLayout>"#
+    );
+    let master = format!(
+        r#"<p:sldMaster xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree/></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst/><p:transition/><p:timing/><p:hf/><p:txStyles><p:titleStyle/><p:bodyStyle/><p:otherStyle/></p:txStyles><p:extLst/></p:sldMaster>"#
+    );
+
+    let written_slide = CT_Slide::from_xml(slide.as_bytes())
+        .unwrap()
+        .to_xml()
+        .unwrap();
+    let written_layout = CT_SlideLayout::from_xml(layout.as_bytes())
+        .unwrap()
+        .to_xml()
+        .unwrap();
+    let written_master = CT_SlideMaster::from_xml(master.as_bytes())
+        .unwrap()
+        .to_xml()
+        .unwrap();
+    assert_order(
+        &written_slide,
+        &[
+            "<x:transition",
+            "<p:cSld",
+            "<p:clrMapOvr",
+            "<p:transition",
+            "<p:timing",
+            "<p:extLst",
+        ],
+    );
+    assert_order(
+        &written_layout,
+        &[
+            "<p:cSld",
+            "<p:clrMapOvr",
+            "<p:hf",
+            "<p:timing",
+            "<p:transition",
+            "<p:extLst",
+        ],
+    );
+    assert_order(
+        &written_master,
+        &[
+            "<p:cSld",
+            "<p:clrMap",
+            "<p:sldLayoutIdLst",
+            "<p:transition",
+            "<p:timing",
+            "<p:hf",
+            "<p:txStyles",
+            "<p:extLst",
+        ],
+    );
+}
+
+#[test]
+fn colour_maps_read_any_prefix_and_preserve_extensions() {
+    let xml = format!(
+        r#"<q:sld xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><q:cSld><q:spTree/></q:cSld><q:clrMapOvr x:keep="yes"><x:before/><d:overrideClrMapping bg1="dk1" tx1="lt1" bg2="dk2" tx2="lt2" accent1="accent6" accent2="accent5" accent3="accent4" accent4="accent3" accent5="accent2" accent6="accent1" hlink="folHlink" folHlink="hlink" x:map="kept"><x:ext/></d:overrideClrMapping><x:after/></q:clrMapOvr></q:sld>"#
+    );
+    let parsed = CT_Slide::from_xml(xml.as_bytes()).unwrap();
+    let override_map = parsed.color_map_override.as_ref().unwrap();
+    let ColorMapOverrideKind::Override(map) = &override_map.kind else {
+        panic!("expected an override colour map");
+    };
+    assert_eq!(
+        map.theme_slot(ColorMapSlot::Background1),
+        ThemeColorSlot::Dark1
+    );
+    assert_eq!(
+        map.theme_slot(ColorMapSlot::Accent1),
+        ThemeColorSlot::Accent6
+    );
+    let written = parsed.to_xml().unwrap();
+    let text = std::str::from_utf8(&written).unwrap();
+    assert!(text.contains("<p:clrMapOvr x:keep=\"yes\"><x:before/><a:overrideClrMapping"));
+    assert!(text.contains("x:map=\"kept\""));
+    assert!(text.contains("<x:ext/></a:overrideClrMapping><x:after/>"));
+    assert_eq!(parsed, CT_Slide::from_xml(&written).unwrap());
+}
+
+#[test]
+fn common_slide_data_preserves_the_shape_tree_until_f070() {
+    let shape_tree = r#"<q:spTree marker="a &amp; b"><q:nvGrpSpPr/><x:producer xmlns:x="urn:producer"><x:data/></x:producer></q:spTree>"#;
+    let xml = format!(
+        r#"<q:sld xmlns:q="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><q:cSld name="Named"><q:bg><q:bgPr/></q:bg>{shape_tree}<q:extLst/></q:cSld></q:sld>"#
+    );
+    let parsed = CT_Slide::from_xml(xml.as_bytes()).unwrap();
+    assert_eq!(parsed.common_slide_data.name.as_deref(), Some("Named"));
+    assert_eq!(
+        parsed.common_slide_data.shape_tree_xml,
+        shape_tree.as_bytes()
+    );
+    let written = parsed.to_xml().unwrap();
+    assert!(
+        written
+            .windows(shape_tree.len())
+            .any(|window| window == shape_tree.as_bytes())
+    );
+    assert_eq!(parsed, CT_Slide::from_xml(&written).unwrap());
+}
+
+#[test]
+fn every_corpus_slide_layout_and_master_round_trips_structurally() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut counts = [0usize; 3];
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, content_type) in &package.content_types.overrides {
+            if !package.parts.contains_key(part) {
+                continue;
+            }
+            let xml = package
+                .get_part(part)
+                .unwrap_or_else(|| panic!("{} {part}: missing part", entry.path));
+            match content_type.as_str() {
+                content_types::SLIDE => {
+                    let parsed = CT_Slide::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                    let written = parsed.to_xml().unwrap();
+                    assert_eq!(parsed, CT_Slide::from_xml(&written).unwrap());
+                    counts[0] += 1;
+                }
+                content_types::SLIDE_LAYOUT => {
+                    let parsed = CT_SlideLayout::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                    let written = parsed.to_xml().unwrap();
+                    assert_eq!(parsed, CT_SlideLayout::from_xml(&written).unwrap());
+                    counts[1] += 1;
+                }
+                content_types::SLIDE_MASTER => {
+                    let parsed = CT_SlideMaster::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                    let written = parsed.to_xml().unwrap();
+                    assert_eq!(parsed, CT_SlideMaster::from_xml(&written).unwrap());
+                    counts[2] += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(
+        counts.iter().all(|count| *count > 0),
+        "part counts: {counts:?}"
+    );
+    eprintln!("PresentationML corpus gate checked {counts:?} slide, layout, and master parts");
+}
+
+#[test]
+fn corpus_part_relationship_counts_are_valid() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, content_type) in &package.content_types.overrides {
+            if !package.parts.contains_key(part) {
+                continue;
+            }
+            let required_type = match content_type.as_str() {
+                content_types::SLIDE => Some(rel_types::SLIDE_LAYOUT),
+                content_types::SLIDE_LAYOUT => Some(rel_types::SLIDE_MASTER),
+                content_types::SLIDE_MASTER => Some(rel_types::THEME),
+                _ => None,
+            };
+            let Some(required_type) = required_type else {
+                continue;
+            };
+            let count = package
+                .get_part_rels(part)
+                .map(|rels| {
+                    rels.items
+                        .iter()
+                        .filter(|rel| rel.rel_type == required_type)
+                        .count()
+                })
+                .unwrap_or(0);
+            assert_eq!(count, 1, "{} {part}: {required_type}", entry.path);
+        }
+    }
+}
+
+fn assert_order(xml: &[u8], tags: &[&str]) {
+    let text = std::str::from_utf8(xml).unwrap();
+    let positions: Vec<_> = tags
+        .iter()
+        .map(|tag| {
+            text.find(tag)
+                .unwrap_or_else(|| panic!("missing {tag}: {text}"))
+        })
+        .collect();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
 }
