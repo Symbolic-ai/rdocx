@@ -22,7 +22,7 @@ regenerated, never hand-edited.
 | M4, Layout primitives                       | 8  | 8 | 0 | 0  |
 | M5, PDF backend                             | 9  | 9 | 0 | 0  |
 | M6, Shared publication and rdocx cutover     | 6  | 0 | 0 | 6  |
-| M7, DrawingML                               | 19 | 9 | 1 | 9  |
+| M7, DrawingML                               | 19 | 9 | 2 | 8  |
 | M8, PresentationML                          | 14 | 0 | 0 | 14 |
 | M9, Inheritance resolver                    | 8  | 0 | 0 | 8  |
 | M10, Renderer                               | 16 | 0 | 0 | 16 |
@@ -30,7 +30,7 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **154** | **49** | **1** | **104** |
+| **Total** | **154** | **49** | **2** | **103** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -143,7 +143,7 @@ regenerated, never hand-edited.
 | F-059 | a:custGeom                                   | S13 | M | done |
 | F-060 | Fills                                        | S13 | L | done |
 | F-061 | Lines                                        | S14 | M | in-progress |
-| F-062 | Effects                                      | S14 | S | pending |
+| F-062 | Effects                                      | S14 | S | in-progress |
 | F-063 | Shape properties and style references        | S14 | M | pending |
 | F-064 | DrawingML text model                         | S14 | XL | pending |
 | F-064a | Text body properties and shell               | S14 | M | pending |
