@@ -8,6 +8,7 @@ use oxml_core::xml::{get_attr, local_name, matches_local_name};
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
+use crate::namespace::reject_conflicting_a_prefix;
 use crate::order::OrderedRawChildren;
 
 /// Errors produced while parsing or writing DrawingML colours.
@@ -440,6 +441,7 @@ pub enum ColorChoice {
 impl ColorChoice {
     /// Parses a colour after the caller has consumed its start event.
     pub fn from_xml(reader: &mut Reader<&[u8]>, start: &BytesStart<'_>) -> Result<Self> {
+        reject_conflicting_a_prefix(start)?;
         let qualified_name = start.name();
         let element_name = local_name(qualified_name.as_ref());
         let (transforms, raw_children) = capture_children(reader, element_name)?;
@@ -448,6 +450,7 @@ impl ColorChoice {
 
     /// Parses a colour from a self-closing element.
     pub fn from_empty_xml(start: &BytesStart<'_>) -> Result<Self> {
+        reject_conflicting_a_prefix(start)?;
         Self::from_parts(start, Vec::new(), OrderedRawChildren::default())
     }
 
@@ -673,6 +676,7 @@ fn capture_children(
                 let transform = ColorTransform::from_xml(&element)?;
                 let raw = capture_element(reader, &element)?;
                 if let Some(transform) = transform.filter(|_| is_explicit_empty_element(&raw)) {
+                    reject_conflicting_a_prefix(&element)?;
                     transforms.push(transform);
                 } else {
                     raw_children.push(transforms.len(), raw);
@@ -680,6 +684,7 @@ fn capture_children(
             }
             Event::Empty(element) => {
                 if let Some(transform) = ColorTransform::from_xml(&element)? {
+                    reject_conflicting_a_prefix(&element)?;
                     transforms.push(transform);
                 } else {
                     raw_children.push(transforms.len(), capture_empty_element(&element)?);

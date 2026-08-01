@@ -278,6 +278,32 @@ mod tests {
     }
 
     #[test]
+    fn list_style_rejects_fixed_prefix_rebinding_at_typed_descendants() {
+        let descendants: &[&[u8]] = &[
+            br#"<d:defRPr xmlns:a="urn:producer"/>"#,
+            br#"<d:spcBef xmlns:a="urn:producer"><d:spcPts val="600"/></d:spcBef>"#,
+            br#"<d:spcBef><d:spcPts xmlns:a="urn:producer" val="600"/></d:spcBef>"#,
+            br#"<d:buChar xmlns:a="urn:producer" char="*"/>"#,
+            br#"<d:buClr xmlns:a="urn:producer"><d:srgbClr val="102030"/></d:buClr>"#,
+            br#"<d:buClr><d:srgbClr xmlns:a="urn:producer" val="102030"/></d:buClr>"#,
+            br#"<d:defRPr><d:solidFill xmlns:a="urn:producer"><d:srgbClr val="102030"/></d:solidFill></d:defRPr>"#,
+            br#"<d:defRPr><d:solidFill><d:srgbClr xmlns:a="urn:producer" val="102030"/></d:solidFill></d:defRPr>"#,
+            br#"<d:defRPr><d:solidFill><d:srgbClr val="102030"><d:alpha xmlns:a="urn:producer" val="50000"/></d:srgbClr></d:solidFill></d:defRPr>"#,
+        ];
+
+        for descendant in descendants {
+            let mut xml = br#"<p:defaultTextStyle xmlns:p="urn:presentation" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><d:lvl1pPr>"#.to_vec();
+            xml.extend_from_slice(descendant);
+            xml.extend_from_slice(br#"</d:lvl1pPr></p:defaultTextStyle>"#);
+            assert!(
+                CT_TextListStyle::from_xml(&xml).is_err(),
+                "typed descendant accepted a conflicting xmlns:a: {}",
+                String::from_utf8_lossy(descendant)
+            );
+        }
+    }
+
+    #[test]
     fn opaque_list_style_child_preserves_its_local_prefix_binding() {
         let opaque = br#"<x:extension xmlns:x="urn:extension" xmlns:a="urn:producer"><a:data/></x:extension>"#;
         let xml = br#"<p:defaultTextStyle xmlns:p="urn:presentation" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><x:extension xmlns:x="urn:extension" xmlns:a="urn:producer"><a:data/></x:extension><d:lvl1pPr/></p:defaultTextStyle>"#;
@@ -288,6 +314,26 @@ mod tests {
                 .windows(opaque.len())
                 .any(|window| window == opaque.as_slice())
         );
+    }
+
+    #[test]
+    fn opaque_typed_descendants_preserve_their_local_prefix_bindings() {
+        let character_extension = br#"<x:extension xmlns:x="urn:extension" xmlns:a="urn:producer"><a:data/></x:extension>"#;
+        let transform_with_content =
+            br#"<d:alpha xmlns:a="urn:producer" val="50000"><a:data/></d:alpha>"#;
+        let xml = br#"<p:defaultTextStyle xmlns:p="urn:presentation" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><d:lvl1pPr><d:defRPr><x:extension xmlns:x="urn:extension" xmlns:a="urn:producer"><a:data/></x:extension><d:solidFill><d:srgbClr val="102030"><d:alpha xmlns:a="urn:producer" val="50000"><a:data/></d:alpha></d:srgbClr></d:solidFill></d:defRPr></d:lvl1pPr></p:defaultTextStyle>"#;
+
+        let written = CT_TextListStyle::from_xml(xml).unwrap().to_xml().unwrap();
+        for opaque in [
+            character_extension.as_slice(),
+            transform_with_content.as_slice(),
+        ] {
+            assert!(
+                written.windows(opaque.len()).any(|window| window == opaque),
+                "opaque descendant was not preserved: {}",
+                String::from_utf8_lossy(opaque)
+            );
+        }
     }
 
     #[test]

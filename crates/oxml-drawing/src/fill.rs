@@ -9,6 +9,7 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::color::{ColorChoice, ColorError};
+use crate::namespace::reject_conflicting_a_prefix;
 use crate::order::OrderedRawChildren;
 
 /// Errors produced while parsing or writing DrawingML fills.
@@ -117,6 +118,7 @@ impl Fill {
 
     /// Parses a fill after the caller has consumed its start event.
     pub fn from_element(reader: &mut Reader<&[u8]>, start: &BytesStart<'_>) -> Result<Self> {
+        reject_conflicting_a_prefix(start)?;
         match local_name(start.name().as_ref()) {
             b"noFill" => Ok(Self::NoFill(NoFill::from_element(reader, start)?)),
             b"solidFill" => Ok(Self::Solid(SolidFill::from_element(reader, start)?)),
@@ -129,6 +131,7 @@ impl Fill {
 
     /// Parses a self-closing fill element.
     pub fn from_empty_element(start: &BytesStart<'_>) -> Result<Self> {
+        reject_conflicting_a_prefix(start)?;
         match local_name(start.name().as_ref()) {
             b"noFill" => Ok(Self::NoFill(NoFill::default())),
             b"solidFill" => Ok(Self::Solid(SolidFill::default())),
@@ -233,6 +236,7 @@ pub struct GradientStop {
 
 impl GradientStop {
     fn from_element(reader: &mut Reader<&[u8]>, start: &BytesStart<'_>) -> Result<Self> {
+        reject_conflicting_a_prefix(start)?;
         let position = required_i32(start, b"pos")?;
         validate_gradient_position(position)?;
         let mut stop = Self {
@@ -245,6 +249,7 @@ impl GradientStop {
     }
 
     fn from_empty(start: &BytesStart<'_>) -> Result<Self> {
+        reject_conflicting_a_prefix(start)?;
         let position = required_i32(start, b"pos")?;
         validate_gradient_position(position)?;
         Ok(Self {
@@ -346,6 +351,7 @@ pub struct GradientFill {
 
 impl GradientFill {
     fn from_start(start: &BytesStart<'_>) -> Result<Self> {
+        reject_conflicting_a_prefix(start)?;
         Ok(Self {
             flip: optional_token(start, b"flip", &["none", "x", "y", "xy"])?,
             rotate_with_shape: optional_bool(start, b"rotWithShape")?,
@@ -363,6 +369,7 @@ impl GradientFill {
                 .map_err(OxmlError::from)?
             {
                 Event::Start(element) if matches_local_name(element.name().as_ref(), b"gsLst") => {
+                    reject_conflicting_a_prefix(&element)?;
                     fill.read_stop_list(reader)?;
                     boundary = 1;
                 }
@@ -503,6 +510,7 @@ pub struct PatternFill {
 
 impl PatternFill {
     fn from_start(start: &BytesStart<'_>) -> Result<Self> {
+        reject_conflicting_a_prefix(start)?;
         Ok(Self {
             preset: get_attr(start, b"prst"),
             ..Self::default()
@@ -519,19 +527,23 @@ impl PatternFill {
                 .map_err(OxmlError::from)?
             {
                 Event::Start(element) if matches_local_name(element.name().as_ref(), b"fgClr") => {
+                    reject_conflicting_a_prefix(&element)?;
                     (fill.foreground, fill.foreground_raw_children) =
                         parse_color_container(reader, b"fgClr")?;
                     boundary = 1;
                 }
                 Event::Start(element) if matches_local_name(element.name().as_ref(), b"bgClr") => {
+                    reject_conflicting_a_prefix(&element)?;
                     (fill.background, fill.background_raw_children) =
                         parse_color_container(reader, b"bgClr")?;
                     boundary = 2;
                 }
                 Event::Empty(element) if matches_local_name(element.name().as_ref(), b"fgClr") => {
+                    reject_conflicting_a_prefix(&element)?;
                     boundary = 1
                 }
                 Event::Empty(element) if matches_local_name(element.name().as_ref(), b"bgClr") => {
+                    reject_conflicting_a_prefix(&element)?;
                     boundary = 2
                 }
                 Event::Start(element) => fill
@@ -667,6 +679,7 @@ pub struct BlipFill {
 
 impl BlipFill {
     fn from_start(start: &BytesStart<'_>) -> Result<Self> {
+        reject_conflicting_a_prefix(start)?;
         Ok(Self {
             dpi: optional_parse(start, b"dpi")?,
             rotate_with_shape: optional_bool(start, b"rotWithShape")?,
@@ -684,10 +697,12 @@ impl BlipFill {
                 .map_err(OxmlError::from)?
             {
                 Event::Start(element) if matches_local_name(element.name().as_ref(), b"blip") => {
+                    reject_conflicting_a_prefix(&element)?;
                     fill.blip = Some(Blip::from_element(reader, &element)?);
                     boundary = 1;
                 }
                 Event::Empty(element) if matches_local_name(element.name().as_ref(), b"blip") => {
+                    reject_conflicting_a_prefix(&element)?;
                     fill.blip = Some(Blip::from_start(&element));
                     boundary = 1;
                 }
@@ -706,12 +721,14 @@ impl BlipFill {
                 Event::Start(element)
                     if matches_local_name(element.name().as_ref(), b"stretch") =>
                 {
+                    reject_conflicting_a_prefix(&element)?;
                     fill.mode = Some(parse_stretch(reader)?);
                     boundary = 3;
                 }
                 Event::Empty(element)
                     if matches_local_name(element.name().as_ref(), b"stretch") =>
                 {
+                    reject_conflicting_a_prefix(&element)?;
                     fill.mode = Some(BlipMode::Stretch {
                         fill_rect: None,
                         raw_children: OrderedRawChildren::default(),
@@ -782,6 +799,7 @@ impl BlipFill {
 }
 
 fn parse_linear(start: &BytesStart<'_>) -> Result<LinearGradient> {
+    reject_conflicting_a_prefix(start)?;
     Ok(LinearGradient {
         angle: Angle(required_i32(start, b"ang")?),
         scaled: optional_bool(start, b"scaled")?,
@@ -799,6 +817,7 @@ fn parse_linear_element(
 }
 
 fn parse_empty_path(start: &BytesStart<'_>) -> Result<PathGradient> {
+    reject_conflicting_a_prefix(start)?;
     let value = required_attr(start, b"path")?;
     let kind = PathGradientKind::parse(&value).ok_or_else(|| invalid(start, b"path", value))?;
     Ok(PathGradient {
@@ -908,6 +927,7 @@ fn parse_stretch(reader: &mut Reader<&[u8]>) -> Result<BlipMode> {
 }
 
 fn parse_empty_tile(start: &BytesStart<'_>) -> Result<Tile> {
+    reject_conflicting_a_prefix(start)?;
     Ok(Tile {
         translation_x: optional_parse(start, b"tx")?,
         translation_y: optional_parse(start, b"ty")?,
@@ -979,6 +999,7 @@ fn write_blip_mode<W: Write>(writer: &mut Writer<W>, mode: &BlipMode) -> Result<
 }
 
 fn parse_rect(start: &BytesStart<'_>) -> Result<RelativeRect> {
+    reject_conflicting_a_prefix(start)?;
     Ok(RelativeRect {
         left: optional_parse::<i32>(start, b"l")?.map(Percent1000),
         top: optional_parse::<i32>(start, b"t")?.map(Percent1000),
