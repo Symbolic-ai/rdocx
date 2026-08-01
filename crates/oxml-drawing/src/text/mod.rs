@@ -278,6 +278,19 @@ mod tests {
     }
 
     #[test]
+    fn opaque_list_style_child_preserves_its_local_prefix_binding() {
+        let opaque = br#"<x:extension xmlns:x="urn:extension" xmlns:a="urn:producer"><a:data/></x:extension>"#;
+        let xml = br#"<p:defaultTextStyle xmlns:p="urn:presentation" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><x:extension xmlns:x="urn:extension" xmlns:a="urn:producer"><a:data/></x:extension><d:lvl1pPr/></p:defaultTextStyle>"#;
+        let parsed = CT_TextListStyle::from_xml(xml).unwrap();
+        let written = parsed.to_xml().unwrap();
+        assert!(
+            written
+                .windows(opaque.len())
+                .any(|window| window == opaque.as_slice())
+        );
+    }
+
+    #[test]
     fn invalid_list_levels_return_errors_without_panicking() {
         let cases: &[&[u8]] = &[
             br#"<q:txBody><q:bodyPr/><q:lstStyle><q:lvl0pPr/></q:lstStyle><q:p/></q:txBody>"#,

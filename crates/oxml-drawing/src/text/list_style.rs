@@ -33,7 +33,6 @@ impl CT_TextListStyle {
     /// Parses a complete list-style element with any prefix, including the
     /// PresentationML wrappers that share this DrawingML content model.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
-        reject_conflicting_drawingml_prefixes(xml)?;
         let mut reader = Reader::from_reader(xml);
         let mut buffer = Vec::new();
         loop {
@@ -42,9 +41,11 @@ impl CT_TextListStyle {
                 .map_err(OxmlError::from)?
             {
                 Event::Start(element) if is_list_style_root(element.name().as_ref()) => {
+                    reject_conflicting_drawingml_prefix(&element)?;
                     return Self::from_element(&mut reader, &element);
                 }
                 Event::Empty(element) if is_list_style_root(element.name().as_ref()) => {
+                    reject_conflicting_drawingml_prefix(&element)?;
                     return Self::from_start(&element);
                 }
                 Event::Start(element) | Event::Empty(element) => {
@@ -80,11 +81,17 @@ impl CT_TextListStyle {
             {
                 Event::Start(element) => {
                     let name = local_name(element.name().as_ref()).to_vec();
+                    if list_level(&name)?.is_some() {
+                        reject_conflicting_drawingml_prefix(&element)?;
+                    }
                     let raw = capture_element(reader, &element)?;
                     style.capture_child(&name, raw, &mut boundary)?;
                 }
                 Event::Empty(element) => {
                     let name = local_name(element.name().as_ref()).to_vec();
+                    if list_level(&name)?.is_some() {
+                        reject_conflicting_drawingml_prefix(&element)?;
+                    }
                     let raw = capture_empty_element(&element)?;
                     style.capture_child(&name, raw, &mut boundary)?;
                 }
@@ -198,38 +205,21 @@ impl CT_TextListStyle {
     }
 }
 
-fn reject_conflicting_drawingml_prefixes(xml: &[u8]) -> Result<()> {
-    let mut reader = Reader::from_reader(xml);
-    let mut buffer = Vec::new();
-    loop {
-        match reader
-            .read_event_into(&mut buffer)
-            .map_err(OxmlError::from)?
-        {
-            Event::Start(element) | Event::Empty(element) => {
-                for attribute in element.attributes() {
-                    let attribute = attribute.map_err(OxmlError::from)?;
-                    if attribute.key.as_ref() == b"xmlns:a" {
-                        let value = attribute
-                            .decoded_and_normalized_value(
-                                XmlVersion::Implicit1_0,
-                                element.decoder(),
-                            )
-                            .map_err(OxmlError::from)?;
-                        if value != A_NS {
-                            return Err(TextError::Xml(OxmlError::InvalidValue(
-                                "xmlns:a conflicts with the fixed DrawingML writer namespace"
-                                    .to_owned(),
-                            )));
-                        }
-                    }
-                }
+fn reject_conflicting_drawingml_prefix(element: &BytesStart<'_>) -> Result<()> {
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(OxmlError::from)?;
+        if attribute.key.as_ref() == b"xmlns:a" {
+            let value = attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+                .map_err(OxmlError::from)?;
+            if value != A_NS {
+                return Err(TextError::Xml(OxmlError::InvalidValue(
+                    "xmlns:a conflicts with the fixed DrawingML writer namespace".to_owned(),
+                )));
             }
-            Event::Eof => return Ok(()),
-            _ => {}
         }
-        buffer.clear();
     }
+    Ok(())
 }
 
 fn is_list_style_root(name: &[u8]) -> bool {
