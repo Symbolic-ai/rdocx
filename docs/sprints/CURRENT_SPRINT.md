@@ -32,7 +32,7 @@ split the XL text story into reviewable sub-IDs before implementation.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-061 | Lines | M | pending | - |
+| F-061 | Lines | M | in-progress | codex |
 | F-062 | Effects | S | pending | - |
 | F-064 | DrawingML text model | XL | pending | - |
 | F-064a | Text body properties and shell | M | pending | - |
