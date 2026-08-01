@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,6 +20,7 @@ use rpptx_oxml::notes_parts::{CT_NotesMaster, CT_NotesSlide};
 use rpptx_oxml::picture::CT_Picture;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType, PlaceholderKey};
 use rpptx_oxml::presentation::CT_Presentation;
+use rpptx_oxml::relmap::rewrite_rel_ids;
 use rpptx_oxml::shape_tree::{CT_Shape, CT_ShapeTree, ShapeTreeChild};
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind};
 
@@ -2615,4 +2616,124 @@ fn verify_graphic_frames(
             _ => {}
         }
     }
+}
+
+#[test]
+fn rewrites_relationship_attributes_and_no_other_bytes() {
+    let raw = format!(
+        r#"<x:payload xmlns:x="urn:producer" xmlns:r="{R_NS}" r:embed="rId1" x:keep="rId1"><x:item r:link='rId2'/><x:item r:dm="rId3"/></x:payload>"#
+    );
+    let map = HashMap::from([
+        ("rId1".to_owned(), "rId11".to_owned()),
+        ("rId2".to_owned(), "rId12".to_owned()),
+        ("rId3".to_owned(), "rId13".to_owned()),
+    ]);
+
+    let rewritten = rewrite_rel_ids(raw.as_bytes(), &map).unwrap();
+
+    assert_eq!(
+        rewritten,
+        format!(
+            r#"<x:payload xmlns:x="urn:producer" xmlns:r="{R_NS}" r:embed="rId11" x:keep="rId1"><x:item r:link='rId12'/><x:item r:dm="rId13"/></x:payload>"#
+        )
+        .into_bytes()
+    );
+}
+
+#[test]
+fn relationship_namespace_aliases_and_shadowing_are_respected() {
+    let raw = format!(
+        r#"<p:root xmlns:p="urn:producer" xmlns:rel="{R_NS}" xmlns:r="{R_NS}" rel:embed="rId1"><p:item xmlns:r="urn:shadow" r:link="rId2" rel:dm="rId3"/><p:item r:id="rId4" r:lo="rId&#52;"/></p:root>"#
+    );
+    let map = HashMap::from([
+        ("rId1".to_owned(), "rId11".to_owned()),
+        ("rId2".to_owned(), "rId12".to_owned()),
+        ("rId3".to_owned(), "rId13".to_owned()),
+        ("rId4".to_owned(), "rId14".to_owned()),
+    ]);
+
+    let rewritten = rewrite_rel_ids(raw.as_bytes(), &map).unwrap();
+
+    assert_eq!(
+        rewritten,
+        format!(
+            r#"<p:root xmlns:p="urn:producer" xmlns:rel="{R_NS}" xmlns:r="{R_NS}" rel:embed="rId11"><p:item xmlns:r="urn:shadow" r:link="rId2" rel:dm="rId13"/><p:item r:id="rId14" r:lo="rId14"/></p:root>"#
+        )
+        .into_bytes()
+    );
+}
+
+#[test]
+fn unmapped_and_non_numeric_relationship_values_are_unchanged() {
+    let raw = format!(
+        r#"<x:payload xmlns:x="urn:producer" xmlns:r="{R_NS}" r:id="rId1" r:embed="rIdABC" r:link="rId" r:dm="rId12x" id="rId2" x:id="rId3"/>"#
+    );
+    let map = HashMap::from([
+        ("rId2".to_owned(), "rId20".to_owned()),
+        ("rId3".to_owned(), "rId30".to_owned()),
+        ("rIdABC".to_owned(), "rId40".to_owned()),
+    ]);
+
+    assert_eq!(
+        rewrite_rel_ids(raw.as_bytes(), &map).unwrap(),
+        raw.as_bytes()
+    );
+}
+
+#[test]
+fn comments_processing_instructions_and_attribute_syntax_are_preserved() {
+    let raw = format!(
+        "<?producer keep?><x:payload  xmlns:x='urn:producer' xmlns:r=\"{R_NS}\"\n r:embed = 'rId1' x:keep=\"a &amp; b\"><!-- keep --><x:item r:link=\"rId2\" /></x:payload>"
+    );
+    let map = HashMap::from([
+        ("rId1".to_owned(), "rId&amp;'\"".to_owned()),
+        ("rId2".to_owned(), "rId22".to_owned()),
+    ]);
+
+    let rewritten = rewrite_rel_ids(raw.as_bytes(), &map).unwrap();
+
+    assert_eq!(
+        rewritten,
+        format!(
+            "<?producer keep?><x:payload  xmlns:x='urn:producer' xmlns:r=\"{R_NS}\"\n r:embed = 'rId&amp;amp;&apos;&quot;' x:keep=\"a &amp; b\"><!-- keep --><x:item r:link=\"rId22\" /></x:payload>"
+        )
+        .into_bytes()
+    );
+}
+
+#[test]
+fn malformed_preserved_xml_returns_an_error() {
+    for raw in [
+        br#"<x:payload xmlns:x="urn:producer">"#.as_slice(),
+        br#"<x:payload xmlns:x="urn:producer"><x:item></x:payload>"#.as_slice(),
+        br#"<x:payload xmlns:x="urn:producer" bad="unterminated/>"#.as_slice(),
+    ] {
+        assert!(rewrite_rel_ids(raw, &HashMap::new()).is_err());
+    }
+}
+
+#[test]
+fn every_corpus_preserved_payload_is_identity_with_an_empty_map() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut xml_parts = 0usize;
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, raw) in &package.parts {
+            if !part.ends_with(".xml") {
+                continue;
+            }
+            assert_eq!(
+                rewrite_rel_ids(raw, &HashMap::new())
+                    .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path)),
+                *raw,
+                "{} {part}",
+                entry.path
+            );
+            xml_parts += 1;
+        }
+    }
+    assert!(xml_parts > 0);
 }

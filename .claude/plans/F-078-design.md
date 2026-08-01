@@ -1,6 +1,6 @@
 # F-078, relmap rewrite_rel_ids
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S18
 **Size**: M
 **Depends on**: F-067
@@ -21,7 +21,7 @@ processing instructions and violate the preservation contract.
 
 ## Spec reference
 
-- `docs/hld/04-opc-and-packaging.md`, "Preservation discipline".
+- `docs/hld/04-opc-and-packaging.md`, "Relationship types".
 - `docs/hld/06-presentationml-model.md`, "Preservation strategy" and
   "Relationship remapping".
 - `docs/hld/12-testing-strategy.md`, "Unit tests" and "The deck corpus".
@@ -105,14 +105,14 @@ PowerPoint development model and has no Word rendering path.
 
 ## Implementation checklist
 
-- [ ] Add and export the relationship remapping module.
-- [ ] Resolve relationship attributes by namespace URI with nested scope.
-- [ ] Rewrite mapped numeric relationship ids by replacing value byte ranges.
-- [ ] Preserve every other source byte and return errors for malformed XML.
-- [ ] Add focused namespace, preservation, and error tests.
-- [ ] Add the required pinned-corpus identity coverage.
-- [ ] Confirm every PowerPoint development crate remains version 0.0.0 and unpublished.
-- [ ] Confirm all deterministic hashes remain unchanged.
+- [x] Add and export the relationship remapping module.
+- [x] Resolve relationship attributes by namespace URI with nested scope.
+- [x] Rewrite mapped numeric relationship ids by replacing value byte ranges.
+- [x] Preserve every other source byte and return errors for malformed XML.
+- [x] Add focused namespace, preservation, and error tests.
+- [x] Add the required pinned-corpus identity coverage.
+- [x] Confirm every PowerPoint development crate remains version 0.0.0 and unpublished.
+- [x] Confirm all deterministic hashes remain unchanged.
 
 ## Open questions
 

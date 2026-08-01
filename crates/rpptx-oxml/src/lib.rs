@@ -7,6 +7,7 @@ pub mod notes_parts;
 pub mod picture;
 pub mod placeholder;
 pub mod presentation;
+pub mod relmap;
 pub mod shape_tree;
 pub mod slide_parts;
 
