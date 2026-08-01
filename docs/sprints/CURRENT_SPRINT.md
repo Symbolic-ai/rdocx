@@ -33,7 +33,7 @@ rendered contract verbatim.
 | F-067 | Create rpptx-oxml and the corpus harness | M | in-progress | codex |
 | F-068 | presentation.xml | M | in-progress | codex |
 | F-069 | Slide, layout and master parts | L | in-progress | codex |
-| F-070 | The shape tree | L | pending | - |
+| F-070 | The shape tree | L | in-progress | codex |
 
 ## Sequencing note
 
