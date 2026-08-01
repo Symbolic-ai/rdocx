@@ -1,6 +1,6 @@
 # F-061, Lines
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S14
 **Size**: M
 **Depends on**: F-054
@@ -67,11 +67,11 @@ Expected to be unchanged. The unpublished DrawingML model has no Word consumer.
 
 ## Implementation checklist
 
-- [ ] Add failing dash-map, line round-trip, schema-order, and malformed-input tests.
-- [ ] Add line enums, endpoint types, errors, and the total preset dash mapping.
-- [ ] Parse and serialise line properties in schema order.
-- [ ] Preserve unsupported children at their original schema boundaries.
-- [ ] Export the approved module and run focused checks.
+- [x] Add failing dash-map, line round-trip, schema-order, and malformed-input tests.
+- [x] Add line enums, endpoint types, errors, and the total preset dash mapping.
+- [x] Parse and serialise line properties in schema order.
+- [x] Preserve unsupported children at their original schema boundaries.
+- [x] Export the approved module and run focused checks.
 
 ## Open questions
 

@@ -1,6 +1,7 @@
 pub mod color;
 pub mod fill;
 pub mod geometry;
+pub mod line;
 pub mod namespace;
 pub mod order;
 pub mod xfrm;
