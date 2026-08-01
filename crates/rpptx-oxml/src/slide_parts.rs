@@ -35,7 +35,7 @@ pub struct CT_ColorMapOverride {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CT_CommonSlideData {
     pub name: Option<String>,
     pub background_xml: Option<Vec<u8>>,
@@ -55,7 +55,7 @@ pub struct CT_MasterTextStyles {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CT_Slide {
     pub common_slide_data: CT_CommonSlideData,
     pub color_map_override: Option<CT_ColorMapOverride>,
@@ -64,7 +64,7 @@ pub struct CT_Slide {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CT_SlideLayout {
     pub common_slide_data: CT_CommonSlideData,
     pub color_map_override: Option<CT_ColorMapOverride>,
@@ -73,7 +73,7 @@ pub struct CT_SlideLayout {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CT_SlideMaster {
     pub common_slide_data: CT_CommonSlideData,
     pub color_map: ColorMap,

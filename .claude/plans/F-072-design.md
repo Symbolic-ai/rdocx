@@ -1,6 +1,6 @@
 # F-072, Pictures
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S17
 **Size**: M
 **Depends on**: F-060
@@ -128,15 +128,15 @@ PowerPoint development crates and does not modify the released Word path.
 
 ## Implementation checklist
 
-- [ ] Add and export the typed picture model.
-- [ ] Reuse F-071 placeholder data inside non-visual picture properties.
-- [ ] Expose root-name-aware concrete writers for blip fill and shape properties.
-- [ ] Retain blip-fill root attributes and namespace-qualified relationship ids.
-- [ ] Replace raw picture arms at the root and in recursive groups.
-- [ ] Preserve markup compatibility and unsupported picture content verbatim.
-- [ ] Add focused schema, crop, relationship, preservation, and corpus tests.
-- [ ] Confirm every PowerPoint development crate remains version 0.0.0 and unpublished.
-- [ ] Confirm all 28 deterministic hashes remain unchanged.
+- [x] Add and export the typed picture model.
+- [x] Reuse F-071 placeholder data inside non-visual picture properties.
+- [x] Expose root-name-aware concrete writers for blip fill and shape properties.
+- [x] Retain blip-fill root attributes and namespace-qualified relationship ids.
+- [x] Replace raw picture arms at the root and in recursive groups.
+- [x] Preserve markup compatibility and unsupported picture content verbatim.
+- [x] Add focused schema, crop, relationship, preservation, and corpus tests.
+- [x] Confirm every PowerPoint development crate remains version 0.0.0 and unpublished.
+- [x] Confirm all 28 deterministic hashes remain unchanged.
 
 ## Open questions
 

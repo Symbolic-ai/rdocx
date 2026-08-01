@@ -13,6 +13,7 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 use rpptx_oxml::PRESENTATION_PART;
 use rpptx_oxml::namespace::{P_NS, P_PREFIX, R_NS, R_PREFIX};
+use rpptx_oxml::picture::CT_Picture;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType, PlaceholderKey};
 use rpptx_oxml::presentation::CT_Presentation;
 use rpptx_oxml::shape_tree::{CT_Shape, CT_ShapeTree, ShapeTreeChild};
@@ -793,7 +794,7 @@ fn shape_tree_requires_non_visual_and_group_properties_in_order() {
 fn all_six_child_variants_keep_document_order() {
     let payloads = [
         r#"<p:sp marker="shape"><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp>"#,
-        r#"<p:pic marker="picture"><p:blipFill/></p:pic>"#,
+        r#"<p:pic marker="picture"><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill/><p:spPr/></p:pic>"#,
         r#"<p:graphicFrame marker="frame"><a:graphic/></p:graphicFrame>"#,
         r#"<p:cxnSp marker="connector"><p:spPr/></p:cxnSp>"#,
         r#"<mc:AlternateContent marker="alternate"><mc:Choice Requires="p14"><p:sp/></mc:Choice></mc:AlternateContent>"#,
@@ -828,7 +829,7 @@ fn all_six_child_variants_keep_document_order() {
             "marker=\"alternate\"",
         ],
     );
-    for payload in &payloads[1..] {
+    for payload in &payloads[2..] {
         assert!(
             written
                 .windows(payload.len())
@@ -841,7 +842,7 @@ fn all_six_child_variants_keep_document_order() {
 #[test]
 fn nested_group_shape_tree_round_trips_with_tree_shape_preserved() {
     let xml = format!(
-        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/><p:grpSp><p:nvGrpSpPr/><p:grpSpPr><a:xfrm><a:off x="100" y="200"/><a:ext cx="300" cy="400"/><a:chOff x="10" y="20"/><a:chExt cx="30" cy="40"/></a:xfrm></p:grpSpPr><p:sp marker="outer"><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:grpSp><p:nvGrpSpPr/><p:grpSpPr/><p:pic marker="inner"/></p:grpSp></p:grpSp></p:spTree></p:cSld></p:sld>"#
+        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/><p:grpSp><p:nvGrpSpPr/><p:grpSpPr><a:xfrm><a:off x="100" y="200"/><a:ext cx="300" cy="400"/><a:chOff x="10" y="20"/><a:chExt cx="30" cy="40"/></a:xfrm></p:grpSpPr><p:sp marker="outer"><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:grpSp><p:nvGrpSpPr/><p:grpSpPr/><p:pic marker="inner"><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill/><p:spPr/></p:pic></p:grpSp></p:grpSp></p:spTree></p:cSld></p:sld>"#
     );
     let parsed = CT_Slide::from_xml(xml.as_bytes()).unwrap();
     let ShapeTreeChild::GroupShape(outer) = &parsed.common_slide_data.shape_tree.children[0] else {
@@ -927,6 +928,301 @@ fn count_groups(children: &[ShapeTreeChild]) -> usize {
             _ => 0,
         })
         .sum()
+}
+
+#[test]
+fn cropped_picture_round_trips_with_relationship_and_source_rectangle() {
+    let xml = format!(
+        r#"<p:pic xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="{R_NS}"><p:nvPicPr><p:cNvPr id="7" name="Photo"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill dpi="144"><a:blip r:embed="rId7"/><a:srcRect l="1000" t="2000" r="3000" b="4000"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="1" y="2"/><a:ext cx="3" cy="4"/></a:xfrm></p:spPr></p:pic>"#
+    );
+    let picture = CT_Picture::from_xml(xml.as_bytes()).unwrap();
+    let blip_fill = picture.blip_fill.as_ref().unwrap();
+    assert_eq!(
+        blip_fill.blip.as_ref().unwrap().embed.as_deref(),
+        Some("rId7")
+    );
+    let crop = blip_fill.source_rect.as_ref().unwrap();
+    assert_eq!(crop.left.unwrap().0, 1000);
+    assert_eq!(crop.top.unwrap().0, 2000);
+    assert_eq!(crop.right.unwrap().0, 3000);
+    assert_eq!(crop.bottom.unwrap().0, 4000);
+    let written = picture.to_xml().unwrap();
+    assert_eq!(picture, CT_Picture::from_xml(&written).unwrap());
+}
+
+#[test]
+fn picture_reads_any_prefix_and_writes_fixed_prefixes_in_schema_order() {
+    let xml = format!(
+        r#"<q:pic xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:rel="{R_NS}" xmlns:x="urn:producer"><q:nvPicPr><q:cNvPr id="1" name="Picture"/><q:cNvPicPr/><q:nvPr><q:ph type="pic" idx="3"/></q:nvPr></q:nvPicPr><q:blipFill x:fill-marker="kept"><d:blip rel:embed="rId1"/></q:blipFill><q:spPr><d:solidFill><d:srgbClr val="112233"/></d:solidFill></q:spPr></q:pic>"#
+    );
+    let picture = CT_Picture::from_xml(xml.as_bytes()).unwrap();
+    assert_eq!(picture.placeholder.as_ref().unwrap().idx, Some(3));
+    let written = picture.to_xml().unwrap();
+    let text = std::str::from_utf8(&written).unwrap();
+    assert!(text.starts_with(&format!(r#"<p:pic xmlns:p="{P_NS}""#)));
+    assert!(text.contains(r#"<a:blip r:embed="rId1"/>"#));
+    assert!(text.contains(r#"<p:blipFill x:fill-marker="kept">"#));
+    assert_order(&written, &["<p:nvPicPr", "<p:blipFill", "<p:spPr"]);
+    assert_eq!(picture, CT_Picture::from_xml(&written).unwrap());
+}
+
+#[test]
+fn picture_requires_non_visual_and_shape_properties_in_schema_order() {
+    let invalid = [
+        format!(r#"<p:pic xmlns:p="{P_NS}"><p:spPr/></p:pic>"#),
+        format!(
+            r#"<p:pic xmlns:p="{P_NS}"><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr></p:pic>"#
+        ),
+        format!(
+            r#"<p:pic xmlns:p="{P_NS}"><p:spPr/><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr></p:pic>"#
+        ),
+        format!(
+            r#"<p:pic xmlns:p="{P_NS}"><p:nvPicPr><p:cNvPicPr/><p:cNvPr/><p:nvPr/></p:nvPicPr><p:spPr/></p:pic>"#
+        ),
+        format!(
+            r#"<p:pic xmlns:p="{P_NS}"><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:spPr/><p:blipFill/></p:pic>"#
+        ),
+        format!(
+            r#"<p:pic xmlns:p="{P_NS}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x="urn:producer"><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><mc:AlternateContent><mc:Choice Requires="x"><x:not-a-fill/></mc:Choice></mc:AlternateContent><p:spPr/></p:pic>"#
+        ),
+    ];
+    for xml in invalid {
+        assert!(CT_Picture::from_xml(xml.as_bytes()).is_err(), "{xml}");
+    }
+}
+
+#[test]
+fn picture_preserves_unknown_children_and_alternate_blip_choice_verbatim() {
+    let xml = format!(
+        r#"<q:pic xmlns:q="{P_NS}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:p14="urn:p14" xmlns:x="urn:producer" x:marker="kept"><q:nvPicPr><q:cNvPr/><q:cNvPicPr/><q:nvPr><x:before/><q:ph type="pic"/><x:after/></q:nvPr></q:nvPicPr><mc:AlternateContent><mc:Choice Requires="p14"><q:blipFill x:opaque="yes"/></mc:Choice></mc:AlternateContent><q:spPr/><x:after-properties/><q:style><x:style-data/></q:style><q:extLst><x:extension/></q:extLst></q:pic>"#
+    );
+    let picture = CT_Picture::from_xml(xml.as_bytes()).unwrap();
+    assert!(picture.blip_fill.is_none());
+    assert!(picture.placeholder.is_some());
+    let written = picture.to_xml().unwrap();
+    let text = std::str::from_utf8(&written).unwrap();
+    assert!(text.contains(r#"x:marker="kept""#));
+    assert!(text.contains(r#"<mc:AlternateContent><mc:Choice Requires="p14"><q:blipFill x:opaque="yes"/></mc:Choice></mc:AlternateContent>"#));
+    assert_order(
+        &written,
+        &[
+            "<p:nvPicPr",
+            "<mc:AlternateContent",
+            "<p:spPr",
+            "<x:after-properties",
+            "<q:style",
+            "<q:extLst",
+        ],
+    );
+    assert_eq!(picture, CT_Picture::from_xml(&written).unwrap());
+}
+
+#[test]
+fn qualified_picture_relationship_attributes_are_not_shadowed() {
+    let xml = format!(
+        r#"<p:pic xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="{R_NS}" xmlns:x="urn:not-relationships"><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId1" x:embed="shadow"/></p:blipFill><p:spPr/></p:pic>"#
+    );
+    assert!(CT_Picture::from_xml(xml.as_bytes()).is_err());
+}
+
+#[test]
+fn every_corpus_picture_round_trips_structurally() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut coverage = PictureCoverage::default();
+    let mut raw_pictures = 0usize;
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, content_type) in &package.content_types.overrides {
+            let Some(xml) = package.get_part(part) else {
+                continue;
+            };
+            let part_coverage = match content_type.as_str() {
+                content_types::SLIDE => {
+                    let parsed = CT_Slide::from_xml(xml).unwrap();
+                    let result = verify_pictures(
+                        &parsed.common_slide_data.shape_tree.children,
+                        false,
+                        entry.path,
+                        part,
+                    );
+                    assert_eq!(
+                        parsed,
+                        CT_Slide::from_xml(&parsed.to_xml().unwrap()).unwrap()
+                    );
+                    result
+                }
+                content_types::SLIDE_LAYOUT => {
+                    let parsed = CT_SlideLayout::from_xml(xml).unwrap();
+                    let result = verify_pictures(
+                        &parsed.common_slide_data.shape_tree.children,
+                        false,
+                        entry.path,
+                        part,
+                    );
+                    assert_eq!(
+                        parsed,
+                        CT_SlideLayout::from_xml(&parsed.to_xml().unwrap()).unwrap()
+                    );
+                    result
+                }
+                content_types::SLIDE_MASTER => {
+                    let parsed = CT_SlideMaster::from_xml(xml).unwrap();
+                    let result = verify_pictures(
+                        &parsed.common_slide_data.shape_tree.children,
+                        false,
+                        entry.path,
+                        part,
+                    );
+                    assert_eq!(
+                        parsed,
+                        CT_SlideMaster::from_xml(&parsed.to_xml().unwrap()).unwrap()
+                    );
+                    result
+                }
+                _ => continue,
+            };
+            let part_raw_pictures = count_picture_elements(xml);
+            assert_eq!(
+                part_coverage.typed + part_coverage.opaque,
+                part_raw_pictures,
+                "{} {part}: every picture must be typed or inside a preserved opaque child",
+                entry.path
+            );
+            raw_pictures += part_raw_pictures;
+            coverage.add(part_coverage);
+        }
+    }
+    assert_eq!(raw_pictures, 240);
+    assert_eq!(coverage.typed + coverage.opaque, raw_pictures);
+    assert_eq!(coverage.cropped + coverage.opaque_cropped, 198);
+    assert_eq!(coverage.nested, 98);
+    assert_eq!(coverage.placeholders, 18);
+    assert_eq!(coverage.alternate_blip, 1);
+    assert!(coverage.cropped > 0);
+    assert!(coverage.embedded > 0);
+    assert!(coverage.linked > 0);
+    assert!(coverage.nested > 0);
+    assert!(coverage.placeholders > 0);
+    assert!(coverage.alternate_blip > 0);
+    eprintln!("Picture corpus gate checked {raw_pictures} p:pic elements: {coverage:?}");
+}
+
+#[derive(Debug, Default)]
+struct PictureCoverage {
+    typed: usize,
+    opaque: usize,
+    opaque_cropped: usize,
+    cropped: usize,
+    embedded: usize,
+    linked: usize,
+    nested: usize,
+    placeholders: usize,
+    alternate_blip: usize,
+}
+
+impl PictureCoverage {
+    fn add(&mut self, other: Self) {
+        self.typed += other.typed;
+        self.opaque += other.opaque;
+        self.opaque_cropped += other.opaque_cropped;
+        self.cropped += other.cropped;
+        self.embedded += other.embedded;
+        self.linked += other.linked;
+        self.nested += other.nested;
+        self.placeholders += other.placeholders;
+        self.alternate_blip += other.alternate_blip;
+    }
+}
+
+fn verify_pictures(
+    children: &[ShapeTreeChild],
+    nested: bool,
+    deck: &str,
+    part: &str,
+) -> PictureCoverage {
+    let mut coverage = PictureCoverage::default();
+    for child in children {
+        match child {
+            ShapeTreeChild::Picture(picture) => {
+                let written = picture.to_xml().unwrap();
+                assert_eq!(
+                    picture,
+                    &CT_Picture::from_xml(&written)
+                        .unwrap_or_else(|error| panic!("{deck} {part}: {error}"))
+                );
+                coverage.typed += 1;
+                coverage.nested += usize::from(nested);
+                coverage.placeholders += usize::from(picture.placeholder.is_some());
+                coverage.alternate_blip += usize::from(picture.blip_fill.is_none());
+                if let Some(fill) = &picture.blip_fill {
+                    coverage.cropped += usize::from(fill.source_rect.is_some());
+                    if let Some(blip) = &fill.blip {
+                        coverage.embedded += usize::from(blip.embed.is_some());
+                        coverage.linked += usize::from(blip.link.is_some());
+                    }
+                }
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                coverage.add(verify_pictures(&group.children, true, deck, part));
+            }
+            ShapeTreeChild::GraphicFrame(xml)
+            | ShapeTreeChild::Connector(xml)
+            | ShapeTreeChild::AlternateContent(xml) => {
+                coverage.opaque += count_picture_elements(xml);
+                coverage.opaque_cropped += count_pictures_with_descendant(xml, b"srcRect");
+            }
+            _ => {}
+        }
+    }
+    coverage
+}
+
+fn count_picture_elements(xml: &[u8]) -> usize {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut count = 0usize;
+    loop {
+        match reader.read_event_into(&mut buffer).unwrap() {
+            Event::Start(start) | Event::Empty(start)
+                if local_name(start.name().as_ref()) == b"pic" =>
+            {
+                count += 1;
+            }
+            Event::Eof => return count,
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn count_pictures_with_descendant(xml: &[u8], descendant: &[u8]) -> usize {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut picture_matches = Vec::new();
+    let mut count = 0usize;
+    loop {
+        match reader.read_event_into(&mut buffer).unwrap() {
+            Event::Start(start) if local_name(start.name().as_ref()) == b"pic" => {
+                picture_matches.push(false);
+            }
+            Event::Start(start) | Event::Empty(start)
+                if local_name(start.name().as_ref()) == descendant =>
+            {
+                if let Some(matches) = picture_matches.last_mut() {
+                    *matches = true;
+                }
+            }
+            Event::End(end) if local_name(end.name().as_ref()) == b"pic" => {
+                count += usize::from(picture_matches.pop().unwrap());
+            }
+            Event::Eof => return count,
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 #[test]

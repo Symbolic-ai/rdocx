@@ -12,16 +12,19 @@ use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, root_attributes,
     self_contained_attributes,
 };
+use crate::picture::CT_Picture;
 use crate::placeholder::CT_Placeholder;
 
 pub type Result<T> = std::result::Result<T, OxmlError>;
 type RawAttributes = Vec<(String, String)>;
 
 /// One shape-tree child in document and z-order.
-#[derive(Clone, Debug, Eq, PartialEq)]
+// The public PresentationML model intentionally stores CT_Picture directly.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ShapeTreeChild {
     Shape(CT_Shape),
-    Picture(Vec<u8>),
+    Picture(CT_Picture),
     GraphicFrame(Vec<u8>),
     GroupShape(Box<CT_GroupShape>),
     Connector(Vec<u8>),
@@ -32,10 +35,10 @@ impl ShapeTreeChild {
     fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         match self {
             Self::Shape(shape) => shape.write_xml_internal(writer, false)?,
-            Self::Picture(xml)
-            | Self::GraphicFrame(xml)
-            | Self::Connector(xml)
-            | Self::AlternateContent(xml) => writer.get_mut().write_all(xml)?,
+            Self::Picture(picture) => picture.write_xml_internal(writer, false)?,
+            Self::GraphicFrame(xml) | Self::Connector(xml) | Self::AlternateContent(xml) => {
+                writer.get_mut().write_all(xml)?
+            }
             Self::GroupShape(group) => group.write_xml_internal(writer, false)?,
         }
         Ok(())
@@ -65,7 +68,7 @@ struct ShapeRaw {
 
 /// The recursive group-shape form used inside a shape tree.
 #[allow(non_camel_case_types)]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CT_GroupShape {
     pub children: Vec<ShapeTreeChild>,
     non_visual_group_properties: NonVisualGroupProperties,
@@ -76,7 +79,7 @@ pub struct CT_GroupShape {
 
 /// The ordered `p:spTree` root shared by slides, layouts, and masters.
 #[allow(non_camel_case_types)]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CT_ShapeTree {
     pub children: Vec<ShapeTreeChild>,
     non_visual_group_properties: NonVisualGroupProperties,
@@ -812,7 +815,10 @@ fn capture_group_child(
             &raw,
             &namespaces.entries(),
         )?)),
-        (Some(P_NS), b"pic") => children.push(ShapeTreeChild::Picture(raw)),
+        (Some(P_NS), b"pic") => children.push(ShapeTreeChild::Picture(CT_Picture::from_fragment(
+            &raw,
+            &namespaces.entries(),
+        )?)),
         (Some(P_NS), b"graphicFrame") => {
             children.push(ShapeTreeChild::GraphicFrame(raw));
         }
