@@ -1,0 +1,20 @@
+[package]
+name = "rpptx-oxml"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["pptx", "powerpoint", "ooxml", "presentation"]
+categories = ["parser-implementations", "text-processing"]
+publish = false
+
+[dependencies]
+oxml-core.workspace = true
+oxml-drawing.workspace = true
+oxml-opc.workspace = true
+
+[dev-dependencies]
+quick-xml.workspace = true

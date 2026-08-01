@@ -506,7 +506,11 @@ impl CT_CustomGeometry2D {
                         boundary = boundary.max(5);
                     }
                     b"pathLst" if path_list.is_none() => {
-                        return Err(GeometryError::MissingPathList);
+                        path_list = Some(PathList {
+                            paths: Vec::new(),
+                            raw_children: OrderedRawChildren::default(),
+                        });
+                        boundary = boundary.max(6);
                     }
                     _ => raw_children.push(boundary, capture_empty_element(&element)?),
                 },
@@ -800,9 +804,6 @@ fn parse_path_list(
             _ => {}
         }
         buffer.clear();
-    }
-    if paths.is_empty() {
-        return Err(GeometryError::MissingPathList);
     }
     Ok(PathList {
         paths,
@@ -1843,6 +1844,17 @@ mod tests {
         let rect = written.find("<a:rect").unwrap();
         let paths = written.find("<a:pathLst").unwrap();
         assert!(av < gd && gd < ah && ah < cxn && cxn < rect && rect < paths);
+    }
+
+    #[test]
+    fn empty_custom_geometry_path_list_from_theme_defaults_round_trips() {
+        let geometry = CT_CustomGeometry2D::from_xml(
+            br#"<q:custGeom><q:avLst/><q:gdLst/><q:ahLst/><q:cxnLst/><q:rect l="0" t="0" r="0" b="0"/><q:pathLst/></q:custGeom>"#,
+        )
+        .unwrap();
+        assert!(geometry.paths().is_empty());
+        let written = geometry.to_xml().unwrap();
+        assert_eq!(CT_CustomGeometry2D::from_xml(&written).unwrap(), geometry);
     }
 
     #[test]

@@ -67,6 +67,16 @@ impl TextValue {
                 }
                 Event::GeneralRef(value) => text.value.push_str(&resolve_entity(&value)),
                 Event::End(element) if matches_local_name(element.name().as_ref(), b"t") => {
+                    if text.space == TextSpace::Default
+                        && (text.value.chars().next().is_some_and(char::is_whitespace)
+                            || text
+                                .value
+                                .chars()
+                                .next_back()
+                                .is_some_and(char::is_whitespace))
+                    {
+                        text.space = TextSpace::Preserve;
+                    }
                     return Ok(text);
                 }
                 Event::Start(element) | Event::Empty(element) => {
@@ -454,9 +464,6 @@ impl TextHyperlink {
 
     fn from_start(start: &BytesStart<'_>) -> Result<Self> {
         let relationship_id = text_attr(start, b"r:id")?;
-        if relationship_id.as_deref() == Some("") {
-            return Err(invalid_attribute("hlink", "r:id", ""));
-        }
         Ok(Self {
             relationship_id,
             invalid_url: text_attr(start, b"invalidUrl")?,
@@ -518,9 +525,6 @@ impl TextHyperlink {
     }
 
     fn write_xml<W: Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
-        if self.relationship_id.as_deref() == Some("") {
-            return Err(invalid_attribute(tag, "r:id", ""));
-        }
         let mut start = BytesStart::new(tag);
         push_optional_attr(&mut start, "r:id", self.relationship_id.as_deref());
         push_optional_attr(&mut start, "invalidUrl", self.invalid_url.as_deref());
@@ -1848,7 +1852,7 @@ mod tests {
             panic!("expected regular run");
         };
         assert_eq!(first.text.value, " leading");
-        assert_eq!(first.text.space, TextSpace::Default);
+        assert_eq!(first.text.space, TextSpace::Preserve);
 
         let body = CT_TextBody::from_xml(
             br#"<q:txBody><q:bodyPr/><q:p><q:r><q:t> body </q:t></q:r></q:p></q:txBody>"#,
@@ -1868,6 +1872,27 @@ mod tests {
             hostile.to_xml().unwrap(),
             br#"<a:p><a:r><a:t x:space="preserve">plain</a:t></a:r></a:p>"#
         );
+    }
+
+    #[test]
+    fn canonical_text_state_matches_whitespace_and_empty_hyperlinks_from_real_decks() {
+        let paragraph = CT_TextParagraph::from_xml(
+            br#"<q:p><q:r><q:rPr><q:hlinkClick r:id=""/></q:rPr><q:t>trailing </q:t></q:r></q:p>"#,
+        )
+        .unwrap();
+        let TextRun::Run(run) = &paragraph.runs[0] else {
+            panic!("expected regular run");
+        };
+        assert_eq!(run.text.space, TextSpace::Preserve);
+        assert_eq!(
+            run.properties
+                .as_ref()
+                .and_then(|properties| properties.hyperlink_click.as_ref())
+                .and_then(|hyperlink| hyperlink.relationship_id.as_deref()),
+            Some("")
+        );
+        let written = paragraph.to_xml().unwrap();
+        assert_eq!(CT_TextParagraph::from_xml(&written).unwrap(), paragraph);
     }
 
     #[test]

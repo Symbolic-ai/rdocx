@@ -1,6 +1,6 @@
 # F-067, Create rpptx-oxml and the corpus harness
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S16
 **Size**: M
 **Depends on**: none
@@ -84,6 +84,7 @@ round-trip byte-identically with no XML modelling.
 
 ## HLD impact
 
+- `docs/hld/03-architecture.md`
 - `docs/hld/12-testing-strategy.md`
 - `docs/hld/13-risks-and-open-questions.md`
 
@@ -104,12 +105,20 @@ in Word sample generation or rendering.
 
 ## Implementation checklist
 
-- [ ] Add the unpublished `rpptx-oxml` workspace member and dependency edge.
-- [ ] Add PresentationML namespace constants and the minimal package entry.
-- [ ] Add and validate the pinned 50-deck corpus manifest and fetcher.
-- [ ] Add the opaque corpus round-trip test with precise failure context.
-- [ ] Execute the carried M7 `a:txBody` and `a:spPr` structural gate.
-- [ ] Run the crate, dependency-tree, corpus, prose, and hash checks.
+- [x] Add the unpublished `rpptx-oxml` workspace member and dependency edge.
+- [x] Add PresentationML namespace constants and the minimal package entry.
+- [x] Add and validate the pinned 50-deck corpus manifest and fetcher.
+- [x] Add the opaque corpus round-trip test with precise failure context.
+- [x] Execute the carried M7 `a:txBody` and `a:spPr` structural gate.
+- [x] Run the crate, dependency-tree, corpus, prose, and hash checks.
+
+## Deviations
+
+The corpus gate exposed two small DrawingML canonicalisation gaps. Boundary
+whitespace now parses into the state the writer emits, empty hyperlink
+relationship ids are preserved, and theme-default custom geometry accepts a
+schema-valid empty path list. Focused regressions cover these cases without
+changing public types.
 
 ## Open questions
 
