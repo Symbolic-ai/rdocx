@@ -30,7 +30,7 @@ rendered contract verbatim.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-067 | Create rpptx-oxml and the corpus harness | M | pending | - |
+| F-067 | Create rpptx-oxml and the corpus harness | M | in-progress | codex |
 | F-068 | presentation.xml | M | pending | - |
 | F-069 | Slide, layout and master parts | L | pending | - |
 | F-070 | The shape tree | L | pending | - |
