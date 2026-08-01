@@ -13,6 +13,7 @@ use oxml_opc::{OpcPackage, content_types};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
 use rpptx_oxml::PRESENTATION_PART;
+use rpptx_oxml::graphic_frame::{CT_GraphicFrame, GraphicDataPayload};
 use rpptx_oxml::namespace::{P_NS, P_PREFIX, R_NS, R_PREFIX};
 use rpptx_oxml::picture::CT_Picture;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType, PlaceholderKey};
@@ -990,6 +991,15 @@ fn shape_tree_requires_non_visual_and_group_properties_in_order() {
             "{invalid}"
         );
     }
+
+    let tree_xml = format!(
+        r#"<p:spTree xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><p:nvGrpSpPr/><p:grpSpPr/><p:graphicFrame><p:nvGraphicFramePr/><p:xfrm/><a:graphic><a:graphicData uri="urn:producer"><x:data name="mc"/></a:graphicData></a:graphic></p:graphicFrame></p:spTree>"#
+    );
+    let tree = CT_ShapeTree::from_xml(tree_xml.as_bytes()).unwrap();
+    assert_eq!(
+        tree,
+        CT_ShapeTree::from_xml(&tree.to_xml().unwrap()).unwrap()
+    );
 }
 
 #[test]
@@ -997,7 +1007,7 @@ fn all_six_child_variants_keep_document_order() {
     let payloads = [
         r#"<p:sp marker="shape"><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp>"#,
         r#"<p:pic marker="picture"><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill/><p:spPr/></p:pic>"#,
-        r#"<p:graphicFrame marker="frame"><a:graphic/></p:graphicFrame>"#,
+        r#"<p:graphicFrame marker="frame"><p:nvGraphicFramePr/><p:xfrm/><a:graphic><a:graphicData uri="urn:frame"><x:data/></a:graphicData></a:graphic></p:graphicFrame>"#,
         r#"<p:cxnSp marker="connector"><p:spPr/></p:cxnSp>"#,
         r#"<mc:AlternateContent marker="alternate"><mc:Choice Requires="p14"><p:sp/></mc:Choice></mc:AlternateContent>"#,
     ];
@@ -1031,7 +1041,8 @@ fn all_six_child_variants_keep_document_order() {
             "marker=\"alternate\"",
         ],
     );
-    for payload in &payloads[2..] {
+    assert!(std::str::from_utf8(&written).unwrap().contains("<x:data/>"));
+    for payload in &payloads[3..] {
         assert!(
             written
                 .windows(payload.len())
@@ -1370,9 +1381,12 @@ fn verify_pictures(
             ShapeTreeChild::GroupShape(group) => {
                 coverage.add(verify_pictures(&group.children, true, deck, part));
             }
-            ShapeTreeChild::GraphicFrame(xml)
-            | ShapeTreeChild::Connector(xml)
-            | ShapeTreeChild::AlternateContent(xml) => {
+            ShapeTreeChild::GraphicFrame(frame) => {
+                let xml = frame.to_xml().unwrap();
+                coverage.opaque += count_picture_elements(&xml);
+                coverage.opaque_cropped += count_pictures_with_descendant(&xml, b"srcRect");
+            }
+            ShapeTreeChild::Connector(xml) | ShapeTreeChild::AlternateContent(xml) => {
                 coverage.opaque += count_picture_elements(xml);
                 coverage.opaque_cropped += count_pictures_with_descendant(xml, b"srcRect");
             }
@@ -1613,4 +1627,266 @@ fn verify_shape_placeholders(children: &[ShapeTreeChild], deck: &str, part: &str
             _ => 0,
         })
         .sum()
+}
+
+#[test]
+fn graphic_data_uri_dispatch_recognises_table_chart_smartart_and_ole() {
+    let table =
+        r#"<a:tbl><a:tblGrid><a:gridCol w="100"/></a:tblGrid><a:tr h="200"><a:tc/></a:tr></a:tbl>"#;
+    let chart = r#"<c:chart xmlns:c="urn:chart" r:id="rId1"/>"#;
+    let smartart = r#"<dgm:relIds xmlns:dgm="urn:diagram" r:dm="rId2"/>"#;
+    let ole = r#"<mc:AlternateContent><mc:Choice Requires="p14"><p:oleObj name="object"/></mc:Choice></mc:AlternateContent>"#;
+
+    let table_frame = CT_GraphicFrame::from_xml(
+        graphic_frame_fixture(
+            "http://schemas.openxmlformats.org/drawingml/2006/table",
+            table,
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    let GraphicDataPayload::Table(table) = &table_frame.graphic_data.payload else {
+        panic!("table URI did not select the typed table branch");
+    };
+    assert_eq!(table.grid.columns.len(), 1);
+    assert_eq!(table.rows.len(), 1);
+
+    for (uri, payload, expected) in [
+        (
+            "http://schemas.openxmlformats.org/drawingml/2006/chart",
+            chart,
+            "chart",
+        ),
+        (
+            "http://schemas.openxmlformats.org/drawingml/2006/diagram",
+            smartart,
+            "smartart",
+        ),
+        (
+            "http://schemas.openxmlformats.org/presentationml/2006/ole",
+            ole,
+            "ole",
+        ),
+        ("urn:producer:graphic-data", "<x:payload/>", "other"),
+    ] {
+        let frame =
+            CT_GraphicFrame::from_xml(graphic_frame_fixture(uri, payload).as_bytes()).unwrap();
+        let raw = match (&frame.graphic_data.payload, expected) {
+            (GraphicDataPayload::Chart(raw), "chart")
+            | (GraphicDataPayload::SmartArt(raw), "smartart")
+            | (GraphicDataPayload::Ole(raw), "ole")
+            | (GraphicDataPayload::Other(raw), "other") => raw,
+            (actual, _) => panic!("{uri} selected the wrong branch: {actual:?}"),
+        };
+        assert_eq!(raw, payload.as_bytes());
+        assert_eq!(
+            frame,
+            CT_GraphicFrame::from_xml(&frame.to_xml().unwrap()).unwrap()
+        );
+    }
+}
+
+#[test]
+fn graphic_frame_requires_children_in_schema_order_and_writes_fixed_prefixes() {
+    let xml = format!(
+        r#"<q:graphicFrame xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="urn:chart"><q:nvGraphicFramePr><q:cNvPr id="2" name="Chart"/><q:cNvGraphicFramePr/><q:nvPr/></q:nvGraphicFramePr><q:xfrm rot="60000"><d:off x="10" y="20"/><d:ext cx="30" cy="40"/></q:xfrm><d:graphic><d:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart/></d:graphicData></d:graphic></q:graphicFrame>"#
+    );
+    let frame = CT_GraphicFrame::from_xml(xml.as_bytes()).unwrap();
+    assert_eq!(frame.transform.offset.unwrap().x.0, 10);
+    let written = frame.to_xml().unwrap();
+    let text = std::str::from_utf8(&written).unwrap();
+    assert!(text.starts_with("<p:graphicFrame xmlns:p="));
+    assert_order(
+        &written,
+        &[
+            "<p:nvGraphicFramePr",
+            "<p:xfrm",
+            "<a:off",
+            "<a:graphic",
+            "<a:graphicData",
+        ],
+    );
+    assert_eq!(frame, CT_GraphicFrame::from_xml(&written).unwrap());
+
+    for invalid in [
+        format!(
+            r#"<p:graphicFrame xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:xfrm/><a:graphic><a:graphicData uri="urn:x"><a:x/></a:graphicData></a:graphic></p:graphicFrame>"#
+        ),
+        format!(
+            r#"<p:graphicFrame xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:nvGraphicFramePr/><a:graphic><a:graphicData uri="urn:x"><a:x/></a:graphicData></a:graphic><p:xfrm/></p:graphicFrame>"#
+        ),
+        format!(
+            r#"<p:graphicFrame xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:nvGraphicFramePr/><p:xfrm/></p:graphicFrame>"#
+        ),
+        format!(
+            r#"<p:graphicFrame xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:nvGraphicFramePr/><p:xfrm/><p:xfrm/><a:graphic><a:graphicData uri="urn:x"><a:x/></a:graphicData></a:graphic></p:graphicFrame>"#
+        ),
+    ] {
+        assert!(
+            CT_GraphicFrame::from_xml(invalid.as_bytes()).is_err(),
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
+fn graphic_frame_preserves_unknown_payload_and_extension_xml_byte_for_byte() {
+    let payload = r#"<u:payload xmlns:u="urn:unknown" marker="a &amp; b"><u:data><!--kept--></u:data></u:payload>"#;
+    let xml = format!(
+        r#"<p:graphicFrame xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer" x:frame="kept"><x:before/><!--frame-kept--><p:nvGraphicFramePr x:nv="kept"><!--nv-kept--><x:nv-child/><?nv kept?></p:nvGraphicFramePr><x:between-nv-and-xfrm/><p:xfrm/><x:between-xfrm-and-graphic/><a:graphic x:graphic="kept"><x:graphic-before/><!--graphic-kept--><a:graphicData uri="urn:producer:data" x:data="kept"><!--data-before-->{payload}<?data kept?><x:payload-after/></a:graphicData><x:graphic-after/></a:graphic><x:before-ext/><p:extLst><p:ext uri="kept"><x:extension/></p:ext></p:extLst><x:after/></p:graphicFrame>"#
+    );
+    let frame = CT_GraphicFrame::from_xml(xml.as_bytes()).unwrap();
+    let GraphicDataPayload::Other(actual) = &frame.graphic_data.payload else {
+        panic!("unknown URI did not select the opaque branch");
+    };
+    assert_eq!(actual, payload.as_bytes());
+    let written = frame.to_xml().unwrap();
+    let text = std::str::from_utf8(&written).unwrap();
+    for raw in [
+        "<x:before/>",
+        "<!--frame-kept-->",
+        "<!--nv-kept-->",
+        "<x:nv-child/>",
+        "<?nv kept?>",
+        "<x:between-nv-and-xfrm/>",
+        "<x:between-xfrm-and-graphic/>",
+        "<x:graphic-before/>",
+        "<!--graphic-kept-->",
+        "<!--data-before-->",
+        payload,
+        "<?data kept?>",
+        "<x:payload-after/>",
+        "<x:graphic-after/>",
+        "<x:before-ext/>",
+        "<p:extLst><p:ext uri=\"kept\"><x:extension/></p:ext></p:extLst>",
+        "<x:after/>",
+    ] {
+        assert!(text.contains(raw), "missing {raw}: {text}");
+    }
+    assert_order(
+        &written,
+        &[
+            "<x:before/>",
+            "<p:nvGraphicFramePr",
+            "<x:between-nv-and-xfrm/>",
+            "<p:xfrm",
+            "<x:between-xfrm-and-graphic/>",
+            "<a:graphic",
+            "<x:before-ext/>",
+            "<p:extLst",
+            "<x:after/>",
+        ],
+    );
+    assert_eq!(frame, CT_GraphicFrame::from_xml(&written).unwrap());
+}
+
+#[test]
+fn every_corpus_graphic_frame_round_trips_structurally() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut coverage = GraphicFrameCoverage::default();
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, content_type) in &package.content_types.overrides {
+            let Some(xml) = package.get_part(part) else {
+                continue;
+            };
+            let children = match content_type.as_str() {
+                content_types::SLIDE => {
+                    &CT_Slide::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path))
+                        .common_slide_data
+                        .shape_tree
+                        .children
+                }
+                content_types::SLIDE_LAYOUT => {
+                    &CT_SlideLayout::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path))
+                        .common_slide_data
+                        .shape_tree
+                        .children
+                }
+                content_types::SLIDE_MASTER => {
+                    &CT_SlideMaster::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path))
+                        .common_slide_data
+                        .shape_tree
+                        .children
+                }
+                _ => continue,
+            };
+            verify_graphic_frames(children, entry.path, part, &mut coverage);
+        }
+    }
+    assert_eq!(coverage.tables, 26);
+    assert_eq!(coverage.charts, 26);
+    assert_eq!(coverage.smartart, 18);
+    assert_eq!(coverage.ole, 16);
+    assert_eq!(coverage.other, 0);
+    assert_eq!(coverage.total(), 86);
+    eprintln!("Graphic-frame corpus gate checked {coverage:?}");
+}
+
+const TABLE_GRAPHIC_DATA_URI: &str = "http://schemas.openxmlformats.org/drawingml/2006/table";
+
+fn graphic_frame_fixture(uri: &str, payload: &str) -> String {
+    format!(
+        r#"<p:graphicFrame xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="{R_NS}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x="urn:producer"><p:nvGraphicFramePr/><p:xfrm><a:off x="1" y="2"/><a:ext cx="3" cy="4"/></p:xfrm><a:graphic><a:graphicData uri="{uri}">{payload}</a:graphicData></a:graphic></p:graphicFrame>"#
+    )
+}
+
+#[derive(Debug, Default)]
+struct GraphicFrameCoverage {
+    tables: usize,
+    charts: usize,
+    smartart: usize,
+    ole: usize,
+    other: usize,
+}
+
+impl GraphicFrameCoverage {
+    const fn total(&self) -> usize {
+        self.tables + self.charts + self.smartart + self.ole + self.other
+    }
+}
+
+fn verify_graphic_frames(
+    children: &[ShapeTreeChild],
+    deck: &str,
+    part: &str,
+    coverage: &mut GraphicFrameCoverage,
+) {
+    for child in children {
+        match child {
+            ShapeTreeChild::GraphicFrame(frame) => {
+                let written = frame.to_xml().unwrap();
+                assert_eq!(
+                    frame.as_ref(),
+                    &CT_GraphicFrame::from_xml(&written)
+                        .unwrap_or_else(|error| panic!("{deck} {part}: {error}")),
+                    "{deck} {part}: graphic frame changed"
+                );
+                match &frame.graphic_data.payload {
+                    GraphicDataPayload::Table(table) => {
+                        assert_eq!(frame.graphic_data.uri, TABLE_GRAPHIC_DATA_URI);
+                        assert_eq!(
+                            table.as_ref(),
+                            &CT_Table::from_xml(&table.to_xml().unwrap()).unwrap()
+                        );
+                        coverage.tables += 1;
+                    }
+                    GraphicDataPayload::Chart(_) => coverage.charts += 1,
+                    GraphicDataPayload::SmartArt(_) => coverage.smartart += 1,
+                    GraphicDataPayload::Ole(_) => coverage.ole += 1,
+                    GraphicDataPayload::Other(_) => coverage.other += 1,
+                }
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                verify_graphic_frames(&group.children, deck, part, coverage);
+            }
+            _ => {}
+        }
+    }
 }

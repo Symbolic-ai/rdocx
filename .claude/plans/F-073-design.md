@@ -1,6 +1,6 @@
 # F-073, Graphic frames
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S17
 **Size**: M
 **Depends on**: F-070
@@ -138,15 +138,15 @@ released Word path.
 
 ## Implementation checklist
 
-- [ ] Add and export typed graphic-frame and graphic-data payload types.
-- [ ] Dispatch the four standard kinds by exact `a:graphicData@uri`.
-- [ ] Parse F-074 tables and preserve chart, SmartArt, OLE, and unknown payloads.
-- [ ] Enforce the frame shell and preserve unsupported content in schema slots.
-- [ ] Add the concrete `p:xfrm` writer path to the shared transform type.
-- [ ] Replace raw graphic-frame arms at the root and in recursive groups.
-- [ ] Add focused dispatch, schema, preservation, and all-corpus tests.
-- [ ] Confirm every PowerPoint development crate remains version 0.0.0 and unpublished.
-- [ ] Confirm all 28 deterministic hashes remain unchanged.
+- [x] Add and export typed graphic-frame and graphic-data payload types.
+- [x] Dispatch the four standard kinds by exact `a:graphicData@uri`.
+- [x] Parse F-074 tables and preserve chart, SmartArt, OLE, and unknown payloads.
+- [x] Enforce the frame shell and preserve unsupported content in schema slots.
+- [x] Add the concrete `p:xfrm` writer path to the shared transform type.
+- [x] Replace raw graphic-frame arms at the root and in recursive groups.
+- [x] Add focused dispatch, schema, preservation, and all-corpus tests.
+- [x] Confirm every PowerPoint development crate remains version 0.0.0 and unpublished.
+- [x] Confirm all 28 deterministic hashes remain unchanged.
 
 ## Open questions
 

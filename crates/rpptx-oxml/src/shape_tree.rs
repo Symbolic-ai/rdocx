@@ -8,6 +8,7 @@ use oxml_drawing::xfrm::CT_Transform2D;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
+use crate::graphic_frame::CT_GraphicFrame;
 use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, root_attributes,
     self_contained_attributes,
@@ -25,7 +26,7 @@ type RawAttributes = Vec<(String, String)>;
 pub enum ShapeTreeChild {
     Shape(CT_Shape),
     Picture(CT_Picture),
-    GraphicFrame(Vec<u8>),
+    GraphicFrame(Box<CT_GraphicFrame>),
     GroupShape(Box<CT_GroupShape>),
     Connector(Vec<u8>),
     AlternateContent(Vec<u8>),
@@ -36,7 +37,8 @@ impl ShapeTreeChild {
         match self {
             Self::Shape(shape) => shape.write_xml_internal(writer, false)?,
             Self::Picture(picture) => picture.write_xml_internal(writer, false)?,
-            Self::GraphicFrame(xml) | Self::Connector(xml) | Self::AlternateContent(xml) => {
+            Self::GraphicFrame(frame) => frame.write_xml_internal(writer, false)?,
+            Self::Connector(xml) | Self::AlternateContent(xml) => {
                 writer.get_mut().write_all(xml)?
             }
             Self::GroupShape(group) => group.write_xml_internal(writer, false)?,
@@ -820,7 +822,9 @@ fn capture_group_child(
             &namespaces.entries(),
         )?)),
         (Some(P_NS), b"graphicFrame") => {
-            children.push(ShapeTreeChild::GraphicFrame(raw));
+            children.push(ShapeTreeChild::GraphicFrame(Box::new(
+                CT_GraphicFrame::from_fragment(&raw, &namespaces.entries())?,
+            )));
         }
         (Some(P_NS), b"grpSp") => children.push(ShapeTreeChild::GroupShape(Box::new(
             CT_GroupShape::from_fragment(&raw, &namespaces.entries())?,
