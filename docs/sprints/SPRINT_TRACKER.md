@@ -102,6 +102,10 @@ defended.
 | F-072 | S17 | M | 2 | 1 | 2026-08-01 | Typed pictures with crops, relationships, and placeholders |
 | F-073 | S17 | M | 2 | 1 | 2026-08-01 | Graphic-frame URI dispatch with typed tables and opaque payloads |
 | F-074 | S17 | L | 4 | 1 | 2026-08-01 | DrawingML tables with merges, banding, and preserved content |
+| F-075 | S18 | S | 1 | 1 | 2026-08-01 | Typed connectors with optional start and end connections |
+| F-076 | S18 | M | 2 | 1 | 2026-08-01 | Raw-preserving alternate content with typed fallback selection |
+| F-077 | S18 | M | 2 | 1 | Notes parts and body-placeholder speaker-note extraction |
+| F-078 | S18 | M | 2 | 1 | Namespace-aware relationship-id rewriting in preserved XML |
 
 ## Velocity
 

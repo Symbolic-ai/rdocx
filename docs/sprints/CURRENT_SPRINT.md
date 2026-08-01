@@ -29,10 +29,10 @@ development crate.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-075 | Connectors | S | in-progress | codex |
-| F-076 | mc:AlternateContent | M | in-progress | codex |
-| F-077 | Notes slides and notes master | M | in-progress | codex |
-| F-078 | relmap rewrite_rel_ids | M | in-progress | codex |
+| F-075 | Connectors | S | done | - |
+| F-076 | mc:AlternateContent | M | done | - |
+| F-077 | Notes slides and notes master | M | done | - |
+| F-078 | relmap rewrite_rel_ids | M | done | - |
 
 ## Sequencing note
 

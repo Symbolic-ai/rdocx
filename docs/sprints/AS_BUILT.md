@@ -2151,3 +2151,126 @@ with 724 cells, and the integrated full gate.
 
 **Notes for future sessions.** Keep grid metadata aligned with column identity
 and reject edits that cannot preserve that identity unambiguously.
+
+### F-075, Connectors
+
+**Sprint.** S18
+**Completed.** 2026-08-01
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** `rpptx-oxml` now models connectors in root and recursive
+shape trees, including optional typed start and end connections, required
+non-visual and shape properties, and ordered preservation of unsupported
+content.
+
+**Non-obvious choices.** Each endpoint keeps its required unqualified shape id
+and connection-site index. Unsupported locks, style, extensions, attributes,
+and children remain at their original schema boundaries.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** `docs/hld/06-presentationml-model.md` now records
+the typed connector arm and its optional endpoint contract.
+
+**Tests.** Endpoint round-trip, namespace aliases, fixed prefixes, required
+order, qualified-attribute rejection, raw preservation, 85 corpus connectors
+with 30 starts, 28 ends, and 6 nested connectors, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep routing and unsupported non-visual content
+opaque until a named story owns those boundaries.
+
+### F-076, mc:AlternateContent
+
+**Sprint.** S18
+**Completed.** 2026-08-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Shape trees now expose ordered typed members from the
+immediate `mc:Fallback` branch while retaining the complete alternate-content
+subtree as the only serialisation source.
+
+**Non-obvious choices.** Choices are not evaluated, an absent fallback returns
+no selection, and an empty fallback remains distinct from an absent fallback.
+Namespace URI resolution identifies the MC fallback instead of its prefix.
+
+**Deviations from the design plan.** None. Microscope pass 2 was clean after
+the first pass corrected stale HLD wording.
+
+**Spec sections touched.** `docs/hld/06-presentationml-model.md` now records
+fallback-only selection, opaque choices, absent-fallback behaviour, and
+raw-only serialisation.
+
+**Tests.** Fallback selection, no-fallback and duplicate-fallback cases,
+namespace aliases, recursive order, exact raw preservation, all 21 corpus
+alternate-content subtrees, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Add choice evaluation only with an explicit
+capability policy. Never serialise this model from the selected fallback.
+
+### F-077, Notes slides and notes master
+
+**Sprint.** S18
+**Completed.** 2026-08-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `rpptx-oxml` now models notes slides and notes masters,
+types shape text bodies with the existing DrawingML text model, and extracts
+speaker notes from effective body placeholders only.
+
+**Non-obvious choices.** Plain text retains run, field, explicit-break, and
+paragraph order. Slide images, numbers, dates, footers, headers, and master
+prompt text do not enter speaker-note output.
+
+**Deviations from the design plan.** Design review against the authoritative
+schema corrected `p:notesStyle` from required to optional. The model, writer,
+HLD, and regression gate use the optional contract. Microscope pass 2 was
+clean.
+
+**Spec sections touched.** `docs/hld/06-presentationml-model.md` now records
+the notes-root sequences, relationship cardinalities, optional notes style,
+and body-placeholder extraction contract.
+
+**Tests.** Text extraction order, placeholder filtering, schema order,
+optional notes style, raw preservation, relationship completeness, all 210
+corpus notes slides and 24 notes masters with 72 nonempty bodies, and the
+integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Treat the typed text body as the single source
+of truth and keep notes-master prompt text outside speaker-note extraction.
+
+### F-078, relmap rewrite_rel_ids
+
+**Sprint.** S18
+**Completed.** 2026-08-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `rpptx-oxml` now rewrites mapped numeric relationship ids
+inside preserved XML by replacing only eligible relationship-namespace
+attribute value ranges.
+
+**Non-obvious choices.** Namespace URI scope, including aliases and nested
+shadowing, decides eligibility. Element spelling, declarations, attribute
+order, quote choice, comments, processing instructions, and every untouched
+byte remain unchanged.
+
+**Deviations from the design plan.** None. Design review corrected one HLD
+section citation before implementation, and microscope pass 1 was clean.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+relationship-remapping contract in `docs/hld/06-presentationml-model.md`.
+
+**Tests.** Embed, link, and diagram relationship rewriting, aliases and
+shadowing, unmapped and nonnumeric values, exact surrounding-byte preservation,
+malformed XML, empty-map identity across preserved payloads in all 50 corpus
+decks, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Use this byte-splice helper before deep-copying
+opaque payloads. Do not reconstruct preserved XML through an event writer.
