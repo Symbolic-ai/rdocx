@@ -14,6 +14,7 @@ use quick_xml::events::Event;
 use rpptx_oxml::PRESENTATION_PART;
 use rpptx_oxml::namespace::{P_NS, P_PREFIX, R_NS, R_PREFIX};
 use rpptx_oxml::presentation::CT_Presentation;
+use rpptx_oxml::shape_tree::{CT_ShapeTree, ShapeTreeChild};
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind};
 
 const MANIFEST: &str = include_str!("../../../scripts/pptx-corpus-manifest.tsv");
@@ -510,13 +511,13 @@ fn every_corpus_presentation_part_round_trips_structurally() {
 #[test]
 fn slide_layout_and_master_write_their_own_schema_order() {
     let slide = format!(
-        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><x:transition/><p:cSld><p:spTree/></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr><p:transition/><p:timing/><p:extLst/></p:sld>"#
+        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><x:transition/><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr><p:transition/><p:timing/><p:extLst/></p:sld>"#
     );
     let layout = format!(
-        r#"<p:sldLayout xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree/></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr><p:hf/><p:timing/><p:transition/><p:extLst/></p:sldLayout>"#
+        r#"<p:sldLayout xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr><p:hf/><p:timing/><p:transition/><p:extLst/></p:sldLayout>"#
     );
     let master = format!(
-        r#"<p:sldMaster xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree/></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst/><p:transition/><p:timing/><p:hf/><p:txStyles><p:titleStyle/><p:bodyStyle/><p:otherStyle/></p:txStyles><p:extLst/></p:sldMaster>"#
+        r#"<p:sldMaster xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst/><p:transition/><p:timing/><p:hf/><p:txStyles><p:titleStyle/><p:bodyStyle/><p:otherStyle/></p:txStyles><p:extLst/></p:sldMaster>"#
     );
 
     let written_slide = CT_Slide::from_xml(slide.as_bytes())
@@ -571,7 +572,7 @@ fn slide_layout_and_master_write_their_own_schema_order() {
 #[test]
 fn colour_maps_read_any_prefix_and_preserve_extensions() {
     let xml = format!(
-        r#"<q:sld xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><q:cSld><q:spTree/></q:cSld><q:clrMapOvr x:keep="yes"><x:before/><d:overrideClrMapping bg1="dk1" tx1="lt1" bg2="dk2" tx2="lt2" accent1="accent6" accent2="accent5" accent3="accent4" accent4="accent3" accent5="accent2" accent6="accent1" hlink="folHlink" folHlink="hlink" x:map="kept"><x:ext/></d:overrideClrMapping><x:after/></q:clrMapOvr></q:sld>"#
+        r#"<q:sld xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld><q:clrMapOvr x:keep="yes"><x:before/><d:overrideClrMapping bg1="dk1" tx1="lt1" bg2="dk2" tx2="lt2" accent1="accent6" accent2="accent5" accent3="accent4" accent4="accent3" accent5="accent2" accent6="accent1" hlink="folHlink" folHlink="hlink" x:map="kept"><x:ext/></d:overrideClrMapping><x:after/></q:clrMapOvr></q:sld>"#
     );
     let parsed = CT_Slide::from_xml(xml.as_bytes()).unwrap();
     let override_map = parsed.color_map_override.as_ref().unwrap();
@@ -595,22 +596,19 @@ fn colour_maps_read_any_prefix_and_preserve_extensions() {
 }
 
 #[test]
-fn common_slide_data_preserves_the_shape_tree_until_f070() {
-    let shape_tree = r#"<q:spTree marker="a &amp; b"><q:nvGrpSpPr/><x:producer xmlns:x="urn:producer"><x:data/></x:producer></q:spTree>"#;
+fn common_slide_data_uses_the_typed_shape_tree() {
+    let producer = r#"<x:producer xmlns:x="urn:producer"><x:data/></x:producer>"#;
     let xml = format!(
-        r#"<q:sld xmlns:q="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><q:cSld name="Named"><q:bg><q:bgPr/></q:bg>{shape_tree}<q:extLst/></q:cSld></q:sld>"#
+        r#"<q:sld xmlns:q="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><q:cSld name="Named"><q:bg><q:bgPr/></q:bg><q:spTree marker="a &amp; b"><q:nvGrpSpPr/><q:grpSpPr/>{producer}</q:spTree><q:extLst/></q:cSld></q:sld>"#
     );
     let parsed = CT_Slide::from_xml(xml.as_bytes()).unwrap();
     assert_eq!(parsed.common_slide_data.name.as_deref(), Some("Named"));
-    assert_eq!(
-        parsed.common_slide_data.shape_tree_xml,
-        shape_tree.as_bytes()
-    );
+    assert!(parsed.common_slide_data.shape_tree.children.is_empty());
     let written = parsed.to_xml().unwrap();
     assert!(
         written
-            .windows(shape_tree.len())
-            .any(|window| window == shape_tree.as_bytes())
+            .windows(producer.len())
+            .any(|window| window == producer.as_bytes())
     );
     assert_eq!(parsed, CT_Slide::from_xml(&written).unwrap());
 }
@@ -709,4 +707,174 @@ fn assert_order(xml: &[u8], tags: &[&str]) {
         })
         .collect();
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
+}
+
+#[test]
+fn shape_tree_requires_non_visual_and_group_properties_in_order() {
+    let valid = format!(
+        r#"<q:spTree xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><q:nvGrpSpPr marker="kept"/><q:grpSpPr><d:xfrm><d:off x="10" y="20"/><d:ext cx="30" cy="40"/><d:chOff x="1" y="2"/><d:chExt cx="3" cy="4"/></d:xfrm><d:solidFill><d:srgbClr val="112233"/></d:solidFill></q:grpSpPr><q:sp/></q:spTree>"#
+    );
+    let parsed = CT_ShapeTree::from_xml(valid.as_bytes()).unwrap();
+    let transform = parsed.group_transform().unwrap();
+    assert_eq!(transform.offset.unwrap().x.0, 10);
+    assert_eq!(transform.child_extent.unwrap().cy.0, 4);
+    let written = parsed.to_xml().unwrap();
+    assert_order(&written, &["<p:nvGrpSpPr", "<p:grpSpPr", "<q:sp"]);
+    assert!(std::str::from_utf8(&written).unwrap().contains("<a:xfrm>"));
+    assert_eq!(parsed, CT_ShapeTree::from_xml(&written).unwrap());
+
+    for invalid in [
+        format!(r#"<p:spTree xmlns:p="{P_NS}"><p:grpSpPr/></p:spTree>"#),
+        format!(r#"<p:spTree xmlns:p="{P_NS}"><p:nvGrpSpPr/></p:spTree>"#),
+        format!(r#"<p:spTree xmlns:p="{P_NS}"><p:grpSpPr/><p:nvGrpSpPr/></p:spTree>"#),
+        format!(
+            r#"<p:spTree xmlns:p="{P_NS}"><p:nvGrpSpPr/><p:grpSpPr/><p:nvGrpSpPr/></p:spTree>"#
+        ),
+        format!(r#"<p:spTree xmlns:p="{P_NS}"><p:nvGrpSpPr/><p:grpSpPr/><p:grpSpPr/></p:spTree>"#),
+    ] {
+        assert!(
+            CT_ShapeTree::from_xml(invalid.as_bytes()).is_err(),
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
+fn all_six_child_variants_keep_document_order() {
+    let payloads = [
+        r#"<p:sp marker="shape"><p:spPr/></p:sp>"#,
+        r#"<p:pic marker="picture"><p:blipFill/></p:pic>"#,
+        r#"<p:graphicFrame marker="frame"><a:graphic/></p:graphicFrame>"#,
+        r#"<p:cxnSp marker="connector"><p:spPr/></p:cxnSp>"#,
+        r#"<mc:AlternateContent marker="alternate"><mc:Choice Requires="p14"><p:sp/></mc:Choice></mc:AlternateContent>"#,
+    ];
+    let xml = format!(
+        r#"<p:spTree xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x="urn:producer"><p:nvGrpSpPr/><p:grpSpPr/>{}<x:between/>{}<p:grpSp><p:nvGrpSpPr/><p:grpSpPr/><p:sp marker="nested"/></p:grpSp>{}{}{}</p:spTree>"#,
+        payloads[0], payloads[1], payloads[2], payloads[3], payloads[4]
+    );
+    let parsed = CT_ShapeTree::from_xml(xml.as_bytes()).unwrap();
+    assert!(matches!(parsed.children[0], ShapeTreeChild::Shape(_)));
+    assert!(matches!(parsed.children[1], ShapeTreeChild::Picture(_)));
+    assert!(matches!(parsed.children[2], ShapeTreeChild::GroupShape(_)));
+    assert!(matches!(
+        parsed.children[3],
+        ShapeTreeChild::GraphicFrame(_)
+    ));
+    assert!(matches!(parsed.children[4], ShapeTreeChild::Connector(_)));
+    assert!(matches!(
+        parsed.children[5],
+        ShapeTreeChild::AlternateContent(_)
+    ));
+    let written = parsed.to_xml().unwrap();
+    assert_order(
+        &written,
+        &[
+            "marker=\"shape\"",
+            "<x:between",
+            "marker=\"picture\"",
+            "marker=\"nested\"",
+            "marker=\"frame\"",
+            "marker=\"connector\"",
+            "marker=\"alternate\"",
+        ],
+    );
+    for payload in payloads {
+        assert!(
+            written
+                .windows(payload.len())
+                .any(|window| window == payload.as_bytes())
+        );
+    }
+    assert_eq!(parsed, CT_ShapeTree::from_xml(&written).unwrap());
+}
+
+#[test]
+fn nested_group_shape_tree_round_trips_with_tree_shape_preserved() {
+    let xml = format!(
+        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/><p:grpSp><p:nvGrpSpPr/><p:grpSpPr><a:xfrm><a:off x="100" y="200"/><a:ext cx="300" cy="400"/><a:chOff x="10" y="20"/><a:chExt cx="30" cy="40"/></a:xfrm></p:grpSpPr><p:sp marker="outer"/><p:grpSp><p:nvGrpSpPr/><p:grpSpPr/><p:pic marker="inner"/></p:grpSp></p:grpSp></p:spTree></p:cSld></p:sld>"#
+    );
+    let parsed = CT_Slide::from_xml(xml.as_bytes()).unwrap();
+    let ShapeTreeChild::GroupShape(outer) = &parsed.common_slide_data.shape_tree.children[0] else {
+        panic!("expected outer group");
+    };
+    assert_eq!(
+        outer.group_transform().unwrap().child_offset.unwrap().x.0,
+        10
+    );
+    assert!(matches!(outer.children[0], ShapeTreeChild::Shape(_)));
+    let ShapeTreeChild::GroupShape(inner) = &outer.children[1] else {
+        panic!("expected inner group");
+    };
+    assert!(matches!(inner.children[0], ShapeTreeChild::Picture(_)));
+    let written = parsed.to_xml().unwrap();
+    let reparsed = CT_Slide::from_xml(&written).unwrap();
+    assert_eq!(parsed, reparsed);
+    assert_eq!(
+        count_groups(&reparsed.common_slide_data.shape_tree.children),
+        2
+    );
+}
+
+#[test]
+fn every_corpus_shape_tree_round_trips_structurally() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut trees = 0usize;
+    let mut groups = 0usize;
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, content_type) in &package.content_types.overrides {
+            let Some(xml) = package.get_part(part) else {
+                continue;
+            };
+            match content_type.as_str() {
+                content_types::SLIDE => {
+                    let parsed = CT_Slide::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                    groups += count_groups(&parsed.common_slide_data.shape_tree.children);
+                    assert_eq!(
+                        parsed,
+                        CT_Slide::from_xml(&parsed.to_xml().unwrap()).unwrap()
+                    );
+                    trees += 1;
+                }
+                content_types::SLIDE_LAYOUT => {
+                    let parsed = CT_SlideLayout::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                    groups += count_groups(&parsed.common_slide_data.shape_tree.children);
+                    assert_eq!(
+                        parsed,
+                        CT_SlideLayout::from_xml(&parsed.to_xml().unwrap()).unwrap()
+                    );
+                    trees += 1;
+                }
+                content_types::SLIDE_MASTER => {
+                    let parsed = CT_SlideMaster::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                    groups += count_groups(&parsed.common_slide_data.shape_tree.children);
+                    assert_eq!(
+                        parsed,
+                        CT_SlideMaster::from_xml(&parsed.to_xml().unwrap()).unwrap()
+                    );
+                    trees += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(trees > 0);
+    assert!(groups > 0);
+    eprintln!("Shape-tree corpus gate checked {trees} trees and {groups} recursive groups");
+}
+
+fn count_groups(children: &[ShapeTreeChild]) -> usize {
+    children
+        .iter()
+        .map(|child| match child {
+            ShapeTreeChild::GroupShape(group) => 1 + count_groups(&group.children),
+            _ => 0,
+        })
+        .sum()
 }

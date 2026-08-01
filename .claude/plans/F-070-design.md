@@ -1,6 +1,6 @@
 # F-070, The shape tree
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S16
 **Size**: L
 **Depends on**: F-063
@@ -87,12 +87,12 @@ and renderers.
 
 ## Implementation checklist
 
-- [ ] Add the recursive shape-tree and group-shape models.
-- [ ] Enforce required non-visual and group-property children in schema order.
-- [ ] Represent and preserve all six child variants in document order.
-- [ ] Replace F-069's raw tree boundary with the typed tree.
-- [ ] Add nested-group and all-corpus round-trip coverage.
-- [ ] Run crate, dependency-tree, prose, and hash checks.
+- [x] Add the recursive shape-tree and group-shape models.
+- [x] Enforce required non-visual and group-property children in schema order.
+- [x] Represent and preserve all six child variants in document order.
+- [x] Replace F-069's raw tree boundary with the typed tree.
+- [x] Add nested-group and all-corpus round-trip coverage.
+- [x] Run crate, dependency-tree, prose, and hash checks.
 
 ## Open questions
 

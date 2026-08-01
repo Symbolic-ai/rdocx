@@ -11,6 +11,7 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::namespace::{P_NS, R_NS};
+use crate::shape_tree::CT_ShapeTree;
 
 pub type Result<T> = std::result::Result<T, OxmlError>;
 type RawAttributes = Vec<(String, String)>;
@@ -36,7 +37,7 @@ pub struct CT_ColorMapOverride {
 pub struct CT_CommonSlideData {
     pub name: Option<String>,
     pub background_xml: Option<Vec<u8>>,
-    pub shape_tree_xml: Vec<u8>,
+    pub shape_tree: CT_ShapeTree,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
 }
@@ -472,7 +473,7 @@ impl CT_CommonSlideData {
             .filter(|(key, _)| key != "name" && !is_canonical_xmlns(key))
             .collect();
         let mut background_xml = None;
-        let mut shape_tree_xml = None;
+        let mut shape_tree = None;
         let mut raw_children = OrderedRawChildren::default();
         let mut boundary = 0usize;
         let mut buffer = Vec::new();
@@ -488,7 +489,8 @@ impl CT_CommonSlideData {
                         is_p,
                         raw,
                         &mut background_xml,
-                        &mut shape_tree_xml,
+                        &mut shape_tree,
+                        &child_ns,
                         &mut raw_children,
                         &mut boundary,
                     )?;
@@ -503,7 +505,8 @@ impl CT_CommonSlideData {
                         is_p,
                         raw,
                         &mut background_xml,
-                        &mut shape_tree_xml,
+                        &mut shape_tree,
+                        &child_ns,
                         &mut raw_children,
                         &mut boundary,
                     )?;
@@ -517,7 +520,7 @@ impl CT_CommonSlideData {
         Ok(Self {
             name,
             background_xml,
-            shape_tree_xml: required(shape_tree_xml, "p:spTree")?,
+            shape_tree: required(shape_tree, "p:spTree")?,
             raw_attributes,
             raw_children,
         })
@@ -535,7 +538,7 @@ impl CT_CommonSlideData {
             writer.get_mut().write_all(background)?;
         }
         emit_raw(writer, self.raw_children.at(1))?;
-        writer.get_mut().write_all(&self.shape_tree_xml)?;
+        self.shape_tree.write_xml(writer)?;
         for boundary in 2..=5 {
             emit_raw(writer, self.raw_children.at(boundary))?;
         }
@@ -544,12 +547,14 @@ impl CT_CommonSlideData {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn capture_common_child(
     name: &[u8],
     is_p: bool,
     raw: Vec<u8>,
     background: &mut Option<Vec<u8>>,
-    shape_tree: &mut Option<Vec<u8>>,
+    shape_tree: &mut Option<CT_ShapeTree>,
+    namespaces: &NamespaceBindings,
     children: &mut OrderedRawChildren,
     boundary: &mut usize,
 ) -> Result<()> {
@@ -559,7 +564,8 @@ fn capture_common_child(
         }
         *boundary = (*boundary).max(1);
     } else if is_p && name == b"spTree" {
-        if shape_tree.replace(raw).is_some() {
+        let parsed = CT_ShapeTree::from_fragment(&raw, &namespaces.entries())?;
+        if shape_tree.replace(parsed).is_some() {
             return Err(duplicate("spTree"));
         }
         *boundary = (*boundary).max(2);
@@ -1058,6 +1064,18 @@ impl NamespaceBindings {
             }
         }
         Ok(())
+    }
+
+    fn entries(&self) -> Vec<(String, String)> {
+        let mut entries: Vec<_> = self
+            .prefixes
+            .iter()
+            .map(|(prefix, uri)| (prefix.clone(), uri.clone()))
+            .collect();
+        if let Some(uri) = &self.default {
+            entries.push((String::new(), uri.clone()));
+        }
+        entries
     }
 }
 

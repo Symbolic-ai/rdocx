@@ -2,6 +2,7 @@
 
 pub mod namespace;
 pub mod presentation;
+pub mod shape_tree;
 pub mod slide_parts;
 
 /// The canonical PresentationML main-part name.
