@@ -39,7 +39,7 @@ split the XL text story into reviewable sub-IDs before implementation.
 | F-064b | Text paragraphs and runs | L | pending | - |
 | F-064c | Text bullets | S | pending | - |
 | F-064d | Nine-level list styles | M | pending | - |
-| F-063 | Shape properties and style references | M | pending | - |
+| F-063 | Shape properties and style references | M | in-progress | codex |
 
 ## Sequencing note
 
