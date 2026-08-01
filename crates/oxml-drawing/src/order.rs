@@ -31,6 +31,35 @@ impl OrderedRawChildren {
     pub fn is_empty(&self) -> bool {
         self.children.is_empty()
     }
+
+    /// Returns raw children at their effective boundary after edits to a
+    /// public collection. Each original boundary is anchored to the next
+    /// surviving original item, or to the trailing boundary when none remains.
+    pub fn at_reconciled<'a>(
+        &'a self,
+        boundary: usize,
+        offset: usize,
+        original_to_current: &'a [Option<usize>],
+        current_len: usize,
+    ) -> impl Iterator<Item = &'a [u8]> {
+        self.children
+            .iter()
+            .filter(move |child| {
+                if child.boundary < offset {
+                    return false;
+                }
+                let original_index = child.boundary - offset;
+                let effective = original_to_current
+                    .iter()
+                    .skip(original_index)
+                    .flatten()
+                    .copied()
+                    .next()
+                    .unwrap_or(current_len);
+                effective == boundary
+            })
+            .map(|child| child.xml.as_slice())
+    }
 }
 
 #[cfg(test)]

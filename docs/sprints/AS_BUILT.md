@@ -2024,3 +2024,130 @@ gate.
 **Notes for future sessions.** F-071 through F-074 own the opaque payload
 variants. Preserve their current XML until each later story replaces one
 boundary with an approved typed model.
+
+### F-071, Placeholders
+
+**Sprint.** S17
+**Completed.** 2026-08-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `rpptx-oxml` now models placeholder-bearing partial shapes
+inside the ordered shape tree. Placeholder keys retain optional indices,
+default an absent type to body, and implement index priority plus the title and
+body equivalence classes.
+
+**Non-obvious choices.** An optional `u32` preserves the distinction between a
+missing index and index zero. Matching compares indices only when both sides
+provide one, then falls back to effective placeholder types. Unrelated shape
+content remains in ordered raw slots.
+
+**Deviations from the design plan.** Microscope passes found local-name-only
+matching, qualified identifier ambiguity, and nested canonical-prefix
+rebinding. URI-aware element matching, qualified relationship attributes,
+prefix-collision checks, and focused regressions fixed them. Pass 4 was clean.
+
+**Spec sections touched.** `docs/hld/06-presentationml-model.md` now records
+the presence-sensitive placeholder key used by the matching contract.
+
+**Tests.** Index and type matching, absent-type defaulting, both equivalence
+classes, opaque preservation, nested group shapes, all 50 corpus decks, and
+the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep placeholder matching presence-sensitive
+and preserve unsupported shape content at its schema boundary.
+
+### F-072, Pictures
+
+**Sprint.** S17
+**Completed.** 2026-08-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `rpptx-oxml` now models pictures in root and recursive
+shape trees, including non-visual properties, optional placeholders, embedded
+and linked image relationships, source-rectangle crops, shape properties,
+style, and extensions.
+
+**Non-obvious choices.** Existing DrawingML blip-fill and shape-property types
+gained concrete root-aware writers so picture-owned element names remain
+schema-correct without adding forwarding wrappers. Relationship identifiers
+stay strings for the OPC layer to resolve.
+
+**Deviations from the design plan.** None. Microscope pass 2 was clean after
+the first pass findings were remediated.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+picture, prefix, ordering, and preservation contracts in
+`docs/hld/05-drawingml-model.md` and `docs/hld/06-presentationml-model.md`.
+
+**Tests.** Cropped picture round-trip, qualified relationships, alternate read
+prefixes, fixed write prefixes, required child order, opaque alternate-content
+preservation, 240 corpus pictures, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Resolve image targets in the OPC layer and keep
+unsupported blip choices verbatim.
+
+### F-073, Graphic frames
+
+**Sprint.** S17
+**Completed.** 2026-08-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `rpptx-oxml` now models graphic frames and dispatches exact
+graphic-data URIs to typed tables or opaque chart, SmartArt, OLE, and unknown
+payloads. Root and recursive shape-tree arms use the typed frame model.
+
+**Non-obvious choices.** Only the table branch is parsed because F-074 owns its
+model. Every other payload remains opaque until its named story. The existing
+DrawingML transform gained a concrete `p:xfrm` writer while retaining its
+DrawingML path.
+
+**Deviations from the design plan.** None. Microscope pass 2 was clean after
+the first pass findings were remediated.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+graphic-frame dispatch and preservation contracts in
+`docs/hld/06-presentationml-model.md`.
+
+**Tests.** Exact URI dispatch, required child order, fixed prefixes,
+root-aware transforms, opaque payload preservation, all 86 corpus frames with
+all four required kinds observed, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Add typed payload branches only in their owning
+stories and retain unknown graphic data verbatim.
+
+### F-074, DrawingML tables
+
+**Sprint.** S17
+**Completed.** 2026-08-01
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `oxml-drawing` now models table properties, style and
+banding flags, grid columns, rows, cells, text bodies, merge origins, spans,
+and horizontal and vertical continuations. Unsupported table and cell content
+remains at ordered raw boundaries.
+
+**Non-obvious choices.** Ambiguous edits to preserved grid metadata return a
+typed error instead of silently attaching metadata to the wrong column. Cell
+text reuses the existing concrete text-body model.
+
+**Deviations from the design plan.** Microscope passes found defects in grid
+metadata edits and preservation boundaries. The model now rejects ambiguous
+mutations and has focused regressions. Pass 5 was clean.
+
+**Spec sections touched.** `docs/hld/05-drawingml-model.md` now records the
+table model, merge semantics, and preservation contract.
+
+**Tests.** Merged-cell origins and continuations, banding and style flags,
+schema order, alternate prefixes, opaque preservation, all 26 corpus tables
+with 724 cells, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep grid metadata aligned with column identity
+and reject edits that cannot preserve that identity unambiguously.

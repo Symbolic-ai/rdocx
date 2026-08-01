@@ -8,19 +8,25 @@ use oxml_drawing::xfrm::CT_Transform2D;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
+use crate::graphic_frame::CT_GraphicFrame;
 use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, root_attributes,
+    self_contained_attributes,
 };
+use crate::picture::CT_Picture;
+use crate::placeholder::{ApplicationProperties, CT_Placeholder, parse_application_properties};
 
 pub type Result<T> = std::result::Result<T, OxmlError>;
 type RawAttributes = Vec<(String, String)>;
 
 /// One shape-tree child in document and z-order.
-#[derive(Clone, Debug, Eq, PartialEq)]
+// The public PresentationML model intentionally stores CT_Picture directly.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ShapeTreeChild {
-    Shape(Vec<u8>),
-    Picture(Vec<u8>),
-    GraphicFrame(Vec<u8>),
+    Shape(CT_Shape),
+    Picture(CT_Picture),
+    GraphicFrame(Box<CT_GraphicFrame>),
     GroupShape(Box<CT_GroupShape>),
     Connector(Vec<u8>),
     AlternateContent(Vec<u8>),
@@ -29,20 +35,42 @@ pub enum ShapeTreeChild {
 impl ShapeTreeChild {
     fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         match self {
-            Self::Shape(xml)
-            | Self::Picture(xml)
-            | Self::GraphicFrame(xml)
-            | Self::Connector(xml)
-            | Self::AlternateContent(xml) => writer.get_mut().write_all(xml)?,
+            Self::Shape(shape) => shape.write_xml_internal(writer, false)?,
+            Self::Picture(picture) => picture.write_xml_internal(writer, false)?,
+            Self::GraphicFrame(frame) => frame.write_xml_internal(writer, false)?,
+            Self::Connector(xml) | Self::AlternateContent(xml) => {
+                writer.get_mut().write_all(xml)?
+            }
             Self::GroupShape(group) => group.write_xml_internal(writer, false)?,
         }
         Ok(())
     }
 }
 
-/// The recursive group-shape form used inside a shape tree.
+/// A partial typed `p:sp` model that owns its placeholder identity.
 #[allow(non_camel_case_types)]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CT_Shape {
+    pub placeholder: Option<CT_Placeholder>,
+    raw: Box<ShapeRaw>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ShapeRaw {
+    raw_attributes: RawAttributes,
+    non_visual_attributes: RawAttributes,
+    non_visual_children: OrderedRawChildren,
+    non_visual_drawing_properties: Vec<u8>,
+    non_visual_shape_properties: Vec<u8>,
+    application_properties_attributes: RawAttributes,
+    application_properties_raw_children: OrderedRawChildren,
+    shape_properties: Vec<u8>,
+    raw_children: OrderedRawChildren,
+}
+
+/// The recursive group-shape form used inside a shape tree.
+#[allow(non_camel_case_types)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CT_GroupShape {
     pub children: Vec<ShapeTreeChild>,
     non_visual_group_properties: NonVisualGroupProperties,
@@ -53,7 +81,7 @@ pub struct CT_GroupShape {
 
 /// The ordered `p:spTree` root shared by slides, layouts, and masters.
 #[allow(non_camel_case_types)]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CT_ShapeTree {
     pub children: Vec<ShapeTreeChild>,
     non_visual_group_properties: NonVisualGroupProperties,
@@ -103,6 +131,351 @@ struct ParsedGroup {
     children: Vec<ShapeTreeChild>,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
+}
+
+impl CT_Shape {
+    /// Parses a complete `p:sp` with any prefix bound to PresentationML.
+    pub fn from_xml(xml: &[u8]) -> Result<Self> {
+        Self::from_fragment(xml, &[])
+    }
+
+    fn from_fragment(xml: &[u8], inherited: &[(String, String)]) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(start) => {
+                    let namespaces =
+                        NamespaceBindings::from_entries(inherited).with_start(&start)?;
+                    if local_name(start.name().as_ref()) != b"sp"
+                        || namespaces.element_uri(start.name().as_ref()) != Some(P_NS)
+                    {
+                        return Err(unexpected(&start));
+                    }
+                    namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
+                    return Self::from_reader(&mut reader, &start, &namespaces, inherited);
+                }
+                Event::Empty(start) => {
+                    return Err(OxmlError::MissingElement(format!(
+                        "{} requires p:nvSpPr and p:spPr",
+                        String::from_utf8_lossy(start.name().as_ref())
+                    )));
+                }
+                Event::Eof => return Err(OxmlError::MissingElement("p:sp".to_owned())),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn from_reader(
+        reader: &mut Reader<&[u8]>,
+        start: &BytesStart<'_>,
+        namespaces: &NamespaceBindings,
+        inherited: &[(String, String)],
+    ) -> Result<Self> {
+        let mut non_visual = None;
+        let mut shape_properties = None;
+        let mut raw_children = OrderedRawChildren::default();
+        let mut boundary = 0usize;
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(child) => {
+                    let child_namespaces = namespaces.with_start(&child)?;
+                    let name = local_name(child.name().as_ref()).to_vec();
+                    let uri = child_namespaces.element_uri(child.name().as_ref());
+                    let raw = capture_element(reader, &child)?;
+                    capture_shape_child(
+                        &name,
+                        uri,
+                        raw,
+                        &child_namespaces,
+                        &mut non_visual,
+                        &mut shape_properties,
+                        &mut raw_children,
+                        &mut boundary,
+                    )?;
+                }
+                Event::Empty(child) => {
+                    let child_namespaces = namespaces.with_start(&child)?;
+                    let name = local_name(child.name().as_ref()).to_vec();
+                    let uri = child_namespaces.element_uri(child.name().as_ref());
+                    let raw = capture_empty_element(&child)?;
+                    capture_shape_child(
+                        &name,
+                        uri,
+                        raw,
+                        &child_namespaces,
+                        &mut non_visual,
+                        &mut shape_properties,
+                        &mut raw_children,
+                        &mut boundary,
+                    )?;
+                }
+                Event::End(end) if local_name(end.name().as_ref()) == b"sp" => break,
+                Event::Eof => return Err(OxmlError::MissingElement("closing p:sp".to_owned())),
+                _ => {}
+            }
+            buffer.clear();
+        }
+
+        let non_visual = required(non_visual, "p:nvSpPr")?;
+        Ok(Self {
+            placeholder: non_visual.placeholder,
+            raw: Box::new(ShapeRaw {
+                raw_attributes: self_contained_attributes(
+                    start,
+                    FIXED_SHAPE_TREE_PREFIXES,
+                    inherited,
+                )?,
+                non_visual_attributes: non_visual.raw_attributes,
+                non_visual_children: non_visual.raw_children,
+                non_visual_drawing_properties: non_visual.non_visual_drawing_properties,
+                non_visual_shape_properties: non_visual.non_visual_shape_properties,
+                application_properties_attributes: non_visual.application_properties_attributes,
+                application_properties_raw_children: non_visual.application_properties_raw_children,
+                shape_properties: required(shape_properties, "p:spPr")?,
+                raw_children,
+            }),
+        })
+    }
+
+    /// Serialises a self-contained shape with fixed modelled prefixes.
+    pub fn to_xml(&self) -> Result<Vec<u8>> {
+        let mut writer = Writer::new(Vec::new());
+        self.write_xml_internal(&mut writer, true)?;
+        Ok(writer.into_inner())
+    }
+
+    fn write_xml_internal<W: Write>(
+        &self,
+        writer: &mut Writer<W>,
+        declare_namespaces: bool,
+    ) -> Result<()> {
+        let mut start = BytesStart::new("p:sp");
+        if declare_namespaces {
+            start.push_attribute(("xmlns:p", P_NS));
+            start.push_attribute(("xmlns:a", A_NS));
+            start.push_attribute(("xmlns:r", R_NS));
+            start.push_attribute(("xmlns:mc", MC_NS));
+        }
+        push_attributes(&mut start, &self.raw.raw_attributes);
+        writer.write_event(Event::Start(start))?;
+
+        emit_raw(writer, self.raw.raw_children.at(0))?;
+        self.write_non_visual_properties(writer)?;
+        emit_raw(writer, self.raw.raw_children.at(1))?;
+        writer.get_mut().write_all(&self.raw.shape_properties)?;
+        emit_raw(writer, self.raw.raw_children.at(2))?;
+        writer.write_event(Event::End(BytesEnd::new("p:sp")))?;
+        Ok(())
+    }
+
+    fn write_non_visual_properties<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        let mut start = BytesStart::new("p:nvSpPr");
+        push_attributes(&mut start, &self.raw.non_visual_attributes);
+        writer.write_event(Event::Start(start))?;
+        emit_raw(writer, self.raw.non_visual_children.at(0))?;
+        writer
+            .get_mut()
+            .write_all(&self.raw.non_visual_drawing_properties)?;
+        emit_raw(writer, self.raw.non_visual_children.at(1))?;
+        writer
+            .get_mut()
+            .write_all(&self.raw.non_visual_shape_properties)?;
+        emit_raw(writer, self.raw.non_visual_children.at(2))?;
+
+        let mut application = BytesStart::new("p:nvPr");
+        push_attributes(
+            &mut application,
+            &self.raw.application_properties_attributes,
+        );
+        if self.placeholder.is_none() && self.raw.application_properties_raw_children.is_empty() {
+            writer.write_event(Event::Empty(application))?;
+        } else {
+            writer.write_event(Event::Start(application))?;
+            emit_raw(writer, self.raw.application_properties_raw_children.at(0))?;
+            if let Some(placeholder) = &self.placeholder {
+                placeholder.write_xml(writer, false)?;
+            }
+            emit_raw(writer, self.raw.application_properties_raw_children.at(1))?;
+            writer.write_event(Event::End(BytesEnd::new("p:nvPr")))?;
+        }
+
+        emit_raw(writer, self.raw.non_visual_children.at(3))?;
+        writer.write_event(Event::End(BytesEnd::new("p:nvSpPr")))?;
+        Ok(())
+    }
+}
+
+struct ParsedNonVisualShape {
+    placeholder: Option<CT_Placeholder>,
+    raw_attributes: RawAttributes,
+    raw_children: OrderedRawChildren,
+    non_visual_drawing_properties: Vec<u8>,
+    non_visual_shape_properties: Vec<u8>,
+    application_properties_attributes: RawAttributes,
+    application_properties_raw_children: OrderedRawChildren,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capture_shape_child(
+    name: &[u8],
+    uri: Option<&str>,
+    raw: Vec<u8>,
+    namespaces: &NamespaceBindings,
+    non_visual: &mut Option<ParsedNonVisualShape>,
+    shape_properties: &mut Option<Vec<u8>>,
+    raw_children: &mut OrderedRawChildren,
+    boundary: &mut usize,
+) -> Result<()> {
+    if uri == Some(P_NS) && matches!(name, b"nvSpPr" | b"spPr") {
+        namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
+    }
+    match (uri, name) {
+        (Some(P_NS), b"nvSpPr") => {
+            if *boundary != 0 || non_visual.is_some() {
+                return Err(OxmlError::InvalidValue(
+                    "p:nvSpPr must be the first modelled p:sp child".to_owned(),
+                ));
+            }
+            *non_visual = Some(parse_non_visual_shape(&raw, namespaces)?);
+            *boundary = 1;
+        }
+        (Some(P_NS), b"spPr") => {
+            if *boundary != 1 || shape_properties.is_some() {
+                return Err(OxmlError::InvalidValue(
+                    "p:spPr must immediately follow p:nvSpPr".to_owned(),
+                ));
+            }
+            *shape_properties = Some(raw);
+            *boundary = 2;
+        }
+        _ => raw_children.push(*boundary, raw),
+    }
+    Ok(())
+}
+
+fn parse_non_visual_shape(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+) -> Result<ParsedNonVisualShape> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) => {
+                let namespaces = inherited.with_start(&start)?;
+                let raw_attributes = root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?;
+                let mut drawing = None;
+                let mut shape = None;
+                let mut application = None;
+                let mut raw_children = OrderedRawChildren::default();
+                let mut boundary = 0usize;
+                loop {
+                    buffer.clear();
+                    match reader.read_event_into(&mut buffer)? {
+                        Event::Start(child) => {
+                            let child_namespaces = namespaces.with_start(&child)?;
+                            let name = local_name(child.name().as_ref()).to_vec();
+                            let uri = child_namespaces.element_uri(child.name().as_ref());
+                            let raw = capture_element(&mut reader, &child)?;
+                            capture_non_visual_shape_child(
+                                &name,
+                                uri,
+                                raw,
+                                &child_namespaces,
+                                &mut drawing,
+                                &mut shape,
+                                &mut application,
+                                &mut raw_children,
+                                &mut boundary,
+                            )?;
+                        }
+                        Event::Empty(child) => {
+                            let child_namespaces = namespaces.with_start(&child)?;
+                            let name = local_name(child.name().as_ref()).to_vec();
+                            let uri = child_namespaces.element_uri(child.name().as_ref());
+                            let raw = capture_empty_element(&child)?;
+                            capture_non_visual_shape_child(
+                                &name,
+                                uri,
+                                raw,
+                                &child_namespaces,
+                                &mut drawing,
+                                &mut shape,
+                                &mut application,
+                                &mut raw_children,
+                                &mut boundary,
+                            )?;
+                        }
+                        Event::End(end) if local_name(end.name().as_ref()) == b"nvSpPr" => break,
+                        Event::Eof => {
+                            return Err(OxmlError::MissingElement("closing p:nvSpPr".to_owned()));
+                        }
+                        _ => {}
+                    }
+                }
+                let application = required(application, "p:nvPr")?;
+                return Ok(ParsedNonVisualShape {
+                    placeholder: application.placeholder,
+                    raw_attributes,
+                    raw_children,
+                    non_visual_drawing_properties: required(drawing, "p:cNvPr")?,
+                    non_visual_shape_properties: required(shape, "p:cNvSpPr")?,
+                    application_properties_attributes: application.raw_attributes,
+                    application_properties_raw_children: application.raw_children,
+                });
+            }
+            Event::Empty(_) => {
+                return Err(OxmlError::MissingElement(
+                    "p:nvSpPr requires p:cNvPr, p:cNvSpPr, and p:nvPr".to_owned(),
+                ));
+            }
+            Event::Eof => return Err(OxmlError::MissingElement("p:nvSpPr".to_owned())),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capture_non_visual_shape_child(
+    name: &[u8],
+    uri: Option<&str>,
+    raw: Vec<u8>,
+    namespaces: &NamespaceBindings,
+    drawing: &mut Option<Vec<u8>>,
+    shape: &mut Option<Vec<u8>>,
+    application: &mut Option<ApplicationProperties>,
+    raw_children: &mut OrderedRawChildren,
+    boundary: &mut usize,
+) -> Result<()> {
+    if uri == Some(P_NS) && matches!(name, b"cNvPr" | b"cNvSpPr" | b"nvPr") {
+        namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
+    }
+    match (uri, name) {
+        (Some(P_NS), b"cNvPr") if *boundary == 0 && drawing.is_none() => {
+            *drawing = Some(raw);
+            *boundary = 1;
+        }
+        (Some(P_NS), b"cNvSpPr") if *boundary == 1 && shape.is_none() => {
+            *shape = Some(raw);
+            *boundary = 2;
+        }
+        (Some(P_NS), b"nvPr") if *boundary == 2 && application.is_none() => {
+            *application = Some(parse_application_properties(&raw, namespaces)?);
+            *boundary = 3;
+        }
+        (Some(P_NS), b"cNvPr" | b"cNvSpPr" | b"nvPr") => {
+            return Err(OxmlError::InvalidValue(
+                "p:nvSpPr children must be p:cNvPr, p:cNvSpPr, and p:nvPr in order".to_owned(),
+            ));
+        }
+        _ => raw_children.push(*boundary, raw),
+    }
+    Ok(())
 }
 
 impl CT_ShapeTree {
@@ -347,10 +720,18 @@ fn capture_group_child(
     }
 
     match (uri, name) {
-        (Some(P_NS), b"sp") => children.push(ShapeTreeChild::Shape(raw)),
-        (Some(P_NS), b"pic") => children.push(ShapeTreeChild::Picture(raw)),
+        (Some(P_NS), b"sp") => children.push(ShapeTreeChild::Shape(CT_Shape::from_fragment(
+            &raw,
+            &namespaces.entries(),
+        )?)),
+        (Some(P_NS), b"pic") => children.push(ShapeTreeChild::Picture(CT_Picture::from_fragment(
+            &raw,
+            &namespaces.entries(),
+        )?)),
         (Some(P_NS), b"graphicFrame") => {
-            children.push(ShapeTreeChild::GraphicFrame(raw));
+            children.push(ShapeTreeChild::GraphicFrame(Box::new(
+                CT_GraphicFrame::from_fragment(&raw, &namespaces.entries())?,
+            )));
         }
         (Some(P_NS), b"grpSp") => children.push(ShapeTreeChild::GroupShape(Box::new(
             CT_GroupShape::from_fragment(&raw, &namespaces.entries())?,

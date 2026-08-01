@@ -172,7 +172,20 @@ impl CT_Transform2D {
 
     /// Writes this transform into an existing XML writer.
     pub fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        let mut start = BytesStart::new("a:xfrm");
+        self.write_xml_with_root(writer, "a:xfrm")
+    }
+
+    /// Writes this transform with the requested qualified root name.
+    ///
+    /// DrawingML owns the transform type, while host formats own the element
+    /// that carries it. PresentationML graphic frames therefore use
+    /// `p:xfrm`, while DrawingML shapes use `a:xfrm`.
+    pub fn write_xml_with_root<W: Write>(
+        &self,
+        writer: &mut Writer<W>,
+        root_name: &str,
+    ) -> Result<()> {
+        let mut start = BytesStart::new(root_name);
         let rotation = (self.rotation.0 != 0).then(|| self.rotation.0.to_string());
         if let Some(rotation) = rotation.as_deref() {
             start.push_attribute(("rot", rotation));
@@ -217,7 +230,7 @@ impl CT_Transform2D {
         }
         emit_raw(writer, self.raw_children.at(4))?;
         writer
-            .write_event(Event::End(BytesEnd::new("a:xfrm")))
+            .write_event(Event::End(BytesEnd::new(root_name)))
             .map_err(OxmlError::from)?;
         Ok(())
     }
@@ -548,6 +561,16 @@ mod tests {
             transform.to_xml().unwrap(),
             br#"<a:xfrm rot="-2700000" flipH="1" flipV="1"><a:off x="-10" y="20"/><a:ext cx="30" cy="40"/><a:chOff x="50" y="60"/><a:chExt cx="70" cy="80"/></a:xfrm>"#
         );
+    }
+
+    #[test]
+    fn transform_writer_uses_the_requested_root_name() {
+        let transform = CT_Transform2D::default();
+        let mut writer = quick_xml::Writer::new(Vec::new());
+        transform
+            .write_xml_with_root(&mut writer, "p:xfrm")
+            .unwrap();
+        assert_eq!(writer.into_inner(), br#"<p:xfrm/>"#);
     }
 
     #[test]

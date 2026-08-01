@@ -221,7 +221,12 @@ impl CT_ShapeProperties {
 
     /// Writes shape properties into an existing XML writer.
     pub fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        let mut start = BytesStart::new("a:spPr");
+        self.write_xml_as(writer, "a:spPr")
+    }
+
+    /// Writes shape properties under the caller's required root name.
+    pub fn write_xml_as<W: Write>(&self, writer: &mut Writer<W>, name: &str) -> Result<()> {
+        let mut start = BytesStart::new(name);
         push_raw_attributes(&mut start, &self.raw_attributes);
         if self.transform.is_none()
             && self.custom_geometry.is_none()
@@ -266,7 +271,7 @@ impl CT_ShapeProperties {
             emit_raw(writer, self.raw_children.at(boundary))?;
         }
         writer
-            .write_event(Event::End(BytesEnd::new("a:spPr")))
+            .write_event(Event::End(BytesEnd::new(name)))
             .map_err(OxmlError::from)?;
         Ok(())
     }

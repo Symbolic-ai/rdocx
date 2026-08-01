@@ -6,7 +6,7 @@ use oxml_core::raw_xml::{capture_element, capture_empty_element};
 use oxml_core::units::{Angle, Percent1000};
 use oxml_core::xml::{get_attr, local_name, matches_local_name};
 use quick_xml::events::{BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::color::{ColorChoice, ColorError};
 use crate::namespace::reject_conflicting_a_prefix;
@@ -674,15 +674,46 @@ pub struct BlipFill {
     pub blip: Option<Blip>,
     pub source_rect: Option<RelativeRect>,
     pub mode: Option<BlipMode>,
+    raw_attributes: Vec<(String, String)>,
     raw_children: OrderedRawChildren,
 }
 
 impl BlipFill {
+    /// Parses one complete picture-fill element with any namespace prefix.
+    pub fn from_xml(xml: &[u8]) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader
+                .read_event_into(&mut buffer)
+                .map_err(OxmlError::from)?
+            {
+                Event::Start(element)
+                    if matches_local_name(element.name().as_ref(), b"blipFill") =>
+                {
+                    return Self::from_element(&mut reader, &element);
+                }
+                Event::Empty(element)
+                    if matches_local_name(element.name().as_ref(), b"blipFill") =>
+                {
+                    return Self::from_start(&element);
+                }
+                Event::Start(element) | Event::Empty(element) => {
+                    return Err(unexpected(&element));
+                }
+                Event::Eof => return Err(missing_end("blipFill")),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
     fn from_start(start: &BytesStart<'_>) -> Result<Self> {
         reject_conflicting_a_prefix(start)?;
         Ok(Self {
             dpi: optional_parse(start, b"dpi")?,
             rotate_with_shape: optional_bool(start, b"rotWithShape")?,
+            raw_attributes: capture_unmodelled_attributes(start, &[b"dpi", b"rotWithShape"])?,
             ..Self::default()
         })
     }
@@ -761,7 +792,12 @@ impl BlipFill {
     }
 
     fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        let mut start = BytesStart::new("a:blipFill");
+        self.write_xml_as(writer, "a:blipFill")
+    }
+
+    /// Writes the picture fill under the caller's required root name.
+    pub fn write_xml_as<W: Write>(&self, writer: &mut Writer<W>, name: &str) -> Result<()> {
+        let mut start = BytesStart::new(name);
         let dpi = self.dpi.map(|value| value.to_string());
         if let Some(dpi) = dpi.as_deref() {
             start.push_attribute(("dpi", dpi));
@@ -769,6 +805,7 @@ impl BlipFill {
         if let Some(rotate) = self.rotate_with_shape.map(bool_text) {
             start.push_attribute(("rotWithShape", rotate));
         }
+        push_raw_attributes(&mut start, &self.raw_attributes);
         if self.blip.is_none()
             && self.source_rect.is_none()
             && self.mode.is_none()
@@ -790,11 +827,40 @@ impl BlipFill {
             write_blip_mode(writer, mode)?;
         }
         emit_raw(writer, self.raw_children.at(3))?;
-        write_end(writer, "a:blipFill")
+        write_end(writer, name)
     }
 
     pub fn raw_children(&self) -> &OrderedRawChildren {
         &self.raw_children
+    }
+}
+
+fn capture_unmodelled_attributes(
+    start: &BytesStart<'_>,
+    modelled: &[&[u8]],
+) -> Result<Vec<(String, String)>> {
+    let mut raw = Vec::new();
+    for attribute in start.attributes() {
+        let attribute = attribute.map_err(OxmlError::from)?;
+        let key = attribute.key.as_ref();
+        if !key.contains(&b':') && modelled.contains(&key) {
+            continue;
+        }
+        let name = std::str::from_utf8(key)
+            .map_err(OxmlError::from)?
+            .to_owned();
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())
+            .map_err(OxmlError::from)?
+            .into_owned();
+        raw.push((name, value));
+    }
+    Ok(raw)
+}
+
+fn push_raw_attributes(start: &mut BytesStart<'_>, attributes: &[(String, String)]) {
+    for (name, value) in attributes {
+        start.push_attribute((name.as_str(), value.as_str()));
     }
 }
 

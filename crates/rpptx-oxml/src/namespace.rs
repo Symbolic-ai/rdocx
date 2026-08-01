@@ -71,6 +71,7 @@ impl NamespaceBindings {
             .iter()
             .map(|(prefix, uri)| (prefix.clone(), uri.clone()))
             .collect();
+        sort_namespace_entries(&mut entries);
         if let Some(uri) = &self.default {
             entries.push((String::new(), uri.clone()));
         }
@@ -115,6 +116,28 @@ pub(crate) fn root_attributes(
         .collect())
 }
 
+pub(crate) fn self_contained_attributes(
+    start: &BytesStart<'_>,
+    fixed_prefixes: &[&str],
+    inherited: &[(String, String)],
+) -> Result<Vec<(String, String)>, OxmlError> {
+    let mut attributes = root_attributes(start, fixed_prefixes)?;
+    for (prefix, uri) in inherited {
+        let name = if prefix.is_empty() {
+            "xmlns".to_owned()
+        } else {
+            format!("xmlns:{prefix}")
+        };
+        if is_fixed_xmlns(&name, fixed_prefixes)
+            || attributes.iter().any(|(existing, _)| existing == &name)
+        {
+            continue;
+        }
+        attributes.push((name, uri.clone()));
+    }
+    Ok(attributes)
+}
+
 pub(crate) fn is_fixed_xmlns(name: &str, fixed_prefixes: &[&str]) -> bool {
     name.strip_prefix("xmlns:")
         .is_some_and(|prefix| fixed_prefixes.contains(&prefix))
@@ -133,4 +156,32 @@ fn canonical_uri(prefix: &str) -> Option<&'static str> {
 fn qname_prefix(name: &[u8]) -> Option<&str> {
     let position = name.iter().position(|byte| *byte == b':')?;
     std::str::from_utf8(&name[..position]).ok()
+}
+
+fn sort_namespace_entries(entries: &mut [(String, String)]) {
+    entries.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sort_namespace_entries;
+
+    #[test]
+    fn namespace_entries_have_deterministic_prefix_order() {
+        let mut entries = vec![
+            ("z".to_owned(), "urn:z".to_owned()),
+            ("a".to_owned(), "urn:a".to_owned()),
+            ("m".to_owned(), "urn:m".to_owned()),
+        ];
+        sort_namespace_entries(&mut entries);
+
+        assert_eq!(
+            entries,
+            vec![
+                ("a".to_owned(), "urn:a".to_owned()),
+                ("m".to_owned(), "urn:m".to_owned()),
+                ("z".to_owned(), "urn:z".to_owned()),
+            ]
+        );
+    }
 }
