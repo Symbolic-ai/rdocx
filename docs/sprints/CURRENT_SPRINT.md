@@ -32,14 +32,14 @@ split the XL text story into reviewable sub-IDs before implementation.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-061 | Lines | M | in-progress | codex |
-| F-062 | Effects | S | in-progress | codex |
-| F-064 | DrawingML text model | XL | pending | - |
-| F-064a | Text body properties and shell | M | in-progress | codex |
-| F-064b | Text paragraphs and runs | L | in-progress | codex |
-| F-064c | Text bullets | S | in-progress | codex |
-| F-064d | Nine-level list styles | M | in-progress | codex |
-| F-063 | Shape properties and style references | M | in-progress | codex |
+| F-061 | Lines | M | done | - |
+| F-062 | Effects | S | done | - |
+| F-064 | DrawingML text model | XL | done | - |
+| F-064a | Text body properties and shell | M | done | - |
+| F-064b | Text paragraphs and runs | L | done | - |
+| F-064c | Text bullets | S | done | - |
+| F-064d | Nine-level list styles | M | done | - |
+| F-063 | Shape properties and style references | M | done | - |
 
 ## Sequencing note
 

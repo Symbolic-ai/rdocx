@@ -1,6 +1,6 @@
 # F-064, DrawingML text model
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S14
 **Size**: XL
 **Depends on**: F-053
@@ -71,9 +71,9 @@ Expected to be unchanged. The unpublished DrawingML model has no Word consumer.
 ## Implementation checklist
 
 - [x] Approve the F-064a through F-064d split in both backlogs and the sprint plan.
-- [ ] Complete F-064a, F-064b, F-064c, and F-064d with individual evidence.
-- [ ] Confirm the integrated text-body and whitespace gates pass.
-- [ ] Close the parent only after every child is complete.
+- [x] Complete F-064a, F-064b, F-064c, and F-064d with individual evidence.
+- [x] Confirm the integrated text-body and whitespace gates pass.
+- [x] Close the parent only after every child is complete.
 
 ## Open questions
 

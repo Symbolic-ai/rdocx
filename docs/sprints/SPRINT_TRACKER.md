@@ -80,6 +80,14 @@ defended.
 | F-058 | S13 | L | 4 | 1 | 2026-07-31 | Guide formulas, path evaluation, and arc lowering |
 | F-059 | S13 | M | 2 | 1 | 2026-07-31 | Custom geometry XML model and evaluation |
 | F-060 | S13 | L | 4 | 1 | 2026-07-31 | DrawingML fill families with raw preservation |
+| F-061 | S14 | M | 2 | 1 | 2026-08-01 | DrawingML line properties and preset dash mapping |
+| F-062 | S14 | S | 1 | 1 | 2026-08-01 | Outer shadows with unsupported effect preservation |
+| F-063 | S14 | M | 2 | 1 | 2026-08-01 | Shape properties and four style-reference forms |
+| F-064a | S14 | M | 2 | 1 | 2026-08-01 | Text body properties and typed shell |
+| F-064b | S14 | L | 4 | 1 | 2026-08-01 | Paragraphs, runs, fields, breaks, and whitespace |
+| F-064c | S14 | S | 1 | 1 | 2026-08-01 | Character, automatic, and no-bullet forms |
+| F-064d | S14 | M | 2 | 1 | 2026-08-01 | Fixed nine-level list styles |
+| F-064 | S14 | XL | 0 | 1 | 2026-08-01 | Umbrella closed after four child stories and integrated gates |
 
 ## Velocity
 

@@ -1584,3 +1584,237 @@ rejection, released Word theme isolation, and the integrated full gate.
 
 **Notes for future sessions.** Resolve picture relationships and media bytes in
 the PresentationML package layer. Do not add an OPC dependency to this crate.
+
+### F-061, Lines
+
+**Sprint.** S14
+**Completed.** 2026-08-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `oxml-drawing` now models `a:ln` width, fill, preset and
+custom dashes, cap and join choices, and head and tail ends. Reads accept any
+prefix, writes use fixed `a:` prefixes, and unsupported children retain their
+schema boundaries.
+
+**Non-obvious choices.** Every preset dash token maps to a concrete dash array
+without a fallback. The wire model retains schema values while the mapping
+provides the later renderer boundary.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+line and preservation contracts in `docs/hld/05-drawingml-model.md`.
+
+**Tests.** `every_preset_line_dash_value_maps_to_a_dash_array`, complete line
+round trips, schema-order writing, raw-child preservation, malformed-value
+handling, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep dash interpretation in the renderer seam.
+The XML layer should continue to preserve the declared line vocabulary.
+
+### F-062, Effects
+
+**Sprint.** S14
+**Completed.** 2026-08-01
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** `oxml-drawing` now models effect lists and outer shadows,
+including geometry and colour, while retaining unsupported effects such as
+glow as raw XML at their exact positions.
+
+**Non-obvious choices.** The effect list models only the values needed by the
+current renderer contract. Unsupported effect subtrees remain authoritative
+wire data rather than partial models.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+effect and preservation contracts in `docs/hld/05-drawingml-model.md`.
+
+**Tests.** `a_shape_with_glow_round_trips_with_glow_intact_as_raw_xml`, outer
+shadow round trips, schema-order output, malformed-value handling, and the
+integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Add another typed effect only when a current
+consumer needs it. Raw preservation already protects unsupported effects.
+
+### F-063, Shape properties and style references
+
+**Sprint.** S14
+**Completed.** 2026-08-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `oxml-drawing` now composes transforms, geometry, fills,
+lines, and effects through `a:spPr`, and models line, fill, effect, and font
+style references with optional colour choices.
+
+**Non-obvious choices.** Style index zero is valid. Fill indices greater than
+1000 select the background-fill list with an offset of 1000, so index 1001
+resolves to background fill style 1.
+
+**Deviations from the design plan.** Microscope pass 1 found that zero indices
+and colourless style references were rejected. Both schema-valid cases were
+added, and pass 2 was clean.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+shape composition and style-matrix rules in `docs/hld/05-drawingml-model.md`.
+
+**Tests.** `fill_ref_1001_resolves_to_background_fill_style_1`, all four style
+reference forms, zero and colourless references, shape schema order,
+malformed-input handling, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** The format-neutral reference model reuses
+`ColorChoice`. It does not alter the released Word theme path.
+
+### F-064a, Text body properties and shell
+
+**Sprint.** S14
+**Completed.** 2026-08-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `oxml-drawing` now owns a typed text-body shell and body
+properties for insets, anchoring, wrapping, vertical direction, autofit, and
+schema-ordered raw children.
+
+**Non-obvious choices.** The first child kept later list styles and paragraphs
+opaque until their dependent stories arrived. This preserved a usable shell
+without anticipating their models.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+text-body and autofit contracts in `docs/hld/05-drawingml-model.md`.
+
+**Tests.** `every_body_property_autofit_form_round_trips_in_schema_order`,
+prefix handling, raw-child boundaries, malformed attributes, and the
+integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Autofit remains a wire-model choice. Layout
+policy belongs to the later renderer milestone.
+
+### F-064b, Text paragraphs and runs
+
+**Sprint.** S14
+**Completed.** 2026-08-01
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `oxml-drawing` now models paragraphs, paragraph and run
+properties, regular runs, fields, line breaks, text spans, fonts, hyperlinks,
+spacing values, and ordered unsupported XML.
+
+**Non-obvious choices.** Significant leading or trailing text is emitted with
+`xml:space="preserve"`. Qualified relationship and whitespace attributes are
+matched exactly so hostile prefixes cannot masquerade as `r:id` or
+`xml:space`.
+
+**Deviations from the design plan.** Microscope pass 1 found that local-name
+fallback could interpret hostile qualified attributes as modelled attributes.
+Exact matching and regressions fixed the issue, and pass 2 was clean.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+text and preservation contracts in `docs/hld/05-drawingml-model.md`.
+
+**Tests.** `leading_and_trailing_text_whitespace_survives_via_xml_space_preserve`,
+paragraph content order, property units, hyperlink attributes, hostile
+prefixes, malformed input, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Relationship resolution remains outside this
+crate. The parser stores relationship identifiers without adding an OPC edge.
+
+### F-064c, Text bullets
+
+**Sprint.** S14
+**Completed.** 2026-08-01
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Paragraph properties now carry character, automatic, and
+explicit no-bullet choices with optional font, point or percentage size, and
+colour components in DrawingML schema order.
+
+**Non-obvious choices.** All 41 automatic-numbering tokens are explicit. The
+wire model retains literal bullet characters, while Wingdings conversion stays
+with the later renderer work.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+bullet and preservation contracts in `docs/hld/05-drawingml-model.md`.
+
+**Tests.** `every_modelled_bullet_form_round_trips_in_schema_order`, every
+numbering token, optional component order, raw preservation, malformed values,
+and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep font-symbol conversion out of structural
+round trips so original bullet codepoints remain recoverable.
+
+### F-064d, Nine-level list styles
+
+**Sprint.** S14
+**Completed.** 2026-08-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `a:lstStyle` now has nine explicit optional paragraph
+property slots. The text-body model composes typed body properties, list
+styles, and paragraphs into one structural round trip.
+
+**Non-obvious choices.** Fixed slots make invalid list-level numbers
+unrepresentable. Unsupported list-style siblings remain raw at their captured
+boundaries, and modelled levels write in ascending schema order.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+nine-level text style chain in `docs/hld/07-inheritance-and-resolution.md`.
+
+**Tests.** `schema_valid_text_body_using_all_nine_list_levels_round_trips_structurally`,
+ascending level order, raw sibling preservation, invalid levels, and the
+integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** The inline schema-valid fixture covers this
+sprint. The fetched deck corpus remains required at the M7 boundary.
+
+### F-064, DrawingML text model
+
+**Sprint.** S14
+**Completed.** 2026-08-01
+**Size.** XL, estimated 0 days after split, actual 1 day
+
+**What was built.** The umbrella closed after F-064a through F-064d delivered
+the complete staged DrawingML text hierarchy for body properties, list styles,
+paragraphs, runs, fields, breaks, whitespace, and bullets.
+
+**Non-obvious choices.** The XL story carries no duplicate implementation.
+Its four child stories own the natural schema boundaries and their individual
+evidence, while this entry records the integrated contract.
+
+**Deviations from the design plan.** The approved split used inline
+schema-valid XML for S14. The fetched external deck corpus remains the M7
+boundary gate, as planned.
+
+**Spec sections touched.** `docs/hld/14-development-backlog.md` already records
+the four-child split and the parent closure rule. No further prose change was
+required.
+
+**Tests.** The complete nine-level text-body structural round trip,
+`leading_and_trailing_text_whitespace_survives_via_xml_space_preserve`, every
+child test gate, and the integrated full workspace gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Run the separately fetched PowerPoint deck
+corpus before closing M7. Do not publish the PowerPoint development crates
+before PowerPoint development is complete.
