@@ -4,6 +4,7 @@ use oxml_core::OxmlError;
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
 use oxml_drawing::namespace::A_NS;
 use oxml_drawing::order::OrderedRawChildren;
+use oxml_drawing::text::CT_TextBody;
 use oxml_drawing::xfrm::CT_Transform2D;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
@@ -170,6 +171,7 @@ fn duplicate_fallback() -> OxmlError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CT_Shape {
     pub placeholder: Option<CT_Placeholder>,
+    pub text_body: Option<CT_TextBody>,
     raw: Box<ShapeRaw>,
 }
 
@@ -294,6 +296,7 @@ impl CT_Shape {
     ) -> Result<Self> {
         let mut non_visual = None;
         let mut shape_properties = None;
+        let mut text_body = None;
         let mut raw_children = OrderedRawChildren::default();
         let mut boundary = 0usize;
         let mut buffer = Vec::new();
@@ -311,6 +314,7 @@ impl CT_Shape {
                         &child_namespaces,
                         &mut non_visual,
                         &mut shape_properties,
+                        &mut text_body,
                         &mut raw_children,
                         &mut boundary,
                     )?;
@@ -327,6 +331,7 @@ impl CT_Shape {
                         &child_namespaces,
                         &mut non_visual,
                         &mut shape_properties,
+                        &mut text_body,
                         &mut raw_children,
                         &mut boundary,
                     )?;
@@ -341,6 +346,7 @@ impl CT_Shape {
         let non_visual = required(non_visual, "p:nvSpPr")?;
         Ok(Self {
             placeholder: non_visual.placeholder,
+            text_body,
             raw: Box::new(ShapeRaw {
                 raw_attributes: self_contained_attributes(
                     start,
@@ -386,6 +392,14 @@ impl CT_Shape {
         emit_raw(writer, self.raw.raw_children.at(1))?;
         writer.get_mut().write_all(&self.raw.shape_properties)?;
         emit_raw(writer, self.raw.raw_children.at(2))?;
+        emit_raw(writer, self.raw.raw_children.at(3))?;
+        if let Some(text_body) = &self.text_body {
+            text_body
+                .write_xml_as(writer, "p:txBody")
+                .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+        }
+        emit_raw(writer, self.raw.raw_children.at(4))?;
+        emit_raw(writer, self.raw.raw_children.at(5))?;
         writer.write_event(Event::End(BytesEnd::new("p:sp")))?;
         Ok(())
     }
@@ -445,6 +459,7 @@ fn capture_shape_child(
     namespaces: &NamespaceBindings,
     non_visual: &mut Option<ParsedNonVisualShape>,
     shape_properties: &mut Option<Vec<u8>>,
+    text_body: &mut Option<CT_TextBody>,
     raw_children: &mut OrderedRawChildren,
     boundary: &mut usize,
 ) -> Result<()> {
@@ -469,6 +484,37 @@ fn capture_shape_child(
             }
             *shape_properties = Some(raw);
             *boundary = 2;
+        }
+        (Some(P_NS), b"style") => {
+            if *boundary != 2 {
+                return Err(OxmlError::InvalidValue(
+                    "p:style must follow p:spPr and precede p:txBody".to_owned(),
+                ));
+            }
+            raw_children.push(2, raw);
+            *boundary = 3;
+        }
+        (Some(P_NS), b"txBody") => {
+            if !matches!(*boundary, 2 | 3) || text_body.is_some() {
+                return Err(OxmlError::InvalidValue(
+                    "p:txBody must follow p:spPr and optional p:style".to_owned(),
+                ));
+            }
+            namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
+            *text_body = Some(
+                CT_TextBody::from_xml(&raw)
+                    .map_err(|error| OxmlError::InvalidValue(error.to_string()))?,
+            );
+            *boundary = 4;
+        }
+        (Some(P_NS), b"extLst") => {
+            if !matches!(*boundary, 2..=4) {
+                return Err(OxmlError::InvalidValue(
+                    "p:extLst must be the final p:sp child".to_owned(),
+                ));
+            }
+            raw_children.push(4, raw);
+            *boundary = 5;
         }
         _ => raw_children.push(*boundary, raw),
     }

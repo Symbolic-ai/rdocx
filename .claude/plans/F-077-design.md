@@ -1,6 +1,6 @@
 # F-077, Notes slides and notes master
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S18
 **Size**: M
 **Depends on**: F-069
@@ -47,14 +47,14 @@ impl CT_NotesSlide {
 pub struct CT_NotesMaster {
     pub common_slide_data: CT_CommonSlideData,
     pub color_map: ColorMap,
-    pub notes_style: CT_TextListStyle,
+    pub notes_style: Option<CT_TextListStyle>,
     // private raw attributes and ordered raw children
 }
 ```
 
 The notes-slide sequence is `p:cSld`, optional `p:clrMapOvr`, then optional
 `p:extLst`. The notes-master sequence is `p:cSld`, required `p:clrMap`, optional
-raw `p:hf`, required typed `p:notesStyle`, then optional `p:extLst`. Both roots
+raw `p:hf`, optional typed `p:notesStyle`, then optional `p:extLst`. Both roots
 reuse the existing common-slide, colour-map, and ordered-preservation machinery,
 accept namespace aliases on read, and write fixed prefixes in schema order.
 
@@ -92,6 +92,7 @@ dispatch. No publication or version change is part of the story.
 | unit | `text_body_plain_text_preserves_run_field_break_and_paragraph_order` | Runs, fields, explicit breaks, and paragraphs produce the specified newline-separated text |
 | unit | `notes_slide_extracts_only_body_placeholder_text` | Slide image, slide number, footer, and master prompt text are excluded from speaker notes |
 | unit | `notes_parts_read_any_prefix_write_fixed_prefixes_and_schema_order` | Alias prefixes parse and both roots write their required and optional children in schema order |
+| regression | `notes_master_without_notes_style_round_trips_with_extension_in_schema_order` | A schema-valid notes master may omit `p:notesStyle`, with or without `p:hf`, while retaining extension order |
 | preservation | `notes_parts_preserve_unmodelled_children_in_their_schema_slots` | Producer attributes and unsupported children remain exact at their original boundaries |
 | round-trip | `every_corpus_notes_slide_and_master_round_trips_structurally` | Every content-type-discovered notes part serialises and reparses equally, with nonempty body notes extracted |
 | integration | `corpus_notes_relationships_are_complete` | Notes slides, notes masters, themes, and source slides have the required relationship cardinalities |
@@ -131,16 +132,16 @@ development crates and does not modify the released Word path.
 
 ## Implementation checklist
 
-- [ ] Add and export notes-slide and notes-master roots.
-- [ ] Enforce their required child sequences and preserve optional content.
-- [ ] Type `p:txBody` on shapes using the existing DrawingML text model.
-- [ ] Add plain-text extraction for runs, fields, breaks, and paragraphs.
-- [ ] Extract speaker notes only from effective body placeholders.
-- [ ] Add focused schema, extraction, relationship, and preservation tests.
-- [ ] Add the required pinned-corpus notes round-trip gate.
-- [ ] Update the approved HLD impact file.
-- [ ] Confirm every PowerPoint development crate remains version 0.0.0 and unpublished.
-- [ ] Confirm all deterministic hashes remain unchanged.
+- [x] Add and export notes-slide and notes-master roots.
+- [x] Enforce their required child sequences and preserve optional content.
+- [x] Type `p:txBody` on shapes using the existing DrawingML text model.
+- [x] Add plain-text extraction for runs, fields, breaks, and paragraphs.
+- [x] Extract speaker notes only from effective body placeholders.
+- [x] Add focused schema, extraction, relationship, and preservation tests.
+- [x] Add the required pinned-corpus notes round-trip gate.
+- [x] Update the approved HLD impact file.
+- [x] Confirm every PowerPoint development crate remains version 0.0.0 and unpublished.
+- [x] Confirm all deterministic hashes remain unchanged.
 
 ## Open questions
 

@@ -17,8 +17,11 @@ Owner: `rpptx-oxml`, with the facade in `rpptx`.
 
 **Hard structural constraints.** Every slide has exactly one `slideLayout`
 relationship. Every layout has exactly one `slideMaster` relationship. Every
-master has a `theme` relationship and a `p:clrMap`. A deck with zero slides is
-valid, and that is what a template is.
+master has a `theme` relationship and a `p:clrMap`. Every notes slide has
+exactly one `notesMaster` relationship and exactly one `slide` relationship
+back to its source slide. Every notes master has exactly one `theme`
+relationship. A source slide has at most one `notesSlide` relationship. A deck
+with zero slides is valid, and that is what a template is.
 
 ## `presentation.xml`
 
@@ -35,6 +38,45 @@ defect in naive `add_slide` implementations.
 The `.pptx` versus `.ppsx` distinction lives entirely in this part's content
 type: `presentationml.presentation.main+xml` against
 `presentationml.slideshow.main+xml`. `Presentation::save_as_show()` exposes it.
+
+## Notes parts
+
+A notes slide has this root sequence:
+
+```
+p:notes
+  p:cSld       required
+  p:clrMapOvr? optional
+  p:extLst?    optional
+```
+
+A notes master has this root sequence:
+
+```
+p:notesMaster
+  p:cSld       required
+  p:clrMap     required
+  p:hf?        optional, preserved raw
+  p:notesStyle? optional, typed as CT_TextListStyle
+  p:extLst?    optional
+```
+
+Both roots reuse `CT_CommonSlideData`. They read namespace aliases, write fixed
+`p:`, `a:`, and `r:` prefixes, and retain unsupported attributes and children
+in their schema slots.
+
+`CT_NotesSlide::notes_text()` walks its shape tree in z-order, including
+recursive groups and the selected rendering view of `mc:AlternateContent`.
+It includes text only from a `p:sp` whose placeholder effective type is exactly
+`body`. An absent `p:ph/@type` therefore qualifies. The placeholder matching
+equivalence between `body`, `subTitle`, and `obj` does not broaden extraction.
+Slide-image, slide-number, date, footer, header, and notes-master prompt text is
+excluded.
+
+Each included `p:txBody` contributes run and field text in document order.
+`a:br` contributes a newline and paragraph boundaries contribute a newline.
+Empty bodies are skipped, and multiple nonempty body placeholders are joined
+with a newline.
 
 ## The shape tree
 

@@ -16,6 +16,7 @@ use rpptx_oxml::PRESENTATION_PART;
 use rpptx_oxml::connector::CT_ConnectionShape;
 use rpptx_oxml::graphic_frame::{CT_GraphicFrame, GraphicDataPayload};
 use rpptx_oxml::namespace::{MC_NS, P_NS, P_PREFIX, R_NS, R_PREFIX};
+use rpptx_oxml::notes_parts::{CT_NotesMaster, CT_NotesSlide};
 use rpptx_oxml::picture::CT_Picture;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType, PlaceholderKey};
 use rpptx_oxml::presentation::CT_Presentation;
@@ -2017,7 +2018,7 @@ fn placeholder_attributes_and_unknown_children_round_trip_in_place() {
 #[test]
 fn typed_shape_placeholder_round_trips_inside_nested_groups() {
     let xml = format!(
-        r#"<q:spTree xmlns:q="{P_NS}" xmlns:x="urn:producer"><q:nvGrpSpPr/><q:grpSpPr/><q:grpSp><q:nvGrpSpPr/><q:grpSpPr/><q:sp marker="shape"><q:nvSpPr x:keep="yes"><q:cNvPr id="2" name="Title"/><x:between/><q:cNvSpPr/><q:nvPr><x:before/><q:ph type="ctrTitle" idx="5"/><x:after/></q:nvPr></q:nvSpPr><q:spPr/><q:txBody><x:raw/></q:txBody></q:sp></q:grpSp></q:spTree>"#
+        r#"<q:spTree xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><q:nvGrpSpPr/><q:grpSpPr/><q:grpSp><q:nvGrpSpPr/><q:grpSpPr/><q:sp marker="shape"><q:nvSpPr x:keep="yes"><q:cNvPr id="2" name="Title"/><x:between/><q:cNvSpPr/><q:nvPr><x:before/><q:ph type="ctrTitle" idx="5"/><x:after/></q:nvPr></q:nvSpPr><q:spPr/><q:txBody><d:bodyPr/><x:raw/><d:p/></q:txBody></q:sp></q:grpSp></q:spTree>"#
     );
     let tree = CT_ShapeTree::from_xml(xml.as_bytes()).unwrap();
     let ShapeTreeChild::GroupShape(group) = &tree.children[0] else {
@@ -2334,6 +2335,224 @@ fn every_corpus_graphic_frame_round_trips_structurally() {
     assert_eq!(coverage.other, 0);
     assert_eq!(coverage.total(), 86);
     eprintln!("Graphic-frame corpus gate checked {coverage:?}");
+}
+
+#[test]
+fn text_body_plain_text_preserves_run_field_break_and_paragraph_order() {
+    let body = CT_TextBody::from_xml(
+        br#"<a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>first</a:t></a:r><a:br/><a:fld id="{14E3C6B4-82AF-4BA3-9737-6C8DF2E2A225}" type="datetime"><a:t>field</a:t></a:fld><a:r><a:t> last</a:t></a:r></a:p><a:p><a:r><a:t>second</a:t></a:r></a:p></a:txBody>"#,
+    )
+    .unwrap();
+    assert_eq!(body.plain_text(), "first\nfield last\nsecond");
+}
+
+#[test]
+fn notes_slide_extracts_only_body_placeholder_text() {
+    let xml = format!(
+        r#"<p:notes xmlns:p="{P_NS}" xmlns:a="{}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/>
+<p:sp><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr><p:ph type="sldImg"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>slide image</a:t></a:r></a:p></p:txBody></p:sp>
+<p:sp><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr><p:ph type="sldNum"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:fld id="{{14E3C6B4-82AF-4BA3-9737-6C8DF2E2A225}}"><a:t>12</a:t></a:fld></a:p></p:txBody></p:sp>
+<p:sp><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr><p:ph type="ftr"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>footer</a:t></a:r></a:p></p:txBody></p:sp>
+<p:sp><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr><p:ph/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>speaker</a:t></a:r><a:br/><a:r><a:t>note</a:t></a:r></a:p></p:txBody></p:sp>
+</p:spTree></p:cSld></p:notes>"#,
+        oxml_drawing::namespace::A_NS
+    );
+    let notes = CT_NotesSlide::from_xml(xml.as_bytes()).unwrap();
+    assert_eq!(notes.notes_text(), "speaker\nnote");
+    assert_eq!(
+        notes,
+        CT_NotesSlide::from_xml(&notes.to_xml().unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn notes_parts_read_any_prefix_write_fixed_prefixes_and_schema_order() {
+    let color_map = r#"bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink""#;
+    let slide_xml = format!(
+        r#"<q:notes xmlns:q="{P_NS}" xmlns:d="{}"><q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld><q:clrMapOvr><d:masterClrMapping/></q:clrMapOvr><q:extLst><q:ext uri="slide"/></q:extLst></q:notes>"#,
+        oxml_drawing::namespace::A_NS
+    );
+    let slide = CT_NotesSlide::from_xml(slide_xml.as_bytes()).unwrap();
+    let slide_written = slide.to_xml().unwrap();
+    assert_order(&slide_written, &["<p:cSld", "<p:clrMapOvr", "<q:extLst"]);
+    assert_eq!(slide, CT_NotesSlide::from_xml(&slide_written).unwrap());
+
+    let master_xml = format!(
+        r#"<q:notesMaster xmlns:q="{P_NS}" xmlns:d="{}"><q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld><q:clrMap {color_map}/><q:hf hdr="1"/><q:notesStyle><d:lvl1pPr/></q:notesStyle><q:extLst><q:ext uri="master"/></q:extLst></q:notesMaster>"#,
+        oxml_drawing::namespace::A_NS
+    );
+    let master = CT_NotesMaster::from_xml(master_xml.as_bytes()).unwrap();
+    let master_written = master.to_xml().unwrap();
+    assert_order(
+        &master_written,
+        &[
+            "<p:cSld",
+            "<p:clrMap",
+            "<q:hf",
+            "<p:notesStyle",
+            "<q:extLst",
+        ],
+    );
+    assert_eq!(master, CT_NotesMaster::from_xml(&master_written).unwrap());
+
+    let out_of_order = format!(
+        r#"<p:notesMaster xmlns:p="{P_NS}"><p:clrMap {color_map}/><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><p:notesStyle/></p:notesMaster>"#
+    );
+    assert!(CT_NotesMaster::from_xml(out_of_order.as_bytes()).is_err());
+}
+
+#[test]
+fn notes_master_without_notes_style_round_trips_with_extension_in_schema_order() {
+    let color_map = r#"bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink""#;
+    for header_footer in ["", r#"<q:hf hdr="1"/>"#] {
+        let xml = format!(
+            r#"<q:notesMaster xmlns:q="{P_NS}" xmlns:x="urn:producer"><q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld><q:clrMap {color_map}/>{header_footer}<x:between/><q:extLst><x:payload/></q:extLst></q:notesMaster>"#
+        );
+        let parsed = CT_NotesMaster::from_xml(xml.as_bytes()).unwrap();
+        assert!(parsed.notes_style.is_none());
+        let written = parsed.to_xml().unwrap();
+        let mut expected = vec!["<p:cSld", "<p:clrMap"];
+        if !header_footer.is_empty() {
+            expected.push("<q:hf");
+        }
+        expected.extend(["<x:between", "<q:extLst"]);
+        assert_order(&written, &expected);
+        assert_eq!(
+            parsed,
+            CT_NotesMaster::from_xml(&written).unwrap(),
+            "{header_footer}"
+        );
+    }
+}
+
+#[test]
+fn notes_parts_preserve_unmodelled_children_in_their_schema_slots() {
+    let producer_before =
+        r#"<x:before marker="a &amp; b"><x:data/><!--kept--><?producer value?></x:before>"#;
+    let producer_between = r#"<x:between value="2"/>"#;
+    let producer_after = r#"<x:after value="3"/>"#;
+    let xml = format!(
+        r#"<q:notes xmlns:q="{P_NS}" xmlns:d="{}" xmlns:x="urn:producer" x:root="kept">{producer_before}<q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld>{producer_between}<q:clrMapOvr><d:masterClrMapping/></q:clrMapOvr>{producer_after}<q:extLst><x:payload/></q:extLst></q:notes>"#,
+        oxml_drawing::namespace::A_NS
+    );
+    let parsed = CT_NotesSlide::from_xml(xml.as_bytes()).unwrap();
+    let written = parsed.to_xml().unwrap();
+    let written_text = std::str::from_utf8(&written).unwrap();
+    assert!(written_text.contains(r#"xmlns:x="urn:producer""#));
+    assert!(written_text.contains(r#"x:root="kept""#));
+    for raw in [producer_before, producer_between, producer_after] {
+        assert!(
+            written
+                .windows(raw.len())
+                .any(|window| window == raw.as_bytes())
+        );
+    }
+    assert_order(
+        &written,
+        &[
+            producer_before,
+            "<p:cSld",
+            producer_between,
+            "<p:clrMapOvr",
+            producer_after,
+        ],
+    );
+}
+
+#[test]
+fn every_corpus_notes_slide_and_master_round_trips_structurally() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut notes_slides = 0usize;
+    let mut notes_masters = 0usize;
+    let mut nonempty_notes = 0usize;
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, content_type) in &package.content_types.overrides {
+            let Some(xml) = package.get_part(part) else {
+                continue;
+            };
+            match content_type.as_str() {
+                content_types::NOTES_SLIDE => {
+                    let parsed = CT_NotesSlide::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                    nonempty_notes += usize::from(!parsed.notes_text().is_empty());
+                    assert_eq!(
+                        parsed,
+                        CT_NotesSlide::from_xml(&parsed.to_xml().unwrap()).unwrap(),
+                        "{} {part}",
+                        entry.path
+                    );
+                    notes_slides += 1;
+                }
+                content_types::NOTES_MASTER => {
+                    let parsed = CT_NotesMaster::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                    assert_eq!(
+                        parsed,
+                        CT_NotesMaster::from_xml(&parsed.to_xml().unwrap()).unwrap(),
+                        "{} {part}",
+                        entry.path
+                    );
+                    notes_masters += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(notes_slides > 0);
+    assert!(notes_masters > 0);
+    assert!(nonempty_notes > 0);
+    eprintln!(
+        "Notes corpus gate checked {notes_slides} notes slides, {notes_masters} notes masters, and {nonempty_notes} nonempty note bodies"
+    );
+}
+
+#[test]
+fn corpus_notes_relationships_are_complete() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut notes_slides = 0usize;
+    let mut notes_masters = 0usize;
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, content_type) in &package.content_types.overrides {
+            if !package.parts.contains_key(part) {
+                continue;
+            }
+            let relationships = package.get_part_rels(part);
+            let count = |relationship_type: &str| {
+                relationships.map_or(0, |items| {
+                    items
+                        .items
+                        .iter()
+                        .filter(|relationship| relationship.rel_type == relationship_type)
+                        .count()
+                })
+            };
+            match content_type.as_str() {
+                content_types::NOTES_SLIDE => {
+                    assert_eq!(count(rel_types::NOTES_MASTER), 1, "{} {part}", entry.path);
+                    assert_eq!(count(rel_types::SLIDE), 1, "{} {part}", entry.path);
+                    notes_slides += 1;
+                }
+                content_types::NOTES_MASTER => {
+                    assert_eq!(count(rel_types::THEME), 1, "{} {part}", entry.path);
+                    notes_masters += 1;
+                }
+                content_types::SLIDE => {
+                    assert!(count(rel_types::NOTES_SLIDE) <= 1, "{} {part}", entry.path);
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(notes_slides > 0);
+    assert!(notes_masters > 0);
 }
 
 const TABLE_GRAPHIC_DATA_URI: &str = "http://schemas.openxmlformats.org/drawingml/2006/table";

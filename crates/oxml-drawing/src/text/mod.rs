@@ -163,11 +163,16 @@ impl CT_TextBody {
 
     /// Writes the shell into an existing XML writer.
     pub fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        self.write_xml_as(writer, "a:txBody")
+    }
+
+    /// Writes the text body using a caller-selected OOXML wrapper tag.
+    pub fn write_xml_as<W: Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
         if self.paragraphs.is_empty() {
             return Err(TextError::MissingParagraph);
         }
         writer
-            .write_event(Event::Start(BytesStart::new("a:txBody")))
+            .write_event(Event::Start(BytesStart::new(tag)))
             .map_err(OxmlError::from)?;
         emit_raw(writer, self.raw_children.at(0))?;
         self.body_properties.write_xml(writer)?;
@@ -181,9 +186,32 @@ impl CT_TextBody {
             emit_raw(writer, self.raw_children.at(3 + index))?;
         }
         writer
-            .write_event(Event::End(BytesEnd::new("a:txBody")))
+            .write_event(Event::End(BytesEnd::new(tag)))
             .map_err(OxmlError::from)?;
         Ok(())
+    }
+
+    /// Returns plain text in paragraph and text-content order.
+    pub fn plain_text(&self) -> String {
+        self.paragraphs
+            .iter()
+            .map(|paragraph| {
+                let mut text = String::new();
+                for run in &paragraph.runs {
+                    match run {
+                        TextRun::Run(run) => text.push_str(&run.text.value),
+                        TextRun::Break(_) => text.push('\n'),
+                        TextRun::Field(field) => {
+                            if let Some(value) = &field.text {
+                                text.push_str(&value.value);
+                            }
+                        }
+                    }
+                }
+                text
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     pub fn has_list_style(&self) -> bool {

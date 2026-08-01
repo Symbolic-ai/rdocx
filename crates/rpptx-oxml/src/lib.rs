@@ -3,6 +3,7 @@
 pub mod connector;
 pub mod graphic_frame;
 pub mod namespace;
+pub mod notes_parts;
 pub mod picture;
 pub mod placeholder;
 pub mod presentation;
