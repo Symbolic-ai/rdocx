@@ -1,6 +1,6 @@
 # F-063, Shape properties and style references
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S14
 **Size**: M
 **Depends on**: F-060, F-061
@@ -74,11 +74,11 @@ Expected to be unchanged. The unpublished DrawingML model has no Word consumer.
 
 ## Implementation checklist
 
-- [ ] Add failing shape-order, style-reference, background-index, and malformed-input tests.
-- [ ] Add and export the shape-properties model.
-- [ ] Add and export the four style-reference forms and index classification.
-- [ ] Preserve unsupported XML at exact schema boundaries.
-- [ ] Run focused checks after F-061 is integrated.
+- [x] Add failing shape-order, style-reference, background-index, and malformed-input tests.
+- [x] Add and export the shape-properties model.
+- [x] Add and export the four style-reference forms and index classification.
+- [x] Preserve unsupported XML at exact schema boundaries.
+- [x] Run focused checks after F-061 is integrated.
 
 ## Open questions
 
