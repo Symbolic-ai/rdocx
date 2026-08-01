@@ -36,7 +36,7 @@ split the XL text story into reviewable sub-IDs before implementation.
 | F-062 | Effects | S | in-progress | codex |
 | F-064 | DrawingML text model | XL | pending | - |
 | F-064a | Text body properties and shell | M | in-progress | codex |
-| F-064b | Text paragraphs and runs | L | pending | - |
+| F-064b | Text paragraphs and runs | L | in-progress | codex |
 | F-064c | Text bullets | S | pending | - |
 | F-064d | Nine-level list styles | M | pending | - |
 | F-063 | Shape properties and style references | M | in-progress | codex |
