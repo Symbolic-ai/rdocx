@@ -1818,3 +1818,71 @@ child test gate, and the integrated full workspace gate.
 **Notes for future sessions.** Run the separately fetched PowerPoint deck
 corpus before closing M7. Do not publish the PowerPoint development crates
 before PowerPoint development is complete.
+
+### F-065, Theme read and write
+
+**Sprint.** S15
+**Completed.** 2026-08-01
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `oxml-drawing` now reads and writes complete DrawingML
+themes with twelve colour slots, major and minor font collections, supplemental
+script fonts, and typed fill, line, effect, and background-fill style lists.
+`office_default()` supplies the standard Aptos-era Office theme.
+
+**Non-obvious choices.** Unsupported attributes and children remain raw at
+their schema boundaries. The canonical default is pinned to PowerPoint 16.104,
+plist build 16.104.25121423, and AppleScript build 1214. The generated theme
+opened in that build without repair.
+
+**Deviations from the design plan.** Microscope pass 1 found that modelled XML
+attributes were not decoded before canonical rewriting and that private writer
+helpers had unjustified single-use generics. Entity decoding, its regression,
+and concrete writer helpers fixed both findings. Pass 2 was clean.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`, "The deck
+corpus", and `docs/hld/14-development-backlog.md`, the M7 gate and F-065 and
+F-067 entries. The external corpus gate now runs at S16 entry after F-067
+creates its harness.
+
+**Tests.** `powerpoint_office_theme_round_trips_structurally`,
+`office_default_theme_is_accepted_by_powerpoint`, schema-order and fixed-prefix
+writing, four format-style lists, raw-child preservation, entity decoding,
+malformed input, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** F-067 must execute the carried M7 `a:txBody` and
+`a:spPr` corpus gate before M8 model work. Keep development crates unpublished.
+
+### F-066, The rdocx Theme adapter
+
+**Sprint.** S15
+**Completed.** 2026-08-01
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** `oxml-drawing` now implements
+`From<&CT_OfficeStyleSheet>` for the stable `rdocx_oxml::theme::Theme`,
+projecting twelve concrete colour slots and the two Latin font families.
+
+**Non-obvious choices.** The dependency runs only from unpublished
+`oxml-drawing` to released `rdocx-oxml`. The adapter ignores shared fields the
+legacy type cannot represent, prefers a system colour's `lastClr`, and retains
+the legacy symbolic fallback when no resolved value exists.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+single dependency exception in `docs/hld/03-architecture.md` and the frozen
+Word tint and shade contract in `docs/hld/05-drawingml-model.md`.
+
+**Tests.** `shared_theme_adapter_matches_the_legacy_theme_projection`,
+`shared_theme_adapter_does_not_project_unresolved_colour_forms`, the legacy
+`tint_shade_modifiers` regression, both dependency trees, the released
+`rdocx-oxml` package dry-run, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Do not reverse the dependency or install the
+shared parser into the active Word path before the separately reviewed shared
+crate publication and cutover work.

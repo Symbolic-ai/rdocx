@@ -22,7 +22,7 @@ regenerated, never hand-edited.
 | M4, Layout primitives                       | 8  | 8 | 0 | 0  |
 | M5, PDF backend                             | 9  | 9 | 0 | 0  |
 | M6, Shared publication and rdocx cutover     | 6  | 0 | 0 | 6  |
-| M7, DrawingML                               | 19 | 17 | 0 | 2  |
+| M7, DrawingML                               | 19 | 19 | 0 | 0  |
 | M8, PresentationML                          | 14 | 0 | 0 | 14 |
 | M9, Inheritance resolver                    | 8  | 0 | 0 | 8  |
 | M10, Renderer                               | 16 | 0 | 0 | 16 |
@@ -30,7 +30,7 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **154** | **57** | **0** | **97** |
+| **Total** | **154** | **59** | **0** | **95** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -150,8 +150,8 @@ regenerated, never hand-edited.
 | F-064b | Text paragraphs and runs                     | S14 | L | done |
 | F-064c | Text bullets                                 | S14 | S | done |
 | F-064d | Nine-level list styles                       | S14 | M | done |
-| F-065 | Theme read and write                         | S15 | L | pending |
-| F-066 | The rdocx Theme adapter                      | S15 | S | pending |
+| F-065 | Theme read and write                         | S15 | L | done |
+| F-066 | The rdocx Theme adapter                      | S15 | S | done |
 <!-- AUTOGEN:backlog-M7 END -->
 
 ### M8, PresentationML

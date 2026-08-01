@@ -92,14 +92,18 @@ where the parser assumptions break:
 - A multi-master corporate template
 - Decks containing SmartArt, charts, embedded video, and ink
 
-Three gates run against it:
+Four gates run against it:
 
-1. **Raw round-trip** (M8 entry): open and save with everything treated as
+1. **DrawingML structural round-trip** (S16 entry): after F-067 fetches the
+   corpus and creates its harness, every `a:txBody` and `a:spPr` parses,
+   serialises and reparses to a structurally equal value. This is the carried
+   M7 exit gate, placed at the first point where the external corpus exists.
+2. **Raw round-trip** (M8 entry): open and save with everything treated as
    opaque parts, assert byte-identical output. This proves the OPC layer and the
    corpus harness before any XML modelling exists.
-2. **Modelled round-trip** (M8 exit): parse, serialise, reparse, compare
+3. **Modelled round-trip** (M8 exit): parse, serialise, reparse, compare
    structurally, and compare the saved package part by part.
-3. **Opens without repair** (M8 and M11): every saved deck opened manually in
+4. **Opens without repair** (M8 and M11): every saved deck opened manually in
    PowerPoint once per milestone. Not automatable, and not skippable.
 
 ## The render fidelity gate
