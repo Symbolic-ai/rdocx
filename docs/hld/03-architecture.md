@@ -97,19 +97,17 @@ and the style resolver. Slides do not paginate, so none of it transfers.
 
 ## Versioning
 
-During PowerPoint development, each implemented `oxml-*` crate keeps its
-reserved `version = "0.0.0"` and sets `publish = false`. The released `rdocx-*`
-crates continue to use the workspace version. The two families move together
-only after the PowerPoint implementation is complete and the shared crates have
-their own reviewed publication plan.
+During PowerPoint development, each implemented `oxml-*` and `rpptx-*` crate
+keeps its reserved `version = "0.0.0"` and sets `publish = false`. The released
+`rdocx-*` crates continue to use the workspace version. PowerPoint development
+crates remain unpublished until that implementation is complete and a separate
+reviewed publication plan receives explicit approval.
 
-`rpptx-*` crates **opt out** with an explicit `version = "0.1.0"`, and carry
-their own `keywords` and `categories`, because the workspace values say
-`["docx", "word"]` which would be wrong on a presentation crate. This means
-rpptx can churn through breaking 0.1.x releases without dragging rdocx's version
-number along, and rdocx can ship patches without implying rpptx stability.
-
-They fold into the lockstep train once rpptx stabilises.
+`rpptx-*` crates carry their own `keywords` and `categories`, because the
+workspace values say `["docx", "word"]` which would be wrong on a presentation
+crate. Once publication is approved, the rpptx family uses its own pre-1.0
+version train so breaking releases do not drag the released rdocx family with
+them. The families fold into a lockstep train once rpptx stabilises.
 
 ## Crate-level conventions
 

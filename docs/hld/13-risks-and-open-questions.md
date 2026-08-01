@@ -25,13 +25,6 @@ The future crates.io names in the publishing graph are controlled by
 distribution such as `rdocx-python` while keeping `import rdocx`. Claim both
 PyPI names as soon as the decision to ship wheels is confirmed.
 
-### Q3, the deck corpus
-
-Fifty real decks are needed, spanning producers. Sourcing them is not
-technically hard but they must be redistributable, or the corpus must be
-fetched rather than committed. Decide before M8, since the corpus is that
-milestone's entry gate.
-
 ## Risks, ranked
 
 ### R1, silent output drift during the extraction

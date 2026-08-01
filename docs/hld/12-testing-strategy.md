@@ -81,9 +81,13 @@ with the sample name.
 
 ## The deck corpus
 
-Roughly 50 real `.pptx` files, stored outside the published crates and fetched
-by a script. Deliberately spanning producers, because non-Microsoft writers are
-where the parser assumptions break:
+Fifty real `.pptx` files are stored outside the published crates and fetched by
+`scripts/fetch_pptx_corpus.py` into the ignored `corpus/pptx` directory. The
+tracked manifest pins each URL, producer, relative path, and SHA-256. It
+contains 49 Apache POI slideshow test decks at commit
+`11ede1db13c554b4341266faeb84e327fc316379` and one public Google Slides export.
+`--check` verifies the complete directory without changing it. The set spans
+producers because non-Microsoft writers are where parser assumptions break:
 
 - PowerPoint 2016 and Microsoft 365
 - Google Slides export
@@ -94,13 +98,15 @@ where the parser assumptions break:
 
 Four gates run against it:
 
-1. **DrawingML structural round-trip** (S16 entry): after F-067 fetches the
-   corpus and creates its harness, every `a:txBody` and `a:spPr` parses,
-   serialises and reparses to a structurally equal value. This is the carried
-   M7 exit gate, placed at the first point where the external corpus exists.
-2. **Raw round-trip** (M8 entry): open and save with everything treated as
-   opaque parts, assert byte-identical output. This proves the OPC layer and the
-   corpus harness before any XML modelling exists.
+1. **DrawingML structural round-trip**: every `a:txBody` and `a:spPr` parses,
+   serialises and reparses to a structurally equal value. The pinned corpus has
+   6,898 text bodies and 8,643 shape-property elements. This is the carried M7
+   exit gate at the first point where the external corpus exists.
+2. **Raw round-trip**: open and canonically save with every document part
+   treated as opaque. Every decompressed part stays byte-identical, while
+   content types and relationships stay structurally equal. ZIP metadata and
+   compression are not model state. This proves the OPC layer and the corpus
+   harness before any PresentationML modelling exists.
 3. **Modelled round-trip** (M8 exit): parse, serialise, reparse, compare
    structurally, and compare the saved package part by part.
 4. **Opens without repair** (M8 and M11): every saved deck opened manually in

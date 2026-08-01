@@ -7,6 +7,7 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::color::ColorChoice;
+use crate::namespace::reject_conflicting_a_prefix;
 use crate::order::OrderedRawChildren;
 
 use super::body::{Result, TextError, missing_end};
@@ -131,6 +132,7 @@ impl TextBulletColor {
                         return Err(duplicate("bullet colour"));
                     }
                     validate_color_attributes(&element)?;
+                    reject_conflicting_a_prefix(&element)?;
                     color = Some(ColorChoice::from_xml(reader, &element)?);
                     boundary = 1;
                 }
@@ -139,6 +141,7 @@ impl TextBulletColor {
                         return Err(duplicate("bullet colour"));
                     }
                     validate_color_attributes(&element)?;
+                    reject_conflicting_a_prefix(&element)?;
                     color = Some(ColorChoice::from_empty_xml(&element)?);
                     boundary = 1;
                 }
@@ -702,9 +705,11 @@ fn parse_complete<T>(
             .map_err(OxmlError::from)?
         {
             Event::Start(element) if matches_local_name(element.name().as_ref(), expected) => {
+                reject_conflicting_a_prefix(&element)?;
                 return parse_start(&mut reader, &element);
             }
             Event::Empty(element) if matches_local_name(element.name().as_ref(), expected) => {
+                reject_conflicting_a_prefix(&element)?;
                 return parse_empty(&element);
             }
             Event::Start(element) | Event::Empty(element) => return Err(unexpected(&element)),
