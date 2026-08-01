@@ -9,10 +9,16 @@ use quick_xml::{Reader, Writer};
 use crate::order::OrderedRawChildren;
 
 pub mod body;
+pub mod paragraph;
 
 pub use body::{
     CT_TextBodyProperties, Coordinate32Value, NormalAutofit, TextAnchor, TextAutofit, TextError,
     TextVertical, TextWrap,
+};
+pub use paragraph::{
+    CT_RegularTextRun, CT_TextCharacterProperties, CT_TextField, CT_TextLineBreak,
+    CT_TextParagraph, CT_TextParagraphProperties, TextAlignment, TextFont, TextHyperlink,
+    TextPointValue, TextRun, TextSpace, TextSpacing, TextStrike, TextUnderline, TextValue,
 };
 
 use body::{Result, missing_end};
@@ -23,7 +29,7 @@ use body::{Result, missing_end};
 pub struct CT_TextBody {
     pub body_properties: CT_TextBodyProperties,
     list_style: Option<OpaqueTextElement>,
-    paragraphs: Vec<OpaqueTextElement>,
+    paragraphs: Vec<CT_TextParagraph>,
     raw_children: OrderedRawChildren,
 }
 
@@ -106,12 +112,12 @@ impl CT_TextBody {
                 }
                 Event::Start(element) if matches_local_name(element.name().as_ref(), b"p") => {
                     let raw = capture_element(reader, &element)?;
-                    paragraphs.push(OpaqueTextElement::from_xml(&raw, b"p")?);
+                    paragraphs.push(CT_TextParagraph::from_xml(&raw)?);
                     boundary = boundary.max(2 + paragraphs.len());
                 }
                 Event::Empty(element) if matches_local_name(element.name().as_ref(), b"p") => {
                     let raw = capture_empty_element(&element)?;
-                    paragraphs.push(OpaqueTextElement::from_xml(&raw, b"p")?);
+                    paragraphs.push(CT_TextParagraph::from_xml(&raw)?);
                     boundary = boundary.max(2 + paragraphs.len());
                 }
                 Event::Start(element) => {
@@ -164,7 +170,7 @@ impl CT_TextBody {
         }
         emit_raw(writer, self.raw_children.at(2))?;
         for (index, paragraph) in self.paragraphs.iter().enumerate() {
-            paragraph.write_xml(writer, "a:p")?;
+            paragraph.write_xml(writer)?;
             emit_raw(writer, self.raw_children.at(3 + index))?;
         }
         writer
@@ -179,6 +185,10 @@ impl CT_TextBody {
 
     pub fn paragraph_count(&self) -> usize {
         self.paragraphs.len()
+    }
+
+    pub fn paragraphs(&self) -> &[CT_TextParagraph] {
+        &self.paragraphs
     }
 
     pub fn raw_children(&self) -> &OrderedRawChildren {

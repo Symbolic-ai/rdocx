@@ -7,6 +7,7 @@ use oxml_core::xml::{get_attr, local_name, matches_local_name};
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
+use crate::fill::FillError;
 use crate::order::OrderedRawChildren;
 
 const MAX_TEXT_SPACING_PERCENT: i32 = 13_200_000;
@@ -15,7 +16,12 @@ const MAX_TEXT_SPACING_PERCENT: i32 = 13_200_000;
 #[derive(Debug)]
 pub enum TextError {
     Xml(OxmlError),
+    Fill(FillError),
     UnexpectedElement(String),
+    MissingAttribute {
+        element: String,
+        attribute: String,
+    },
     MissingBodyProperties,
     MissingParagraph,
     DuplicateElement(String),
@@ -30,8 +36,12 @@ impl fmt::Display for TextError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Xml(error) => error.fmt(formatter),
+            Self::Fill(error) => error.fmt(formatter),
             Self::UnexpectedElement(element) => {
                 write!(formatter, "unexpected DrawingML text element: {element}")
+            }
+            Self::MissingAttribute { element, attribute } => {
+                write!(formatter, "DrawingML {element} requires @{attribute}")
             }
             Self::MissingBodyProperties => write!(formatter, "DrawingML txBody requires bodyPr"),
             Self::MissingParagraph => write!(formatter, "DrawingML txBody requires at least one p"),
@@ -54,6 +64,7 @@ impl std::error::Error for TextError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Xml(error) => Some(error),
+            Self::Fill(error) => Some(error),
             _ => None,
         }
     }
@@ -62,6 +73,12 @@ impl std::error::Error for TextError {
 impl From<OxmlError> for TextError {
     fn from(error: OxmlError) -> Self {
         Self::Xml(error)
+    }
+}
+
+impl From<FillError> for TextError {
+    fn from(error: FillError) -> Self {
+        Self::Fill(error)
     }
 }
 

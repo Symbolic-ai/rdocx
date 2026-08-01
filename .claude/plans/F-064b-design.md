@@ -1,6 +1,6 @@
 # F-064b, Text paragraphs and runs
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S14
 **Size**: L
 **Depends on**: F-064a
@@ -66,11 +66,11 @@ Expected to be unchanged. The unpublished DrawingML model has no Word consumer.
 
 ## Implementation checklist
 
-- [ ] Add failing whitespace, content-order, property-unit, and malformed-input tests.
-- [ ] Add paragraph, run, field, break, and text types.
-- [ ] Add paragraph and run property parsing and serialisation.
-- [ ] Preserve significant text whitespace and unsupported XML.
-- [ ] Connect paragraphs to the F-064a shell and run focused checks.
+- [x] Add failing whitespace, content-order, property-unit, and malformed-input tests.
+- [x] Add paragraph, run, field, break, and text types.
+- [x] Add paragraph and run property parsing and serialisation.
+- [x] Preserve significant text whitespace and unsupported XML.
+- [x] Connect paragraphs to the F-064a shell and run focused checks.
 
 ## Open questions
 
