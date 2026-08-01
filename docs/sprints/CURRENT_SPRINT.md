@@ -28,7 +28,7 @@ PowerPoint development crate.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-071 | Placeholders | M | pending | - |
+| F-071 | Placeholders | M | in-progress | codex |
 | F-072 | Pictures | M | pending | - |
 | F-073 | Graphic frames | M | pending | - |
 | F-074 | DrawingML tables | L | pending | - |
