@@ -19,8 +19,6 @@ rendered contract verbatim.
   shape-tree variants, identifier constraints, and raw XML preservation.
 - `docs/hld/12-testing-strategy.md`, for the external 50-deck corpus, the
   carried DrawingML structural gate, and raw and modelled round-trip evidence.
-- `docs/hld/13-risks-and-open-questions.md`, for the requirement to settle a
-  redistributable or fetched corpus source before M8 implementation proceeds.
 - `docs/hld/14-development-backlog.md`, for the F-067 through F-070 contracts,
   sizes, dependencies, test gates, and M8 milestone boundary.
 - `docs/hld/15-build-and-toolchain.md`, for keeping `rpptx-oxml` at version

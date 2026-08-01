@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::Write;
 
 use oxml_core::OxmlError;
@@ -8,9 +8,11 @@ use oxml_drawing::namespace::A_NS;
 use oxml_drawing::order::OrderedRawChildren;
 use oxml_drawing::text::CT_TextListStyle;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer, XmlVersion};
+use quick_xml::{Reader, Writer};
 
-use crate::namespace::{P_NS, R_NS};
+use crate::namespace::{
+    FIXED_MODEL_PREFIXES, NamespaceBindings, P_NS, R_NS, all_attributes, root_attributes,
+};
 
 const MIN_SLIDE_ID: u32 = 256;
 const MAX_SLIDE_ID: u32 = 2_147_483_647;
@@ -20,51 +22,6 @@ type RawAttributes = Vec<(String, String)>;
 type ParsedSlideList = (Vec<CT_SlideId>, RawAttributes, OrderedRawChildren);
 type ParsedMasterList = (Vec<CT_SlideMasterId>, RawAttributes, OrderedRawChildren);
 type ParsedIdentifier = (Option<u32>, String, RawAttributes, OrderedRawChildren);
-
-#[derive(Clone, Debug, Default)]
-struct NamespaceBindings {
-    default: Option<String>,
-    prefixes: HashMap<String, String>,
-}
-
-impl NamespaceBindings {
-    fn with_start(&self, start: &BytesStart<'_>) -> Result<Self> {
-        let mut bindings = self.clone();
-        for (name, value) in all_attributes(start)? {
-            if name == "xmlns" {
-                bindings.default = Some(value);
-            } else if let Some(prefix) = name.strip_prefix("xmlns:") {
-                bindings.prefixes.insert(prefix.to_owned(), value);
-            }
-        }
-        Ok(bindings)
-    }
-
-    fn element_uri<'a>(&'a self, name: &[u8]) -> Option<&'a str> {
-        let prefix = qname_prefix(name);
-        match prefix {
-            Some(prefix) => self.prefixes.get(prefix).map(String::as_str),
-            None => self.default.as_deref(),
-        }
-    }
-
-    fn attribute_uri<'a>(&'a self, name: &[u8]) -> Option<&'a str> {
-        qname_prefix(name).and_then(|prefix| self.prefixes.get(prefix).map(String::as_str))
-    }
-
-    fn reject_canonical_conflicts(&self) -> Result<()> {
-        for (prefix, expected) in [("p", P_NS), ("a", A_NS), ("r", R_NS)] {
-            if let Some(actual) = self.prefixes.get(prefix)
-                && actual != expected
-            {
-                return Err(invalid_value(format!(
-                    "root xmlns:{prefix} conflicts with the fixed writer namespace"
-                )));
-            }
-        }
-        Ok(())
-    }
-}
 
 /// The typed size of a presentation slide or notes page in EMUs.
 #[allow(non_camel_case_types)]
@@ -185,7 +142,7 @@ impl PresentationParseState {
 
         match name {
             b"sldMasterIdLst" => {
-                namespaces.reject_canonical_conflicts()?;
+                namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
                 if self.slide_master_ids.is_some() {
                     return Err(duplicate("sldMasterIdLst"));
                 }
@@ -196,7 +153,7 @@ impl PresentationParseState {
                 self.boundary = self.boundary.max(1);
             }
             b"sldIdLst" => {
-                namespaces.reject_canonical_conflicts()?;
+                namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
                 if self.slide_ids.is_some() {
                     return Err(duplicate("sldIdLst"));
                 }
@@ -207,7 +164,7 @@ impl PresentationParseState {
                 self.boundary = self.boundary.max(4);
             }
             b"sldSz" => {
-                namespaces.reject_canonical_conflicts()?;
+                namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
                 if self.slide_size.is_some() {
                     return Err(duplicate("sldSz"));
                 }
@@ -215,7 +172,7 @@ impl PresentationParseState {
                 self.boundary = self.boundary.max(5);
             }
             b"notesSz" => {
-                namespaces.reject_canonical_conflicts()?;
+                namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
                 if self.notes_size.is_some() {
                     return Err(duplicate("notesSz"));
                 }
@@ -223,7 +180,7 @@ impl PresentationParseState {
                 self.boundary = self.boundary.max(6);
             }
             b"defaultTextStyle" => {
-                namespaces.reject_canonical_conflicts()?;
+                namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
                 if self.default_text_style.is_some() {
                     return Err(duplicate("defaultTextStyle"));
                 }
@@ -296,7 +253,7 @@ impl CT_Presentation {
                     if local_name(element.name().as_ref()) == b"presentation"
                         && namespaces.element_uri(element.name().as_ref()) == Some(P_NS)
                     {
-                        namespaces.reject_canonical_conflicts()?;
+                        namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
                         return Self::from_element(&mut reader, &element, &namespaces);
                     }
                     return Err(OxmlError::UnexpectedElement(element_name(&element)));
@@ -306,7 +263,7 @@ impl CT_Presentation {
                     if local_name(element.name().as_ref()) == b"presentation"
                         && namespaces.element_uri(element.name().as_ref()) == Some(P_NS)
                     {
-                        namespaces.reject_canonical_conflicts()?;
+                        namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
                         return Err(OxmlError::MissingElement("p:notesSz".to_owned()));
                     }
                     return Err(OxmlError::UnexpectedElement(element_name(&element)));
@@ -328,7 +285,7 @@ impl CT_Presentation {
         root_namespaces: &NamespaceBindings,
     ) -> Result<Self> {
         let mut state = PresentationParseState {
-            raw_attributes: root_attributes(start)?,
+            raw_attributes: root_attributes(start, FIXED_MODEL_PREFIXES)?,
             ..PresentationParseState::default()
         };
         let mut buffer = Vec::new();
@@ -449,7 +406,7 @@ fn parse_slide_list(xml: &[u8], inherited: &NamespaceBindings) -> Result<ParsedS
                 if local_name(element.name().as_ref()) == b"sldId"
                     && namespaces.element_uri(element.name().as_ref()) == Some(P_NS)
                 {
-                    namespaces.reject_canonical_conflicts()?;
+                    namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
                     items.push(parse_slide_id(&raw, &namespaces)?);
                 } else {
                     raw_children.push(items.len(), raw);
@@ -461,7 +418,7 @@ fn parse_slide_list(xml: &[u8], inherited: &NamespaceBindings) -> Result<ParsedS
                 if local_name(element.name().as_ref()) == b"sldId"
                     && namespaces.element_uri(element.name().as_ref()) == Some(P_NS)
                 {
-                    namespaces.reject_canonical_conflicts()?;
+                    namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
                     items.push(parse_slide_id(&raw, &namespaces)?);
                 } else {
                     raw_children.push(items.len(), raw);
@@ -509,7 +466,7 @@ fn parse_master_list(xml: &[u8], inherited: &NamespaceBindings) -> Result<Parsed
                 if local_name(element.name().as_ref()) == b"sldMasterId"
                     && namespaces.element_uri(element.name().as_ref()) == Some(P_NS)
                 {
-                    namespaces.reject_canonical_conflicts()?;
+                    namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
                     items.push(parse_master_id(&raw, &namespaces)?);
                 } else {
                     raw_children.push(items.len(), raw);
@@ -521,7 +478,7 @@ fn parse_master_list(xml: &[u8], inherited: &NamespaceBindings) -> Result<Parsed
                 if local_name(element.name().as_ref()) == b"sldMasterId"
                     && namespaces.element_uri(element.name().as_ref()) == Some(P_NS)
                 {
-                    namespaces.reject_canonical_conflicts()?;
+                    namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
                     items.push(parse_master_id(&raw, &namespaces)?);
                 } else {
                     raw_children.push(items.len(), raw);
@@ -866,26 +823,6 @@ fn parse_u32(element: &str, attribute: &str, value: &str) -> Result<u32> {
         .map_err(|_| invalid_value(format!("{element} has malformed @{attribute}: {value}")))
 }
 
-fn root_attributes(start: &BytesStart<'_>) -> Result<Vec<(String, String)>> {
-    Ok(all_attributes(start)?
-        .into_iter()
-        .filter(|(name, _)| !matches!(name.as_str(), "xmlns:p" | "xmlns:a" | "xmlns:r"))
-        .collect())
-}
-
-fn all_attributes(start: &BytesStart<'_>) -> Result<Vec<(String, String)>> {
-    let mut attributes = Vec::new();
-    for attribute in start.attributes() {
-        let attribute = attribute?;
-        let name = std::str::from_utf8(attribute.key.as_ref())?.to_owned();
-        let value = attribute
-            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())?
-            .into_owned();
-        attributes.push((name, value));
-    }
-    Ok(attributes)
-}
-
 fn push_attributes(start: &mut BytesStart<'_>, attributes: &[(String, String)]) {
     for (name, value) in attributes {
         start.push_attribute((name.as_str(), value.as_str()));
@@ -920,11 +857,6 @@ fn root_schema_boundary(name: &[u8]) -> Option<usize> {
 
 fn local_name(name: &[u8]) -> &[u8] {
     name.rsplit(|byte| *byte == b':').next().unwrap_or(name)
-}
-
-fn qname_prefix(name: &[u8]) -> Option<&str> {
-    let position = name.iter().position(|byte| *byte == b':')?;
-    std::str::from_utf8(&name[..position]).ok()
 }
 
 fn element_name(element: &BytesStart<'_>) -> String {

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::io::Write;
 
 use oxml_core::OxmlError;
@@ -8,9 +7,12 @@ use oxml_drawing::namespace::A_NS;
 use oxml_drawing::order::OrderedRawChildren;
 use oxml_drawing::text::CT_TextListStyle;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer, XmlVersion};
+use quick_xml::{Reader, Writer};
 
-use crate::namespace::{P_NS, R_NS};
+use crate::namespace::{
+    FIXED_MODEL_PREFIXES, NamespaceBindings, P_NS, R_NS, all_attributes, is_fixed_xmlns,
+    root_attributes,
+};
 use crate::shape_tree::CT_ShapeTree;
 
 pub type Result<T> = std::result::Result<T, OxmlError>;
@@ -229,10 +231,10 @@ impl CT_SlideMaster {
         for boundary in 2..=5 {
             emit_raw(&mut writer, self.raw_children.at(boundary))?;
         }
+        emit_raw(&mut writer, self.raw_children.at(6))?;
         if let Some(styles) = &self.text_styles {
             styles.write_xml(&mut writer)?;
         }
-        emit_raw(&mut writer, self.raw_children.at(6))?;
         emit_raw(&mut writer, self.raw_children.at(7))?;
         emit_raw(&mut writer, self.raw_children.at(8))?;
         writer.write_event(Event::End(BytesEnd::new(RootKind::Master.tag())))?;
@@ -252,7 +254,7 @@ fn parse_root(xml: &[u8], kind: RootKind) -> Result<ParsedRoot> {
                 {
                     return Err(unexpected(&start));
                 }
-                namespaces.reject_canonical_conflicts()?;
+                namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
                 return parse_root_children(&mut reader, &start, &namespaces, kind);
             }
             Event::Empty(start) => {
@@ -281,7 +283,7 @@ fn parse_root_children(
     kind: RootKind,
 ) -> Result<ParsedRoot> {
     let mut parsed = ParsedRoot {
-        raw_attributes: root_attributes(start)?,
+        raw_attributes: root_attributes(start, FIXED_MODEL_PREFIXES)?,
         ..ParsedRoot::default()
     };
     let mut buffer = Vec::new();
@@ -321,7 +323,7 @@ impl ParsedRoot {
         kind: RootKind,
     ) -> Result<()> {
         if is_p && name == b"cSld" {
-            namespaces.reject_canonical_conflicts()?;
+            namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
             if self.common_slide_data.is_some() {
                 return Err(duplicate("cSld"));
             }
@@ -330,7 +332,7 @@ impl ParsedRoot {
             return Ok(());
         }
         if is_p && name == b"clrMapOvr" && !matches!(kind, RootKind::Master) {
-            namespaces.reject_canonical_conflicts()?;
+            namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
             if self.color_map_override.is_some() {
                 return Err(duplicate("clrMapOvr"));
             }
@@ -339,16 +341,16 @@ impl ParsedRoot {
             return Ok(());
         }
         if is_p && name == b"clrMap" && matches!(kind, RootKind::Master) {
-            namespaces.reject_canonical_conflicts()?;
+            namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
             if self.color_map.is_some() {
                 return Err(duplicate("clrMap"));
             }
-            self.color_map = Some(parse_color_map(&raw)?);
+            self.color_map = Some(parse_color_map(&raw, namespaces)?);
             self.boundary = self.boundary.max(2);
             return Ok(());
         }
         if is_p && name == b"txStyles" && matches!(kind, RootKind::Master) {
-            namespaces.reject_canonical_conflicts()?;
+            namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
             if self.text_styles.is_some() {
                 return Err(duplicate("txStyles"));
             }
@@ -462,7 +464,7 @@ impl CT_CommonSlideData {
         start: &BytesStart<'_>,
         namespaces: &NamespaceBindings,
     ) -> Result<Self> {
-        namespaces.reject_canonical_conflicts()?;
+        namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
         let attributes = all_attributes(start)?;
         let name = attributes
             .iter()
@@ -470,7 +472,7 @@ impl CT_CommonSlideData {
             .map(|(_, value)| value.clone());
         let raw_attributes = attributes
             .into_iter()
-            .filter(|(key, _)| key != "name" && !is_canonical_xmlns(key))
+            .filter(|(key, _)| key != "name" && !is_fixed_xmlns(key, FIXED_MODEL_PREFIXES))
             .collect();
         let mut background_xml = None;
         let mut shape_tree = None;
@@ -604,7 +606,8 @@ impl CT_ColorMapOverride {
             buffer.clear();
         };
         let namespaces = inherited.with_start(&start)?;
-        let raw_attributes = root_attributes(&start)?;
+        namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
+        let raw_attributes = root_attributes(&start, FIXED_MODEL_PREFIXES)?;
         let mut kind = None;
         let mut mapping_attributes = Vec::new();
         let mut mapping_children = OrderedRawChildren::default();
@@ -627,6 +630,7 @@ impl CT_ColorMapOverride {
                         &mut mapping_children,
                         &mut raw_children,
                         &mut boundary,
+                        &child_ns,
                     )?;
                 }
                 Event::Empty(child) => {
@@ -643,6 +647,7 @@ impl CT_ColorMapOverride {
                         &mut mapping_children,
                         &mut raw_children,
                         &mut boundary,
+                        &child_ns,
                     )?;
                 }
                 Event::End(end) if local_name(end.name().as_ref()) == b"clrMapOvr" => break,
@@ -701,13 +706,15 @@ fn capture_override_choice(
     mapping_children: &mut OrderedRawChildren,
     raw_children: &mut OrderedRawChildren,
     boundary: &mut usize,
+    namespaces: &NamespaceBindings,
 ) -> Result<()> {
     if is_a && matches!(name, b"masterClrMapping" | b"overrideClrMapping") {
+        namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
         if kind.is_some() {
             return Err(duplicate("colour-map override choice"));
         }
         if name == b"overrideClrMapping" {
-            let parsed = parse_color_map(&raw)?;
+            let parsed = parse_color_map(&raw, namespaces)?;
             *attributes = parsed.raw_attributes;
             *mapping_children = parsed.raw_children;
             *kind = Some(ColorMapOverrideKind::Override(parsed.value));
@@ -737,7 +744,8 @@ impl CT_MasterTextStyles {
             buffer.clear();
         };
         let namespaces = inherited.with_start(&start)?;
-        let raw_attributes = root_attributes(&start)?;
+        namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
+        let raw_attributes = root_attributes(&start, FIXED_MODEL_PREFIXES)?;
         let mut styles: [Option<CT_TextListStyle>; 3] = [None, None, None];
         let mut raw_children = OrderedRawChildren::default();
         let mut boundary = 0usize;
@@ -756,6 +764,7 @@ impl CT_MasterTextStyles {
                         &mut styles,
                         &mut raw_children,
                         &mut boundary,
+                        &child_ns,
                     )?;
                 }
                 Event::Empty(child) => {
@@ -770,6 +779,7 @@ impl CT_MasterTextStyles {
                         &mut styles,
                         &mut raw_children,
                         &mut boundary,
+                        &child_ns,
                     )?;
                 }
                 Event::End(end) if local_name(end.name().as_ref()) == b"txStyles" => break,
@@ -818,6 +828,7 @@ fn capture_text_style(
     styles: &mut [Option<CT_TextListStyle>; 3],
     children: &mut OrderedRawChildren,
     boundary: &mut usize,
+    namespaces: &NamespaceBindings,
 ) -> Result<()> {
     let index = if is_p {
         match name {
@@ -830,6 +841,7 @@ fn capture_text_style(
         None
     };
     if let Some(index) = index {
+        namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
         if styles[index].is_some() {
             return Err(duplicate(std::str::from_utf8(name).unwrap_or("text style")));
         }
@@ -841,7 +853,8 @@ fn capture_text_style(
     Ok(())
 }
 
-fn parse_color_map(xml: &[u8]) -> Result<ParsedColorMap> {
+fn parse_color_map(xml: &[u8], namespaces: &NamespaceBindings) -> Result<ParsedColorMap> {
+    namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
     let mut reader = Reader::from_reader(xml);
     let mut buffer = Vec::new();
     loop {
@@ -923,7 +936,9 @@ fn color_map_raw_attributes(start: &BytesStart<'_>) -> Result<RawAttributes> {
     ];
     Ok(all_attributes(start)?
         .into_iter()
-        .filter(|(name, _)| !KNOWN.contains(&name.as_str()) && !is_canonical_xmlns(name))
+        .filter(|(name, _)| {
+            !KNOWN.contains(&name.as_str()) && !is_fixed_xmlns(name, FIXED_MODEL_PREFIXES)
+        })
         .collect())
 }
 
@@ -972,13 +987,16 @@ fn parse_raw_shell(xml: &[u8]) -> Result<(RawAttributes, OrderedRawChildren)> {
     loop {
         match reader.read_event_into(&mut buffer)? {
             Event::Start(start) => {
-                let attrs = root_attributes(&start)?;
+                let attrs = root_attributes(&start, FIXED_MODEL_PREFIXES)?;
                 let children =
                     capture_shell_children(&mut reader, local_name(start.name().as_ref()))?;
                 return Ok((attrs, children));
             }
             Event::Empty(start) => {
-                return Ok((root_attributes(&start)?, OrderedRawChildren::default()));
+                return Ok((
+                    root_attributes(&start, FIXED_MODEL_PREFIXES)?,
+                    OrderedRawChildren::default(),
+                ));
             }
             Event::Eof => return Err(OxmlError::MissingElement("mapping element".to_owned())),
             _ => {}
@@ -1027,82 +1045,6 @@ fn write_mapping_shell<W: Write>(
     Ok(())
 }
 
-#[derive(Clone, Debug, Default)]
-struct NamespaceBindings {
-    default: Option<String>,
-    prefixes: HashMap<String, String>,
-}
-
-impl NamespaceBindings {
-    fn with_start(&self, start: &BytesStart<'_>) -> Result<Self> {
-        let mut bindings = self.clone();
-        for (name, value) in all_attributes(start)? {
-            if name == "xmlns" {
-                bindings.default = Some(value);
-            } else if let Some(prefix) = name.strip_prefix("xmlns:") {
-                bindings.prefixes.insert(prefix.to_owned(), value);
-            }
-        }
-        Ok(bindings)
-    }
-
-    fn element_uri<'a>(&'a self, name: &[u8]) -> Option<&'a str> {
-        match qname_prefix(name) {
-            Some(prefix) => self.prefixes.get(prefix).map(String::as_str),
-            None => self.default.as_deref(),
-        }
-    }
-
-    fn reject_canonical_conflicts(&self) -> Result<()> {
-        for (prefix, expected) in [("p", P_NS), ("a", A_NS), ("r", R_NS)] {
-            if let Some(actual) = self.prefixes.get(prefix)
-                && actual != expected
-            {
-                return Err(OxmlError::InvalidValue(format!(
-                    "root xmlns:{prefix} conflicts with the fixed writer namespace"
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    fn entries(&self) -> Vec<(String, String)> {
-        let mut entries: Vec<_> = self
-            .prefixes
-            .iter()
-            .map(|(prefix, uri)| (prefix.clone(), uri.clone()))
-            .collect();
-        if let Some(uri) = &self.default {
-            entries.push((String::new(), uri.clone()));
-        }
-        entries
-    }
-}
-
-fn root_attributes(start: &BytesStart<'_>) -> Result<RawAttributes> {
-    Ok(all_attributes(start)?
-        .into_iter()
-        .filter(|(name, _)| !is_canonical_xmlns(name))
-        .collect())
-}
-
-fn is_canonical_xmlns(name: &str) -> bool {
-    matches!(name, "xmlns:p" | "xmlns:a" | "xmlns:r")
-}
-
-fn all_attributes(start: &BytesStart<'_>) -> Result<RawAttributes> {
-    let mut attributes = Vec::new();
-    for attribute in start.attributes() {
-        let attribute = attribute?;
-        let name = std::str::from_utf8(attribute.key.as_ref())?.to_owned();
-        let value = attribute
-            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())?
-            .replace(['\r', '\n', '\t'], " ");
-        attributes.push((name, value));
-    }
-    Ok(attributes)
-}
-
 fn push_attributes(start: &mut BytesStart<'_>, attributes: &RawAttributes) {
     for (name, value) in attributes {
         start.push_attribute((name.as_str(), value.as_str()));
@@ -1121,11 +1063,6 @@ fn emit_raw<'a, W: Write>(
 
 fn local_name(name: &[u8]) -> &[u8] {
     name.rsplit(|byte| *byte == b':').next().unwrap_or(name)
-}
-
-fn qname_prefix(name: &[u8]) -> Option<&str> {
-    let position = name.iter().position(|byte| *byte == b':')?;
-    std::str::from_utf8(&name[..position]).ok()
 }
 
 fn required<T>(value: Option<T>, name: &str) -> Result<T> {

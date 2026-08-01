@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::io::Write;
 
 use oxml_core::OxmlError;
@@ -7,11 +6,11 @@ use oxml_drawing::namespace::A_NS;
 use oxml_drawing::order::OrderedRawChildren;
 use oxml_drawing::xfrm::CT_Transform2D;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer, XmlVersion};
+use quick_xml::{Reader, Writer};
 
-use crate::namespace::{P_NS, R_NS};
-
-const MC_NS: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+use crate::namespace::{
+    FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, root_attributes,
+};
 
 pub type Result<T> = std::result::Result<T, OxmlError>;
 type RawAttributes = Vec<(String, String)>;
@@ -216,7 +215,7 @@ fn parse_group(xml: &[u8], inherited: &[(String, String)], kind: GroupKind) -> R
                 {
                     return Err(unexpected(&start));
                 }
-                namespaces.reject_canonical_conflicts()?;
+                namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
                 return parse_group_children(&mut reader, &start, &namespaces, kind);
             }
             Event::Empty(start) => {
@@ -244,7 +243,7 @@ fn parse_group_children(
     namespaces: &NamespaceBindings,
     kind: GroupKind,
 ) -> Result<ParsedGroup> {
-    let raw_attributes = root_attributes(start)?;
+    let raw_attributes = root_attributes(start, FIXED_SHAPE_TREE_PREFIXES)?;
     let mut non_visual = None;
     let mut group_properties = None;
     let mut children = Vec::new();
@@ -316,6 +315,9 @@ fn capture_group_child(
     raw_children: &mut OrderedRawChildren,
     state: &mut usize,
 ) -> Result<()> {
+    if uri == Some(P_NS) && matches!(name, b"nvGrpSpPr" | b"grpSpPr" | b"grpSp") {
+        namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
+    }
     if *state == 0 {
         if uri == Some(P_NS) && name == b"nvGrpSpPr" {
             *non_visual = Some(NonVisualGroupProperties::from_fragment(&raw)?);
@@ -400,7 +402,7 @@ impl NonVisualGroupProperties {
         loop {
             match reader.read_event_into(&mut buffer)? {
                 Event::Start(start) => {
-                    let raw_attributes = root_attributes(&start)?;
+                    let raw_attributes = root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?;
                     let mut raw_children = Vec::new();
                     loop {
                         buffer.clear();
@@ -428,7 +430,7 @@ impl NonVisualGroupProperties {
                 }
                 Event::Empty(start) => {
                     return Ok(Self {
-                        raw_attributes: root_attributes(&start)?,
+                        raw_attributes: root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?,
                         raw_children: Vec::new(),
                     });
                 }
@@ -468,7 +470,7 @@ impl GroupProperties {
                 Event::Empty(start) => {
                     return Ok(Self {
                         transform: None,
-                        raw_attributes: root_attributes(&start)?,
+                        raw_attributes: root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?,
                         raw_children: OrderedRawChildren::default(),
                     });
                 }
@@ -495,6 +497,9 @@ impl GroupProperties {
                     let is_transform = child_namespaces.element_uri(child.name().as_ref())
                         == Some(A_NS)
                         && local_name(child.name().as_ref()) == b"xfrm";
+                    if is_transform {
+                        child_namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
+                    }
                     let raw = capture_element(reader, &child)?;
                     capture_group_property_child(
                         is_transform,
@@ -509,6 +514,9 @@ impl GroupProperties {
                     let is_transform = child_namespaces.element_uri(child.name().as_ref())
                         == Some(A_NS)
                         && local_name(child.name().as_ref()) == b"xfrm";
+                    if is_transform {
+                        child_namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
+                    }
                     let raw = capture_empty_element(&child)?;
                     capture_group_property_child(
                         is_transform,
@@ -528,7 +536,7 @@ impl GroupProperties {
         }
         Ok(Self {
             transform,
-            raw_attributes: root_attributes(start)?,
+            raw_attributes: root_attributes(start, FIXED_SHAPE_TREE_PREFIXES)?,
             raw_children,
         })
     }
@@ -582,95 +590,6 @@ fn capture_group_property_child(
     Ok(())
 }
 
-#[derive(Clone, Debug, Default)]
-struct NamespaceBindings {
-    default: Option<String>,
-    prefixes: HashMap<String, String>,
-}
-
-impl NamespaceBindings {
-    fn from_entries(entries: &[(String, String)]) -> Self {
-        let mut bindings = Self::default();
-        for (prefix, uri) in entries {
-            if prefix.is_empty() {
-                bindings.default = Some(uri.clone());
-            } else {
-                bindings.prefixes.insert(prefix.clone(), uri.clone());
-            }
-        }
-        bindings
-    }
-
-    fn with_start(&self, start: &BytesStart<'_>) -> Result<Self> {
-        let mut bindings = self.clone();
-        for (name, value) in all_attributes(start)? {
-            if name == "xmlns" {
-                bindings.default = Some(value);
-            } else if let Some(prefix) = name.strip_prefix("xmlns:") {
-                bindings.prefixes.insert(prefix.to_owned(), value);
-            }
-        }
-        Ok(bindings)
-    }
-
-    fn element_uri<'a>(&'a self, name: &[u8]) -> Option<&'a str> {
-        match qname_prefix(name) {
-            Some(prefix) => self.prefixes.get(prefix).map(String::as_str),
-            None => self.default.as_deref(),
-        }
-    }
-
-    fn entries(&self) -> Vec<(String, String)> {
-        let mut entries: Vec<_> = self
-            .prefixes
-            .iter()
-            .map(|(prefix, uri)| (prefix.clone(), uri.clone()))
-            .collect();
-        if let Some(uri) = &self.default {
-            entries.push((String::new(), uri.clone()));
-        }
-        entries
-    }
-
-    fn reject_canonical_conflicts(&self) -> Result<()> {
-        for (prefix, expected) in [("p", P_NS), ("a", A_NS), ("r", R_NS), ("mc", MC_NS)] {
-            if let Some(actual) = self.prefixes.get(prefix)
-                && actual != expected
-            {
-                return Err(OxmlError::InvalidValue(format!(
-                    "root xmlns:{prefix} conflicts with the fixed writer namespace"
-                )));
-            }
-        }
-        Ok(())
-    }
-}
-
-fn root_attributes(start: &BytesStart<'_>) -> Result<RawAttributes> {
-    Ok(all_attributes(start)?
-        .into_iter()
-        .filter(|(name, _)| {
-            !matches!(
-                name.as_str(),
-                "xmlns:p" | "xmlns:a" | "xmlns:r" | "xmlns:mc"
-            )
-        })
-        .collect())
-}
-
-fn all_attributes(start: &BytesStart<'_>) -> Result<RawAttributes> {
-    let mut attributes = Vec::new();
-    for attribute in start.attributes() {
-        let attribute = attribute?;
-        let name = std::str::from_utf8(attribute.key.as_ref())?.to_owned();
-        let value = attribute
-            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())?
-            .replace(['\r', '\n', '\t'], " ");
-        attributes.push((name, value));
-    }
-    Ok(attributes)
-}
-
 fn push_attributes(start: &mut BytesStart<'_>, attributes: &RawAttributes) {
     for (name, value) in attributes {
         start.push_attribute((name.as_str(), value.as_str()));
@@ -693,11 +612,6 @@ fn required<T>(value: Option<T>, name: &str) -> Result<T> {
 
 fn local_name(name: &[u8]) -> &[u8] {
     name.rsplit(|byte| *byte == b':').next().unwrap_or(name)
-}
-
-fn qname_prefix(name: &[u8]) -> Option<&str> {
-    let position = name.iter().position(|byte| *byte == b':')?;
-    std::str::from_utf8(&name[..position]).ok()
 }
 
 fn unexpected(element: &BytesStart<'_>) -> OxmlError {

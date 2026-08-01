@@ -517,7 +517,7 @@ fn slide_layout_and_master_write_their_own_schema_order() {
         r#"<p:sldLayout xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr><p:hf/><p:timing/><p:transition/><p:extLst/></p:sldLayout>"#
     );
     let master = format!(
-        r#"<p:sldMaster xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst/><p:transition/><p:timing/><p:hf/><p:txStyles><p:titleStyle/><p:bodyStyle/><p:otherStyle/></p:txStyles><p:extLst/></p:sldMaster>"#
+        r#"<p:sldMaster xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst/><p:transition/><p:timing/><p:hf/><x:beforeTextStyles><x:data/></x:beforeTextStyles><p:txStyles><p:titleStyle/><p:bodyStyle/><p:otherStyle/></p:txStyles><p:extLst/></p:sldMaster>"#
     );
 
     let written_slide = CT_Slide::from_xml(slide.as_bytes())
@@ -563,6 +563,7 @@ fn slide_layout_and_master_write_their_own_schema_order() {
             "<p:transition",
             "<p:timing",
             "<p:hf",
+            "<x:beforeTextStyles",
             "<p:txStyles",
             "<p:extLst",
         ],
@@ -593,6 +594,34 @@ fn colour_maps_read_any_prefix_and_preserve_extensions() {
     assert!(text.contains("x:map=\"kept\""));
     assert!(text.contains("<x:ext/></a:overrideClrMapping><x:after/>"));
     assert_eq!(parsed, CT_Slide::from_xml(&written).unwrap());
+}
+
+#[test]
+fn modelled_nested_elements_reject_fixed_prefix_rebinding() {
+    let colour_choice = format!(
+        r#"<q:sld xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld><q:clrMapOvr><d:overrideClrMapping xmlns:a="urn:producer" bg1="dk1" tx1="lt1" bg2="dk2" tx2="lt2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"><a:raw/></d:overrideClrMapping></q:clrMapOvr></q:sld>"#
+    );
+    assert!(CT_Slide::from_xml(colour_choice.as_bytes()).is_err());
+
+    let text_style = format!(
+        r#"<q:sldMaster xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld><q:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><q:txStyles><q:titleStyle xmlns:p="urn:producer"><p:raw/></q:titleStyle><q:bodyStyle/><q:otherStyle/></q:txStyles></q:sldMaster>"#
+    );
+    assert!(CT_SlideMaster::from_xml(text_style.as_bytes()).is_err());
+
+    let required_shell = format!(
+        r#"<q:spTree xmlns:q="{P_NS}"><q:nvGrpSpPr xmlns:p="urn:producer"><p:raw/></q:nvGrpSpPr><q:grpSpPr/></q:spTree>"#
+    );
+    assert!(CT_ShapeTree::from_xml(required_shell.as_bytes()).is_err());
+
+    let group_transform = format!(
+        r#"<q:spTree xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><q:nvGrpSpPr/><q:grpSpPr><d:xfrm xmlns:a="urn:producer"><a:raw/></d:xfrm></q:grpSpPr></q:spTree>"#
+    );
+    assert!(CT_ShapeTree::from_xml(group_transform.as_bytes()).is_err());
+
+    let nested_group = format!(
+        r#"<q:spTree xmlns:q="{P_NS}"><q:nvGrpSpPr/><q:grpSpPr/><q:grpSp xmlns:p="urn:producer"><q:nvGrpSpPr/><q:grpSpPr/><p:raw/></q:grpSp></q:spTree>"#
+    );
+    assert!(CT_ShapeTree::from_xml(nested_group.as_bytes()).is_err());
 }
 
 #[test]
