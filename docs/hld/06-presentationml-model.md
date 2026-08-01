@@ -61,6 +61,14 @@ pub enum ShapeTreeChild {
 }
 ```
 
+`CT_ConnectionShape` types the connector's required `p:spPr` and its optional
+start and end connections. Each present `a:stCxn` or `a:endCxn` carries the
+required unqualified shape `id` and connection-site `idx` as `u32` values.
+Free-standing, start-only, end-only, and fully connected shapes therefore use
+the same model. Unsupported connector locks, style, extensions, attributes,
+and children remain in their ordered schema slots and round-trip without being
+interpreted.
+
 **`p:cNvPr/@id` must be unique within one `spTree`**, including inside nested
 groups and inside `mc:AlternateContent` fallbacks. A `ShapeIdAllocator` scans
 the whole tree and hands out ids from 2, because the tree's own `p:nvGrpSpPr`

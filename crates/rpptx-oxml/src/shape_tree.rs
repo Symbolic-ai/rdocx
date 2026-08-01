@@ -8,6 +8,7 @@ use oxml_drawing::xfrm::CT_Transform2D;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
+use crate::connector::CT_ConnectionShape;
 use crate::graphic_frame::CT_GraphicFrame;
 use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, root_attributes,
@@ -28,7 +29,7 @@ pub enum ShapeTreeChild {
     Picture(CT_Picture),
     GraphicFrame(Box<CT_GraphicFrame>),
     GroupShape(Box<CT_GroupShape>),
-    Connector(Vec<u8>),
+    Connector(CT_ConnectionShape),
     AlternateContent(Vec<u8>),
 }
 
@@ -38,9 +39,8 @@ impl ShapeTreeChild {
             Self::Shape(shape) => shape.write_xml_internal(writer, false)?,
             Self::Picture(picture) => picture.write_xml_internal(writer, false)?,
             Self::GraphicFrame(frame) => frame.write_xml_internal(writer, false)?,
-            Self::Connector(xml) | Self::AlternateContent(xml) => {
-                writer.get_mut().write_all(xml)?
-            }
+            Self::Connector(connector) => connector.write_xml_internal(writer, false)?,
+            Self::AlternateContent(xml) => writer.get_mut().write_all(xml)?,
             Self::GroupShape(group) => group.write_xml_internal(writer, false)?,
         }
         Ok(())
@@ -736,7 +736,9 @@ fn capture_group_child(
         (Some(P_NS), b"grpSp") => children.push(ShapeTreeChild::GroupShape(Box::new(
             CT_GroupShape::from_fragment(&raw, &namespaces.entries())?,
         ))),
-        (Some(P_NS), b"cxnSp") => children.push(ShapeTreeChild::Connector(raw)),
+        (Some(P_NS), b"cxnSp") => children.push(ShapeTreeChild::Connector(
+            CT_ConnectionShape::from_fragment(&raw, &namespaces.entries())?,
+        )),
         (Some(MC_NS), b"AlternateContent") => {
             children.push(ShapeTreeChild::AlternateContent(raw));
         }

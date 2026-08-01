@@ -1,6 +1,6 @@
 # F-075, Connectors
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S18
 **Size**: S
 **Depends on**: none
@@ -123,16 +123,16 @@ PowerPoint development model and does not affect Word rendering.
 
 ## Implementation checklist
 
-- [ ] Add and export concrete connector and endpoint types.
-- [ ] Enforce root, non-visual, and endpoint child order.
-- [ ] Parse optional endpoints with required unqualified id and index attributes.
-- [ ] Preserve unsupported connector content in its schema slots.
-- [ ] Replace root and recursive raw connector arms with the typed model.
-- [ ] Add focused namespace, order, endpoint, and preservation tests.
-- [ ] Add the required pinned-corpus connector round-trip gate.
-- [ ] Update the approved HLD impact file.
-- [ ] Confirm every PowerPoint development crate remains version 0.0.0 and unpublished.
-- [ ] Confirm all deterministic hashes remain unchanged.
+- [x] Add and export concrete connector and endpoint types.
+- [x] Enforce root, non-visual, and endpoint child order.
+- [x] Parse optional endpoints with required unqualified id and index attributes.
+- [x] Preserve unsupported connector content in its schema slots.
+- [x] Replace root and recursive raw connector arms with the typed model.
+- [x] Add focused namespace, order, endpoint, and preservation tests.
+- [x] Add the required pinned-corpus connector round-trip gate.
+- [x] Update the approved HLD impact file.
+- [x] Confirm every PowerPoint development crate remains version 0.0.0 and unpublished.
+- [x] Confirm all deterministic hashes remain unchanged.
 
 ## Open questions
 

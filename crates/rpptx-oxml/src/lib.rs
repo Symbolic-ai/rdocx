@@ -1,5 +1,6 @@
 #![allow(non_camel_case_types)]
 
+pub mod connector;
 pub mod graphic_frame;
 pub mod namespace;
 pub mod picture;
