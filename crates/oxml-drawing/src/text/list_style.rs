@@ -6,6 +6,7 @@ use oxml_core::xml::{local_name, matches_local_name};
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 
+use crate::namespace::A_NS;
 use crate::order::OrderedRawChildren;
 
 use super::body::{Result, TextError, missing_end};
@@ -32,6 +33,7 @@ impl CT_TextListStyle {
     /// Parses a complete list-style element with any prefix, including the
     /// PresentationML wrappers that share this DrawingML content model.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
+        reject_conflicting_drawingml_prefixes(xml)?;
         let mut reader = Reader::from_reader(xml);
         let mut buffer = Vec::new();
         loop {
@@ -193,6 +195,40 @@ impl CT_TextListStyle {
             _ => return,
         };
         *slot = Some(properties);
+    }
+}
+
+fn reject_conflicting_drawingml_prefixes(xml: &[u8]) -> Result<()> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(OxmlError::from)?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(OxmlError::from)?;
+                    if attribute.key.as_ref() == b"xmlns:a" {
+                        let value = attribute
+                            .decoded_and_normalized_value(
+                                XmlVersion::Implicit1_0,
+                                element.decoder(),
+                            )
+                            .map_err(OxmlError::from)?;
+                        if value != A_NS {
+                            return Err(TextError::Xml(OxmlError::InvalidValue(
+                                "xmlns:a conflicts with the fixed DrawingML writer namespace"
+                                    .to_owned(),
+                            )));
+                        }
+                    }
+                }
+            }
+            Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
     }
 }
 

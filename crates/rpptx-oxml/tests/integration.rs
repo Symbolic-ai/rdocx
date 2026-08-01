@@ -608,6 +608,16 @@ fn modelled_nested_elements_reject_fixed_prefix_rebinding() {
     );
     assert!(CT_SlideMaster::from_xml(text_style.as_bytes()).is_err());
 
+    let default_text_level = format!(
+        r#"<q:presentation xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><q:notesSz cx="6858000" cy="9144000"/><q:defaultTextStyle><d:lvl1pPr xmlns:a="urn:producer"><a:raw/></d:lvl1pPr></q:defaultTextStyle></q:presentation>"#
+    );
+    assert!(CT_Presentation::from_xml(default_text_level.as_bytes()).is_err());
+
+    let master_text_level = format!(
+        r#"<q:sldMaster xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld><q:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><q:txStyles><q:titleStyle><d:lvl1pPr xmlns:a="urn:producer"><a:raw/></d:lvl1pPr></q:titleStyle><q:bodyStyle/><q:otherStyle/></q:txStyles></q:sldMaster>"#
+    );
+    assert!(CT_SlideMaster::from_xml(master_text_level.as_bytes()).is_err());
+
     let required_shell = format!(
         r#"<q:spTree xmlns:q="{P_NS}"><q:nvGrpSpPr xmlns:p="urn:producer"><p:raw/></q:nvGrpSpPr><q:grpSpPr/></q:spTree>"#
     );

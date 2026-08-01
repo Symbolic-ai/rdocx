@@ -225,7 +225,7 @@ fn element_name(element: &BytesStart<'_>) -> String {
 mod tests {
     use std::panic;
 
-    use super::CT_TextBody;
+    use super::{CT_TextBody, CT_TextListStyle};
 
     #[test]
     fn text_body_reads_any_prefix_and_writes_the_fixed_a_prefix() {
@@ -269,6 +269,12 @@ mod tests {
             body.to_xml().unwrap(),
             br#"<a:txBody><a:bodyPr/><a:lstStyle><x:before x:id="1"/><a:lvl1pPr/><x:between><x:nested>one &amp; two</x:nested><!--note--></x:between><a:lvl2pPr/><x:after x:id="9"/></a:lstStyle><a:p/></a:txBody>"#
         );
+    }
+
+    #[test]
+    fn list_style_rejects_nested_fixed_prefix_rebinding() {
+        let xml = br#"<p:defaultTextStyle xmlns:p="urn:presentation" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><d:lvl1pPr xmlns:a="urn:producer"><a:raw/></d:lvl1pPr></p:defaultTextStyle>"#;
+        assert!(CT_TextListStyle::from_xml(xml).is_err());
     }
 
     #[test]
