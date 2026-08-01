@@ -1,6 +1,6 @@
 # F-066, The rdocx Theme adapter
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S15
 **Size**: S
 **Depends on**: F-065
@@ -98,14 +98,14 @@ active Word path. Any delta is undeclared and blocks integration.
 
 ## Implementation checklist
 
-- [ ] Wait until F-065 is integrated and use its approved concrete API.
-- [ ] Add the one documented dependency to `oxml-drawing` and update the lockfile.
-- [ ] Implement the trait in the shared theme module.
-- [ ] Project twelve concrete colours and two Latin fonts only.
-- [ ] Add inline comparison and unresolved-colour tests.
-- [ ] Leave released rdocx source and manifests unchanged.
-- [ ] Prove the dependency direction and released package dry-run.
-- [ ] Run focused checks and the unchanged hash gate.
+- [x] Wait until F-065 is integrated and use its approved concrete API.
+- [x] Add the one documented dependency to `oxml-drawing` and update the lockfile.
+- [x] Implement the trait in the shared theme module.
+- [x] Project twelve concrete colours and two Latin fonts only.
+- [x] Add inline comparison and unresolved-colour tests.
+- [x] Leave released rdocx source and manifests unchanged.
+- [x] Prove the dependency direction and released package dry-run.
+- [x] Run focused checks and the unchanged hash gate.
 
 ## Open questions
 

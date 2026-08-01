@@ -20,6 +20,9 @@ mod tests {
 
     use oxml_opc::OpcPackage;
 
+    use crate::color::{ColorChoice, RgbColor};
+    use crate::order::OrderedRawChildren;
+
     use super::{CT_OfficeStyleSheet, OFFICE_DEFAULT_XML};
 
     const POWERPOINT_VERSION: &str = "16.104";
@@ -141,6 +144,56 @@ mod tests {
         assert_eq!(elements.format_scheme.line_styles.len(), 3);
         assert_eq!(elements.format_scheme.effect_styles.len(), 3);
         assert_eq!(elements.format_scheme.background_fill_styles.len(), 3);
+    }
+
+    #[test]
+    fn shared_theme_adapter_matches_the_legacy_theme_projection() {
+        let shared = CT_OfficeStyleSheet::from_xml(OFFICE_DEFAULT_XML.as_bytes()).unwrap();
+        let legacy = rdocx_oxml::theme::Theme::from_xml(OFFICE_DEFAULT_XML.as_bytes()).unwrap();
+        let projected = rdocx_oxml::theme::Theme::from(&shared);
+
+        for slot in [
+            "dk1", "dk2", "lt1", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5",
+            "accent6", "hlink", "folHlink",
+        ] {
+            assert_eq!(projected.colors.get(slot), legacy.colors.get(slot));
+        }
+        assert_eq!(projected.major_font, legacy.major_font);
+        assert_eq!(projected.minor_font, legacy.minor_font);
+    }
+
+    #[test]
+    fn shared_theme_adapter_does_not_project_unresolved_colour_forms() {
+        let mut shared = CT_OfficeStyleSheet::office_default();
+        shared.theme_elements.color_scheme.accent1 = ColorChoice::Scheme {
+            value: "accent2".to_owned(),
+            transforms: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+        };
+        shared.theme_elements.color_scheme.accent2 = ColorChoice::Preset {
+            value: "red".to_owned(),
+            transforms: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+        };
+        shared.theme_elements.color_scheme.accent3 = ColorChoice::System {
+            value: "windowText".to_owned(),
+            last_color: None,
+            transforms: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+        };
+        shared.theme_elements.color_scheme.accent4 = ColorChoice::System {
+            value: "window".to_owned(),
+            last_color: Some(RgbColor::new(0xab, 0xcd, 0xef)),
+            transforms: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+        };
+
+        let projected = rdocx_oxml::theme::Theme::from(&shared);
+
+        assert_eq!(projected.colors.accent1, None);
+        assert_eq!(projected.colors.accent2, None);
+        assert_eq!(projected.colors.accent3.as_deref(), Some("windowText"));
+        assert_eq!(projected.colors.accent4.as_deref(), Some("ABCDEF"));
     }
 
     #[test]
@@ -403,6 +456,45 @@ pub struct SupplementalFont {
     pub typeface: String,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
+}
+
+impl From<&CT_OfficeStyleSheet> for rdocx_oxml::theme::Theme {
+    fn from(theme: &CT_OfficeStyleSheet) -> Self {
+        let colours = &theme.theme_elements.color_scheme;
+        let fonts = &theme.theme_elements.font_scheme;
+        Self {
+            colors: rdocx_oxml::theme::ThemeColors {
+                dk1: legacy_colour(colours.color(ThemeColorSlot::Dark1)),
+                dk2: legacy_colour(colours.color(ThemeColorSlot::Dark2)),
+                lt1: legacy_colour(colours.color(ThemeColorSlot::Light1)),
+                lt2: legacy_colour(colours.color(ThemeColorSlot::Light2)),
+                accent1: legacy_colour(colours.color(ThemeColorSlot::Accent1)),
+                accent2: legacy_colour(colours.color(ThemeColorSlot::Accent2)),
+                accent3: legacy_colour(colours.color(ThemeColorSlot::Accent3)),
+                accent4: legacy_colour(colours.color(ThemeColorSlot::Accent4)),
+                accent5: legacy_colour(colours.color(ThemeColorSlot::Accent5)),
+                accent6: legacy_colour(colours.color(ThemeColorSlot::Accent6)),
+                hlink: legacy_colour(colours.color(ThemeColorSlot::Hyperlink)),
+                fol_hlink: legacy_colour(colours.color(ThemeColorSlot::FollowedHyperlink)),
+            },
+            major_font: Some(fonts.major_font.latin.typeface.clone()),
+            minor_font: Some(fonts.minor_font.latin.typeface.clone()),
+        }
+    }
+}
+
+fn legacy_colour(colour: &ColorChoice) -> Option<String> {
+    match colour {
+        ColorChoice::Srgb { value, .. } => Some(value.to_string()),
+        ColorChoice::System {
+            value, last_color, ..
+        } => Some(
+            last_color
+                .map(|resolved| resolved.to_string())
+                .unwrap_or_else(|| value.clone()),
+        ),
+        ColorChoice::Scheme { .. } | ColorChoice::Preset { .. } => None,
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

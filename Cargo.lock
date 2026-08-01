@@ -428,6 +428,7 @@ dependencies = [
  "oxml-core",
  "oxml-opc",
  "quick-xml",
+ "rdocx-oxml",
 ]
 
 [[package]]
