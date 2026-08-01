@@ -1,6 +1,6 @@
 # F-065, Theme read and write
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S15
 **Size**: L
 **Depends on**: F-060, F-061
@@ -152,16 +152,16 @@ Expected unchanged. F-065 adds an unpublished model with no Word consumer.
 
 ## Implementation checklist
 
-- [ ] Add failing theme root, colour, font, format-list, raw-preservation, and malformed-input tests.
-- [ ] Add and export the approved `theme.rs` module with its error and public types.
-- [ ] Parse required theme children by local name and reject missing or duplicate required children.
-- [ ] Write fixed `a:` prefixes and schema-ordered children.
-- [ ] Reuse the completed fill, line, and effect models in the format scheme.
-- [ ] Preserve unmodelled attributes and subtrees at exact schema boundaries.
-- [ ] Implement the approved canonical `office_default()` data.
-- [ ] Run the pinned PowerPoint-generated theme gate and record the oracle build.
-- [ ] Build an acceptance deck and record the pinned PowerPoint no-repair result.
-- [ ] Run focused checks and the consolidated S15 gate.
+- [x] Add failing theme root, colour, font, format-list, raw-preservation, and malformed-input tests.
+- [x] Add and export the approved `theme.rs` module with its error and public types.
+- [x] Parse required theme children by local name and reject missing or duplicate required children.
+- [x] Write fixed `a:` prefixes and schema-ordered children.
+- [x] Reuse the completed fill, line, and effect models in the format scheme.
+- [x] Preserve unmodelled attributes and subtrees at exact schema boundaries.
+- [x] Implement the approved canonical `office_default()` data.
+- [x] Run the pinned PowerPoint-generated theme gate and record the oracle build.
+- [x] Build an acceptance deck and record the pinned PowerPoint no-repair result.
+- [x] Run focused checks and the consolidated S15 gate.
 
 ## Open questions
 

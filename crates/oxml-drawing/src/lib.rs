@@ -8,6 +8,7 @@ pub mod order;
 pub mod shape_props;
 pub mod style_ref;
 pub mod text;
+pub mod theme;
 pub mod xfrm;
 
 #[cfg(test)]
