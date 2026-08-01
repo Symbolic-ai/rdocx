@@ -27,7 +27,7 @@ rendering behaviour.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-065 | Theme read and write | L | pending | - |
+| F-065 | Theme read and write | L | in-progress | codex |
 | F-066 | The rdocx Theme adapter | S | pending | - |
 
 ## Sequencing note
