@@ -10,6 +10,7 @@ use crate::order::OrderedRawChildren;
 
 pub mod body;
 pub mod bullet;
+pub mod list_style;
 pub mod paragraph;
 
 pub use body::{
@@ -20,6 +21,7 @@ pub use bullet::{
     TextAutoNumber, TextAutoNumberScheme, TextBullet, TextBulletCharacter, TextBulletChoice,
     TextBulletColor, TextBulletSize, TextBulletSizeValue, TextNoBullet,
 };
+pub use list_style::CT_TextListStyle;
 pub use paragraph::{
     CT_RegularTextRun, CT_TextCharacterProperties, CT_TextField, CT_TextLineBreak,
     CT_TextParagraph, CT_TextParagraphProperties, TextAlignment, TextFont, TextHyperlink,
@@ -33,7 +35,7 @@ use body::{Result, missing_end};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CT_TextBody {
     pub body_properties: CT_TextBodyProperties,
-    list_style: Option<OpaqueTextElement>,
+    list_style: Option<CT_TextListStyle>,
     paragraphs: Vec<CT_TextParagraph>,
     raw_children: OrderedRawChildren,
 }
@@ -102,7 +104,7 @@ impl CT_TextBody {
                         return Err(TextError::DuplicateElement("lstStyle".to_owned()));
                     }
                     let raw = capture_element(reader, &element)?;
-                    list_style = Some(OpaqueTextElement::from_xml(&raw, b"lstStyle")?);
+                    list_style = Some(CT_TextListStyle::from_xml(&raw)?);
                     boundary = boundary.max(2);
                 }
                 Event::Empty(element)
@@ -112,7 +114,7 @@ impl CT_TextBody {
                         return Err(TextError::DuplicateElement("lstStyle".to_owned()));
                     }
                     let raw = capture_empty_element(&element)?;
-                    list_style = Some(OpaqueTextElement::from_xml(&raw, b"lstStyle")?);
+                    list_style = Some(CT_TextListStyle::from_xml(&raw)?);
                     boundary = boundary.max(2);
                 }
                 Event::Start(element) if matches_local_name(element.name().as_ref(), b"p") => {
@@ -171,7 +173,7 @@ impl CT_TextBody {
         self.body_properties.write_xml(writer)?;
         emit_raw(writer, self.raw_children.at(1))?;
         if let Some(list_style) = &self.list_style {
-            list_style.write_xml(writer, "a:lstStyle")?;
+            list_style.write_xml(writer)?;
         }
         emit_raw(writer, self.raw_children.at(2))?;
         for (index, paragraph) in self.paragraphs.iter().enumerate() {
@@ -188,6 +190,10 @@ impl CT_TextBody {
         self.list_style.is_some()
     }
 
+    pub fn list_style(&self) -> Option<&CT_TextListStyle> {
+        self.list_style.as_ref()
+    }
+
     pub fn paragraph_count(&self) -> usize {
         self.paragraphs.len()
     }
@@ -198,84 +204,6 @@ impl CT_TextBody {
 
     pub fn raw_children(&self) -> &OrderedRawChildren {
         &self.raw_children
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct OpaqueTextElement {
-    empty: bool,
-    inner_xml: Vec<u8>,
-}
-
-impl OpaqueTextElement {
-    fn from_xml(xml: &[u8], expected: &[u8]) -> Result<Self> {
-        let mut reader = Reader::from_reader(xml);
-        let mut buffer = Vec::new();
-        match reader
-            .read_event_into(&mut buffer)
-            .map_err(OxmlError::from)?
-        {
-            Event::Empty(element) if matches_local_name(element.name().as_ref(), expected) => {
-                Ok(Self {
-                    empty: true,
-                    inner_xml: Vec::new(),
-                })
-            }
-            Event::Start(element) if matches_local_name(element.name().as_ref(), expected) => {
-                let inner_start = reader.buffer_position() as usize;
-                let mut depth = 0usize;
-                loop {
-                    let event_start = reader.buffer_position() as usize;
-                    buffer.clear();
-                    match reader
-                        .read_event_into(&mut buffer)
-                        .map_err(OxmlError::from)?
-                    {
-                        Event::Start(_) => depth += 1,
-                        Event::End(element)
-                            if depth == 0
-                                && matches_local_name(element.name().as_ref(), expected) =>
-                        {
-                            return Ok(Self {
-                                empty: false,
-                                inner_xml: xml[inner_start..event_start].to_vec(),
-                            });
-                        }
-                        Event::End(_) => depth = depth.saturating_sub(1),
-                        Event::Eof => {
-                            return Err(missing_end(&String::from_utf8_lossy(expected)));
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            Event::Start(element) | Event::Empty(element) => {
-                Err(TextError::UnexpectedElement(element_name(&element)))
-            }
-            _ => Err(TextError::UnexpectedElement(
-                String::from_utf8_lossy(expected).into_owned(),
-            )),
-        }
-    }
-
-    fn write_xml<W: Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
-        if self.empty {
-            writer
-                .write_event(Event::Empty(BytesStart::new(tag)))
-                .map_err(OxmlError::from)?;
-            return Ok(());
-        }
-        writer
-            .write_event(Event::Start(BytesStart::new(tag)))
-            .map_err(OxmlError::from)?;
-        writer
-            .get_mut()
-            .write_all(&self.inner_xml)
-            .map_err(OxmlError::from)?;
-        writer
-            .write_event(Event::End(BytesEnd::new(tag)))
-            .map_err(OxmlError::from)?;
-        Ok(())
     }
 }
 
@@ -295,6 +223,8 @@ fn element_name(element: &BytesStart<'_>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::panic;
+
     use super::CT_TextBody;
 
     #[test]
@@ -304,5 +234,58 @@ mod tests {
         assert!(body.has_list_style());
         assert_eq!(body.paragraph_count(), 1);
         assert_eq!(body.to_xml().unwrap(), br#"<a:txBody><x:before/><a:bodyPr anchor="ctr"><a:noAutofit/></a:bodyPr><x:afterBody/><a:lstStyle><x:listChild/></a:lstStyle><x:beforeParagraph/><a:p><x:run>kept</x:run></a:p><x:afterParagraph/></a:txBody>"#);
+    }
+
+    #[test]
+    fn schema_valid_text_body_using_all_nine_list_levels_round_trips_structurally() {
+        let xml = br#"<q:txBody><q:bodyPr/><q:lstStyle><q:lvl1pPr lvl="0"><q:buChar char="*"/></q:lvl1pPr><q:lvl2pPr marL="100"><q:buAutoNum type="arabicPeriod" startAt="2"/></q:lvl2pPr><q:lvl3pPr><q:buNone/></q:lvl3pPr><q:lvl4pPr><q:defRPr sz="1200"/></q:lvl4pPr><q:lvl5pPr algn="ctr"/><x:extension x:id="5"><x:child>one &amp; two</x:child></x:extension><q:lvl6pPr marR="200"/><q:lvl7pPr><q:spcBef><q:spcPts val="600"/></q:spcBef></q:lvl7pPr><q:lvl8pPr><q:buSzPct val="125000"/><q:buFont typeface="Wingdings"/><q:buChar char="o"/></q:lvl8pPr><q:lvl9pPr indent="-100"/></q:lstStyle><q:p><q:pPr lvl="1"/><q:r><q:t xml:space="preserve"> item </q:t></q:r></q:p></q:txBody>"#;
+        let expected = br#"<a:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr lvl="0"><a:buChar char="*"/></a:lvl1pPr><a:lvl2pPr marL="100"><a:buAutoNum type="arabicPeriod" startAt="2"/></a:lvl2pPr><a:lvl3pPr><a:buNone/></a:lvl3pPr><a:lvl4pPr><a:defRPr sz="1200"/></a:lvl4pPr><a:lvl5pPr algn="ctr"/><x:extension x:id="5"><x:child>one &amp; two</x:child></x:extension><a:lvl6pPr marR="200"/><a:lvl7pPr><a:spcBef><a:spcPts val="600"/></a:spcBef></a:lvl7pPr><a:lvl8pPr><a:buSzPct val="125000"/><a:buFont typeface="Wingdings"/><a:buChar char="o"/></a:lvl8pPr><a:lvl9pPr indent="-100"/></a:lstStyle><a:p><a:pPr lvl="1"/><a:r><a:t xml:space="preserve"> item </a:t></a:r></a:p></a:txBody>"#;
+
+        let body = CT_TextBody::from_xml(xml).unwrap();
+        let written = body.to_xml().unwrap();
+        assert_eq!(written, expected);
+        assert_eq!(CT_TextBody::from_xml(&written).unwrap(), body);
+    }
+
+    #[test]
+    fn list_style_levels_write_in_ascending_schema_order() {
+        let body = CT_TextBody::from_xml(
+            br#"<q:txBody><q:bodyPr/><q:lstStyle><q:lvl9pPr indent="-9"/><q:lvl5pPr indent="-5"/><q:lvl1pPr indent="-1"/></q:lstStyle><q:p/></q:txBody>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            body.to_xml().unwrap(),
+            br#"<a:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr indent="-1"/><a:lvl5pPr indent="-5"/><a:lvl9pPr indent="-9"/></a:lstStyle><a:p/></a:txBody>"#
+        );
+    }
+
+    #[test]
+    fn unknown_list_style_children_round_trip_byte_for_byte() {
+        let body = CT_TextBody::from_xml(
+            br#"<q:txBody><q:bodyPr/><q:lstStyle><x:before x:id="1"/><q:lvl1pPr/><x:between><x:nested>one &amp; two</x:nested><!--note--></x:between><q:lvl2pPr/><x:after x:id="9"/></q:lstStyle><q:p/></q:txBody>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            body.to_xml().unwrap(),
+            br#"<a:txBody><a:bodyPr/><a:lstStyle><x:before x:id="1"/><a:lvl1pPr/><x:between><x:nested>one &amp; two</x:nested><!--note--></x:between><a:lvl2pPr/><x:after x:id="9"/></a:lstStyle><a:p/></a:txBody>"#
+        );
+    }
+
+    #[test]
+    fn invalid_list_levels_return_errors_without_panicking() {
+        let cases: &[&[u8]] = &[
+            br#"<q:txBody><q:bodyPr/><q:lstStyle><q:lvl0pPr/></q:lstStyle><q:p/></q:txBody>"#,
+            br#"<q:txBody><q:bodyPr/><q:lstStyle><q:lvl10pPr/></q:lstStyle><q:p/></q:txBody>"#,
+            br#"<q:txBody><q:bodyPr/><q:lstStyle><q:lvl01pPr/></q:lstStyle><q:p/></q:txBody>"#,
+            br#"<q:txBody><q:bodyPr/><q:lstStyle><q:lvl1pPr/><q:lvl1pPr/></q:lstStyle><q:p/></q:txBody>"#,
+            br#"<q:txBody><q:bodyPr/><q:lstStyle><q:lvl4pPr lvl="9"/></q:lstStyle><q:p/></q:txBody>"#,
+            br#"<q:txBody><q:bodyPr/><q:lstStyle><q:lvl7pPr><q:buChar/></q:lvl7pPr></q:lstStyle><q:p/></q:txBody>"#,
+        ];
+
+        for xml in cases {
+            let result = panic::catch_unwind(|| CT_TextBody::from_xml(xml));
+            assert!(result.is_ok(), "list-style parser panicked");
+            assert!(result.unwrap().is_err(), "invalid list level parsed");
+        }
     }
 }

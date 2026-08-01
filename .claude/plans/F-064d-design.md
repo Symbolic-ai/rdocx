@@ -1,6 +1,6 @@
 # F-064d, Nine-level list styles
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S14
 **Size**: M
 **Depends on**: F-064b, F-064c
@@ -68,11 +68,11 @@ Expected to be unchanged. The unpublished DrawingML model has no Word consumer.
 
 ## Implementation checklist
 
-- [ ] Add failing nine-level, complete-text-body, raw, and malformed-input tests.
-- [ ] Add the fixed nine-slot list-style model.
-- [ ] Parse and serialise list levels in schema order.
-- [ ] Complete the text-body shell using all prior child types.
-- [ ] Run focused checks and retain the external corpus gate for the M7 boundary.
+- [x] Add failing nine-level, complete-text-body, raw, and malformed-input tests.
+- [x] Add the fixed nine-slot list-style model.
+- [x] Parse and serialise list levels in schema order.
+- [x] Complete the text-body shell using all prior child types.
+- [x] Run focused checks and retain the external corpus gate for the M7 boundary.
 
 ## Open questions
 
