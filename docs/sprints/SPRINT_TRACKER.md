@@ -26,6 +26,7 @@ defended.
 | S11 | M6 | 0 | 0 | 0 | 0 | 1 | Confirmed the staged extraction boundary with no publication, consumer cutover, or implementation F-IDs |
 | S12 | M7 | 5 | 5 | 0 | 11 | 5 | Completed the first M7 DrawingML slice with exact PowerPoint colour evidence and no publication |
 | S13 | M7 | 4 | 4 | 0 | 12 | 4 | Completed transforms, custom geometry, and fills in unpublished oxml-drawing with all 28 hashes unchanged |
+| S14 | M7 | 8 | 8 | 0 | 14 | 8 | Completed lines, effects, shape properties, style references, and the split text model with all 28 hashes unchanged and no publication |
 
 ## Completed features
 
@@ -114,6 +115,7 @@ five working days.
 | S11 | 0 | 1 | 0.00 |
 | S12 | 5 | 5 | 5.00 |
 | S13 | 4 | 4 | 5.00 |
+| S14 | 8 | 8 | 5.00 |
 
 ## Escalation record
 
@@ -131,3 +133,4 @@ was done about it. Empty is the expected state.
 | 2026-07-31 | Sprint estimate variance exceeded 30 percent | S10 | Record 2 actual days against 8 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
 | 2026-07-31 | Sprint estimate variance exceeded 30 percent | S12 | Record 5 actual days against 11 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
 | 2026-08-01 | Sprint estimate variance exceeded 30 percent | S13 | Record 4 actual days against 12 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
+| 2026-08-01 | Sprint estimate variance exceeded 30 percent | S14 | Record 8 actual days against 14 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
