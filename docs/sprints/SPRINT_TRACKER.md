@@ -25,6 +25,7 @@ defended.
 | S10 | M5 | 2 | 2 | 0 | 8 | 2 | Completed M5 with PDF gradients and recursive raster groups, paths, clips, gradients, dashes, and backgrounds |
 | S11 | M6 | 0 | 0 | 0 | 0 | 1 | Confirmed the staged extraction boundary with no publication, consumer cutover, or implementation F-IDs |
 | S12 | M7 | 5 | 5 | 0 | 11 | 5 | Completed the first M7 DrawingML slice with exact PowerPoint colour evidence and no publication |
+| S13 | M7 | 4 | 4 | 0 | 12 | 4 | Completed transforms, custom geometry, and fills in unpublished oxml-drawing with all 28 hashes unchanged |
 
 ## Completed features
 
@@ -75,6 +76,10 @@ defended.
 | F-054 | S12 | M | 2 | 1 | 2026-07-31 | Four DrawingML colour choices with raw preservation |
 | F-055 | S12 | L | 4 | 1 | 2026-07-31 | Exact PowerPoint colour transform stack |
 | F-056 | S12 | M | 2 | 1 | 2026-07-31 | Master colour-map resolution before theme lookup |
+| F-057 | S13 | M | 2 | 1 | 2026-07-31 | DrawingML transforms and exact nested composition |
+| F-058 | S13 | L | 4 | 1 | 2026-07-31 | Guide formulas, path evaluation, and arc lowering |
+| F-059 | S13 | M | 2 | 1 | 2026-07-31 | Custom geometry XML model and evaluation |
+| F-060 | S13 | L | 4 | 1 | 2026-07-31 | DrawingML fill families with raw preservation |
 
 ## Velocity
 
@@ -100,6 +105,7 @@ five working days.
 | S10 | 2 | 2 | 5.00 |
 | S11 | 0 | 1 | 0.00 |
 | S12 | 5 | 5 | 5.00 |
+| S13 | 4 | 4 | 5.00 |
 
 ## Escalation record
 
@@ -116,3 +122,4 @@ was done about it. Empty is the expected state.
 | 2026-07-31 | Sprint estimate variance exceeded 30 percent | S09 | Record 4 actual days against 7 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
 | 2026-07-31 | Sprint estimate variance exceeded 30 percent | S10 | Record 2 actual days against 8 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
 | 2026-07-31 | Sprint estimate variance exceeded 30 percent | S12 | Record 5 actual days against 11 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
+| 2026-08-01 | Sprint estimate variance exceeded 30 percent | S13 | Record 4 actual days against 12 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
