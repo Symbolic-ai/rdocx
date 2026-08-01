@@ -1,6 +1,6 @@
 # F-062, Effects
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S14
 **Size**: S
 **Depends on**: none
@@ -66,11 +66,11 @@ Expected to be unchanged. The unpublished DrawingML model has no Word consumer.
 
 ## Implementation checklist
 
-- [ ] Add failing glow, outer-shadow, schema-order, and malformed-input tests.
-- [ ] Add effect-list and outer-shadow types with explicit errors.
-- [ ] Parse and serialise the modelled shadow in schema order.
-- [ ] Preserve unsupported effects at their original boundaries.
-- [ ] Export the approved module and run focused checks.
+- [x] Add failing glow, outer-shadow, schema-order, and malformed-input tests.
+- [x] Add effect-list and outer-shadow types with explicit errors.
+- [x] Parse and serialise the modelled shadow in schema order.
+- [x] Preserve unsupported effects at their original boundaries.
+- [x] Export the approved module and run focused checks.
 
 ## Open questions
 
