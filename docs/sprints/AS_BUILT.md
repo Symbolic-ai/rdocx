@@ -1886,3 +1886,141 @@ Word tint and shade contract in `docs/hld/05-drawingml-model.md`.
 **Notes for future sessions.** Do not reverse the dependency or install the
 shared parser into the active Word path before the separately reviewed shared
 crate publication and cutover work.
+
+### F-067, Create rpptx-oxml and the corpus harness
+
+**Sprint.** S16
+**Completed.** 2026-08-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The workspace now contains unpublished `rpptx-oxml` at
+version 0.0.0, PresentationML namespace constants, a pinned 50-deck public
+corpus manifest and fetcher, opaque OPC round trips, and the carried M7
+DrawingML corpus gate.
+
+**Non-obvious choices.** Byte identity means equality of every decompressed
+package part after canonical OPC save. ZIP metadata and compression are not
+model state. The corpus remains in ignored storage and every fetch is checked
+against its pinned SHA-256 value.
+
+**Deviations from the design plan.** The corpus exposed boundary whitespace,
+empty hyperlink relationship ids, and an empty custom-geometry path list.
+Their canonical parser states and focused regressions were added before the
+carried M7 gate passed.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/13-risks-and-open-questions.md` now record the implemented crate,
+corpus source, gate, and publication boundary.
+
+**Tests.** `corpus_manifest_is_complete_and_verified`,
+`all_corpus_decks_round_trip_opaquely`,
+`carried_m7_drawingml_gate_passes_for_the_corpus`, all 50 pinned decks, 6,898
+text bodies, 8,643 shape-property elements, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep every PowerPoint development crate at
+version 0.0.0 with publication disabled until PowerPoint development is
+complete. Do not commit the fetched corpus binaries.
+
+### F-068, presentation.xml
+
+**Sprint.** S16
+**Completed.** 2026-08-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `rpptx-oxml` now models the presentation root, slide and
+notes sizes, ordered slide and master identifiers, and the default text style.
+It validates slide-id bounds and uniqueness while preserving unsupported XML
+at its schema boundaries.
+
+**Non-obvious choices.** Relationship identifiers remain strings for the OPC
+layer to resolve. Reads use namespace URIs and tolerate alternate prefixes,
+while writes use fixed PresentationML, DrawingML, and relationship prefixes.
+Canonical-prefix collisions are rejected rather than changing the meaning of
+preserved raw XML.
+
+**Deviations from the design plan.** Microscope passes found local-name-only
+matching, qualified id ambiguity, and nested canonical-prefix rebinding. URI
+aware element matching, qualified relationship attributes, collision checks,
+and focused regressions fixed them. Pass 3 was clean.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+presentation and preservation contracts in
+`docs/hld/06-presentationml-model.md`.
+
+**Tests.** `every_corpus_presentation_part_round_trips_structurally`, all 50
+presentation roots, slide-id validation, alternate-prefix writing,
+zero-slide templates, malformed input, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep relationship target resolution out of the
+XML model and continue rejecting namespace rebinding that would corrupt raw
+payload semantics.
+
+### F-069, Slide, layout and master parts
+
+**Sprint.** S16
+**Completed.** 2026-08-01
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `rpptx-oxml` now has distinct schema-ordered models for
+slides, layouts, masters, common slide data, master text styles, colour maps,
+and colour-map overrides. Unsupported timing, transition, extension, and
+producer-specific XML remains at ordered raw boundaries.
+
+**Non-obvious choices.** The three roots use concrete types because their
+schema sequences differ. Colour maps reuse the DrawingML value model but keep
+their PresentationML element ownership. OPC relationship cardinality remains
+an integration concern outside the XML structs.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean. F-070
+subsequently replaced the deliberately raw shape-tree boundary with its typed
+model.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+part, colour-map, and preservation contracts in
+`docs/hld/06-presentationml-model.md`.
+
+**Tests.** `every_corpus_slide_layout_and_master_round_trips_structurally`,
+`corpus_part_relationship_counts_are_valid`, schema-order and colour-map
+fixtures, 421 slides, 766 layouts, 76 masters, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep required package relationships in the OPC
+layer and preserve unsupported root children in their captured schema slots.
+
+### F-070, The shape tree
+
+**Sprint.** S16
+**Completed.** 2026-08-01
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Common slide data now owns a typed, schema-ordered shape
+tree with required non-visual group properties, DrawingML group properties,
+and recursive group shapes. All six child variants retain document z-order.
+
+**Non-obvious choices.** Only group shapes recurse. Shapes, pictures, graphic
+frames, connectors, and alternate content own their captured XML bytes until
+their named later stories model them. Group properties expose the existing
+DrawingML transform while preserving unsupported children.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** No HLD file changed. The implementation follows the
+shape-tree and preservation contracts in
+`docs/hld/06-presentationml-model.md`.
+
+**Tests.** `nested_group_shape_tree_round_trips_with_tree_shape_preserved`,
+`every_corpus_shape_tree_round_trips_structurally`, all six child variants,
+required child order, 1,263 trees, 63 recursive groups, and the integrated full
+gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** F-071 through F-074 own the opaque payload
+variants. Preserve their current XML until each later story replaces one
+boundary with an approved typed model.
