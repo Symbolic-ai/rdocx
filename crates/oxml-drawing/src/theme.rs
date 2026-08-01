@@ -128,6 +128,33 @@ mod tests {
     }
 
     #[test]
+    fn qualified_extension_attributes_do_not_replace_unqualified_theme_attributes() {
+        let xml = minimal_theme()
+            .replace(
+                "name=\"Test\" custom=\"root\"",
+                "name=\"Test\" x:name=\"extension\" custom=\"root\"",
+            )
+            .replace(
+                "<z:themeElements>",
+                "<x:extension x:name=\"child\"/><z:themeElements>",
+            );
+        let theme = CT_OfficeStyleSheet::from_xml(xml.as_bytes()).unwrap();
+        let written = theme.to_xml().unwrap();
+        let reparsed = CT_OfficeStyleSheet::from_xml(&written).unwrap();
+
+        assert_eq!(reparsed, theme);
+        assert!(contains(&written, br#"xmlns:x="urn:test""#));
+        assert!(contains(&written, br#"x:name="extension""#));
+        assert!(contains(&written, br#"<x:extension x:name="child"/>"#));
+
+        let missing_unqualified = minimal_theme().replace(
+            "<z:clrScheme name=\"Test\">",
+            "<z:clrScheme x:name=\"extension\">",
+        );
+        assert!(CT_OfficeStyleSheet::from_xml(missing_unqualified.as_bytes()).is_err());
+    }
+
+    #[test]
     fn office_default_contains_the_standard_colour_font_and_style_contract() {
         let theme = CT_OfficeStyleSheet::office_default();
         let elements = &theme.theme_elements;
@@ -1356,7 +1383,7 @@ fn raw_attributes(
     for attribute in start.attributes() {
         let attribute = attribute.map_err(OxmlError::from)?;
         let key = attribute.key.as_ref();
-        if modelled.iter().any(|name| local_name(key) == *name) {
+        if modelled.contains(&key) {
             continue;
         }
         if is_root && key == b"xmlns:a" {
@@ -1384,7 +1411,7 @@ fn required_attr(start: &BytesStart<'_>, name: &[u8]) -> Result<String> {
 fn decoded_attr(start: &BytesStart<'_>, name: &[u8]) -> Result<Option<String>> {
     for attribute in start.attributes() {
         let attribute = attribute.map_err(OxmlError::from)?;
-        if local_name(attribute.key.as_ref()) == name {
+        if attribute.key.as_ref() == name {
             return Ok(Some(
                 attribute
                     .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())
