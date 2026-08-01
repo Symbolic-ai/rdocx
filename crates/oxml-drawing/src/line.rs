@@ -5,7 +5,7 @@ use oxml_core::OxmlError;
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
 use oxml_core::xml::{get_attr, local_name, matches_local_name};
 use quick_xml::events::{BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::fill::{Fill, FillError};
 use crate::order::OrderedRawChildren;
@@ -362,6 +362,7 @@ pub struct CT_LineProperties {
     pub join: Option<LineJoin>,
     pub head_end: Option<LineEnd>,
     pub tail_end: Option<LineEnd>,
+    raw_attributes: Vec<(String, String)>,
     raw_children: OrderedRawChildren,
 }
 
@@ -396,13 +397,14 @@ impl CT_LineProperties {
     }
 
     fn from_start(start: &BytesStart<'_>) -> Result<Self> {
-        let width = optional_parse(start, b"w")?;
+        let width = optional_exact_parse(start, b"w")?;
         if let Some(width) = width {
             validate_line_width(width)?;
         }
         Ok(Self {
             width,
-            cap: optional_enum(start, b"cap", LineCap::parse)?,
+            cap: optional_exact_enum(start, b"cap", LineCap::parse)?,
+            raw_attributes: capture_raw_attributes(start, &[b"w", b"cap"])?,
             ..Self::default()
         })
     }
@@ -518,6 +520,7 @@ impl CT_LineProperties {
         if let Some(cap) = self.cap {
             start.push_attribute(("cap", cap.as_str()));
         }
+        push_raw_attributes(&mut start, &self.raw_attributes);
         if self.fill.is_none()
             && self.dash.is_none()
             && self.join.is_none()
@@ -804,6 +807,66 @@ fn optional_enum<T>(
         .transpose()
 }
 
+fn exact_attr(start: &BytesStart<'_>, name: &[u8]) -> Result<Option<String>> {
+    for attribute in start.attributes() {
+        let attribute = attribute.map_err(OxmlError::from)?;
+        if attribute.key.as_ref() == name {
+            let value = attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())
+                .map_err(OxmlError::from)?;
+            return Ok(Some(value.into_owned()));
+        }
+    }
+    Ok(None)
+}
+
+fn optional_exact_parse<T: std::str::FromStr>(
+    start: &BytesStart<'_>,
+    name: &[u8],
+) -> Result<Option<T>> {
+    exact_attr(start, name)?
+        .map(|value| value.parse().map_err(|_| invalid(start, name, value)))
+        .transpose()
+}
+
+fn optional_exact_enum<T>(
+    start: &BytesStart<'_>,
+    name: &[u8],
+    parse: impl FnOnce(&str) -> Option<T>,
+) -> Result<Option<T>> {
+    exact_attr(start, name)?
+        .map(|value| parse(&value).ok_or_else(|| invalid(start, name, value)))
+        .transpose()
+}
+
+fn capture_raw_attributes(
+    start: &BytesStart<'_>,
+    modelled: &[&[u8]],
+) -> Result<Vec<(String, String)>> {
+    let mut raw = Vec::new();
+    for attribute in start.attributes() {
+        let attribute = attribute.map_err(OxmlError::from)?;
+        if modelled.iter().any(|name| attribute.key.as_ref() == *name) {
+            continue;
+        }
+        let name = std::str::from_utf8(attribute.key.as_ref())
+            .map_err(OxmlError::from)?
+            .to_owned();
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())
+            .map_err(OxmlError::from)?
+            .into_owned();
+        raw.push((name, value));
+    }
+    Ok(raw)
+}
+
+fn push_raw_attributes(start: &mut BytesStart<'_>, attributes: &[(String, String)]) {
+    for (name, value) in attributes {
+        start.push_attribute((name.as_str(), value.as_str()));
+    }
+}
+
 fn invalid(start: &BytesStart<'_>, attribute: &[u8], value: String) -> LineError {
     LineError::InvalidAttribute {
         element: String::from_utf8_lossy(local_name(start.name().as_ref())).into_owned(),
@@ -879,6 +942,19 @@ mod tests {
             assert_eq!(value.as_str(), *token);
             assert_eq!(value.dash_array(), *dash_array);
         }
+    }
+
+    #[test]
+    fn line_root_attributes_round_trip_without_loss() {
+        let line = CT_LineProperties::from_xml(
+            br#"<q:ln w="12700" cap="rnd" cmpd="dbl" algn="ctr" x:w="999"/>"#,
+        )
+        .unwrap();
+        assert_eq!(line.width, Some(12_700));
+        assert_eq!(
+            line.to_xml().unwrap(),
+            br#"<a:ln w="12700" cap="rnd" cmpd="dbl" algn="ctr" x:w="999"/>"#
+        );
     }
 
     #[test]

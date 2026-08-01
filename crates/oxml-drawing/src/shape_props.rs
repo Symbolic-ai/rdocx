@@ -5,7 +5,7 @@ use oxml_core::OxmlError;
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
 use oxml_core::xml::{local_name, matches_local_name};
 use quick_xml::events::{BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::effect::{CT_EffectList, EffectError};
 use crate::fill::{Fill, FillError};
@@ -106,6 +106,7 @@ pub struct CT_ShapeProperties {
     pub fill: Option<Fill>,
     pub line: Option<CT_LineProperties>,
     pub effects: Option<CT_EffectList>,
+    raw_attributes: Vec<(String, String)>,
     raw_children: OrderedRawChildren,
 }
 
@@ -120,10 +121,10 @@ impl CT_ShapeProperties {
                 .map_err(OxmlError::from)?
             {
                 Event::Start(element) if matches_local_name(element.name().as_ref(), b"spPr") => {
-                    return Self::from_element(&mut reader);
+                    return Self::from_element(&mut reader, &element);
                 }
                 Event::Empty(element) if matches_local_name(element.name().as_ref(), b"spPr") => {
-                    return Ok(Self::default());
+                    return Self::from_start(&element);
                 }
                 Event::Start(element) | Event::Empty(element) => {
                     return Err(ShapePropertiesError::UnexpectedElement(element_name(
@@ -141,8 +142,15 @@ impl CT_ShapeProperties {
         }
     }
 
-    fn from_element(reader: &mut Reader<&[u8]>) -> Result<Self> {
-        let mut properties = Self::default();
+    fn from_start(start: &BytesStart<'_>) -> Result<Self> {
+        Ok(Self {
+            raw_attributes: capture_raw_attributes(start)?,
+            ..Self::default()
+        })
+    }
+
+    fn from_element(reader: &mut Reader<&[u8]>, start: &BytesStart<'_>) -> Result<Self> {
+        let mut properties = Self::from_start(start)?;
         let mut boundary = 0;
         let mut buffer = Vec::new();
 
@@ -213,6 +221,8 @@ impl CT_ShapeProperties {
 
     /// Writes shape properties into an existing XML writer.
     pub fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        let mut start = BytesStart::new("a:spPr");
+        push_raw_attributes(&mut start, &self.raw_attributes);
         if self.transform.is_none()
             && self.custom_geometry.is_none()
             && self.fill.is_none()
@@ -221,13 +231,13 @@ impl CT_ShapeProperties {
             && self.raw_children.is_empty()
         {
             writer
-                .write_event(Event::Empty(BytesStart::new("a:spPr")))
+                .write_event(Event::Empty(start))
                 .map_err(OxmlError::from)?;
             return Ok(());
         }
 
         writer
-            .write_event(Event::Start(BytesStart::new("a:spPr")))
+            .write_event(Event::Start(start))
             .map_err(OxmlError::from)?;
         emit_raw(writer, self.raw_children.at(0))?;
         if let Some(transform) = &self.transform {
@@ -308,6 +318,28 @@ fn emit_raw<'a, W: Write>(
     Ok(())
 }
 
+fn capture_raw_attributes(start: &BytesStart<'_>) -> Result<Vec<(String, String)>> {
+    let mut raw = Vec::new();
+    for attribute in start.attributes() {
+        let attribute = attribute.map_err(OxmlError::from)?;
+        let name = std::str::from_utf8(attribute.key.as_ref())
+            .map_err(OxmlError::from)?
+            .to_owned();
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())
+            .map_err(OxmlError::from)?
+            .into_owned();
+        raw.push((name, value));
+    }
+    Ok(raw)
+}
+
+fn push_raw_attributes(start: &mut BytesStart<'_>, attributes: &[(String, String)]) {
+    for (name, value) in attributes {
+        start.push_attribute((name.as_str(), value.as_str()));
+    }
+}
+
 fn element_name(element: &BytesStart<'_>) -> String {
     String::from_utf8_lossy(element.name().as_ref()).into_owned()
 }
@@ -335,5 +367,16 @@ mod tests {
         let written = properties.to_xml().unwrap();
         assert_eq!(written, br#"<a:spPr><x:before/><a:xfrm rot="60000"><a:off x="1" y="2"/></a:xfrm><x:afterXfrm/><a:custGeom><a:pathLst><a:path/></a:pathLst></a:custGeom><x:afterGeom/><a:solidFill><a:srgbClr val="112233"/></a:solidFill><x:afterFill/><a:ln w="12700"><a:noFill/></a:ln><x:afterLine/><a:effectLst><z:glow rad="40000"><z:srgbClr val="445566"/></z:glow></a:effectLst><x:afterEffects/></a:spPr>"#);
         assert_eq!(CT_ShapeProperties::from_xml(&written).unwrap(), properties);
+    }
+
+    #[test]
+    fn shape_property_root_attributes_round_trip_without_loss() {
+        let properties =
+            CT_ShapeProperties::from_xml(br#"<q:spPr bwMode="gray" x:future="keep &amp; stay"/>"#)
+                .unwrap();
+        assert_eq!(
+            properties.to_xml().unwrap(),
+            br#"<a:spPr bwMode="gray" x:future="keep &amp; stay"/>"#
+        );
     }
 }
