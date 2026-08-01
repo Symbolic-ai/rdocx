@@ -30,7 +30,7 @@ PowerPoint development crate.
 |------|-------|------|--------|-------|
 | F-071 | Placeholders | M | in-progress | codex |
 | F-072 | Pictures | M | in-progress | codex |
-| F-073 | Graphic frames | M | pending | - |
+| F-073 | Graphic frames | M | in-progress | codex |
 | F-074 | DrawingML tables | L | in-progress | codex |
 
 ## Sequencing note

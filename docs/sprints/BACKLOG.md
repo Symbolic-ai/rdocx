@@ -23,14 +23,14 @@ regenerated, never hand-edited.
 | M5, PDF backend                             | 9  | 9 | 0 | 0  |
 | M6, Shared publication and rdocx cutover     | 6  | 0 | 0 | 6  |
 | M7, DrawingML                               | 19 | 19 | 0 | 0  |
-| M8, PresentationML                          | 14 | 4 | 3 | 7  |
+| M8, PresentationML                          | 14 | 4 | 4 | 6  |
 | M9, Inheritance resolver                    | 8  | 0 | 0 | 8  |
 | M10, Renderer                               | 16 | 0 | 0 | 16 |
 | M11, Write API                              | 12 | 0 | 0 | 12 |
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **154** | **63** | **3** | **88** |
+| **Total** | **154** | **63** | **4** | **87** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -165,7 +165,7 @@ regenerated, never hand-edited.
 | F-070 | The shape tree                               | S16 | L | done |
 | F-071 | Placeholders                                 | S17 | M | in-progress |
 | F-072 | Pictures                                     | S17 | M | in-progress |
-| F-073 | Graphic frames                               | S17 | M | pending |
+| F-073 | Graphic frames                               | S17 | M | in-progress |
 | F-074 | DrawingML tables                             | S17 | L | in-progress |
 | F-075 | Connectors                                   | S18 | S | pending |
 | F-076 | mc:AlternateContent                          | S18 | M | pending |
