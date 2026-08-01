@@ -69,7 +69,7 @@ takes 1.
 ## Placeholders
 
 ```rust
-pub struct PlaceholderKey { pub ph_type: PhType, pub idx: u32 }
+pub struct PlaceholderKey { pub ph_type: PhType, pub idx: Option<u32> }
 ```
 
 Matching follows PowerPoint's actual rule, not the obvious one:

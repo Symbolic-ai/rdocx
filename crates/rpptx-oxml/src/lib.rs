@@ -1,6 +1,7 @@
 #![allow(non_camel_case_types)]
 
 pub mod namespace;
+pub mod placeholder;
 pub mod presentation;
 pub mod shape_tree;
 pub mod slide_parts;

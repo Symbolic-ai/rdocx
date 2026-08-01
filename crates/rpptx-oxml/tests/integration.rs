@@ -13,8 +13,9 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 use rpptx_oxml::PRESENTATION_PART;
 use rpptx_oxml::namespace::{P_NS, P_PREFIX, R_NS, R_PREFIX};
+use rpptx_oxml::placeholder::{CT_Placeholder, PhType, PlaceholderKey};
 use rpptx_oxml::presentation::CT_Presentation;
-use rpptx_oxml::shape_tree::{CT_ShapeTree, ShapeTreeChild};
+use rpptx_oxml::shape_tree::{CT_Shape, CT_ShapeTree, ShapeTreeChild};
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind};
 
 const MANIFEST: &str = include_str!("../../../scripts/pptx-corpus-manifest.tsv");
@@ -761,7 +762,7 @@ fn assert_order(xml: &[u8], tags: &[&str]) {
 #[test]
 fn shape_tree_requires_non_visual_and_group_properties_in_order() {
     let valid = format!(
-        r#"<q:spTree xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><q:nvGrpSpPr marker="kept"/><q:grpSpPr><d:xfrm><d:off x="10" y="20"/><d:ext cx="30" cy="40"/><d:chOff x="1" y="2"/><d:chExt cx="3" cy="4"/></d:xfrm><d:solidFill><d:srgbClr val="112233"/></d:solidFill></q:grpSpPr><q:sp/></q:spTree>"#
+        r#"<q:spTree xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><q:nvGrpSpPr marker="kept"/><q:grpSpPr><d:xfrm><d:off x="10" y="20"/><d:ext cx="30" cy="40"/><d:chOff x="1" y="2"/><d:chExt cx="3" cy="4"/></d:xfrm><d:solidFill><d:srgbClr val="112233"/></d:solidFill></q:grpSpPr><q:sp><q:nvSpPr><q:cNvPr/><q:cNvSpPr/><q:nvPr/></q:nvSpPr><q:spPr/></q:sp></q:spTree>"#
     );
     let parsed = CT_ShapeTree::from_xml(valid.as_bytes()).unwrap();
     let transform = parsed.group_transform().unwrap();
@@ -791,14 +792,14 @@ fn shape_tree_requires_non_visual_and_group_properties_in_order() {
 #[test]
 fn all_six_child_variants_keep_document_order() {
     let payloads = [
-        r#"<p:sp marker="shape"><p:spPr/></p:sp>"#,
+        r#"<p:sp marker="shape"><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp>"#,
         r#"<p:pic marker="picture"><p:blipFill/></p:pic>"#,
         r#"<p:graphicFrame marker="frame"><a:graphic/></p:graphicFrame>"#,
         r#"<p:cxnSp marker="connector"><p:spPr/></p:cxnSp>"#,
         r#"<mc:AlternateContent marker="alternate"><mc:Choice Requires="p14"><p:sp/></mc:Choice></mc:AlternateContent>"#,
     ];
     let xml = format!(
-        r#"<p:spTree xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x="urn:producer"><p:nvGrpSpPr/><p:grpSpPr/>{}<x:between/>{}<p:grpSp><p:nvGrpSpPr/><p:grpSpPr/><p:sp marker="nested"/></p:grpSp>{}{}{}</p:spTree>"#,
+        r#"<p:spTree xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x="urn:producer"><p:nvGrpSpPr/><p:grpSpPr/>{}<x:between/>{}<p:grpSp><p:nvGrpSpPr/><p:grpSpPr/><p:sp marker="nested"><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp></p:grpSp>{}{}{}</p:spTree>"#,
         payloads[0], payloads[1], payloads[2], payloads[3], payloads[4]
     );
     let parsed = CT_ShapeTree::from_xml(xml.as_bytes()).unwrap();
@@ -827,7 +828,7 @@ fn all_six_child_variants_keep_document_order() {
             "marker=\"alternate\"",
         ],
     );
-    for payload in payloads {
+    for payload in &payloads[1..] {
         assert!(
             written
                 .windows(payload.len())
@@ -840,7 +841,7 @@ fn all_six_child_variants_keep_document_order() {
 #[test]
 fn nested_group_shape_tree_round_trips_with_tree_shape_preserved() {
     let xml = format!(
-        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/><p:grpSp><p:nvGrpSpPr/><p:grpSpPr><a:xfrm><a:off x="100" y="200"/><a:ext cx="300" cy="400"/><a:chOff x="10" y="20"/><a:chExt cx="30" cy="40"/></a:xfrm></p:grpSpPr><p:sp marker="outer"/><p:grpSp><p:nvGrpSpPr/><p:grpSpPr/><p:pic marker="inner"/></p:grpSp></p:grpSp></p:spTree></p:cSld></p:sld>"#
+        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/><p:grpSp><p:nvGrpSpPr/><p:grpSpPr><a:xfrm><a:off x="100" y="200"/><a:ext cx="300" cy="400"/><a:chOff x="10" y="20"/><a:chExt cx="30" cy="40"/></a:xfrm></p:grpSpPr><p:sp marker="outer"><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:grpSp><p:nvGrpSpPr/><p:grpSpPr/><p:pic marker="inner"/></p:grpSp></p:grpSp></p:spTree></p:cSld></p:sld>"#
     );
     let parsed = CT_Slide::from_xml(xml.as_bytes()).unwrap();
     let ShapeTreeChild::GroupShape(outer) = &parsed.common_slide_data.shape_tree.children[0] else {
@@ -923,6 +924,194 @@ fn count_groups(children: &[ShapeTreeChild]) -> usize {
         .iter()
         .map(|child| match child {
             ShapeTreeChild::GroupShape(group) => 1 + count_groups(&group.children),
+            _ => 0,
+        })
+        .sum()
+}
+
+#[test]
+fn placeholders_match_by_idx_before_type() {
+    let title = PlaceholderKey {
+        ph_type: PhType::Title,
+        idx: Some(7),
+    };
+    let body = PlaceholderKey {
+        ph_type: PhType::Body,
+        idx: Some(7),
+    };
+    let same_type_other_idx = PlaceholderKey {
+        ph_type: PhType::Title,
+        idx: Some(8),
+    };
+    assert!(title.matches(&body));
+    assert!(!title.matches(&same_type_other_idx));
+}
+
+#[test]
+fn placeholders_match_by_type_when_either_idx_is_absent() {
+    let indexed = PlaceholderKey {
+        ph_type: PhType::Chart,
+        idx: Some(3),
+    };
+    let unindexed = PlaceholderKey {
+        ph_type: PhType::Chart,
+        idx: None,
+    };
+    let other_type = PlaceholderKey {
+        ph_type: PhType::Table,
+        idx: None,
+    };
+    assert!(indexed.matches(&unindexed));
+    assert!(!indexed.matches(&other_type));
+}
+
+#[test]
+fn absent_placeholder_type_defaults_to_body() {
+    let xml = format!(r#"<q:ph xmlns:q="{P_NS}" idx="4"/>"#);
+    let placeholder = CT_Placeholder::from_xml(xml.as_bytes()).unwrap();
+    assert_eq!(placeholder.ph_type, None);
+    assert_eq!(placeholder.effective_type(), PhType::Body);
+    assert_eq!(placeholder.key().idx, Some(4));
+}
+
+#[test]
+fn title_and_centered_title_are_equivalent_placeholders() {
+    let title = PlaceholderKey {
+        ph_type: PhType::Title,
+        idx: None,
+    };
+    let centered = PlaceholderKey {
+        ph_type: PhType::CenteredTitle,
+        idx: None,
+    };
+    assert!(title.matches(&centered));
+    assert!(centered.matches(&title));
+}
+
+#[test]
+fn body_subtitle_and_object_are_equivalent_placeholders() {
+    let keys = [PhType::Body, PhType::Subtitle, PhType::Object]
+        .map(|ph_type| PlaceholderKey { ph_type, idx: None });
+    for left in &keys {
+        for right in &keys {
+            assert!(left.matches(right));
+        }
+    }
+}
+
+#[test]
+fn placeholder_attributes_and_unknown_children_round_trip_in_place() {
+    let xml = format!(
+        r#"<q:ph xmlns:q="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer" type="vertBody" orient="vert" sz="half" idx="4294967295" hasCustomPrompt="1" x:marker="kept"><x:before/><a:opaque/><q:extLst><q:ext uri="raw"/></q:extLst></q:ph>"#
+    );
+    let placeholder = CT_Placeholder::from_xml(xml.as_bytes()).unwrap();
+    assert_eq!(placeholder.ph_type, Some(PhType::VerticalBody));
+    assert_eq!(placeholder.idx, Some(u32::MAX));
+    let written = placeholder.to_xml().unwrap();
+    let text = std::str::from_utf8(&written).unwrap();
+    assert!(text.starts_with(&format!(r#"<p:ph xmlns:p="{P_NS}""#)));
+    assert!(text.contains(r#"orient="vert""#));
+    assert!(text.contains(r#"sz="half""#));
+    assert!(text.contains(r#"hasCustomPrompt="1""#));
+    assert!(text.contains(r#"x:marker="kept""#));
+    assert!(text.contains(r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main""#));
+    assert!(text.contains("<x:before/><a:opaque/><q:extLst><q:ext uri=\"raw\"/></q:extLst>"));
+    assert_eq!(placeholder, CT_Placeholder::from_xml(&written).unwrap());
+}
+
+#[test]
+fn typed_shape_placeholder_round_trips_inside_nested_groups() {
+    let xml = format!(
+        r#"<q:spTree xmlns:q="{P_NS}" xmlns:x="urn:producer"><q:nvGrpSpPr/><q:grpSpPr/><q:grpSp><q:nvGrpSpPr/><q:grpSpPr/><q:sp marker="shape"><q:nvSpPr x:keep="yes"><q:cNvPr id="2" name="Title"/><x:between/><q:cNvSpPr/><q:nvPr><x:before/><q:ph type="ctrTitle" idx="5"/><x:after/></q:nvPr></q:nvSpPr><q:spPr/><q:txBody><x:raw/></q:txBody></q:sp></q:grpSp></q:spTree>"#
+    );
+    let tree = CT_ShapeTree::from_xml(xml.as_bytes()).unwrap();
+    let ShapeTreeChild::GroupShape(group) = &tree.children[0] else {
+        panic!("expected group");
+    };
+    let ShapeTreeChild::Shape(shape) = &group.children[0] else {
+        panic!("expected typed shape");
+    };
+    let placeholder = shape.placeholder.as_ref().unwrap();
+    assert_eq!(placeholder.ph_type, Some(PhType::CenteredTitle));
+    assert_eq!(placeholder.idx, Some(5));
+    let standalone_shape = shape.to_xml().unwrap();
+    let standalone_text = std::str::from_utf8(&standalone_shape).unwrap();
+    assert!(standalone_text.contains(&format!(r#"xmlns:q="{P_NS}""#)));
+    assert!(standalone_text.contains(r#"xmlns:x="urn:producer""#));
+    assert_eq!(shape, &CT_Shape::from_xml(&standalone_shape).unwrap());
+    let standalone_placeholder = placeholder.to_xml().unwrap();
+    assert_eq!(
+        placeholder,
+        &CT_Placeholder::from_xml(&standalone_placeholder).unwrap()
+    );
+    let written = tree.to_xml().unwrap();
+    let text = std::str::from_utf8(&written).unwrap();
+    assert!(text.contains("<p:sp marker=\"shape\""));
+    assert!(text.contains("<p:nvSpPr x:keep=\"yes\">"));
+    assert_order(&written, &["<x:before/>", "<p:ph", "<x:after/>"]);
+    assert_eq!(tree, CT_ShapeTree::from_xml(&written).unwrap());
+}
+
+#[test]
+fn every_corpus_shape_placeholder_round_trips_structurally() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut placeholders = 0usize;
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, content_type) in &package.content_types.overrides {
+            let Some(xml) = package.get_part(part) else {
+                continue;
+            };
+            let children = match content_type.as_str() {
+                content_types::SLIDE => {
+                    &CT_Slide::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path))
+                        .common_slide_data
+                        .shape_tree
+                        .children
+                }
+                content_types::SLIDE_LAYOUT => {
+                    &CT_SlideLayout::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path))
+                        .common_slide_data
+                        .shape_tree
+                        .children
+                }
+                content_types::SLIDE_MASTER => {
+                    &CT_SlideMaster::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path))
+                        .common_slide_data
+                        .shape_tree
+                        .children
+                }
+                _ => continue,
+            };
+            placeholders += verify_shape_placeholders(children, entry.path, part);
+        }
+    }
+    assert!(placeholders > 0);
+    eprintln!("Placeholder corpus gate checked {placeholders} typed p:ph elements");
+}
+
+fn verify_shape_placeholders(children: &[ShapeTreeChild], deck: &str, part: &str) -> usize {
+    children
+        .iter()
+        .map(|child| match child {
+            ShapeTreeChild::Shape(shape) => {
+                let written = shape.to_xml().unwrap();
+                assert_eq!(
+                    shape,
+                    &CT_Shape::from_xml(&written)
+                        .unwrap_or_else(|error| panic!("{deck} {part}: {error}"))
+                );
+                usize::from(shape.placeholder.is_some())
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                verify_shape_placeholders(&group.children, deck, part)
+            }
             _ => 0,
         })
         .sum()

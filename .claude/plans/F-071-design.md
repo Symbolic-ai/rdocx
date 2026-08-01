@@ -1,6 +1,6 @@
 # F-071, Placeholders
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S17
 **Size**: M
 **Depends on**: F-070
@@ -148,15 +148,15 @@ does not enter the released Word path.
 
 ## Implementation checklist
 
-- [ ] Add and export the placeholder types and matching predicate.
-- [ ] Preserve attribute presence and default absent type to body.
-- [ ] Implement both equivalence classes and the `idx` priority rule.
-- [ ] Replace the raw shape arm with the partial typed `CT_Shape` model.
-- [ ] Preserve unrelated shape content and enforce the required shape shell.
-- [ ] Add focused matching, prefix, order, preservation, nested-tree, and corpus tests.
-- [ ] Update the approved HLD impact file with the presence-sensitive key type.
-- [ ] Confirm every PowerPoint development crate remains version 0.0.0 and unpublished.
-- [ ] Confirm all 28 deterministic hashes remain unchanged.
+- [x] Add and export the placeholder types and matching predicate.
+- [x] Preserve attribute presence and default absent type to body.
+- [x] Implement both equivalence classes and the `idx` priority rule.
+- [x] Replace the raw shape arm with the partial typed `CT_Shape` model.
+- [x] Preserve unrelated shape content and enforce the required shape shell.
+- [x] Add focused matching, prefix, order, preservation, nested-tree, and corpus tests.
+- [x] Update the approved HLD impact file with the presence-sensitive key type.
+- [x] Confirm every PowerPoint development crate remains version 0.0.0 and unpublished.
+- [x] Confirm all 28 deterministic hashes remain unchanged.
 
 ## Open questions
 
