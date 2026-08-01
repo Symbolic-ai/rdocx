@@ -243,9 +243,13 @@ problem.
 | F-062 | Effects                                      | S |
 | F-063 | Shape properties and style references        | M |
 | F-064 | DrawingML text model                         | XL |
+| F-064a | Text body properties and shell               | M |
+| F-064b | Text paragraphs and runs                     | L |
+| F-064c | Text bullets                                 | S |
+| F-064d | Nine-level list styles                       | M |
 
-F-064 is sized XL deliberately. Split it at implementation into body properties,
-list styles, paragraphs and runs, and bullets.
+F-064 is the umbrella gate. Its implementation is split into F-064a through
+F-064d, and the parent closes only after every child closes.
 
 #### Sprint S15, Theme
 

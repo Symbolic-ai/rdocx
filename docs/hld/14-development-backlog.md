@@ -511,6 +511,37 @@ Path lists, adjust value lists, guide lists, the text rectangle.
 **Test gate**: every `a:txBody` in the corpus round-trips structurally, and
 `a:t` whitespace survives via `xml:space`.
 
+F-064 is split into the four implementation stories below. The parent closes
+only after every child closes.
+
+### F-064a, Text body properties and shell (M)
+`a:txBody` ownership and `a:bodyPr` insets, anchoring, wrapping, vertical
+direction, and autofit forms.
+**Depends on**: F-053.
+**Test gate**: every `a:bodyPr` autofit form round-trips in schema order with
+unmodelled children preserved.
+
+### F-064b, Text paragraphs and runs (L)
+`a:p`, `a:pPr`, `a:r`, `a:rPr`, `a:t`, `a:fld`, and `a:br`, including the
+DrawingML centipoint and percentage conventions.
+**Depends on**: F-064a.
+**Test gate**: leading and trailing `a:t` whitespace survives a structural
+round-trip through `xml:space="preserve"`.
+
+### F-064c, Text bullets (S)
+`a:buChar`, `a:buAutoNum`, `a:buNone`, `a:buFont`, `a:buSzPct`, `a:buSzPts`,
+and `a:buClr` on paragraph properties.
+**Depends on**: F-064b.
+**Test gate**: every modelled bullet form round-trips with colour, font, and
+size children in schema order.
+
+### F-064d, Nine-level list styles (M)
+`a:lstStyle` with nine level-specific paragraph property slots, completing the
+modelled `a:txBody` hierarchy.
+**Depends on**: F-064b, F-064c.
+**Test gate**: a schema-valid `a:txBody` fixture using all nine list levels
+serialises, reparses, and remains structurally equal.
+
 ### F-065, Theme read and write (L)
 `CT_OfficeStyleSheet` including `a:fmtScheme`, plus `office_default()`.
 **Depends on**: F-060, F-061.
