@@ -30,7 +30,7 @@ development crate.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-075 | Connectors | S | in-progress | codex |
-| F-076 | mc:AlternateContent | M | pending | - |
+| F-076 | mc:AlternateContent | M | in-progress | codex |
 | F-077 | Notes slides and notes master | M | pending | - |
 | F-078 | relmap rewrite_rel_ids | M | pending | - |
 
