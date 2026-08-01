@@ -1,6 +1,6 @@
 # F-064a, Text body properties and shell
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S14
 **Size**: M
 **Depends on**: F-053
@@ -67,11 +67,11 @@ Expected to be unchanged. The unpublished DrawingML model has no Word consumer.
 
 ## Implementation checklist
 
-- [ ] Add failing body-property, prefix, raw-preservation, and malformed-input tests.
-- [ ] Add the text module, text-body shell, and body-property types.
-- [ ] Parse and serialise body properties and autofit forms in schema order.
-- [ ] Preserve unsupported XML at exact boundaries.
-- [ ] Export the approved text module and run focused checks.
+- [x] Add failing body-property, prefix, raw-preservation, and malformed-input tests.
+- [x] Add the text module, text-body shell, and body-property types.
+- [x] Parse and serialise body properties and autofit forms in schema order.
+- [x] Preserve unsupported XML at exact boundaries.
+- [x] Export the approved text module and run focused checks.
 
 ## Open questions
 

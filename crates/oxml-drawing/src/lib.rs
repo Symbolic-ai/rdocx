@@ -7,6 +7,7 @@ pub mod namespace;
 pub mod order;
 pub mod shape_props;
 pub mod style_ref;
+pub mod text;
 pub mod xfrm;
 
 #[cfg(test)]
