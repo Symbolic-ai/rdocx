@@ -23,14 +23,14 @@ regenerated, never hand-edited.
 | M5, PDF backend                             | 9  | 9 | 0 | 0  |
 | M6, Shared publication and rdocx cutover     | 6  | 0 | 0 | 6  |
 | M7, DrawingML                               | 19 | 19 | 0 | 0  |
-| M8, PresentationML                          | 14 | 8 | 3 | 3  |
+| M8, PresentationML                          | 14 | 8 | 4 | 2  |
 | M9, Inheritance resolver                    | 8  | 0 | 0 | 8  |
 | M10, Renderer                               | 16 | 0 | 0 | 16 |
 | M11, Write API                              | 12 | 0 | 0 | 12 |
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **154** | **67** | **3** | **84** |
+| **Total** | **154** | **67** | **4** | **83** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -170,7 +170,7 @@ regenerated, never hand-edited.
 | F-075 | Connectors                                   | S18 | S | in-progress |
 | F-076 | mc:AlternateContent                          | S18 | M | in-progress |
 | F-077 | Notes slides and notes master                | S18 | M | in-progress |
-| F-078 | relmap rewrite_rel_ids                       | S18 | M | pending |
+| F-078 | relmap rewrite_rel_ids                       | S18 | M | in-progress |
 | F-079 | The rpptx read facade                        | S19 | L | pending |
 | F-080 | Modelled round-trip gate                     | S19 | M | pending |
 <!-- AUTOGEN:backlog-M8 END -->
