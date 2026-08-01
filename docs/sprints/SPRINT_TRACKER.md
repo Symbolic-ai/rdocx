@@ -89,6 +89,8 @@ defended.
 | F-064c | S14 | S | 1 | 1 | 2026-08-01 | Character, automatic, and no-bullet forms |
 | F-064d | S14 | M | 2 | 1 | 2026-08-01 | Fixed nine-level list styles |
 | F-064 | S14 | XL | 0 | 1 | 2026-08-01 | Umbrella closed after four child stories and integrated gates |
+| F-065 | S15 | L | 4 | 1 | 2026-08-01 | Complete DrawingML theme and pinned PowerPoint default |
+| F-066 | S15 | S | 1 | 1 | 2026-08-01 | Stable Word theme projection through the documented edge |
 
 ## Velocity
 
