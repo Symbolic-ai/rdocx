@@ -1781,6 +1781,30 @@ fn graphic_frame_preserves_unknown_payload_and_extension_xml_byte_for_byte() {
 }
 
 #[test]
+fn empty_namespace_shadow_does_not_hide_later_inherited_binding() {
+    let xml = format!(
+        r#"<p:spTree xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:outer"><p:nvGrpSpPr/><p:grpSpPr/><p:graphicFrame><p:nvGraphicFramePr/><p:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr><x:shadow xmlns:x="urn:inner"/></a:tblPr><a:tblGrid><a:gridCol w="100"/></a:tblGrid><a:tr h="200"><a:tc><x:needed/><a:tcPr/></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame></p:spTree>"#
+    );
+    let tree = CT_ShapeTree::from_xml(xml.as_bytes()).unwrap();
+    let ShapeTreeChild::GraphicFrame(frame) = &tree.children[0] else {
+        panic!("shape tree did not retain the graphic frame");
+    };
+    let frame_xml = frame.to_xml().unwrap();
+    let frame_text = std::str::from_utf8(&frame_xml).unwrap();
+    assert!(frame_text.contains(r#"xmlns:x="urn:outer""#));
+    assert!(frame_text.contains(r#"<x:shadow xmlns:x="urn:inner"/>"#));
+    assert!(frame_text.contains("<x:needed/>"));
+
+    let GraphicDataPayload::Table(table) = &frame.graphic_data.payload else {
+        panic!("table URI did not select the typed table branch");
+    };
+    let table_xml = table.to_xml().unwrap();
+    let table_text = std::str::from_utf8(&table_xml).unwrap();
+    assert!(table_text.contains(r#"xmlns:x="urn:outer""#));
+    assert!(table_text.contains("<x:needed/>"));
+}
+
+#[test]
 fn every_corpus_graphic_frame_round_trips_structurally() {
     let Some(corpus) = require_or_skip_corpus() else {
         return;

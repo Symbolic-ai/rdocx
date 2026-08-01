@@ -3,12 +3,13 @@ use std::io::Write;
 use oxml_core::OxmlError;
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
 use oxml_drawing::namespace::A_NS;
+use oxml_drawing::order::OrderedRawChildren;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, all_attributes,
-    self_contained_attributes,
+    root_attributes, self_contained_attributes,
 };
 
 pub type Result<T> = std::result::Result<T, OxmlError>;
@@ -255,6 +256,12 @@ pub struct PlaceholderKey {
     pub idx: Option<u32>,
 }
 
+pub(crate) struct ApplicationProperties {
+    pub(crate) placeholder: Option<CT_Placeholder>,
+    pub(crate) raw_attributes: Vec<(String, String)>,
+    pub(crate) raw_children: OrderedRawChildren,
+}
+
 impl PlaceholderKey {
     /// Applies PowerPoint's index-first, type-fallback matching rule.
     pub fn matches(&self, other: &Self) -> bool {
@@ -263,6 +270,101 @@ impl PlaceholderKey {
             _ => self.ph_type.equivalent_to(&other.ph_type),
         }
     }
+}
+
+pub(crate) fn parse_application_properties(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+) -> Result<ApplicationProperties> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) => {
+                let namespaces = inherited.with_start(&start)?;
+                let raw_attributes = root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?;
+                let mut placeholder = None;
+                let mut raw_children = OrderedRawChildren::default();
+                let mut boundary = 0usize;
+                loop {
+                    buffer.clear();
+                    match reader.read_event_into(&mut buffer)? {
+                        Event::Start(child) => {
+                            let child_namespaces = namespaces.with_start(&child)?;
+                            let is_placeholder =
+                                child_namespaces.element_uri(child.name().as_ref()) == Some(P_NS)
+                                    && local_name(child.name().as_ref()) == b"ph";
+                            let raw = capture_element(&mut reader, &child)?;
+                            capture_application_child(
+                                is_placeholder,
+                                raw,
+                                &child_namespaces,
+                                &mut placeholder,
+                                &mut raw_children,
+                                &mut boundary,
+                            )?;
+                        }
+                        Event::Empty(child) => {
+                            let child_namespaces = namespaces.with_start(&child)?;
+                            let is_placeholder =
+                                child_namespaces.element_uri(child.name().as_ref()) == Some(P_NS)
+                                    && local_name(child.name().as_ref()) == b"ph";
+                            let raw = capture_empty_element(&child)?;
+                            capture_application_child(
+                                is_placeholder,
+                                raw,
+                                &child_namespaces,
+                                &mut placeholder,
+                                &mut raw_children,
+                                &mut boundary,
+                            )?;
+                        }
+                        Event::End(end) if local_name(end.name().as_ref()) == b"nvPr" => break,
+                        Event::Eof => {
+                            return Err(OxmlError::MissingElement("closing p:nvPr".to_owned()));
+                        }
+                        _ => {}
+                    }
+                }
+                return Ok(ApplicationProperties {
+                    placeholder,
+                    raw_attributes,
+                    raw_children,
+                });
+            }
+            Event::Empty(start) => {
+                return Ok(ApplicationProperties {
+                    placeholder: None,
+                    raw_attributes: root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?,
+                    raw_children: OrderedRawChildren::default(),
+                });
+            }
+            Event::Eof => return Err(OxmlError::MissingElement("p:nvPr".to_owned())),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn capture_application_child(
+    is_placeholder: bool,
+    raw: Vec<u8>,
+    namespaces: &NamespaceBindings,
+    placeholder: &mut Option<CT_Placeholder>,
+    raw_children: &mut OrderedRawChildren,
+    boundary: &mut usize,
+) -> Result<()> {
+    if is_placeholder {
+        namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
+        if placeholder.is_some() {
+            return Err(OxmlError::InvalidValue("duplicate p:ph".to_owned()));
+        }
+        *placeholder = Some(CT_Placeholder::from_fragment(&raw, &namespaces.entries())?);
+        *boundary = 1;
+    } else {
+        raw_children.push(*boundary, raw);
+    }
+    Ok(())
 }
 
 fn validate_root(start: &BytesStart<'_>, namespaces: &NamespaceBindings) -> Result<()> {

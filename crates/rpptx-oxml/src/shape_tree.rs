@@ -14,7 +14,7 @@ use crate::namespace::{
     self_contained_attributes,
 };
 use crate::picture::CT_Picture;
-use crate::placeholder::CT_Placeholder;
+use crate::placeholder::{ApplicationProperties, CT_Placeholder, parse_application_properties};
 
 pub type Result<T> = std::result::Result<T, OxmlError>;
 type RawAttributes = Vec<(String, String)>;
@@ -417,15 +417,15 @@ fn parse_non_visual_shape(
                         _ => {}
                     }
                 }
-                let (placeholder, app_attributes, app_raw) = required(application, "p:nvPr")?;
+                let application = required(application, "p:nvPr")?;
                 return Ok(ParsedNonVisualShape {
-                    placeholder,
+                    placeholder: application.placeholder,
                     raw_attributes,
                     raw_children,
                     non_visual_drawing_properties: required(drawing, "p:cNvPr")?,
                     non_visual_shape_properties: required(shape, "p:cNvSpPr")?,
-                    application_properties_attributes: app_attributes,
-                    application_properties_raw_children: app_raw,
+                    application_properties_attributes: application.raw_attributes,
+                    application_properties_raw_children: application.raw_children,
                 });
             }
             Event::Empty(_) => {
@@ -440,8 +440,6 @@ fn parse_non_visual_shape(
     }
 }
 
-type ParsedApplicationProperties = (Option<CT_Placeholder>, RawAttributes, OrderedRawChildren);
-
 #[allow(clippy::too_many_arguments)]
 fn capture_non_visual_shape_child(
     name: &[u8],
@@ -450,7 +448,7 @@ fn capture_non_visual_shape_child(
     namespaces: &NamespaceBindings,
     drawing: &mut Option<Vec<u8>>,
     shape: &mut Option<Vec<u8>>,
-    application: &mut Option<ParsedApplicationProperties>,
+    application: &mut Option<ApplicationProperties>,
     raw_children: &mut OrderedRawChildren,
     boundary: &mut usize,
 ) -> Result<()> {
@@ -476,97 +474,6 @@ fn capture_non_visual_shape_child(
             ));
         }
         _ => raw_children.push(*boundary, raw),
-    }
-    Ok(())
-}
-
-fn parse_application_properties(
-    xml: &[u8],
-    inherited: &NamespaceBindings,
-) -> Result<ParsedApplicationProperties> {
-    let mut reader = Reader::from_reader(xml);
-    let mut buffer = Vec::new();
-    loop {
-        match reader.read_event_into(&mut buffer)? {
-            Event::Start(start) => {
-                let namespaces = inherited.with_start(&start)?;
-                let raw_attributes = root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?;
-                let mut placeholder = None;
-                let mut raw_children = OrderedRawChildren::default();
-                let mut boundary = 0usize;
-                loop {
-                    buffer.clear();
-                    match reader.read_event_into(&mut buffer)? {
-                        Event::Start(child) => {
-                            let child_namespaces = namespaces.with_start(&child)?;
-                            let is_placeholder =
-                                child_namespaces.element_uri(child.name().as_ref()) == Some(P_NS)
-                                    && local_name(child.name().as_ref()) == b"ph";
-                            let raw = capture_element(&mut reader, &child)?;
-                            capture_application_child(
-                                is_placeholder,
-                                raw,
-                                &child_namespaces,
-                                &mut placeholder,
-                                &mut raw_children,
-                                &mut boundary,
-                            )?;
-                        }
-                        Event::Empty(child) => {
-                            let child_namespaces = namespaces.with_start(&child)?;
-                            let is_placeholder =
-                                child_namespaces.element_uri(child.name().as_ref()) == Some(P_NS)
-                                    && local_name(child.name().as_ref()) == b"ph";
-                            let raw = capture_empty_element(&child)?;
-                            capture_application_child(
-                                is_placeholder,
-                                raw,
-                                &child_namespaces,
-                                &mut placeholder,
-                                &mut raw_children,
-                                &mut boundary,
-                            )?;
-                        }
-                        Event::End(end) if local_name(end.name().as_ref()) == b"nvPr" => break,
-                        Event::Eof => {
-                            return Err(OxmlError::MissingElement("closing p:nvPr".to_owned()));
-                        }
-                        _ => {}
-                    }
-                }
-                return Ok((placeholder, raw_attributes, raw_children));
-            }
-            Event::Empty(start) => {
-                return Ok((
-                    None,
-                    root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?,
-                    OrderedRawChildren::default(),
-                ));
-            }
-            Event::Eof => return Err(OxmlError::MissingElement("p:nvPr".to_owned())),
-            _ => {}
-        }
-        buffer.clear();
-    }
-}
-
-fn capture_application_child(
-    is_placeholder: bool,
-    raw: Vec<u8>,
-    namespaces: &NamespaceBindings,
-    placeholder: &mut Option<CT_Placeholder>,
-    raw_children: &mut OrderedRawChildren,
-    boundary: &mut usize,
-) -> Result<()> {
-    if is_placeholder {
-        namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
-        if placeholder.is_some() {
-            return Err(OxmlError::InvalidValue("duplicate p:ph".to_owned()));
-        }
-        *placeholder = Some(CT_Placeholder::from_fragment(&raw, &namespaces.entries())?);
-        *boundary = 1;
-    } else {
-        raw_children.push(*boundary, raw);
     }
     Ok(())
 }

@@ -611,56 +611,22 @@ fn referenced_namespaces(
     let mut buffer = Vec::new();
     loop {
         match reader.read_event_into(&mut buffer)? {
-            Event::Start(start) | Event::Empty(start) => {
-                let is_empty = start.is_empty();
-                let mut declarations = HashSet::new();
-                let mut attributes = Vec::new();
-                for attribute in start.attributes() {
-                    let attribute = attribute?;
-                    let name = attribute.key.as_ref().to_vec();
-                    if name == b"xmlns" {
-                        declarations.insert(String::new());
-                        continue;
-                    }
-                    if let Some(prefix) = name.strip_prefix(b"xmlns:") {
-                        declarations.insert(std::str::from_utf8(prefix)?.to_owned());
-                        continue;
-                    }
-                    let value = attribute
-                        .decoded_and_normalized_value(
-                            quick_xml::XmlVersion::Implicit1_0,
-                            start.decoder(),
-                        )?
-                        .into_owned();
-                    attributes.push((name, value));
-                }
-                local_scopes.push(declarations);
-                record_name_prefix(
-                    start.name().as_ref(),
-                    true,
+            Event::Start(start) => {
+                record_element_namespaces(
+                    &start,
                     &inherited_prefixes,
-                    &local_scopes,
+                    &mut local_scopes,
                     &mut referenced,
                 )?;
-                for (name, value) in attributes {
-                    record_name_prefix(
-                        &name,
-                        false,
-                        &inherited_prefixes,
-                        &local_scopes,
-                        &mut referenced,
-                    )?;
-                    record_value_prefixes(
-                        &name,
-                        &value,
-                        &inherited_prefixes,
-                        &local_scopes,
-                        &mut referenced,
-                    );
-                }
-                if is_empty {
-                    local_scopes.pop();
-                }
+            }
+            Event::Empty(start) => {
+                record_element_namespaces(
+                    &start,
+                    &inherited_prefixes,
+                    &mut local_scopes,
+                    &mut referenced,
+                )?;
+                local_scopes.pop();
             }
             Event::End(_) => {
                 local_scopes.pop();
@@ -675,6 +641,45 @@ fn referenced_namespaces(
         .filter(|(prefix, _)| referenced.contains(prefix))
         .cloned()
         .collect())
+}
+
+fn record_element_namespaces(
+    start: &BytesStart<'_>,
+    inherited_prefixes: &HashSet<String>,
+    local_scopes: &mut Vec<HashSet<String>>,
+    referenced: &mut HashSet<String>,
+) -> Result<()> {
+    let mut declarations = HashSet::new();
+    let mut attributes = Vec::new();
+    for attribute in start.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref().to_vec();
+        if name == b"xmlns" {
+            declarations.insert(String::new());
+            continue;
+        }
+        if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+            declarations.insert(std::str::from_utf8(prefix)?.to_owned());
+            continue;
+        }
+        let value = attribute
+            .decoded_and_normalized_value(quick_xml::XmlVersion::Implicit1_0, start.decoder())?
+            .into_owned();
+        attributes.push((name, value));
+    }
+    local_scopes.push(declarations);
+    record_name_prefix(
+        start.name().as_ref(),
+        true,
+        inherited_prefixes,
+        local_scopes,
+        referenced,
+    )?;
+    for (name, value) in attributes {
+        record_name_prefix(&name, false, inherited_prefixes, local_scopes, referenced)?;
+        record_value_prefixes(&name, &value, inherited_prefixes, local_scopes, referenced);
+    }
+    Ok(())
 }
 
 fn record_name_prefix(
