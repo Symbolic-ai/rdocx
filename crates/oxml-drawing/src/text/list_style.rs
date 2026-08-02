@@ -16,6 +16,7 @@ use super::paragraph::CT_TextParagraphProperties;
 #[allow(non_camel_case_types)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CT_TextListStyle {
+    pub default_paragraph_properties: Option<CT_TextParagraphProperties>,
     pub level1: Option<CT_TextParagraphProperties>,
     pub level2: Option<CT_TextParagraphProperties>,
     pub level3: Option<CT_TextParagraphProperties>,
@@ -81,7 +82,7 @@ impl CT_TextListStyle {
             {
                 Event::Start(element) => {
                     let name = local_name(element.name().as_ref()).to_vec();
-                    if list_level(&name)?.is_some() {
+                    if name == b"defPPr" || list_level(&name)?.is_some() {
                         reject_conflicting_a_prefix(&element)?;
                     }
                     let raw = capture_element(reader, &element)?;
@@ -89,7 +90,7 @@ impl CT_TextListStyle {
                 }
                 Event::Empty(element) => {
                     let name = local_name(element.name().as_ref()).to_vec();
-                    if list_level(&name)?.is_some() {
+                    if name == b"defPPr" || list_level(&name)?.is_some() {
                         reject_conflicting_a_prefix(&element)?;
                     }
                     let raw = capture_empty_element(&element)?;
@@ -112,6 +113,14 @@ impl CT_TextListStyle {
     }
 
     fn capture_child(&mut self, name: &[u8], raw: Vec<u8>, boundary: &mut usize) -> Result<()> {
+        if name == b"defPPr" {
+            if self.default_paragraph_properties.is_some() {
+                return Err(TextError::DuplicateElement("defPPr".to_owned()));
+            }
+            self.default_paragraph_properties = Some(CT_TextParagraphProperties::from_xml(&raw)?);
+            *boundary = (*boundary).max(1);
+            return Ok(());
+        }
         if let Some(level) = list_level(name)? {
             if self.level(level).is_some() {
                 return Err(TextError::DuplicateElement(
@@ -119,13 +128,12 @@ impl CT_TextListStyle {
                 ));
             }
             self.set_level(level, CT_TextParagraphProperties::from_xml(&raw)?);
-            *boundary = (*boundary).max(level);
+            *boundary = (*boundary).max(level + 1);
             return Ok(());
         }
 
         let schema_boundary = match name {
-            b"defPPr" => 0,
-            b"extLst" => 9,
+            b"extLst" => 10,
             _ => *boundary,
         };
         self.raw_children
@@ -143,21 +151,26 @@ impl CT_TextListStyle {
     pub fn write_xml_as<W: Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
         let mut start = BytesStart::new(tag);
         push_raw_attributes(&mut start, &self.raw_attributes);
-        let has_levels = (1..=9).any(|level| self.level(level).is_some());
-        if !has_levels && self.raw_children.is_empty() {
+        let has_modelled = self.default_paragraph_properties.is_some()
+            || (1..=9).any(|level| self.level(level).is_some());
+        if !has_modelled && self.raw_children.is_empty() {
             return write_empty(writer, start);
         }
 
         write_start(writer, start)?;
         emit_raw(writer, self.raw_children.at(0))?;
+        if let Some(properties) = &self.default_paragraph_properties {
+            properties.write_xml(writer, "a:defPPr")?;
+        }
         for level in 1..=9 {
+            emit_raw(writer, self.raw_children.at(level))?;
             if let Some(properties) = self.level(level) {
                 let tag = level_tag(level)
                     .ok_or_else(|| TextError::UnexpectedElement(format!("list level {level}")))?;
                 properties.write_xml(writer, tag)?;
             }
-            emit_raw(writer, self.raw_children.at(level))?;
         }
+        emit_raw(writer, self.raw_children.at(10))?;
         write_end(writer, tag)
     }
 

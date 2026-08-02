@@ -1,9 +1,14 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use oxml_drawing::color::ColorMap;
 use oxml_drawing::text::CT_TextListStyle;
 use oxml_drawing::theme::CT_OfficeStyleSheet;
 use rpptx_oxml::placeholder::PlaceholderKey;
 use rpptx_oxml::shape_tree::{CT_Shape, ShapeTreeChild};
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster};
+
+use crate::text::EffectiveListStyle;
 
 /// The fixed presentation hierarchy and theme inputs for resolving one slide.
 pub struct ResolveCtx<'a> {
@@ -13,6 +18,7 @@ pub struct ResolveCtx<'a> {
     pub layout: &'a CT_SlideLayout,
     pub slide: &'a CT_Slide,
     pub default_text_style: &'a CT_TextListStyle,
+    pub(crate) list_style_cache: RefCell<HashMap<Option<PlaceholderKey>, EffectiveListStyle>>,
 }
 
 impl<'a> ResolveCtx<'a> {
@@ -31,6 +37,7 @@ impl<'a> ResolveCtx<'a> {
             layout,
             slide,
             default_text_style,
+            list_style_cache: RefCell::new(HashMap::new()),
         }
     }
 

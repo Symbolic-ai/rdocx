@@ -1,6 +1,6 @@
 # F-083, The seven-step list style merge
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S20
 **Size**: L
 **Depends on**: F-081, F-064
@@ -98,13 +98,13 @@ Expected to be unchanged. The resolver does not alter the Word renderer.
 
 ## Implementation checklist
 
-- [ ] Type, parse, and write list-style `a:defPPr` in schema order.
-- [ ] Add concrete effective list and text property values in `text.rs`.
-- [ ] Implement the five-source, nine-level cached prefix.
-- [ ] Apply direct shape, paragraph, and run sources without cache leakage.
-- [ ] Merge nested character and bullet properties per field.
-- [ ] Add focused cascade, parser, and corpus regressions.
-- [ ] Update the two HLD files during sprint finalisation.
+- [x] Type, parse, and write list-style `a:defPPr` in schema order.
+- [x] Add concrete effective list and text property values in `text.rs`.
+- [x] Implement the five-source, nine-level cached prefix.
+- [x] Apply direct shape, paragraph, and run sources without cache leakage.
+- [x] Merge nested character and bullet properties per field.
+- [x] Add focused cascade, parser, and corpus regressions.
+- [x] Update the two HLD files during sprint finalisation.
 
 ## Open questions
 

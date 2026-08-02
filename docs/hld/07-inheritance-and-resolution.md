@@ -110,6 +110,12 @@ Seven sources, merged in this order, later winning per property and per level:
 6. The paragraph's `a:pPr`
 7. The run's `a:rPr`
 
+Within each list-style source, `a:defPPr` is applied to all nine levels before
+the matching `a:lvlNpPr`. Paragraph fields and nested default character fields
+overlay independently. Bullet colour, size, font and choice are independent
+properties, while each fill and typeface slot is atomic. Effective values do
+not inherit opaque XML or hyperlink actions.
+
 ### 4. Style references
 
 `p:style` carries `a:lnRef`, `a:fillRef`, `a:effectRef` and `a:fontRef`, each
@@ -137,20 +143,27 @@ complex-script faces, and per-script `a:font@script` entries override.
 
 ```rust
 pub struct ResolveCtx<'a> {
-    pub theme: &'a Theme,
+    pub theme: &'a CT_OfficeStyleSheet,
     pub color_map: ColorMap,               // clrMap, overridden by clrMapOvr
     pub master: &'a CT_SlideMaster,
     pub layout: &'a CT_SlideLayout,
     pub slide:  &'a CT_Slide,
-    pub default_text_style: &'a ListStyle,
-    ls_cache: RefCell<HashMap<PlaceholderKey, Rc<ListStyle>>>,
+    pub default_text_style: &'a CT_TextListStyle,
+    list_style_cache:
+        RefCell<HashMap<Option<PlaceholderKey>, EffectiveListStyle>>,
 }
 
 impl ResolveCtx<'_> {
     fn placeholder_chain(&self, sp: &Shape) -> (Option<&Shape>, Option<&Shape>);
     pub fn effective_xfrm(&self, sp: &Shape) -> Option<Xfrm>;
     pub fn effective_body_pr(&self, sp: &Shape) -> BodyPr;
-    pub fn effective_list_style(&self, sp: &Shape) -> Rc<ListStyle>;
+    pub fn effective_list_style(&self, sp: &Shape) -> EffectiveListStyle;
+    pub fn effective_text_properties(
+        &self,
+        sp: &Shape,
+        paragraph: Option<&CT_TextParagraphProperties>,
+        run: Option<&CT_TextCharacterProperties>,
+    ) -> EffectiveTextProperties;
     pub fn effective_fill(&self, sp: &Shape) -> Option<Fill>;
     pub fn effective_line(&self, sp: &Shape) -> Option<Line>;
     pub fn resolve_color(&self, c: &ColorChoice) -> Color;
@@ -159,8 +172,11 @@ impl ResolveCtx<'_> {
 ```
 
 Built once per slide, because the layout and master chain is constant across a
-slide's shapes. `effective_list_style` is memoised **by placeholder key, not by
-shape**, since every shape occupying the same placeholder resolves identically.
+slide's shapes. The presentation default, selected master style, master
+placeholder and layout placeholder form a prefix memoised by
+`Option<PlaceholderKey>`. `effective_list_style` clones that prefix before
+applying the shape's own list style. Shapes that share a placeholder key can
+therefore reuse inherited formatting without sharing their direct formatting.
 
 ## Testing this
 
