@@ -1,6 +1,6 @@
 # F-085, Typeface resolution
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S20
 **Size**: S
 **Depends on**: F-065
@@ -82,11 +82,11 @@ renderer.
 
 ## Implementation checklist
 
-- [ ] Add the six major and minor theme-token mappings.
-- [ ] Apply first-match supplemental script overrides.
-- [ ] Add base-face fallback and pass-through behavior.
-- [ ] Add focused tests for all token and script policies.
-- [ ] Document the explicit script input and fallback in the HLD.
+- [x] Add the six major and minor theme-token mappings.
+- [x] Apply first-match supplemental script overrides.
+- [x] Add base-face fallback and pass-through behavior.
+- [x] Add focused tests for all token and script policies.
+- [x] Document the explicit script input and fallback in the HLD.
 
 ## Open questions
 

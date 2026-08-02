@@ -137,7 +137,14 @@ master inverts `bg1` and `tx1`.
 
 `a:latin@typeface` of `+mn-lt` resolves to the theme's minor font,
 `+mj-lt` to the major font. `+mn-ea` and `+mn-cs` select the East Asian and
-complex-script faces, and per-script `a:font@script` entries override.
+complex-script faces. The corresponding `+mj-ea` and `+mj-cs` tokens select
+the major collection. A caller may supply an ISO 15924 script tag. The first
+matching `a:font@script` entry in the selected collection overrides the base
+face. A missing or unknown script falls back to the token-specific base face.
+Ordinary typefaces and unknown theme-like tokens pass through unchanged.
+
+Script detection belongs to later text shaping. The resolver accepts the
+script explicitly because the current run model does not infer one.
 
 ## The resolver
 
@@ -167,7 +174,7 @@ impl ResolveCtx<'_> {
     pub fn effective_fill(&self, sp: &Shape) -> Option<Fill>;
     pub fn effective_line(&self, sp: &Shape) -> Option<Line>;
     pub fn resolve_color(&self, c: &ColorChoice) -> Color;
-    pub fn resolve_typeface(&self, tf: &str) -> String;
+    pub fn resolve_typeface(&self, tf: &str, script: Option<&str>) -> String;
 }
 ```
 
