@@ -32,6 +32,7 @@ defended.
 | S17 | M8 | 4 | 4 | 0 | 10 | 4 | Completed placeholders, pictures, graphic-frame dispatch, and DrawingML tables against all 50 pinned decks with all 28 hashes unchanged and no publication |
 | S18 | M8 | 4 | 4 | 0 | 7 | 4 | Completed connectors, alternate-content fallback selection, notes parts, and relationship-id rewriting against all 50 pinned decks with all 28 hashes unchanged and no publication |
 | S19 | M8 | 2 | 2 | 0 | 6 | 2 | Completed the rpptx read facade and modelled 50-deck gate with native PowerPoint acceptance, all 28 hashes unchanged, and no publication |
+| S20 | M9 | 5 | 5 | 0 | 11 | 5 | Completed placeholder, transform, body, text-style, format-scheme, and typeface inheritance with all 28 hashes unchanged and no publication |
 
 ## Completed features
 
@@ -147,6 +148,7 @@ five working days.
 | S17 | 4 | 4 | 5.00 |
 | S18 | 4 | 4 | 5.00 |
 | S19 | 2 | 2 | 5.00 |
+| S20 | 5 | 5 | 5.00 |
 
 ## Escalation record
 
