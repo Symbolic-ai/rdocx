@@ -1,6 +1,6 @@
 # F-088, Visual differential tests
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S21
 **Size**: M
 **Depends on**: F-087
@@ -16,7 +16,10 @@ round trips and the read facade, not resolved visual intent.
 
 The M9 gate therefore lacks a durable differential record and a one-time manual
 review of decks whose correct appearance exposes master logos, prompt-text
-leaks, backgrounds, placeholders, and exact theme colours.
+leaks, backgrounds, placeholders, and exact theme colours. The first native
+review also exposed a resolver defect: when both layout and master omit `p:hf`,
+inherited latent date and slide-number placeholders are incorrectly emitted,
+while an occupied slide-level footer is incorrectly dropped.
 
 ## Spec reference
 
@@ -41,6 +44,14 @@ text, unsupported markers, and diagnostics without serialisation-specific
 bytes. Compare inheritance-sensitive fields against pinned python-pptx 1.0.2
 where its object model exposes them. Keep the oracle version assertion in the
 executable gate and classify any known divergence explicitly.
+
+Repair latent-placeholder visibility in the existing `rpptx-layout` flattener.
+An occupied slide-level `dt`, `ftr`, or `sldNum` remains eligible under the
+effective flags. An inherited layout or master latent placeholder additionally
+requires a `p:hf` container on the layout or master, so an omitted container
+does not make template fields visible. Keep this source distinction private and
+add no new public type. Record concrete run fill RGBA in the normalized evidence
+and assert the cyan placeholder run exactly.
 
 Use existing pinned corpus decks that make the policies visually obvious,
 including `WithMaster.pptx`, `backgrounds.pptx`,
@@ -72,6 +83,7 @@ file is added.
 | integration | `visual_decks_resolve_in_expected_draw_order` | Background, logo, placeholders, and slide content follow the frozen contract |
 | regression | `visual_decks_never_emit_template_prompt_text` | Master and layout prompt strings do not enter resolved output |
 | regression | `visual_decks_emit_each_master_logo_once` | Master artwork is neither dropped nor duplicated |
+| regression | `absent_header_footer_container_hides_inherited_latent_placeholders` | Omitted `p:hf` hides inherited date and slide number while an occupied slide footer survives |
 | unit | `powerpoint_colour_transform_oracle_matches_all_forty_pairs` | All 40 exact RGB or RGBA pairs retain the pinned PowerPoint result |
 | manual | `selected_visual_decks_reviewed_once_in_powerpoint` | Exact paths and PowerPoint build are recorded with a clean verdict |
 
@@ -95,6 +107,9 @@ review.
 - Theme colour, tint, shade, and colour mapping. Run the exact 40-case
   PowerPoint oracle and the inheritance-sensitive deck checks without touching
   the deliberately different Word colour path.
+- Layout and rendering comparison. The native PowerPoint review is the
+  compatibility oracle for latent-placeholder visibility. Record no raster
+  baseline, and keep the normalized evidence independent of system fonts.
 - Crate dependency graph. Keep `rpptx-layout` as a test-only dependency of the
   facade and confirm no `oxml-*` crate gains an `rpptx-*` dependency.
 
@@ -105,12 +120,28 @@ alter Word rendering.
 
 ## Implementation checklist
 
-- [ ] Assemble complete resolver inputs through package relationships.
-- [ ] Add normalized resolved-visual output to the existing test binary.
-- [ ] Compare supported fields against pinned python-pptx 1.0.2.
-- [ ] Gate prompt suppression, logo count, draw order, and concrete colours.
-- [ ] Run and record the existing exact 40-case colour table.
-- [ ] Complete and record the one-time manual PowerPoint review.
+- [x] Assemble complete resolver inputs through package relationships.
+- [x] Add normalized resolved-visual output to the existing test binary.
+- [x] Compare supported fields against pinned python-pptx 1.0.2.
+- [x] Gate prompt suppression, logo count, draw order, and concrete colours.
+- [x] Repair source-sensitive latent-placeholder visibility and lock it with a
+  focused regression.
+- [x] Run and record the existing exact 40-case colour table.
+- [x] Complete and record the one-time manual PowerPoint review.
+
+## Deviations
+
+The first native PowerPoint pass exposed a latent-placeholder compatibility
+defect, so the approved test-only approach was revised before production code
+changed. The smallest repair stayed private to the existing flattener. The
+existing pinned `60810.pptx` corpus deck was added to the automated set because
+the four manual decks contain inherited artwork but no master picture. No
+binary fixture, source file, public type or production dependency was added.
+The automated visual tests follow the repository's external-corpus policy.
+They skip only when the configured corpus directory is absent and
+`RDOCX_PPTX_CORPUS_REQUIRED` is unset. They fail on the same missing directory
+when the corpus is required. The manual acceptance record remains runnable
+without corpus files.
 
 ## Open questions
 

@@ -101,9 +101,12 @@ Two further suppressions while flattening passes 2 and 3:
   occupies it. A layout placeholder suppresses the master placeholder it
   inherits from, and a slide placeholder suppresses the layout one with the same
   `idx`.
-- `dt`, `ftr` and `sldNum` render only when the layout and master `p:hf` flags
-  permit. Their text comes from the slide's own shapes if present, otherwise
-  from the `a:fld` in the layout or master shape.
+- An occupied slide-level `dt`, `ftr` or `sldNum` renders when the effective
+  layout and master `p:hf` flags permit it. An inherited layout or master latent
+  placeholder additionally requires a `p:hf` container on at least one of
+  those parts. Omitting both containers does not make template date and slide
+  number fields visible. Their text comes from the slide's own shape when
+  present, otherwise from the occupied layout or master shape.
 
 This logic belongs in the flattener, not the renderer.
 
@@ -123,9 +126,11 @@ The layout `showMasterSp` controls only the master non-placeholder pass. The
 slide `showMasterSp` controls only the layout non-placeholder pass. An absent
 value means true. Ordinary master and layout placeholders remain templates and
 are omitted. An occupied latent placeholder has nonempty field or run text.
-The deepest matching occupied latent placeholder is emitted once when both the
-layout and master header-footer policies permit its type. Empty latent shapes
-fall back to the deepest occupied layout or master match.
+Latent placeholders match by type across the level-specific indices used by
+masters, layouts and slides. The deepest matching occupied latent placeholder
+is emitted once when the header-footer policy permits its source and type.
+Empty latent shapes fall back to the deepest eligible occupied layout or master
+match.
 
 ## The chains
 
@@ -262,3 +267,12 @@ is "subtly wrong" rather than "wrong". The milestone therefore gates on visual
 differential tests against decks whose correct appearance can be eyeballed, plus
 a table of roughly 40 theme-colour and transform pairs sampled from real
 PowerPoint renders and asserted to resolve to exact RGB values.
+
+The executable visual differential pins python-pptx 1.0.2 and compares slide
+size, ordered source shape kind, bounds and text over selected corpus decks.
+Resolver-only records additionally retain backgrounds, group transforms,
+concrete shape and run paint, diagnostics and unsupported categories. Latent
+header-footer policy is asserted on the Rust result because python-pptx exposes
+raw placeholder collections rather than native visibility. The native
+PowerPoint acceptance record fixes the reviewed application build and original
+corpus paths in the integration test.

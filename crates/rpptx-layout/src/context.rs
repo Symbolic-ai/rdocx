@@ -225,6 +225,8 @@ impl<'a> ResolveCtx<'a> {
             flattened.push(FlattenedItem::Background(background));
         }
         let allow_latent = LatentPolicy::from_context(self);
+        let inherited_latent_enabled =
+            self.layout.header_footer.is_some() || self.master.header_footer.is_some();
         let mut master_deeper = layout_latent.clone();
         master_deeper.extend(slide_latent.iter().cloned());
         emit_tree(
@@ -232,6 +234,7 @@ impl<'a> ResolveCtx<'a> {
             PassRules {
                 source: FlattenedSource::Master,
                 emit_non_placeholders: self.layout.show_master_shapes.unwrap_or(true),
+                emit_inherited_latent: inherited_latent_enabled,
                 deeper_latent: &master_deeper,
                 latent_policy: allow_latent,
             },
@@ -242,6 +245,7 @@ impl<'a> ResolveCtx<'a> {
             PassRules {
                 source: FlattenedSource::Layout,
                 emit_non_placeholders: self.slide.show_master_shapes.unwrap_or(true),
+                emit_inherited_latent: inherited_latent_enabled,
                 deeper_latent: &slide_latent,
                 latent_policy: allow_latent,
             },
@@ -252,6 +256,7 @@ impl<'a> ResolveCtx<'a> {
             PassRules {
                 source: FlattenedSource::Slide,
                 emit_non_placeholders: true,
+                emit_inherited_latent: true,
                 deeper_latent: &[],
                 latent_policy: allow_latent,
             },
@@ -1226,6 +1231,7 @@ impl LatentPolicy {
 struct PassRules<'a> {
     source: FlattenedSource,
     emit_non_placeholders: bool,
+    emit_inherited_latent: bool,
     deeper_latent: &'a [PlaceholderKey],
     latent_policy: LatentPolicy,
 }
@@ -1256,7 +1262,10 @@ fn collect_occupied_latent(children: &[ShapeTreeChild], keys: &mut Vec<Placehold
 }
 
 fn push_unmatched(keys: &mut Vec<PlaceholderKey>, key: PlaceholderKey) {
-    if !keys.iter().any(|existing| key.matches(existing)) {
+    if !keys
+        .iter()
+        .any(|existing| placeholder_keys_match(&key, existing))
+    {
         keys.push(key);
     }
 }
@@ -1318,7 +1327,7 @@ fn emit_leaf<'a>(
                 let occupied = child_is_occupied(child);
                 let already_emitted = emitted_latent
                     .iter()
-                    .any(|key| placeholder.key().matches(key));
+                    .any(|key| placeholder_keys_match(&placeholder.key(), key));
                 if !rules.latent_policy.permits(&ph_type) || !occupied || already_emitted {
                     return;
                 }
@@ -1346,10 +1355,16 @@ fn emit_leaf<'a>(
     let ph_type = placeholder.effective_type();
     let key = placeholder.key();
     if !is_latent(&ph_type)
+        || !rules.emit_inherited_latent
         || !rules.latent_policy.permits(&ph_type)
         || !child_is_occupied(child)
-        || rules.deeper_latent.iter().any(|deeper| key.matches(deeper))
-        || emitted_latent.iter().any(|emitted| key.matches(emitted))
+        || rules
+            .deeper_latent
+            .iter()
+            .any(|deeper| placeholder_keys_match(&key, deeper))
+        || emitted_latent
+            .iter()
+            .any(|emitted| placeholder_keys_match(&key, emitted))
     {
         return;
     }
@@ -1439,6 +1454,14 @@ fn is_latent(ph_type: &PhType) -> bool {
     )
 }
 
+fn placeholder_keys_match(left: &PlaceholderKey, right: &PlaceholderKey) -> bool {
+    if is_latent(&left.ph_type) && is_latent(&right.ph_type) {
+        left.ph_type == right.ph_type
+    } else {
+        left.matches(right)
+    }
+}
+
 fn default_body_properties() -> CT_TextBodyProperties {
     let mut properties = CT_TextBodyProperties::default();
     properties.left_inset = Some(Coordinate32Value::Emu(91_440));
@@ -1488,7 +1511,7 @@ fn find_placeholder<'a>(
             ShapeTreeChild::Shape(shape) => shape
                 .placeholder
                 .as_ref()
-                .is_some_and(|placeholder| key.matches(&placeholder.key()))
+                .is_some_and(|placeholder| placeholder_keys_match(key, &placeholder.key()))
                 .then_some(shape),
             ShapeTreeChild::GroupShape(group) => find_placeholder(&group.children, key),
             ShapeTreeChild::AlternateContent(alternate) => alternate
@@ -1961,6 +1984,26 @@ mod tests {
             .collect();
 
         assert_eq!(texts, ["footer"]);
+    }
+
+    #[test]
+    fn absent_header_footer_container_hides_inherited_latent_placeholders() {
+        let slide = shape_with_text(Some("ftr"), Some(11), "slide footer");
+        let layout = [
+            shape_with_text(Some("dt"), Some(10), "layout date"),
+            shape_with_text(Some("sldNum"), Some(12), "layout number"),
+        ]
+        .join("");
+        let fixture = Fixture::from_xml(&slide_xml(&slide), &layout_xml(&layout), &master_xml(""));
+
+        let texts = fixture
+            .context()
+            .flatten()
+            .into_iter()
+            .filter_map(|item| item_text(&item))
+            .collect::<Vec<_>>();
+
+        assert_eq!(texts, ["slide footer"]);
     }
 
     #[test]

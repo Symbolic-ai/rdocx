@@ -127,6 +127,24 @@ Four gates run against it:
 4. **Opens without repair** (M8 and M11): every saved deck opened manually in
    PowerPoint once per milestone. Not automatable, and not skippable.
 
+The M9 resolver gate selects `WithMaster.pptx`, `backgrounds.pptx`,
+`placeholder-layout-color.pptx`, and
+`bug58144-headers-footers-2007.pptx` for native visual acceptance. Its
+repeatable normalized differential also includes `60810.pptx`, whose master
+picture appears exactly once on every enabled slide and zero times on its two
+`showMasterSp="0"` layouts. The executable oracle pins python-pptx 1.0.2 and
+compares ordered source shape kind, bounds and text. Concrete resolver evidence
+retains RGBA fills and unsupported diagnostics, including exact cyan `#00FFFF`
+for the inherited placeholder run. The one-time PowerPoint record in the
+integration test names build 16.104.25121423, the exact original paths and the
+clean no-repair verdict.
+
+These automated visual tests use the same external-corpus policy as the other
+corpus gates. A missing configured corpus skips them when
+`RDOCX_PPTX_CORPUS_REQUIRED` is unset and fails them when it is set. The
+one-time native acceptance record does not require the external files to remain
+present after review.
+
 ## The render fidelity gate
 
 Roughly 50 decks rendered to PNG at 150 dpi and compared with
