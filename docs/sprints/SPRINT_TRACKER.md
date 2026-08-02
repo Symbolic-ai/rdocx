@@ -107,6 +107,8 @@ defended.
 | F-076 | S18 | M | 2 | 1 | 2026-08-01 | Raw-preserving alternate content with typed fallback selection |
 | F-077 | S18 | M | 2 | 1 | Notes parts and body-placeholder speaker-note extraction |
 | F-078 | S18 | M | 2 | 1 | Namespace-aware relationship-id rewriting in preserved XML |
+| F-079 | S19 | L | 4 | 1 | 2026-08-02 | Unpublished relationship-resolved rpptx read facade |
+| F-080 | S19 | M | 2 | 1 | 2026-08-02 | Seven-root 50-deck modelled round-trip and native PowerPoint gate |
 
 ## Velocity
 

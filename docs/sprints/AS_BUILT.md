@@ -2274,3 +2274,81 @@ decks, and the integrated full gate.
 
 **Notes for future sessions.** Use this byte-splice helper before deep-copying
 opaque payloads. Do not reconstruct preserved XML through an event writer.
+
+### F-079, The rpptx read facade
+
+**Sprint.** S19
+**Completed.** 2026-08-02
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The new unpublished `rpptx` crate opens presentations from
+paths or bytes, resolves ordered slides and notes through OPC relationships,
+and exposes safe borrowed slide and recursive shape handles with text, table
+text, and speaker-note access. It also saves facade-owned modelled parts through
+the deterministic package writer.
+
+**Non-obvious choices.** Immediate shape iteration preserves z-order. Groups
+and selected alternate-content fallbacks expose children explicitly. Indexed
+access returns `Option`, missing notes remain distinct from empty notes, and
+the public facade does not expose schema-layer `CT_*` values.
+
+**Deviations from the design plan.** Microscope pass 1 found package-root
+relationship targets with dot segments were resolved incorrectly and found a
+forwarding-only helper. Both were corrected, and pass 2 was clean.
+
+**Spec sections touched.** `docs/hld/06-presentationml-model.md` records the
+read facade and relationship-resolved ownership model. `docs/hld/12-testing-strategy.md`
+records the normalized python-pptx differential gate.
+
+**Tests.** Eight facade integration tests cover ordered slides and notes, total
+indexed access, all six shape kinds, recursive text, contextual graph errors,
+deterministic reopen, package-root dot segments, and workspace publication
+metadata. `dump_deck_matches_python_pptx_1_0_2_for_the_corpus` matched the
+pinned oracle across all 50 decks. The integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep `rpptx` at version 0.0.0 with
+`publish = false` until PowerPoint development is complete. Preserve the
+normalized facade boundary instead of leaking lower-level model types.
+
+### F-080, Modelled round-trip gate
+
+**Sprint.** S19
+**Completed.** 2026-08-02
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The 50-deck gate now parses, serialises, reparses, and
+structurally compares all seven modelled PresentationML and theme roots. It
+builds an exact expected package, checks canonical bytes for rewritten parts,
+preserves original bytes for unmodelled parts, and verifies the facade read
+surface after save and reopen.
+
+**Non-obvious choices.** `CT_StyleMatrix.name` is optional because accepted
+producer themes omit `a:fmtScheme/@name`. Canonical `a:blip` output declares
+the relationship namespace locally whenever it writes `r:embed` or `r:link`,
+so independently serialised fills remain namespace-valid.
+
+**Deviations from the design plan.** The approved plan was extended when the
+first corpus run exposed an absent format-scheme name and the first native
+PowerPoint run exposed an undeclared relationship prefix. Both compatibility
+repairs received focused regressions. Microscope pass 3 was clean.
+
+**Spec sections touched.** `docs/hld/05-drawingml-model.md` records optional
+format-scheme names and self-contained blip namespaces.
+`docs/hld/06-presentationml-model.md` and
+`docs/hld/12-testing-strategy.md` record the structural and exact-byte
+round-trip boundary.
+
+**Tests.** The required 50-deck corpus passed all 11 `rpptx` tests, including
+seven-root structural equality, exact expected packages, facade reopen, and
+the pinned python-pptx differential. Both compatibility regressions passed.
+A Codex-operated native run opened and closed all 50 generated decks without
+repair in PowerPoint 16.104 build 16.104.25121423. The output digest was
+`19609644c12923fad63939656fc54681c667efa2e066fbd2a080bb717aa037fc`.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep lexical byte equality for unmodelled parts
+and exact expected canonical bytes for rewritten roots. XML well-formedness is
+not a substitute for the native PowerPoint acceptance gate.
