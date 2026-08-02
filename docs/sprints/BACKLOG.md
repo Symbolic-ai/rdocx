@@ -24,13 +24,13 @@ regenerated, never hand-edited.
 | M6, Shared publication and rdocx cutover     | 6  | 0 | 0 | 6  |
 | M7, DrawingML                               | 19 | 19 | 0 | 0  |
 | M8, PresentationML                          | 14 | 14 | 0 | 0  |
-| M9, Inheritance resolver                    | 8  | 0 | 2 | 6  |
+| M9, Inheritance resolver                    | 8  | 0 | 3 | 5  |
 | M10, Renderer                               | 16 | 0 | 0 | 16 |
 | M11, Write API                              | 12 | 0 | 0 | 12 |
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **154** | **73** | **2** | **79** |
+| **Total** | **154** | **73** | **3** | **78** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -181,7 +181,7 @@ regenerated, never hand-edited.
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
 | F-081 | ResolveCtx skeleton and placeholder chain    | S20 | M | in-progress |
-| F-082 | Effective transform and body properties      | S20 | M | pending |
+| F-082 | Effective transform and body properties      | S20 | M | in-progress |
 | F-083 | The seven-step list style merge              | S20 | L | in-progress |
 | F-084 | Format scheme reference resolution           | S20 | M | pending |
 | F-085 | Typeface resolution                          | S20 | S | pending |
