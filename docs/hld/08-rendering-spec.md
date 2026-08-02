@@ -231,7 +231,7 @@ particular, the `blur` field on an outer shadow has no raster approximation.
 | Option | Cost | Coverage | Verdict |
 |---|---|---|---|
 | Hand-write the top ~20 | 1-2 days | ~85 percent by frequency, but the tail is *visibly broken* | insufficient |
-| Generate from the spec's shape definitions | 4-6 days | ~100 percent | **chosen** |
+| Generate from the official ECMA-376 shape definitions | 4-6 days | 187 preset shape definitions | **chosen** |
 | Port LibreOffice's table | 2 days | ~100 percent | **rejected: MPL-2.0 file-level copyleft, incompatible with MIT OR Apache-2.0** |
 
 **The decisive argument is that the marginal cost over hand-writing is near
@@ -245,10 +245,25 @@ Mechanism: an offline generator under `tools/gen-presets/` emitting a
 code gives reproducible builds, no build-time XML dependency, a clean
 `cargo publish` and a reviewable diff.
 
-**Resolve the provenance and licensing of the source shape definitions before
-writing the generator.** If the ECMA-376 accompanying files prove unusable, the
-fallback is deriving the tables from the specification text, which enumerates
-every preset's guides.
+The only permitted generator input is the official
+[ECMA-376 fifth-edition Part 1 archive](https://ecma-international.org/publications-and-standards/standards/ecma-376/),
+downloaded as `ECMA-376-1_5th_edition_december_2016.zip`. The source inside it
+is `OfficeOpenXML-DrawingMLGeometries.zip/presetShapeDefinitions.xml`. It has
+187 preset shape definitions and SHA-256
+`2f7c868d857c1e3c4b5a6068759fe0e07d77ad58377a6618d1b02ba3507b6939`.
+The generator refuses a different count or digest.
+
+The [Ecma software policy](https://ecma-international.org/policies/by-ipr/ecma-international-policy-on-submission-inclusion-and-licensing-of-software/)
+identifies XML data sets as source code and makes software incorporated in a
+standard available under its three-clause BSD licence. F-090 must retain the
+Ecma copyright notice, the three licence conditions, and the disclaimer beside
+the checked-in generated output. The repository remains MIT OR Apache-2.0, with
+the ECMA-derived table carrying its own third-party notice.
+
+LibreOffice's preset table must not be used as generator input because its
+MPL-2.0 file-level copyleft is outside this repository's licensing model. If
+the official archive, exact count, exact digest, or required notice cannot be
+reproduced, the fallback is deriving the table from the specification text.
 
 Fallback for an unknown preset, in order: use `a:custGeom` if present, otherwise
 emit the bounding rectangle **and still lay out the text inside it**, recording

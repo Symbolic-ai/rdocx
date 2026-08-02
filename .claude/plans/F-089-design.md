@@ -1,6 +1,6 @@
 # F-089, Resolve the preset geometry licensing question
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S22
 **Size**: S
 **Depends on**: none
@@ -78,11 +78,11 @@ Expected to be unchanged. This story changes no executable code or fixture.
 
 ## Implementation checklist
 
-- [ ] Record the official fifth-edition Part 1 archive and inner file.
-- [ ] Record the 187-definition count and source SHA-256.
-- [ ] Record the Ecma software-policy and BSD notice basis.
-- [ ] Retain the LibreOffice rejection and specification-text fallback.
-- [ ] Run prose and link-oriented documentation checks.
+- [x] Record the official fifth-edition Part 1 archive and inner file.
+- [x] Record the 187-definition count and source SHA-256.
+- [x] Record the Ecma software-policy and BSD notice basis.
+- [x] Retain the LibreOffice rejection and specification-text fallback.
+- [x] Run prose and link-oriented documentation checks.
 
 ## Open questions
 
