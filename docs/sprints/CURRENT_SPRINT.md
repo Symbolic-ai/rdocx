@@ -29,7 +29,7 @@ or hierarchy references.
 | F-082 | Effective transform and body properties | M | in-progress | codex |
 | F-083 | The seven-step list style merge | L | in-progress | codex |
 | F-084 | Format scheme reference resolution | M | pending | - |
-| F-085 | Typeface resolution | S | pending | - |
+| F-085 | Typeface resolution | S | in-progress | codex |
 
 ## Sequencing note
 
