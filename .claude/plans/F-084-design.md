@@ -1,0 +1,121 @@
+# F-084, Format scheme reference resolution
+
+**Status**: approved
+**Sprint**: S20
+**Size**: M
+**Depends on**: F-063, F-065
+
+## Problem
+
+DrawingML already models fill, line, effect, and font references at
+`crates/oxml-drawing/src/style_ref.rs:82`, plus theme format lists at
+`crates/oxml-drawing/src/theme.rs:558`. Ordinary `CT_Shape`, however, retains
+`p:style` as opaque bytes at `crates/rpptx-oxml/src/shape_tree.rs:488`. A parsed
+shape therefore cannot select a theme entry, substitute `phClr`, or layer its
+explicit shape properties on top.
+
+The current HLD also describes all four `p:style` references as numeric
+one-based indices at `docs/hld/07-inheritance-and-resolution.md:113`.
+`a:fontRef@idx` is instead `major`, `minor`, or `none`, which the existing
+`FontCollectionIndex` correctly models at
+`crates/oxml-drawing/src/style_ref.rs:122`.
+
+## Spec reference
+
+- `docs/hld/05-drawingml-model.md`, "Theme", "Colour, the part everyone gets
+  wrong", and "Style references".
+- `docs/hld/06-presentationml-model.md`, "The shape tree" and
+  "Preservation strategy".
+- `docs/hld/07-inheritance-and-resolution.md`, "Style references" and
+  "Colour".
+- `docs/hld/14-development-backlog.md`, "F-084, Format scheme reference
+  resolution".
+
+## Approach
+
+Extend the existing ordinary-shape model with an optional typed
+`CT_ShapeStyle` containing concrete line, fill, effect, and font reference
+fields. Parse `p:style` prefix-tolerantly after `p:spPr`, write fixed prefixes
+in `xsd:sequence`, and preserve unmodelled attributes and children through the
+existing ordered raw-child machinery. Build on F-082's typed
+`CT_ShapeProperties` rather than introducing a second representation.
+
+Add `style.rs` to `rpptx-layout`. Resolve line, fill, and effect numeric
+references with one-based indexing. Index zero means no referenced theme
+style. A positive out-of-range index returns `ResolveError::StyleIndexOutOfRange`
+rather than panicking or silently choosing a value. Fill indices above 1000
+select `background_fill_styles[(idx - 1000) - 1]`.
+
+Clone the chosen format entry and substitute every modelled
+`schemeClr val="phClr"` with the reference colour. Keep reference transforms
+first and then the placeholder colour's transforms so document order remains
+deterministic. Fill choices and typed effects are atomic overlays. Explicit
+line properties merge per property over the referenced line so omitted shape
+properties remain inherited. Explicit `noFill` replaces the theme fill.
+Unsupported raw effect children remain preserved and are not claimed as
+resolved. If raw XML contains an unresolved `phClr`, return a specific resolver
+error so a later renderer cannot consume a falsely concrete value.
+
+Keep font collection selection typed as `major`, `minor`, or `none`. F-085
+owns typeface-token lookup inside the selected collection.
+
+## Rejected alternatives
+
+- Treat `a:fontRef@idx` as a number. That contradicts OOXML and the existing
+  correct parser model.
+- Rewrite raw effect XML to replace `phClr`. Byte rewriting would bypass the
+  typed parser and could corrupt namespace or transform semantics.
+- Silently clamp or ignore an out-of-range numeric index. Malformed input must
+  not select an unrelated style.
+
+## Test plan
+
+| Category | Test | Asserts |
+|---|---|---|
+| unit | `shape_with_style_resolves_theme_fill_with_reference_colour_substituted` | The backlog shape resolves its theme fill with the reference colour |
+| unit | `fill_ref_1001_selects_first_background_fill` | The background-fill rule uses one-based indexing |
+| unit | `style_matrix_zero_is_none_and_out_of_range_is_error` | Zero and malformed positive indices follow distinct policies |
+| unit | `placeholder_colour_substitution_keeps_transform_order` | Reference and placeholder transforms remain in the declared order |
+| unit | `explicit_shape_properties_overlay_the_theme_style` | Fill and effect replacement plus line property overlay follow precedence |
+| unit | `unmodelled_effect_with_placeholder_colour_is_rejected` | The resolver never reports an opaque unresolved colour as concrete |
+| round-trip | `ordinary_shape_style_round_trips_in_schema_order` | Alternate prefixes parse, fixed prefixes write, and raw siblings survive exactly |
+| corpus | `all_corpus_modelled_parts_reparse_structurally` | The required corpus gate remains green after typing `p:style` |
+
+The backlog test gate is named explicitly:
+`shape_with_style_resolves_theme_fill_with_reference_colour_substituted`.
+
+## HLD impact
+
+- `docs/hld/06-presentationml-model.md`
+- `docs/hld/07-inheritance-and-resolution.md`
+
+## Risk routing
+
+- Theme colour, tint, shade, and colour mapping. Preserve transform order and
+  do not modify `rdocx_oxml::theme::apply_tint_shade`. Run focused exact-colour
+  tests and require all 28 hashes unchanged.
+- Any parser or serialiser. Recheck `p:style` schema order,
+  prefix-tolerant reads, fixed-prefix writes, and byte preservation of
+  unmodelled children. Run the required corpus structural round-trip gate.
+- A new module or file. `src/style.rs` is justified by the current F-084
+  implementation and requires the shared explicit approval recorded in F-081.
+
+## Hash harness
+
+Expected to be unchanged. PowerPoint theme resolution does not change the Word
+rendering baseline.
+
+## Implementation checklist
+
+- [ ] Type ordinary-shape `p:style` in the existing schema position.
+- [ ] Resolve normal and background format-list indices without clamping.
+- [ ] Substitute modelled `phClr` values while preserving transform order.
+- [ ] Overlay explicit fill, line, and effect properties.
+- [ ] Keep font collection selection separate from F-085 typeface lookup.
+- [ ] Add focused parser, resolver, and corpus regressions.
+- [ ] Correct the font-reference wording in the inheritance HLD.
+
+## Open questions
+
+None. Numeric zero is no style, malformed positive indices are errors, and
+opaque unresolved placeholder colours are rejected rather than misreported.
