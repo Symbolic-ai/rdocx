@@ -4,6 +4,7 @@ use oxml_core::OxmlError;
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
 use oxml_drawing::namespace::A_NS;
 use oxml_drawing::order::OrderedRawChildren;
+use oxml_drawing::shape_props::CT_ShapeProperties;
 use oxml_drawing::text::CT_TextBody;
 use oxml_drawing::xfrm::CT_Transform2D;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
@@ -168,9 +169,10 @@ fn duplicate_fallback() -> OxmlError {
 
 /// A partial typed `p:sp` model that owns its placeholder identity.
 #[allow(non_camel_case_types)]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CT_Shape {
     pub placeholder: Option<CT_Placeholder>,
+    pub shape_properties: CT_ShapeProperties,
     pub text_body: Option<CT_TextBody>,
     raw: Box<ShapeRaw>,
 }
@@ -184,7 +186,6 @@ struct ShapeRaw {
     non_visual_shape_properties: Vec<u8>,
     application_properties_attributes: RawAttributes,
     application_properties_raw_children: OrderedRawChildren,
-    shape_properties: Vec<u8>,
     raw_children: OrderedRawChildren,
 }
 
@@ -346,6 +347,7 @@ impl CT_Shape {
         let non_visual = required(non_visual, "p:nvSpPr")?;
         Ok(Self {
             placeholder: non_visual.placeholder,
+            shape_properties: required(shape_properties, "p:spPr")?,
             text_body,
             raw: Box::new(ShapeRaw {
                 raw_attributes: self_contained_attributes(
@@ -359,7 +361,6 @@ impl CT_Shape {
                 non_visual_shape_properties: non_visual.non_visual_shape_properties,
                 application_properties_attributes: non_visual.application_properties_attributes,
                 application_properties_raw_children: non_visual.application_properties_raw_children,
-                shape_properties: required(shape_properties, "p:spPr")?,
                 raw_children,
             }),
         })
@@ -390,7 +391,9 @@ impl CT_Shape {
         emit_raw(writer, self.raw.raw_children.at(0))?;
         self.write_non_visual_properties(writer)?;
         emit_raw(writer, self.raw.raw_children.at(1))?;
-        writer.get_mut().write_all(&self.raw.shape_properties)?;
+        self.shape_properties
+            .write_xml_as(writer, "p:spPr")
+            .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
         emit_raw(writer, self.raw.raw_children.at(2))?;
         emit_raw(writer, self.raw.raw_children.at(3))?;
         if let Some(text_body) = &self.text_body {
@@ -458,7 +461,7 @@ fn capture_shape_child(
     raw: Vec<u8>,
     namespaces: &NamespaceBindings,
     non_visual: &mut Option<ParsedNonVisualShape>,
-    shape_properties: &mut Option<Vec<u8>>,
+    shape_properties: &mut Option<CT_ShapeProperties>,
     text_body: &mut Option<CT_TextBody>,
     raw_children: &mut OrderedRawChildren,
     boundary: &mut usize,
@@ -482,7 +485,10 @@ fn capture_shape_child(
                     "p:spPr must immediately follow p:nvSpPr".to_owned(),
                 ));
             }
-            *shape_properties = Some(raw);
+            *shape_properties = Some(
+                CT_ShapeProperties::from_xml(&raw)
+                    .map_err(|error| OxmlError::InvalidValue(error.to_string()))?,
+            );
             *boundary = 2;
         }
         (Some(P_NS), b"style") => {

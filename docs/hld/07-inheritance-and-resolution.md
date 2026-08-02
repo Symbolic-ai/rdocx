@@ -86,14 +86,17 @@ Six independent chains. Getting them separately right is the difference between
 ### 1. Position and size
 
 Shape's own `a:xfrm`, then the matching layout placeholder, then the matching
-master placeholder, then none. A shape that resolves to no extent is skipped
-rather than treated as an error.
+master placeholder, then none. `ResolveCtx::effective_xfrm` returns an owned
+clone from the first source that supplies a transform. A shape that resolves to
+no extent is skipped rather than treated as an error.
 
 ### 2. Body properties
 
-The shape's `p:txBody/a:bodyPr`, then the layout placeholder's, then the
-master's, then the spec defaults: insets of 0.1 inch horizontally and 0.05 inch
-vertically, anchor top, wrap square, horizontal text, no autofit.
+Body properties resolve independently per field. Resolution starts with exact
+defaults of 91,440 EMU left and right, 45,720 EMU top and bottom, top anchor,
+square wrap, horizontal text, and no autofit. The master, layout, and slide
+shape then overlay their present `p:txBody/a:bodyPr` fields in that order, so a
+later partial value does not erase unrelated inherited fields.
 
 ### 3. The nine-level list style
 

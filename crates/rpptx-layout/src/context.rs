@@ -2,8 +2,12 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use oxml_drawing::color::ColorMap;
-use oxml_drawing::text::CT_TextListStyle;
+use oxml_drawing::text::{
+    CT_TextBodyProperties, CT_TextListStyle, Coordinate32Value, TextAnchor, TextAutofit,
+    TextVertical, TextWrap,
+};
 use oxml_drawing::theme::CT_OfficeStyleSheet;
+use oxml_drawing::xfrm::CT_Transform2D;
 use rpptx_oxml::placeholder::PlaceholderKey;
 use rpptx_oxml::shape_tree::{CT_Shape, ShapeTreeChild};
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster};
@@ -41,8 +45,6 @@ impl<'a> ResolveCtx<'a> {
         }
     }
 
-    // F-082 is the first production caller of the chain established by F-081.
-    #[allow(dead_code)]
     pub(crate) fn placeholder_chain<'ctx>(
         &'ctx self,
         shape: &CT_Shape,
@@ -73,6 +75,69 @@ impl<'a> ResolveCtx<'a> {
         );
         (Some(layout_shape), master_shape)
     }
+
+    /// Resolves an owned transform from the slide, layout, then master shape.
+    pub fn effective_xfrm(&self, shape: &CT_Shape) -> Option<CT_Transform2D> {
+        let (layout, master) = self.placeholder_chain(shape);
+        shape
+            .shape_properties
+            .transform
+            .clone()
+            .or_else(|| layout.and_then(|shape| shape.shape_properties.transform.as_ref().cloned()))
+            .or_else(|| master.and_then(|shape| shape.shape_properties.transform.as_ref().cloned()))
+    }
+
+    /// Resolves body properties per field over defaults, master, layout, and slide.
+    pub fn effective_body_pr(&self, shape: &CT_Shape) -> CT_TextBodyProperties {
+        let (layout, master) = self.placeholder_chain(shape);
+        let mut effective = default_body_properties();
+        for source in [master, layout, Some(shape)].into_iter().flatten() {
+            if let Some(text_body) = &source.text_body {
+                merge_body_properties(&mut effective, &text_body.body_properties);
+            }
+        }
+        effective
+    }
+}
+
+fn default_body_properties() -> CT_TextBodyProperties {
+    let mut properties = CT_TextBodyProperties::default();
+    properties.left_inset = Some(Coordinate32Value::Emu(91_440));
+    properties.top_inset = Some(Coordinate32Value::Emu(45_720));
+    properties.right_inset = Some(Coordinate32Value::Emu(91_440));
+    properties.bottom_inset = Some(Coordinate32Value::Emu(45_720));
+    properties.anchor = Some(TextAnchor::Top);
+    properties.wrap = Some(TextWrap::Square);
+    properties.vertical = Some(TextVertical::Horizontal);
+    properties.autofit = Some(TextAutofit::NoAutofit);
+    properties
+}
+
+fn merge_body_properties(target: &mut CT_TextBodyProperties, source: &CT_TextBodyProperties) {
+    if let Some(value) = &source.left_inset {
+        target.left_inset = Some(value.clone());
+    }
+    if let Some(value) = &source.top_inset {
+        target.top_inset = Some(value.clone());
+    }
+    if let Some(value) = &source.right_inset {
+        target.right_inset = Some(value.clone());
+    }
+    if let Some(value) = &source.bottom_inset {
+        target.bottom_inset = Some(value.clone());
+    }
+    if let Some(value) = source.anchor {
+        target.anchor = Some(value);
+    }
+    if let Some(value) = source.wrap {
+        target.wrap = Some(value);
+    }
+    if let Some(value) = source.vertical {
+        target.vertical = Some(value);
+    }
+    if let Some(value) = &source.autofit {
+        target.autofit = Some(value.clone());
+    }
 }
 
 fn find_placeholder<'a>(
@@ -102,7 +167,9 @@ fn find_placeholder<'a>(
 #[cfg(test)]
 mod tests {
     use oxml_drawing::color::ColorMap;
-    use oxml_drawing::text::CT_TextListStyle;
+    use oxml_drawing::text::{
+        CT_TextListStyle, Coordinate32Value, TextAnchor, TextAutofit, TextVertical, TextWrap,
+    };
     use oxml_drawing::theme::CT_OfficeStyleSheet;
     use rpptx_oxml::placeholder::PhType;
     use rpptx_oxml::shape_tree::{CT_Shape, ShapeTreeChild};
@@ -229,6 +296,117 @@ mod tests {
         );
     }
 
+    #[test]
+    fn slide_placeholder_without_transform_inherits_layout_position() {
+        let fixture = Fixture::new(
+            &shape(Some("body"), Some(1)),
+            &shape_with_details(Some("body"), Some(1), &transform(10), None),
+            &shape_with_details(Some("body"), Some(1), &transform(20), None),
+        );
+        let transform = fixture
+            .context()
+            .effective_xfrm(fixture.slide_shape(0))
+            .unwrap();
+
+        assert_eq!(transform.offset.unwrap().x.0, 10);
+    }
+
+    #[test]
+    fn effective_transform_uses_slide_layout_master_precedence() {
+        let slide_children = [
+            shape_with_details(Some("body"), Some(1), &transform(11), None),
+            shape(Some("body"), Some(2)),
+            shape(Some("body"), Some(3)),
+            shape(Some("body"), Some(4)),
+        ]
+        .join("");
+        let layout_children = [
+            shape_with_details(Some("body"), Some(1), &transform(21), None),
+            shape_with_details(Some("body"), Some(2), &transform(22), None),
+            shape(Some("body"), Some(3)),
+            shape(Some("body"), Some(4)),
+        ]
+        .join("");
+        let master_children = [
+            shape_with_details(Some("body"), Some(1), &transform(31), None),
+            shape_with_details(Some("body"), Some(2), &transform(32), None),
+            shape_with_details(Some("body"), Some(3), &transform(33), None),
+            shape(Some("body"), Some(4)),
+        ]
+        .join("");
+        let fixture = Fixture::new(&slide_children, &layout_children, &master_children);
+        let context = fixture.context();
+
+        let offsets: Vec<_> = (0..3)
+            .map(|index| {
+                context
+                    .effective_xfrm(fixture.slide_shape(index))
+                    .unwrap()
+                    .offset
+                    .unwrap()
+                    .x
+                    .0
+            })
+            .collect();
+
+        assert_eq!(offsets, [11, 22, 33]);
+        assert!(context.effective_xfrm(fixture.slide_shape(3)).is_none());
+    }
+
+    #[test]
+    fn body_properties_merge_per_field_across_the_chain() {
+        let fixture = Fixture::new(
+            &shape_with_details(
+                Some("body"),
+                Some(4),
+                "",
+                Some(r#"<a:bodyPr bIns="50" anchor="ctr"/>"#),
+            ),
+            &shape_with_details(
+                Some("body"),
+                Some(4),
+                "",
+                Some(r#"<a:bodyPr lIns="30" rIns="40" wrap="none"/>"#),
+            ),
+            &shape_with_details(
+                Some("body"),
+                Some(4),
+                "",
+                Some(
+                    r#"<a:bodyPr lIns="10" tIns="20" anchor="b" vert="vert"><a:spAutoFit/></a:bodyPr>"#,
+                ),
+            ),
+        );
+        let properties = fixture.context().effective_body_pr(fixture.slide_shape(0));
+
+        assert_eq!(properties.left_inset, Some(Coordinate32Value::Emu(30)));
+        assert_eq!(properties.top_inset, Some(Coordinate32Value::Emu(20)));
+        assert_eq!(properties.right_inset, Some(Coordinate32Value::Emu(40)));
+        assert_eq!(properties.bottom_inset, Some(Coordinate32Value::Emu(50)));
+        assert_eq!(properties.anchor, Some(TextAnchor::Center));
+        assert_eq!(properties.wrap, Some(TextWrap::None));
+        assert_eq!(properties.vertical, Some(TextVertical::Vertical));
+        assert_eq!(properties.autofit, Some(TextAutofit::ShapeAutofit));
+    }
+
+    #[test]
+    fn body_property_defaults_use_exact_emu_values() {
+        let fixture = Fixture::new(&shape(None, None), "", "");
+        let properties = fixture.context().effective_body_pr(fixture.slide_shape(0));
+
+        assert_eq!(properties.left_inset, Some(Coordinate32Value::Emu(91_440)));
+        assert_eq!(properties.right_inset, Some(Coordinate32Value::Emu(91_440)));
+        assert_eq!(properties.top_inset, Some(Coordinate32Value::Emu(45_720)));
+        assert_eq!(
+            properties.bottom_inset,
+            Some(Coordinate32Value::Emu(45_720))
+        );
+        assert_eq!(properties.anchor, Some(TextAnchor::Top));
+        assert_eq!(properties.wrap, Some(TextWrap::Square));
+        assert_eq!(properties.vertical, Some(TextVertical::Horizontal));
+        assert_eq!(properties.autofit, Some(TextAutofit::NoAutofit));
+    }
+
     fn slide_xml(children: &str) -> String {
         format!(
             "<p:sld xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\" xmlns:mc=\"{MC_NS}\"><p:cSld>{}</p:cSld></p:sld>",
@@ -255,6 +433,15 @@ mod tests {
     }
 
     fn shape(ph_type: Option<&str>, idx: Option<u32>) -> String {
+        shape_with_details(ph_type, idx, "", None)
+    }
+
+    fn shape_with_details(
+        ph_type: Option<&str>,
+        idx: Option<u32>,
+        shape_properties: &str,
+        body_properties: Option<&str>,
+    ) -> String {
         let placeholder = if ph_type.is_none() && idx.is_none() {
             String::new()
         } else {
@@ -262,8 +449,15 @@ mod tests {
             let idx = idx.map_or_else(String::new, |value| format!(" idx=\"{value}\""));
             format!("<p:ph{ph_type}{idx}/>")
         };
+        let text_body = body_properties.map_or_else(String::new, |body_properties| {
+            format!("<p:txBody>{body_properties}<a:p/></p:txBody>")
+        });
         format!(
-            "<p:sp><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr>{placeholder}</p:nvPr></p:nvSpPr><p:spPr/></p:sp>"
+            "<p:sp><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr>{placeholder}</p:nvPr></p:nvSpPr><p:spPr>{shape_properties}</p:spPr>{text_body}</p:sp>"
         )
+    }
+
+    fn transform(x: i64) -> String {
+        format!("<a:xfrm><a:off x=\"{x}\" y=\"0\"/><a:ext cx=\"100\" cy=\"100\"/></a:xfrm>")
     }
 }

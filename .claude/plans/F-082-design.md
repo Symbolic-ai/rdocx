@@ -1,6 +1,6 @@
 # F-082, Effective transform and body properties
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S20
 **Size**: M
 **Depends on**: F-081, F-057
@@ -97,12 +97,12 @@ surface.
 
 ## Implementation checklist
 
-- [ ] Type ordinary-shape `p:spPr` without changing schema position.
-- [ ] Add transform resolution in slide, layout, master order.
-- [ ] Add per-property body cascade with exact defaults.
-- [ ] Add focused parser, transform, body, and corpus regressions.
-- [ ] Run the unit, parser, dependency, and deterministic-hash riders.
-- [ ] Update the two HLD files during sprint finalisation.
+- [x] Type ordinary-shape `p:spPr` without changing schema position.
+- [x] Add transform resolution in slide, layout, master order.
+- [x] Add per-property body cascade with exact defaults.
+- [x] Add focused parser, transform, body, and corpus regressions.
+- [x] Run the unit, parser, dependency, and deterministic-hash riders.
+- [x] Update the two HLD files during sprint finalisation.
 
 ## Open questions
 

@@ -118,6 +118,11 @@ p:cSld
 Document order is z-order. `p:spTree` missing its own `p:nvGrpSpPr` or
 `p:grpSpPr` is a repair prompt, as is any `p:sp` without `p:spPr`.
 
+An ordinary `CT_Shape` owns its required `p:spPr` as a public typed
+`CT_ShapeProperties`. Modelled transform, geometry, fill, line, and effect
+children write with fixed prefixes in schema order. Unsupported attributes and
+children remain in the shape-properties ordered raw slots.
+
 ```rust
 pub enum ShapeTreeChild {
     Shape(CT_Shape),
