@@ -976,7 +976,7 @@ fn shape_tree_requires_non_visual_and_group_properties_in_order() {
     assert_eq!(transform.offset.unwrap().x.0, 10);
     assert_eq!(transform.child_extent.unwrap().cy.0, 4);
     let written = parsed.to_xml().unwrap();
-    assert_order(&written, &["<p:nvGrpSpPr", "<p:grpSpPr", "<q:sp"]);
+    assert_order(&written, &["<p:nvGrpSpPr", "<p:grpSpPr", "<p:sp xmlns"]);
     assert!(std::str::from_utf8(&written).unwrap().contains("<a:xfrm>"));
     assert_eq!(parsed, CT_ShapeTree::from_xml(&written).unwrap());
 
@@ -2047,6 +2047,40 @@ fn typed_shape_placeholder_round_trips_inside_nested_groups() {
     assert!(text.contains("<p:nvSpPr x:keep=\"yes\">"));
     assert_order(&written, &["<x:before/>", "<p:ph", "<x:after/>"]);
     assert_eq!(tree, CT_ShapeTree::from_xml(&written).unwrap());
+}
+
+#[test]
+fn ordinary_shape_properties_round_trip_in_schema_order() {
+    let xml = format!(
+        r#"<q:sp xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><q:nvSpPr><q:cNvPr id="7" name="Shape 7"/><q:cNvSpPr/><q:nvPr/></q:nvSpPr><q:spPr x:marker="kept"><x:before/><d:xfrm><d:off x="10" y="20"/><d:ext cx="30" cy="40"/></d:xfrm><x:between/><d:solidFill><d:srgbClr val="112233"/></d:solidFill><x:after/></q:spPr><x:between-shape/><q:style><x:style-payload/><d:lnRef idx="0"/><d:fillRef idx="0"/><d:effectRef idx="0"/><d:fontRef idx="none"/></q:style><q:txBody><d:bodyPr/><d:p/></q:txBody></q:sp>"#
+    );
+    let shape = CT_Shape::from_xml(xml.as_bytes()).unwrap();
+    let properties: &CT_ShapeProperties = &shape.shape_properties;
+    let transform = properties.transform.as_ref().unwrap();
+    assert_eq!(transform.offset.unwrap().x.0, 10);
+    assert!(properties.fill.is_some());
+
+    let written = shape.to_xml().unwrap();
+    let text = std::str::from_utf8(&written).unwrap();
+    assert!(text.contains(r#"<p:spPr x:marker="kept">"#));
+    assert!(text.contains("<x:before/>"));
+    assert!(text.contains("<x:between/>"));
+    assert!(text.contains("<x:after/>"));
+    assert_order(
+        &written,
+        &[
+            "<p:spPr",
+            "<x:before/>",
+            "<a:xfrm",
+            "<x:between/>",
+            "<a:solidFill",
+            "<x:after/>",
+            "<x:between-shape/>",
+            "<p:style",
+            "<p:txBody",
+        ],
+    );
+    assert_eq!(shape, CT_Shape::from_xml(&written).unwrap());
 }
 
 #[test]

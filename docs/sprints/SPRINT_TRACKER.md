@@ -32,6 +32,7 @@ defended.
 | S17 | M8 | 4 | 4 | 0 | 10 | 4 | Completed placeholders, pictures, graphic-frame dispatch, and DrawingML tables against all 50 pinned decks with all 28 hashes unchanged and no publication |
 | S18 | M8 | 4 | 4 | 0 | 7 | 4 | Completed connectors, alternate-content fallback selection, notes parts, and relationship-id rewriting against all 50 pinned decks with all 28 hashes unchanged and no publication |
 | S19 | M8 | 2 | 2 | 0 | 6 | 2 | Completed the rpptx read facade and modelled 50-deck gate with native PowerPoint acceptance, all 28 hashes unchanged, and no publication |
+| S20 | M9 | 5 | 5 | 0 | 11 | 5 | Completed placeholder, transform, body, text-style, format-scheme, and typeface inheritance with all 28 hashes unchanged and no publication |
 
 ## Completed features
 
@@ -110,6 +111,11 @@ defended.
 | F-078 | S18 | M | 2 | 1 | Namespace-aware relationship-id rewriting in preserved XML |
 | F-079 | S19 | L | 4 | 1 | 2026-08-02 | Unpublished relationship-resolved rpptx read facade |
 | F-080 | S19 | M | 2 | 1 | 2026-08-02 | Seven-root 50-deck modelled round-trip and native PowerPoint gate |
+| F-081 | S20 | M | 2 | 1 | 2026-08-02 | Unpublished resolver context and recursive placeholder chain |
+| F-082 | S20 | M | 2 | 1 | 2026-08-02 | Typed ordinary-shape properties plus transform and body inheritance |
+| F-083 | S20 | L | 4 | 1 | 2026-08-02 | Seven-source, nine-level text-property cascade with safe caching |
+| F-084 | S20 | M | 2 | 1 | 2026-08-02 | Typed shape styles and format-scheme resolution with placeholder colours |
+| F-085 | S20 | S | 1 | 1 | 2026-08-02 | Major and minor theme-token typeface resolution |
 
 ## Velocity
 
@@ -142,6 +148,7 @@ five working days.
 | S17 | 4 | 4 | 5.00 |
 | S18 | 4 | 4 | 5.00 |
 | S19 | 2 | 2 | 5.00 |
+| S20 | 5 | 5 | 5.00 |
 
 ## Escalation record
 
@@ -165,3 +172,4 @@ was done about it. Empty is the expected state.
 | 2026-08-01 | Sprint estimate variance exceeded 30 percent | S17 | Record 4 actual days against 10 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
 | 2026-08-02 | Sprint estimate variance exceeded 30 percent | S18 | Record 4 actual days against 7 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
 | 2026-08-02 | Sprint estimate variance exceeded 30 percent | S19 | Record 2 actual days against 6 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
+| 2026-08-02 | Sprint estimate variance exceeded 30 percent | S20 | Record 5 actual days against 11 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |

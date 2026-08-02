@@ -1,55 +1,55 @@
-# Current Sprint, S19
+# Current Sprint, S20
 
-**Milestone**: M8 PresentationML.
+**Milestone**: M9 Inheritance resolver.
 
-**Goal**: Open any deck and read it through the public `rpptx` facade. Build
-the read-only presentation, slide, shape, and text access surface, then prove
-modelled round-trip integrity across all 50 pinned decks and complete the
-manual PowerPoint repair-prompt gate without publishing any PowerPoint
-development crate.
+**Goal**: Resolve every inherited property needed by the slide model. Build
+the placeholder, transform, body, list-style, format-scheme, and typeface
+chains so later resolved-slide work receives concrete values rather than theme
+or hierarchy references.
 
 ## Spec references
 
-- `docs/hld/02-scope-and-non-goals.md`, for the in-scope presentation, slide,
-  shape, text, and notes read surface.
-- `docs/hld/03-architecture.md`, for the `rpptx` facade boundary, read-only
-  handle conventions, dependency direction, and unpublished versioning.
-- `docs/hld/04-opc-and-packaging.md`, for deterministic package saves, main
-  part discovery, relationship resolution, and package integrity.
-- `docs/hld/06-presentationml-model.md`, for the typed part and shape models,
-  document order, preservation strategy, and presentation validity rules.
-- `docs/hld/12-testing-strategy.md`, for the modelled corpus round-trip,
-  part-by-part comparison, python-pptx oracle, and manual PowerPoint open gate.
-- `docs/hld/14-development-backlog.md`, for the F-079 and F-080 contracts and
-  the M8 end-of-milestone gate.
-- `docs/hld/15-build-and-toolchain.md`, for keeping implemented `oxml-*` and
-  `rpptx-*` crates at version 0.0.0 with publication disabled.
+- `docs/hld/05-drawingml-model.md`, for the typed theme, format scheme,
+  style-reference, text-style, colour, and font inputs consumed by resolution.
+- `docs/hld/06-presentationml-model.md`, for placeholder matching, slide to
+  layout to master relationships, and the preserved PresentationML model.
+- `docs/hld/07-inheritance-and-resolution.md`, for the six inheritance chains,
+  seven-source list-style cascade, `ResolveCtx` boundary, and concrete output
+  rules.
+- `docs/hld/14-development-backlog.md`, for the five F-ID dependencies and
+  their focused test gates.
+- `docs/hld/15-build-and-toolchain.md`, for keeping PowerPoint development
+  crates at version 0.0.0 with publication disabled.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-079 | The rpptx read facade | L | done | - |
-| F-080 | Modelled round-trip gate | M | done | - |
+| F-081 | ResolveCtx skeleton and placeholder chain | M | done | - |
+| F-082 | Effective transform and body properties | M | done | - |
+| F-083 | The seven-step list style merge | L | done | - |
+| F-084 | Format scheme reference resolution | M | done | - |
+| F-085 | Typeface resolution | S | done | - |
 
 ## Sequencing note
 
-Rows are listed in dependency order, not F-ID order. F-079 builds the public
-facade over the completed PresentationML and OPC models. F-080 depends on that
-facade and exercises the saved package produced through it, so its structural,
-part-by-part, and manual PowerPoint gates run only after F-079 is integrated.
+Rows are listed in dependency order, not implementation priority. F-081
+establishes the context and placeholder chain required by F-082 and F-083.
+F-084 and F-085 depend only on completed M7 theme and shape work, so they can
+proceed independently while the F-081 chain is being established.
 
 ## Definition of done for this sprint
 
-- `Presentation::open`, `from_bytes`, and `to_bytes` expose ordered slides,
-  shapes, text, notes, and read-only handle types without panicking on indexed
-  access.
-- A `dump_deck` example matches python-pptx shape and text output across the
-  pinned corpus for the supported read surface.
-- Every one of the 50 pinned decks parses, serialises, reparses to a
-  structurally equal model, and passes the saved-package part comparison.
-- Every saved corpus deck is opened manually in PowerPoint without a repair
-  prompt, completing the M8 gate with recorded evidence.
+- A slide placeholder resolves to its matching layout and master placeholders.
+- A placeholder without its own transform inherits the layout position, and
+  effective body properties follow the documented defaults and chain.
+- Text properties merge through all seven sources and all nine list levels,
+  with later sources winning per property and level.
+- Format-scheme fill, line, and effect references use one-based indices, apply
+  the background-fill rule above 1000, and substitute `phClr` from the shape
+  reference. Font references select the major, minor, or no font collection.
+- Theme tokens including `+mn-lt`, `+mj-lt`, `+mn-ea`, and `+mn-cs` resolve to
+  the correct theme and per-script typefaces.
 - The full workspace gate passes with all 28 deterministic hashes unchanged,
   and every PowerPoint development crate remains version 0.0.0 and
   unpublished.

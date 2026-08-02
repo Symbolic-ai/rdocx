@@ -6,7 +6,9 @@ use quick_xml::{Reader, Writer, XmlVersion};
 use std::fmt;
 
 use crate::color::{ColorChoice, ColorError, ThemeColorSlot};
-use crate::effect::{CT_EffectList, EffectError};
+use crate::effect::{
+    CT_EffectList, EffectError, raw_contains_placeholder_color, raw_is_effect_dag,
+};
 use crate::fill::{Fill, FillError};
 use crate::line::{CT_LineProperties, LineError};
 use crate::namespace::A_NS;
@@ -1266,6 +1268,20 @@ fn read_effect_style_list(
 }
 
 impl CT_EffectStyle {
+    /// Returns whether this style preserves an opaque effect DAG.
+    pub fn has_unmodelled_effect(&self) -> bool {
+        (0..=1).any(|boundary| self.raw_children.at(boundary).any(raw_is_effect_dag))
+    }
+
+    /// Reports a placeholder colour inside this style's opaque effect DAG.
+    pub fn has_unmodelled_effect_placeholder_color(&self) -> bool {
+        (0..=1).any(|boundary| {
+            self.raw_children
+                .at(boundary)
+                .any(|xml| raw_is_effect_dag(xml) && raw_contains_placeholder_color(xml))
+        })
+    }
+
     fn read(reader: &mut Reader<&[u8]>, start: &BytesStart<'_>) -> Result<Self> {
         let mut effect_list = None;
         let mut raw_children = OrderedRawChildren::default();

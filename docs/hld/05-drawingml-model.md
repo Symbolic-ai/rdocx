@@ -162,7 +162,9 @@ The generated table and its provenance are covered in `08-rendering-spec.md`.
 ```
 a:txBody
   a:bodyPr     insets, anchor, wrap, vertical direction, autofit
-  a:lstStyle   nine levels of default paragraph and run properties
+  a:lstStyle
+    a:defPPr?  paragraph and run defaults shared by every level
+    a:lvl1pPr? through a:lvl9pPr?  overrides for one level
   a:p*
     a:pPr      alignment, level, indents, spacing, bullet
     (a:r | a:br | a:fld)*
@@ -178,6 +180,11 @@ plain percentage rather than 240ths of a line.
 
 Bullets are `a:buChar`, `a:buAutoNum`, `a:buNone`, with `a:buFont`, `a:buSzPct`
 or `a:buSzPts`, and `a:buClr`.
+
+`CT_TextListStyle` types `a:defPPr` separately from its nine optional level
+properties. The reader accepts any prefix, and the writer emits `a:defPPr`
+before the ascending level properties with fixed `a:` prefixes. Unmodelled
+siblings remain in their original positions around those typed children.
 
 ## Tables
 

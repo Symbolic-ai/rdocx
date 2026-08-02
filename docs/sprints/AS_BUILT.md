@@ -2352,3 +2352,173 @@ repair in PowerPoint 16.104 build 16.104.25121423. The output digest was
 **Notes for future sessions.** Keep lexical byte equality for unmodelled parts
 and exact expected canonical bytes for rewritten roots. XML well-formedness is
 not a substitute for the native PowerPoint acceptance gate.
+
+### F-081, ResolveCtx skeleton and placeholder chain
+
+**Sprint.** S20
+**Completed.** 2026-08-02
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The new unpublished `rpptx-layout` crate owns a concrete
+per-slide `ResolveCtx` with theme, colour-map, presentation text defaults,
+master, layout, and slide inputs. It resolves an ordinary slide placeholder
+through nested groups and selected fallback branches to its layout and master
+counterparts.
+
+**Non-obvious choices.** Matching uses the existing index-first and
+type-fallback rule. The master hop uses the matched layout placeholder key, and
+a missing layout match terminates the chain instead of skipping a level.
+
+**Deviations from the design plan.** Microscope pass 1 found that the chain
+method had the wrong visibility. It was corrected to the crate boundary, and
+pass 2 was clean.
+
+**Spec sections touched.** No HLD file changed. The existing architecture and
+inheritance HLD already assigned this boundary to `rpptx-layout`.
+
+**Tests.** Four focused tests cover the complete two-hop gate, layout-key
+master matching, recursive group and fallback lookup, and missing or
+non-placeholder shapes. The integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Build each context once per slide and preserve
+the exact hierarchy order when adding later resolver consumers.
+
+### F-082, Effective transform and body properties
+
+**Sprint.** S20
+**Completed.** 2026-08-02
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Ordinary `p:spPr` is typed as DrawingML shape properties.
+The resolver returns the first slide, layout, or master transform and merges
+body properties per field over exact OOXML inset, anchor, wrap, direction, and
+autofit defaults.
+
+**Non-obvious choices.** Transform results are owned clones so hierarchy
+lifetimes do not leak through the API. Body values overlay master, layout, and
+slide in that order, retaining unrelated inherited fields.
+
+**Deviations from the design plan.** A canonical-prefix assertion was updated
+when typed `p:spPr` began using the fixed `p:` root. The first corpus run also
+exposed excessive debug-stack pressure from storing shape properties by value.
+F-084 completed the reviewed boxed-storage remediation while preserving field
+access semantics and proving the normal-stack corpus gate.
+
+**Spec sections touched.** `docs/hld/06-presentationml-model.md` records typed
+ordinary-shape properties. `docs/hld/07-inheritance-and-resolution.md` records
+owned transform precedence and the exact per-field body cascade.
+
+**Tests.** Transform precedence, exact defaults, per-field body overlay,
+ordinary-shape schema order and raw preservation, all 68 PresentationML parser
+tests, and the normal-stack 50-deck structural corpus gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep the exact integer EMU defaults and do not
+replace the property-level body cascade with whole-value selection.
+
+### F-083, The seven-step list style merge
+
+**Sprint.** S20
+**Completed.** 2026-08-02
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** DrawingML list styles now type `a:defPPr`, and
+`rpptx-layout` resolves all nine levels through presentation defaults, the
+selected master style, master and layout placeholders, shape list style,
+paragraph properties, and run properties.
+
+**Non-obvious choices.** The cache stores only the first four sources by
+optional placeholder key. Shape formatting is applied after cloning the cached
+prefix, so two shapes occupying one placeholder cannot leak direct formatting.
+Bullet components and nested character properties merge independently.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** `docs/hld/05-drawingml-model.md` records typed
+default paragraph properties. `docs/hld/07-inheritance-and-resolution.md`
+records level selection, merge granularity, and prefix-only cache semantics.
+
+**Tests.** Eleven resolver tests cover the named seven-source gate, all nine
+levels, `defPPr`, property retention, bullet components, atomic fill and font
+slots, raw-action exclusion, and cache isolation. DrawingML parser and required
+corpus structural tests also passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Apply shape-owned style after cache cloning and
+keep paragraph level selection separate from inherited formatting.
+
+### F-084, Format scheme reference resolution
+
+**Sprint.** S20
+**Completed.** 2026-08-02
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Ordinary shapes now type `p:style` in schema order. The
+resolver selects one-based fill, line, and effect format entries, applies the
+background-fill rule above 1000, substitutes modelled placeholder colours, and
+layers explicit shape properties over theme values.
+
+**Non-obvious choices.** Index zero means no referenced entry, while a positive
+out-of-range value is an error. Opaque effect DAGs replace referenced effects
+atomically and are rejected when they retain unresolved `phClr`. Font
+references retain their `major`, `minor`, or `none` collection selector rather
+than being treated as numeric indices.
+
+**Deviations from the design plan.** The plan was revised after the integrated
+F-082 parser overflowed on a real slide master at normal stack size. Boxing
+shape properties and private shape style removed the large transient values
+without requiring a stack-size workaround. Microscope pass 1 then found opaque
+effect DAGs bypassed unresolved-colour checks. Three regressions fixed that
+defect, and microscope pass 2 was clean. Sprint review pass 1 then found that
+the raw scanners matched local names without resolving namespaces. Two focused
+regressions made foreign producer extensions inert.
+
+**Spec sections touched.** `docs/hld/06-presentationml-model.md` records typed
+shape properties and style with bounded storage. `docs/hld/07-inheritance-and-resolution.md`
+records numeric format-list rules, font collection selection, placeholder
+colour substitution, explicit overlays, and malformed-reference errors.
+
+**Tests.** Thirty-five integrated resolver tests include the named fill gate,
+background fills, zero and out-of-range indices, transform order, explicit
+overlays, modelled and opaque effects, unresolved placeholder rejection, and
+same-named foreign effect extensions. All 68 parser tests, the 40-case exact
+colour table, and the normal-stack 50-deck corpus gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Never claim an opaque effect with `phClr` is
+concrete. Type it, substitute it, or return a resolver error.
+
+### F-085, Typeface resolution
+
+**Sprint.** S20
+**Completed.** 2026-08-02
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** `ResolveCtx::resolve_typeface` maps major and minor Latin,
+East Asian, and complex-script tokens to concrete theme faces and applies
+supplemental per-script overrides.
+
+**Non-obvious choices.** Script is an explicit optional input because the
+current run model does not perform script segmentation. The first matching
+supplemental entry wins in document order, missing matches fall back to the
+token-specific base face, and ordinary or unknown typefaces pass through.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** `docs/hld/07-inheritance-and-resolution.md` records
+the explicit script input, all six tokens, override order, fallback, and
+pass-through behavior.
+
+**Tests.** Six focused tests cover the named minor Latin gate, all major and
+minor aliases, supplemental overrides, missing-script fallback, pass-through,
+and duplicate-script document order. The integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep Unicode script segmentation in the text
+shaping layer and pass the resulting ISO 15924 tag into this resolver.
