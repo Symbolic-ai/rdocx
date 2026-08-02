@@ -29,7 +29,7 @@ crate unpublished.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-089 | Resolve the preset geometry licensing question | S | in-progress | codex |
-| F-092 | rpptx-render skeleton and RenderInput | M | pending | - |
+| F-092 | rpptx-render skeleton and RenderInput | M | in-progress | codex |
 | F-090 | Preset table generator | L | in-progress | codex |
 | F-091 | Preset evaluation and fallback | M | pending | - |
 
