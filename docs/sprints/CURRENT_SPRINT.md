@@ -31,7 +31,7 @@ documented handoff to the M10 render track without publishing any crate.
 |------|-------|------|--------|-------|
 | F-086 | Draw order and the flattener | L | in-progress | codex |
 | F-087 | ResolvedSlide contract | M | in-progress | codex |
-| F-088 | Visual differential tests | M | pending | - |
+| F-088 | Visual differential tests | M | in-progress | codex |
 
 ## Sequencing note
 
