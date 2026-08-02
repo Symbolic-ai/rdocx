@@ -1,6 +1,6 @@
 # F-084, Format scheme reference resolution
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S20
 **Size**: M
 **Depends on**: F-063, F-065
@@ -59,6 +59,15 @@ error so a later renderer cannot consume a falsely concrete value.
 Keep font collection selection typed as `major`, `minor`, or `none`. F-085
 owns typeface-token lookup inside the selected collection.
 
+The first normal-stack corpus run also exposed an integrated F-082 regression.
+Adding the typed `CT_ShapeProperties` inline had expanded `CT_Shape` enough for
+the five-level group tree in `themes.pptx` slide master 3 to overflow the test
+thread stack. Store the required public shape properties as
+`Box<CT_ShapeProperties>`. Ordinary field access remains available through
+`Box` dereferencing, while recursive parsing no longer carries the large
+property value inline. `rpptx-oxml` is unpublished at version `0.0.0`, so this
+public storage-type correction has no published semver impact.
+
 ## Rejected alternatives
 
 - Treat `a:fontRef@idx` as a number. That contradicts OOXML and the existing
@@ -67,6 +76,9 @@ owns typeface-token lookup inside the selected collection.
   typed parser and could corrupt namespace or transform semantics.
 - Silently clamp or ignore an out-of-range numeric index. Malformed input must
   not select an unrelated style.
+- Set `RUST_MIN_STACK` for the corpus test. That hides a library stack-footprint
+  regression and leaves ordinary callers exposed. The required gate must pass
+  with the normal test-thread stack.
 
 ## Test plan
 
@@ -79,7 +91,8 @@ owns typeface-token lookup inside the selected collection.
 | unit | `explicit_shape_properties_overlay_the_theme_style` | Fill and effect replacement plus line property overlay follow precedence |
 | unit | `unmodelled_effect_with_placeholder_colour_is_rejected` | The resolver never reports an opaque unresolved colour as concrete |
 | round-trip | `ordinary_shape_style_round_trips_in_schema_order` | Alternate prefixes parse, fixed prefixes write, and raw siblings survive exactly |
-| corpus | `all_corpus_modelled_parts_reparse_structurally` | The required corpus gate remains green after typing `p:style` |
+| regression | `ordinary_shape_properties_round_trip_in_schema_order` | Boxed public shape properties retain ordinary field access and structural round trips |
+| corpus | `all_corpus_modelled_parts_reparse_structurally` | All 50 decks pass on the normal test-thread stack after typing `p:style` and boxing shape properties |
 
 The backlog test gate is named explicitly:
 `shape_with_style_resolves_theme_fill_with_reference_colour_substituted`.
@@ -99,6 +112,10 @@ The backlog test gate is named explicitly:
   unmodelled children. Run the required corpus structural round-trip gate.
 - A new module or file. `src/style.rs` is justified by the current F-084
   implementation and requires the shared explicit approval recorded in F-081.
+- Public storage type in an unpublished crate. `CT_Shape::shape_properties`
+  changes to `Box<CT_ShapeProperties>` in unpublished `rpptx-oxml 0.0.0`, with
+  no published semver impact. Run the normal-stack 50-deck corpus gate and
+  retain direct field-access coverage.
 
 ## Hash harness
 
@@ -107,13 +124,14 @@ rendering baseline.
 
 ## Implementation checklist
 
-- [ ] Type ordinary-shape `p:style` in the existing schema position.
-- [ ] Resolve normal and background format-list indices without clamping.
-- [ ] Substitute modelled `phClr` values while preserving transform order.
-- [ ] Overlay explicit fill, line, and effect properties.
-- [ ] Keep font collection selection separate from F-085 typeface lookup.
-- [ ] Add focused parser, resolver, and corpus regressions.
-- [ ] Correct the font-reference wording in the inheritance HLD.
+- [x] Type ordinary-shape `p:style` in the existing schema position.
+- [x] Resolve normal and background format-list indices without clamping.
+- [x] Substitute modelled `phClr` values while preserving transform order.
+- [x] Overlay explicit fill, line, and effect properties.
+- [x] Keep font collection selection separate from F-085 typeface lookup.
+- [x] Bound recursive parser stack use without a larger-stack test workaround.
+- [x] Add focused parser, resolver, and corpus regressions.
+- [x] Correct the font-reference wording in the inheritance HLD.
 
 ## Open questions
 

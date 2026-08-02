@@ -7,7 +7,9 @@ use oxml_core::xml::{local_name, matches_local_name};
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 
-use crate::effect::{CT_EffectList, EffectError};
+use crate::effect::{
+    CT_EffectList, EffectError, raw_contains_placeholder_color, raw_is_effect_dag,
+};
 use crate::fill::{Fill, FillError};
 use crate::geometry::{CT_CustomGeometry2D, GeometryError};
 use crate::line::{CT_LineProperties, LineError};
@@ -278,6 +280,20 @@ impl CT_ShapeProperties {
 
     pub fn raw_children(&self) -> &OrderedRawChildren {
         &self.raw_children
+    }
+
+    /// Returns whether an opaque effect DAG is present instead of a typed list.
+    pub fn has_unmodelled_effect(&self) -> bool {
+        (0..=8).any(|boundary| self.raw_children.at(boundary).any(raw_is_effect_dag))
+    }
+
+    /// Reports a placeholder colour inside an opaque effect DAG.
+    pub fn has_unmodelled_effect_placeholder_color(&self) -> bool {
+        (0..=8).any(|boundary| {
+            self.raw_children
+                .at(boundary)
+                .any(|xml| raw_is_effect_dag(xml) && raw_contains_placeholder_color(xml))
+        })
     }
 }
 

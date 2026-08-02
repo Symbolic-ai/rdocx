@@ -118,10 +118,20 @@ p:cSld
 Document order is z-order. `p:spTree` missing its own `p:nvGrpSpPr` or
 `p:grpSpPr` is a repair prompt, as is any `p:sp` without `p:spPr`.
 
-An ordinary `CT_Shape` owns its required `p:spPr` as a public typed
-`CT_ShapeProperties`. Modelled transform, geometry, fill, line, and effect
-children write with fixed prefixes in schema order. Unsupported attributes and
-children remain in the shape-properties ordered raw slots.
+An ordinary `CT_Shape` owns its required `p:spPr` as a public boxed
+`CT_ShapeProperties`. The allocation keeps recursive group parsing within the
+normal test-thread stack even when a master contains deeply nested shapes with
+large text bodies. Field access remains direct through `Box` dereferencing.
+Modelled transform, geometry, fill, line, and effect children write with fixed
+prefixes in schema order. Unsupported attributes and children remain in the
+shape-properties ordered raw slots.
+
+The optional `p:style` is typed as `CT_ShapeStyle` behind `CT_Shape::style()`.
+Its required line, fill, effect, and font references parse with any bound
+prefix and write with fixed `p:` and `a:` prefixes after `p:spPr` and before
+`p:txBody`. Root attributes and unsupported children remain in their ordered
+raw slots. The style payload shares the shape's existing allocation so typing
+it does not expand the recursive `ShapeTreeChild` value.
 
 ```rust
 pub enum ShapeTreeChild {

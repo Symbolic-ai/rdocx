@@ -121,14 +121,28 @@ not inherit opaque XML or hyperlink actions.
 
 ### 4. Style references
 
-`p:style` carries `a:lnRef`, `a:fillRef`, `a:effectRef` and `a:fontRef`, each
-with a **1-based** `idx` into the theme's `a:fmtScheme` lists.
+`p:style` carries numeric `a:lnRef`, `a:fillRef`, and `a:effectRef` values.
+Zero selects no theme entry. Positive values use one-based indexing into the
+corresponding `a:fmtScheme` list, and an out-of-range value returns
+`ResolveError::StyleIndexOutOfRange` without clamping or panicking.
 
 **`fillRef@idx` above 1000 means index `idx - 1000` into `a:bgFillStyleLst`.**
 
 Resolution takes the format-scheme entry, substitutes every
 `a:schemeClr val="phClr"` with the reference's own colour, then layers the
-shape's explicit `a:spPr` fill, line and effects on top.
+shape's explicit `a:spPr` fill, line and effects on top. Reference colour
+transforms precede the placeholder colour's transforms. Fill and modelled
+effects are atomic replacements. Line width, cap, fill, dash, join, head, and
+tail values overlay independently, so omitted direct properties retain their
+theme values. An explicit `a:noFill` replaces a referenced fill.
+
+Opaque effect children remain preserved rather than being claimed as resolved.
+An opaque effect that still contains `phClr` returns
+`ResolveError::UnresolvedPlaceholderColor`.
+
+`a:fontRef@idx` is not numeric. It retains the typed `major`, `minor`, or
+`none` collection selection. Typeface-token lookup within that collection is
+the separate font-resolution step described below.
 
 ### 5. Colour
 
@@ -176,6 +190,10 @@ impl ResolveCtx<'_> {
     ) -> EffectiveTextProperties;
     pub fn effective_fill(&self, sp: &Shape) -> Option<Fill>;
     pub fn effective_line(&self, sp: &Shape) -> Option<Line>;
+    pub fn effective_shape_style(
+        &self,
+        sp: &CT_Shape,
+    ) -> Result<EffectiveShapeStyle, ResolveError>;
     pub fn resolve_color(&self, c: &ColorChoice) -> Color;
     pub fn resolve_typeface(&self, tf: &str, script: Option<&str>) -> String;
 }

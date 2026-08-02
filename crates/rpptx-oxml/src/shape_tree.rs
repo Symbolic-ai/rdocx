@@ -5,6 +5,7 @@ use oxml_core::raw_xml::{capture_element, capture_empty_element};
 use oxml_drawing::namespace::A_NS;
 use oxml_drawing::order::OrderedRawChildren;
 use oxml_drawing::shape_props::CT_ShapeProperties;
+use oxml_drawing::style_ref::{FontReference, StyleMatrixReference, StyleReference};
 use oxml_drawing::text::CT_TextBody;
 use oxml_drawing::xfrm::CT_Transform2D;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
@@ -172,9 +173,21 @@ fn duplicate_fallback() -> OxmlError {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CT_Shape {
     pub placeholder: Option<CT_Placeholder>,
-    pub shape_properties: CT_ShapeProperties,
+    pub shape_properties: Box<CT_ShapeProperties>,
     pub text_body: Option<CT_TextBody>,
     raw: Box<ShapeRaw>,
+}
+
+/// The four ordered DrawingML references carried by an ordinary shape style.
+#[allow(non_camel_case_types)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CT_ShapeStyle {
+    pub line_reference: StyleMatrixReference,
+    pub fill_reference: StyleMatrixReference,
+    pub effect_reference: StyleMatrixReference,
+    pub font_reference: FontReference,
+    raw_attributes: RawAttributes,
+    raw_children: OrderedRawChildren,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -186,7 +199,171 @@ struct ShapeRaw {
     non_visual_shape_properties: Vec<u8>,
     application_properties_attributes: RawAttributes,
     application_properties_raw_children: OrderedRawChildren,
+    style: Option<Box<CT_ShapeStyle>>,
     raw_children: OrderedRawChildren,
+}
+
+impl CT_ShapeStyle {
+    fn from_fragment(xml: &[u8], inherited: &NamespaceBindings) -> Result<Box<Self>> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(start) => {
+                    let namespaces = inherited.with_start(&start)?;
+                    if local_name(start.name().as_ref()) != b"style"
+                        || namespaces.element_uri(start.name().as_ref()) != Some(P_NS)
+                    {
+                        return Err(unexpected(&start));
+                    }
+                    return Self::from_reader(&mut reader, &start, &namespaces);
+                }
+                Event::Empty(start) => {
+                    return Err(OxmlError::MissingElement(format!(
+                        "{} requires a:lnRef, a:fillRef, a:effectRef, and a:fontRef",
+                        String::from_utf8_lossy(start.name().as_ref())
+                    )));
+                }
+                Event::Eof => return Err(OxmlError::MissingElement("p:style".to_owned())),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn from_reader(
+        reader: &mut Reader<&[u8]>,
+        start: &BytesStart<'_>,
+        namespaces: &NamespaceBindings,
+    ) -> Result<Box<Self>> {
+        let mut line_reference = None;
+        let mut fill_reference = None;
+        let mut effect_reference = None;
+        let mut font_reference = None;
+        let mut raw_children = OrderedRawChildren::default();
+        let mut boundary = 0usize;
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(child) => {
+                    let child_namespaces = namespaces.with_start(&child)?;
+                    let name = local_name(child.name().as_ref()).to_vec();
+                    let uri = child_namespaces.element_uri(child.name().as_ref());
+                    let raw = capture_element(reader, &child)?;
+                    capture_style_child(
+                        &name,
+                        uri,
+                        raw,
+                        &mut line_reference,
+                        &mut fill_reference,
+                        &mut effect_reference,
+                        &mut font_reference,
+                        &mut raw_children,
+                        &mut boundary,
+                    )?;
+                }
+                Event::Empty(child) => {
+                    let child_namespaces = namespaces.with_start(&child)?;
+                    let name = local_name(child.name().as_ref()).to_vec();
+                    let uri = child_namespaces.element_uri(child.name().as_ref());
+                    let raw = capture_empty_element(&child)?;
+                    capture_style_child(
+                        &name,
+                        uri,
+                        raw,
+                        &mut line_reference,
+                        &mut fill_reference,
+                        &mut effect_reference,
+                        &mut font_reference,
+                        &mut raw_children,
+                        &mut boundary,
+                    )?;
+                }
+                Event::End(end) if local_name(end.name().as_ref()) == b"style" => break,
+                Event::Eof => {
+                    return Err(OxmlError::MissingElement("closing p:style".to_owned()));
+                }
+                _ => {}
+            }
+            buffer.clear();
+        }
+
+        Ok(Box::new(Self {
+            line_reference: required(line_reference, "a:lnRef")?,
+            fill_reference: required(fill_reference, "a:fillRef")?,
+            effect_reference: required(effect_reference, "a:effectRef")?,
+            font_reference: required(font_reference, "a:fontRef")?,
+            raw_attributes: root_attributes(start, FIXED_SHAPE_TREE_PREFIXES)?,
+            raw_children,
+        }))
+    }
+
+    fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        let mut start = BytesStart::new("p:style");
+        push_attributes(&mut start, &self.raw_attributes);
+        writer.write_event(Event::Start(start))?;
+        emit_raw(writer, self.raw_children.at(0))?;
+        StyleReference::Line(self.line_reference.clone())
+            .write_xml(writer)
+            .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+        emit_raw(writer, self.raw_children.at(1))?;
+        StyleReference::Fill(self.fill_reference.clone())
+            .write_xml(writer)
+            .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+        emit_raw(writer, self.raw_children.at(2))?;
+        StyleReference::Effect(self.effect_reference.clone())
+            .write_xml(writer)
+            .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+        emit_raw(writer, self.raw_children.at(3))?;
+        StyleReference::Font(self.font_reference.clone())
+            .write_xml(writer)
+            .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+        emit_raw(writer, self.raw_children.at(4))?;
+        writer.write_event(Event::End(BytesEnd::new("p:style")))?;
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capture_style_child(
+    name: &[u8],
+    uri: Option<&str>,
+    raw: Vec<u8>,
+    line_reference: &mut Option<StyleMatrixReference>,
+    fill_reference: &mut Option<StyleMatrixReference>,
+    effect_reference: &mut Option<StyleMatrixReference>,
+    font_reference: &mut Option<FontReference>,
+    raw_children: &mut OrderedRawChildren,
+    boundary: &mut usize,
+) -> Result<()> {
+    let expected_boundary = match (uri, name) {
+        (Some(A_NS), b"lnRef") => Some(0),
+        (Some(A_NS), b"fillRef") => Some(1),
+        (Some(A_NS), b"effectRef") => Some(2),
+        (Some(A_NS), b"fontRef") => Some(3),
+        _ => None,
+    };
+    let Some(expected_boundary) = expected_boundary else {
+        raw_children.push(*boundary, raw);
+        return Ok(());
+    };
+    if *boundary != expected_boundary {
+        return Err(OxmlError::InvalidValue(
+            "p:style children must be a:lnRef, a:fillRef, a:effectRef, and a:fontRef in order"
+                .to_owned(),
+        ));
+    }
+
+    let reference = StyleReference::from_xml(&raw)
+        .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+    match reference {
+        StyleReference::Line(reference) => *line_reference = Some(reference),
+        StyleReference::Fill(reference) => *fill_reference = Some(reference),
+        StyleReference::Effect(reference) => *effect_reference = Some(reference),
+        StyleReference::Font(reference) => *font_reference = Some(reference),
+    }
+    *boundary += 1;
+    Ok(())
 }
 
 /// The recursive group-shape form used inside a shape tree.
@@ -297,6 +474,7 @@ impl CT_Shape {
     ) -> Result<Self> {
         let mut non_visual = None;
         let mut shape_properties = None;
+        let mut style = None;
         let mut text_body = None;
         let mut raw_children = OrderedRawChildren::default();
         let mut boundary = 0usize;
@@ -315,6 +493,7 @@ impl CT_Shape {
                         &child_namespaces,
                         &mut non_visual,
                         &mut shape_properties,
+                        &mut style,
                         &mut text_body,
                         &mut raw_children,
                         &mut boundary,
@@ -332,6 +511,7 @@ impl CT_Shape {
                         &child_namespaces,
                         &mut non_visual,
                         &mut shape_properties,
+                        &mut style,
                         &mut text_body,
                         &mut raw_children,
                         &mut boundary,
@@ -347,7 +527,7 @@ impl CT_Shape {
         let non_visual = required(non_visual, "p:nvSpPr")?;
         Ok(Self {
             placeholder: non_visual.placeholder,
-            shape_properties: required(shape_properties, "p:spPr")?,
+            shape_properties: Box::new(required(shape_properties, "p:spPr")?),
             text_body,
             raw: Box::new(ShapeRaw {
                 raw_attributes: self_contained_attributes(
@@ -361,9 +541,15 @@ impl CT_Shape {
                 non_visual_shape_properties: non_visual.non_visual_shape_properties,
                 application_properties_attributes: non_visual.application_properties_attributes,
                 application_properties_raw_children: non_visual.application_properties_raw_children,
+                style,
                 raw_children,
             }),
         })
+    }
+
+    /// Returns the optional typed format-scheme references.
+    pub fn style(&self) -> Option<&CT_ShapeStyle> {
+        self.raw.style.as_deref()
     }
 
     /// Serialises a self-contained shape with fixed modelled prefixes.
@@ -395,6 +581,9 @@ impl CT_Shape {
             .write_xml_as(writer, "p:spPr")
             .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
         emit_raw(writer, self.raw.raw_children.at(2))?;
+        if let Some(style) = &self.raw.style {
+            style.write_xml(writer)?;
+        }
         emit_raw(writer, self.raw.raw_children.at(3))?;
         if let Some(text_body) = &self.text_body {
             text_body
@@ -462,11 +651,12 @@ fn capture_shape_child(
     namespaces: &NamespaceBindings,
     non_visual: &mut Option<ParsedNonVisualShape>,
     shape_properties: &mut Option<CT_ShapeProperties>,
+    style: &mut Option<Box<CT_ShapeStyle>>,
     text_body: &mut Option<CT_TextBody>,
     raw_children: &mut OrderedRawChildren,
     boundary: &mut usize,
 ) -> Result<()> {
-    if uri == Some(P_NS) && matches!(name, b"nvSpPr" | b"spPr") {
+    if uri == Some(P_NS) && matches!(name, b"nvSpPr" | b"spPr" | b"style") {
         namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
     }
     match (uri, name) {
@@ -492,12 +682,12 @@ fn capture_shape_child(
             *boundary = 2;
         }
         (Some(P_NS), b"style") => {
-            if *boundary != 2 {
+            if *boundary != 2 || style.is_some() {
                 return Err(OxmlError::InvalidValue(
                     "p:style must follow p:spPr and precede p:txBody".to_owned(),
                 ));
             }
-            raw_children.push(2, raw);
+            *style = Some(CT_ShapeStyle::from_fragment(&raw, namespaces)?);
             *boundary = 3;
         }
         (Some(P_NS), b"txBody") => {
@@ -1249,4 +1439,38 @@ fn local_name(name: &[u8]) -> &[u8] {
 
 fn unexpected(element: &BytesStart<'_>) -> OxmlError {
     OxmlError::UnexpectedElement(String::from_utf8_lossy(element.name().as_ref()).into_owned())
+}
+
+#[cfg(test)]
+mod style_tests {
+    use oxml_drawing::style_ref::FontCollectionIndex;
+
+    use super::CT_Shape;
+
+    #[test]
+    fn ordinary_shape_style_round_trips_in_schema_order() {
+        let xml = br#"<q:sp xmlns:q="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:test"><q:nvSpPr><q:cNvPr/><q:cNvSpPr/><q:nvPr/></q:nvSpPr><q:spPr/><x:before-style x:value="kept"/><q:style x:custom="yes"><x:before/><d:lnRef idx="2"><d:schemeClr val="accent1"/></d:lnRef><x:between-line-fill/><d:fillRef idx="1"><d:schemeClr val="accent2"/></d:fillRef><d:effectRef idx="3"><d:schemeClr val="accent3"/></d:effectRef><d:fontRef idx="major"><d:schemeClr val="tx1"/></d:fontRef><x:after/></q:style><x:after-style/></q:sp>"#;
+        let shape = CT_Shape::from_xml(xml).unwrap();
+        let style = shape.style().unwrap();
+
+        assert_eq!(style.line_reference.index, 2);
+        assert_eq!(style.fill_reference.index, 1);
+        assert_eq!(style.effect_reference.index, 3);
+        assert_eq!(style.font_reference.index, FontCollectionIndex::Major);
+
+        let written = shape.to_xml().unwrap();
+        let text = String::from_utf8(written.clone()).unwrap();
+        assert!(text.contains("<p:style x:custom=\"yes\">"));
+        assert!(text.contains("<x:before/>"));
+        assert!(text.contains("<x:between-line-fill/>"));
+        assert!(text.contains("<x:after/>"));
+        let line = text.find("<a:lnRef").unwrap();
+        let fill = text.find("<a:fillRef").unwrap();
+        let effect = text.find("<a:effectRef").unwrap();
+        let font = text.find("<a:fontRef").unwrap();
+        assert!(line < fill && fill < effect && effect < font);
+        assert!(text.find("<p:spPr").unwrap() < text.find("<p:style").unwrap());
+        assert!(text.find("<p:style").unwrap() < text.find("<x:after-style").unwrap());
+        assert_eq!(CT_Shape::from_xml(&written).unwrap(), shape);
+    }
 }

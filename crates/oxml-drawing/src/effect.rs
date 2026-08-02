@@ -372,6 +372,54 @@ impl CT_EffectList {
     pub fn raw_children(&self) -> &OrderedRawChildren {
         &self.raw_children
     }
+
+    /// Reports an unresolved placeholder colour inside an opaque effect child.
+    pub fn has_unmodelled_placeholder_color(&self) -> bool {
+        self.raw_children
+            .at(0)
+            .chain(self.raw_children.at(1))
+            .any(raw_contains_placeholder_color)
+            || self.outer_shadow.as_ref().is_some_and(|shadow| {
+                shadow
+                    .raw_children()
+                    .at(0)
+                    .chain(shadow.raw_children().at(1))
+                    .any(raw_contains_placeholder_color)
+            })
+    }
+}
+
+pub(crate) fn raw_contains_placeholder_color(xml: &[u8]) -> bool {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element) | Event::Empty(element))
+                if matches_local_name(element.name().as_ref(), b"schemeClr")
+                    && get_attr(&element, b"val").as_deref() == Some("phClr") =>
+            {
+                return true;
+            }
+            Ok(Event::Eof) | Err(_) => return false,
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+pub(crate) fn raw_is_effect_dag(xml: &[u8]) -> bool {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element) | Event::Empty(element)) => {
+                return matches_local_name(element.name().as_ref(), b"effectDag");
+            }
+            Ok(Event::Eof) | Err(_) => return false,
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 fn is_color(name: &[u8]) -> bool {

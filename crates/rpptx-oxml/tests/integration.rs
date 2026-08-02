@@ -2052,12 +2052,13 @@ fn typed_shape_placeholder_round_trips_inside_nested_groups() {
 #[test]
 fn ordinary_shape_properties_round_trip_in_schema_order() {
     let xml = format!(
-        r#"<q:sp xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><q:nvSpPr><q:cNvPr id="7" name="Shape 7"/><q:cNvSpPr/><q:nvPr/></q:nvSpPr><q:spPr x:marker="kept"><x:before/><d:xfrm><d:off x="10" y="20"/><d:ext cx="30" cy="40"/></d:xfrm><x:between/><d:solidFill><d:srgbClr val="112233"/></d:solidFill><x:after/></q:spPr><x:between-shape/><q:style><x:style-payload/></q:style><q:txBody><d:bodyPr/><d:p/></q:txBody></q:sp>"#
+        r#"<q:sp xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><q:nvSpPr><q:cNvPr id="7" name="Shape 7"/><q:cNvSpPr/><q:nvPr/></q:nvSpPr><q:spPr x:marker="kept"><x:before/><d:xfrm><d:off x="10" y="20"/><d:ext cx="30" cy="40"/></d:xfrm><x:between/><d:solidFill><d:srgbClr val="112233"/></d:solidFill><x:after/></q:spPr><x:between-shape/><q:style><x:style-payload/><d:lnRef idx="0"/><d:fillRef idx="0"/><d:effectRef idx="0"/><d:fontRef idx="none"/></q:style><q:txBody><d:bodyPr/><d:p/></q:txBody></q:sp>"#
     );
     let shape = CT_Shape::from_xml(xml.as_bytes()).unwrap();
-    let transform = shape.shape_properties.transform.as_ref().unwrap();
+    let properties: &CT_ShapeProperties = &shape.shape_properties;
+    let transform = properties.transform.as_ref().unwrap();
     assert_eq!(transform.offset.unwrap().x.0, 10);
-    assert!(shape.shape_properties.fill.is_some());
+    assert!(properties.fill.is_some());
 
     let written = shape.to_xml().unwrap();
     let text = std::str::from_utf8(&written).unwrap();
@@ -2075,7 +2076,7 @@ fn ordinary_shape_properties_round_trip_in_schema_order() {
             "<a:solidFill",
             "<x:after/>",
             "<x:between-shape/>",
-            "<q:style",
+            "<p:style",
             "<p:txBody",
         ],
     );
