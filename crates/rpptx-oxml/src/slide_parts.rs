@@ -150,10 +150,10 @@ struct ParsedRoot {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct ParsedColorMap {
-    value: ColorMap,
-    raw_attributes: RawAttributes,
-    raw_children: OrderedRawChildren,
+pub(crate) struct ParsedColorMap {
+    pub(crate) value: ColorMap,
+    pub(crate) raw_attributes: RawAttributes,
+    pub(crate) raw_children: OrderedRawChildren,
 }
 
 impl CT_Slide {
@@ -443,7 +443,7 @@ impl CT_CommonSlideData {
         }
     }
 
-    fn from_fragment(xml: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
+    pub(crate) fn from_fragment(xml: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
         let mut reader = Reader::from_reader(xml);
         let mut buffer = Vec::new();
         loop {
@@ -528,7 +528,7 @@ impl CT_CommonSlideData {
         })
     }
 
-    fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+    pub(crate) fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         let mut start = BytesStart::new("p:cSld");
         if let Some(name) = &self.name {
             start.push_attribute(("name", name.as_str()));
@@ -594,7 +594,7 @@ fn capture_common_child(
 }
 
 impl CT_ColorMapOverride {
-    fn from_fragment(xml: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
+    pub(crate) fn from_fragment(xml: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
         let mut reader = Reader::from_reader(xml);
         let mut buffer = Vec::new();
         let start = loop {
@@ -666,7 +666,7 @@ impl CT_ColorMapOverride {
         })
     }
 
-    fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+    pub(crate) fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         let mut start = BytesStart::new("p:clrMapOvr");
         push_attributes(&mut start, &self.raw_attributes);
         writer.write_event(Event::Start(start))?;
@@ -853,7 +853,10 @@ fn capture_text_style(
     Ok(())
 }
 
-fn parse_color_map(xml: &[u8], namespaces: &NamespaceBindings) -> Result<ParsedColorMap> {
+pub(crate) fn parse_color_map(
+    xml: &[u8],
+    namespaces: &NamespaceBindings,
+) -> Result<ParsedColorMap> {
     namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
     let mut reader = Reader::from_reader(xml);
     let mut buffer = Vec::new();
@@ -942,7 +945,7 @@ fn color_map_raw_attributes(start: &BytesStart<'_>) -> Result<RawAttributes> {
         .collect())
 }
 
-fn write_color_map<W: Write>(
+pub(crate) fn write_color_map<W: Write>(
     writer: &mut Writer<W>,
     tag: &str,
     map: &ColorMap,

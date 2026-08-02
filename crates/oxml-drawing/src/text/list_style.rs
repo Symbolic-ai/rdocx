@@ -211,6 +211,7 @@ fn is_list_style_root(name: &[u8]) -> bool {
         || matches_local_name(name, b"titleStyle")
         || matches_local_name(name, b"bodyStyle")
         || matches_local_name(name, b"otherStyle")
+        || matches_local_name(name, b"notesStyle")
 }
 
 fn list_level(name: &[u8]) -> Result<Option<usize>> {

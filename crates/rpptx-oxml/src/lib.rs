@@ -1,10 +1,13 @@
 #![allow(non_camel_case_types)]
 
+pub mod connector;
 pub mod graphic_frame;
 pub mod namespace;
+pub mod notes_parts;
 pub mod picture;
 pub mod placeholder;
 pub mod presentation;
+pub mod relmap;
 pub mod shape_tree;
 pub mod slide_parts;
 

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,14 +10,17 @@ use oxml_drawing::table::CT_Table;
 use oxml_drawing::text::CT_TextBody;
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
-use quick_xml::events::{BytesStart, Event};
-use quick_xml::{Reader, XmlVersion};
+use quick_xml::events::{BytesEnd, BytesStart, Event};
+use quick_xml::{Reader, Writer, XmlVersion};
 use rpptx_oxml::PRESENTATION_PART;
+use rpptx_oxml::connector::CT_ConnectionShape;
 use rpptx_oxml::graphic_frame::{CT_GraphicFrame, GraphicDataPayload};
-use rpptx_oxml::namespace::{P_NS, P_PREFIX, R_NS, R_PREFIX};
+use rpptx_oxml::namespace::{MC_NS, P_NS, P_PREFIX, R_NS, R_PREFIX};
+use rpptx_oxml::notes_parts::{CT_NotesMaster, CT_NotesSlide};
 use rpptx_oxml::picture::CT_Picture;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType, PlaceholderKey};
 use rpptx_oxml::presentation::CT_Presentation;
+use rpptx_oxml::relmap::rewrite_rel_ids;
 use rpptx_oxml::shape_tree::{CT_Shape, CT_ShapeTree, ShapeTreeChild};
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind};
 
@@ -1008,7 +1011,7 @@ fn all_six_child_variants_keep_document_order() {
         r#"<p:sp marker="shape"><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp>"#,
         r#"<p:pic marker="picture"><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill/><p:spPr/></p:pic>"#,
         r#"<p:graphicFrame marker="frame"><p:nvGraphicFramePr/><p:xfrm/><a:graphic><a:graphicData uri="urn:frame"><x:data/></a:graphicData></a:graphic></p:graphicFrame>"#,
-        r#"<p:cxnSp marker="connector"><p:spPr/></p:cxnSp>"#,
+        r#"<p:cxnSp marker="connector"><p:nvCxnSpPr><p:cNvPr id="2" name="Connector"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp>"#,
         r#"<mc:AlternateContent marker="alternate"><mc:Choice Requires="p14"><p:sp/></mc:Choice></mc:AlternateContent>"#,
     ];
     let xml = format!(
@@ -1042,14 +1045,490 @@ fn all_six_child_variants_keep_document_order() {
         ],
     );
     assert!(std::str::from_utf8(&written).unwrap().contains("<x:data/>"));
-    for payload in &payloads[3..] {
+    let alternate_content = payloads[4].as_bytes();
+    assert!(
+        written
+            .windows(alternate_content.len())
+            .any(|window| window == alternate_content)
+    );
+    assert_eq!(parsed, CT_ShapeTree::from_xml(&written).unwrap());
+}
+
+#[test]
+fn alternate_content_selects_fallback_without_parsing_choices() {
+    let raw = r#"<mc:AlternateContent marker="selected"><mc:Choice Requires="p14"><p:sp/></mc:Choice><mc:Fallback><p:sp marker="fallback-shape"><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><x:ignored/><p:pic marker="fallback-picture"><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill/><p:spPr/></p:pic><p:cxnSp marker="fallback-connector"><p:nvCxnSpPr><p:cNvPr/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp></mc:Fallback></mc:AlternateContent>"#;
+    let tree = alternate_content_tree(raw.as_bytes(), &[]).unwrap();
+    let ShapeTreeChild::AlternateContent(alternate) = &tree.children[0] else {
+        panic!("expected typed AlternateContent");
+    };
+    let selected = alternate.selected_fallback().unwrap();
+    assert_eq!(selected.len(), 3);
+    assert!(matches!(selected[0], ShapeTreeChild::Shape(_)));
+    assert!(matches!(selected[1], ShapeTreeChild::Picture(_)));
+    assert!(matches!(selected[2], ShapeTreeChild::Connector(_)));
+}
+
+#[test]
+fn alternate_content_without_fallback_preserves_choices_and_selects_none() {
+    let raw = r#"<mc:AlternateContent marker="choice-only"><mc:Choice Requires="p14"><p:sp/></mc:Choice></mc:AlternateContent>"#;
+    let tree = alternate_content_tree(raw.as_bytes(), &[]).unwrap();
+    let ShapeTreeChild::AlternateContent(alternate) = &tree.children[0] else {
+        panic!("expected typed AlternateContent");
+    };
+    assert_eq!(alternate.raw_xml(), raw.as_bytes());
+    assert_eq!(alternate.selected_fallback(), None);
+    assert!(
+        tree.to_xml()
+            .unwrap()
+            .windows(raw.len())
+            .any(|part| part == raw.as_bytes())
+    );
+}
+
+#[test]
+fn alternate_content_resolves_branch_namespaces_and_rejects_duplicate_fallbacks() {
+    let raw = r#"<m:AlternateContent><m:Choice Requires="q"><m:Fallback><q:sp/></m:Fallback></m:Choice><x:Fallback><q:sp/></x:Fallback><m:Fallback><q:sp marker="alias"><q:nvSpPr><q:cNvPr/><q:cNvSpPr/><q:nvPr/></q:nvSpPr><q:spPr/></q:sp></m:Fallback></m:AlternateContent>"#;
+    let inherited = [
+        (
+            "m",
+            "http://schemas.openxmlformats.org/markup-compatibility/2006",
+        ),
+        ("q", P_NS),
+        ("x", "urn:not-mc"),
+    ];
+    let tree = alternate_content_tree(raw.as_bytes(), &inherited).unwrap();
+    let ShapeTreeChild::AlternateContent(alternate) = &tree.children[0] else {
+        panic!("expected typed AlternateContent");
+    };
+    let selected = alternate.selected_fallback().unwrap();
+    assert_eq!(selected.len(), 1);
+    assert!(matches!(selected[0], ShapeTreeChild::Shape(_)));
+
+    let empty = r#"<m:AlternateContent><m:Fallback/></m:AlternateContent>"#;
+    let empty_tree = alternate_content_tree(empty.as_bytes(), &inherited).unwrap();
+    let ShapeTreeChild::AlternateContent(empty_alternate) = &empty_tree.children[0] else {
+        panic!("expected empty typed AlternateContent fallback");
+    };
+    assert_eq!(empty_alternate.selected_fallback(), Some(&[][..]));
+
+    let duplicate = r#"<m:AlternateContent><m:Fallback/><m:Fallback/></m:AlternateContent>"#;
+    assert!(alternate_content_tree(duplicate.as_bytes(), &inherited).is_err());
+}
+
+#[test]
+fn alternate_content_fallback_selection_does_not_change_stored_alternatives() {
+    let raw = r#"<mc:AlternateContent x:marker="a &amp; b">
+  <?producer keep?>
+  <!-- choice stays opaque -->
+  <mc:Choice Requires="p14"><p:sp x:data="&quot;raw&quot;"/></mc:Choice>
+  <mc:Fallback><x:before/><p:sp marker="selected"><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><x:after/></mc:Fallback>
+</mc:AlternateContent>"#;
+    let tree = alternate_content_tree(raw.as_bytes(), &[]).unwrap();
+    let ShapeTreeChild::AlternateContent(alternate) = &tree.children[0] else {
+        panic!("expected typed AlternateContent");
+    };
+    assert_eq!(alternate.raw_xml(), raw.as_bytes());
+    assert_eq!(alternate.selected_fallback().unwrap().len(), 1);
+    let written = tree.to_xml().unwrap();
+    assert!(
+        written
+            .windows(raw.len())
+            .any(|part| part == raw.as_bytes())
+    );
+    let reparsed = CT_ShapeTree::from_xml(&written).unwrap();
+    let ShapeTreeChild::AlternateContent(reparsed_alternate) = &reparsed.children[0] else {
+        panic!("expected typed AlternateContent after round-trip");
+    };
+    assert_eq!(reparsed_alternate.raw_xml(), raw.as_bytes());
+}
+
+#[test]
+fn alternate_content_fallback_keeps_shape_tree_order_inside_nested_groups() {
+    let raw = r#"<mc:AlternateContent marker="alternate"><mc:Fallback><p:sp marker="first"><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:grpSp marker="second"><p:nvGrpSpPr/><p:grpSpPr/><p:pic marker="nested-picture"><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill/><p:spPr/></p:pic></p:grpSp><p:cxnSp marker="third"><p:nvCxnSpPr><p:cNvPr/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp></mc:Fallback></mc:AlternateContent>"#;
+    let outer = format!(
+        r#"<p:spTree xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><p:nvGrpSpPr/><p:grpSpPr/><p:grpSp marker="outer"><p:nvGrpSpPr/><p:grpSpPr/>{raw}</p:grpSp><p:sp marker="after"><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp></p:spTree>"#
+    );
+    let tree = CT_ShapeTree::from_xml(outer.as_bytes()).unwrap();
+    let ShapeTreeChild::GroupShape(group) = &tree.children[0] else {
+        panic!("expected outer group");
+    };
+    let ShapeTreeChild::AlternateContent(alternate) = &group.children[0] else {
+        panic!("expected AlternateContent inside group");
+    };
+    let selected = alternate.selected_fallback().unwrap();
+    assert!(matches!(selected[0], ShapeTreeChild::Shape(_)));
+    let ShapeTreeChild::GroupShape(selected_group) = &selected[1] else {
+        panic!("expected selected nested group");
+    };
+    assert!(matches!(
+        selected_group.children[0],
+        ShapeTreeChild::Picture(_)
+    ));
+    assert!(matches!(selected[2], ShapeTreeChild::Connector(_)));
+    assert!(matches!(tree.children[1], ShapeTreeChild::Shape(_)));
+    let written = tree.to_xml().unwrap();
+    assert_order(
+        &written,
+        &[
+            "marker=\"outer\"",
+            "marker=\"alternate\"",
+            "marker=\"after\"",
+        ],
+    );
+    assert_eq!(tree, CT_ShapeTree::from_xml(&written).unwrap());
+}
+
+#[test]
+fn every_corpus_alternate_content_subtree_round_trips_byte_identically() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut coverage = 0usize;
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, xml) in &package.parts {
+            if !part.ends_with(".xml") {
+                continue;
+            }
+            for alternate in alternate_content_subtrees(xml)
+                .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path))
+            {
+                let inherited: Vec<_> = alternate
+                    .inherited_namespaces
+                    .iter()
+                    .map(|(prefix, uri)| (prefix.as_str(), uri.as_str()))
+                    .collect();
+                let tree = alternate_content_tree(&alternate.xml, &inherited)
+                    .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                let ShapeTreeChild::AlternateContent(model) = &tree.children[0] else {
+                    panic!("{} {part}: expected typed AlternateContent", entry.path);
+                };
+                assert_eq!(model.raw_xml(), alternate.xml);
+                let written = tree.to_xml().unwrap();
+                assert!(
+                    written
+                        .windows(alternate.xml.len())
+                        .any(|part| part == alternate.xml)
+                );
+                assert_eq!(tree, CT_ShapeTree::from_xml(&written).unwrap());
+                coverage += 1;
+            }
+        }
+    }
+    assert!(
+        coverage > 0,
+        "the pinned corpus contained no MC AlternateContent"
+    );
+    eprintln!("AlternateContent corpus gate checked {coverage} subtrees");
+}
+
+fn alternate_content_tree(
+    raw: &[u8],
+    inherited: &[(&str, &str)],
+) -> Result<CT_ShapeTree, oxml_core::OxmlError> {
+    let mut attributes = vec![
+        ("xmlns:p".to_owned(), P_NS.to_owned()),
+        (
+            "xmlns:a".to_owned(),
+            oxml_drawing::namespace::A_NS.to_owned(),
+        ),
+        ("xmlns:r".to_owned(), R_NS.to_owned()),
+        ("xmlns:mc".to_owned(), MC_NS.to_owned()),
+    ];
+    for (prefix, uri) in inherited {
+        if matches!(*prefix, "p" | "a" | "r" | "mc") {
+            continue;
+        }
+        let name = if prefix.is_empty() {
+            "xmlns".to_owned()
+        } else {
+            format!("xmlns:{prefix}")
+        };
+        attributes.push((name, (*uri).to_owned()));
+    }
+
+    let mut writer = Writer::new(Vec::new());
+    let mut root = BytesStart::new("p:spTree");
+    for (name, value) in &attributes {
+        root.push_attribute((name.as_str(), value.as_str()));
+    }
+    writer.write_event(Event::Start(root))?;
+    writer.write_event(Event::Empty(BytesStart::new("p:nvGrpSpPr")))?;
+    writer.write_event(Event::Empty(BytesStart::new("p:grpSpPr")))?;
+    writer.get_mut().extend_from_slice(raw);
+    writer.write_event(Event::End(BytesEnd::new("p:spTree")))?;
+    CT_ShapeTree::from_xml(&writer.into_inner())
+}
+
+struct ExtractedAlternateContent {
+    xml: Vec<u8>,
+    inherited_namespaces: Vec<(String, String)>,
+}
+
+fn alternate_content_subtrees(xml: &[u8]) -> Result<Vec<ExtractedAlternateContent>, String> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut alternatives = Vec::new();
+    let mut namespace_frames = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                let local_declarations = namespace_declarations(&element)?;
+                if local_name(element.name().as_ref()) == b"AlternateContent"
+                    && element_namespace(
+                        element.name().as_ref(),
+                        &namespace_frames,
+                        &local_declarations,
+                    ) == Some(MC_NS)
+                {
+                    alternatives.push(ExtractedAlternateContent {
+                        xml: capture_element(&mut reader, &element)
+                            .map_err(|error| format!("AlternateContent scan failed: {error}"))?,
+                        inherited_namespaces: effective_namespaces(&namespace_frames),
+                    });
+                } else {
+                    namespace_frames.push(local_declarations);
+                }
+            }
+            Ok(Event::Empty(element)) => {
+                let local_declarations = namespace_declarations(&element)?;
+                if local_name(element.name().as_ref()) == b"AlternateContent"
+                    && element_namespace(
+                        element.name().as_ref(),
+                        &namespace_frames,
+                        &local_declarations,
+                    ) == Some(MC_NS)
+                {
+                    alternatives.push(ExtractedAlternateContent {
+                        xml: capture_empty_element(&element)
+                            .map_err(|error| format!("AlternateContent scan failed: {error}"))?,
+                        inherited_namespaces: effective_namespaces(&namespace_frames),
+                    });
+                }
+            }
+            Ok(Event::End(_)) => {
+                namespace_frames
+                    .pop()
+                    .ok_or_else(|| "namespace stack underflow".to_owned())?;
+            }
+            Ok(Event::Eof) => return Ok(alternatives),
+            Ok(_) => {}
+            Err(error) => return Err(format!("XML scan failed: {error}")),
+        }
+        buffer.clear();
+    }
+}
+
+#[test]
+fn connector_with_start_and_end_connections_round_trips() {
+    let xml = format!(
+        r#"<p:cxnSp xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:nvCxnSpPr><p:cNvPr id="2" name="Connector 1"/><p:cNvCxnSpPr><a:stCxn id="3" idx="0"/><a:endCxn id="4" idx="1"/></p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp>"#
+    );
+    let parsed = CT_ConnectionShape::from_xml(xml.as_bytes()).unwrap();
+    assert_eq!(parsed.start_connection.as_ref().unwrap().id, 3);
+    assert_eq!(parsed.start_connection.as_ref().unwrap().idx, 0);
+    assert_eq!(parsed.end_connection.as_ref().unwrap().id, 4);
+    assert_eq!(parsed.end_connection.as_ref().unwrap().idx, 1);
+    assert_eq!(
+        parsed,
+        CT_ConnectionShape::from_xml(&parsed.to_xml().unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn connector_reads_any_prefix_and_writes_fixed_prefixes_in_schema_order() {
+    let xml = format!(
+        r#"<q:cxnSp xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><q:nvCxnSpPr><q:cNvPr id="2" name="Connector"/><q:cNvCxnSpPr><d:stCxn id="3" idx="2"/><d:endCxn id="4" idx="1"/></q:cNvCxnSpPr><q:nvPr/></q:nvCxnSpPr><q:spPr/></q:cxnSp>"#
+    );
+    let written = CT_ConnectionShape::from_xml(xml.as_bytes())
+        .unwrap()
+        .to_xml()
+        .unwrap();
+    assert_order(
+        &written,
+        &[
+            "<p:nvCxnSpPr",
+            "<p:cNvPr",
+            "<p:cNvCxnSpPr",
+            "<a:stCxn",
+            "<a:endCxn",
+            "<p:nvPr",
+            "<p:spPr",
+        ],
+    );
+}
+
+#[test]
+fn connector_requires_non_visual_and_shape_properties_in_schema_order() {
+    let documents = [
+        format!(r#"<p:cxnSp xmlns:p="{P_NS}"><p:spPr/></p:cxnSp>"#),
+        format!(
+            r#"<p:cxnSp xmlns:p="{P_NS}"><p:nvCxnSpPr><p:cNvPr/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr></p:cxnSp>"#
+        ),
+        format!(
+            r#"<p:cxnSp xmlns:p="{P_NS}"><p:spPr/><p:nvCxnSpPr><p:cNvPr/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr></p:cxnSp>"#
+        ),
+        format!(
+            r#"<p:cxnSp xmlns:p="{P_NS}"><p:nvCxnSpPr><p:cNvCxnSpPr/><p:cNvPr/><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp>"#
+        ),
+        format!(
+            r#"<p:cxnSp xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:nvCxnSpPr><p:cNvPr/><p:cNvCxnSpPr><a:endCxn id="4" idx="1"/><a:stCxn id="3" idx="0"/></p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp>"#
+        ),
+    ];
+    for document in documents {
         assert!(
-            written
-                .windows(payload.len())
-                .any(|window| window == payload.as_bytes())
+            CT_ConnectionShape::from_xml(document.as_bytes()).is_err(),
+            "{document}"
         );
     }
-    assert_eq!(parsed, CT_ShapeTree::from_xml(&written).unwrap());
+
+    for endpoints in [
+        "".to_owned(),
+        r#"<a:stCxn id="3" idx="0"/>"#.to_owned(),
+        r#"<a:endCxn id="4" idx="1"/>"#.to_owned(),
+    ] {
+        let document = format!(
+            r#"<p:cxnSp xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:nvCxnSpPr><p:cNvPr/><p:cNvCxnSpPr>{endpoints}</p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp>"#
+        );
+        CT_ConnectionShape::from_xml(document.as_bytes()).unwrap();
+    }
+}
+
+#[test]
+fn connector_connection_attributes_cannot_be_shadowed_by_qualified_names() {
+    let valid = format!(
+        r#"<p:cxnSp xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:lookalike"><p:nvCxnSpPr><p:cNvPr/><p:cNvCxnSpPr><a:stCxn x:id="99" x:idx="98" id="3" idx="2"/></p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp>"#
+    );
+    let parsed = CT_ConnectionShape::from_xml(valid.as_bytes()).unwrap();
+    assert_eq!(parsed.start_connection.as_ref().unwrap().id, 3);
+    assert_eq!(parsed.start_connection.as_ref().unwrap().idx, 2);
+    let written = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+    assert!(written.contains(r#"x:id="99" x:idx="98""#));
+
+    let missing_unqualified = format!(
+        r#"<p:cxnSp xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:lookalike"><p:nvCxnSpPr><p:cNvPr/><p:cNvCxnSpPr><a:endCxn x:id="97" x:idx="96"/></p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp>"#
+    );
+    assert!(CT_ConnectionShape::from_xml(missing_unqualified.as_bytes()).is_err());
+}
+
+#[test]
+fn connector_preserves_unknown_children_in_their_schema_slots() {
+    let xml = format!(
+        r#"<p:cxnSp xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer" x:root="kept"><x:before/><p:nvCxnSpPr x:nv="kept"><x:nv-before/><p:cNvPr id="2" name="Connector"><x:drawing/></p:cNvPr><x:nv-middle/><p:cNvCxnSpPr x:connector="kept"><x:locks/><a:stCxn id="3" idx="0" x:endpoint="kept"><x:payload/></a:stCxn><x:between/><a:endCxn id="4" idx="1"/><x:extension/></p:cNvCxnSpPr><x:nv-after/><p:nvPr><x:application/></p:nvPr></p:nvCxnSpPr><x:middle/><p:spPr><a:prstGeom prst="line"><a:avLst/></a:prstGeom></p:spPr><x:after/><p:style><x:style/></p:style><p:extLst><x:extension/></p:extLst></p:cxnSp>"#
+    );
+    let mut parsed = CT_ConnectionShape::from_xml(xml.as_bytes()).unwrap();
+    parsed.start_connection.as_mut().unwrap().id = 30;
+    parsed.end_connection.as_mut().unwrap().idx = 10;
+    let written = parsed.to_xml().unwrap();
+    let text = std::str::from_utf8(&written).unwrap();
+    for preserved in [
+        r#"<x:before/>"#,
+        r#"<x:drawing/>"#,
+        r#"<x:locks/>"#,
+        r#"<x:payload/>"#,
+        r#"<x:between/>"#,
+        r#"<x:application/>"#,
+        r#"<x:after/>"#,
+        r#"<p:style><x:style/></p:style>"#,
+        r#"<p:extLst><x:extension/></p:extLst>"#,
+    ] {
+        assert!(text.contains(preserved), "missing {preserved}: {text}");
+    }
+    assert!(text.contains(r#"<a:stCxn id="30" idx="0""#));
+    assert!(text.contains(r#"<a:endCxn id="4" idx="10""#));
+    assert_eq!(parsed, CT_ConnectionShape::from_xml(&written).unwrap());
+}
+
+#[derive(Clone, Copy, Default)]
+struct ConnectorCoverage {
+    total: usize,
+    starts: usize,
+    ends: usize,
+    nested: usize,
+}
+
+impl ConnectorCoverage {
+    fn add(&mut self, other: Self) {
+        self.total += other.total;
+        self.starts += other.starts;
+        self.ends += other.ends;
+        self.nested += other.nested;
+    }
+}
+
+fn verify_connectors(
+    children: &[ShapeTreeChild],
+    nested: bool,
+    deck: &str,
+    part: &str,
+) -> ConnectorCoverage {
+    let mut coverage = ConnectorCoverage::default();
+    for child in children {
+        match child {
+            ShapeTreeChild::Connector(connector) => {
+                let written = connector.to_xml().unwrap();
+                assert_eq!(
+                    connector,
+                    &CT_ConnectionShape::from_xml(&written)
+                        .unwrap_or_else(|error| panic!("{deck} {part}: {error}"))
+                );
+                coverage.total += 1;
+                coverage.starts += usize::from(connector.start_connection.is_some());
+                coverage.ends += usize::from(connector.end_connection.is_some());
+                coverage.nested += usize::from(nested);
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                coverage.add(verify_connectors(&group.children, true, deck, part));
+            }
+            _ => {}
+        }
+    }
+    coverage
+}
+
+#[test]
+fn every_corpus_connector_round_trips_structurally() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut coverage = ConnectorCoverage::default();
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, content_type) in &package.content_types.overrides {
+            let Some(xml) = package.get_part(part) else {
+                continue;
+            };
+            let children = match content_type.as_str() {
+                content_types::SLIDE => {
+                    let parsed = CT_Slide::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                    parsed.common_slide_data.shape_tree.children
+                }
+                content_types::SLIDE_LAYOUT => {
+                    let parsed = CT_SlideLayout::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                    parsed.common_slide_data.shape_tree.children
+                }
+                content_types::SLIDE_MASTER => {
+                    let parsed = CT_SlideMaster::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                    parsed.common_slide_data.shape_tree.children
+                }
+                _ => continue,
+            };
+            coverage.add(verify_connectors(&children, false, entry.path, part));
+        }
+    }
+    assert!(coverage.total > 0);
+    assert!(coverage.starts > 0);
+    assert!(coverage.ends > 0);
+    assert!(coverage.nested > 0);
+    eprintln!(
+        "Connector corpus gate checked {} connectors, {} starts, {} ends, and {} nested connectors",
+        coverage.total, coverage.starts, coverage.ends, coverage.nested
+    );
 }
 
 #[test]
@@ -1386,9 +1865,15 @@ fn verify_pictures(
                 coverage.opaque += count_picture_elements(&xml);
                 coverage.opaque_cropped += count_pictures_with_descendant(&xml, b"srcRect");
             }
-            ShapeTreeChild::Connector(xml) | ShapeTreeChild::AlternateContent(xml) => {
-                coverage.opaque += count_picture_elements(xml);
-                coverage.opaque_cropped += count_pictures_with_descendant(xml, b"srcRect");
+            ShapeTreeChild::Connector(connector) => {
+                let xml = connector.to_xml().unwrap();
+                coverage.opaque += count_picture_elements(&xml);
+                coverage.opaque_cropped += count_pictures_with_descendant(&xml, b"srcRect");
+            }
+            ShapeTreeChild::AlternateContent(alternate) => {
+                coverage.opaque += count_picture_elements(alternate.raw_xml());
+                coverage.opaque_cropped +=
+                    count_pictures_with_descendant(alternate.raw_xml(), b"srcRect");
             }
             _ => {}
         }
@@ -1534,7 +2019,7 @@ fn placeholder_attributes_and_unknown_children_round_trip_in_place() {
 #[test]
 fn typed_shape_placeholder_round_trips_inside_nested_groups() {
     let xml = format!(
-        r#"<q:spTree xmlns:q="{P_NS}" xmlns:x="urn:producer"><q:nvGrpSpPr/><q:grpSpPr/><q:grpSp><q:nvGrpSpPr/><q:grpSpPr/><q:sp marker="shape"><q:nvSpPr x:keep="yes"><q:cNvPr id="2" name="Title"/><x:between/><q:cNvSpPr/><q:nvPr><x:before/><q:ph type="ctrTitle" idx="5"/><x:after/></q:nvPr></q:nvSpPr><q:spPr/><q:txBody><x:raw/></q:txBody></q:sp></q:grpSp></q:spTree>"#
+        r#"<q:spTree xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><q:nvGrpSpPr/><q:grpSpPr/><q:grpSp><q:nvGrpSpPr/><q:grpSpPr/><q:sp marker="shape"><q:nvSpPr x:keep="yes"><q:cNvPr id="2" name="Title"/><x:between/><q:cNvSpPr/><q:nvPr><x:before/><q:ph type="ctrTitle" idx="5"/><x:after/></q:nvPr></q:nvSpPr><q:spPr/><q:txBody><d:bodyPr/><x:raw/><d:p/></q:txBody></q:sp></q:grpSp></q:spTree>"#
     );
     let tree = CT_ShapeTree::from_xml(xml.as_bytes()).unwrap();
     let ShapeTreeChild::GroupShape(group) = &tree.children[0] else {
@@ -1853,6 +2338,224 @@ fn every_corpus_graphic_frame_round_trips_structurally() {
     eprintln!("Graphic-frame corpus gate checked {coverage:?}");
 }
 
+#[test]
+fn text_body_plain_text_preserves_run_field_break_and_paragraph_order() {
+    let body = CT_TextBody::from_xml(
+        br#"<a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>first</a:t></a:r><a:br/><a:fld id="{14E3C6B4-82AF-4BA3-9737-6C8DF2E2A225}" type="datetime"><a:t>field</a:t></a:fld><a:r><a:t> last</a:t></a:r></a:p><a:p><a:r><a:t>second</a:t></a:r></a:p></a:txBody>"#,
+    )
+    .unwrap();
+    assert_eq!(body.plain_text(), "first\nfield last\nsecond");
+}
+
+#[test]
+fn notes_slide_extracts_only_body_placeholder_text() {
+    let xml = format!(
+        r#"<p:notes xmlns:p="{P_NS}" xmlns:a="{}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/>
+<p:sp><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr><p:ph type="sldImg"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>slide image</a:t></a:r></a:p></p:txBody></p:sp>
+<p:sp><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr><p:ph type="sldNum"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:fld id="{{14E3C6B4-82AF-4BA3-9737-6C8DF2E2A225}}"><a:t>12</a:t></a:fld></a:p></p:txBody></p:sp>
+<p:sp><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr><p:ph type="ftr"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>footer</a:t></a:r></a:p></p:txBody></p:sp>
+<p:sp><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr><p:ph/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>speaker</a:t></a:r><a:br/><a:r><a:t>note</a:t></a:r></a:p></p:txBody></p:sp>
+</p:spTree></p:cSld></p:notes>"#,
+        oxml_drawing::namespace::A_NS
+    );
+    let notes = CT_NotesSlide::from_xml(xml.as_bytes()).unwrap();
+    assert_eq!(notes.notes_text(), "speaker\nnote");
+    assert_eq!(
+        notes,
+        CT_NotesSlide::from_xml(&notes.to_xml().unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn notes_parts_read_any_prefix_write_fixed_prefixes_and_schema_order() {
+    let color_map = r#"bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink""#;
+    let slide_xml = format!(
+        r#"<q:notes xmlns:q="{P_NS}" xmlns:d="{}"><q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld><q:clrMapOvr><d:masterClrMapping/></q:clrMapOvr><q:extLst><q:ext uri="slide"/></q:extLst></q:notes>"#,
+        oxml_drawing::namespace::A_NS
+    );
+    let slide = CT_NotesSlide::from_xml(slide_xml.as_bytes()).unwrap();
+    let slide_written = slide.to_xml().unwrap();
+    assert_order(&slide_written, &["<p:cSld", "<p:clrMapOvr", "<q:extLst"]);
+    assert_eq!(slide, CT_NotesSlide::from_xml(&slide_written).unwrap());
+
+    let master_xml = format!(
+        r#"<q:notesMaster xmlns:q="{P_NS}" xmlns:d="{}"><q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld><q:clrMap {color_map}/><q:hf hdr="1"/><q:notesStyle><d:lvl1pPr/></q:notesStyle><q:extLst><q:ext uri="master"/></q:extLst></q:notesMaster>"#,
+        oxml_drawing::namespace::A_NS
+    );
+    let master = CT_NotesMaster::from_xml(master_xml.as_bytes()).unwrap();
+    let master_written = master.to_xml().unwrap();
+    assert_order(
+        &master_written,
+        &[
+            "<p:cSld",
+            "<p:clrMap",
+            "<q:hf",
+            "<p:notesStyle",
+            "<q:extLst",
+        ],
+    );
+    assert_eq!(master, CT_NotesMaster::from_xml(&master_written).unwrap());
+
+    let out_of_order = format!(
+        r#"<p:notesMaster xmlns:p="{P_NS}"><p:clrMap {color_map}/><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><p:notesStyle/></p:notesMaster>"#
+    );
+    assert!(CT_NotesMaster::from_xml(out_of_order.as_bytes()).is_err());
+}
+
+#[test]
+fn notes_master_without_notes_style_round_trips_with_extension_in_schema_order() {
+    let color_map = r#"bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink""#;
+    for header_footer in ["", r#"<q:hf hdr="1"/>"#] {
+        let xml = format!(
+            r#"<q:notesMaster xmlns:q="{P_NS}" xmlns:x="urn:producer"><q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld><q:clrMap {color_map}/>{header_footer}<x:between/><q:extLst><x:payload/></q:extLst></q:notesMaster>"#
+        );
+        let parsed = CT_NotesMaster::from_xml(xml.as_bytes()).unwrap();
+        assert!(parsed.notes_style.is_none());
+        let written = parsed.to_xml().unwrap();
+        let mut expected = vec!["<p:cSld", "<p:clrMap"];
+        if !header_footer.is_empty() {
+            expected.push("<q:hf");
+        }
+        expected.extend(["<x:between", "<q:extLst"]);
+        assert_order(&written, &expected);
+        assert_eq!(
+            parsed,
+            CT_NotesMaster::from_xml(&written).unwrap(),
+            "{header_footer}"
+        );
+    }
+}
+
+#[test]
+fn notes_parts_preserve_unmodelled_children_in_their_schema_slots() {
+    let producer_before =
+        r#"<x:before marker="a &amp; b"><x:data/><!--kept--><?producer value?></x:before>"#;
+    let producer_between = r#"<x:between value="2"/>"#;
+    let producer_after = r#"<x:after value="3"/>"#;
+    let xml = format!(
+        r#"<q:notes xmlns:q="{P_NS}" xmlns:d="{}" xmlns:x="urn:producer" x:root="kept">{producer_before}<q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld>{producer_between}<q:clrMapOvr><d:masterClrMapping/></q:clrMapOvr>{producer_after}<q:extLst><x:payload/></q:extLst></q:notes>"#,
+        oxml_drawing::namespace::A_NS
+    );
+    let parsed = CT_NotesSlide::from_xml(xml.as_bytes()).unwrap();
+    let written = parsed.to_xml().unwrap();
+    let written_text = std::str::from_utf8(&written).unwrap();
+    assert!(written_text.contains(r#"xmlns:x="urn:producer""#));
+    assert!(written_text.contains(r#"x:root="kept""#));
+    for raw in [producer_before, producer_between, producer_after] {
+        assert!(
+            written
+                .windows(raw.len())
+                .any(|window| window == raw.as_bytes())
+        );
+    }
+    assert_order(
+        &written,
+        &[
+            producer_before,
+            "<p:cSld",
+            producer_between,
+            "<p:clrMapOvr",
+            producer_after,
+        ],
+    );
+}
+
+#[test]
+fn every_corpus_notes_slide_and_master_round_trips_structurally() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut notes_slides = 0usize;
+    let mut notes_masters = 0usize;
+    let mut nonempty_notes = 0usize;
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, content_type) in &package.content_types.overrides {
+            let Some(xml) = package.get_part(part) else {
+                continue;
+            };
+            match content_type.as_str() {
+                content_types::NOTES_SLIDE => {
+                    let parsed = CT_NotesSlide::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                    nonempty_notes += usize::from(!parsed.notes_text().is_empty());
+                    assert_eq!(
+                        parsed,
+                        CT_NotesSlide::from_xml(&parsed.to_xml().unwrap()).unwrap(),
+                        "{} {part}",
+                        entry.path
+                    );
+                    notes_slides += 1;
+                }
+                content_types::NOTES_MASTER => {
+                    let parsed = CT_NotesMaster::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                    assert_eq!(
+                        parsed,
+                        CT_NotesMaster::from_xml(&parsed.to_xml().unwrap()).unwrap(),
+                        "{} {part}",
+                        entry.path
+                    );
+                    notes_masters += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(notes_slides > 0);
+    assert!(notes_masters > 0);
+    assert!(nonempty_notes > 0);
+    eprintln!(
+        "Notes corpus gate checked {notes_slides} notes slides, {notes_masters} notes masters, and {nonempty_notes} nonempty note bodies"
+    );
+}
+
+#[test]
+fn corpus_notes_relationships_are_complete() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut notes_slides = 0usize;
+    let mut notes_masters = 0usize;
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, content_type) in &package.content_types.overrides {
+            if !package.parts.contains_key(part) {
+                continue;
+            }
+            let relationships = package.get_part_rels(part);
+            let count = |relationship_type: &str| {
+                relationships.map_or(0, |items| {
+                    items
+                        .items
+                        .iter()
+                        .filter(|relationship| relationship.rel_type == relationship_type)
+                        .count()
+                })
+            };
+            match content_type.as_str() {
+                content_types::NOTES_SLIDE => {
+                    assert_eq!(count(rel_types::NOTES_MASTER), 1, "{} {part}", entry.path);
+                    assert_eq!(count(rel_types::SLIDE), 1, "{} {part}", entry.path);
+                    notes_slides += 1;
+                }
+                content_types::NOTES_MASTER => {
+                    assert_eq!(count(rel_types::THEME), 1, "{} {part}", entry.path);
+                    notes_masters += 1;
+                }
+                content_types::SLIDE => {
+                    assert!(count(rel_types::NOTES_SLIDE) <= 1, "{} {part}", entry.path);
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(notes_slides > 0);
+    assert!(notes_masters > 0);
+}
+
 const TABLE_GRAPHIC_DATA_URI: &str = "http://schemas.openxmlformats.org/drawingml/2006/table";
 
 fn graphic_frame_fixture(uri: &str, payload: &str) -> String {
@@ -1913,4 +2616,124 @@ fn verify_graphic_frames(
             _ => {}
         }
     }
+}
+
+#[test]
+fn rewrites_relationship_attributes_and_no_other_bytes() {
+    let raw = format!(
+        r#"<x:payload xmlns:x="urn:producer" xmlns:r="{R_NS}" r:embed="rId1" x:keep="rId1"><x:item r:link='rId2'/><x:item r:dm="rId3"/></x:payload>"#
+    );
+    let map = HashMap::from([
+        ("rId1".to_owned(), "rId11".to_owned()),
+        ("rId2".to_owned(), "rId12".to_owned()),
+        ("rId3".to_owned(), "rId13".to_owned()),
+    ]);
+
+    let rewritten = rewrite_rel_ids(raw.as_bytes(), &map).unwrap();
+
+    assert_eq!(
+        rewritten,
+        format!(
+            r#"<x:payload xmlns:x="urn:producer" xmlns:r="{R_NS}" r:embed="rId11" x:keep="rId1"><x:item r:link='rId12'/><x:item r:dm="rId13"/></x:payload>"#
+        )
+        .into_bytes()
+    );
+}
+
+#[test]
+fn relationship_namespace_aliases_and_shadowing_are_respected() {
+    let raw = format!(
+        r#"<p:root xmlns:p="urn:producer" xmlns:rel="{R_NS}" xmlns:r="{R_NS}" rel:embed="rId1"><p:item xmlns:r="urn:shadow" r:link="rId2" rel:dm="rId3"/><p:item r:id="rId4" r:lo="rId&#52;"/></p:root>"#
+    );
+    let map = HashMap::from([
+        ("rId1".to_owned(), "rId11".to_owned()),
+        ("rId2".to_owned(), "rId12".to_owned()),
+        ("rId3".to_owned(), "rId13".to_owned()),
+        ("rId4".to_owned(), "rId14".to_owned()),
+    ]);
+
+    let rewritten = rewrite_rel_ids(raw.as_bytes(), &map).unwrap();
+
+    assert_eq!(
+        rewritten,
+        format!(
+            r#"<p:root xmlns:p="urn:producer" xmlns:rel="{R_NS}" xmlns:r="{R_NS}" rel:embed="rId11"><p:item xmlns:r="urn:shadow" r:link="rId2" rel:dm="rId13"/><p:item r:id="rId14" r:lo="rId14"/></p:root>"#
+        )
+        .into_bytes()
+    );
+}
+
+#[test]
+fn unmapped_and_non_numeric_relationship_values_are_unchanged() {
+    let raw = format!(
+        r#"<x:payload xmlns:x="urn:producer" xmlns:r="{R_NS}" r:id="rId1" r:embed="rIdABC" r:link="rId" r:dm="rId12x" id="rId2" x:id="rId3"/>"#
+    );
+    let map = HashMap::from([
+        ("rId2".to_owned(), "rId20".to_owned()),
+        ("rId3".to_owned(), "rId30".to_owned()),
+        ("rIdABC".to_owned(), "rId40".to_owned()),
+    ]);
+
+    assert_eq!(
+        rewrite_rel_ids(raw.as_bytes(), &map).unwrap(),
+        raw.as_bytes()
+    );
+}
+
+#[test]
+fn comments_processing_instructions_and_attribute_syntax_are_preserved() {
+    let raw = format!(
+        "<?producer keep?><x:payload  xmlns:x='urn:producer' xmlns:r=\"{R_NS}\"\n r:embed = 'rId1' x:keep=\"a &amp; b\"><!-- keep --><x:item r:link=\"rId2\" /></x:payload>"
+    );
+    let map = HashMap::from([
+        ("rId1".to_owned(), "rId&amp;'\"".to_owned()),
+        ("rId2".to_owned(), "rId22".to_owned()),
+    ]);
+
+    let rewritten = rewrite_rel_ids(raw.as_bytes(), &map).unwrap();
+
+    assert_eq!(
+        rewritten,
+        format!(
+            "<?producer keep?><x:payload  xmlns:x='urn:producer' xmlns:r=\"{R_NS}\"\n r:embed = 'rId&amp;amp;&apos;&quot;' x:keep=\"a &amp; b\"><!-- keep --><x:item r:link=\"rId22\" /></x:payload>"
+        )
+        .into_bytes()
+    );
+}
+
+#[test]
+fn malformed_preserved_xml_returns_an_error() {
+    for raw in [
+        br#"<x:payload xmlns:x="urn:producer">"#.as_slice(),
+        br#"<x:payload xmlns:x="urn:producer"><x:item></x:payload>"#.as_slice(),
+        br#"<x:payload xmlns:x="urn:producer" bad="unterminated/>"#.as_slice(),
+    ] {
+        assert!(rewrite_rel_ids(raw, &HashMap::new()).is_err());
+    }
+}
+
+#[test]
+fn every_corpus_preserved_payload_is_identity_with_an_empty_map() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut xml_parts = 0usize;
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, raw) in &package.parts {
+            if !part.ends_with(".xml") {
+                continue;
+            }
+            assert_eq!(
+                rewrite_rel_ids(raw, &HashMap::new())
+                    .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path)),
+                *raw,
+                "{} {part}",
+                entry.path
+            );
+            xml_parts += 1;
+        }
+    }
+    assert!(xml_parts > 0);
 }

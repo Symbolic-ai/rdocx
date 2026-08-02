@@ -17,8 +17,11 @@ Owner: `rpptx-oxml`, with the facade in `rpptx`.
 
 **Hard structural constraints.** Every slide has exactly one `slideLayout`
 relationship. Every layout has exactly one `slideMaster` relationship. Every
-master has a `theme` relationship and a `p:clrMap`. A deck with zero slides is
-valid, and that is what a template is.
+master has a `theme` relationship and a `p:clrMap`. Every notes slide has
+exactly one `notesMaster` relationship and exactly one `slide` relationship
+back to its source slide. Every notes master has exactly one `theme`
+relationship. A source slide has at most one `notesSlide` relationship. A deck
+with zero slides is valid, and that is what a template is.
 
 ## `presentation.xml`
 
@@ -35,6 +38,45 @@ defect in naive `add_slide` implementations.
 The `.pptx` versus `.ppsx` distinction lives entirely in this part's content
 type: `presentationml.presentation.main+xml` against
 `presentationml.slideshow.main+xml`. `Presentation::save_as_show()` exposes it.
+
+## Notes parts
+
+A notes slide has this root sequence:
+
+```
+p:notes
+  p:cSld       required
+  p:clrMapOvr? optional
+  p:extLst?    optional
+```
+
+A notes master has this root sequence:
+
+```
+p:notesMaster
+  p:cSld       required
+  p:clrMap     required
+  p:hf?        optional, preserved raw
+  p:notesStyle? optional, typed as CT_TextListStyle
+  p:extLst?    optional
+```
+
+Both roots reuse `CT_CommonSlideData`. They read namespace aliases, write fixed
+`p:`, `a:`, and `r:` prefixes, and retain unsupported attributes and children
+in their schema slots.
+
+`CT_NotesSlide::notes_text()` walks its shape tree in z-order, including
+recursive groups and the selected rendering view of `mc:AlternateContent`.
+It includes text only from a `p:sp` whose placeholder effective type is exactly
+`body`. An absent `p:ph/@type` therefore qualifies. The placeholder matching
+equivalence between `body`, `subTitle`, and `obj` does not broaden extraction.
+Slide-image, slide-number, date, footer, header, and notes-master prompt text is
+excluded.
+
+Each included `p:txBody` contributes run and field text in document order.
+`a:br` contributes a newline and paragraph boundaries contribute a newline.
+Empty bodies are skipped, and multiple nonempty body placeholders are joined
+with a newline.
 
 ## The shape tree
 
@@ -57,9 +99,34 @@ pub enum ShapeTreeChild {
     GraphicFrame(CT_GraphicFrame),   // tables, charts, SmartArt, OLE
     GroupShape(CT_GroupShape),       // recursive
     Connector(CT_ConnectionShape),
-    AlternateContent(Vec<u8>),       // preserved verbatim
+    AlternateContent(Box<CT_AlternateContent>),
+}
+
+pub struct CT_AlternateContent {
+    raw_xml: Vec<u8>,
+    selected_fallback: Option<Vec<ShapeTreeChild>>,
 }
 ```
+
+`CT_AlternateContent` selects ordered typed members only from its one immediate
+`mc:Fallback` child. It resolves the branch by namespace URI and uses the same
+shape-tree dispatch as `p:spTree` and `p:grpSp`. Every `mc:Choice` stays opaque
+and is not evaluated. No fallback is valid and produces no selection. An empty
+fallback produces an empty selection, while more than one immediate MC
+fallback is invalid.
+
+The captured `raw_xml` subtree is the only serialisation source. The selected
+fallback is a read-only rendering view and is never written back in place of
+the producer XML, so choices, comments, processing instructions, attributes,
+entities, whitespace, and fallback content remain byte-identical.
+
+`CT_ConnectionShape` types the connector's required `p:spPr` and its optional
+start and end connections. Each present `a:stCxn` or `a:endCxn` carries the
+required unqualified shape `id` and connection-site `idx` as `u32` values.
+Free-standing, start-only, end-only, and fully connected shapes therefore use
+the same model. Unsupported connector locks, style, extensions, attributes,
+and children remain in their ordered schema slots and round-trip without being
+interpreted.
 
 **`p:cNvPr/@id` must be unique within one `spTree`**, including inside nested
 groups and inside `mc:AlternateContent` fallbacks. A `ShapeIdAllocator` scans
@@ -98,6 +165,10 @@ through `oxml_core::raw_xml::capture_element`.
 Preserved as opaque bytes in v1: `p:timing`, `p:transition`, `p:custShowLst`,
 `p14:sectionLst`, comments, ink, `p:contentPart`, SmartArt `dgm:` payloads, OLE
 and ActiveX, and every `mc:AlternateContent` alternative.
+
+An `mc:AlternateContent` model may inspect its selected fallback, but the full
+captured subtree remains opaque for serialisation and round-trips
+byte-identically.
 
 The gate on this is a full-corpus round-trip: parse, serialise, reparse, compare
 structurally, and separately compare the saved package part-by-part against the
