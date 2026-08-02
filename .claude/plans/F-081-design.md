@@ -1,6 +1,6 @@
 # F-081, ResolveCtx skeleton and placeholder chain
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S20
 **Size**: M
 **Depends on**: F-071
@@ -95,12 +95,12 @@ Expected to be unchanged. The resolver does not change Word rendering.
 
 ## Implementation checklist
 
-- [ ] Add `rpptx-layout` to the workspace and workspace dependency table.
-- [ ] Create its unpublished `0.0.0` manifest and focused source layout.
-- [ ] Add the concrete `ResolveCtx<'a>` constructor and stored inputs.
-- [ ] Walk nested ordinary shapes and selected fallback branches.
-- [ ] Resolve slide to layout to master through existing placeholder keys.
-- [ ] Run focused tests and the dependency-direction rider.
+- [x] Add `rpptx-layout` to the workspace and workspace dependency table.
+- [x] Create its unpublished `0.0.0` manifest and focused source layout.
+- [x] Add the concrete `ResolveCtx<'a>` constructor and stored inputs.
+- [x] Walk nested ordinary shapes and selected fallback branches.
+- [x] Resolve slide to layout to master through existing placeholder keys.
+- [x] Run focused tests and the dependency-direction rider.
 
 ## Open questions
 
