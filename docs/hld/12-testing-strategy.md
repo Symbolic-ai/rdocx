@@ -116,8 +116,14 @@ Four gates run against it:
    content types and relationships stay structurally equal. ZIP metadata and
    compression are not model state. This proves the OPC layer and the corpus
    harness before any PresentationML modelling exists.
-3. **Modelled round-trip** (M8 exit): parse, serialise, reparse, compare
-   structurally, and compare the saved package part by part.
+3. **Modelled round-trip** (M8 exit): parse and serialise the presentation,
+   slide, layout, master, notes slide, notes master, and theme roots. Reparse
+   each canonical result and compare it structurally. Build the expected
+   package from those exact modelled bytes, retain the original bytes for all
+   unmodelled parts, save through deterministic OPC output, reopen, and compare
+   content types, relationships, part names, part counts, and every part byte
+   against that expectation. The gate requires nonzero corpus coverage for all
+   seven root types.
 4. **Opens without repair** (M8 and M11): every saved deck opened manually in
    PowerPoint once per milestone. Not automatable, and not skippable.
 

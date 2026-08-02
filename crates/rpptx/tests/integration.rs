@@ -1,10 +1,17 @@
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use oxml_drawing::theme::CT_OfficeStyleSheet;
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
-use rpptx::{Error, Presentation, ShapeKind};
+use rpptx::{Error, Presentation, ShapeKind, ShapeRef};
+use rpptx_oxml::notes_parts::{CT_NotesMaster, CT_NotesSlide};
+use rpptx_oxml::presentation::CT_Presentation;
+use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster};
 
 #[path = "../examples/dump_deck.rs"]
 mod dump_deck;
@@ -17,6 +24,125 @@ const PRESENTATION_PART: &str = "/custom/presentation-main.xml";
 const SLIDE_ONE_PART: &str = "/custom/slides/first.xml";
 const SLIDE_TWO_PART: &str = "/custom/slides/second.xml";
 const NOTES_PART: &str = "/custom/notes/speaker.xml";
+const MODELLED_CONTENT_TYPES: [&str; 7] = [
+    content_types::PRESENTATION,
+    content_types::SLIDE,
+    content_types::SLIDE_LAYOUT,
+    content_types::SLIDE_MASTER,
+    content_types::NOTES_SLIDE,
+    content_types::NOTES_MASTER,
+    content_types::THEME,
+];
+
+#[test]
+fn all_corpus_modelled_parts_reparse_structurally() {
+    let Some(paths) = corpus_paths() else {
+        return;
+    };
+    let mut coverage = BTreeMap::new();
+    for path in paths {
+        let deck = deck_name(&path);
+        let bytes = fs::read(&path).unwrap_or_else(|error| panic!("{deck}: {error}"));
+        let package = open_opc(&bytes, deck);
+        for (content_type, count) in modelled_part_bytes(&package, deck).1 {
+            *coverage.entry(content_type).or_insert(0) += count;
+        }
+    }
+    for content_type in MODELLED_CONTENT_TYPES {
+        assert!(
+            coverage.get(content_type).copied().unwrap_or(0) > 0,
+            "corpus has no modelled part with content type {content_type}"
+        );
+    }
+}
+
+#[test]
+fn all_modelled_corpus_packages_match_expected_parts() {
+    let Some(paths) = corpus_paths() else {
+        return;
+    };
+    let save_dir = std::env::var_os("RDOCX_PPTX_SAVE_DIR").map(PathBuf::from);
+    if let Some(directory) = &save_dir {
+        fs::create_dir_all(directory)
+            .unwrap_or_else(|error| panic!("{}: {error}", directory.display()));
+    }
+
+    let mut saved_paths = Vec::new();
+    for path in paths {
+        let deck = deck_name(&path);
+        let original_bytes = fs::read(&path).unwrap_or_else(|error| panic!("{deck}: {error}"));
+        let original = open_opc(&original_bytes, deck);
+        let (rewritten, _) = modelled_part_bytes(&original, deck);
+
+        let mut expected = original.clone();
+        for (part_name, bytes) in &rewritten {
+            expected.set_part(part_name, bytes.clone());
+        }
+        let expected = reopen_written_package(&expected, deck, "expected package");
+
+        let facade_bytes = Presentation::from_bytes(&original_bytes)
+            .unwrap_or_else(|error| panic!("{deck}: open facade: {error}"))
+            .to_bytes()
+            .unwrap_or_else(|error| panic!("{deck}: save facade: {error}"));
+        let mut actual = open_opc(&facade_bytes, deck);
+        for (part_name, bytes) in &rewritten {
+            let content_type = original
+                .content_types
+                .overrides
+                .get(part_name)
+                .map(String::as_str)
+                .unwrap_or_else(|| panic!("{deck} {part_name}: missing content-type override"));
+            if matches!(
+                content_type,
+                content_types::SLIDE_LAYOUT
+                    | content_types::SLIDE_MASTER
+                    | content_types::NOTES_MASTER
+                    | content_types::THEME
+            ) {
+                actual.set_part(part_name, bytes.clone());
+            }
+        }
+        let actual_bytes = write_package(&actual, deck, "modelled package");
+        let actual = open_opc(&actual_bytes, deck);
+        assert_packages_equal(&expected, &actual, deck);
+
+        if let Some(directory) = &save_dir {
+            let saved_path = directory.join(deck);
+            fs::write(&saved_path, &actual_bytes)
+                .unwrap_or_else(|error| panic!("{}: {error}", saved_path.display()));
+            saved_paths.push(saved_path);
+        }
+    }
+
+    saved_paths.sort();
+    for path in saved_paths {
+        eprintln!(
+            "sha256\t{}\t{}",
+            sha256(&path),
+            path.file_name().unwrap().to_string_lossy()
+        );
+    }
+}
+
+#[test]
+fn facade_saved_corpus_reopens_with_the_same_read_surface() {
+    let Some(paths) = corpus_paths() else {
+        return;
+    };
+    for path in paths {
+        let deck = deck_name(&path);
+        let bytes = fs::read(&path).unwrap_or_else(|error| panic!("{deck}: {error}"));
+        let before = Presentation::from_bytes(&bytes)
+            .unwrap_or_else(|error| panic!("{deck}: open facade: {error}"));
+        let snapshot = read_surface(&before);
+        let saved = before
+            .to_bytes()
+            .unwrap_or_else(|error| panic!("{deck}: save facade: {error}"));
+        let after = Presentation::from_bytes(&saved)
+            .unwrap_or_else(|error| panic!("{deck}: reopen facade: {error}"));
+        assert_eq!(snapshot, read_surface(&after), "{deck}: read surface");
+    }
+}
 
 #[test]
 fn rpptx_is_an_unpublished_workspace_member() {
@@ -263,6 +389,276 @@ fn dump_deck_matches_python_pptx_1_0_2_for_the_corpus() {
             oracle_lines.len(),
         );
     }
+}
+
+fn corpus_paths() -> Option<Vec<PathBuf>> {
+    let corpus = corpus_dir();
+    if !corpus.is_dir() {
+        assert!(
+            std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").is_none(),
+            "required corpus is missing at {}",
+            corpus.display()
+        );
+        eprintln!(
+            "corpus round-trip skipped because {} is absent",
+            corpus.display()
+        );
+        return None;
+    }
+    let entries = manifest_entries();
+    assert_eq!(
+        entries.len(),
+        50,
+        "the corpus manifest must contain 50 decks"
+    );
+    let mut paths = entries
+        .into_iter()
+        .map(|entry| corpus.join(entry))
+        .collect::<Vec<_>>();
+    paths.sort();
+    assert!(
+        paths.iter().all(|path| path.is_file()),
+        "every corpus manifest entry must exist under {}",
+        corpus.display()
+    );
+    Some(paths)
+}
+
+fn deck_name(path: &Path) -> &str {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_else(|| panic!("non-UTF-8 corpus filename: {}", path.display()))
+}
+
+fn open_opc(bytes: &[u8], deck: &str) -> OpcPackage {
+    OpcPackage::from_reader(Cursor::new(bytes))
+        .unwrap_or_else(|error| panic!("{deck}: open OPC package: {error}"))
+}
+
+fn modelled_part_bytes(
+    package: &OpcPackage,
+    deck: &str,
+) -> (BTreeMap<String, Vec<u8>>, BTreeMap<&'static str, usize>) {
+    let mut overrides = package.content_types.overrides.iter().collect::<Vec<_>>();
+    overrides.sort_by_key(|(part_name, _)| *part_name);
+    let mut rewritten = BTreeMap::new();
+    let mut coverage = BTreeMap::new();
+    for (part_name, content_type) in overrides {
+        let Some(canonical_type) = MODELLED_CONTENT_TYPES
+            .iter()
+            .copied()
+            .find(|candidate| *candidate == content_type)
+        else {
+            continue;
+        };
+        let Some(bytes) = package.get_part(part_name) else {
+            panic!("{deck} {part_name}: content-type override has no package part");
+        };
+        let serialised = serialise_modelled_part(content_type, bytes, deck, part_name);
+        if let Some(serialised) = serialised {
+            *coverage.entry(canonical_type).or_insert(0) += 1;
+            rewritten.insert(part_name.clone(), serialised);
+        }
+    }
+    (rewritten, coverage)
+}
+
+fn serialise_modelled_part(
+    content_type: &str,
+    xml: &[u8],
+    deck: &str,
+    part_name: &str,
+) -> Option<Vec<u8>> {
+    let context = || format!("{deck} {part_name}");
+    match content_type {
+        content_types::PRESENTATION => {
+            let parsed = CT_Presentation::from_xml(xml)
+                .unwrap_or_else(|error| panic!("{}: parse presentation: {error}", context()));
+            let serialised = parsed
+                .to_xml()
+                .unwrap_or_else(|error| panic!("{}: serialise presentation: {error}", context()));
+            let reparsed = CT_Presentation::from_xml(&serialised)
+                .unwrap_or_else(|error| panic!("{}: reparse presentation: {error}", context()));
+            assert_eq!(parsed, reparsed, "{}: presentation structure", context());
+            Some(serialised)
+        }
+        content_types::SLIDE => {
+            let parsed = CT_Slide::from_xml(xml)
+                .unwrap_or_else(|error| panic!("{}: parse slide: {error}", context()));
+            let serialised = parsed
+                .to_xml()
+                .unwrap_or_else(|error| panic!("{}: serialise slide: {error}", context()));
+            let reparsed = CT_Slide::from_xml(&serialised)
+                .unwrap_or_else(|error| panic!("{}: reparse slide: {error}", context()));
+            assert_eq!(parsed, reparsed, "{}: slide structure", context());
+            Some(serialised)
+        }
+        content_types::SLIDE_LAYOUT => {
+            let parsed = CT_SlideLayout::from_xml(xml)
+                .unwrap_or_else(|error| panic!("{}: parse slide layout: {error}", context()));
+            let serialised = parsed
+                .to_xml()
+                .unwrap_or_else(|error| panic!("{}: serialise slide layout: {error}", context()));
+            let reparsed = CT_SlideLayout::from_xml(&serialised)
+                .unwrap_or_else(|error| panic!("{}: reparse slide layout: {error}", context()));
+            assert_eq!(parsed, reparsed, "{}: slide layout structure", context());
+            Some(serialised)
+        }
+        content_types::SLIDE_MASTER => {
+            let parsed = CT_SlideMaster::from_xml(xml)
+                .unwrap_or_else(|error| panic!("{}: parse slide master: {error}", context()));
+            let serialised = parsed
+                .to_xml()
+                .unwrap_or_else(|error| panic!("{}: serialise slide master: {error}", context()));
+            let reparsed = CT_SlideMaster::from_xml(&serialised)
+                .unwrap_or_else(|error| panic!("{}: reparse slide master: {error}", context()));
+            assert_eq!(parsed, reparsed, "{}: slide master structure", context());
+            Some(serialised)
+        }
+        content_types::NOTES_SLIDE => {
+            let parsed = CT_NotesSlide::from_xml(xml)
+                .unwrap_or_else(|error| panic!("{}: parse notes slide: {error}", context()));
+            let serialised = parsed
+                .to_xml()
+                .unwrap_or_else(|error| panic!("{}: serialise notes slide: {error}", context()));
+            let reparsed = CT_NotesSlide::from_xml(&serialised)
+                .unwrap_or_else(|error| panic!("{}: reparse notes slide: {error}", context()));
+            assert_eq!(parsed, reparsed, "{}: notes slide structure", context());
+            Some(serialised)
+        }
+        content_types::NOTES_MASTER => {
+            let parsed = CT_NotesMaster::from_xml(xml)
+                .unwrap_or_else(|error| panic!("{}: parse notes master: {error}", context()));
+            let serialised = parsed
+                .to_xml()
+                .unwrap_or_else(|error| panic!("{}: serialise notes master: {error}", context()));
+            let reparsed = CT_NotesMaster::from_xml(&serialised)
+                .unwrap_or_else(|error| panic!("{}: reparse notes master: {error}", context()));
+            assert_eq!(parsed, reparsed, "{}: notes master structure", context());
+            Some(serialised)
+        }
+        content_types::THEME => {
+            let parsed = CT_OfficeStyleSheet::from_xml(xml)
+                .unwrap_or_else(|error| panic!("{}: parse theme: {error}", context()));
+            let serialised = parsed
+                .to_xml()
+                .unwrap_or_else(|error| panic!("{}: serialise theme: {error}", context()));
+            let reparsed = CT_OfficeStyleSheet::from_xml(&serialised)
+                .unwrap_or_else(|error| panic!("{}: reparse theme: {error}", context()));
+            assert_eq!(parsed, reparsed, "{}: theme structure", context());
+            Some(serialised)
+        }
+        _ => None,
+    }
+}
+
+fn reopen_written_package(package: &OpcPackage, deck: &str, action: &str) -> OpcPackage {
+    open_opc(&write_package(package, deck, action), deck)
+}
+
+fn write_package(package: &OpcPackage, deck: &str, action: &str) -> Vec<u8> {
+    let mut output = Cursor::new(Vec::new());
+    package
+        .write_to(&mut output)
+        .unwrap_or_else(|error| panic!("{deck}: {action}: {error}"));
+    output.into_inner()
+}
+
+fn assert_packages_equal(expected: &OpcPackage, actual: &OpcPackage, deck: &str) {
+    assert_eq!(
+        expected.content_types.defaults, actual.content_types.defaults,
+        "{deck}: content-type defaults"
+    );
+    assert_eq!(
+        expected.content_types.overrides, actual.content_types.overrides,
+        "{deck}: content-type overrides"
+    );
+    assert_eq!(
+        expected.package_rels.items, actual.package_rels.items,
+        "{deck}: package relationships"
+    );
+    let mut expected_relationship_parts = expected.part_rels.keys().collect::<Vec<_>>();
+    let mut actual_relationship_parts = actual.part_rels.keys().collect::<Vec<_>>();
+    expected_relationship_parts.sort();
+    actual_relationship_parts.sort();
+    assert_eq!(
+        expected_relationship_parts, actual_relationship_parts,
+        "{deck}: relationship part names"
+    );
+    for part_name in expected_relationship_parts {
+        assert_eq!(
+            expected.part_rels[part_name].items, actual.part_rels[part_name].items,
+            "{deck} {part_name}: relationships"
+        );
+    }
+    assert_eq!(
+        expected.parts.len(),
+        actual.parts.len(),
+        "{deck}: part count"
+    );
+    let mut expected_part_names = expected.parts.keys().collect::<Vec<_>>();
+    let mut actual_part_names = actual.parts.keys().collect::<Vec<_>>();
+    expected_part_names.sort();
+    actual_part_names.sort();
+    assert_eq!(expected_part_names, actual_part_names, "{deck}: part names");
+    for part_name in expected_part_names {
+        assert_eq!(
+            expected.parts[part_name], actual.parts[part_name],
+            "{deck} {part_name}: part bytes"
+        );
+    }
+}
+
+fn read_surface(presentation: &Presentation) -> String {
+    let mut output = String::new();
+    for (slide_index, slide) in presentation.slides().enumerate() {
+        writeln!(
+            output,
+            "slide\t{slide_index}\t{}\t{:?}\t{:?}\t{:?}",
+            slide.id(),
+            slide.name(),
+            slide.text(),
+            slide.notes_text()
+        )
+        .unwrap();
+        for (shape_index, shape) in slide.shapes().enumerate() {
+            append_shape_surface(&mut output, shape, &shape_index.to_string());
+        }
+    }
+    output
+}
+
+fn append_shape_surface(output: &mut String, shape: ShapeRef<'_>, path: &str) {
+    writeln!(
+        output,
+        "shape\t{path}\t{:?}\t{:?}",
+        shape.kind(),
+        shape.text()
+    )
+    .unwrap();
+    for (child_index, child) in shape.children().enumerate() {
+        append_shape_surface(output, child, &format!("{path}.{child_index}"));
+    }
+}
+
+fn sha256(path: &Path) -> String {
+    let output = Command::new("shasum")
+        .args(["-a", "256"])
+        .arg(path)
+        .output()
+        .unwrap_or_else(|error| panic!("{}: run shasum: {error}", path.display()));
+    assert!(
+        output.status.success(),
+        "{}: shasum failed: {}",
+        path.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned()
 }
 
 fn open_package(package: OpcPackage) -> Result<Presentation, Error> {

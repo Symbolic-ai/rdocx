@@ -196,9 +196,12 @@ An `mc:AlternateContent` model may inspect its selected fallback, but the full
 captured subtree remains opaque for serialisation and round-trips
 byte-identically.
 
-The gate on this is a full-corpus round-trip: parse, serialise, reparse, compare
-structurally, and separately compare the saved package part-by-part against the
-original bytes.
+The gate on this is a full-corpus round-trip. Every modelled root parses,
+serialises, reparses, and compares structurally. The expected package replaces
+each modelled root with those exact canonical serialised bytes. After save and
+reopen, every rewritten root must match its expected bytes, while every
+unmodelled part must match its original bytes. Content types, relationships,
+part names, and part counts must remain structurally unchanged.
 
 ## Relationship remapping
 

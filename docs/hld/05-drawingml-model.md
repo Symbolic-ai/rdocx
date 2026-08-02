@@ -206,7 +206,11 @@ output.
 
 `a:fmtScheme` is modelled, unlike the current rdocx theme reader which omits it
 entirely. Shapes reference it through `p:style`, and `07` covers how the indices
-resolve.
+resolve. `CT_StyleMatrix.name` is optional because accepted producer themes in
+the corpus omit `a:fmtScheme/@name`. Reading and writing preserve that absence
+rather than inventing an attribute. A canonical `a:blip` with `r:embed` or
+`r:link` declares the fixed relationship namespace locally, so a modelled fill
+remains namespace-valid when its parent did not declare `r`.
 
 `office_default()` constructs the standard Office theme. It is the correctness
 floor for a template whose master lacks a theme relationship. It is *not* how

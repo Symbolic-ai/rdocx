@@ -105,6 +105,31 @@ mod tests {
     }
 
     #[test]
+    fn format_scheme_without_name_round_trips_without_inventing_attribute() {
+        let xml = minimal_theme().replace(
+            "<z:fmtScheme name=\"Test\">",
+            "<z:fmtScheme custom=\"preserved\">",
+        );
+        let theme = CT_OfficeStyleSheet::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(theme.theme_elements.format_scheme.name, None);
+
+        let written = String::from_utf8(theme.to_xml().unwrap()).unwrap();
+        let format_scheme = written
+            .split_once("<a:fmtScheme")
+            .unwrap()
+            .1
+            .split_once('>')
+            .unwrap()
+            .0;
+        assert!(!format_scheme.contains("name="));
+        assert!(format_scheme.contains("custom=\"preserved\""));
+        assert_eq!(
+            CT_OfficeStyleSheet::from_xml(written.as_bytes()).unwrap(),
+            theme
+        );
+    }
+
+    #[test]
     fn unknown_theme_children_round_trip_byte_for_byte_in_place() {
         let xml = minimal_theme()
             .replace(
@@ -533,7 +558,7 @@ struct StyleListRaw {
 #[allow(non_camel_case_types)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CT_StyleMatrix {
-    pub name: String,
+    pub name: Option<String>,
     pub fill_styles: Vec<Fill>,
     pub line_styles: Vec<CT_LineProperties>,
     pub effect_styles: Vec<CT_EffectStyle>,
@@ -1094,7 +1119,7 @@ impl CT_StyleMatrix {
             buf.clear();
         }
         Ok(Self {
-            name: required_attr(start, b"name")?,
+            name: decoded_attr(start, b"name")?,
             fill_styles: fills.ok_or_else(|| missing("fillStyleLst"))?,
             line_styles: lines.ok_or_else(|| missing("lnStyleLst"))?,
             effect_styles: effects.ok_or_else(|| missing("effectStyleLst"))?,
@@ -1110,7 +1135,9 @@ impl CT_StyleMatrix {
 
     fn write(&self, writer: &mut Writer<Vec<u8>>) -> Result<()> {
         let mut start = BytesStart::new("a:fmtScheme");
-        start.push_attribute(("name", self.name.as_str()));
+        if let Some(name) = self.name.as_deref() {
+            start.push_attribute(("name", name));
+        }
         push_attributes(&mut start, &self.raw_attributes);
         write_start(writer, start)?;
         emit_raw(writer, self.raw_children.at(0))?;

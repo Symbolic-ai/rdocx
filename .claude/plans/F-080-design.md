@@ -1,6 +1,6 @@
 # F-080, Modelled round-trip gate
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S19
 **Size**: M
 **Depends on**: F-079
@@ -23,10 +23,22 @@ correct gate for rewritten modelled XML. Byte equality remains exact for every
 part the modelled save did not rewrite and for the expected rewritten bytes
 after OPC save and reopen.
 
+The first approved corpus run also found a producer-compatible theme whose
+`a:fmtScheme` omits `@name`. The existing `CT_StyleMatrix` rejects that deck.
+F-080 therefore includes the narrowly approved compatibility repair:
+`CT_StyleMatrix.name` becomes `Option<String>`, and the parser and writer
+preserve whether the attribute was absent.
+
+The first native acceptance attempt also exposed canonical `a:blip` output
+that retained `r:embed` while dropping the relationship namespace binding
+declared on the producer element. F-080 therefore requires `a:blip` to declare
+the fixed `r` namespace locally whenever it writes `r:embed` or `r:link`.
+
 ## Spec reference
 
 - `docs/hld/03-architecture.md`, "Crate-level conventions".
 - `docs/hld/04-opc-and-packaging.md`, "The package" and "Deterministic output".
+- `docs/hld/05-drawingml-model.md`, "Theme" and "Preservation".
 - `docs/hld/06-presentationml-model.md`, "Parts", "Hard structural
   constraints", and "Preservation strategy".
 - `docs/hld/12-testing-strategy.md`, "The deck corpus".
@@ -38,6 +50,16 @@ after OPC save and reopen.
 Extend the existing `crates/rpptx/tests/integration.rs` entrypoint created by
 F-079. Add `oxml-drawing` only as a dev dependency for direct theme-model
 access. Do not create a second integration binary or a production module.
+
+Update `crates/oxml-drawing/src/theme.rs` so an absent
+`a:fmtScheme/@name` parses as `None` and writes without inventing the
+attribute. Keep present names unchanged. No other theme field or validation
+rule changes under this compatibility repair.
+
+Update `crates/oxml-drawing/src/fill.rs` so canonical `a:blip` output declares
+the relationship namespace whenever it writes a relationship attribute. Keep
+the declaration local to `a:blip`, which makes independently serialised fills
+namespace-valid without depending on an ancestor declaration.
 
 For every content-type override in each verified corpus package, dispatch the
 currently modelled root types:
@@ -107,6 +129,8 @@ operator confirmation keeps F-080 incomplete and is classified as
 
 | Category | Test | Asserts |
 |---|---|---|
+| regression | `format_scheme_without_name_round_trips_without_inventing_attribute` | A producer theme without `a:fmtScheme/@name` parses, retains `None`, writes without the attribute, and reparses structurally |
+| regression | `blip_relationship_prefix_is_declared_in_canonical_output` | Canonical `a:blip` output binds the fixed relationship namespace before writing `r:embed` |
 | round-trip | `all_corpus_modelled_parts_reparse_structurally` | Every currently modelled root in all 50 decks parses, serialises, reparses, and remains structurally equal with nonzero coverage per content type |
 | integration | `all_modelled_corpus_packages_match_expected_parts` | Saved packages retain exact part names and counts, exact unmodelled bytes, exact expected modelled bytes, and structurally equal content types and relationships |
 | integration | `facade_saved_corpus_reopens_with_the_same_read_surface` | Every facade save reopens and retains slide ids, order, shapes, text, and notes |
@@ -117,6 +141,7 @@ PowerPoint without repair.
 
 ## HLD impact
 
+- `docs/hld/05-drawingml-model.md`
 - `docs/hld/06-presentationml-model.md`
 - `docs/hld/12-testing-strategy.md`
 
@@ -126,6 +151,9 @@ PowerPoint without repair.
   captured-subtree preservation, and combined package integrity across all 50
   decks. Run the required corpus tests with
   `RDOCX_PPTX_CORPUS_REQUIRED=1` and an isolated target directory.
+- A public data shape. `CT_StyleMatrix.name` changes from `String` to
+  `Option<String>` because a current corpus producer omits the attribute. Run
+  all `oxml-drawing` tests and compile every workspace consumer.
 - An external oracle comparison. Pin the manual oracle to Microsoft PowerPoint
   16.104 build 16.104.25121423, record the resolved build and operator result,
   and refuse to count any skipped deck as a pass.
@@ -137,21 +165,41 @@ decks do not participate in the 28 Word rendering hashes.
 
 ## Implementation checklist
 
-- [ ] Add one combined dispatcher for every currently modelled presentation
+- [x] Make `CT_StyleMatrix.name` optional in
+  `crates/oxml-drawing/src/theme.rs`, preserving attribute absence on write.
+- [x] Add
+  `format_scheme_without_name_round_trips_without_inventing_attribute` and run
+  the focused `oxml-drawing` regression.
+- [x] Declare the fixed relationship namespace on canonical `a:blip` output
+  with `r:embed` or `r:link`, and add the focused regression.
+- [x] Add one combined dispatcher for every currently modelled presentation
   root to the existing `rpptx` integration test binary.
-- [ ] Parse, serialise, reparse, and structurally compare every modelled corpus
+- [x] Parse, serialise, reparse, and structurally compare every modelled corpus
   part.
-- [ ] Save, reopen, and compare the expected package part by part with exact
+- [x] Save, reopen, and compare the expected package part by part with exact
   preservation for unmodelled parts.
-- [ ] Generate the ignored 50-deck S19 acceptance directory and checksum log.
-- [ ] Complete and record the manual pinned-PowerPoint no-repair protocol.
-- [ ] Update the HLD with the exact modelled versus unmodelled byte boundary.
-- [ ] Run the focused corpus gate, full verification, prose, and hash checks.
+- [x] Generate the ignored 50-deck S19 acceptance directory and checksum log.
+- [x] Complete and record the manual pinned-PowerPoint no-repair protocol.
+- [x] Update the HLD with the exact modelled versus unmodelled byte boundary.
+- [x] Run the focused corpus gate, full verification, prose, and hash checks.
+
+## Completion evidence
+
+On 2026-08-02, a Codex-operated native acceptance run opened all 50 generated
+decks in Microsoft PowerPoint 16.104, bundle build 16.104.25121423 and
+AppleScript build 1214. Every deck began with zero open presentations, opened
+as the only presentation at its expected absolute path, closed without saving,
+and returned PowerPoint to zero open presentations. No repair prompt, timeout,
+path mismatch, or presentation-count mismatch occurred in the completed run.
+
+The ignored evidence directory is `corpus/pptx-s19-modelled`. Its 50 sorted
+deck files have aggregate SHA-256
+`19609644c12923fad63939656fc54681c667efa2e066fbd2a080bb717aa037fc`.
 
 ## Open questions
 
-None. The user approved structural equality for rewritten modelled XML, exact
-expected serialised bytes after package save, and exact original bytes for
-every unmodelled part. The user also approved the manual acceptance protocol
-and confirmed that every saved deck will be opened in the pinned PowerPoint
-build and checked for repair prompts.
+None. The approved gate uses structural equality for rewritten modelled XML,
+exact expected serialised bytes after package save, and exact original bytes
+for every unmodelled part. The approved compatibility repairs preserve absent
+`a:fmtScheme/@name` and bind the fixed relationship namespace on canonical
+`a:blip` output.
