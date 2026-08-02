@@ -1,6 +1,6 @@
 # F-086, Draw order and the flattener
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S21
 **Size**: L
 **Depends on**: F-081
@@ -100,12 +100,12 @@ Word rendering.
 
 ## Implementation checklist
 
-- [ ] Type slide and layout master-shape visibility without losing raw data.
-- [ ] Type layout and master header-footer policy in schema order.
-- [ ] Select the effective background source.
-- [ ] Emit allowed master, layout, and slide content in final draw order.
-- [ ] Suppress template and occupied placeholders, including latent kinds.
-- [ ] Add focused parser, flattener, and corpus regressions.
+- [x] Type slide and layout master-shape visibility without losing raw data.
+- [x] Type layout and master header-footer policy in schema order.
+- [x] Select the effective background source.
+- [x] Emit allowed master, layout, and slide content in final draw order.
+- [x] Suppress template and occupied placeholders, including latent kinds.
+- [x] Add focused parser, flattener, and corpus regressions.
 
 ## Open questions
 

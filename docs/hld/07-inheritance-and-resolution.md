@@ -78,6 +78,25 @@ Two further suppressions while flattening passes 2 and 3:
 
 This logic belongs in the flattener, not the renderer.
 
+`ResolveCtx::flatten()` returns a borrowed `Vec<FlattenedItem<'_>>`. The first
+item is the effective background when one exists, followed by master, layout,
+and slide shape-tree leaves in final draw order. Each shape item retains its
+source and a reference to the selected `ShapeTreeChild`. Recursive groups and
+the selected immediate `mc:Fallback` are walked in document order.
+
+The background view identifies slide, layout, master, or theme fallback as its
+producer. A raw `p:bg` remains borrowed XML. The theme fallback borrows the
+first background fill style. Both forms retain a reference to the context's
+per-master colour map for concrete resolution.
+
+The layout `showMasterSp` controls only the master non-placeholder pass. The
+slide `showMasterSp` controls only the layout non-placeholder pass. An absent
+value means true. Ordinary master and layout placeholders remain templates and
+are omitted. An occupied latent placeholder has nonempty field or run text.
+The deepest matching occupied latent placeholder is emitted once when both the
+layout and master header-footer policies permit its type. Empty latent shapes
+fall back to the deepest occupied layout or master match.
+
 ## The chains
 
 Six independent chains. Getting them separately right is the difference between
