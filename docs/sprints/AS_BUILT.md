@@ -2473,18 +2473,20 @@ F-082 parser overflowed on a real slide master at normal stack size. Boxing
 shape properties and private shape style removed the large transient values
 without requiring a stack-size workaround. Microscope pass 1 then found opaque
 effect DAGs bypassed unresolved-colour checks. Three regressions fixed that
-defect, and pass 2 was clean.
+defect, and microscope pass 2 was clean. Sprint review pass 1 then found that
+the raw scanners matched local names without resolving namespaces. Two focused
+regressions made foreign producer extensions inert.
 
 **Spec sections touched.** `docs/hld/06-presentationml-model.md` records typed
 shape properties and style with bounded storage. `docs/hld/07-inheritance-and-resolution.md`
 records numeric format-list rules, font collection selection, placeholder
 colour substitution, explicit overlays, and malformed-reference errors.
 
-**Tests.** Thirty-three integrated resolver tests include the named fill gate,
+**Tests.** Thirty-five integrated resolver tests include the named fill gate,
 background fills, zero and out-of-range indices, transform order, explicit
-overlays, modelled and opaque effects, and unresolved placeholder rejection.
-All 68 parser tests, the 40-case exact colour table, and the normal-stack
-50-deck corpus gate passed.
+overlays, modelled and opaque effects, unresolved placeholder rejection, and
+same-named foreign effect extensions. All 68 parser tests, the 40-case exact
+colour table, and the normal-stack 50-deck corpus gate passed.
 
 **Hash harness.** Unchanged. All 28 integrated entries match.
 

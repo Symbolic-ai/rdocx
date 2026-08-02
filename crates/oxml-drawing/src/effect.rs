@@ -6,9 +6,12 @@ use oxml_core::raw_xml::{capture_element, capture_empty_element};
 use oxml_core::units::{Angle, Percent1000};
 use oxml_core::xml::{get_attr, local_name, matches_local_name};
 use quick_xml::events::{BytesEnd, BytesStart, Event};
+use quick_xml::name::{Namespace, ResolveResult};
+use quick_xml::reader::NsReader;
 use quick_xml::{Reader, Writer};
 
 use crate::color::{ColorChoice, ColorError};
+use crate::namespace::A_NS;
 use crate::order::OrderedRawChildren;
 
 const MAX_POSITIVE_COORDINATE: i64 = 27_273_042_316_900;
@@ -390,17 +393,18 @@ impl CT_EffectList {
 }
 
 pub(crate) fn raw_contains_placeholder_color(xml: &[u8]) -> bool {
-    let mut reader = Reader::from_reader(xml);
+    let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
     loop {
-        match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(element) | Event::Empty(element))
-                if matches_local_name(element.name().as_ref(), b"schemeClr")
+        match reader.read_resolved_event_into(&mut buffer) {
+            Ok((namespace, Event::Start(element) | Event::Empty(element)))
+                if is_drawingml_namespace(&namespace)
+                    && matches_local_name(element.name().as_ref(), b"schemeClr")
                     && get_attr(&element, b"val").as_deref() == Some("phClr") =>
             {
                 return true;
             }
-            Ok(Event::Eof) | Err(_) => return false,
+            Ok((_, Event::Eof)) | Err(_) => return false,
             _ => {}
         }
         buffer.clear();
@@ -408,17 +412,26 @@ pub(crate) fn raw_contains_placeholder_color(xml: &[u8]) -> bool {
 }
 
 pub(crate) fn raw_is_effect_dag(xml: &[u8]) -> bool {
-    let mut reader = Reader::from_reader(xml);
+    let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
     loop {
-        match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(element) | Event::Empty(element)) => {
-                return matches_local_name(element.name().as_ref(), b"effectDag");
+        match reader.read_resolved_event_into(&mut buffer) {
+            Ok((namespace, Event::Start(element) | Event::Empty(element))) => {
+                return is_drawingml_namespace(&namespace)
+                    && matches_local_name(element.name().as_ref(), b"effectDag");
             }
-            Ok(Event::Eof) | Err(_) => return false,
+            Ok((_, Event::Eof)) | Err(_) => return false,
             _ => {}
         }
         buffer.clear();
+    }
+}
+
+fn is_drawingml_namespace(namespace: &ResolveResult<'_>) -> bool {
+    match namespace {
+        ResolveResult::Bound(Namespace(uri)) => *uri == A_NS.as_bytes(),
+        ResolveResult::Unknown(prefix) => prefix == b"a",
+        ResolveResult::Unbound => false,
     }
 }
 

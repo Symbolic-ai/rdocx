@@ -55,6 +55,10 @@ properties remain inherited. Explicit `noFill` replaces the theme fill.
 Unsupported raw effect children remain preserved and are not claimed as
 resolved. If raw XML contains an unresolved `phClr`, return a specific resolver
 error so a later renderer cannot consume a falsely concrete value.
+Resolve opaque `effectDag` and nested `schemeClr` names against their XML
+namespace before classifying them. Same-named producer extensions remain
+opaque and cannot replace a DrawingML effect or trigger a placeholder-colour
+error.
 
 Keep font collection selection typed as `major`, `minor`, or `none`. F-085
 owns typeface-token lookup inside the selected collection.
@@ -90,6 +94,8 @@ public storage-type correction has no published semver impact.
 | unit | `placeholder_colour_substitution_keeps_transform_order` | Reference and placeholder transforms remain in the declared order |
 | unit | `explicit_shape_properties_overlay_the_theme_style` | Fill and effect replacement plus line property overlay follow precedence |
 | unit | `unmodelled_effect_with_placeholder_colour_is_rejected` | The resolver never reports an opaque unresolved colour as concrete |
+| unit | `foreign_namespace_effect_dag_does_not_replace_theme_effect` | A same-named producer extension cannot suppress a referenced DrawingML effect |
+| unit | `foreign_namespace_scheme_color_is_not_a_placeholder_color` | A foreign `schemeClr` cannot trigger DrawingML placeholder-colour rejection |
 | round-trip | `ordinary_shape_style_round_trips_in_schema_order` | Alternate prefixes parse, fixed prefixes write, and raw siblings survive exactly |
 | regression | `ordinary_shape_properties_round_trip_in_schema_order` | Boxed public shape properties retain ordinary field access and structural round trips |
 | corpus | `all_corpus_modelled_parts_reparse_structurally` | All 50 decks pass on the normal test-thread stack after typing `p:style` and boxing shape properties |
@@ -109,7 +115,8 @@ The backlog test gate is named explicitly:
   tests and require all 28 hashes unchanged.
 - Any parser or serialiser. Recheck `p:style` schema order,
   prefix-tolerant reads, fixed-prefix writes, and byte preservation of
-  unmodelled children. Run the required corpus structural round-trip gate.
+  unmodelled children. Require namespace-aware inspection of opaque effects and
+  run the required corpus structural round-trip gate.
 - A new module or file. `src/style.rs` is justified by the current F-084
   implementation and requires the shared explicit approval recorded in F-081.
 - Public storage type in an unpublished crate. `CT_Shape::shape_properties`
@@ -128,6 +135,7 @@ rendering baseline.
 - [x] Resolve normal and background format-list indices without clamping.
 - [x] Substitute modelled `phClr` values while preserving transform order.
 - [x] Overlay explicit fill, line, and effect properties.
+- [x] Keep same-named foreign effect extensions opaque during inspection.
 - [x] Keep font collection selection separate from F-085 typeface lookup.
 - [x] Bound recursive parser stack use without a larger-stack test workaround.
 - [x] Add focused parser, resolver, and corpus regressions.

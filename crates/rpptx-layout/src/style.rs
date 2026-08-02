@@ -527,6 +527,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn foreign_namespace_effect_dag_does_not_replace_theme_effect() {
+        let fixture = Fixture::new(&shape(
+            r#"<x:effectDag xmlns:x="urn:extension"><x:schemeClr val="phClr"/></x:effectDag>"#,
+            &style_refs(0, 0, 3, "none", "778899"),
+        ));
+
+        let resolved = fixture
+            .context()
+            .effective_shape_style(fixture.shape(0))
+            .unwrap();
+        assert!(resolved.effects.is_some());
+    }
+
+    #[test]
+    fn foreign_namespace_scheme_color_is_not_a_placeholder_color() {
+        let fixture = Fixture::new(&shape(
+            r#"<a:effectDag><a:cont><x:schemeClr xmlns:x="urn:extension" val="phClr"/></a:cont></a:effectDag>"#,
+            &style_refs(0, 0, 3, "none", "778899"),
+        ));
+
+        let resolved = fixture
+            .context()
+            .effective_shape_style(fixture.shape(0))
+            .unwrap();
+        assert!(resolved.effects.is_none());
+    }
+
     struct Fixture {
         theme: CT_OfficeStyleSheet,
         master: CT_SlideMaster,
