@@ -24,13 +24,13 @@ regenerated, never hand-edited.
 | M6, Shared publication and rdocx cutover     | 6  | 0 | 0 | 6  |
 | M7, DrawingML                               | 19 | 19 | 0 | 0  |
 | M8, PresentationML                          | 14 | 14 | 0 | 0  |
-| M9, Inheritance resolver                    | 8  | 5 | 1 | 2  |
+| M9, Inheritance resolver                    | 8  | 5 | 2 | 1  |
 | M10, Renderer                               | 16 | 0 | 0 | 16 |
 | M11, Write API                              | 12 | 0 | 0 | 12 |
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **154** | **78** | **1** | **75** |
+| **Total** | **154** | **78** | **2** | **74** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -186,7 +186,7 @@ regenerated, never hand-edited.
 | F-084 | Format scheme reference resolution           | S20 | M | done |
 | F-085 | Typeface resolution                          | S20 | S | done |
 | F-086 | Draw order and the flattener                 | S21 | L | in-progress |
-| F-087 | ResolvedSlide contract                       | S21 | M | pending |
+| F-087 | ResolvedSlide contract                       | S21 | M | in-progress |
 | F-088 | Visual differential tests                    | S21 | M | pending |
 <!-- AUTOGEN:backlog-M9 END -->
 
