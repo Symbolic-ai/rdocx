@@ -1,6 +1,6 @@
 # F-092, rpptx-render skeleton and RenderInput
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S22
 **Size**: M
 **Depends on**: F-087, F-036
@@ -33,8 +33,10 @@ content-addressed `MediaId`.
 
 Create the explicitly planned `crates/rpptx-render` workspace crate at version
 0.0.0 with `publish = false`. Its normal dependency direction is
-`rpptx-render -> rpptx-layout`, `rpptx-oxml`, `oxml-layout`, and `oxml-media`.
-No `oxml-*` crate gains a reverse dependency.
+`rpptx-render -> rpptx-layout`, `rpptx-oxml`, `oxml-drawing`, `oxml-layout`, and
+`oxml-media`. `SlideBundle` stores its shared parsed theme as an
+`Arc<CT_OfficeStyleSheet>`, which is the concrete consumer that requires the
+direct `oxml-drawing` dependency. No `oxml-*` crate gains a reverse dependency.
 
 Separate assembly from rendering in one concrete module. `SlideBundle` holds
 the raw slide, shared layout, shared master, shared theme, optional notes,
@@ -105,6 +107,14 @@ The backlog test gate is
   0.0.0 with publication disabled. Inspect the manifest and lockfile diff and
   run the full publication dry-run gate without publishing.
 
+## Design deviations
+
+- The approved implementation adds `oxml-drawing` as a direct normal
+  dependency. The original dependency list omitted the crate that owns
+  `CT_OfficeStyleSheet`, while `SlideBundle` explicitly requires the parsed
+  shared theme. This remains an inward architecture edge and is covered by the
+  existing cargo-tree rider.
+
 ## Hash harness
 
 Expected to be unchanged. The new unpublished skeleton is not connected to the
@@ -112,12 +122,12 @@ released Word render path.
 
 ## Implementation checklist
 
-- [ ] Add the unpublished workspace crate and one-way dependencies.
-- [ ] Define `RelScope`, `RelScopes`, and contextual relationship errors.
-- [ ] Define `SlideBundle` as the upstream assembly boundary.
-- [ ] Resolve scoped media targets to content-addressed `MediaId` entries.
-- [ ] Define `RenderInput` over frozen `ResolvedSlide` values.
-- [ ] Reconcile the HLD input example with the frozen M9 contract.
+- [x] Add the unpublished workspace crate and one-way dependencies.
+- [x] Define `RelScope`, `RelScopes`, and contextual relationship errors.
+- [x] Define `SlideBundle` as the upstream assembly boundary.
+- [x] Resolve scoped media targets to content-addressed `MediaId` entries.
+- [x] Define `RenderInput` over frozen `ResolvedSlide` values.
+- [x] Reconcile the HLD input example with the frozen M9 contract.
 
 ## Open questions
 

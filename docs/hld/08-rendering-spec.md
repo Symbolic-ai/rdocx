@@ -334,22 +334,27 @@ pub fn layout_slide(input: &RenderInput, index: usize) -> Result<PageFrame>;
 
 ```rust
 pub struct RenderInput {
-    pub slide_size: (f64, f64),
-    pub slides: Vec<SlideBundle>,
+    pub slides: Vec<ResolvedSlide>,
     pub media: HashMap<MediaId, MediaData>,   // deduplicated across the deck
     pub fonts: Vec<FontFile>,
     pub metadata: Option<DocumentMetadata>,
-    pub default_text_style: ListStyle,
 }
+```
+
+`RenderInput` is the rendering boundary. It contains only owned,
+format-neutral `ResolvedSlide` values from `rpptx-layout`. Raw PresentationML
+parts remain on the upstream assembly side of that boundary:
+
+```rust
 
 pub struct SlideBundle {
     pub slide: CT_Slide,
     pub layout: Arc<CT_SlideLayout>,   // ~5 layouts shared by 200 slides
     pub master: Arc<CT_SlideMaster>,
-    pub theme:  Arc<Theme>,
+    pub theme:  Arc<CT_OfficeStyleSheet>,
     pub notes:  Option<CT_NotesSlide>,
-    pub rels:   RelScopes,
     pub hidden: bool,
+    pub relationships: RelScopes,
 }
 
 /// A slide, its layout and its master each have their OWN relationship
@@ -359,8 +364,26 @@ pub struct RelScopes {
     pub layout: HashMap<String, ResolvedRel>,
     pub master: HashMap<String, ResolvedRel>,
 }
+
+pub enum RelScope {
+    Slide,
+    Layout,
+    Master,
+}
+
+pub struct ResolvedRel {
+    pub target: String,
+    pub relationship_type: String,
+}
+
+pub struct MediaData {
+    pub bytes: Vec<u8>,
+    pub content_type: String,
+}
 ```
 
-Blips are resolved to bytes **before** emitting, and keyed by content hash. This
-is why `embed_id` cannot survive the port, and it gives free deduplication of the
-logo that appears on every slide.
+Relationship lookup requires an explicit `RelScope`, so equal identifiers in
+slide, layout, and master parts never alias. Blips are resolved to bytes
+**before** constructing `RenderInput` and keyed by `MediaId::from_bytes`. This
+is why `embed_id` cannot survive the port, and it deduplicates a logo that
+appears on every slide.
