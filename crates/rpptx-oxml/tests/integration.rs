@@ -1652,7 +1652,7 @@ fn picture_reads_any_prefix_and_writes_fixed_prefixes_in_schema_order() {
     let written = picture.to_xml().unwrap();
     let text = std::str::from_utf8(&written).unwrap();
     assert!(text.starts_with(&format!(r#"<p:pic xmlns:p="{P_NS}""#)));
-    assert!(text.contains(r#"<a:blip r:embed="rId1"/>"#));
+    assert!(text.contains(&format!(r#"<a:blip xmlns:r="{R_NS}" r:embed="rId1"/>"#)));
     assert!(text.contains(r#"<p:blipFill x:fill-marker="kept">"#));
     assert_order(&written, &["<p:nvPicPr", "<p:blipFill", "<p:spPr"]);
     assert_eq!(picture, CT_Picture::from_xml(&written).unwrap());

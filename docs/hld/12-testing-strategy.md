@@ -96,6 +96,15 @@ producers because non-Microsoft writers are where parser assumptions break:
 - A multi-master corporate template
 - Decks containing SmartArt, charts, embedded video, and ink
 
+The read-facade differential runs `dump_deck` over all fifty decks and compares
+its normalized records with python-pptx 1.0.2. The executable test command pins
+that exact oracle version with `uv run --with python-pptx==1.0.2` and rejects a
+different resolved version. Records cover slide id and name, recursive shape
+path and structural kind, ordinary shape text, row-major table text, aggregate
+slide text, and optional speaker-note text. Empty python-pptx names and shape
+text capability without a stored `p:txBody` are normalized to the facade's
+explicit `Option` contract.
+
 Four gates run against it:
 
 1. **DrawingML structural round-trip**: every `a:txBody` and `a:spPr` parses,
@@ -107,8 +116,14 @@ Four gates run against it:
    content types and relationships stay structurally equal. ZIP metadata and
    compression are not model state. This proves the OPC layer and the corpus
    harness before any PresentationML modelling exists.
-3. **Modelled round-trip** (M8 exit): parse, serialise, reparse, compare
-   structurally, and compare the saved package part by part.
+3. **Modelled round-trip** (M8 exit): parse and serialise the presentation,
+   slide, layout, master, notes slide, notes master, and theme roots. Reparse
+   each canonical result and compare it structurally. Build the expected
+   package from those exact modelled bytes, retain the original bytes for all
+   unmodelled parts, save through deterministic OPC output, reopen, and compare
+   content types, relationships, part names, part counts, and every part byte
+   against that expectation. The gate requires nonzero corpus coverage for all
+   seven root types.
 4. **Opens without repair** (M8 and M11): every saved deck opened manually in
    PowerPoint once per milestone. Not automatable, and not skippable.
 

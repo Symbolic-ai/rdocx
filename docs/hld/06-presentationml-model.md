@@ -23,6 +23,32 @@ back to its source slide. Every notes master has exactly one `theme`
 relationship. A source slide has at most one `notesSlide` relationship. A deck
 with zero slides is valid, and that is what a template is.
 
+## Public read facade
+
+`rpptx::Presentation` opens a path or byte slice and owns the OPC package, the
+typed presentation root, and the ordered slides resolved from `p:sldIdLst`.
+Part names are never assumed. The main part, slides, and optional notes slides
+are joined through their OPC relationships, including normalized relative
+targets. Missing parts, missing or wrong relationship ids, external slide
+targets, duplicate notes-slide links, and malformed typed roots return a
+concrete facade error.
+
+`slides()` and `slide(index)` expose borrowed `SlideRef` handles in producer
+slide order. A slide exposes its producer id, optional `p:cSld` name, immediate
+z-order shapes, recursive visible text, and optional speaker-note text. Indexed
+access returns `Option` and does not panic.
+
+`ShapeRef` normalizes the six typed shape-tree members to `ShapeKind`. Immediate
+group members and the selected `mc:Fallback` view are exposed through child
+iteration. Ordinary shapes return their text-body text. Table frames return
+row-major cell text with tabs between cells and newlines between rows. Other
+shape kinds have no direct text.
+
+`to_bytes()` clones the source package, serialises the owned presentation,
+slide, and notes roots back to their relationship-resolved part names, and uses
+the deterministic OPC writer. The read facade has no mutation surface. Parts
+outside those owned roots remain the exact source bytes.
+
 ## `presentation.xml`
 
 Carries `p:sldSz` (deck dimensions in EMU), `p:notesSz`, `p:sldIdLst`,
@@ -170,9 +196,12 @@ An `mc:AlternateContent` model may inspect its selected fallback, but the full
 captured subtree remains opaque for serialisation and round-trips
 byte-identically.
 
-The gate on this is a full-corpus round-trip: parse, serialise, reparse, compare
-structurally, and separately compare the saved package part-by-part against the
-original bytes.
+The gate on this is a full-corpus round-trip. Every modelled root parses,
+serialises, reparses, and compares structurally. The expected package replaces
+each modelled root with those exact canonical serialised bytes. After save and
+reopen, every rewritten root must match its expected bytes, while every
+unmodelled part must match its original bytes. Content types, relationships,
+part names, and part counts must remain structurally unchanged.
 
 ## Relationship remapping
 

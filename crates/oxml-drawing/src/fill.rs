@@ -4,7 +4,7 @@ use std::io::Write;
 use oxml_core::OxmlError;
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
 use oxml_core::units::{Angle, Percent1000};
-use oxml_core::xml::{get_attr, local_name, matches_local_name};
+use oxml_core::xml::{R_NS, get_attr, local_name, matches_local_name};
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 
@@ -629,6 +629,9 @@ impl Blip {
 
     fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         let mut start = BytesStart::new("a:blip");
+        if self.embed.is_some() || self.link.is_some() {
+            start.push_attribute(("xmlns:r", R_NS));
+        }
         if let Some(embed) = self.embed.as_deref() {
             start.push_attribute(("r:embed", embed));
         }
@@ -1357,10 +1360,23 @@ mod tests {
     #[test]
     fn fill_forms_read_any_prefix_and_write_fixed_a_prefix_in_schema_order() {
         let fill = Fill::from_xml(br#"<z:blipFill><z:blip r:embed="rId4"/><z:srcRect l="10"/><z:stretch><z:fillRect t="20"/></z:stretch></z:blipFill>"#).unwrap();
-        assert_eq!(fill.to_xml().unwrap(), br#"<a:blipFill><a:blip r:embed="rId4"/><a:srcRect l="10"/><a:stretch><a:fillRect t="20"/></a:stretch></a:blipFill>"#);
+        assert_eq!(fill.to_xml().unwrap(), br#"<a:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId4"/><a:srcRect l="10"/><a:stretch><a:fillRect t="20"/></a:stretch></a:blipFill>"#);
 
         let gradient = Fill::from_xml(br#"<q:gradFill><q:gsLst><q:gs pos="0"><q:srgbClr val="ABCDEF"/></q:gs></q:gsLst><q:path path="rect"/></q:gradFill>"#).unwrap();
         assert_eq!(gradient.to_xml().unwrap(), br#"<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ABCDEF"/></a:gs></a:gsLst><a:path path="rect"/></a:gradFill>"#);
+    }
+
+    #[test]
+    fn blip_relationship_prefix_is_declared_in_canonical_output() {
+        let fill = Fill::from_xml(
+            br#"<a:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId1"/></a:blipFill>"#,
+        )
+        .unwrap();
+        let written = String::from_utf8(fill.to_xml().unwrap()).unwrap();
+
+        assert!(written.contains(
+            "<a:blip xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:embed=\"rId1\"/>"
+        ));
     }
 
     #[test]
@@ -1370,7 +1386,7 @@ mod tests {
         assert_eq!(written, br#"<a:gradFill><x:before x:id="1"><x:item>one &amp; two</x:item><!--note--></x:before><a:gsLst><y:first/><a:gs pos="0"><a:srgbClr val="000000"><x:transform value="kept"/></a:srgbClr></a:gs><y:last/></a:gsLst><x:middle/><a:lin ang="0"/><x:after/></a:gradFill>"#);
 
         let blip = br#"<z:blipFill><z:blip r:embed="rId1"><a:alphaModFix amt="50000"/><x:ext x:v="raw"/></z:blip><x:between/><z:tile><x:tileExt/></z:tile></z:blipFill>"#;
-        assert_eq!(Fill::from_xml(blip).unwrap().to_xml().unwrap(), br#"<a:blipFill><a:blip r:embed="rId1"><a:alphaModFix amt="50000"/><x:ext x:v="raw"/></a:blip><x:between/><a:tile><x:tileExt/></a:tile></a:blipFill>"#);
+        assert_eq!(Fill::from_xml(blip).unwrap().to_xml().unwrap(), br#"<a:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId1"><a:alphaModFix amt="50000"/><x:ext x:v="raw"/></a:blip><x:between/><a:tile><x:tileExt/></a:tile></a:blipFill>"#);
 
         let pattern = br#"<z:pattFill><z:fgClr><x:before/><z:srgbClr val="102030"/><x:after x:v="kept"/></z:fgClr></z:pattFill>"#;
         assert_eq!(Fill::from_xml(pattern).unwrap().to_xml().unwrap(), br#"<a:pattFill><a:fgClr><x:before/><a:srgbClr val="102030"/><x:after x:v="kept"/></a:fgClr></a:pattFill>"#);
