@@ -29,7 +29,7 @@ documented handoff to the M10 render track without publishing any crate.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-086 | Draw order and the flattener | L | pending | - |
+| F-086 | Draw order and the flattener | L | in-progress | codex |
 | F-087 | ResolvedSlide contract | M | pending | - |
 | F-088 | Visual differential tests | M | pending | - |
 
