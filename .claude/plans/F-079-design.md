@@ -1,6 +1,6 @@
 # F-079, The rpptx read facade
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S19
 **Size**: L
 **Depends on**: F-069, F-070
@@ -181,12 +181,12 @@ participate in the 28 Word rendering hashes.
 
 ## Implementation checklist
 
-- [ ] Add the unpublished `rpptx` workspace member and one-file facade.
-- [ ] Resolve presentation, slide, and notes parts through OPC relationships.
-- [ ] Add safe slide and shape reference handles with recursive text access.
-- [ ] Flush facade-owned modelled parts through deterministic `to_bytes()`.
-- [ ] Add the `dump_deck` example and the single integration test entrypoint.
-- [ ] Run the focused, oracle, dependency-tree, full verification, prose, and
+- [x] Add the unpublished `rpptx` workspace member and one-file facade.
+- [x] Resolve presentation, slide, and notes parts through OPC relationships.
+- [x] Add safe slide and shape reference handles with recursive text access.
+- [x] Flush facade-owned modelled parts through deterministic `to_bytes()`.
+- [x] Add the `dump_deck` example and the single integration test entrypoint.
+- [x] Run the focused, oracle, dependency-tree, full verification, prose, and
   hash checks.
 
 ## Open questions

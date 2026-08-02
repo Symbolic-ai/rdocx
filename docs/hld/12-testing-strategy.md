@@ -96,6 +96,15 @@ producers because non-Microsoft writers are where parser assumptions break:
 - A multi-master corporate template
 - Decks containing SmartArt, charts, embedded video, and ink
 
+The read-facade differential runs `dump_deck` over all fifty decks and compares
+its normalized records with python-pptx 1.0.2. The executable test command pins
+that exact oracle version with `uv run --with python-pptx==1.0.2` and rejects a
+different resolved version. Records cover slide id and name, recursive shape
+path and structural kind, ordinary shape text, row-major table text, aggregate
+slide text, and optional speaker-note text. Empty python-pptx names and shape
+text capability without a stored `p:txBody` are normalized to the facade's
+explicit `Option` contract.
+
 Four gates run against it:
 
 1. **DrawingML structural round-trip**: every `a:txBody` and `a:spPr` parses,
