@@ -25,11 +25,11 @@ or hierarchy references.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-081 | ResolveCtx skeleton and placeholder chain | M | in-progress | codex |
-| F-082 | Effective transform and body properties | M | in-progress | codex |
-| F-083 | The seven-step list style merge | L | in-progress | codex |
-| F-084 | Format scheme reference resolution | M | in-progress | codex |
-| F-085 | Typeface resolution | S | in-progress | codex |
+| F-081 | ResolveCtx skeleton and placeholder chain | M | done | - |
+| F-082 | Effective transform and body properties | M | done | - |
+| F-083 | The seven-step list style merge | L | done | - |
+| F-084 | Format scheme reference resolution | M | done | - |
+| F-085 | Typeface resolution | S | done | - |
 
 ## Sequencing note
 
@@ -45,9 +45,9 @@ proceed independently while the F-081 chain is being established.
   effective body properties follow the documented defaults and chain.
 - Text properties merge through all seven sources and all nine list levels,
   with later sources winning per property and level.
-- Format-scheme fill, line, effect, and font references use one-based indices,
-  apply the background-fill rule above 1000, and substitute `phClr` from the
-  shape reference.
+- Format-scheme fill, line, and effect references use one-based indices, apply
+  the background-fill rule above 1000, and substitute `phClr` from the shape
+  reference. Font references select the major, minor, or no font collection.
 - Theme tokens including `+mn-lt`, `+mj-lt`, `+mn-ea`, and `+mn-cs` resolve to
   the correct theme and per-script typefaces.
 - The full workspace gate passes with all 28 deterministic hashes unchanged,

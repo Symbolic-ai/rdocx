@@ -110,6 +110,11 @@ defended.
 | F-078 | S18 | M | 2 | 1 | Namespace-aware relationship-id rewriting in preserved XML |
 | F-079 | S19 | L | 4 | 1 | 2026-08-02 | Unpublished relationship-resolved rpptx read facade |
 | F-080 | S19 | M | 2 | 1 | 2026-08-02 | Seven-root 50-deck modelled round-trip and native PowerPoint gate |
+| F-081 | S20 | M | 2 | 1 | 2026-08-02 | Unpublished resolver context and recursive placeholder chain |
+| F-082 | S20 | M | 2 | 1 | 2026-08-02 | Typed ordinary-shape properties plus transform and body inheritance |
+| F-083 | S20 | L | 4 | 1 | 2026-08-02 | Seven-source, nine-level text-property cascade with safe caching |
+| F-084 | S20 | M | 2 | 1 | 2026-08-02 | Typed shape styles and format-scheme resolution with placeholder colours |
+| F-085 | S20 | S | 1 | 1 | 2026-08-02 | Major and minor theme-token typeface resolution |
 
 ## Velocity
 
@@ -165,3 +170,4 @@ was done about it. Empty is the expected state.
 | 2026-08-01 | Sprint estimate variance exceeded 30 percent | S17 | Record 4 actual days against 10 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
 | 2026-08-02 | Sprint estimate variance exceeded 30 percent | S18 | Record 4 actual days against 7 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
 | 2026-08-02 | Sprint estimate variance exceeded 30 percent | S19 | Record 2 actual days against 6 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
+| 2026-08-02 | Sprint estimate variance exceeded 30 percent | S20 | Record 5 actual days against 11 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
