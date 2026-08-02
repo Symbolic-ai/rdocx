@@ -114,6 +114,15 @@ translate(-chOffX, -chOffY)
   · scale(flipH ? -1 : 1, flipV ? -1 : 1) about the centre
 ```
 
+`rpptx-layout` freezes this mapping before the renderer boundary. Every
+`ResolvedShape` carries a backend-neutral `group_transform` accumulated from
+its parent groups. The shape's own point bounds, rotation, and flips remain
+separate, so the renderer can group the shape's geometry, paint, outline, and
+text once and then apply the accumulated parent transform. Nested composition
+applies the child transform before the parent transform. Missing group mapping
+components leave that group's contribution as identity, while a zero child
+extent cannot produce a non-finite matrix.
+
 Rotated text, rotated pictures, rotated gradients and clipped picture frames all
 follow for free. Arrowheads lower into extra filled `Path` elements, so they
 need no backend support at all.

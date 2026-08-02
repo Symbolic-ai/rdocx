@@ -31,6 +31,10 @@ pub enum ResolveError {
     UnresolvedPlaceholderColor {
         reference: &'static str,
     },
+    ConcreteValue {
+        kind: &'static str,
+        detail: String,
+    },
 }
 
 impl fmt::Display for ResolveError {
@@ -48,6 +52,12 @@ impl fmt::Display for ResolveError {
                 formatter,
                 "{reference} style retains an unresolved phClr placeholder colour"
             ),
+            Self::ConcreteValue { kind, detail } => {
+                write!(
+                    formatter,
+                    "cannot resolve {kind} to a concrete value: {detail}"
+                )
+            }
         }
     }
 }

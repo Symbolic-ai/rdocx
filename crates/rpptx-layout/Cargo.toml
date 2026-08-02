@@ -13,4 +13,8 @@ publish = false
 
 [dependencies]
 oxml-drawing.workspace = true
+oxml-layout.workspace = true
 rpptx-oxml.workspace = true
+
+[dev-dependencies]
+oxml-opc.workspace = true

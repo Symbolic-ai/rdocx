@@ -16,22 +16,29 @@ hierarchy**, not a style graph.
 ```rust
 pub struct ResolvedSlide {
     pub size: (f64, f64),                 // points
-    pub background: Option<ResolvedFill>,
-    pub shapes: Vec<ResolvedShape>,       // already flattened and in draw order
+    pub background: Option<Paint>,
+    pub shapes: Vec<ResolvedShape>,       // flattened and in draw order
     pub diagnostics: Vec<Diagnostic>,
 }
 
 pub struct ResolvedShape {
+    pub group_transform: Transform,
     pub bounds: Rect,
     pub rotation_deg: f64,
     pub flip_h: bool, pub flip_v: bool,
     pub geometry: ResolvedGeometry,
-    pub fill: ResolvedFill,
-    pub line: Option<ResolvedLine>,
-    pub shadow: Option<ResolvedShadow>,
+    pub fill: Option<Paint>,
+    pub line: Option<Stroke>,
+    pub shadow: Option<Effect>,
     pub content: ResolvedContent,
     /// Set when we fell back: unknown preset, SmartArt, chart, ink.
     pub unsupported: Option<&'static str>,
+}
+
+pub enum ResolvedGeometry {
+    Rectangle,
+    Custom { paths: Vec<Path>, text_rect: Option<Rect> },
+    BoundsFallback,
 }
 
 pub enum ResolvedContent {
@@ -45,6 +52,28 @@ pub enum ResolvedContent {
 Every theme reference, colour transform, inherited property and list-style level
 is **already collapsed to a concrete value**. The renderer consumes this and
 nothing else, and never sees a `p:` or `a:` type.
+
+`ResolveCtx::resolve_slide` owns this boundary. It converts EMU coordinates to
+points, resolves colours through the effective colour map and theme, evaluates
+custom geometry in each path's local coordinate space, and returns text and
+table content without part-tree lifetimes. Text bodies retain concrete insets,
+anchor, wrap, direction, autofit, paragraphs, runs, paragraph spacing, and
+bullets. Character and auto-number bullets both retain their independently
+inherited font, colour, size, and choice values.
+
+Each flattened leaf carries an accumulated `group_transform`. Nested group
+transforms map child coordinates through `chOff`, `chExt`, `off`, and `ext`,
+then apply rotation and centre flips in DrawingML order. A leaf outside a group
+carries `Transform::IDENTITY`.
+
+Unrepresentable content remains visible as a bounds fallback with a stable
+unsupported category and a diagnostic. This includes charts, SmartArt, OLE,
+unknown graphic frames, connectors pending concrete geometry, image media
+pending relationship resolution, preset geometry pending evaluation, and fill
+forms that the backend-neutral paint model cannot represent exactly. A raw
+modelled `p:bg` remains unresolved with a diagnostic until background paint
+resolution lands. Theme fallback backgrounds already resolve to concrete
+paint.
 
 **Freeze this contract when the resolver lands, or the resolver and renderer
 tracks diverge.** It is versioned with the crate.
@@ -81,8 +110,9 @@ This logic belongs in the flattener, not the renderer.
 `ResolveCtx::flatten()` returns a borrowed `Vec<FlattenedItem<'_>>`. The first
 item is the effective background when one exists, followed by master, layout,
 and slide shape-tree leaves in final draw order. Each shape item retains its
-source and a reference to the selected `ShapeTreeChild`. Recursive groups and
-the selected immediate `mc:Fallback` are walked in document order.
+source, a reference to the selected `ShapeTreeChild`, and the accumulated
+backend-neutral group transform. Recursive groups and the selected immediate
+`mc:Fallback` are walked in document order.
 
 The background view identifies slide, layout, master, or theme fallback as its
 producer. A raw `p:bg` remains borrowed XML. The theme fallback borrows the

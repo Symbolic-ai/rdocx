@@ -1,6 +1,6 @@
 # F-087, ResolvedSlide contract
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S21
 **Size**: M
 **Depends on**: F-082, F-083, F-084, F-085, F-086
@@ -44,6 +44,7 @@ pub struct ResolvedSlide {
 }
 
 pub struct ResolvedShape {
+    pub group_transform: Transform,
     pub bounds: Rect,
     pub rotation_deg: f64,
     pub flip_h: bool,
@@ -71,6 +72,14 @@ colour through the context colour map and theme, and copies only concrete text
 properties. Unsupported chart, SmartArt, ink, OLE, and unknown geometry remain
 present as bounding-box fallbacks with diagnostics rather than leaking source
 XML or disappearing.
+
+The two required 50-deck resolver gates add `oxml-opc` as a test-only
+dependency of `rpptx-layout`. Those tests are the existing concrete consumers.
+They open each pinned package and resolve its slide, layout, master, theme, and
+presentation-default chain. Production dependencies and production code do
+not use `oxml-opc`. The manifest change updates the `rpptx-layout` dependency
+entry in `Cargo.lock` without adding a package because `oxml-opc` is already a
+workspace member.
 
 Keep all work in existing files. No trait, generic parameter, wrapper-only
 type, module, source file, or feature flag is introduced.
@@ -116,7 +125,9 @@ The backlog test gate is named explicitly:
   render comparison uses deterministic font mode.
 - Crate dependency graph. Run `cargo tree -p rpptx-layout --edges normal` and
   confirm the edge points from `rpptx-layout` to `oxml-layout`, with no reverse
-  dependency from an `oxml-*` crate.
+  dependency from an `oxml-*` crate. Also run
+  `cargo tree -p rpptx-layout --edges dev` and confirm the test-only
+  `rpptx-layout -> oxml-opc` edge does not enter the normal graph.
 - Public API in unpublished crates. Record that the contract freezes
   `rpptx-layout` at version 0.0.0 with publication disabled. Inspect the
   manifest and lockfile diff and run the full publication dry-run gate without
@@ -129,14 +140,28 @@ to Word rendering.
 
 ## Implementation checklist
 
-- [ ] Add the one-way `oxml-layout` dependency.
-- [ ] Define the complete owned `ResolvedSlide` type set in `lib.rs`.
-- [ ] Convert effective transforms and styles into concrete neutral values.
-- [ ] Preserve unsupported content with bounds and diagnostics.
-- [ ] Resolve a corpus slide without source-model or theme references.
-- [ ] Freeze and document the renderer-facing contract.
+- [x] Add the one-way `oxml-layout` dependency.
+- [x] Add the test-only `oxml-opc` dependency for both 50-deck gates.
+- [x] Define the complete owned `ResolvedSlide` type set in `lib.rs`.
+- [x] Convert effective transforms and styles into concrete neutral values.
+- [x] Preserve unsupported content with bounds and diagnostics.
+- [x] Resolve a corpus slide without source-model or theme references.
+- [x] Freeze and document the renderer-facing contract.
 
 ## Open questions
 
 None. The HLD fixes the owned type set, `MediaId` boundary, unsupported-content
 policy, and dependency direction.
+
+## Design deviations
+
+- Remediation pass 1 replaced three in-memory corpus-shaped fixtures with both
+  required 50-deck gates. This requires the test-only `oxml-opc` dependency
+  described above. No production dependency or runtime package boundary
+  changed.
+- Remediation pass 1 added a backend-neutral accumulated group transform to
+  each resolved shape. This prevents nested group transforms from being lost
+  before the frozen renderer boundary and follows the existing HLD group seam.
+- Remediation passes 1 and 2 expanded the owned text contract with paragraph
+  spacing and complete bullet styling. Character and auto-number bullets both
+  retain independently inherited font, colour, size, and choice values.
