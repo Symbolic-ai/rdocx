@@ -29,8 +29,8 @@ development crate.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-079 | The rpptx read facade | L | done | |
-| F-080 | Modelled round-trip gate | M | done | |
+| F-079 | The rpptx read facade | L | done | - |
+| F-080 | Modelled round-trip gate | M | done | - |
 
 ## Sequencing note
 
