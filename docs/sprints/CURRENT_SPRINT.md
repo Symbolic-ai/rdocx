@@ -25,7 +25,7 @@ or hierarchy references.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-081 | ResolveCtx skeleton and placeholder chain | M | pending | - |
+| F-081 | ResolveCtx skeleton and placeholder chain | M | in-progress | codex |
 | F-082 | Effective transform and body properties | M | pending | - |
 | F-083 | The seven-step list style merge | L | pending | - |
 | F-084 | Format scheme reference resolution | M | pending | - |
