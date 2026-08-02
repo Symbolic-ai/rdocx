@@ -1,6 +1,6 @@
 # F-090, Preset table generator
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S22
 **Size**: L
 **Depends on**: F-089, F-058
@@ -34,8 +34,11 @@ generator. The source is copied verbatim from the official fifth-edition Part 1
 electronic addendum and checked against the F-089 SHA-256 before generation.
 
 The generator parses all 187 top-level definitions using the Python standard
-library, canonicalises each definition into a complete `a:custGeom` byte
-string, and emits a deterministic match table in
+library. The source contains 186 unique preset names because two byte-identical
+`upDownArrow` definitions are present. The generator rejects a repeated name
+whose source bytes conflict, deduplicates the identical pair, canonicalises
+each unique definition into a complete `a:custGeom` byte string, and emits a
+deterministic 186-key match table in
 `crates/oxml-drawing/src/preset_shape_data.rs`. The existing
 `crates/oxml-drawing/src/lib.rs` declares the generated module privately.
 Generated output carries the upstream provenance, source hash, and BSD notice.
@@ -45,7 +48,16 @@ or feature flag is introduced.
 The command supports `--check` and an optional corpus path. Check mode compares
 fresh output byte for byte with the checked-in file and scans every `.pptx`
 member for `a:prstGeom@prst`, failing if any corpus name is absent from the
-table. It also asserts exactly 187 unique source names.
+table. It also asserts exactly 187 direct definitions and 186 unique source
+names.
+
+## Design deviations
+
+The approved plan described 187 unique source names. Verification of the pinned
+official XML found 187 direct definitions and 186 unique names because
+`upDownArrow` occurs twice with byte-identical definition XML. The generator
+therefore rejects conflicting duplicates and deduplicates this identical pair.
+This follows the official source without inventing a non-standard lookup key.
 
 ## Rejected alternatives
 
@@ -62,7 +74,7 @@ table. It also asserts exactly 187 unique source names.
 |---|---|---|
 | regression | `generator_reproduces_checked_in_table` | Running the generator in check mode produces a byte-identical Rust file |
 | corpus | `generated_table_covers_every_corpus_preset` | Every preset name in all 50 pinned decks exists in the generated table |
-| unit | `source_has_187_unique_preset_names` | The pinned official XML contains exactly the expected unique definitions |
+| unit | `source_has_187_direct_definitions` | The pinned official XML contains 187 direct definitions, 186 unique names, and no conflicting duplicate |
 | unit | `generated_lookup_has_known_and_unknown_cases` | A standard name returns bytes and an unknown name returns none |
 
 The backlog test gate is that the generated table covers every preset name in
@@ -89,12 +101,12 @@ until F-091.
 
 ## Implementation checklist
 
-- [ ] Vendor the exact official XML and required BSD notice.
-- [ ] Implement deterministic parsing and Rust emission.
-- [ ] Generate all 187 unique preset entries.
-- [ ] Add byte-identical `--check` mode.
-- [ ] Scan all 50 corpus decks and reject missing preset names.
-- [ ] Expose only a private generated lookup for F-091.
+- [x] Vendor the exact official XML and required BSD notice.
+- [x] Implement deterministic parsing and Rust emission.
+- [x] Generate 186 unique preset entries from all 187 direct definitions.
+- [x] Add byte-identical `--check` mode.
+- [x] Scan all 50 corpus decks and reject missing preset names.
+- [x] Expose only a private generated lookup for F-091.
 
 ## Open questions
 
