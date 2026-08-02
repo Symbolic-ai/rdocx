@@ -11,6 +11,7 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::order::OrderedRawChildren;
+use crate::preset_shape_data::preset_shape_definition;
 
 const ANGLE_UNITS_PER_DEGREE: f64 = 60_000.0;
 const QUARTER_CIRCLE: f64 = 90.0 * ANGLE_UNITS_PER_DEGREE;
@@ -395,6 +396,14 @@ pub struct CT_CustomGeometry2D {
     raw_children: OrderedRawChildren,
 }
 
+#[allow(non_camel_case_types)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CT_PresetGeometry2D {
+    pub preset: String,
+    adjust_values: Option<GuideList>,
+    raw_children: OrderedRawChildren,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EvaluatedTextRectangle {
     pub left: f64,
@@ -584,11 +593,25 @@ impl CT_CustomGeometry2D {
         &self,
         overrides: &BTreeMap<String, f64>,
     ) -> Result<EvaluatedCustomGeometry, GeometryError> {
+        self.evaluate_with_default_dimensions(overrides, None)
+    }
+
+    fn evaluate_with_default_dimensions(
+        &self,
+        overrides: &BTreeMap<String, f64>,
+        default_dimensions: Option<(f64, f64)>,
+    ) -> Result<EvaluatedCustomGeometry, GeometryError> {
         let mut paths = Vec::with_capacity(self.path_list.paths.len());
         let mut text_rectangle = None;
         for (index, path) in self.path_list.paths.iter().enumerate() {
-            let width = path.width.ok_or(GeometryError::MissingPathDimensions)?;
-            let height = path.height.ok_or(GeometryError::MissingPathDimensions)?;
+            let width = path
+                .width
+                .or(default_dimensions.map(|dimensions| dimensions.0))
+                .ok_or(GeometryError::MissingPathDimensions)?;
+            let height = path
+                .height
+                .or(default_dimensions.map(|dimensions| dimensions.1))
+                .ok_or(GeometryError::MissingPathDimensions)?;
             let mut evaluator = GuideEvaluator::new(width, height)?;
             evaluator.apply_adjust_values(self.adjust_values(), overrides)?;
             evaluator.evaluate_guides(self.guides())?;
@@ -598,7 +621,7 @@ impl CT_CustomGeometry2D {
                 .map(|record| record.command.to_evaluator_command())
                 .collect::<Vec<_>>();
             paths.push(evaluator.evaluate_path(&commands)?);
-            if index == 0 {
+            if index == 0 && default_dimensions.is_none() {
                 text_rectangle = self
                     .text_rectangle
                     .as_ref()
@@ -606,10 +629,195 @@ impl CT_CustomGeometry2D {
                     .transpose()?;
             }
         }
+        if let Some((width, height)) = default_dimensions {
+            let mut evaluator = GuideEvaluator::new(width, height)?;
+            evaluator.apply_adjust_values(self.adjust_values(), overrides)?;
+            evaluator.evaluate_guides(self.guides())?;
+            text_rectangle = self
+                .text_rectangle
+                .as_ref()
+                .map(|rectangle| rectangle.evaluate(&evaluator))
+                .transpose()?;
+        }
         Ok(EvaluatedCustomGeometry {
             paths,
             text_rectangle,
         })
+    }
+}
+
+impl CT_PresetGeometry2D {
+    /// Parses one complete `a:prstGeom` element with any namespace prefix.
+    pub fn from_xml(xml: &[u8]) -> Result<Self, GeometryError> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader
+                .read_event_into(&mut buffer)
+                .map_err(|error| GeometryError::Xml(error.to_string()))?
+            {
+                Event::Start(element)
+                    if matches_local_name(element.name().as_ref(), b"prstGeom") =>
+                {
+                    return Self::from_element(&mut reader, &element);
+                }
+                Event::Empty(element)
+                    if matches_local_name(element.name().as_ref(), b"prstGeom") =>
+                {
+                    return Ok(Self {
+                        preset: required_attr(&element, b"prst")?,
+                        adjust_values: None,
+                        raw_children: OrderedRawChildren::default(),
+                    });
+                }
+                Event::Start(element) | Event::Empty(element) => {
+                    return Err(GeometryError::UnexpectedElement(element_name(&element)));
+                }
+                Event::Eof => {
+                    return Err(GeometryError::UnexpectedElement("EOF".to_owned()));
+                }
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn from_element(
+        reader: &mut Reader<&[u8]>,
+        start: &BytesStart<'_>,
+    ) -> Result<Self, GeometryError> {
+        let preset = required_attr(start, b"prst")?;
+        let mut adjust_values = None;
+        let mut raw_children = OrderedRawChildren::default();
+        let mut boundary = 0;
+        let mut buffer = Vec::new();
+        loop {
+            match reader
+                .read_event_into(&mut buffer)
+                .map_err(|error| GeometryError::Xml(error.to_string()))?
+            {
+                Event::Start(element)
+                    if matches_local_name(element.name().as_ref(), b"avLst")
+                        && adjust_values.is_none() =>
+                {
+                    adjust_values = Some(parse_guide_list(reader, &element, b"avLst")?);
+                    boundary = 1;
+                }
+                Event::Empty(element)
+                    if matches_local_name(element.name().as_ref(), b"avLst")
+                        && adjust_values.is_none() =>
+                {
+                    adjust_values = Some(GuideList {
+                        guides: Vec::new(),
+                        guide_raw_children: Vec::new(),
+                        raw_children: OrderedRawChildren::default(),
+                    });
+                    boundary = 1;
+                }
+                Event::Start(element) => {
+                    raw_children.push(boundary, capture_element(reader, &element)?)
+                }
+                Event::Empty(element) => {
+                    raw_children.push(boundary, capture_empty_element(&element)?)
+                }
+                Event::End(element) if matches_local_name(element.name().as_ref(), b"prstGeom") => {
+                    break;
+                }
+                Event::Eof => {
+                    return Err(GeometryError::Xml("missing closing a:prstGeom".to_owned()));
+                }
+                _ => {}
+            }
+            buffer.clear();
+        }
+        Ok(Self {
+            preset,
+            adjust_values,
+            raw_children,
+        })
+    }
+
+    pub fn adjust_values(&self) -> &[Guide] {
+        self.adjust_values
+            .as_ref()
+            .map_or(&[], |list| list.guides.as_slice())
+    }
+
+    /// Writes with the canonical `a:` prefix and DrawingML schema order.
+    pub fn to_xml(&self) -> Result<Vec<u8>, GeometryError> {
+        let mut writer = Writer::new(Vec::new());
+        let mut start = BytesStart::new("a:prstGeom");
+        start.push_attribute(("prst", self.preset.as_str()));
+        if self.adjust_values.is_none() && self.raw_children.is_empty() {
+            writer
+                .write_event(Event::Empty(start))
+                .map_err(|error| GeometryError::Xml(error.to_string()))?;
+            return Ok(writer.into_inner());
+        }
+        writer
+            .write_event(Event::Start(start))
+            .map_err(|error| GeometryError::Xml(error.to_string()))?;
+        emit_raw(&mut writer, self.raw_children.at(0))?;
+        if let Some(list) = &self.adjust_values {
+            write_guide_list(&mut writer, "a:avLst", list)?;
+        }
+        emit_raw(&mut writer, self.raw_children.at(1))?;
+        writer
+            .write_event(Event::End(BytesEnd::new("a:prstGeom")))
+            .map_err(|error| GeometryError::Xml(error.to_string()))?;
+        Ok(writer.into_inner())
+    }
+
+    /// Evaluates a known preset in the shape's coordinate space.
+    pub fn evaluate(
+        &self,
+        size: (f64, f64),
+    ) -> Result<Option<EvaluatedCustomGeometry>, GeometryError> {
+        let Some(xml) = preset_shape_definition(&self.preset) else {
+            return Ok(None);
+        };
+        let definition = CT_CustomGeometry2D::from_xml(xml)?;
+        let mut override_evaluator = GuideEvaluator::new(size.0, size.1)?;
+        override_evaluator.apply_adjust_values(self.adjust_values(), &BTreeMap::new())?;
+        let overrides = self
+            .adjust_values()
+            .iter()
+            .map(|guide| Ok((guide.name.clone(), override_evaluator.value(&guide.name)?)))
+            .collect::<Result<BTreeMap<_, _>, GeometryError>>()?;
+        let mut evaluated = definition.evaluate_with_default_dimensions(&overrides, Some(size))?;
+        for (commands, path) in evaluated.paths.iter_mut().zip(definition.paths()) {
+            let scale_x = size.0 / path.width.unwrap_or(size.0);
+            let scale_y = size.1 / path.height.unwrap_or(size.1);
+            for command in commands {
+                scale_evaluated_path_command(command, scale_x, scale_y);
+            }
+        }
+        Ok(Some(evaluated))
+    }
+}
+
+fn scale_evaluated_path_command(command: &mut EvaluatedPathCommand, scale_x: f64, scale_y: f64) {
+    match command {
+        EvaluatedPathCommand::MoveTo { x, y } | EvaluatedPathCommand::LineTo { x, y } => {
+            *x *= scale_x;
+            *y *= scale_y;
+        }
+        EvaluatedPathCommand::CubicTo {
+            x1,
+            y1,
+            x2,
+            y2,
+            x,
+            y,
+        } => {
+            *x1 *= scale_x;
+            *y1 *= scale_y;
+            *x2 *= scale_x;
+            *y2 *= scale_y;
+            *x *= scale_x;
+            *y *= scale_y;
+        }
+        EvaluatedPathCommand::Close => {}
     }
 }
 
@@ -1314,10 +1522,10 @@ impl GuideEvaluator {
         evaluator.seed("ss", width.min(height));
         evaluator.seed("ls", width.max(height));
 
-        for divisor in [2_u32, 3, 4, 5, 6, 8, 10, 32] {
+        for divisor in [2_u32, 3, 4, 5, 6, 8, 10, 12, 32] {
             evaluator.seed(&format!("wd{divisor}"), width / f64::from(divisor));
         }
-        for divisor in [2_u32, 3, 4, 5, 6, 8] {
+        for divisor in [2_u32, 3, 4, 5, 6, 8, 10] {
             evaluator.seed(&format!("hd{divisor}"), height / f64::from(divisor));
         }
         for divisor in [2_u32, 4, 6, 8, 16, 32] {
@@ -1666,7 +1874,9 @@ mod tests {
         let overrides = BTreeMap::from([("adj1".to_owned(), 20_000.0)]);
         let mut evaluator = GuideEvaluator::new(100.0, 100.0).unwrap();
         assert_eq!(evaluator.value("wd32").unwrap(), 3.125);
+        assert_eq!(evaluator.value("wd12").unwrap(), 100.0 / 12.0);
         assert_eq!(evaluator.value("hd8").unwrap(), 12.5);
+        assert_eq!(evaluator.value("hd10").unwrap(), 10.0);
         assert_eq!(evaluator.value("ssd32").unwrap(), 3.125);
         assert_eq!(evaluator.value("3cd8").unwrap(), 8_100_000.0);
         evaluator
@@ -1905,5 +2115,58 @@ mod tests {
             assert!(result.is_ok(), "malformed XML panicked");
             assert!(result.unwrap().is_err(), "malformed XML was accepted");
         }
+    }
+
+    #[test]
+    fn rectangle_preset_evaluates_to_expected_bounds_and_text_rect() {
+        let preset = CT_PresetGeometry2D::from_xml(br#"<q:prstGeom prst="rect"/>"#).unwrap();
+        let evaluated = preset.evaluate((120.0, 80.0)).unwrap().unwrap();
+
+        assert_eq!(
+            evaluated.paths[0],
+            [
+                EvaluatedPathCommand::MoveTo { x: 0.0, y: 0.0 },
+                EvaluatedPathCommand::LineTo { x: 120.0, y: 0.0 },
+                EvaluatedPathCommand::LineTo { x: 120.0, y: 80.0 },
+                EvaluatedPathCommand::LineTo { x: 0.0, y: 80.0 },
+                EvaluatedPathCommand::Close,
+            ]
+        );
+        assert_eq!(
+            evaluated.text_rectangle,
+            Some(EvaluatedTextRectangle {
+                left: 0.0,
+                top: 0.0,
+                right: 120.0,
+                bottom: 80.0,
+            })
+        );
+    }
+
+    #[test]
+    fn preset_adjustments_override_generated_defaults() {
+        let default = CT_PresetGeometry2D::from_xml(
+            br#"<a:prstGeom prst="trapezoid"><a:avLst/></a:prstGeom>"#,
+        )
+        .unwrap()
+        .evaluate((200.0, 100.0))
+        .unwrap()
+        .unwrap();
+        let adjusted = CT_PresetGeometry2D::from_xml(
+            br#"<a:prstGeom prst="trapezoid"><a:avLst><a:gd name="adj" fmla="val 50000"/></a:avLst></a:prstGeom>"#,
+        )
+        .unwrap()
+        .evaluate((200.0, 100.0))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            default.paths[0][1],
+            EvaluatedPathCommand::LineTo { x: 25.0, y: 0.0 }
+        );
+        assert_eq!(
+            adjusted.paths[0][1],
+            EvaluatedPathCommand::LineTo { x: 50.0, y: 0.0 }
+        );
     }
 }

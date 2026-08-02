@@ -1,6 +1,6 @@
 # F-091, Preset evaluation and fallback
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S22
 **Size**: M
 **Depends on**: F-090
@@ -90,12 +90,19 @@ released Word render samples.
 
 ## Implementation checklist
 
-- [ ] Model preset name and adjustment values in existing geometry code.
-- [ ] Preserve unknown preset children and schema order on round-trip.
-- [ ] Evaluate generated definitions through F-058.
-- [ ] Convert known presets to backend-neutral paths and text rectangles.
-- [ ] Preserve bounds and text for unknown presets with a named diagnostic.
-- [ ] Run the 50-deck corpus resolution gate.
+- [x] Model preset name and adjustment values in existing geometry code.
+- [x] Preserve unknown preset children and schema order on round-trip.
+- [x] Evaluate generated definitions through F-058.
+- [x] Convert known presets to backend-neutral paths and text rectangles.
+- [x] Preserve bounds and text for unknown presets with a named diagnostic.
+- [x] Run the 50-deck corpus resolution gate.
+
+## Deviations
+
+The non-vacuous corpus gate exposed two standard fractional guides used by
+F-090's generated definitions but absent from F-058's evaluator seed. The
+existing evaluator now seeds `wd12` and `hd10`. No approach, dependency,
+public contract, HLD impact, or hash expectation changed.
 
 ## Open questions
 
