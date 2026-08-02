@@ -1,60 +1,58 @@
-# Current Sprint, S21
+# Current Sprint, S22
 
-**Milestone**: M9 Inheritance resolver.
+**Milestone**: M10 Renderer.
 
-**Goal**: Freeze a correct `ResolvedSlide` boundary by flattening slide,
-layout, and master content into final draw order and collapsing every inherited
-or theme-derived value. Prove the contract on the corpus and publish it as the
-documented handoff to the M10 render track without publishing any crate.
+**Goal**: Settle the licensed source for preset shape definitions, generate a
+reproducible checked-in preset table, and evaluate known and unknown preset
+geometry without dropping visible content. Establish the `rpptx-render` input
+boundary so M10 can consume the frozen resolver contract with relationship
+scopes and media resolved correctly, while keeping every PowerPoint development
+crate unpublished.
 
 ## Spec references
 
-- `docs/hld/05-drawingml-model.md`, for the typed colour, theme, fill, shape,
-  and text inputs and their concrete resolved forms.
-- `docs/hld/06-presentationml-model.md`, for part relationships, document-order
-  shape trees, placeholder identity, and latent-placeholder inputs.
-- `docs/hld/07-inheritance-and-resolution.md`, for the `ResolvedSlide` output,
-  four-pass draw order, suppression rules, and concrete-value contract.
-- `docs/hld/08-rendering-spec.md`, for the renderer-facing seam and
-  backend-neutral geometry, paint, and content types.
-- `docs/hld/12-testing-strategy.md`, for the corpus, exact 40-colour table,
-  differential decks, and one-time manual review evidence.
-- `docs/hld/14-development-backlog.md`, for the three F-ID dependencies, test
-  gates, and M9 end gate.
-- `docs/hld/15-build-and-toolchain.md`, for keeping PowerPoint development
-  crates at version 0.0.0 with publication disabled while publishing the
-  contract only to the render track.
+- `docs/hld/03-architecture.md`, for the `rpptx-layout` to `rpptx-render` seam
+  and one-way dependency graph.
+- `docs/hld/08-rendering-spec.md`, for the preset generator, evaluator,
+  fallback, and `RenderInput`, `SlideBundle`, and `RelScopes` contracts.
+- `docs/hld/12-testing-strategy.md`, for the 50-deck corpus and render-fidelity
+  evidence requirements.
+- `docs/hld/13-risks-and-open-questions.md`, for preset-table provenance and
+  rejection of the MPL-2.0 LibreOffice source.
+- `docs/hld/14-development-backlog.md`, for F-089 through F-092 dependencies,
+  story gates, and the M10 boundary.
+- `docs/hld/15-build-and-toolchain.md`, for checked-in generated artifacts and
+  the version 0.0.0, publication-disabled policy.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-086 | Draw order and the flattener | L | done | - |
-| F-087 | ResolvedSlide contract | M | done | - |
-| F-088 | Visual differential tests | M | done | - |
+| F-089 | Resolve the preset geometry licensing question | S | pending | - |
+| F-092 | rpptx-render skeleton and RenderInput | M | pending | - |
+| F-090 | Preset table generator | L | pending | - |
+| F-091 | Preset evaluation and fallback | M | pending | - |
 
 ## Sequencing note
 
-F-086 runs first because F-087 depends on F-082 through F-086. F-087 then
-freezes the complete renderer-facing output contract. F-088 consumes that
-frozen contract and supplies the differential and manual-review evidence for
-the milestone gate. These dependencies leave no safe implementation
-parallelism across the three F-IDs.
+F-089 must settle the permitted source before F-090 generates the preset table.
+F-091 then consumes that table. F-092 depends only on the completed F-036 and
+F-087 contracts, so it may proceed in parallel with the F-089 through F-091
+chain. The row order puts the two independent starting stories first.
 
 ## Definition of done for this sprint
 
-- The flattener emits the background, allowed master non-placeholder shapes,
-  allowed layout non-placeholder shapes, and slide shape tree in final document
-  order.
-- `showMasterSp`, placeholder suppression, and latent date, footer, and slide
-  number placeholders behave as documented. No prompt text is drawn, and a
-  master logo appears exactly once.
-- The public, documented `ResolvedSlide` type set is frozen. It contains no
-  PresentationML or DrawingML model types and no unresolved theme references.
-- Every corpus slide resolves without unresolved theme references.
-- The exact 40-case colour table and differential decks pass and receive their
-  required one-time manual review.
-- The M9 contract is documented and published to the M10 render track.
+- A written HLD decision records the preset geometry source and its licensing
+  basis. No MPL-2.0 LibreOffice table or code is used.
+- The offline preset generator covers every preset name found in the corpus,
+  checks its output into the repository, and regenerates byte-identically.
+- Known presets evaluate through the generated table. An unknown preset falls
+  back to its shape bounds, preserves its text, and emits a diagnostic.
+- The `rpptx-render` skeleton consumes the frozen resolver contract through
+  `RenderInput`, `SlideBundle`, and three distinct relationship scopes. Equal
+  relationship IDs in slide, layout, and master scopes resolve to their own
+  targets.
+- The package and dependency direction follows the architecture contract.
+  Every PowerPoint development crate remains version 0.0.0 with publication
+  disabled, and no crate is published to crates.io.
 - The full workspace gate passes with all 28 deterministic hashes unchanged.
-  Every PowerPoint development crate remains version 0.0.0 and unpublished,
-  with no crates.io publication.
