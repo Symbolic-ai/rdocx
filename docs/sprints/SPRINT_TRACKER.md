@@ -116,6 +116,9 @@ defended.
 | F-083 | S20 | L | 4 | 1 | 2026-08-02 | Seven-source, nine-level text-property cascade with safe caching |
 | F-084 | S20 | M | 2 | 1 | 2026-08-02 | Typed shape styles and format-scheme resolution with placeholder colours |
 | F-085 | S20 | S | 1 | 1 | 2026-08-02 | Major and minor theme-token typeface resolution |
+| F-086 | S21 | L | 4 | 1 | 2026-08-02 | Final draw-order flattener with inherited-shape suppression |
+| F-087 | S21 | M | 2 | 1 | 2026-08-02 | Frozen owned ResolvedSlide contract with concrete renderer values |
+| F-088 | S21 | M | 2 | 1 | 2026-08-02 | Pinned visual differential and native PowerPoint acceptance gates |
 
 ## Velocity
 
