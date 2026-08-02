@@ -18,3 +18,4 @@ thiserror.workspace = true
 
 [dev-dependencies]
 oxml-drawing.workspace = true
+rpptx-layout.workspace = true

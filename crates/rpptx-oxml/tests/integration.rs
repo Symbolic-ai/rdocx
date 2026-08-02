@@ -2771,3 +2771,135 @@ fn every_corpus_preserved_payload_is_identity_with_an_empty_map() {
     }
     assert!(xml_parts > 0);
 }
+
+#[test]
+fn visibility_and_header_footer_inputs_round_trip_in_schema_order() {
+    let slide_xml = format!(
+        r#"<q:sld xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer" showMasterSp="false" x:keep="slide"><q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld><q:clrMapOvr><d:masterClrMapping/></q:clrMapOvr><q:extLst/></q:sld>"#
+    );
+    let layout_xml = format!(
+        r#"<q:sldLayout xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer" showMasterSp="0" x:keep="layout"><q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld><q:clrMapOvr><d:masterClrMapping/></q:clrMapOvr><x:beforeHf/><q:hf sldNum="true" hdr="false" ftr="0" dt="1" x:keep="hf"><x:child/></q:hf><q:timing/><q:transition/><q:extLst/></q:sldLayout>"#
+    );
+    let master_xml = format!(
+        r#"<q:sldMaster xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld><q:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><q:sldLayoutIdLst/><q:timing/><q:hf sldNum="0" ftr="1" dt="false" x:keep="master"><x:child/></q:hf><x:afterHf/><q:txStyles><q:titleStyle/><q:bodyStyle/><q:otherStyle/></q:txStyles><q:extLst/></q:sldMaster>"#
+    );
+
+    let slide = CT_Slide::from_xml(slide_xml.as_bytes()).unwrap();
+    let layout = CT_SlideLayout::from_xml(layout_xml.as_bytes()).unwrap();
+    let master = CT_SlideMaster::from_xml(master_xml.as_bytes()).unwrap();
+
+    assert_eq!(slide.show_master_shapes, Some(false));
+    assert_eq!(layout.show_master_shapes, Some(false));
+    let layout_hf = layout.header_footer.as_ref().unwrap();
+    assert_eq!(layout_hf.slide_number, Some(true));
+    assert_eq!(layout_hf.header, Some(false));
+    assert_eq!(layout_hf.footer, Some(false));
+    assert_eq!(layout_hf.date_time, Some(true));
+    let master_hf = master.header_footer.as_ref().unwrap();
+    assert_eq!(master_hf.slide_number, Some(false));
+    assert_eq!(master_hf.footer, Some(true));
+    assert_eq!(master_hf.date_time, Some(false));
+
+    let written_slide = slide.to_xml().unwrap();
+    let written_layout = layout.to_xml().unwrap();
+    let written_master = master.to_xml().unwrap();
+    let slide_text = std::str::from_utf8(&written_slide).unwrap();
+    let layout_text = std::str::from_utf8(&written_layout).unwrap();
+    let master_text = std::str::from_utf8(&written_master).unwrap();
+
+    assert!(slide_text.starts_with("<p:sld "));
+    assert!(slide_text.contains("showMasterSp=\"0\""));
+    assert!(slide_text.contains("x:keep=\"slide\""));
+    assert!(layout_text.contains(
+        "<p:hf sldNum=\"1\" hdr=\"0\" ftr=\"0\" dt=\"1\" x:keep=\"hf\"><x:child/></p:hf>"
+    ));
+    assert!(
+        master_text
+            .contains("<p:hf sldNum=\"0\" ftr=\"1\" dt=\"0\" x:keep=\"master\"><x:child/></p:hf>")
+    );
+    assert!(!layout_text.contains("<q:hf"));
+    assert!(!master_text.contains("<q:hf"));
+    assert_order(
+        &written_layout,
+        &[
+            "<p:clrMapOvr",
+            "<x:beforeHf",
+            "<p:hf",
+            "<q:timing",
+            "<q:transition",
+            "<q:extLst",
+        ],
+    );
+    assert_order(
+        &written_master,
+        &[
+            "<p:clrMap",
+            "<q:sldLayoutIdLst",
+            "<q:timing",
+            "<p:hf",
+            "<x:afterHf",
+            "<p:txStyles",
+            "<q:extLst",
+        ],
+    );
+    assert_eq!(slide, CT_Slide::from_xml(&written_slide).unwrap());
+    assert_eq!(layout, CT_SlideLayout::from_xml(&written_layout).unwrap());
+    assert_eq!(master, CT_SlideMaster::from_xml(&written_master).unwrap());
+}
+
+#[test]
+fn all_corpus_slide_layout_and_master_parts_reparse_after_visibility_typing() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut decks = 0usize;
+    let mut counts = [0usize; 3];
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, content_type) in &package.content_types.overrides {
+            let Some(xml) = package.get_part(part) else {
+                continue;
+            };
+            match content_type.as_str() {
+                content_types::SLIDE => {
+                    let parsed = CT_Slide::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                    let _ = parsed.show_master_shapes;
+                    assert_eq!(
+                        parsed,
+                        CT_Slide::from_xml(&parsed.to_xml().unwrap()).unwrap()
+                    );
+                    counts[0] += 1;
+                }
+                content_types::SLIDE_LAYOUT => {
+                    let parsed = CT_SlideLayout::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                    let _ = (parsed.show_master_shapes, parsed.header_footer.as_ref());
+                    assert_eq!(
+                        parsed,
+                        CT_SlideLayout::from_xml(&parsed.to_xml().unwrap()).unwrap()
+                    );
+                    counts[1] += 1;
+                }
+                content_types::SLIDE_MASTER => {
+                    let parsed = CT_SlideMaster::from_xml(xml)
+                        .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                    let _ = parsed.header_footer.as_ref();
+                    assert_eq!(
+                        parsed,
+                        CT_SlideMaster::from_xml(&parsed.to_xml().unwrap()).unwrap()
+                    );
+                    counts[2] += 1;
+                }
+                _ => {}
+            }
+        }
+        decks += 1;
+    }
+    assert_eq!(decks, EXPECTED_DECKS);
+    assert!(
+        counts.iter().all(|count| *count > 0),
+        "part counts: {counts:?}"
+    );
+}

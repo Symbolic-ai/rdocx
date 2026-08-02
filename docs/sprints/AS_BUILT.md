@@ -2522,3 +2522,125 @@ and duplicate-script document order. The integrated full gate passed.
 
 **Notes for future sessions.** Keep Unicode script segmentation in the text
 shaping layer and pass the resulting ISO 15924 tag into this resolver.
+
+### F-086, Draw order and the flattener
+
+**Sprint.** S21
+**Completed.** 2026-08-02
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `ResolveCtx::flatten` now emits the effective background,
+allowed master artwork, allowed layout artwork, and slide shape-tree leaves in
+final source order. It walks nested groups and selected fallback content while
+retaining each leaf's source. Slide and layout `showMasterSp`, ordinary
+placeholder suppression, typed header-footer controls, and occupied latent
+placeholders are applied before the renderer boundary.
+
+**Non-obvious choices.** Background selection keeps the producing part and
+effective master colour map. The layout visibility flag controls only the
+master pass, while the slide flag controls only the layout pass. Ordinary
+master and layout placeholders remain templates rather than drawable content.
+
+**Deviations from the design plan.** Microscope pass 1 found that the tests did
+not isolate the two visibility controls and did not prove all four background
+fallback sources. Both coverage gaps were corrected, and pass 2 was clean.
+
+**Spec sections touched.** `docs/hld/06-presentationml-model.md` records typed
+visibility and header-footer inputs. `docs/hld/07-inheritance-and-resolution.md`
+records the borrowed flattened view, final draw order, and suppression policy.
+
+**Tests.** Forty-one resolver tests, 68 PresentationML integration tests, all
+50 pinned corpus decks, exact-colour checks, and the integrated full gate
+passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep source order and suppression in the
+flattener. Renderers must not reconstruct the slide, layout, and master passes.
+
+### F-087, ResolvedSlide contract
+
+**Sprint.** S21
+**Completed.** 2026-08-02
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `rpptx-layout` now exposes an owned `ResolvedSlide`
+boundary with point geometry, accumulated group transforms, concrete paint,
+lines, shadows, text, tables, unsupported categories, and diagnostics. The
+contract contains no PresentationML or DrawingML model types and retains
+visible bounds fallbacks when content cannot yet be represented exactly.
+
+**Non-obvious choices.** Custom paths scale in their own declared coordinate
+spaces. Unsupported gradient geometry, media relationships, charts, SmartArt,
+OLE, and pending presets remain explicit instead of being approximated as
+concrete output. Character and automatic-number bullets retain independently
+inherited font, colour, size, and choice values.
+
+**Deviations from the design plan.** The plan added a test-only `oxml-opc`
+dependency so both named gates could traverse all 50 real decks. Microscope
+pass 1 found six contract and corpus defects, and pass 2 found group-composition
+and automatic-number bullet defects. All were remediated. Pass 3 was clean.
+Sprint review pass 1 then found that the named corpus gate accepted contextual
+resolver errors. The strict gate exposed 20 affected slides. Preset black and
+white now resolve concretely, and invalid custom geometry retains a diagnosed
+bounds fallback. All corpus slides now produce an owned contract.
+
+**Spec sections touched.** `docs/hld/07-inheritance-and-resolution.md` freezes
+the owned output and fallback boundary. `docs/hld/08-rendering-spec.md` records
+the accumulated group transform supplied to renderers.
+
+**Tests.** Fifty-seven resolver tests, two independent 50-deck gates, exact
+colour checks, dependency-direction riders, publication dry-run, and the
+integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Renderers consume only the owned contract.
+Relationship-to-media resolution and pending geometry evaluation must fill the
+documented gaps without exposing source-model types.
+
+### F-088, Visual differential tests
+
+**Sprint.** S21
+**Completed.** 2026-08-02
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The existing `rpptx` integration binary now assembles full
+resolver inputs through package relationships and emits normalized visual
+records with ordered shape kinds, bounds, concrete shape and run paint, text,
+unsupported categories, and diagnostics. It compares shared fields with pinned
+python-pptx 1.0.2, proves exact cyan inheritance, prompt suppression, draw
+order, and master artwork multiplicity, and records the one-time native
+PowerPoint acceptance.
+
+**Non-obvious choices.** Python supplies only mutually observable structure.
+Rust separately asserts effective latent-placeholder visibility because
+python-pptx exposes raw collections. Automated gates skip when the ignored
+external corpus is absent and optional, but fail when the corpus is required.
+The manual acceptance record remains available without the corpus files.
+
+**Deviations from the design plan.** The first native review exposed inherited
+date and slide-number fields that PowerPoint hid and an explicit slide footer
+that the resolver dropped. The private flattener was repaired to require an
+inherited header-footer container, preserve occupied slide latent content, and
+match latent types across level-specific indices. Microscope pass 1 found two
+evidence gaps, pass 2 was clean after remediation, and integrator review found
+the clean-clone corpus issue. The compact repair received a clean pass 3.
+
+**Spec sections touched.** `docs/hld/07-inheritance-and-resolution.md` records
+source-sensitive latent visibility and the executable visual differential.
+`docs/hld/12-testing-strategy.md` records the selected decks, pinned oracle,
+external-corpus policy, and native acceptance evidence.
+
+**Tests.** Sixteen `rpptx` tests, 57 resolver tests, all 50 pinned decks, the
+40-case exact PowerPoint colour table, optional and required corpus modes, and
+the integrated full gate passed. Microsoft PowerPoint 16.104 build
+16.104.25121423 opened and exported all four selected originals without repair
+or clipping. Native master artwork, backgrounds, exact cyan, prompt
+suppression, and footer visibility matched the remediated evidence.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep native visibility policy in the flattener,
+keep the Python comparison structural, and preserve explicit unsupported
+diagnostics until modelled background paint and media resolution land.

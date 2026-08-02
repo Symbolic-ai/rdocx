@@ -682,6 +682,7 @@ version = "0.0.0"
 dependencies = [
  "oxml-drawing",
  "oxml-opc",
+ "rpptx-layout",
  "rpptx-oxml",
  "thiserror",
 ]
@@ -691,6 +692,8 @@ name = "rpptx-layout"
 version = "0.0.0"
 dependencies = [
  "oxml-drawing",
+ "oxml-layout",
+ "oxml-opc",
  "rpptx-oxml",
 ]
 

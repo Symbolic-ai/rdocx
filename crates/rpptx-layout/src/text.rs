@@ -75,6 +75,33 @@ impl ResolveCtx<'_> {
         effective
     }
 
+    /// Resolves presentation defaults and the master's other style for table text.
+    pub(crate) fn effective_table_text_properties(
+        &self,
+        paragraph: Option<&CT_TextParagraphProperties>,
+        run: Option<&CT_TextCharacterProperties>,
+    ) -> EffectiveTextProperties {
+        let mut style = EffectiveListStyle::default();
+        merge_list_style(&mut style, self.default_text_style);
+        if let Some(styles) = &self.master.text_styles {
+            merge_list_style(&mut style, &styles.other_style);
+        }
+        let level = paragraph
+            .and_then(|properties| properties.level)
+            .unwrap_or(0);
+        let mut effective = style
+            .level(level)
+            .cloned()
+            .unwrap_or_else(EffectiveTextProperties::default);
+        if let Some(properties) = paragraph {
+            merge_paragraph(&mut effective, properties);
+        }
+        if let Some(properties) = run {
+            merge_character(&mut effective, properties);
+        }
+        effective
+    }
+
     fn resolve_list_style_prefix(&self, shape: &CT_Shape) -> EffectiveListStyle {
         let mut effective = EffectiveListStyle::default();
         merge_list_style(&mut effective, self.default_text_style);

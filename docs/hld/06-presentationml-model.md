@@ -23,6 +23,19 @@ back to its source slide. Every notes master has exactly one `theme`
 relationship. A source slide has at most one `notesSlide` relationship. A deck
 with zero slides is valid, and that is what a template is.
 
+`CT_Slide` and `CT_SlideLayout` expose the presence-sensitive
+`show_master_shapes` root attribute. An absent `showMasterSp` means true.
+`CT_SlideLayout` and `CT_SlideMaster` expose their optional `p:hf` as
+`CT_HeaderFooter`, with presence-sensitive slide-number, header, footer, and
+date-time flags. Each absent flag means true. Boolean inputs accept both XML
+boolean spellings and canonical output uses `1` or `0`.
+
+The visibility attributes read through any PresentationML element prefix and
+write at their fixed root locations. The modelled `p:hf` writes with the fixed
+`p:` prefix in its schema position. Unmodelled root attributes, header-footer
+attributes, and header-footer children retain their original payload and
+relative positions.
+
 ## Public read facade
 
 `rpptx::Presentation` opens a path or byte slice and owns the OPC package, the
@@ -321,3 +334,5 @@ and **zero slides**.
 
 The asset must live under the crate's own directory. A workspace-root `assets/`
 compiles locally but is not included in the published `.crate`.
+
+The PresentationML model crates remain version `0.0.0` with `publish = false`.

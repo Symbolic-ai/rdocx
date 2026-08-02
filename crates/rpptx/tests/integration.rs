@@ -5,13 +5,19 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use oxml_drawing::color::ColorMap;
 use oxml_drawing::theme::CT_OfficeStyleSheet;
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
 use rpptx::{Error, Presentation, ShapeKind, ShapeRef};
+use rpptx_layout::{
+    FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,
+};
 use rpptx_oxml::notes_parts::{CT_NotesMaster, CT_NotesSlide};
+use rpptx_oxml::placeholder::PhType;
 use rpptx_oxml::presentation::CT_Presentation;
-use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster};
+use rpptx_oxml::shape_tree::ShapeTreeChild;
+use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind};
 
 #[path = "../examples/dump_deck.rs"]
 mod dump_deck;
@@ -33,6 +39,30 @@ const MODELLED_CONTENT_TYPES: [&str; 7] = [
     content_types::NOTES_MASTER,
     content_types::THEME,
 ];
+const VISUAL_DECKS: [&str; 5] = [
+    "WithMaster.pptx",
+    "backgrounds.pptx",
+    "placeholder-layout-color.pptx",
+    "bug58144-headers-footers-2007.pptx",
+    "60810.pptx",
+];
+const POWERPOINT_VISUAL_ACCEPTANCE: &str = r#"application	Microsoft PowerPoint 16.104	bundle 16.104.25121423
+deck	/Users/atulsharma/Documents/projects/tensorbee/rdocx/corpus/pptx/WithMaster.pptx
+deck	/Users/atulsharma/Documents/projects/tensorbee/rdocx/corpus/pptx/backgrounds.pptx
+deck	/Users/atulsharma/Documents/projects/tensorbee/rdocx/corpus/pptx/placeholder-layout-color.pptx
+deck	/Users/atulsharma/Documents/projects/tensorbee/rdocx/corpus/pptx/bug58144-headers-footers-2007.pptx
+native_pdf	/private/tmp/F088-WithMaster.pdf
+native_pdf	/private/tmp/F088-backgrounds.pdf
+native_pdf	/private/tmp/F088-placeholder-layout-color.pdf
+native_pdf	/private/tmp/F088-headers-footers.pdf
+rendered_pages	/private/tmp/F088-pdf-render
+normalized_evidence	/private/tmp/F-088-normalized-visual.txt
+result	clean	opened and exported without repair, clipping, or prompt text
+WithMaster	master artwork once, slide footer once on slide 2, no latent date or number
+backgrounds	distinct solid, gradient, picture, and texture visuals
+placeholder-layout-color	exact cyan on black, RGBA #00FFFF
+bug58144-headers-footers-2007	Slide footer once
+"#;
 
 #[test]
 fn all_corpus_modelled_parts_reparse_structurally() {
@@ -389,6 +419,570 @@ fn dump_deck_matches_python_pptx_1_0_2_for_the_corpus() {
             oracle_lines.len(),
         );
     }
+}
+
+#[test]
+fn resolved_visual_dump_matches_python_pptx_1_0_2() {
+    let Some(decks) = resolve_visual_decks() else {
+        return;
+    };
+    let rust = normalized_visual_oracle_records(&decks);
+    let paths = VISUAL_DECKS
+        .iter()
+        .map(|name| corpus_dir().join(name))
+        .collect::<Vec<_>>();
+    let mut command = Command::new("uv");
+    command.args([
+        "run",
+        "--with",
+        "python-pptx==1.0.2",
+        "python",
+        "-c",
+        PYTHON_VISUAL_ORACLE,
+    ]);
+    command.args(&paths);
+    let output = command
+        .output()
+        .expect("run pinned visual python-pptx oracle");
+    assert!(
+        output.status.success(),
+        "visual python-pptx oracle failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let python = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(rust, python, "normalized resolved visual records");
+
+    let cyan_deck = decks
+        .iter()
+        .find(|deck| deck.name == "placeholder-layout-color.pptx")
+        .expect("cyan placeholder deck");
+    let cyan_fills = cyan_deck.slides[0]
+        .resolved
+        .shapes
+        .iter()
+        .filter(|shape| resolved_content_text(&shape.content) == "CYAN TEXT")
+        .flat_map(|shape| resolved_run_fills(&shape.content))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cyan_fills,
+        ["Solid(Color { r: 0.0, g: 1.0, b: 1.0, a: 1.0 })"],
+        "placeholder run must resolve to exact cyan RGBA"
+    );
+
+    let with_master = decks
+        .iter()
+        .find(|deck| deck.name == "WithMaster.pptx")
+        .expect("latent-placeholder deck");
+    let first_text = with_master.slides[0]
+        .resolved
+        .shapes
+        .iter()
+        .map(|shape| resolved_content_text(&shape.content))
+        .collect::<Vec<_>>();
+    let second_text = with_master.slides[1]
+        .resolved
+        .shapes
+        .iter()
+        .map(|shape| resolved_content_text(&shape.content))
+        .collect::<Vec<_>>();
+    for text in [&first_text, &second_text] {
+        assert!(!text.iter().any(|value| value == "9/26/2011"));
+        assert!(!text.iter().any(|value| value == "‹#›"));
+    }
+    assert_eq!(
+        second_text
+            .iter()
+            .filter(|value| value.as_str() == "Footer from the master slide")
+            .count(),
+        1,
+        "occupied slide footer must resolve exactly once"
+    );
+
+    let header_footer = decks
+        .iter()
+        .find(|deck| deck.name == "bug58144-headers-footers-2007.pptx")
+        .expect("header-footer policy deck");
+    let header_footer_text = header_footer.slides[0]
+        .resolved
+        .shapes
+        .iter()
+        .map(|shape| resolved_content_text(&shape.content))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        header_footer_text
+            .iter()
+            .filter(|value| value.as_str() == "Slide footer")
+            .count(),
+        1,
+        "enabled slide footer must remain visible exactly once"
+    );
+
+    if let Some(path) = std::env::var_os("RDOCX_PPTX_VISUAL_EVIDENCE") {
+        let path = PathBuf::from(path);
+        fs::write(&path, normalized_resolved_evidence(&decks))
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        eprintln!("normalized visual evidence: {}", path.display());
+    }
+}
+
+#[test]
+fn visual_decks_resolve_in_expected_draw_order() {
+    let Some(decks) = resolve_visual_decks() else {
+        return;
+    };
+    let records = normalized_visual_oracle_records(&decks);
+    assert!(records.contains("This text comes from the Master Slide"));
+    assert!(records.contains("First page title"));
+    let master_text = records
+        .find("This text comes from the Master Slide")
+        .unwrap();
+    let slide_text = records.find("First page title").unwrap();
+    assert!(
+        master_text < slide_text,
+        "layout artwork must precede slide content"
+    );
+}
+
+#[test]
+fn visual_decks_never_emit_template_prompt_text() {
+    let Some(decks) = resolve_visual_decks() else {
+        return;
+    };
+    let evidence = normalized_resolved_evidence(&decks);
+    for prompt in ["Click to edit", "Click to add"] {
+        assert!(
+            !evidence.contains(prompt),
+            "template prompt leaked: {prompt}"
+        );
+    }
+}
+
+#[test]
+fn visual_decks_emit_each_master_logo_once() {
+    let Some(decks) = resolve_visual_decks() else {
+        return;
+    };
+    let deck = decks
+        .iter()
+        .find(|deck| deck.name == "60810.pptx")
+        .expect("master-logo deck");
+    for (slide_index, slide) in deck.slides.iter().enumerate() {
+        let logos = slide
+            .resolved
+            .shapes
+            .iter()
+            .filter(|shape| {
+                shape.unsupported == Some("image media pending relationship resolution")
+                    && (shape.bounds.x - 611.751).abs() < 0.001
+                    && (shape.bounds.y - 27.000).abs() < 0.001
+                    && (shape.bounds.width - 101.732).abs() < 0.001
+                    && (shape.bounds.height - 20.312).abs() < 0.001
+            })
+            .count();
+        let expected = usize::from(!matches!(slide_index, 2 | 3));
+        assert_eq!(
+            logos, expected,
+            "60810.pptx slide {slide_index} master logo"
+        );
+    }
+}
+
+#[test]
+fn selected_visual_decks_reviewed_once_in_powerpoint() {
+    assert!(POWERPOINT_VISUAL_ACCEPTANCE.contains("bundle 16.104.25121423"));
+    assert_eq!(
+        POWERPOINT_VISUAL_ACCEPTANCE
+            .lines()
+            .filter(|line| line.starts_with("deck\t"))
+            .count(),
+        4
+    );
+    assert!(POWERPOINT_VISUAL_ACCEPTANCE.contains("result\tclean"));
+    assert!(POWERPOINT_VISUAL_ACCEPTANCE.contains("RGBA #00FFFF"));
+    assert!(POWERPOINT_VISUAL_ACCEPTANCE.contains("slide footer once on slide 2"));
+}
+
+struct ResolvedVisualDeck {
+    name: &'static str,
+    slides: Vec<ResolvedVisualSlide>,
+}
+
+struct ResolvedVisualSlide {
+    resolved: ResolvedSlide,
+    shape_metadata: Vec<ResolvedVisualShapeMetadata>,
+}
+
+struct ResolvedVisualShapeMetadata {
+    kind: &'static str,
+    is_latent: bool,
+}
+
+fn resolve_visual_decks() -> Option<Vec<ResolvedVisualDeck>> {
+    let corpus = corpus_dir();
+    if !corpus.is_dir() {
+        assert!(
+            std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").is_none(),
+            "required visual corpus is missing at {}",
+            corpus.display()
+        );
+        eprintln!(
+            "visual differential skipped because {} is absent",
+            corpus.display()
+        );
+        return None;
+    }
+    Some(resolve_visual_decks_from_corpus(&corpus))
+}
+
+fn resolve_visual_decks_from_corpus(corpus: &Path) -> Vec<ResolvedVisualDeck> {
+    VISUAL_DECKS
+        .iter()
+        .map(|&name| {
+            let path = corpus.join(name);
+            assert!(
+                path.is_file(),
+                "missing selected visual deck {}",
+                path.display()
+            );
+            let package = OpcPackage::open(&path)
+                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            let presentation_part = package
+                .main_document_part()
+                .unwrap_or_else(|| panic!("{}: no presentation part", path.display()));
+            let presentation = CT_Presentation::from_xml(visual_part(&package, &presentation_part))
+                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            let default_text_style = presentation.default_text_style.unwrap_or_default();
+            let size = presentation.slide_size.map_or((720.0, 540.0), |size| {
+                (size.cx.0 as f64 / 12_700.0, size.cy.0 as f64 / 12_700.0)
+            });
+            let presentation_rels = package
+                .get_part_rels(&presentation_part)
+                .unwrap_or_else(|| panic!("{}: no presentation relationships", path.display()));
+            let slides = presentation
+                .slide_ids
+                .iter()
+                .map(|slide_id| {
+                    let slide_rel = presentation_rels
+                        .get_by_id(&slide_id.relationship_id)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "{}: missing slide relationship {}",
+                                path.display(),
+                                slide_id.relationship_id
+                            )
+                        });
+                    assert_eq!(slide_rel.rel_type, rel_types::SLIDE, "{}", path.display());
+                    let slide_part =
+                        OpcPackage::resolve_rel_target(&presentation_part, &slide_rel.target);
+                    let layout_part =
+                        related_visual_part(&package, &slide_part, rel_types::SLIDE_LAYOUT, &path);
+                    let master_part =
+                        related_visual_part(&package, &layout_part, rel_types::SLIDE_MASTER, &path);
+                    let theme_part =
+                        related_visual_part(&package, &master_part, rel_types::THEME, &path);
+                    let slide = CT_Slide::from_xml(visual_part(&package, &slide_part))
+                        .unwrap_or_else(|error| panic!("{} {slide_part}: {error}", path.display()));
+                    let layout = CT_SlideLayout::from_xml(visual_part(&package, &layout_part))
+                        .unwrap_or_else(|error| {
+                            panic!("{} {layout_part}: {error}", path.display())
+                        });
+                    let master = CT_SlideMaster::from_xml(visual_part(&package, &master_part))
+                        .unwrap_or_else(|error| {
+                            panic!("{} {master_part}: {error}", path.display())
+                        });
+                    let theme = CT_OfficeStyleSheet::from_xml(visual_part(&package, &theme_part))
+                        .unwrap_or_else(|error| panic!("{} {theme_part}: {error}", path.display()));
+                    let color_map = effective_visual_color_map(&master, &layout, &slide);
+                    let context = ResolveCtx::new(
+                        &theme,
+                        color_map,
+                        &master,
+                        &layout,
+                        &slide,
+                        &default_text_style,
+                    );
+                    let shape_metadata = context
+                        .flatten()
+                        .into_iter()
+                        .filter_map(|item| match item {
+                            FlattenedItem::Background(_) => None,
+                            FlattenedItem::Shape { child, .. } => {
+                                flattened_child_has_bounds(&context, child).then(|| {
+                                    ResolvedVisualShapeMetadata {
+                                        kind: flattened_child_kind(child),
+                                        is_latent: flattened_child_is_latent(child),
+                                    }
+                                })
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    let resolved = context
+                        .resolve_slide(size)
+                        .unwrap_or_else(|error| panic!("{} {slide_part}: {error}", path.display()));
+                    assert_eq!(
+                        shape_metadata.len(),
+                        resolved.shapes.len(),
+                        "{} {slide_part}: flattened and resolved shape counts",
+                        path.display()
+                    );
+                    ResolvedVisualSlide {
+                        resolved,
+                        shape_metadata,
+                    }
+                })
+                .collect();
+            ResolvedVisualDeck { name, slides }
+        })
+        .collect()
+}
+
+fn flattened_child_kind(child: &ShapeTreeChild) -> &'static str {
+    match child {
+        ShapeTreeChild::Shape(_) => "Shape",
+        ShapeTreeChild::Picture(_) => "Picture",
+        ShapeTreeChild::GraphicFrame(_) => "GraphicFrame",
+        ShapeTreeChild::Connector(_) => "Connector",
+        ShapeTreeChild::GroupShape(_) => "Group",
+        ShapeTreeChild::AlternateContent(_) => "AlternateContent",
+    }
+}
+
+fn flattened_child_has_bounds(context: &ResolveCtx<'_>, child: &ShapeTreeChild) -> bool {
+    match child {
+        ShapeTreeChild::Shape(shape) => context
+            .effective_xfrm(shape)
+            .as_ref()
+            .is_some_and(transform_has_bounds),
+        ShapeTreeChild::Picture(picture) => picture
+            .shape_properties
+            .transform
+            .as_ref()
+            .is_some_and(transform_has_bounds),
+        ShapeTreeChild::GraphicFrame(frame) => transform_has_bounds(&frame.transform),
+        ShapeTreeChild::Connector(connector) => connector
+            .shape_properties
+            .transform
+            .as_ref()
+            .is_some_and(transform_has_bounds),
+        ShapeTreeChild::GroupShape(_) | ShapeTreeChild::AlternateContent(_) => false,
+    }
+}
+
+fn transform_has_bounds(transform: &oxml_drawing::xfrm::CT_Transform2D) -> bool {
+    transform.offset.is_some() && transform.extent.is_some()
+}
+
+fn flattened_child_is_latent(child: &ShapeTreeChild) -> bool {
+    let placeholder = match child {
+        ShapeTreeChild::Shape(shape) => shape.placeholder.as_ref(),
+        ShapeTreeChild::Picture(picture) => picture.placeholder.as_ref(),
+        _ => None,
+    };
+    placeholder.is_some_and(|placeholder| {
+        matches!(
+            placeholder.effective_type(),
+            PhType::DateTime | PhType::Footer | PhType::SlideNumber
+        )
+    })
+}
+
+fn visual_part<'a>(package: &'a OpcPackage, part_name: &str) -> &'a [u8] {
+    package
+        .get_part(part_name)
+        .unwrap_or_else(|| panic!("missing package part {part_name}"))
+}
+
+fn related_visual_part(
+    package: &OpcPackage,
+    source_part: &str,
+    relationship_type: &str,
+    deck: &Path,
+) -> String {
+    let relationship = package
+        .get_part_rels(source_part)
+        .and_then(|relationships| relationships.get_by_type(relationship_type))
+        .unwrap_or_else(|| {
+            panic!(
+                "{} {source_part}: missing relationship {relationship_type}",
+                deck.display()
+            )
+        });
+    OpcPackage::resolve_rel_target(source_part, &relationship.target)
+}
+
+fn effective_visual_color_map(
+    master: &CT_SlideMaster,
+    layout: &CT_SlideLayout,
+    slide: &CT_Slide,
+) -> ColorMap {
+    for override_value in [
+        slide.color_map_override.as_ref(),
+        layout.color_map_override.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let ColorMapOverrideKind::Override(map) = &override_value.kind {
+            return map.clone();
+        }
+    }
+    master.color_map.clone()
+}
+
+fn normalized_visual_oracle_records(decks: &[ResolvedVisualDeck]) -> String {
+    let mut output = String::new();
+    for deck in decks {
+        writeln!(output, "deck\t{}", deck.name).unwrap();
+        for (slide_index, visual_slide) in deck.slides.iter().enumerate() {
+            let slide = &visual_slide.resolved;
+            writeln!(
+                output,
+                "slide\t{slide_index}\t{:.3}\t{:.3}",
+                slide.size.0, slide.size.1
+            )
+            .unwrap();
+            for (shape, metadata) in slide.shapes.iter().zip(&visual_slide.shape_metadata) {
+                // python-pptx exposes header and footer placeholders as raw
+                // collection members rather than applying the effective p:hf
+                // policy. Their policy is asserted by the Rust regressions.
+                if metadata.is_latent {
+                    continue;
+                }
+                writeln!(
+                    output,
+                    "shape\t{slide_index}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{}",
+                    metadata.kind,
+                    shape.bounds.x,
+                    shape.bounds.y,
+                    shape.bounds.width,
+                    shape.bounds.height,
+                    escape_record(&resolved_content_text(&shape.content))
+                )
+                .unwrap();
+            }
+        }
+    }
+    output
+}
+
+fn normalized_resolved_evidence(decks: &[ResolvedVisualDeck]) -> String {
+    let mut output = String::new();
+    for deck in decks {
+        writeln!(output, "deck\t{}", deck.name).unwrap();
+        for (slide_index, visual_slide) in deck.slides.iter().enumerate() {
+            let slide = &visual_slide.resolved;
+            writeln!(
+                output,
+                "slide\t{slide_index}\tsize={:.3}x{:.3}\tbackground={:?}\tdiagnostics={:?}",
+                slide.size.0, slide.size.1, slide.background, slide.diagnostics
+            )
+            .unwrap();
+            for (shape_index, (shape, metadata)) in slide
+                .shapes
+                .iter()
+                .zip(&visual_slide.shape_metadata)
+                .enumerate()
+            {
+                writeln!(
+                    output,
+                    "shape\t{slide_index}.{shape_index}\tkind={}\tbounds={:.3},{:.3},{:.3},{:.3}\ttransform={:?}\tfill={:?}\tline={:?}\trun_fills={:?}\ttext={}\tunsupported={}",
+                    metadata.kind,
+                    shape.bounds.x,
+                    shape.bounds.y,
+                    shape.bounds.width,
+                    shape.bounds.height,
+                    shape.group_transform,
+                    shape.fill,
+                    shape.line,
+                    resolved_run_fills(&shape.content),
+                    escape_record(&resolved_content_text(&shape.content)),
+                    shape.unsupported.unwrap_or("-")
+                )
+                .unwrap();
+            }
+        }
+    }
+    output
+}
+
+fn resolved_run_fills(content: &ResolvedContent) -> Vec<String> {
+    let mut fills = Vec::new();
+    let mut collect_body = |body: &ResolvedTextBody| {
+        for paragraph in &body.paragraphs {
+            for run in &paragraph.runs {
+                let style = match run {
+                    ResolvedTextRun::Text { style, .. } | ResolvedTextRun::Field { style, .. } => {
+                        style
+                    }
+                    ResolvedTextRun::Break => continue,
+                };
+                if let Some(fill) = &style.fill {
+                    fills.push(format!("{fill:?}"));
+                }
+            }
+        }
+    };
+    match content {
+        ResolvedContent::Text(body) => collect_body(body),
+        ResolvedContent::Table(table) => {
+            for body in table
+                .rows
+                .iter()
+                .flat_map(|row| row.cells.iter())
+                .filter_map(|cell| cell.text.as_ref())
+            {
+                collect_body(body);
+            }
+        }
+        ResolvedContent::None | ResolvedContent::Image { .. } => {}
+    }
+    fills
+}
+
+fn resolved_content_text(content: &ResolvedContent) -> String {
+    match content {
+        ResolvedContent::Text(body) => resolved_text(body),
+        ResolvedContent::Table(table) => table
+            .rows
+            .iter()
+            .map(|row| {
+                row.cells
+                    .iter()
+                    .map(|cell| cell.text.as_ref().map(resolved_text).unwrap_or_default())
+                    .collect::<Vec<_>>()
+                    .join("\t")
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        ResolvedContent::None | ResolvedContent::Image { .. } => String::new(),
+    }
+}
+
+fn resolved_text(body: &ResolvedTextBody) -> String {
+    body.paragraphs
+        .iter()
+        .map(|paragraph| {
+            paragraph
+                .runs
+                .iter()
+                .map(|run| match run {
+                    ResolvedTextRun::Text { text, .. } | ResolvedTextRun::Field { text, .. } => {
+                        text.as_str()
+                    }
+                    ResolvedTextRun::Break => "\n",
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn escape_record(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\r', "\\r")
+        .replace('\n', "\\n")
 }
 
 fn corpus_paths() -> Option<Vec<PathBuf>> {
@@ -880,4 +1474,68 @@ for filename in sys.argv[1:]:
         for shape_index, element in enumerate(top_level):
             append_shape(shape_lines, slide_index, str(shape_index), element, slide.shapes)
         print("\n".join(shape_lines))
+"#;
+
+const PYTHON_VISUAL_ORACLE: &str = r#"
+from pathlib import Path
+import sys
+import pptx
+from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
+
+assert pptx.__version__ == "1.0.2", pptx.__version__
+
+def escape(value):
+    return value.replace("\\", "\\\\").replace("\t", "\\t").replace("\r", "\\r").replace("\n", "\\n")
+
+def shape_text(shape):
+    if getattr(shape, "has_table", False):
+        return "\n".join("\t".join(cell.text.replace("\v", "\n") for cell in row.cells) for row in shape.table.rows)
+    if getattr(shape, "has_text_frame", False):
+        return shape.text.replace("\v", "\n")
+    return ""
+
+def shape_kind(shape):
+    local = shape._element.tag.rsplit("}", 1)[-1]
+    return {
+        "sp": "Shape",
+        "pic": "Picture",
+        "graphicFrame": "GraphicFrame",
+        "cxnSp": "Connector",
+    }[local]
+
+def leaves(shapes):
+    for shape in shapes:
+        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+            yield from leaves(shape.shapes)
+        elif not (
+            shape.is_placeholder
+            and shape.placeholder_format.type
+            in (PP_PLACEHOLDER.DATE, PP_PLACEHOLDER.FOOTER, PP_PLACEHOLDER.SLIDE_NUMBER)
+        ):
+            yield shape
+
+def visible_shapes(slide):
+    layout = slide.slide_layout
+    master = layout.slide_master
+    if layout._element.get("showMasterSp") != "0":
+        yield from leaves(shape for shape in master.shapes if not shape.is_placeholder)
+    if slide._element.get("showMasterSp") != "0":
+        yield from leaves(shape for shape in layout.shapes if not shape.is_placeholder)
+    yield from leaves(slide.shapes)
+
+for filename in sys.argv[1:]:
+    path = Path(filename)
+    presentation = Presentation(path)
+    print("deck\t" + path.name)
+    for slide_index, slide in enumerate(presentation.slides):
+        print(f"slide\t{slide_index}\t{presentation.slide_width / 12700:.3f}\t{presentation.slide_height / 12700:.3f}")
+        for shape in visible_shapes(slide):
+            bounds = (shape.left, shape.top, shape.width, shape.height)
+            if any(value is None for value in bounds):
+                continue
+            print(
+                f"shape\t{slide_index}\t{shape_kind(shape)}\t{bounds[0] / 12700:.3f}\t{bounds[1] / 12700:.3f}\t"
+                f"{bounds[2] / 12700:.3f}\t{bounds[3] / 12700:.3f}\t{escape(shape_text(shape))}"
+            )
 "#;

@@ -54,11 +54,38 @@ pub struct CT_MasterTextStyles {
     raw_children: OrderedRawChildren,
 }
 
+/// Presence-sensitive header and footer visibility inherited by a slide.
+#[allow(non_camel_case_types)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CT_HeaderFooter {
+    pub slide_number: Option<bool>,
+    pub header: Option<bool>,
+    pub footer: Option<bool>,
+    pub date_time: Option<bool>,
+    raw_attributes: RawAttributes,
+    raw_children: OrderedRawChildren,
+}
+
+impl CT_HeaderFooter {
+    pub fn slide_number_enabled(&self) -> bool {
+        self.slide_number.unwrap_or(true)
+    }
+
+    pub fn footer_enabled(&self) -> bool {
+        self.footer.unwrap_or(true)
+    }
+
+    pub fn date_time_enabled(&self) -> bool {
+        self.date_time.unwrap_or(true)
+    }
+}
+
 #[allow(non_camel_case_types)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct CT_Slide {
     pub common_slide_data: CT_CommonSlideData,
     pub color_map_override: Option<CT_ColorMapOverride>,
+    pub show_master_shapes: Option<bool>,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
 }
@@ -68,6 +95,8 @@ pub struct CT_Slide {
 pub struct CT_SlideLayout {
     pub common_slide_data: CT_CommonSlideData,
     pub color_map_override: Option<CT_ColorMapOverride>,
+    pub show_master_shapes: Option<bool>,
+    pub header_footer: Option<CT_HeaderFooter>,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
 }
@@ -78,6 +107,7 @@ pub struct CT_SlideMaster {
     pub common_slide_data: CT_CommonSlideData,
     pub color_map: ColorMap,
     pub text_styles: Option<CT_MasterTextStyles>,
+    pub header_footer: Option<CT_HeaderFooter>,
     raw_attributes: RawAttributes,
     color_map_attributes: RawAttributes,
     color_map_children: OrderedRawChildren,
@@ -144,6 +174,8 @@ struct ParsedRoot {
     color_map_override: Option<CT_ColorMapOverride>,
     color_map: Option<ParsedColorMap>,
     text_styles: Option<CT_MasterTextStyles>,
+    header_footer: Option<CT_HeaderFooter>,
+    show_master_shapes: Option<bool>,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
     boundary: usize,
@@ -162,6 +194,7 @@ impl CT_Slide {
         Ok(Self {
             common_slide_data: required(parsed.common_slide_data, "p:cSld")?,
             color_map_override: parsed.color_map_override,
+            show_master_shapes: parsed.show_master_shapes,
             raw_attributes: parsed.raw_attributes,
             raw_children: parsed.raw_children,
         })
@@ -172,6 +205,8 @@ impl CT_Slide {
             RootKind::Slide,
             &self.common_slide_data,
             self.color_map_override.as_ref(),
+            self.show_master_shapes,
+            None,
             &self.raw_attributes,
             &self.raw_children,
         )
@@ -184,6 +219,8 @@ impl CT_SlideLayout {
         Ok(Self {
             common_slide_data: required(parsed.common_slide_data, "p:cSld")?,
             color_map_override: parsed.color_map_override,
+            show_master_shapes: parsed.show_master_shapes,
+            header_footer: parsed.header_footer,
             raw_attributes: parsed.raw_attributes,
             raw_children: parsed.raw_children,
         })
@@ -194,6 +231,8 @@ impl CT_SlideLayout {
             RootKind::Layout,
             &self.common_slide_data,
             self.color_map_override.as_ref(),
+            self.show_master_shapes,
+            self.header_footer.as_ref(),
             &self.raw_attributes,
             &self.raw_children,
         )
@@ -208,6 +247,7 @@ impl CT_SlideMaster {
             common_slide_data: required(parsed.common_slide_data, "p:cSld")?,
             color_map: color_map.value,
             text_styles: parsed.text_styles,
+            header_footer: parsed.header_footer,
             raw_attributes: parsed.raw_attributes,
             color_map_attributes: color_map.raw_attributes,
             color_map_children: color_map.raw_children,
@@ -217,7 +257,7 @@ impl CT_SlideMaster {
 
     pub fn to_xml(&self) -> Result<Vec<u8>> {
         let mut writer = Writer::new(Vec::new());
-        write_root_start(&mut writer, RootKind::Master, &self.raw_attributes)?;
+        write_root_start(&mut writer, RootKind::Master, None, &self.raw_attributes)?;
         emit_raw(&mut writer, self.raw_children.at(0))?;
         self.common_slide_data.write_xml(&mut writer)?;
         emit_raw(&mut writer, self.raw_children.at(1))?;
@@ -230,6 +270,9 @@ impl CT_SlideMaster {
         )?;
         for boundary in 2..=5 {
             emit_raw(&mut writer, self.raw_children.at(boundary))?;
+        }
+        if let Some(header_footer) = &self.header_footer {
+            header_footer.write_xml(&mut writer)?;
         }
         emit_raw(&mut writer, self.raw_children.at(6))?;
         if let Some(styles) = &self.text_styles {
@@ -286,6 +329,12 @@ fn parse_root_children(
         raw_attributes: root_attributes(start, FIXED_MODEL_PREFIXES)?,
         ..ParsedRoot::default()
     };
+    if !matches!(kind, RootKind::Master) {
+        parsed.show_master_shapes = parse_optional_bool_attribute(start, "showMasterSp")?;
+        parsed
+            .raw_attributes
+            .retain(|(name, _)| name != "showMasterSp");
+    }
     let mut buffer = Vec::new();
     loop {
         match reader.read_event_into(&mut buffer)? {
@@ -358,6 +407,19 @@ impl ParsedRoot {
             self.boundary = self.boundary.max(7);
             return Ok(());
         }
+        if is_p && name == b"hf" && matches!(kind, RootKind::Layout | RootKind::Master) {
+            namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
+            if self.header_footer.is_some() {
+                return Err(duplicate("hf"));
+            }
+            self.header_footer = Some(CT_HeaderFooter::from_fragment(&raw, namespaces)?);
+            self.boundary = self.boundary.max(match kind {
+                RootKind::Layout => 3,
+                RootKind::Master => 6,
+                RootKind::Slide => unreachable!(),
+            });
+            return Ok(());
+        }
         let (at, after) = if is_p {
             kind.raw_boundary(name, self.boundary)
         } else {
@@ -373,24 +435,35 @@ fn write_slide_like(
     kind: RootKind,
     common: &CT_CommonSlideData,
     color_override: Option<&CT_ColorMapOverride>,
+    show_master_shapes: Option<bool>,
+    header_footer: Option<&CT_HeaderFooter>,
     attributes: &RawAttributes,
     raw: &OrderedRawChildren,
 ) -> Result<Vec<u8>> {
     let mut writer = Writer::new(Vec::new());
-    write_root_start(&mut writer, kind, attributes)?;
+    write_root_start(&mut writer, kind, show_master_shapes, attributes)?;
     emit_raw(&mut writer, raw.at(0))?;
     common.write_xml(&mut writer)?;
     emit_raw(&mut writer, raw.at(1))?;
     if let Some(color_override) = color_override {
         color_override.write_xml(&mut writer)?;
     }
-    let end = match kind {
-        RootKind::Slide => 5,
-        RootKind::Layout => 6,
+    match kind {
+        RootKind::Slide => {
+            for boundary in 2..=5 {
+                emit_raw(&mut writer, raw.at(boundary))?;
+            }
+        }
+        RootKind::Layout => {
+            emit_raw(&mut writer, raw.at(2))?;
+            if let Some(header_footer) = header_footer {
+                header_footer.write_xml(&mut writer)?;
+            }
+            for boundary in 3..=6 {
+                emit_raw(&mut writer, raw.at(boundary))?;
+            }
+        }
         RootKind::Master => unreachable!(),
-    };
-    for boundary in 2..=end {
-        emit_raw(&mut writer, raw.at(boundary))?;
     }
     writer.write_event(Event::End(BytesEnd::new(kind.tag())))?;
     Ok(writer.into_inner())
@@ -399,15 +472,102 @@ fn write_slide_like(
 fn write_root_start<W: Write>(
     writer: &mut Writer<W>,
     kind: RootKind,
+    show_master_shapes: Option<bool>,
     attributes: &RawAttributes,
 ) -> Result<()> {
     let mut root = BytesStart::new(kind.tag());
     root.push_attribute(("xmlns:p", P_NS));
     root.push_attribute(("xmlns:a", A_NS));
     root.push_attribute(("xmlns:r", R_NS));
+    if let Some(show_master_shapes) = show_master_shapes {
+        root.push_attribute(("showMasterSp", if show_master_shapes { "1" } else { "0" }));
+    }
     push_attributes(&mut root, attributes);
     writer.write_event(Event::Start(root))?;
     Ok(())
+}
+
+impl CT_HeaderFooter {
+    fn from_fragment(xml: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(start) => {
+                    let namespaces = inherited.with_start(&start)?;
+                    if local_name(start.name().as_ref()) != b"hf"
+                        || namespaces.element_uri(start.name().as_ref()) != Some(P_NS)
+                    {
+                        return Err(unexpected(&start));
+                    }
+                    let mut value = Self::from_start(&start)?;
+                    value.raw_children = capture_shell_children(&mut reader, b"hf")?;
+                    return Ok(value);
+                }
+                Event::Empty(start) => return Self::from_start(&start),
+                Event::Eof => return Err(OxmlError::MissingElement("p:hf".to_owned())),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn from_start(start: &BytesStart<'_>) -> Result<Self> {
+        let mut raw_attributes = root_attributes(start, FIXED_MODEL_PREFIXES)?;
+        raw_attributes
+            .retain(|(name, _)| !matches!(name.as_str(), "sldNum" | "hdr" | "ftr" | "dt"));
+        Ok(Self {
+            slide_number: parse_optional_bool_attribute(start, "sldNum")?,
+            header: parse_optional_bool_attribute(start, "hdr")?,
+            footer: parse_optional_bool_attribute(start, "ftr")?,
+            date_time: parse_optional_bool_attribute(start, "dt")?,
+            raw_attributes,
+            raw_children: OrderedRawChildren::default(),
+        })
+    }
+
+    fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        let mut start = BytesStart::new("p:hf");
+        push_optional_bool_attribute(&mut start, "sldNum", self.slide_number);
+        push_optional_bool_attribute(&mut start, "hdr", self.header);
+        push_optional_bool_attribute(&mut start, "ftr", self.footer);
+        push_optional_bool_attribute(&mut start, "dt", self.date_time);
+        push_attributes(&mut start, &self.raw_attributes);
+        if self.raw_children.is_empty() {
+            writer.write_event(Event::Empty(start))?;
+        } else {
+            writer.write_event(Event::Start(start))?;
+            emit_raw(writer, self.raw_children.at(0))?;
+            writer.write_event(Event::End(BytesEnd::new("p:hf")))?;
+        }
+        Ok(())
+    }
+}
+
+fn parse_optional_bool_attribute(start: &BytesStart<'_>, name: &str) -> Result<Option<bool>> {
+    let Some((_, value)) = all_attributes(start)?
+        .into_iter()
+        .find(|(attribute, _)| attribute == name)
+    else {
+        return Ok(None);
+    };
+    match value.as_str() {
+        "true" | "1" => Ok(Some(true)),
+        "false" | "0" => Ok(Some(false)),
+        _ => Err(OxmlError::InvalidValue(format!(
+            "invalid boolean @{name} value {value}"
+        ))),
+    }
+}
+
+fn push_optional_bool_attribute(
+    start: &mut BytesStart<'_>,
+    name: &'static str,
+    value: Option<bool>,
+) {
+    if let Some(value) = value {
+        start.push_attribute((name, if value { "1" } else { "0" }));
+    }
 }
 
 impl CT_CommonSlideData {

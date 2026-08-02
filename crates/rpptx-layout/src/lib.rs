@@ -1,10 +1,239 @@
 //! PresentationML inheritance resolution and shape-tree flattening.
 
+use oxml_layout::{Diagnostic, Effect, MediaId, Paint, Path, Rect, Stroke, Transform};
+
 mod context;
 mod font;
 mod style;
 mod text;
 
-pub use context::ResolveCtx;
+pub use context::{
+    BackgroundContent, BackgroundSource, EffectiveBackground, FlattenedItem, FlattenedSource,
+    ResolveCtx,
+};
 pub use style::{EffectiveShapeStyle, ResolveError};
 pub use text::{EffectiveListStyle, EffectiveTextProperties};
+
+/// An owned slide with every renderer-visible value resolved.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedSlide {
+    /// Slide width and height in typographic points.
+    pub size: (f64, f64),
+    pub background: Option<Paint>,
+    /// Shapes in final draw order.
+    pub shapes: Vec<ResolvedShape>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// One renderer-facing shape with no OOXML model types or part-tree lifetimes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedShape {
+    /// Affine mapping from this shape's coordinate space through all parent groups.
+    pub group_transform: Transform,
+    pub bounds: Rect,
+    pub rotation_deg: f64,
+    pub flip_h: bool,
+    pub flip_v: bool,
+    pub geometry: ResolvedGeometry,
+    pub fill: Option<Paint>,
+    pub line: Option<Stroke>,
+    pub shadow: Option<Effect>,
+    pub content: ResolvedContent,
+    /// Stable fallback category when the renderer cannot reproduce the source.
+    pub unsupported: Option<&'static str>,
+}
+
+/// Concrete geometry ready for the renderer, or a visible bounds fallback.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ResolvedGeometry {
+    Rectangle,
+    Custom {
+        paths: Vec<Path>,
+        text_rect: Option<Rect>,
+    },
+    BoundsFallback,
+}
+
+/// Owned content attached to one resolved shape.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ResolvedContent {
+    None,
+    Text(ResolvedTextBody),
+    Image {
+        media: MediaId,
+        src_rect: Option<CropRect>,
+    },
+    Table(ResolvedTable),
+}
+
+/// Picture cropping as fractions of the source dimensions.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CropRect {
+    pub left: f64,
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+}
+
+/// Text-box geometry and paragraphs after inheritance.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedTextBody {
+    pub insets: TextInsets,
+    pub anchor: TextAnchor,
+    pub wrap: bool,
+    pub vertical: TextDirection,
+    pub autofit: ResolvedAutofit,
+    pub paragraphs: Vec<ResolvedParagraph>,
+}
+
+/// Text-box edge insets in points.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TextInsets {
+    pub left: f64,
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TextAnchor {
+    #[default]
+    Top,
+    Center,
+    Bottom,
+    Justified,
+    Distributed,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TextDirection {
+    #[default]
+    Horizontal,
+    Vertical,
+    Vertical270,
+    EastAsianVertical,
+    MongolianVertical,
+    WordArtVertical,
+    WordArtVerticalRtl,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum ResolvedAutofit {
+    #[default]
+    None,
+    Shape,
+    Normal {
+        font_scale: Option<f64>,
+        line_spacing_reduction: Option<f64>,
+    },
+}
+
+/// One paragraph with concrete layout and text-run values.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResolvedParagraph {
+    pub level: u8,
+    pub left_margin: f64,
+    pub right_margin: f64,
+    pub indent: f64,
+    pub alignment: ParagraphAlignment,
+    pub line_spacing: Option<ResolvedTextSpacing>,
+    pub space_before: Option<ResolvedTextSpacing>,
+    pub space_after: Option<ResolvedTextSpacing>,
+    pub bullet: Option<ResolvedBullet>,
+    pub runs: Vec<ResolvedTextRun>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ParagraphAlignment {
+    #[default]
+    Left,
+    Center,
+    Right,
+    Justified,
+    Distributed,
+}
+
+/// Concrete paragraph spacing as a font-relative fraction or typographic points.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ResolvedTextSpacing {
+    Percent(f64),
+    Points(f64),
+}
+
+/// Concrete bullet size as a font-relative fraction or typographic points.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ResolvedBulletSize {
+    Percent(f64),
+    Points(f64),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ResolvedBullet {
+    Character {
+        character: String,
+        font: Option<String>,
+        color: Option<oxml_layout::Color>,
+        size: Option<ResolvedBulletSize>,
+    },
+    AutoNumber {
+        scheme: String,
+        start_at: u32,
+        font: Option<String>,
+        color: Option<oxml_layout::Color>,
+        size: Option<ResolvedBulletSize>,
+    },
+}
+
+/// Ordered text, explicit breaks, and fields in one paragraph.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ResolvedTextRun {
+    Text {
+        text: String,
+        style: ResolvedRunStyle,
+    },
+    Break,
+    Field {
+        text: String,
+        field_type: Option<String>,
+        style: ResolvedRunStyle,
+    },
+}
+
+/// Concrete renderer-visible properties of one text run.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResolvedRunStyle {
+    pub font_size: Option<f64>,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strike: bool,
+    pub spacing: Option<f64>,
+    pub baseline: Option<f64>,
+    pub fill: Option<Paint>,
+    pub latin_typeface: Option<String>,
+    pub east_asian_typeface: Option<String>,
+    pub complex_script_typeface: Option<String>,
+    pub symbol_typeface: Option<String>,
+}
+
+/// One table with concrete dimensions and owned cell text.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResolvedTable {
+    pub column_widths: Vec<f64>,
+    pub rows: Vec<ResolvedTableRow>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResolvedTableRow {
+    pub height: f64,
+    pub cells: Vec<ResolvedTableCell>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResolvedTableCell {
+    pub text: Option<ResolvedTextBody>,
+    pub row_span: u32,
+    pub grid_span: u32,
+    pub horizontal_merge: bool,
+    pub vertical_merge: bool,
+}
