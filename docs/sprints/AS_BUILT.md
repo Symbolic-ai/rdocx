@@ -2580,12 +2580,16 @@ inherited font, colour, size, and choice values.
 dependency so both named gates could traverse all 50 real decks. Microscope
 pass 1 found six contract and corpus defects, and pass 2 found group-composition
 and automatic-number bullet defects. All were remediated. Pass 3 was clean.
+Sprint review pass 1 then found that the named corpus gate accepted contextual
+resolver errors. The strict gate exposed 20 affected slides. Preset black and
+white now resolve concretely, and invalid custom geometry retains a diagnosed
+bounds fallback. All corpus slides now produce an owned contract.
 
 **Spec sections touched.** `docs/hld/07-inheritance-and-resolution.md` freezes
 the owned output and fallback boundary. `docs/hld/08-rendering-spec.md` records
 the accumulated group transform supplied to renderers.
 
-**Tests.** Fifty-four resolver tests, two independent 50-deck gates, exact
+**Tests.** Fifty-seven resolver tests, two independent 50-deck gates, exact
 colour checks, dependency-direction riders, publication dry-run, and the
 integrated full gate passed.
 
@@ -2628,7 +2632,7 @@ source-sensitive latent visibility and the executable visual differential.
 `docs/hld/12-testing-strategy.md` records the selected decks, pinned oracle,
 external-corpus policy, and native acceptance evidence.
 
-**Tests.** Sixteen `rpptx` tests, 55 resolver tests, all 50 pinned decks, the
+**Tests.** Sixteen `rpptx` tests, 57 resolver tests, all 50 pinned decks, the
 40-case exact PowerPoint colour table, optional and required corpus modes, and
 the integrated full gate passed. Microsoft PowerPoint 16.104 build
 16.104.25121423 opened and exported all four selected originals without repair

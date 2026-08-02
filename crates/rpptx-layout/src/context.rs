@@ -452,10 +452,13 @@ impl<'a> ResolveCtx<'a> {
             .transpose()?;
         let (geometry, geometry_unsupported) =
             if let Some(custom) = &shape.shape_properties.custom_geometry {
-                (
-                    self.concrete_custom_geometry(custom, (bounds.width, bounds.height))?,
-                    None,
-                )
+                match self.concrete_custom_geometry(custom, (bounds.width, bounds.height)) {
+                    Ok(geometry) => (geometry, None),
+                    Err(_) => (
+                        ResolvedGeometry::BoundsFallback,
+                        Some("custom geometry evaluation"),
+                    ),
+                }
             } else {
                 (
                     ResolvedGeometry::BoundsFallback,
@@ -686,14 +689,18 @@ impl ResolveCtx<'_> {
     }
 
     fn theme_lookup(&self) -> Vec<(String, RgbColor)> {
-        self.theme
+        let mut lookup = self
+            .theme
             .theme_elements
             .color_scheme
             .iter()
             .filter_map(|(slot, choice)| {
                 base_rgb(choice).map(|color| (slot.as_str().to_owned(), color))
             })
-            .collect()
+            .collect::<Vec<_>>();
+        lookup.push(("black".to_owned(), RgbColor::new(0, 0, 0)));
+        lookup.push(("white".to_owned(), RgbColor::new(255, 255, 255)));
+        lookup
     }
 
     fn concrete_custom_geometry(
@@ -2012,7 +2019,8 @@ mod tests {
 
         assert_eq!(stats.decks, EXPECTED_CORPUS_DECKS);
         assert!(stats.slides > EXPECTED_CORPUS_DECKS);
-        assert!(stats.resolved > 0, "no corpus slide produced a contract");
+        assert_eq!(stats.contextual_errors, 0, "{}", stats.errors.join("\n"));
+        assert_eq!(stats.resolved, stats.slides);
         assert_eq!(stats.theme_references, 0);
     }
 
@@ -2078,6 +2086,54 @@ mod tests {
             paths[0].commands[1],
             PathCommand::LineTo(oxml_layout::Point { x: 10.0, y: 20.0 })
         );
+    }
+
+    #[test]
+    fn invalid_custom_geometry_retains_a_diagnosed_bounds_fallback() {
+        let geometry = r#"<a:custGeom><a:avLst/><a:pathLst><a:path><a:moveTo><a:pt x="0" y="0"/></a:moveTo></a:path></a:pathLst></a:custGeom>"#;
+        let shape = shape_with_details(None, None, &format!("{}{}", transform(0), geometry), None);
+        let fixture = Fixture::new(&shape, "", "");
+
+        let resolved = fixture.context().resolve_slide((720.0, 540.0)).unwrap();
+        assert_eq!(
+            resolved.shapes[0].geometry,
+            ResolvedGeometry::BoundsFallback
+        );
+        assert_eq!(
+            resolved.shapes[0].unsupported,
+            Some("custom geometry evaluation")
+        );
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.message.contains("custom geometry evaluation") })
+        );
+    }
+
+    #[test]
+    fn preset_black_and_white_resolve_to_concrete_paint() {
+        let black = format!(
+            "{}<a:solidFill><a:prstClr val=\"black\"/></a:solidFill>",
+            transform(0)
+        );
+        let white = format!(
+            "{}<a:solidFill><a:prstClr val=\"white\"/></a:solidFill>",
+            transform(100)
+        );
+        let fixture = Fixture::new(
+            &format!(
+                "{}{}",
+                shape_with_details(None, None, &black, None),
+                shape_with_details(None, None, &white, None)
+            ),
+            "",
+            "",
+        );
+
+        let resolved = fixture.context().resolve_slide((720.0, 540.0)).unwrap();
+        assert_eq!(resolved.shapes[0].fill, Some(Paint::Solid(Color::BLACK)));
+        assert_eq!(resolved.shapes[1].fill, Some(Paint::Solid(Color::WHITE)));
     }
 
     #[test]
@@ -2270,6 +2326,7 @@ mod tests {
         resolved: usize,
         contextual_errors: usize,
         theme_references: usize,
+        errors: Vec<String>,
     }
 
     fn resolve_pinned_corpus() -> CorpusResolveStats {
@@ -2357,7 +2414,12 @@ mod tests {
                             .count();
                         stats.resolved += 1;
                     }
-                    Err(_) => stats.contextual_errors += 1,
+                    Err(error) => {
+                        stats.contextual_errors += 1;
+                        stats
+                            .errors
+                            .push(format!("{} {slide_part}: {error}", path.display()));
+                    }
                 }
             }
             stats.decks += 1;
