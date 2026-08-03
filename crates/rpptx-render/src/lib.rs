@@ -199,16 +199,43 @@ fn lower_shape(shape: &ResolvedShape) -> PositionedElement {
         })
         .collect();
     PositionedElement::Group(GroupElement {
-        transform: Transform {
-            e: shape.bounds.x,
-            f: shape.bounds.y,
-            ..Transform::IDENTITY
-        },
+        transform: shape_transform(shape),
         clip: None,
         opacity: 1.0,
         effects: Vec::new(),
         children,
     })
+}
+
+fn shape_transform(shape: &ResolvedShape) -> Transform {
+    let center_x = shape.bounds.width / 2.0;
+    let center_y = shape.bounds.height / 2.0;
+    let rotation = Transform::rotate_about(shape.rotation_deg, center_x, center_y);
+    let flip = Transform {
+        a: if shape.flip_h { -1.0 } else { 1.0 },
+        b: 0.0,
+        c: 0.0,
+        d: if shape.flip_v { -1.0 } else { 1.0 },
+        e: if shape.flip_h {
+            shape.bounds.width
+        } else {
+            0.0
+        },
+        f: if shape.flip_v {
+            shape.bounds.height
+        } else {
+            0.0
+        },
+    };
+    let translation = Transform {
+        e: shape.bounds.x,
+        f: shape.bounds.y,
+        ..Transform::IDENTITY
+    };
+    rotation
+        .then(flip)
+        .then(translation)
+        .then(shape.group_transform)
 }
 
 /// Resolve one scoped media relationship into the deck's content-addressed store.
@@ -311,6 +338,197 @@ mod tests {
             panic!("shape should lower to one group");
         };
         group
+    }
+
+    fn assert_point_close(actual: Point, expected: Point) {
+        const EPSILON: f64 = 1.0e-10;
+        assert!(
+            (actual.x - expected.x).abs() < EPSILON && (actual.y - expected.y).abs() < EPSILON,
+            "expected ({}, {}), got ({}, {})",
+            expected.x,
+            expected.y,
+            actual.x,
+            actual.y
+        );
+    }
+
+    #[test]
+    fn rotated_shape_corners_match_hand_computed_coordinates() {
+        let mut rotated = shape(
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 8.0,
+                height: 4.0,
+            },
+            ResolvedGeometry::Rectangle,
+            Some(Paint::Solid(Color::BLACK)),
+            None,
+        );
+        rotated.rotation_deg = 30.0;
+        let page = layout_slide(&render_input(vec![slide((40.0, 40.0), vec![rotated])]), 0)
+            .expect("lower rotated shape");
+        let transform = only_group(&page.elements[0]).transform;
+        let radians = 30.0_f64.to_radians();
+        let (sin, cos) = radians.sin_cos();
+
+        for corner in [
+            Point { x: 0.0, y: 0.0 },
+            Point { x: 8.0, y: 0.0 },
+            Point { x: 0.0, y: 4.0 },
+            Point { x: 8.0, y: 4.0 },
+        ] {
+            let dx = corner.x - 4.0;
+            let dy = corner.y - 2.0;
+            let expected = Point {
+                x: 10.0 + 4.0 + cos * dx - sin * dy,
+                y: 20.0 + 2.0 + sin * dx + cos * dy,
+            };
+            assert_point_close(transform.apply(corner), expected);
+        }
+    }
+
+    #[test]
+    fn horizontal_and_vertical_flips_are_about_the_shape_centre() {
+        let bounds = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 8.0,
+            height: 4.0,
+        };
+        let mut horizontal = shape(
+            bounds,
+            ResolvedGeometry::Rectangle,
+            Some(Paint::Solid(Color::BLACK)),
+            None,
+        );
+        horizontal.flip_h = true;
+        let mut vertical = horizontal.clone();
+        vertical.flip_h = false;
+        vertical.flip_v = true;
+        let page = layout_slide(
+            &render_input(vec![slide((40.0, 40.0), vec![horizontal, vertical])]),
+            0,
+        )
+        .expect("lower flipped shapes");
+        let horizontal = only_group(&page.elements[0]).transform;
+        let vertical = only_group(&page.elements[1]).transform;
+
+        assert_point_close(
+            horizontal.apply(Point { x: 4.0, y: 2.0 }),
+            Point { x: 14.0, y: 22.0 },
+        );
+        assert_point_close(
+            horizontal.apply(Point { x: 0.0, y: 0.0 }),
+            Point { x: 18.0, y: 20.0 },
+        );
+        assert_point_close(
+            horizontal.apply(Point { x: 8.0, y: 4.0 }),
+            Point { x: 10.0, y: 24.0 },
+        );
+        assert_point_close(
+            vertical.apply(Point { x: 4.0, y: 2.0 }),
+            Point { x: 14.0, y: 22.0 },
+        );
+        assert_point_close(
+            vertical.apply(Point { x: 0.0, y: 0.0 }),
+            Point { x: 10.0, y: 24.0 },
+        );
+        assert_point_close(
+            vertical.apply(Point { x: 8.0, y: 4.0 }),
+            Point { x: 18.0, y: 20.0 },
+        );
+    }
+
+    #[test]
+    fn nested_group_transform_applies_child_before_parent() {
+        let mut nested = shape(
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 8.0,
+                height: 4.0,
+            },
+            ResolvedGeometry::Rectangle,
+            Some(Paint::Solid(Color::BLACK)),
+            None,
+        );
+        nested.rotation_deg = 90.0;
+        nested.flip_h = true;
+        nested.group_transform = Transform {
+            a: 2.0,
+            b: 0.0,
+            c: 0.0,
+            d: 3.0,
+            e: 5.0,
+            f: 7.0,
+        };
+        let page = layout_slide(&render_input(vec![slide((80.0, 100.0), vec![nested])]), 0)
+            .expect("lower nested shape");
+        let transform = only_group(&page.elements[0]).transform;
+
+        assert_point_close(
+            transform.apply(Point { x: 0.0, y: 0.0 }),
+            Point { x: 29.0, y: 61.0 },
+        );
+        assert_point_close(
+            transform.apply(Point { x: 8.0, y: 4.0 }),
+            Point { x: 37.0, y: 85.0 },
+        );
+    }
+
+    #[test]
+    fn rotated_gradient_and_outline_share_the_shape_transform() {
+        let red = color(1.0, 0.0, 0.0);
+        let blue = color(0.0, 0.0, 1.0);
+        let mut rotated = shape(
+            Rect {
+                x: 8.0,
+                y: 8.0,
+                width: 12.0,
+                height: 6.0,
+            },
+            ResolvedGeometry::Rectangle,
+            Some(Paint::linear(
+                Point { x: 0.0, y: 0.0 },
+                Point { x: 12.0, y: 0.0 },
+                vec![
+                    GradientStop {
+                        offset: 0.0,
+                        color: red,
+                    },
+                    GradientStop {
+                        offset: 0.49,
+                        color: red,
+                    },
+                    GradientStop {
+                        offset: 0.51,
+                        color: blue,
+                    },
+                    GradientStop {
+                        offset: 1.0,
+                        color: blue,
+                    },
+                ],
+                (true, true),
+            )),
+            Some(Stroke::new(Paint::Solid(Color::BLACK), 2.0)),
+        );
+        rotated.rotation_deg = 90.0;
+        let layout = layout_presentation(&render_input(vec![slide((28.0, 24.0), vec![rotated])]))
+            .expect("lower rotated gradient");
+        let png =
+            oxml_pdf::render_page_to_png(&layout, 0, 72.0).expect("rasterise rotated gradient");
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).expect("decode rotated gradient");
+        let rgb = |x, y| {
+            let pixel = pixmap.pixel(x, y).expect("sample lies inside page");
+            (pixel.red(), pixel.green(), pixel.blue())
+        };
+
+        assert_eq!(rgb(14, 7), (255, 0, 0));
+        assert_eq!(rgb(14, 15), (0, 0, 255));
+        assert_eq!(rgb(11, 11), (0, 0, 0));
+        assert_eq!(rgb(8, 8), (255, 255, 255));
     }
 
     #[test]

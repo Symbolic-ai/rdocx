@@ -1,6 +1,6 @@
 # F-094, Rotation, flips and groups
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S23
 **Size**: M
 **Depends on**: F-093, F-031
@@ -88,9 +88,9 @@ released Word renderer.
 
 ## Implementation checklist
 
-- [ ] Compose rotation, centre flips, translation, and accumulated parent transforms in DrawingML order.
-- [ ] Keep all shape paint and geometry under one group transform.
-- [ ] Prove corners, flips, nesting order, and rotated paint through focused tests.
+- [x] Compose rotation, centre flips, translation, and accumulated parent transforms in DrawingML order.
+- [x] Keep all shape paint and geometry under one group transform.
+- [x] Prove corners, flips, nesting order, and rotated paint through focused tests.
 
 ## Open questions
 
