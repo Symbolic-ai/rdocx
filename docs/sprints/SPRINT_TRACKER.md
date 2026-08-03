@@ -125,6 +125,11 @@ defended.
 | F-090 | S22 | L | 4 | 1 | 2026-08-02 | Reproducible complete preset geometry table generator |
 | F-091 | S22 | M | 2 | 1 | 2026-08-02 | Known preset evaluation and diagnosed bounds fallback |
 | F-092 | S22 | M | 2 | 1 | 2026-08-02 | Unpublished scoped relationship and RenderInput boundary |
+| F-093 | S23 | L | 4 | 1 | 2026-08-03 | Shape paths with solid, gradient, outline, and visible fallback paint |
+| F-094 | S23 | M | 2 | 1 | 2026-08-03 | Exact rotation, centre flip, translation, and parent transform composition |
+| F-095 | S23 | S | 1 | 1 | 2026-08-03 | Source-neutral resolved line ends lowered to filled paths |
+| F-096 | S23 | M | 2 | 1 | 2026-08-03 | Source-scoped cropped, stretched, and tiled picture rendering |
+| F-097 | S23 | S | 1 | 1 | 2026-08-03 | Preserving explicit background projection and concrete paint resolution |
 
 ## Velocity
 

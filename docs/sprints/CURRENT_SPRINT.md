@@ -32,11 +32,11 @@ adds shape text.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-093 | Shape geometry, fills and lines | L | in-progress | codex |
-| F-096 | Pictures with crop and tile | M | in-progress | codex |
-| F-097 | Backgrounds | S | in-progress | codex |
-| F-094 | Rotation, flips and groups | M | in-progress | codex |
-| F-095 | Arrowheads | S | in-progress | codex |
+| F-093 | Shape geometry, fills and lines | L | done | |
+| F-096 | Pictures with crop and tile | M | done | |
+| F-097 | Backgrounds | S | done | |
+| F-094 | Rotation, flips and groups | M | done | |
+| F-095 | Arrowheads | S | done | |
 
 ## Sequencing note
 
