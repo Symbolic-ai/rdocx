@@ -2786,3 +2786,186 @@ the integrated full gate passed.
 **Notes for future sessions.** Keep raw OOXML in `SlideBundle` assembly and
 feed renderers only the frozen owned resolver contract. All PowerPoint crates
 remain version 0.0.0 with publication disabled until development is complete.
+
+### F-093, Shape geometry, fills and lines
+
+**Sprint.** S23
+**Completed.** 2026-08-03
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `rpptx-render` now lowers resolved slides into ordered page
+frames and shape geometry into backend-neutral paths. Solid fills, gradients,
+outlines, diagnostics, metadata, and page order cross the renderer boundary.
+An otherwise unpainted bounds fallback receives a deterministic 1 point black
+outline so unsupported geometry remains visible.
+
+**Non-obvious choices.** Shape paths stay in local coordinates beneath one
+group transform. This keeps geometry, paint, and later text on one transform
+path and avoids rewriting gradient coordinates into page space.
+
+**Deviations from the design plan.** The sampled-pixel gate exposed an existing
+`oxml-pdf` raster defect that applied an accumulated group transform twice to
+gradient coordinates. The backend now keeps shader coordinates local, with a
+focused regression test. Microscope pass 1 was clean.
+
+**Spec sections touched.** None. The implementation follows the existing
+page-frame and path-lowering contract.
+
+**Tests.** `solid_gradient_and_outlined_shapes_rasterise_at_sampled_pixels`,
+`preset_and_custom_geometry_lower_to_ordered_paths`,
+`bounds_fallback_emits_a_visible_black_outline`,
+`layout_slide_rejects_an_out_of_range_index`,
+`layout_presentation_preserves_page_order_and_diagnostics`,
+`translated_group_gradient_uses_local_coordinates_exactly_once`, and the
+integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep gradient coordinates local to the same
+group as their paths. The visible fallback outline is part of the approved
+renderer contract.
+
+### F-094, Rotation, flips and groups
+
+**Sprint.** S23
+**Completed.** 2026-08-03
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Resolved shapes now compose local rotation, centre-based
+horizontal and vertical flips, bounds translation, and the accumulated parent
+group transform into one backend-neutral group transform.
+
+**Non-obvious choices.** The exact order is child rotation, flips,
+translation, then parent transform. Geometry, gradients, outlines, and later
+content remain beneath the same group so every visual component shares the
+same placement.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** None. The implementation follows the documented
+DrawingML composition and shared group boundary.
+
+**Tests.** `rotated_shape_corners_match_hand_computed_coordinates`,
+`horizontal_and_vertical_flips_are_about_the_shape_centre`,
+`nested_group_transform_applies_child_before_parent`,
+`rotated_gradient_and_outline_share_the_shape_transform`, and the integrated
+full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Use the shared group transform for every new
+shape-local element. Do not pre-transform individual path coordinates.
+
+### F-095, Arrowheads
+
+**Sprint.** S23
+**Completed.** 2026-08-03
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The resolved shape contract now carries source-neutral
+line-end kind, width, and length values. The renderer derives stable endpoint
+tangents and lowers triangle, stealth, diamond, oval, and arrow ends into
+closed filled paths using the resolved line paint.
+
+**Non-obvious choices.** Missing dimensions use DrawingML medium defaults.
+Small, medium, and large dimensions are 2, 3, and 5 times the stroke width.
+Degenerate segments omit their decoration without producing invalid geometry.
+
+**Deviations from the design plan.** Microscope pass 1 found that structural
+path checks did not prove rendered output. A deterministic raster assertion
+was added, and pass 2 was clean.
+
+**Spec sections touched.** `docs/hld/07-inheritance-and-resolution.md` and
+`docs/hld/08-rendering-spec.md` now include the approved neutral line-end
+contract and filled-path lowering.
+
+**Tests.** `line_end_resolution_keeps_kind_width_and_length`,
+`triangular_tail_end_emits_an_extra_filled_path`,
+`head_end_uses_the_reversed_start_tangent`,
+`all_supported_line_end_kinds_produce_finite_geometry`,
+`zero_length_segment_omits_arrowhead_without_panicking`, deterministic raster
+evidence, and the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Arrowheads remain presentation-side geometry,
+not a shared stroke or backend primitive.
+
+### F-096, Pictures with crop and tile
+
+**Sprint.** S23
+**Completed.** 2026-08-03
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Slide, layout, and master relationship identifiers now map
+to content-addressed media in separate source scopes. Resolved picture content
+carries neutral stretch or tile placement, and the renderer lowers crop,
+alignment, translation, scale, flip, DPI, and rotation policy into clipped
+shared image elements with bounded row-major tiling.
+
+**Non-obvious choices.** Missing tile values normalize to zero translation,
+100 percent scale, no flip, top-left alignment, and rotation with the shape.
+Declared DPI wins over embedded DPI, which wins over 96 DPI. External linked
+media remains unsupported without network access.
+
+**Deviations from the design plan.** Microscope pass 1 found that
+`rotateWithShape=false` did not cover every stretch and tile branch. The fix
+made coverage, clipping, flip phase, and rotation policy explicit. Pass 2 was
+clean.
+
+**Spec sections touched.** `docs/hld/07-inheritance-and-resolution.md` and
+`docs/hld/08-rendering-spec.md` now describe source-scoped media and neutral
+picture placement.
+
+**Tests.** `cropped_picture_renders_only_its_crop_region`,
+`same_relationship_id_resolves_to_distinct_media_in_each_source_scope`,
+`picture_model_resolves_to_neutral_stretch_and_tile_placement`,
+`crop_lowers_to_clipped_source_image_geometry`,
+`tile_picture_repeats_media_in_row_major_order_inside_shape_clip`,
+`tile_dpi_prefers_declared_then_embedded_then_96`,
+`equal_picture_bytes_reuse_one_media_id_across_elements`,
+`missing_external_media_and_empty_crop_are_contextual`, and the integrated
+full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Resolve relationships to `MediaId` before the
+renderer boundary. Keep repeated image lowering bounded even for malformed
+placement values.
+
+### F-097, Backgrounds
+
+**Sprint.** S23
+**Completed.** 2026-08-03
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** PresentationML backgrounds now retain their complete raw
+subtree as the sole serialization source while exposing a typed rendering
+projection for `p:bgPr` and `p:bgRef`. The resolver applies slide, layout,
+master, then theme precedence, resolves style references and `phClr`, and the
+renderer assigns concrete paint to the page background before shape content.
+
+**Non-obvious choices.** The typed projection is read-only and never becomes a
+second writer. Unsupported paint records a specific diagnostic, while the raw
+subtree remains byte-for-byte preserved in its schema position.
+
+**Deviations from the design plan.** Microscope pass 1 strengthened the exact
+theme transform-order assertion. A later lint exposed an oversized fill enum
+variant, which was boxed without changing the serialized contract. Microscope
+pass 3 was clean.
+
+**Spec sections touched.** `docs/hld/06-presentationml-model.md` and
+`docs/hld/07-inheritance-and-resolution.md` now describe the preserving
+background projection and concrete resolution path.
+
+**Tests.** `background_projection_preserves_the_source_subtree_verbatim`,
+`background_precedence_is_slide_layout_master_then_theme`,
+`master_gradient_background_renders_when_slide_and_layout_omit_one`,
+`background_reference_resolves_phclr_through_the_master_colour_map`,
+`background_is_not_duplicated_in_page_elements`, and the integrated full gate
+passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep the captured background subtree as the
+only serialization source and the typed form as a rendering projection only.

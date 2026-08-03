@@ -181,7 +181,7 @@ fn matrix_entry<T: Clone>(
         })
 }
 
-fn referenced_fill(
+pub(crate) fn referenced_fill(
     index: u32,
     normal: &[Fill],
     background: &[Fill],
@@ -217,7 +217,7 @@ fn overlay_line(target: &mut CT_LineProperties, source: &CT_LineProperties) {
     }
 }
 
-fn substitute_fill(
+pub(crate) fn substitute_fill(
     fill: &mut Fill,
     reference: Option<&ColorChoice>,
     kind: &'static str,

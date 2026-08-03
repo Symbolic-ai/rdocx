@@ -17,3 +17,7 @@ oxml-layout.workspace = true
 oxml-media.workspace = true
 rpptx-layout.workspace = true
 rpptx-oxml.workspace = true
+
+[dev-dependencies]
+oxml-pdf.workspace = true
+tiny-skia.workspace = true

@@ -219,7 +219,7 @@ fn render_path(
     let Some(path_geometry) = build_path(path) else {
         return;
     };
-    if let Some(paint) = fill.and_then(|paint| raster_paint(paint, transform)) {
+    if let Some(paint) = fill.and_then(raster_paint) {
         let paint_mask =
             fill.and_then(|paint| gradient_domain_mask(pixmap, paint, transform, mask));
         pixmap.fill_path(
@@ -231,7 +231,7 @@ fn render_path(
         );
     }
     if let Some(stroke) = stroke
-        && let Some(paint) = raster_paint(&stroke.paint, transform)
+        && let Some(paint) = raster_paint(&stroke.paint)
     {
         let paint_mask = gradient_domain_mask(pixmap, &stroke.paint, transform, mask);
         let stroke = raster_stroke(stroke);
@@ -272,7 +272,7 @@ fn fill_rule(rule: oxml_layout::FillRule) -> FillRule {
     }
 }
 
-fn raster_paint(paint: &LayoutPaint, transform: Transform) -> Option<Paint<'static>> {
+fn raster_paint(paint: &LayoutPaint) -> Option<Paint<'static>> {
     match paint {
         LayoutPaint::Solid(color) => Some(solid_paint(*color)),
         LayoutPaint::Linear {
@@ -283,7 +283,7 @@ fn raster_paint(paint: &LayoutPaint, transform: Transform) -> Option<Paint<'stat
                 tiny_skia::Point::from_xy(end.x as f32, end.y as f32),
                 gradient_stops(stops),
                 tiny_skia::SpreadMode::Pad,
-                transform,
+                Transform::identity(),
             )?;
             Some(Paint {
                 shader,
@@ -304,7 +304,7 @@ fn raster_paint(paint: &LayoutPaint, transform: Transform) -> Option<Paint<'stat
                 *radius as f32,
                 gradient_stops(stops),
                 tiny_skia::SpreadMode::Pad,
-                transform,
+                Transform::identity(),
             )?;
             Some(Paint {
                 shader,
@@ -980,6 +980,65 @@ mod tests {
         let radial_edge = rgb(pixmap.pixel(1, 24).unwrap());
         assert!(radial_center.0 > radial_center.2);
         assert!(radial_edge.2 > radial_edge.0);
+    }
+
+    #[test]
+    fn translated_group_gradient_uses_local_coordinates_exactly_once() {
+        let red = Color {
+            r: 1.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        };
+        let blue = Color {
+            r: 0.0,
+            g: 0.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        let element = PositionedElement::Group(GroupElement {
+            transform: Transform {
+                e: 12.0,
+                ..Transform::IDENTITY
+            },
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children: vec![PositionedElement::Path(PathElement {
+                path: Path::rect(Rect {
+                    x: 0.0,
+                    y: 2.0,
+                    width: 8.0,
+                    height: 8.0,
+                }),
+                fill: Some(Paint::linear(
+                    Point { x: 0.0, y: 0.0 },
+                    Point { x: 8.0, y: 0.0 },
+                    vec![
+                        GradientStop {
+                            offset: 0.0,
+                            color: red,
+                        },
+                        GradientStop {
+                            offset: 1.0,
+                            color: blue,
+                        },
+                    ],
+                    (true, true),
+                )),
+                stroke: None,
+            })],
+        });
+        let pixmap = render_page_to_pixmap(&page(vec![element]), &[], 72.0).unwrap();
+
+        let start = rgb(pixmap.pixel(13, 6).unwrap());
+        let end = rgb(pixmap.pixel(18, 6).unwrap());
+        assert!(
+            start.0 > start.2,
+            "expected red-dominant start, got {start:?}"
+        );
+        assert!(end.2 > end.0, "expected blue-dominant end, got {end:?}");
+        assert_eq!(rgb(pixmap.pixel(9, 6).unwrap()), (255, 255, 255));
     }
 
     #[test]

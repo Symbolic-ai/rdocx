@@ -1,6 +1,8 @@
 //! PresentationML inheritance resolution and shape-tree flattening.
 
-use oxml_layout::{Diagnostic, Effect, MediaId, Paint, Path, Rect, Stroke, Transform};
+use std::collections::HashMap;
+
+use oxml_layout::{Diagnostic, Effect, MediaId, Paint, Path, Point, Rect, Stroke, Transform};
 
 mod context;
 mod font;
@@ -13,6 +15,28 @@ pub use context::{
 };
 pub use style::{EffectiveShapeStyle, ResolveError};
 pub use text::{EffectiveListStyle, EffectiveTextProperties};
+
+/// Content-addressed media identifiers kept separate by relationship scope.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ScopedMediaIds {
+    pub slide: HashMap<String, MediaId>,
+    pub layout: HashMap<String, MediaId>,
+    pub master: HashMap<String, MediaId>,
+}
+
+impl ScopedMediaIds {
+    /// Look up an embedded relationship only in its producing part's scope.
+    pub fn get(&self, source: FlattenedSource, relationship_id: &str) -> Option<MediaId> {
+        match source {
+            FlattenedSource::Slide => &self.slide,
+            FlattenedSource::Layout => &self.layout,
+            FlattenedSource::Master => &self.master,
+            FlattenedSource::Background => return None,
+        }
+        .get(relationship_id)
+        .copied()
+    }
+}
 
 /// An owned slide with every renderer-visible value resolved.
 #[derive(Clone, Debug, PartialEq)]
@@ -37,10 +61,39 @@ pub struct ResolvedShape {
     pub geometry: ResolvedGeometry,
     pub fill: Option<Paint>,
     pub line: Option<Stroke>,
+    pub head_end: Option<ResolvedLineEnd>,
+    pub tail_end: Option<ResolvedLineEnd>,
     pub shadow: Option<Effect>,
     pub content: ResolvedContent,
     /// Stable fallback category when the renderer cannot reproduce the source.
     pub unsupported: Option<&'static str>,
+}
+
+/// One source-neutral line endpoint ready for renderer geometry lowering.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolvedLineEnd {
+    pub kind: ResolvedLineEndKind,
+    pub width: ResolvedLineEndSize,
+    pub length: ResolvedLineEndSize,
+}
+
+/// A visible line endpoint kind. DrawingML `none` resolves to no endpoint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolvedLineEndKind {
+    Triangle,
+    Stealth,
+    Diamond,
+    Oval,
+    Arrow,
+}
+
+/// A line endpoint width or length multiplier category.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ResolvedLineEndSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
 }
 
 /// Concrete geometry ready for the renderer, or a visible bounds fallback.
@@ -62,8 +115,59 @@ pub enum ResolvedContent {
     Image {
         media: MediaId,
         src_rect: Option<CropRect>,
+        placement: ResolvedImagePlacement,
+        dpi: Option<f64>,
+        rotate_with_shape: bool,
     },
     Table(ResolvedTable),
+}
+
+/// Destination placement for one resolved picture.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ResolvedImagePlacement {
+    Stretch { fill_rect: Option<CropRect> },
+    Tile(ResolvedTilePlacement),
+}
+
+impl Default for ResolvedImagePlacement {
+    fn default() -> Self {
+        Self::Stretch { fill_rect: None }
+    }
+}
+
+/// Concrete tile placement with all DrawingML defaults applied.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ResolvedTilePlacement {
+    pub translation: Point,
+    pub scale_x: f64,
+    pub scale_y: f64,
+    pub flip: ResolvedTileFlip,
+    pub alignment: ResolvedRectAlignment,
+}
+
+/// Alternating tile reflection axes.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ResolvedTileFlip {
+    #[default]
+    None,
+    Horizontal,
+    Vertical,
+    Both,
+}
+
+/// The nine DrawingML rectangle alignment positions.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ResolvedRectAlignment {
+    #[default]
+    TopLeft,
+    Top,
+    TopRight,
+    Left,
+    Center,
+    Right,
+    BottomLeft,
+    Bottom,
+    BottomRight,
 }
 
 /// Picture cropping as fractions of the source dimensions.

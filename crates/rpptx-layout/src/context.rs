@@ -4,10 +4,11 @@ use std::collections::HashMap;
 
 use oxml_drawing::color::{ColorChoice, ColorMap, ColorMapSlot, RgbColor, resolve_color};
 use oxml_drawing::effect::CT_OuterShadowEffect;
-use oxml_drawing::fill::{Fill, GradientGeometry};
+use oxml_drawing::fill::{BlipMode, Fill, GradientGeometry, RelativeRect};
 use oxml_drawing::geometry::EvaluatedPathCommand;
 use oxml_drawing::line::{
-    CT_LineProperties, LineCap as DrawingLineCap, LineDash, LineJoin as DrawingLineJoin,
+    CT_LineProperties, LineCap as DrawingLineCap, LineDash, LineEnd, LineEndSize, LineEndType,
+    LineJoin as DrawingLineJoin,
 };
 use oxml_drawing::text::{
     CT_TextBody, CT_TextBodyProperties, CT_TextCharacterProperties, CT_TextListStyle,
@@ -24,15 +25,18 @@ use oxml_layout::{
 use rpptx_oxml::graphic_frame::GraphicDataPayload;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType, PlaceholderKey};
 use rpptx_oxml::shape_tree::{CT_Shape, ShapeTreeChild};
-use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster};
+use rpptx_oxml::slide_parts::{BackgroundRendering, CT_Slide, CT_SlideLayout, CT_SlideMaster};
 
 use crate::ResolveError;
+use crate::style::{referenced_fill, substitute_fill};
 use crate::text::EffectiveListStyle;
 use crate::{
     ParagraphAlignment, ResolvedAutofit, ResolvedBullet, ResolvedBulletSize, ResolvedContent,
-    ResolvedGeometry, ResolvedParagraph, ResolvedRunStyle, ResolvedShape, ResolvedSlide,
-    ResolvedTable, ResolvedTableCell, ResolvedTableRow, ResolvedTextBody, ResolvedTextRun,
-    ResolvedTextSpacing, TextAnchor, TextDirection, TextInsets,
+    ResolvedGeometry, ResolvedImagePlacement, ResolvedLineEnd, ResolvedLineEndKind,
+    ResolvedLineEndSize, ResolvedParagraph, ResolvedRectAlignment, ResolvedRunStyle, ResolvedShape,
+    ResolvedSlide, ResolvedTable, ResolvedTableCell, ResolvedTableRow, ResolvedTextBody,
+    ResolvedTextRun, ResolvedTextSpacing, ResolvedTileFlip, ResolvedTilePlacement, ScopedMediaIds,
+    TextAnchor, TextDirection, TextInsets,
 };
 
 /// The producer part that supplied the effective background.
@@ -47,7 +51,7 @@ pub enum BackgroundSource {
 /// The borrowed background payload selected for one slide.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BackgroundContent<'a> {
-    Xml(&'a [u8]),
+    Model(&'a BackgroundRendering),
     ThemeFill(&'a Fill),
 }
 
@@ -176,24 +180,24 @@ impl<'a> ResolveCtx<'a> {
 
     /// Selects the first background in slide, layout, master, and theme order.
     pub fn effective_background(&self) -> Option<EffectiveBackground<'_>> {
-        for (source, xml) in [
+        for (source, background) in [
             (
                 BackgroundSource::Slide,
-                self.slide.common_slide_data.background_xml.as_deref(),
+                self.slide.common_slide_data.background.as_ref(),
             ),
             (
                 BackgroundSource::Layout,
-                self.layout.common_slide_data.background_xml.as_deref(),
+                self.layout.common_slide_data.background.as_ref(),
             ),
             (
                 BackgroundSource::Master,
-                self.master.common_slide_data.background_xml.as_deref(),
+                self.master.common_slide_data.background.as_ref(),
             ),
         ] {
-            if let Some(xml) = xml {
+            if let Some(background) = background {
                 return Some(EffectiveBackground {
                     source,
-                    content: BackgroundContent::Xml(xml),
+                    content: BackgroundContent::Model(background.rendering()),
                     color_map: &self.color_map,
                 });
             }
@@ -267,6 +271,23 @@ impl<'a> ResolveCtx<'a> {
 
     /// Resolves one owned renderer-facing slide at the supplied point size.
     pub fn resolve_slide(&self, size: (f64, f64)) -> Result<ResolvedSlide, ResolveError> {
+        self.resolve_slide_inner(size, None)
+    }
+
+    /// Resolves one slide using embedded media identifiers scoped to source parts.
+    pub fn resolve_slide_with_media(
+        &self,
+        size: (f64, f64),
+        media: &ScopedMediaIds,
+    ) -> Result<ResolvedSlide, ResolveError> {
+        self.resolve_slide_inner(size, Some(media))
+    }
+
+    fn resolve_slide_inner(
+        &self,
+        size: (f64, f64),
+        media: Option<&ScopedMediaIds>,
+    ) -> Result<ResolvedSlide, ResolveError> {
         let mut slide = ResolvedSlide {
             size,
             background: None,
@@ -275,22 +296,42 @@ impl<'a> ResolveCtx<'a> {
         };
         for item in self.flatten() {
             match item {
-                FlattenedItem::Background(background) => match background.content {
-                    BackgroundContent::ThemeFill(fill) => {
-                        slide.background = self.concrete_background_fill(fill, size)?.0;
+                FlattenedItem::Background(background) => {
+                    let (paint, unsupported) = match background.content {
+                        BackgroundContent::ThemeFill(fill) => {
+                            self.concrete_background_fill(fill, size)?
+                        }
+                        BackgroundContent::Model(BackgroundRendering::Properties(fill)) => {
+                            match fill {
+                                Some(fill) => self.concrete_background_fill(fill, size)?,
+                                None => (None, None),
+                            }
+                        }
+                        BackgroundContent::Model(BackgroundRendering::Reference {
+                            index,
+                            color,
+                        }) => self.concrete_background_reference(*index, color.as_ref(), size)?,
+                        BackgroundContent::Model(BackgroundRendering::Unsupported(detail)) => {
+                            (None, Some(*detail))
+                        }
+                    };
+                    slide.background = paint;
+                    if let Some(unsupported) = unsupported {
+                        slide.diagnostics.push(Diagnostic {
+                            message: format!("unsupported background {unsupported}"),
+                        });
                     }
-                    BackgroundContent::Xml(_) => slide.diagnostics.push(Diagnostic {
-                        message: "modelled slide background paint is not available".to_owned(),
-                    }),
-                },
+                }
                 FlattenedItem::Shape {
+                    source,
                     child,
                     group_transform,
-                    ..
                 } => {
                     if let Some(shape) = self.resolve_flattened_shape(
+                        source,
                         child,
                         group_transform,
+                        media,
                         &mut slide.diagnostics,
                     )? {
                         slide.shapes.push(shape);
@@ -303,8 +344,10 @@ impl<'a> ResolveCtx<'a> {
 
     fn resolve_flattened_shape(
         &self,
+        source: FlattenedSource,
         child: &ShapeTreeChild,
         group_transform: Transform,
+        media: Option<&ScopedMediaIds>,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<Option<ResolvedShape>, ResolveError> {
         match child {
@@ -317,22 +360,44 @@ impl<'a> ResolveCtx<'a> {
                 else {
                     return Ok(None);
                 };
-                let category = "image media pending relationship resolution";
-                diagnostics.push(Diagnostic {
-                    message: category.to_owned(),
-                });
+                let line_properties = picture.shape_properties.line.as_ref();
+                let line = line_properties
+                    .map(|line| self.concrete_line(line, (bounds.width, bounds.height)))
+                    .transpose()?
+                    .flatten();
+                let (head_end, tail_end) = line_properties
+                    .map(resolved_line_ends)
+                    .unwrap_or((None, None));
+                let shadow = picture
+                    .shape_properties
+                    .effects
+                    .as_ref()
+                    .and_then(|effects| effects.outer_shadow.as_ref())
+                    .map(|shadow| self.concrete_shadow(shadow))
+                    .transpose()?;
+                let (geometry, geometry_unsupported) =
+                    self.concrete_picture_geometry(picture, (bounds.width, bounds.height));
+                if let Some(category) = geometry_unsupported {
+                    diagnostics.push(Diagnostic {
+                        message: format!("unsupported {category} retained as picture bounds"),
+                    });
+                }
+                let (content, media_unsupported) =
+                    resolve_picture_content(picture, source, media, diagnostics);
                 Ok(Some(ResolvedShape {
                     group_transform,
                     bounds,
                     rotation_deg,
                     flip_h,
                     flip_v,
-                    geometry: ResolvedGeometry::Rectangle,
+                    geometry,
                     fill: None,
-                    line: None,
-                    shadow: None,
-                    content: ResolvedContent::None,
-                    unsupported: Some(category),
+                    line,
+                    head_end,
+                    tail_end,
+                    shadow,
+                    content,
+                    unsupported: media_unsupported.or(geometry_unsupported),
                 }))
             }
             ShapeTreeChild::GraphicFrame(frame) => {
@@ -370,6 +435,8 @@ impl<'a> ResolveCtx<'a> {
                     },
                     fill: None,
                     line: None,
+                    head_end: None,
+                    tail_end: None,
                     shadow: None,
                     content,
                     unsupported,
@@ -395,6 +462,12 @@ impl<'a> ResolveCtx<'a> {
                     .map(|line| self.concrete_line(line, (bounds.width, bounds.height)))
                     .transpose()?
                     .flatten();
+                let (head_end, tail_end) = connector
+                    .shape_properties
+                    .line
+                    .as_ref()
+                    .map(resolved_line_ends)
+                    .unwrap_or((None, None));
                 let unsupported = fill_unsupported.or(Some("connector geometry"));
                 diagnostics.push(Diagnostic {
                     message: format!(
@@ -411,6 +484,8 @@ impl<'a> ResolveCtx<'a> {
                     geometry: ResolvedGeometry::BoundsFallback,
                     fill,
                     line,
+                    head_end,
+                    tail_end,
                     shadow: None,
                     content: ResolvedContent::None,
                     unsupported,
@@ -444,6 +519,11 @@ impl<'a> ResolveCtx<'a> {
             .map(|line| self.concrete_line(line, (bounds.width, bounds.height)))
             .transpose()?
             .flatten();
+        let (head_end, tail_end) = effective
+            .line
+            .as_ref()
+            .map(resolved_line_ends)
+            .unwrap_or((None, None));
         let shadow = effective
             .effects
             .as_ref()
@@ -515,10 +595,208 @@ impl<'a> ResolveCtx<'a> {
             geometry,
             fill,
             line,
+            head_end,
+            tail_end,
             shadow,
             content,
             unsupported: fill_unsupported.or(geometry_unsupported),
         }))
+    }
+
+    fn concrete_picture_geometry(
+        &self,
+        picture: &rpptx_oxml::picture::CT_Picture,
+        size: (f64, f64),
+    ) -> (ResolvedGeometry, Option<&'static str>) {
+        if let Some(custom) = &picture.shape_properties.custom_geometry {
+            return self
+                .concrete_custom_geometry(custom, size)
+                .map(|geometry| (geometry, None))
+                .unwrap_or((ResolvedGeometry::Rectangle, Some("picture custom geometry")));
+        }
+        if let Some(preset) = &picture.shape_properties.preset_geometry {
+            return match self.concrete_preset_geometry(preset, size) {
+                Ok(Some(geometry)) => (geometry, None),
+                Ok(None) => (
+                    ResolvedGeometry::Rectangle,
+                    Some("unknown picture preset geometry"),
+                ),
+                Err(_) => (
+                    ResolvedGeometry::Rectangle,
+                    Some("picture preset geometry evaluation"),
+                ),
+            };
+        }
+        (ResolvedGeometry::Rectangle, None)
+    }
+}
+
+fn resolve_picture_content(
+    picture: &rpptx_oxml::picture::CT_Picture,
+    source: FlattenedSource,
+    media: Option<&ScopedMediaIds>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> (ResolvedContent, Option<&'static str>) {
+    let Some(fill) = picture.blip_fill.as_ref() else {
+        return unsupported_picture(
+            "alternate picture media",
+            "alternate picture media is not resolved",
+            diagnostics,
+        );
+    };
+    let Some(blip) = fill.blip.as_ref() else {
+        return unsupported_picture(
+            "missing picture blip",
+            "picture fill has no modelled embedded blip",
+            diagnostics,
+        );
+    };
+    let Some(relationship_id) = blip.embed.as_deref() else {
+        let message = if let Some(link) = blip.link.as_deref() {
+            format!("external picture relationship `{link}` is unsupported")
+        } else {
+            "picture blip has no embedded relationship".to_owned()
+        };
+        return unsupported_picture("external picture media", &message, diagnostics);
+    };
+    let Some(media) = media else {
+        return unsupported_picture(
+            "image media pending relationship resolution",
+            "image media pending relationship resolution",
+            diagnostics,
+        );
+    };
+    let Some(media_id) = media.get(source, relationship_id) else {
+        return unsupported_picture(
+            "missing image relationship",
+            &format!(
+                "missing {} image relationship `{relationship_id}`",
+                flattened_source_name(source)
+            ),
+            diagnostics,
+        );
+    };
+    (
+        ResolvedContent::Image {
+            media: media_id,
+            src_rect: fill.source_rect.as_ref().map(resolved_crop_rect),
+            placement: match fill.mode.as_ref() {
+                Some(BlipMode::Tile(tile)) => ResolvedImagePlacement::Tile(ResolvedTilePlacement {
+                    translation: Point {
+                        x: emu_to_points(tile.translation_x.unwrap_or(0)),
+                        y: emu_to_points(tile.translation_y.unwrap_or(0)),
+                    },
+                    scale_x: tile
+                        .scale_x
+                        .map_or(1.0, |value| f64::from(value.0) / 100_000.0),
+                    scale_y: tile
+                        .scale_y
+                        .map_or(1.0, |value| f64::from(value.0) / 100_000.0),
+                    flip: resolved_tile_flip(tile.flip.as_deref()),
+                    alignment: resolved_rect_alignment(tile.alignment.as_deref()),
+                }),
+                Some(BlipMode::Stretch { fill_rect, .. }) => ResolvedImagePlacement::Stretch {
+                    fill_rect: fill_rect.as_ref().map(resolved_crop_rect),
+                },
+                None => ResolvedImagePlacement::default(),
+            },
+            dpi: fill.dpi.filter(|dpi| *dpi > 0).map(f64::from),
+            rotate_with_shape: fill.rotate_with_shape.unwrap_or(true),
+        },
+        None,
+    )
+}
+
+fn unsupported_picture(
+    category: &'static str,
+    message: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> (ResolvedContent, Option<&'static str>) {
+    diagnostics.push(Diagnostic {
+        message: message.to_owned(),
+    });
+    (ResolvedContent::None, Some(category))
+}
+
+fn flattened_source_name(source: FlattenedSource) -> &'static str {
+    match source {
+        FlattenedSource::Background => "background",
+        FlattenedSource::Master => "master",
+        FlattenedSource::Layout => "layout",
+        FlattenedSource::Slide => "slide",
+    }
+}
+
+fn resolved_crop_rect(rect: &RelativeRect) -> crate::CropRect {
+    crate::CropRect {
+        left: rect
+            .left
+            .map_or(0.0, |value| f64::from(value.0) / 100_000.0),
+        top: rect.top.map_or(0.0, |value| f64::from(value.0) / 100_000.0),
+        right: rect
+            .right
+            .map_or(0.0, |value| f64::from(value.0) / 100_000.0),
+        bottom: rect
+            .bottom
+            .map_or(0.0, |value| f64::from(value.0) / 100_000.0),
+    }
+}
+
+fn resolved_tile_flip(value: Option<&str>) -> ResolvedTileFlip {
+    match value {
+        Some("x") => ResolvedTileFlip::Horizontal,
+        Some("y") => ResolvedTileFlip::Vertical,
+        Some("xy") => ResolvedTileFlip::Both,
+        Some("none") | None => ResolvedTileFlip::None,
+        Some(_) => unreachable!("DrawingML tile flip is validated while parsing"),
+    }
+}
+
+fn resolved_rect_alignment(value: Option<&str>) -> ResolvedRectAlignment {
+    match value {
+        Some("t") => ResolvedRectAlignment::Top,
+        Some("tr") => ResolvedRectAlignment::TopRight,
+        Some("l") => ResolvedRectAlignment::Left,
+        Some("ctr") => ResolvedRectAlignment::Center,
+        Some("r") => ResolvedRectAlignment::Right,
+        Some("bl") => ResolvedRectAlignment::BottomLeft,
+        Some("b") => ResolvedRectAlignment::Bottom,
+        Some("br") => ResolvedRectAlignment::BottomRight,
+        Some("tl") | None => ResolvedRectAlignment::TopLeft,
+        Some(_) => unreachable!("DrawingML rectangle alignment is validated while parsing"),
+    }
+}
+
+fn resolved_line_ends(
+    line: &CT_LineProperties,
+) -> (Option<ResolvedLineEnd>, Option<ResolvedLineEnd>) {
+    (
+        line.head_end.as_ref().and_then(resolved_line_end),
+        line.tail_end.as_ref().and_then(resolved_line_end),
+    )
+}
+
+fn resolved_line_end(end: &LineEnd) -> Option<ResolvedLineEnd> {
+    let kind = match end.kind? {
+        LineEndType::None => return None,
+        LineEndType::Triangle => ResolvedLineEndKind::Triangle,
+        LineEndType::Stealth => ResolvedLineEndKind::Stealth,
+        LineEndType::Diamond => ResolvedLineEndKind::Diamond,
+        LineEndType::Oval => ResolvedLineEndKind::Oval,
+        LineEndType::Arrow => ResolvedLineEndKind::Arrow,
+    };
+    Some(ResolvedLineEnd {
+        kind,
+        width: resolved_line_end_size(end.width),
+        length: resolved_line_end_size(end.length),
+    })
+}
+
+fn resolved_line_end_size(size: Option<LineEndSize>) -> ResolvedLineEndSize {
+    match size.unwrap_or(LineEndSize::Medium) {
+        LineEndSize::Small => ResolvedLineEndSize::Small,
+        LineEndSize::Medium => ResolvedLineEndSize::Medium,
+        LineEndSize::Large => ResolvedLineEndSize::Large,
     }
 }
 
@@ -528,17 +806,27 @@ impl ResolveCtx<'_> {
         fill: &Fill,
         size: (f64, f64),
     ) -> Result<(Option<Paint>, Option<&'static str>), ResolveError> {
-        if let Fill::Solid(solid) = fill
-            && matches!(
-                solid.color.as_ref(),
-                Some(ColorChoice::Scheme { value, .. }) if value == "phClr"
-            )
-        {
-            let slot = self.color_map.theme_slot(ColorMapSlot::Background1);
-            let choice = self.theme.theme_elements.color_scheme.color(slot);
-            return Ok((Some(Paint::Solid(self.concrete_color(choice)?)), None));
-        }
-        self.concrete_fill(fill, size)
+        let mut fill = fill.clone();
+        let slot = self.color_map.theme_slot(ColorMapSlot::Background1);
+        let reference = self.theme.theme_elements.color_scheme.color(slot);
+        substitute_fill(&mut fill, Some(reference), "background")?;
+        self.concrete_fill(&fill, size)
+    }
+
+    fn concrete_background_reference(
+        &self,
+        index: u32,
+        color: Option<&ColorChoice>,
+        size: (f64, f64),
+    ) -> Result<(Option<Paint>, Option<&'static str>), ResolveError> {
+        let matrix = &self.theme.theme_elements.format_scheme;
+        let Some(mut fill) =
+            referenced_fill(index, &matrix.fill_styles, &matrix.background_fill_styles)?
+        else {
+            return Ok((None, None));
+        };
+        substitute_fill(&mut fill, color, "background")?;
+        self.concrete_fill(&fill, size)
     }
 
     fn concrete_fill(
@@ -1592,6 +1880,7 @@ fn find_placeholder<'a>(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
     use oxml_drawing::color::ColorMap;
@@ -1609,10 +1898,11 @@ mod tests {
     use super::{BackgroundSource, FlattenedItem, FlattenedSource, ResolveCtx, transform_values};
     use crate::{
         ResolvedAutofit, ResolvedBullet, ResolvedBulletSize, ResolvedContent, ResolvedGeometry,
-        ResolvedSlide, ResolvedTextRun, ResolvedTextSpacing, TextAnchor as ResolvedTextAnchor,
-        TextDirection,
+        ResolvedImagePlacement, ResolvedLineEnd, ResolvedLineEndKind, ResolvedLineEndSize,
+        ResolvedRectAlignment, ResolvedSlide, ResolvedTextRun, ResolvedTextSpacing,
+        ResolvedTileFlip, ScopedMediaIds, TextAnchor as ResolvedTextAnchor, TextDirection,
     };
-    use oxml_layout::{Color, Effect, Paint, PathCommand, Point};
+    use oxml_layout::{Color, Effect, MediaId, Paint, PathCommand, Point};
 
     const P_NS: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
     const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
@@ -1927,7 +2217,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_background_uses_fallback_order_and_master_color_map() {
+    fn background_precedence_is_slide_layout_master_then_theme() {
         let slide_first = Fixture::from_xml(
             &slide_xml_with("", "<p:bg><p:bgPr/></p:bg>", ""),
             &layout_xml_with("", "<p:bg><p:bgPr/></p:bg>", "", ""),
@@ -1955,6 +2245,117 @@ mod tests {
         let context = theme_fallback.context();
         let background = context.effective_background().unwrap();
         assert!(std::ptr::eq(background.color_map, &context.color_map));
+    }
+
+    #[test]
+    fn master_gradient_background_resolves_when_slide_and_layout_omit_one() {
+        let background = r#"<p:bg><p:bgPr><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill></p:bgPr></p:bg>"#;
+        let fixture = Fixture::from_xml(
+            &slide_xml_with("", "", ""),
+            &layout_xml_with("", "", "", ""),
+            &master_xml_with(background, "", ""),
+        );
+
+        let resolved = fixture.context().resolve_slide((40.0, 20.0)).unwrap();
+        let Some(Paint::Linear { stops, .. }) = resolved.background else {
+            panic!("expected inherited master gradient paint");
+        };
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, Color::from_hex("FF0000"));
+        assert_eq!(stops[1].color, Color::from_hex("0000FF"));
+        assert!(resolved.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn background_reference_resolves_phclr_through_the_master_colour_map() {
+        let master = master_xml_with(
+            r#"<p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg>"#,
+            "",
+            "",
+        )
+        .replace("bg1=\"lt1\"", "bg1=\"accent6\"");
+        let fixture = Fixture::from_xml(
+            &slide_xml_with("", "", ""),
+            &layout_xml_with("", "", "", ""),
+            &master,
+        );
+        let context = ResolveCtx::new(
+            &fixture.theme,
+            fixture.master.color_map.clone(),
+            &fixture.master,
+            &fixture.layout,
+            &fixture.slide,
+            &fixture.default_text_style,
+        );
+
+        let resolved = context.resolve_slide((40.0, 20.0)).unwrap();
+        assert_eq!(
+            resolved.background,
+            Some(Paint::Solid(Color::from_hex("4EA72E")))
+        );
+        assert!(resolved.diagnostics.is_empty());
+
+        let mut transformed = Fixture::from_xml(
+            &slide_xml_with("", "", ""),
+            &layout_xml_with("", "", "", ""),
+            &master_xml_with(
+                r#"<p:bg><p:bgRef idx="1001"><a:srgbClr val="C0504D"><a:tint val="60000"/></a:srgbClr></p:bgRef></p:bg>"#,
+                "",
+                "",
+            ),
+        );
+        transformed
+            .theme
+            .theme_elements
+            .format_scheme
+            .background_fill_styles[0] = oxml_drawing::fill::Fill::from_xml(
+            br#"<a:solidFill><a:schemeClr val="phClr"><a:shade val="70000"/></a:schemeClr></a:solidFill>"#,
+        )
+        .unwrap();
+
+        let transformed = transformed.context().resolve_slide((40.0, 20.0)).unwrap();
+        assert_eq!(
+            transformed.background,
+            Some(Paint::Solid(Color::from_hex("BC9897")))
+        );
+    }
+
+    #[test]
+    fn unsupported_background_fill_records_a_specific_diagnostic() {
+        let fixture = Fixture::from_xml(
+            &slide_xml_with(
+                "",
+                r#"<p:bg><p:bgPr><a:pattFill prst="pct5"><a:fgClr><a:srgbClr val="FF0000"/></a:fgClr><a:bgClr><a:srgbClr val="FFFFFF"/></a:bgClr></a:pattFill></p:bgPr></p:bg>"#,
+                "",
+            ),
+            &layout_xml_with("", "", "", ""),
+            &master_xml_with("", "", ""),
+        );
+
+        let resolved = fixture.context().resolve_slide((40.0, 20.0)).unwrap();
+        assert!(resolved.background.is_none());
+        assert_eq!(
+            resolved.diagnostics,
+            vec![oxml_layout::Diagnostic {
+                message: "unsupported background pattern fill".to_owned(),
+            }]
+        );
+
+        let group_fill = Fixture::from_xml(
+            &slide_xml_with("", r#"<p:bg><p:bgPr><a:grpFill/></p:bgPr></p:bg>"#, ""),
+            &layout_xml_with("", "", "", ""),
+            &master_xml_with("", "", ""),
+        )
+        .context()
+        .resolve_slide((40.0, 20.0))
+        .unwrap();
+        assert!(group_fill.background.is_none());
+        assert_eq!(
+            group_fill.diagnostics,
+            vec![oxml_layout::Diagnostic {
+                message: "unsupported background group fill".to_owned(),
+            }]
+        );
     }
 
     #[test]
@@ -2097,6 +2498,159 @@ mod tests {
             assert!(!type_name.contains("rpptx_oxml"));
             assert!(!type_name.contains("oxml_drawing"));
         }
+    }
+
+    #[test]
+    fn line_end_resolution_keeps_kind_width_and_length() {
+        let properties = format!(
+            r#"{}<a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln w="25400"><a:solidFill><a:prstClr val="black"/></a:solidFill><a:headEnd type="diamond" w="sm"/><a:tailEnd type="triangle" len="lg"/></a:ln>"#,
+            transform(0)
+        );
+        let fixture = Fixture::new(&shape_with_details(None, None, &properties, None), "", "");
+
+        let resolved = fixture.context().resolve_slide((720.0, 540.0)).unwrap();
+        let shape = &resolved.shapes[0];
+        assert_eq!(
+            shape.head_end,
+            Some(ResolvedLineEnd {
+                kind: ResolvedLineEndKind::Diamond,
+                width: ResolvedLineEndSize::Small,
+                length: ResolvedLineEndSize::Medium,
+            })
+        );
+        assert_eq!(
+            shape.tail_end,
+            Some(ResolvedLineEnd {
+                kind: ResolvedLineEndKind::Triangle,
+                width: ResolvedLineEndSize::Medium,
+                length: ResolvedLineEndSize::Large,
+            })
+        );
+        assert_eq!(shape.line.as_ref().map(|line| line.width), Some(2.0));
+    }
+
+    #[test]
+    fn same_relationship_id_resolves_to_distinct_media_in_each_source_scope() {
+        let fixture = Fixture::new(
+            &picture("rId2", "", "", 25_400),
+            &picture("rId2", "", "", 12_700),
+            &picture("rId2", "", "", 0),
+        );
+        let media = ScopedMediaIds {
+            slide: HashMap::from([("rId2".to_owned(), MediaId(1))]),
+            layout: HashMap::from([("rId2".to_owned(), MediaId(2))]),
+            master: HashMap::from([("rId2".to_owned(), MediaId(3))]),
+        };
+
+        let resolved = fixture
+            .context()
+            .resolve_slide_with_media((720.0, 540.0), &media)
+            .unwrap();
+        let ids = resolved
+            .shapes
+            .iter()
+            .map(|shape| match shape.content {
+                ResolvedContent::Image { media, .. } => media,
+                _ => panic!("scoped picture should resolve to image content"),
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, [MediaId(3), MediaId(2), MediaId(1)]);
+    }
+
+    #[test]
+    fn picture_model_resolves_to_neutral_stretch_and_tile_placement() {
+        let fixture = Fixture::new(
+            &format!(
+                "{}{}{}{}",
+                picture("rId1", "", "", 0),
+                picture(
+                    "rId2",
+                    "dpi=\"144\" rotWithShape=\"0\"",
+                    r#"<a:srcRect l="10000"/><a:tile tx="12700" ty="-25400" sx="50000" sy="200000" flip="xy" algn="br"/>"#,
+                    12_700,
+                ),
+                picture(
+                    "rId4",
+                    "",
+                    r#"<a:stretch><a:fillRect l="10000" t="20000" r="30000" b="40000"/></a:stretch>"#,
+                    25_400,
+                ),
+                linked_picture("https://example.invalid/image.png", 38_100),
+            ),
+            "",
+            "",
+        );
+        let media = ScopedMediaIds {
+            slide: HashMap::from([
+                ("rId1".to_owned(), MediaId(11)),
+                ("rId2".to_owned(), MediaId(12)),
+                ("rId4".to_owned(), MediaId(14)),
+            ]),
+            ..ScopedMediaIds::default()
+        };
+
+        let resolved = fixture
+            .context()
+            .resolve_slide_with_media((720.0, 540.0), &media)
+            .unwrap();
+        let ResolvedContent::Image {
+            placement,
+            dpi,
+            rotate_with_shape,
+            ..
+        } = &resolved.shapes[0].content
+        else {
+            panic!("default picture should resolve");
+        };
+        assert_eq!(placement, &ResolvedImagePlacement::default());
+        assert_eq!(*dpi, None);
+        assert!(*rotate_with_shape);
+
+        let ResolvedContent::Image {
+            src_rect,
+            placement: ResolvedImagePlacement::Tile(tile),
+            dpi,
+            rotate_with_shape,
+            ..
+        } = &resolved.shapes[1].content
+        else {
+            panic!("tile picture should resolve");
+        };
+        assert_eq!(src_rect.unwrap().left, 0.1);
+        assert_eq!(tile.translation, Point { x: 1.0, y: -2.0 });
+        assert_eq!((tile.scale_x, tile.scale_y), (0.5, 2.0));
+        assert_eq!(tile.flip, ResolvedTileFlip::Both);
+        assert_eq!(tile.alignment, ResolvedRectAlignment::BottomRight);
+        assert_eq!(*dpi, Some(144.0));
+        assert!(!*rotate_with_shape);
+
+        let ResolvedContent::Image {
+            placement: ResolvedImagePlacement::Stretch { fill_rect },
+            ..
+        } = &resolved.shapes[2].content
+        else {
+            panic!("explicit stretch picture should resolve");
+        };
+        assert_eq!(
+            *fill_rect,
+            Some(crate::CropRect {
+                left: 0.1,
+                top: 0.2,
+                right: 0.3,
+                bottom: 0.4,
+            })
+        );
+        assert_eq!(resolved.shapes[3].content, ResolvedContent::None);
+        assert_eq!(
+            resolved.shapes[3].unsupported,
+            Some("external picture media")
+        );
+        assert!(resolved.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("external picture relationship `https://example.invalid/image.png`")
+        }));
     }
 
     #[test]
@@ -2728,6 +3282,25 @@ mod tests {
         });
         format!(
             "<p:sp><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr>{placeholder}</p:nvPr></p:nvSpPr><p:spPr>{shape_properties}</p:spPr>{text_body}</p:sp>"
+        )
+    }
+
+    fn picture(
+        relationship_id: &str,
+        fill_attributes: &str,
+        fill_children: &str,
+        x: i64,
+    ) -> String {
+        format!(
+            r#"<p:pic><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill {fill_attributes}><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="{relationship_id}"/>{fill_children}</p:blipFill><p:spPr>{}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>"#,
+            transform(x)
+        )
+    }
+
+    fn linked_picture(url: &str, x: i64) -> String {
+        format!(
+            r#"<p:pic><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:link="{url}"/></p:blipFill><p:spPr>{}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>"#,
+            transform(x)
         )
     }
 

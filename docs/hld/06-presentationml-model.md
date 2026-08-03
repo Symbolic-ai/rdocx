@@ -131,6 +131,14 @@ p:cSld
 Document order is z-order. `p:spTree` missing its own `p:nvGrpSpPr` or
 `p:grpSpPr` is a repair prompt, as is any `p:sp` without `p:spPr`.
 
+`CT_Background` retains the complete captured `p:bg` subtree as its sole
+serialisation source. Its read-only rendering projection distinguishes a
+`p:bgPr` DrawingML fill from a `p:bgRef` style index and colour. Projection
+parsing uses the namespace bindings inherited from `p:cSld`, so aliased
+prefixes remain valid even when their declarations live on the part root.
+Attributes, effects, unsupported siblings, and the original child order remain
+inside the retained raw subtree and round-trip byte-identically.
+
 An ordinary `CT_Shape` owns its required `p:spPr` as a public boxed
 `CT_ShapeProperties`. The allocation keeps recursive group parsing within the
 normal test-thread stack even when a master contains deeply nested shapes with

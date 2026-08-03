@@ -6,8 +6,15 @@ use std::fmt;
 use std::sync::Arc;
 
 use oxml_drawing::theme::CT_OfficeStyleSheet;
-use oxml_layout::{DocumentMetadata, FontFile, MediaId};
-use rpptx_layout::ResolvedSlide;
+use oxml_layout::{
+    Color, DocumentMetadata, FontFile, GroupElement, LayoutResult, MediaId, PageFrame, Paint, Path,
+    PathCommand, PathElement, Point, PositionedElement, Rect, Stroke, Transform,
+};
+use rpptx_layout::{
+    CropRect, ResolvedContent, ResolvedGeometry, ResolvedImagePlacement, ResolvedLineEnd,
+    ResolvedLineEndKind, ResolvedLineEndSize, ResolvedRectAlignment, ResolvedShape, ResolvedSlide,
+    ResolvedTileFlip, ResolvedTilePlacement,
+};
 use rpptx_oxml::notes_parts::CT_NotesSlide;
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster};
 
@@ -84,6 +91,22 @@ pub enum RenderInputError {
         relationship_id: String,
         target: String,
     },
+    SlideIndexOutOfBounds {
+        index: usize,
+        slide_count: usize,
+    },
+    MissingMedia {
+        media: MediaId,
+    },
+    InvalidPicture {
+        media: MediaId,
+        detail: &'static str,
+    },
+    TileLimitExceeded {
+        media: MediaId,
+        requested: usize,
+        limit: usize,
+    },
 }
 
 impl fmt::Display for RenderInputError {
@@ -100,6 +123,25 @@ impl fmt::Display for RenderInputError {
             } => write!(
                 formatter,
                 "missing media target {target} for {scope} relationship {relationship_id}"
+            ),
+            Self::SlideIndexOutOfBounds { index, slide_count } => write!(
+                formatter,
+                "slide index {index} is out of bounds for {slide_count} slides"
+            ),
+            Self::MissingMedia { media } => {
+                write!(formatter, "missing picture media {}", media.0)
+            }
+            Self::InvalidPicture { media, detail } => {
+                write!(formatter, "invalid picture media {}: {detail}", media.0)
+            }
+            Self::TileLimitExceeded {
+                media,
+                requested,
+                limit,
+            } => write!(
+                formatter,
+                "picture media {} requests {requested} tiles, above the {limit} tile limit",
+                media.0
             ),
         }
     }
@@ -128,6 +170,831 @@ pub struct RenderInput {
     pub metadata: Option<DocumentMetadata>,
 }
 
+/// Lower every resolved slide to one fixed-size page in presentation order.
+pub fn layout_presentation(input: &RenderInput) -> Result<LayoutResult, RenderInputError> {
+    let pages = (0..input.slides.len())
+        .map(|index| layout_slide(input, index))
+        .collect::<Result<Vec<_>, _>>()?;
+    let diagnostics = input
+        .slides
+        .iter()
+        .flat_map(|slide| slide.diagnostics.iter().cloned())
+        .collect();
+    let mut layout = LayoutResult::new(pages, Vec::new(), input.metadata.clone(), Vec::new());
+    layout.diagnostics = diagnostics;
+    Ok(layout)
+}
+
+/// Lower one zero-based resolved slide to a fixed-size page.
+pub fn layout_slide(input: &RenderInput, index: usize) -> Result<PageFrame, RenderInputError> {
+    let slide = input
+        .slides
+        .get(index)
+        .ok_or(RenderInputError::SlideIndexOutOfBounds {
+            index,
+            slide_count: input.slides.len(),
+        })?;
+    let elements = slide
+        .shapes
+        .iter()
+        .map(|shape| lower_shape(input, shape))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut page = PageFrame::new(index + 1, slide.size.0, slide.size.1, elements);
+    page.background.clone_from(&slide.background);
+    Ok(page)
+}
+
+fn lower_shape(
+    input: &RenderInput,
+    shape: &ResolvedShape,
+) -> Result<PositionedElement, RenderInputError> {
+    let paths = match &shape.geometry {
+        ResolvedGeometry::Rectangle | ResolvedGeometry::BoundsFallback => vec![Path::rect(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: shape.bounds.width,
+            height: shape.bounds.height,
+        })],
+        ResolvedGeometry::Custom { paths, .. } => paths.clone(),
+    };
+    let stroke = match (&shape.geometry, &shape.fill, &shape.line) {
+        (ResolvedGeometry::BoundsFallback, None, None) => {
+            Some(Stroke::new(Paint::Solid(Color::BLACK), 1.0))
+        }
+        _ => shape.line.clone(),
+    };
+    let mut children = match &shape.content {
+        ResolvedContent::Image {
+            media,
+            src_rect,
+            placement,
+            dpi,
+            rotate_with_shape,
+        } => lower_picture(
+            input,
+            shape,
+            &paths,
+            *media,
+            *src_rect,
+            placement,
+            *dpi,
+            *rotate_with_shape,
+        )?,
+        _ => Vec::new(),
+    };
+    children.extend(
+        paths
+            .iter()
+            .cloned()
+            .map(|path| {
+                PositionedElement::Path(PathElement {
+                    path,
+                    fill: shape.fill.clone(),
+                    stroke: stroke.clone(),
+                })
+            })
+            .collect::<Vec<_>>(),
+    );
+    if let Some(line) = &shape.line {
+        let (head_tangent, tail_tangent) = endpoint_tangents(&paths);
+        if let Some(path) = shape
+            .head_end
+            .as_ref()
+            .zip(head_tangent)
+            .and_then(|(end, tangent)| line_end_path(end, tangent, line.width))
+        {
+            children.push(filled_line_end(path, &line.paint));
+        }
+        if let Some(path) = shape
+            .tail_end
+            .as_ref()
+            .zip(tail_tangent)
+            .and_then(|(end, tangent)| line_end_path(end, tangent, line.width))
+        {
+            children.push(filled_line_end(path, &line.paint));
+        }
+    }
+    Ok(PositionedElement::Group(GroupElement {
+        transform: shape_transform(shape),
+        clip: None,
+        opacity: 1.0,
+        effects: Vec::new(),
+        children,
+    }))
+}
+
+const MAX_TILE_ELEMENTS: usize = 4_096;
+const MAX_TILED_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+
+#[allow(clippy::too_many_arguments)]
+fn lower_picture(
+    input: &RenderInput,
+    shape: &ResolvedShape,
+    paths: &[Path],
+    media_id: MediaId,
+    crop: Option<CropRect>,
+    placement: &ResolvedImagePlacement,
+    declared_dpi: Option<f64>,
+    rotate_with_shape: bool,
+) -> Result<Vec<PositionedElement>, RenderInputError> {
+    let media = input
+        .media
+        .get(&media_id)
+        .ok_or(RenderInputError::MissingMedia { media: media_id })?;
+    let crop = normalized_insets(crop, media_id, "source crop")?;
+    let elements = match placement {
+        ResolvedImagePlacement::Stretch { fill_rect } => {
+            let fill_rect = normalized_insets(*fill_rect, media_id, "stretch fill rectangle")?;
+            let destination =
+                inset_rect(picture_coverage_rect(shape, rotate_with_shape), fill_rect);
+            let image = picture_image(media_id, media, expanded_crop_rect(destination, crop));
+            let image = counter_rotate_image(image, shape, rotate_with_shape);
+            let mut image = if crop.is_some() {
+                clipped_group(Path::rect(destination), vec![image])
+            } else {
+                image
+            };
+            if !matches!(shape.geometry, ResolvedGeometry::Rectangle)
+                || (!rotate_with_shape && shape.rotation_deg != 0.0)
+            {
+                image = clip_to_picture_shape(shape, paths, vec![image]);
+            }
+            vec![image]
+        }
+        ResolvedImagePlacement::Tile(tile) => lower_tiled_picture(
+            shape,
+            paths,
+            media_id,
+            media,
+            crop,
+            tile,
+            declared_dpi,
+            rotate_with_shape,
+        )?,
+    };
+    Ok(elements)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_tiled_picture(
+    shape: &ResolvedShape,
+    paths: &[Path],
+    media_id: MediaId,
+    media: &MediaData,
+    crop: Option<CropRect>,
+    tile: &ResolvedTilePlacement,
+    declared_dpi: Option<f64>,
+    rotate_with_shape: bool,
+) -> Result<Vec<PositionedElement>, RenderInputError> {
+    let info = oxml_media::probe(&media.bytes).ok_or(RenderInputError::InvalidPicture {
+        media: media_id,
+        detail: "tile image metadata is unavailable",
+    })?;
+    let (native_width, native_height) = tile_native_size_points(info, declared_dpi, media_id)?;
+    let tile_width = native_width * tile.scale_x;
+    let tile_height = native_height * tile.scale_y;
+    if !tile_width.is_finite()
+        || !tile_height.is_finite()
+        || tile_width <= 0.0
+        || tile_height <= 0.0
+        || !tile.translation.x.is_finite()
+        || !tile.translation.y.is_finite()
+    {
+        return Err(RenderInputError::InvalidPicture {
+            media: media_id,
+            detail: "tile size or translation is not finite and positive",
+        });
+    }
+    let shape_rect = local_shape_rect(shape);
+    let coverage_rect = picture_coverage_rect(shape, rotate_with_shape);
+    let anchor = tile_alignment_origin(shape_rect, tile_width, tile_height, tile.alignment);
+    let translated_anchor = Point {
+        x: anchor.x + tile.translation.x,
+        y: anchor.y + tile.translation.y,
+    };
+    let origin_x = repeated_origin(translated_anchor.x, coverage_rect.x, tile_width);
+    let origin_y = repeated_origin(translated_anchor.y, coverage_rect.y, tile_height);
+    if !origin_x.is_finite() || !origin_y.is_finite() {
+        return Err(RenderInputError::InvalidPicture {
+            media: media_id,
+            detail: "tile origin is not finite",
+        });
+    }
+    let first_column = repeated_tile_index(origin_x, translated_anchor.x, tile_width, media_id)?;
+    let first_row = repeated_tile_index(origin_y, translated_anchor.y, tile_height, media_id)?;
+    let columns = repeat_count(
+        origin_x,
+        coverage_rect.x + coverage_rect.width,
+        tile_width,
+        media_id,
+    )?;
+    let rows = repeat_count(
+        origin_y,
+        coverage_rect.y + coverage_rect.height,
+        tile_height,
+        media_id,
+    )?;
+    let requested = columns
+        .checked_mul(rows)
+        .ok_or(RenderInputError::TileLimitExceeded {
+            media: media_id,
+            requested: usize::MAX,
+            limit: MAX_TILE_ELEMENTS,
+        })?;
+    let byte_limit = MAX_TILED_IMAGE_BYTES / media.bytes.len().max(1);
+    let limit = MAX_TILE_ELEMENTS.min(byte_limit.max(1));
+    if requested > limit {
+        return Err(RenderInputError::TileLimitExceeded {
+            media: media_id,
+            requested,
+            limit,
+        });
+    }
+
+    let mut tiles = Vec::with_capacity(requested);
+    for row in 0..rows {
+        for column in 0..columns {
+            let rect = Rect {
+                x: origin_x + column as f64 * tile_width,
+                y: origin_y + row as f64 * tile_height,
+                width: tile_width,
+                height: tile_height,
+            };
+            let image = picture_image(media_id, media, expanded_crop_rect(rect, crop));
+            let image = if crop.is_some() {
+                clipped_group(Path::rect(rect), vec![image])
+            } else {
+                image
+            };
+            tiles.push(flip_tile(
+                image,
+                rect,
+                tile.flip,
+                (first_column.rem_euclid(2) == 1) != (column % 2 == 1),
+                (first_row.rem_euclid(2) == 1) != (row % 2 == 1),
+            ));
+        }
+    }
+    let tiles = if rotate_with_shape || shape.rotation_deg == 0.0 {
+        tiles
+    } else {
+        vec![PositionedElement::Group(GroupElement {
+            transform: Transform::rotate_about(
+                -shape.rotation_deg,
+                shape.bounds.width / 2.0,
+                shape.bounds.height / 2.0,
+            ),
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children: tiles,
+        })]
+    };
+    Ok(vec![clip_to_picture_shape(shape, paths, tiles)])
+}
+
+fn normalized_insets(
+    crop: Option<CropRect>,
+    media: MediaId,
+    detail: &'static str,
+) -> Result<Option<CropRect>, RenderInputError> {
+    let Some(crop) = crop else {
+        return Ok(None);
+    };
+    let values = [crop.left, crop.top, crop.right, crop.bottom];
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(RenderInputError::InvalidPicture { media, detail });
+    }
+    let crop = CropRect {
+        left: crop.left.clamp(0.0, 1.0),
+        top: crop.top.clamp(0.0, 1.0),
+        right: crop.right.clamp(0.0, 1.0),
+        bottom: crop.bottom.clamp(0.0, 1.0),
+    };
+    if crop.left + crop.right >= 1.0 || crop.top + crop.bottom >= 1.0 {
+        return Err(RenderInputError::InvalidPicture { media, detail });
+    }
+    Ok((crop != CropRect::default()).then_some(crop))
+}
+
+fn local_shape_rect(shape: &ResolvedShape) -> Rect {
+    Rect {
+        x: 0.0,
+        y: 0.0,
+        width: shape.bounds.width,
+        height: shape.bounds.height,
+    }
+}
+
+fn picture_coverage_rect(shape: &ResolvedShape, rotate_with_shape: bool) -> Rect {
+    let rect = local_shape_rect(shape);
+    if rotate_with_shape || shape.rotation_deg == 0.0 {
+        return rect;
+    }
+    Transform::rotate_about(
+        shape.rotation_deg,
+        shape.bounds.width / 2.0,
+        shape.bounds.height / 2.0,
+    )
+    .transform_rect_bbox(rect)
+}
+
+fn inset_rect(rect: Rect, insets: Option<CropRect>) -> Rect {
+    let Some(insets) = insets else {
+        return rect;
+    };
+    Rect {
+        x: rect.x + rect.width * insets.left,
+        y: rect.y + rect.height * insets.top,
+        width: rect.width * (1.0 - insets.left - insets.right),
+        height: rect.height * (1.0 - insets.top - insets.bottom),
+    }
+}
+
+fn expanded_crop_rect(destination: Rect, crop: Option<CropRect>) -> Rect {
+    let Some(crop) = crop else {
+        return destination;
+    };
+    let retained_width = 1.0 - crop.left - crop.right;
+    let retained_height = 1.0 - crop.top - crop.bottom;
+    let width = destination.width / retained_width;
+    let height = destination.height / retained_height;
+    Rect {
+        x: destination.x - width * crop.left,
+        y: destination.y - height * crop.top,
+        width,
+        height,
+    }
+}
+
+fn picture_image(media_id: MediaId, media: &MediaData, rect: Rect) -> PositionedElement {
+    PositionedElement::Image {
+        rect,
+        data: media.bytes.clone(),
+        content_type: media.content_type.clone(),
+        media_id,
+    }
+}
+
+fn counter_rotate_image(
+    image: PositionedElement,
+    shape: &ResolvedShape,
+    rotate_with_shape: bool,
+) -> PositionedElement {
+    if rotate_with_shape || shape.rotation_deg == 0.0 {
+        return image;
+    }
+    PositionedElement::Group(GroupElement {
+        transform: Transform::rotate_about(
+            -shape.rotation_deg,
+            shape.bounds.width / 2.0,
+            shape.bounds.height / 2.0,
+        ),
+        clip: None,
+        opacity: 1.0,
+        effects: Vec::new(),
+        children: vec![image],
+    })
+}
+
+fn clip_to_picture_shape(
+    shape: &ResolvedShape,
+    paths: &[Path],
+    children: Vec<PositionedElement>,
+) -> PositionedElement {
+    if matches!(shape.geometry, ResolvedGeometry::Rectangle) {
+        return clipped_group(Path::rect(local_shape_rect(shape)), children);
+    }
+    clipped_group(combined_clip_path(paths), children)
+}
+
+fn combined_clip_path(paths: &[Path]) -> Path {
+    Path {
+        commands: paths
+            .iter()
+            .flat_map(|path| path.commands.iter().cloned())
+            .collect(),
+        fill_rule: paths
+            .first()
+            .map_or(oxml_layout::FillRule::NonZero, |path| path.fill_rule),
+    }
+}
+
+fn clipped_group(clip: Path, children: Vec<PositionedElement>) -> PositionedElement {
+    PositionedElement::Group(GroupElement {
+        transform: Transform::IDENTITY,
+        clip: Some(clip),
+        opacity: 1.0,
+        effects: Vec::new(),
+        children,
+    })
+}
+
+fn tile_native_size_points(
+    mut info: oxml_media::ImageInfo,
+    declared_dpi: Option<f64>,
+    media: MediaId,
+) -> Result<(f64, f64), RenderInputError> {
+    if let Some(dpi) = declared_dpi {
+        if !dpi.is_finite() || dpi <= 0.0 {
+            return Err(RenderInputError::InvalidPicture {
+                media,
+                detail: "declared picture DPI is not finite and positive",
+            });
+        }
+        info.dpi_x = Some(dpi);
+        info.dpi_y = Some(dpi);
+    }
+    let size = info
+        .native_size(96.0)
+        .ok_or(RenderInputError::InvalidPicture {
+            media,
+            detail: "picture DPI cannot produce a native size",
+        })?;
+    Ok((
+        size.width_emu as f64 / 12_700.0,
+        size.height_emu as f64 / 12_700.0,
+    ))
+}
+
+fn tile_alignment_origin(
+    rect: Rect,
+    tile_width: f64,
+    tile_height: f64,
+    alignment: ResolvedRectAlignment,
+) -> Point {
+    let center_x = rect.x + (rect.width - tile_width) / 2.0;
+    let right = rect.x + rect.width - tile_width;
+    let center_y = rect.y + (rect.height - tile_height) / 2.0;
+    let bottom = rect.y + rect.height - tile_height;
+    match alignment {
+        ResolvedRectAlignment::TopLeft => Point {
+            x: rect.x,
+            y: rect.y,
+        },
+        ResolvedRectAlignment::Top => Point {
+            x: center_x,
+            y: rect.y,
+        },
+        ResolvedRectAlignment::TopRight => Point {
+            x: right,
+            y: rect.y,
+        },
+        ResolvedRectAlignment::Left => Point {
+            x: rect.x,
+            y: center_y,
+        },
+        ResolvedRectAlignment::Center => Point {
+            x: center_x,
+            y: center_y,
+        },
+        ResolvedRectAlignment::Right => Point {
+            x: right,
+            y: center_y,
+        },
+        ResolvedRectAlignment::BottomLeft => Point {
+            x: rect.x,
+            y: bottom,
+        },
+        ResolvedRectAlignment::Bottom => Point {
+            x: center_x,
+            y: bottom,
+        },
+        ResolvedRectAlignment::BottomRight => Point {
+            x: right,
+            y: bottom,
+        },
+    }
+}
+
+fn repeated_origin(anchor: f64, coverage_start: f64, tile_size: f64) -> f64 {
+    coverage_start - (coverage_start - anchor).rem_euclid(tile_size)
+}
+
+fn repeated_tile_index(
+    origin: f64,
+    anchor: f64,
+    tile_size: f64,
+    media: MediaId,
+) -> Result<isize, RenderInputError> {
+    let index = ((origin - anchor) / tile_size).round();
+    if !index.is_finite() || index < isize::MIN as f64 || index > isize::MAX as f64 {
+        return Err(RenderInputError::InvalidPicture {
+            media,
+            detail: "tile translation cannot preserve flip phase",
+        });
+    }
+    Ok(index as isize)
+}
+
+fn repeat_count(
+    origin: f64,
+    coverage_end: f64,
+    tile_size: f64,
+    media: MediaId,
+) -> Result<usize, RenderInputError> {
+    let count = ((coverage_end - origin) / tile_size).ceil().max(0.0);
+    if !count.is_finite() || count > usize::MAX as f64 {
+        return Err(RenderInputError::TileLimitExceeded {
+            media,
+            requested: usize::MAX,
+            limit: MAX_TILE_ELEMENTS,
+        });
+    }
+    Ok(count as usize)
+}
+
+fn flip_tile(
+    tile: PositionedElement,
+    rect: Rect,
+    flip: ResolvedTileFlip,
+    odd_column: bool,
+    odd_row: bool,
+) -> PositionedElement {
+    let flip_h =
+        matches!(flip, ResolvedTileFlip::Horizontal | ResolvedTileFlip::Both) && odd_column;
+    let flip_v = matches!(flip, ResolvedTileFlip::Vertical | ResolvedTileFlip::Both) && odd_row;
+    if !flip_h && !flip_v {
+        return tile;
+    }
+    PositionedElement::Group(GroupElement {
+        transform: Transform {
+            a: if flip_h { -1.0 } else { 1.0 },
+            b: 0.0,
+            c: 0.0,
+            d: if flip_v { -1.0 } else { 1.0 },
+            e: if flip_h {
+                2.0 * rect.x + rect.width
+            } else {
+                0.0
+            },
+            f: if flip_v {
+                2.0 * rect.y + rect.height
+            } else {
+                0.0
+            },
+        },
+        clip: None,
+        opacity: 1.0,
+        effects: Vec::new(),
+        children: vec![tile],
+    })
+}
+
+#[derive(Clone, Copy)]
+struct EndpointTangent {
+    point: Point,
+    outward: Point,
+}
+
+fn endpoint_tangents(paths: &[Path]) -> (Option<EndpointTangent>, Option<EndpointTangent>) {
+    let mut head = None;
+    let mut tail = None;
+    for path in paths {
+        let mut current = None;
+        let mut subpath_start = None;
+        for command in &path.commands {
+            match *command {
+                PathCommand::MoveTo(point) => {
+                    current = Some(point);
+                    subpath_start = Some(point);
+                }
+                PathCommand::LineTo(to) => {
+                    if let Some(from) = current
+                        && let Some(direction) = unit_direction(from, to)
+                    {
+                        head.get_or_insert(EndpointTangent {
+                            point: from,
+                            outward: Point {
+                                x: -direction.x,
+                                y: -direction.y,
+                            },
+                        });
+                        tail = Some(EndpointTangent {
+                            point: to,
+                            outward: direction,
+                        });
+                    }
+                    current = Some(to);
+                }
+                PathCommand::CurveTo { c1, c2, to } => {
+                    if let Some(from) = current {
+                        let start_direction = [c1, c2, to]
+                            .into_iter()
+                            .find_map(|candidate| unit_direction(from, candidate));
+                        let end_direction = [c2, c1, from]
+                            .into_iter()
+                            .find_map(|candidate| unit_direction(candidate, to));
+                        if let Some(direction) = start_direction {
+                            head.get_or_insert(EndpointTangent {
+                                point: from,
+                                outward: Point {
+                                    x: -direction.x,
+                                    y: -direction.y,
+                                },
+                            });
+                        }
+                        if let Some(direction) = end_direction {
+                            tail = Some(EndpointTangent {
+                                point: to,
+                                outward: direction,
+                            });
+                        }
+                    }
+                    current = Some(to);
+                }
+                PathCommand::Close => {
+                    if let (Some(from), Some(to)) = (current, subpath_start)
+                        && let Some(direction) = unit_direction(from, to)
+                    {
+                        head.get_or_insert(EndpointTangent {
+                            point: from,
+                            outward: Point {
+                                x: -direction.x,
+                                y: -direction.y,
+                            },
+                        });
+                        tail = Some(EndpointTangent {
+                            point: to,
+                            outward: direction,
+                        });
+                    }
+                    current = subpath_start;
+                }
+            }
+        }
+    }
+    (head, tail)
+}
+
+fn unit_direction(from: Point, to: Point) -> Option<Point> {
+    let dx = to.x - from.x;
+    let dy = to.y - from.y;
+    let length = dx.hypot(dy);
+    (length.is_finite() && length > 1.0e-10).then_some(Point {
+        x: dx / length,
+        y: dy / length,
+    })
+}
+
+fn line_end_path(
+    end: &ResolvedLineEnd,
+    tangent: EndpointTangent,
+    stroke_width: f64,
+) -> Option<Path> {
+    if !stroke_width.is_finite() || stroke_width <= 0.0 {
+        return None;
+    }
+    let width = line_end_factor(end.width) * stroke_width;
+    let length = line_end_factor(end.length) * stroke_width;
+    let point = |along: f64, across: f64| Point {
+        x: tangent.point.x + tangent.outward.x * along - tangent.outward.y * across,
+        y: tangent.point.y + tangent.outward.y * along + tangent.outward.x * across,
+    };
+    let path = match end.kind {
+        ResolvedLineEndKind::Triangle => closed_polygon(vec![
+            point(0.0, 0.0),
+            point(-length, width / 2.0),
+            point(-length, -width / 2.0),
+        ]),
+        ResolvedLineEndKind::Stealth => closed_polygon(vec![
+            point(0.0, 0.0),
+            point(-length, width / 2.0),
+            point(-length / 2.0, 0.0),
+            point(-length, -width / 2.0),
+        ]),
+        ResolvedLineEndKind::Diamond => closed_polygon(vec![
+            point(0.0, 0.0),
+            point(-length / 2.0, width / 2.0),
+            point(-length, 0.0),
+            point(-length / 2.0, -width / 2.0),
+        ]),
+        ResolvedLineEndKind::Oval => oval_line_end(&point, width, length),
+        ResolvedLineEndKind::Arrow => {
+            let arm = stroke_width.min(width / 2.0);
+            closed_polygon(vec![
+                point(0.0, 0.0),
+                point(-length, width / 2.0),
+                point(-length, width / 2.0 - arm),
+                point(-arm, 0.0),
+                point(-length, -width / 2.0 + arm),
+                point(-length, -width / 2.0),
+            ])
+        }
+    };
+    path_is_finite(&path).then_some(path)
+}
+
+fn line_end_factor(size: ResolvedLineEndSize) -> f64 {
+    match size {
+        ResolvedLineEndSize::Small => 2.0,
+        ResolvedLineEndSize::Medium => 3.0,
+        ResolvedLineEndSize::Large => 5.0,
+    }
+}
+
+fn closed_polygon(points: Vec<Point>) -> Path {
+    let mut points = points.into_iter();
+    let mut commands = points
+        .next()
+        .map(PathCommand::MoveTo)
+        .into_iter()
+        .collect::<Vec<_>>();
+    commands.extend(points.map(PathCommand::LineTo));
+    commands.push(PathCommand::Close);
+    Path {
+        commands,
+        fill_rule: oxml_layout::FillRule::NonZero,
+    }
+}
+
+fn oval_line_end(point: &impl Fn(f64, f64) -> Point, width: f64, length: f64) -> Path {
+    const KAPPA: f64 = 0.552_284_749_830_793_6;
+    let rx = length / 2.0;
+    let ry = width / 2.0;
+    let center = -rx;
+    Path {
+        commands: vec![
+            PathCommand::MoveTo(point(0.0, 0.0)),
+            PathCommand::CurveTo {
+                c1: point(0.0, KAPPA * ry),
+                c2: point(center + KAPPA * rx, ry),
+                to: point(center, ry),
+            },
+            PathCommand::CurveTo {
+                c1: point(center - KAPPA * rx, ry),
+                c2: point(-length, KAPPA * ry),
+                to: point(-length, 0.0),
+            },
+            PathCommand::CurveTo {
+                c1: point(-length, -KAPPA * ry),
+                c2: point(center - KAPPA * rx, -ry),
+                to: point(center, -ry),
+            },
+            PathCommand::CurveTo {
+                c1: point(center + KAPPA * rx, -ry),
+                c2: point(0.0, -KAPPA * ry),
+                to: point(0.0, 0.0),
+            },
+            PathCommand::Close,
+        ],
+        fill_rule: oxml_layout::FillRule::NonZero,
+    }
+}
+
+fn path_is_finite(path: &Path) -> bool {
+    path.commands.iter().all(|command| match command {
+        PathCommand::MoveTo(point) | PathCommand::LineTo(point) => point_is_finite(*point),
+        PathCommand::CurveTo { c1, c2, to } => {
+            point_is_finite(*c1) && point_is_finite(*c2) && point_is_finite(*to)
+        }
+        PathCommand::Close => true,
+    })
+}
+
+fn point_is_finite(point: Point) -> bool {
+    point.x.is_finite() && point.y.is_finite()
+}
+
+fn filled_line_end(path: Path, paint: &Paint) -> PositionedElement {
+    PositionedElement::Path(PathElement {
+        path,
+        fill: Some(paint.clone()),
+        stroke: None,
+    })
+}
+
+fn shape_transform(shape: &ResolvedShape) -> Transform {
+    let center_x = shape.bounds.width / 2.0;
+    let center_y = shape.bounds.height / 2.0;
+    let rotation = Transform::rotate_about(shape.rotation_deg, center_x, center_y);
+    let flip = Transform {
+        a: if shape.flip_h { -1.0 } else { 1.0 },
+        b: 0.0,
+        c: 0.0,
+        d: if shape.flip_v { -1.0 } else { 1.0 },
+        e: if shape.flip_h {
+            shape.bounds.width
+        } else {
+            0.0
+        },
+        f: if shape.flip_v {
+            shape.bounds.height
+        } else {
+            0.0
+        },
+    };
+    let translation = Transform {
+        e: shape.bounds.x,
+        f: shape.bounds.y,
+        ..Transform::IDENTITY
+    };
+    rotation
+        .then(flip)
+        .then(translation)
+        .then(shape.group_transform)
+}
+
 /// Resolve one scoped media relationship into the deck's content-addressed store.
 pub fn resolve_media_relationship(
     relationships: &RelScopes,
@@ -152,6 +1019,13 @@ pub fn resolve_media_relationship(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oxml_drawing::color::ColorMap;
+    use oxml_drawing::text::CT_TextListStyle;
+    use oxml_layout::{
+        Color, Diagnostic, FillRule, GradientStop, GroupElement, Paint, Path, PathCommand, Point,
+        PositionedElement, Rect, Stroke, Transform,
+    };
+    use rpptx_layout::{ResolveCtx, ResolvedContent, ResolvedGeometry, ResolvedShape};
 
     const IMAGE_RELATIONSHIP: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
@@ -168,6 +1042,1256 @@ mod tests {
             target: target.to_owned(),
             relationship_type: IMAGE_RELATIONSHIP.to_owned(),
         }
+    }
+
+    fn color(red: f64, green: f64, blue: f64) -> Color {
+        Color {
+            r: red,
+            g: green,
+            b: blue,
+            a: 1.0,
+        }
+    }
+
+    fn shape(
+        bounds: Rect,
+        geometry: ResolvedGeometry,
+        fill: Option<Paint>,
+        line: Option<Stroke>,
+    ) -> ResolvedShape {
+        ResolvedShape {
+            group_transform: Transform::IDENTITY,
+            bounds,
+            rotation_deg: 0.0,
+            flip_h: false,
+            flip_v: false,
+            geometry,
+            fill,
+            line,
+            head_end: None,
+            tail_end: None,
+            shadow: None,
+            content: ResolvedContent::None,
+            unsupported: None,
+        }
+    }
+
+    fn slide(size: (f64, f64), shapes: Vec<ResolvedShape>) -> ResolvedSlide {
+        ResolvedSlide {
+            size,
+            background: None,
+            shapes,
+            diagnostics: Vec::new(),
+        }
+    }
+
+    fn render_input(slides: Vec<ResolvedSlide>) -> RenderInput {
+        RenderInput {
+            slides,
+            media: HashMap::new(),
+            fonts: Vec::new(),
+            metadata: None,
+        }
+    }
+
+    fn only_group(element: &PositionedElement) -> &GroupElement {
+        let PositionedElement::Group(group) = element else {
+            panic!("shape should lower to one group");
+        };
+        group
+    }
+
+    fn assert_point_close(actual: Point, expected: Point) {
+        const EPSILON: f64 = 1.0e-10;
+        assert!(
+            (actual.x - expected.x).abs() < EPSILON && (actual.y - expected.y).abs() < EPSILON,
+            "expected ({}, {}), got ({}, {})",
+            expected.x,
+            expected.y,
+            actual.x,
+            actual.y
+        );
+    }
+
+    #[test]
+    fn rotated_shape_corners_match_hand_computed_coordinates() {
+        let mut rotated = shape(
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 8.0,
+                height: 4.0,
+            },
+            ResolvedGeometry::Rectangle,
+            Some(Paint::Solid(Color::BLACK)),
+            None,
+        );
+        rotated.rotation_deg = 30.0;
+        let page = layout_slide(&render_input(vec![slide((40.0, 40.0), vec![rotated])]), 0)
+            .expect("lower rotated shape");
+        let transform = only_group(&page.elements[0]).transform;
+        let radians = 30.0_f64.to_radians();
+        let (sin, cos) = radians.sin_cos();
+
+        for corner in [
+            Point { x: 0.0, y: 0.0 },
+            Point { x: 8.0, y: 0.0 },
+            Point { x: 0.0, y: 4.0 },
+            Point { x: 8.0, y: 4.0 },
+        ] {
+            let dx = corner.x - 4.0;
+            let dy = corner.y - 2.0;
+            let expected = Point {
+                x: 10.0 + 4.0 + cos * dx - sin * dy,
+                y: 20.0 + 2.0 + sin * dx + cos * dy,
+            };
+            assert_point_close(transform.apply(corner), expected);
+        }
+    }
+
+    #[test]
+    fn horizontal_and_vertical_flips_are_about_the_shape_centre() {
+        let bounds = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 8.0,
+            height: 4.0,
+        };
+        let mut horizontal = shape(
+            bounds,
+            ResolvedGeometry::Rectangle,
+            Some(Paint::Solid(Color::BLACK)),
+            None,
+        );
+        horizontal.flip_h = true;
+        let mut vertical = horizontal.clone();
+        vertical.flip_h = false;
+        vertical.flip_v = true;
+        let page = layout_slide(
+            &render_input(vec![slide((40.0, 40.0), vec![horizontal, vertical])]),
+            0,
+        )
+        .expect("lower flipped shapes");
+        let horizontal = only_group(&page.elements[0]).transform;
+        let vertical = only_group(&page.elements[1]).transform;
+
+        assert_point_close(
+            horizontal.apply(Point { x: 4.0, y: 2.0 }),
+            Point { x: 14.0, y: 22.0 },
+        );
+        assert_point_close(
+            horizontal.apply(Point { x: 0.0, y: 0.0 }),
+            Point { x: 18.0, y: 20.0 },
+        );
+        assert_point_close(
+            horizontal.apply(Point { x: 8.0, y: 4.0 }),
+            Point { x: 10.0, y: 24.0 },
+        );
+        assert_point_close(
+            vertical.apply(Point { x: 4.0, y: 2.0 }),
+            Point { x: 14.0, y: 22.0 },
+        );
+        assert_point_close(
+            vertical.apply(Point { x: 0.0, y: 0.0 }),
+            Point { x: 10.0, y: 24.0 },
+        );
+        assert_point_close(
+            vertical.apply(Point { x: 8.0, y: 4.0 }),
+            Point { x: 18.0, y: 20.0 },
+        );
+    }
+
+    #[test]
+    fn nested_group_transform_applies_child_before_parent() {
+        let mut nested = shape(
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 8.0,
+                height: 4.0,
+            },
+            ResolvedGeometry::Rectangle,
+            Some(Paint::Solid(Color::BLACK)),
+            None,
+        );
+        nested.rotation_deg = 90.0;
+        nested.flip_h = true;
+        nested.group_transform = Transform {
+            a: 2.0,
+            b: 0.0,
+            c: 0.0,
+            d: 3.0,
+            e: 5.0,
+            f: 7.0,
+        };
+        let page = layout_slide(&render_input(vec![slide((80.0, 100.0), vec![nested])]), 0)
+            .expect("lower nested shape");
+        let transform = only_group(&page.elements[0]).transform;
+
+        assert_point_close(
+            transform.apply(Point { x: 0.0, y: 0.0 }),
+            Point { x: 29.0, y: 61.0 },
+        );
+        assert_point_close(
+            transform.apply(Point { x: 8.0, y: 4.0 }),
+            Point { x: 37.0, y: 85.0 },
+        );
+    }
+
+    #[test]
+    fn rotated_gradient_and_outline_share_the_shape_transform() {
+        let red = color(1.0, 0.0, 0.0);
+        let blue = color(0.0, 0.0, 1.0);
+        let mut rotated = shape(
+            Rect {
+                x: 8.0,
+                y: 8.0,
+                width: 12.0,
+                height: 6.0,
+            },
+            ResolvedGeometry::Rectangle,
+            Some(Paint::linear(
+                Point { x: 0.0, y: 0.0 },
+                Point { x: 12.0, y: 0.0 },
+                vec![
+                    GradientStop {
+                        offset: 0.0,
+                        color: red,
+                    },
+                    GradientStop {
+                        offset: 0.49,
+                        color: red,
+                    },
+                    GradientStop {
+                        offset: 0.51,
+                        color: blue,
+                    },
+                    GradientStop {
+                        offset: 1.0,
+                        color: blue,
+                    },
+                ],
+                (true, true),
+            )),
+            Some(Stroke::new(Paint::Solid(Color::BLACK), 2.0)),
+        );
+        rotated.rotation_deg = 90.0;
+        let layout = layout_presentation(&render_input(vec![slide((28.0, 24.0), vec![rotated])]))
+            .expect("lower rotated gradient");
+        let png =
+            oxml_pdf::render_page_to_png(&layout, 0, 72.0).expect("rasterise rotated gradient");
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).expect("decode rotated gradient");
+        let rgb = |x, y| {
+            let pixel = pixmap.pixel(x, y).expect("sample lies inside page");
+            (pixel.red(), pixel.green(), pixel.blue())
+        };
+
+        assert_eq!(rgb(14, 7), (255, 0, 0));
+        assert_eq!(rgb(14, 15), (0, 0, 255));
+        assert_eq!(rgb(11, 11), (0, 0, 0));
+        assert_eq!(rgb(8, 8), (255, 255, 255));
+    }
+
+    #[test]
+    fn solid_gradient_and_outlined_shapes_rasterise_at_sampled_pixels() {
+        let red = color(1.0, 0.0, 0.0);
+        let blue = color(0.0, 0.0, 1.0);
+        let green = color(0.0, 1.0, 0.0);
+        let gradient = Paint::linear(
+            Point { x: 0.0, y: 0.0 },
+            Point { x: 8.0, y: 0.0 },
+            vec![
+                GradientStop {
+                    offset: 0.0,
+                    color: red,
+                },
+                GradientStop {
+                    offset: 0.49,
+                    color: red,
+                },
+                GradientStop {
+                    offset: 0.51,
+                    color: blue,
+                },
+                GradientStop {
+                    offset: 1.0,
+                    color: blue,
+                },
+            ],
+            (true, true),
+        );
+        let input = render_input(vec![slide(
+            (40.0, 14.0),
+            vec![
+                shape(
+                    Rect {
+                        x: 2.0,
+                        y: 2.0,
+                        width: 8.0,
+                        height: 8.0,
+                    },
+                    ResolvedGeometry::Rectangle,
+                    Some(Paint::Solid(red)),
+                    None,
+                ),
+                shape(
+                    Rect {
+                        x: 14.0,
+                        y: 2.0,
+                        width: 8.0,
+                        height: 8.0,
+                    },
+                    ResolvedGeometry::Rectangle,
+                    Some(gradient),
+                    None,
+                ),
+                shape(
+                    Rect {
+                        x: 26.0,
+                        y: 2.0,
+                        width: 8.0,
+                        height: 8.0,
+                    },
+                    ResolvedGeometry::Rectangle,
+                    None,
+                    Some(Stroke::new(Paint::Solid(green), 2.0)),
+                ),
+            ],
+        )]);
+
+        let layout = layout_presentation(&input).expect("lower shape slide");
+        let png = oxml_pdf::render_page_to_png(&layout, 0, 72.0).expect("rasterise shape slide");
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).expect("decode shape slide");
+        let rgb = |x, y| {
+            let pixel = pixmap.pixel(x, y).expect("sample lies inside page");
+            (pixel.red(), pixel.green(), pixel.blue())
+        };
+
+        assert_eq!(rgb(5, 5), (255, 0, 0));
+        assert_eq!(rgb(15, 5), (255, 0, 0));
+        assert_eq!(rgb(20, 5), (0, 0, 255));
+        assert_eq!(rgb(26, 5), (0, 255, 0));
+        assert_eq!(rgb(30, 5), (255, 255, 255));
+        assert_eq!(rgb(38, 5), (255, 255, 255));
+    }
+
+    #[test]
+    fn preset_and_custom_geometry_lower_to_ordered_paths() {
+        let first = Path {
+            commands: vec![
+                PathCommand::MoveTo(Point { x: 0.0, y: 0.0 }),
+                PathCommand::LineTo(Point { x: 4.0, y: 0.0 }),
+            ],
+            fill_rule: FillRule::NonZero,
+        };
+        let second = Path {
+            commands: vec![
+                PathCommand::MoveTo(Point { x: 0.0, y: 1.0 }),
+                PathCommand::LineTo(Point { x: 4.0, y: 1.0 }),
+            ],
+            fill_rule: FillRule::EvenOdd,
+        };
+        let fill = Paint::Solid(Color::BLACK);
+        let line = Stroke::new(Paint::Solid(Color::WHITE), 2.0);
+        let input = render_input(vec![slide(
+            (20.0, 20.0),
+            vec![
+                shape(
+                    Rect {
+                        x: 2.0,
+                        y: 3.0,
+                        width: 4.0,
+                        height: 5.0,
+                    },
+                    ResolvedGeometry::Rectangle,
+                    Some(fill.clone()),
+                    Some(line.clone()),
+                ),
+                shape(
+                    Rect {
+                        x: 8.0,
+                        y: 9.0,
+                        width: 4.0,
+                        height: 5.0,
+                    },
+                    ResolvedGeometry::Custom {
+                        paths: vec![first.clone(), second.clone()],
+                        text_rect: None,
+                    },
+                    Some(fill.clone()),
+                    Some(line.clone()),
+                ),
+            ],
+        )]);
+
+        let page = layout_slide(&input, 0).expect("lower first slide");
+        assert_eq!(page.elements.len(), 2);
+        let rectangle = only_group(&page.elements[0]);
+        assert_eq!(
+            rectangle.transform,
+            Transform {
+                e: 2.0,
+                f: 3.0,
+                ..Transform::IDENTITY
+            }
+        );
+        let PositionedElement::Path(rectangle) = &rectangle.children[0] else {
+            panic!("rectangle should lower to a path");
+        };
+        assert_eq!(
+            rectangle.path,
+            Path::rect(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 4.0,
+                height: 5.0
+            })
+        );
+        assert_eq!(rectangle.fill, Some(fill.clone()));
+        assert_eq!(rectangle.stroke, Some(line.clone()));
+
+        let custom = only_group(&page.elements[1]);
+        assert_eq!(custom.children.len(), 2);
+        for (element, expected) in custom.children.iter().zip([first, second]) {
+            let PositionedElement::Path(element) = element else {
+                panic!("custom geometry should lower to paths");
+            };
+            assert_eq!(element.path, expected);
+            assert_eq!(element.fill, Some(fill.clone()));
+            assert_eq!(element.stroke, Some(line.clone()));
+        }
+    }
+
+    #[test]
+    fn bounds_fallback_emits_a_visible_black_outline() {
+        let input = render_input(vec![slide(
+            (20.0, 20.0),
+            vec![shape(
+                Rect {
+                    x: 2.0,
+                    y: 3.0,
+                    width: 4.0,
+                    height: 5.0,
+                },
+                ResolvedGeometry::BoundsFallback,
+                None,
+                None,
+            )],
+        )]);
+
+        let page = layout_slide(&input, 0).expect("lower fallback slide");
+        let group = only_group(&page.elements[0]);
+        let PositionedElement::Path(path) = &group.children[0] else {
+            panic!("fallback should lower to a path");
+        };
+        assert_eq!(path.fill, None);
+        assert_eq!(
+            path.stroke,
+            Some(Stroke::new(Paint::Solid(Color::BLACK), 1.0))
+        );
+    }
+
+    #[test]
+    fn triangular_tail_end_emits_an_extra_filled_path() {
+        let paint = Paint::Solid(color(1.0, 0.0, 0.0));
+        let mut arrow = shape(
+            Rect {
+                x: 2.0,
+                y: 3.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            ResolvedGeometry::Custom {
+                paths: vec![open_line(
+                    Point { x: 0.0, y: 5.0 },
+                    Point { x: 10.0, y: 5.0 },
+                )],
+                text_rect: None,
+            },
+            None,
+            Some(Stroke::new(paint.clone(), 2.0)),
+        );
+        arrow.tail_end = Some(line_end(ResolvedLineEndKind::Triangle));
+
+        let layout = layout_presentation(&render_input(vec![slide((20.0, 20.0), vec![arrow])]))
+            .expect("lower triangular tail");
+        let group = only_group(&layout.pages[0].elements[0]);
+        assert_eq!(group.children.len(), 2);
+        let PositionedElement::Path(end) = &group.children[1] else {
+            panic!("tail end should lower to a path");
+        };
+        assert_eq!(end.fill, Some(paint));
+        assert_eq!(end.stroke, None);
+        assert!(matches!(end.path.commands.last(), Some(PathCommand::Close)));
+        assert_eq!(
+            end.path.commands.first(),
+            Some(&PathCommand::MoveTo(Point { x: 10.0, y: 5.0 }))
+        );
+
+        let png =
+            oxml_pdf::render_page_to_png(&layout, 0, 72.0).expect("rasterise triangular tail");
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).expect("decode triangular tail");
+        let endpoint_pixel = pixmap.pixel(7, 6).expect("sample lies inside page");
+        assert_eq!(
+            (
+                endpoint_pixel.red(),
+                endpoint_pixel.green(),
+                endpoint_pixel.blue()
+            ),
+            (255, 0, 0)
+        );
+    }
+
+    #[test]
+    fn head_end_uses_the_reversed_start_tangent() {
+        let mut arrow = shape(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 10.0,
+            },
+            ResolvedGeometry::Custom {
+                paths: vec![open_line(
+                    Point { x: 5.0, y: 5.0 },
+                    Point { x: 15.0, y: 5.0 },
+                )],
+                text_rect: None,
+            },
+            None,
+            Some(Stroke::new(Paint::Solid(Color::BLACK), 2.0)),
+        );
+        arrow.head_end = Some(line_end(ResolvedLineEndKind::Triangle));
+        arrow.tail_end = Some(line_end(ResolvedLineEndKind::Triangle));
+
+        let page = layout_slide(&render_input(vec![slide((20.0, 10.0), vec![arrow])]), 0)
+            .expect("lower opposite ends");
+        let group = only_group(&page.elements[0]);
+        let PositionedElement::Path(head) = &group.children[1] else {
+            panic!("head end should be a path");
+        };
+        let PositionedElement::Path(tail) = &group.children[2] else {
+            panic!("tail end should be a path");
+        };
+        assert_eq!(
+            head.path.commands[1],
+            PathCommand::LineTo(Point { x: 11.0, y: 2.0 })
+        );
+        assert_eq!(
+            tail.path.commands[1],
+            PathCommand::LineTo(Point { x: 9.0, y: 8.0 })
+        );
+    }
+
+    #[test]
+    fn all_supported_line_end_kinds_produce_finite_geometry() {
+        let tangent = EndpointTangent {
+            point: Point { x: 10.0, y: 5.0 },
+            outward: Point { x: 1.0, y: 0.0 },
+        };
+        for kind in [
+            ResolvedLineEndKind::Triangle,
+            ResolvedLineEndKind::Stealth,
+            ResolvedLineEndKind::Diamond,
+            ResolvedLineEndKind::Oval,
+            ResolvedLineEndKind::Arrow,
+        ] {
+            let path = line_end_path(&line_end(kind), tangent, 2.0)
+                .expect("supported endpoint should produce geometry");
+            assert!(path_is_finite(&path));
+            assert!(matches!(path.commands.last(), Some(PathCommand::Close)));
+            let bounds = path.bounds().expect("endpoint should have bounds");
+            assert!(bounds.x >= 4.0 && bounds.x + bounds.width <= 10.0);
+            assert!(bounds.y >= 2.0 && bounds.y + bounds.height <= 8.0);
+        }
+        assert_eq!(line_end_factor(ResolvedLineEndSize::Small), 2.0);
+        assert_eq!(line_end_factor(ResolvedLineEndSize::Medium), 3.0);
+        assert_eq!(line_end_factor(ResolvedLineEndSize::Large), 5.0);
+    }
+
+    #[test]
+    fn zero_length_segment_omits_arrowhead_without_panicking() {
+        let point = Point { x: 5.0, y: 5.0 };
+        let mut arrow = shape(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            ResolvedGeometry::Custom {
+                paths: vec![open_line(point, point)],
+                text_rect: None,
+            },
+            None,
+            Some(Stroke::new(Paint::Solid(Color::BLACK), 2.0)),
+        );
+        arrow.tail_end = Some(line_end(ResolvedLineEndKind::Triangle));
+
+        let page = layout_slide(&render_input(vec![slide((10.0, 10.0), vec![arrow])]), 0)
+            .expect("lower zero-length line");
+        assert_eq!(only_group(&page.elements[0]).children.len(), 1);
+    }
+
+    #[test]
+    fn cropped_picture_renders_only_its_crop_region() {
+        let png = horizontal_png(&[
+            [255, 0, 0, 255],
+            [0, 255, 0, 255],
+            [0, 255, 0, 255],
+            [0, 255, 0, 255],
+        ]);
+        let media_id = MediaId::from_bytes(&png);
+        let picture = picture_shape(
+            Rect {
+                x: 2.0,
+                y: 2.0,
+                width: 8.0,
+                height: 4.0,
+            },
+            media_id,
+            Some(CropRect {
+                left: 0.25,
+                ..CropRect::default()
+            }),
+            ResolvedImagePlacement::default(),
+            None,
+        );
+        let input = render_input_with_media(
+            vec![slide((12.0, 8.0), vec![picture])],
+            HashMap::from([(media_id, media(&png))]),
+        );
+
+        let layout = layout_presentation(&input).expect("lower cropped picture");
+        let rendered =
+            oxml_pdf::render_page_to_png(&layout, 0, 72.0).expect("rasterise cropped picture");
+        let pixmap = tiny_skia::Pixmap::decode_png(&rendered).expect("decode cropped picture");
+        let rgb = |x, y| {
+            let pixel = pixmap.pixel(x, y).expect("sample lies inside page");
+            (pixel.red(), pixel.green(), pixel.blue())
+        };
+
+        assert_eq!(rgb(3, 4), (0, 255, 0));
+        assert_eq!(rgb(8, 4), (0, 255, 0));
+        assert_eq!(rgb(1, 4), (255, 255, 255));
+    }
+
+    #[test]
+    fn crop_lowers_to_clipped_source_image_geometry() {
+        let media_id = MediaId(21);
+        let mut picture = picture_shape(
+            Rect {
+                x: 2.0,
+                y: 3.0,
+                width: 10.0,
+                height: 8.0,
+            },
+            media_id,
+            Some(CropRect {
+                left: 0.25,
+                right: 0.25,
+                ..CropRect::default()
+            }),
+            ResolvedImagePlacement::default(),
+            None,
+        );
+        picture.line = Some(Stroke::new(Paint::Solid(Color::BLACK), 1.0));
+        let input = render_input_with_media(
+            vec![slide((20.0, 20.0), vec![picture])],
+            HashMap::from([(media_id, media(b"image"))]),
+        );
+
+        let page = layout_slide(&input, 0).expect("lower crop geometry");
+        let shape_group = only_group(&page.elements[0]);
+        assert_eq!(shape_group.children.len(), 2, "outline must follow picture");
+        let crop_clip = only_group(&shape_group.children[0]);
+        assert_eq!(
+            crop_clip.clip,
+            Some(Path::rect(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 8.0,
+            }))
+        );
+        let PositionedElement::Image {
+            rect, media_id: id, ..
+        } = &crop_clip.children[0]
+        else {
+            panic!("crop group should contain the expanded source image");
+        };
+        assert_eq!(*id, media_id);
+        assert_eq!(
+            *rect,
+            Rect {
+                x: -5.0,
+                y: 0.0,
+                width: 20.0,
+                height: 8.0,
+            }
+        );
+        let PositionedElement::Path(outline) = &shape_group.children[1] else {
+            panic!("picture outline should remain above image content");
+        };
+        assert!(outline.stroke.is_some());
+    }
+
+    #[test]
+    fn tile_picture_repeats_media_in_row_major_order_inside_shape_clip() {
+        let png = horizontal_png(&[[255, 0, 0, 255]]);
+        let media_id = MediaId::from_bytes(&png);
+        let picture = picture_shape(
+            Rect {
+                x: 2.0,
+                y: 2.0,
+                width: 3.0,
+                height: 2.0,
+            },
+            media_id,
+            None,
+            ResolvedImagePlacement::Tile(ResolvedTilePlacement {
+                translation: Point { x: 0.0, y: 0.0 },
+                scale_x: 1.0,
+                scale_y: 1.0,
+                flip: ResolvedTileFlip::None,
+                alignment: ResolvedRectAlignment::TopLeft,
+            }),
+            Some(72.0),
+        );
+        let input = render_input_with_media(
+            vec![slide((8.0, 6.0), vec![picture])],
+            HashMap::from([(media_id, media(&png))]),
+        );
+
+        let layout = layout_presentation(&input).expect("lower tiled picture");
+        let shape_group = only_group(&layout.pages[0].elements[0]);
+        let tiles = only_group(&shape_group.children[0]);
+        let rects = tiles
+            .children
+            .iter()
+            .map(|tile| match tile {
+                PositionedElement::Image { rect, .. } => *rect,
+                _ => panic!("unflipped tile should be one image"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rects,
+            [
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0
+                },
+                Rect {
+                    x: 1.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0
+                },
+                Rect {
+                    x: 2.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0
+                },
+                Rect {
+                    x: 0.0,
+                    y: 1.0,
+                    width: 1.0,
+                    height: 1.0
+                },
+                Rect {
+                    x: 1.0,
+                    y: 1.0,
+                    width: 1.0,
+                    height: 1.0
+                },
+                Rect {
+                    x: 2.0,
+                    y: 1.0,
+                    width: 1.0,
+                    height: 1.0
+                },
+            ]
+        );
+        let rendered =
+            oxml_pdf::render_page_to_png(&layout, 0, 72.0).expect("rasterise tiled picture");
+        let pixmap = tiny_skia::Pixmap::decode_png(&rendered).expect("decode tiled picture");
+        assert_eq!(rgb_at(&pixmap, 3, 3), (255, 0, 0));
+        assert_eq!(rgb_at(&pixmap, 1, 3), (255, 255, 255));
+        assert_eq!(rgb_at(&pixmap, 5, 3), (255, 255, 255));
+
+        assert_eq!(
+            tile_alignment_origin(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 3.0,
+                    height: 2.0,
+                },
+                1.0,
+                1.0,
+                ResolvedRectAlignment::BottomRight,
+            ),
+            Point { x: 2.0, y: 1.0 }
+        );
+        assert_eq!(repeated_origin(3.5, 0.0, 1.0), -0.5);
+        assert_eq!(repeated_origin(0.0, -2.1, 1.0), -3.0);
+        assert_eq!(repeated_tile_index(-0.5, 2.5, 1.0, media_id).unwrap(), -3);
+        let flipped = flip_tile(
+            picture_image(media_id, input.media.get(&media_id).unwrap(), rects[4]),
+            rects[4],
+            ResolvedTileFlip::Both,
+            true,
+            true,
+        );
+        let flipped = only_group(&flipped);
+        assert_eq!(
+            flipped.transform,
+            Transform {
+                a: -1.0,
+                b: 0.0,
+                c: 0.0,
+                d: -1.0,
+                e: 3.0,
+                f: 3.0,
+            }
+        );
+    }
+
+    #[test]
+    fn picture_rotation_policy_counter_rotates_only_image_content() {
+        let png = horizontal_png(&[[255, 0, 0, 255]]);
+        let media_id = MediaId::from_bytes(&png);
+        let mut picture = picture_shape(
+            Rect {
+                x: 5.0,
+                y: 5.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            media_id,
+            None,
+            ResolvedImagePlacement::default(),
+            None,
+        );
+        picture.rotation_deg = 45.0;
+        let ResolvedContent::Image {
+            rotate_with_shape, ..
+        } = &mut picture.content
+        else {
+            unreachable!();
+        };
+        *rotate_with_shape = false;
+        let mut tiled_picture = picture_shape(
+            Rect {
+                x: 25.0,
+                y: 5.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            media_id,
+            None,
+            ResolvedImagePlacement::Tile(ResolvedTilePlacement {
+                translation: Point { x: 0.0, y: 0.0 },
+                scale_x: 1.0,
+                scale_y: 1.0,
+                flip: ResolvedTileFlip::None,
+                alignment: ResolvedRectAlignment::TopLeft,
+            }),
+            Some(72.0),
+        );
+        tiled_picture.rotation_deg = 45.0;
+        let ResolvedContent::Image {
+            rotate_with_shape, ..
+        } = &mut tiled_picture.content
+        else {
+            unreachable!();
+        };
+        *rotate_with_shape = false;
+        let input = render_input_with_media(
+            vec![slide((40.0, 20.0), vec![picture, tiled_picture])],
+            HashMap::from([(media_id, media(&png))]),
+        );
+
+        let layout = layout_presentation(&input).expect("lower picture rotation policy");
+        let shape = only_group(&layout.pages[0].elements[0]);
+        let clip = only_group(&shape.children[0]);
+        assert_eq!(
+            clip.clip,
+            Some(Path::rect(local_shape_rect(&input.slides[0].shapes[0])))
+        );
+        let image = only_group(&clip.children[0]);
+        assert_eq!(image.transform, Transform::rotate_about(-45.0, 5.0, 5.0));
+        assert!(matches!(
+            image.children.as_slice(),
+            [PositionedElement::Image { .. }]
+        ));
+
+        let rendered =
+            oxml_pdf::render_page_to_png(&layout, 0, 72.0).expect("rasterise picture rotation");
+        let pixmap = tiny_skia::Pixmap::decode_png(&rendered).expect("decode picture rotation");
+        assert_eq!(rgb_at(&pixmap, 10, 4), (255, 0, 0));
+        assert_eq!(rgb_at(&pixmap, 4, 4), (255, 255, 255));
+        assert_eq!(rgb_at(&pixmap, 30, 4), (255, 0, 0));
+        assert_eq!(rgb_at(&pixmap, 24, 4), (255, 255, 255));
+    }
+
+    #[test]
+    fn tile_dpi_prefers_declared_then_embedded_then_96() {
+        let embedded = oxml_media::ImageInfo {
+            format: oxml_media::ImageFormat::Png,
+            width_px: 144,
+            height_px: 72,
+            dpi_x: Some(72.0),
+            dpi_y: Some(72.0),
+            bit_depth: 8,
+            channels: 4,
+            has_alpha: true,
+        };
+        assert_eq!(
+            tile_native_size_points(embedded, Some(144.0), MediaId(1)).unwrap(),
+            (72.0, 36.0)
+        );
+        assert_eq!(
+            tile_native_size_points(embedded, None, MediaId(1)).unwrap(),
+            (144.0, 72.0)
+        );
+        assert_eq!(
+            tile_native_size_points(
+                oxml_media::ImageInfo {
+                    dpi_x: None,
+                    dpi_y: None,
+                    ..embedded
+                },
+                None,
+                MediaId(1),
+            )
+            .unwrap(),
+            (108.0, 54.0)
+        );
+    }
+
+    #[test]
+    fn equal_picture_bytes_reuse_one_media_id_across_elements() {
+        let bytes = b"same picture";
+        let media_id = MediaId::from_bytes(bytes);
+        let pictures = [0.0, 5.0]
+            .map(|x| {
+                picture_shape(
+                    Rect {
+                        x,
+                        y: 0.0,
+                        width: 4.0,
+                        height: 4.0,
+                    },
+                    media_id,
+                    None,
+                    ResolvedImagePlacement::default(),
+                    None,
+                )
+            })
+            .to_vec();
+        let input = render_input_with_media(
+            vec![slide((10.0, 5.0), pictures)],
+            HashMap::from([(media_id, media(bytes))]),
+        );
+
+        let layout = layout_presentation(&input).expect("lower repeated picture media");
+        let mut ids = Vec::new();
+        collect_image_ids(&layout.pages[0].elements, &mut ids);
+        assert_eq!(ids, [media_id, media_id]);
+        assert_eq!(input.media.len(), 1);
+    }
+
+    #[test]
+    fn missing_external_media_and_empty_crop_are_contextual() {
+        let missing_id = MediaId(404);
+        let missing = picture_shape(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 4.0,
+                height: 4.0,
+            },
+            missing_id,
+            None,
+            ResolvedImagePlacement::default(),
+            None,
+        );
+        assert_eq!(
+            layout_slide(&render_input(vec![slide((5.0, 5.0), vec![missing])]), 0).unwrap_err(),
+            RenderInputError::MissingMedia { media: missing_id }
+        );
+
+        let media_id = MediaId(405);
+        let empty = picture_shape(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 4.0,
+                height: 4.0,
+            },
+            media_id,
+            Some(CropRect {
+                left: 0.5,
+                right: 0.5,
+                ..CropRect::default()
+            }),
+            ResolvedImagePlacement::default(),
+            None,
+        );
+        let input = render_input_with_media(
+            vec![slide((5.0, 5.0), vec![empty])],
+            HashMap::from([(media_id, media(b"image"))]),
+        );
+        assert_eq!(
+            layout_slide(&input, 0).unwrap_err(),
+            RenderInputError::InvalidPicture {
+                media: media_id,
+                detail: "source crop",
+            }
+        );
+
+        let png = horizontal_png(&[[0, 0, 0, 255]]);
+        let media_id = MediaId::from_bytes(&png);
+        let excessive = picture_shape(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            media_id,
+            None,
+            ResolvedImagePlacement::Tile(ResolvedTilePlacement {
+                translation: Point { x: 0.0, y: 0.0 },
+                scale_x: 0.000_1,
+                scale_y: 0.000_1,
+                flip: ResolvedTileFlip::None,
+                alignment: ResolvedRectAlignment::TopLeft,
+            }),
+            Some(72.0),
+        );
+        let input = render_input_with_media(
+            vec![slide((10.0, 10.0), vec![excessive])],
+            HashMap::from([(media_id, media(&png))]),
+        );
+        assert!(matches!(
+            layout_slide(&input, 0),
+            Err(RenderInputError::TileLimitExceeded { media, .. }) if media == media_id
+        ));
+    }
+
+    fn picture_shape(
+        bounds: Rect,
+        media: MediaId,
+        src_rect: Option<CropRect>,
+        placement: ResolvedImagePlacement,
+        dpi: Option<f64>,
+    ) -> ResolvedShape {
+        let mut picture = shape(bounds, ResolvedGeometry::Rectangle, None, None);
+        picture.content = ResolvedContent::Image {
+            media,
+            src_rect,
+            placement,
+            dpi,
+            rotate_with_shape: true,
+        };
+        picture
+    }
+
+    fn render_input_with_media(
+        slides: Vec<ResolvedSlide>,
+        media: HashMap<MediaId, MediaData>,
+    ) -> RenderInput {
+        RenderInput {
+            slides,
+            media,
+            fonts: Vec::new(),
+            metadata: None,
+        }
+    }
+
+    fn horizontal_png(colors: &[[u8; 4]]) -> Vec<u8> {
+        let mut pixmap = tiny_skia::Pixmap::new(colors.len() as u32, 1).expect("fixture pixmap");
+        for (pixel, color) in pixmap.pixels_mut().iter_mut().zip(colors) {
+            *pixel =
+                tiny_skia::PremultipliedColorU8::from_rgba(color[0], color[1], color[2], color[3])
+                    .expect("premultiplied fixture colour");
+        }
+        pixmap.encode_png().expect("encode fixture PNG")
+    }
+
+    fn rgb_at(pixmap: &tiny_skia::Pixmap, x: u32, y: u32) -> (u8, u8, u8) {
+        let pixel = pixmap.pixel(x, y).expect("sample lies inside page");
+        (pixel.red(), pixel.green(), pixel.blue())
+    }
+
+    fn collect_image_ids(elements: &[PositionedElement], ids: &mut Vec<MediaId>) {
+        for element in elements {
+            match element {
+                PositionedElement::Image { media_id, .. } => ids.push(*media_id),
+                PositionedElement::Group(group) => collect_image_ids(&group.children, ids),
+                _ => {}
+            }
+        }
+    }
+
+    fn open_line(from: Point, to: Point) -> Path {
+        Path {
+            commands: vec![PathCommand::MoveTo(from), PathCommand::LineTo(to)],
+            fill_rule: FillRule::NonZero,
+        }
+    }
+
+    fn line_end(kind: ResolvedLineEndKind) -> ResolvedLineEnd {
+        ResolvedLineEnd {
+            kind,
+            width: ResolvedLineEndSize::Medium,
+            length: ResolvedLineEndSize::Medium,
+        }
+    }
+
+    #[test]
+    fn layout_slide_rejects_an_out_of_range_index() {
+        let input = render_input(vec![slide((20.0, 10.0), Vec::new())]);
+
+        assert_eq!(
+            layout_slide(&input, 4).unwrap_err(),
+            RenderInputError::SlideIndexOutOfBounds {
+                index: 4,
+                slide_count: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn master_gradient_background_renders_when_slide_and_layout_omit_one() {
+        const P_NS: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
+        const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        let shape_tree = "<p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree>";
+        let slide = CT_Slide::from_xml(
+            format!(
+                "<p:sld xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\"><p:cSld>{shape_tree}</p:cSld></p:sld>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let layout = CT_SlideLayout::from_xml(
+            format!(
+                "<p:sldLayout xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\"><p:cSld>{shape_tree}</p:cSld></p:sldLayout>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let background = r#"<p:bg><p:bgPr><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill></p:bgPr></p:bg>"#;
+        let master = CT_SlideMaster::from_xml(
+            format!(
+                "<p:sldMaster xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\"><p:cSld>{background}{shape_tree}</p:cSld><p:clrMap bg1=\"lt1\" tx1=\"dk1\" bg2=\"lt2\" tx2=\"dk2\" accent1=\"accent1\" accent2=\"accent2\" accent3=\"accent3\" accent4=\"accent4\" accent5=\"accent5\" accent6=\"accent6\" hlink=\"hlink\" folHlink=\"folHlink\"/></p:sldMaster>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let theme = CT_OfficeStyleSheet::office_default();
+        let default_text_style = CT_TextListStyle::default();
+        let resolved = ResolveCtx::new(
+            &theme,
+            ColorMap::default(),
+            &master,
+            &layout,
+            &slide,
+            &default_text_style,
+        )
+        .resolve_slide((40.0, 20.0))
+        .unwrap();
+        let resolved_background = resolved.background.clone();
+        let rendered = layout_presentation(&render_input(vec![resolved])).unwrap();
+
+        assert_eq!(rendered.pages[0].background, resolved_background);
+        assert!(rendered.pages[0].elements.is_empty());
+        let png = oxml_pdf::render_page_to_png(&rendered, 0, 72.0)
+            .expect("rasterise inherited master gradient");
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).expect("decode background raster");
+        let left = rgb_at(&pixmap, 2, 10);
+        let right = rgb_at(&pixmap, 37, 10);
+        assert!(
+            left.0 > left.2,
+            "left sample should be red-dominant: {left:?}"
+        );
+        assert!(
+            right.2 > right.0,
+            "right sample should be blue-dominant: {right:?}"
+        );
+    }
+
+    #[test]
+    fn background_is_not_duplicated_in_page_elements() {
+        let mut resolved = slide((20.0, 10.0), Vec::new());
+        resolved.background = Some(Paint::Solid(Color::from_hex("102030")));
+
+        let page = layout_slide(&render_input(vec![resolved]), 0).unwrap();
+
+        assert_eq!(
+            page.background,
+            Some(Paint::Solid(Color::from_hex("102030")))
+        );
+        assert!(page.elements.is_empty());
+    }
+
+    #[test]
+    fn layout_presentation_preserves_page_order_and_diagnostics() {
+        let mut first = slide((20.0, 10.0), Vec::new());
+        first.diagnostics.push(Diagnostic {
+            message: "first diagnostic".to_owned(),
+        });
+        let mut second = slide((30.0, 15.0), Vec::new());
+        second.diagnostics.push(Diagnostic {
+            message: "second diagnostic".to_owned(),
+        });
+        let mut input = render_input(vec![first, second]);
+        input.metadata = Some(DocumentMetadata {
+            title: Some("shape deck".to_owned()),
+            author: Some("rpptx-render".to_owned()),
+            ..DocumentMetadata::default()
+        });
+
+        let layout = layout_presentation(&input).expect("lower presentation");
+        assert_eq!(layout.pages.len(), 2);
+        assert_eq!(
+            (
+                layout.pages[0].page_number,
+                layout.pages[0].width,
+                layout.pages[0].height
+            ),
+            (1, 20.0, 10.0)
+        );
+        assert_eq!(
+            (
+                layout.pages[1].page_number,
+                layout.pages[1].width,
+                layout.pages[1].height
+            ),
+            (2, 30.0, 15.0)
+        );
+        assert_eq!(
+            layout
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.title.as_deref()),
+            Some("shape deck")
+        );
+        assert_eq!(
+            layout
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first diagnostic", "second diagnostic"]
+        );
+        assert!(layout.fonts.is_empty());
+        assert!(layout.outlines.is_empty());
     }
 
     #[test]
