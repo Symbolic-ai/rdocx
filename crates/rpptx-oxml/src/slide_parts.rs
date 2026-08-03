@@ -2,7 +2,8 @@ use std::io::Write;
 
 use oxml_core::OxmlError;
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
-use oxml_drawing::color::{ColorMap, ColorMapSlot, ThemeColorSlot};
+use oxml_drawing::color::{ColorChoice, ColorMap, ColorMapSlot, ThemeColorSlot};
+use oxml_drawing::fill::Fill;
 use oxml_drawing::namespace::A_NS;
 use oxml_drawing::order::OrderedRawChildren;
 use oxml_drawing::text::CT_TextListStyle;
@@ -38,10 +39,72 @@ pub struct CT_ColorMapOverride {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CT_CommonSlideData {
     pub name: Option<String>,
-    pub background_xml: Option<Vec<u8>>,
+    pub background: Option<CT_Background>,
     pub shape_tree: CT_ShapeTree,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
+}
+
+/// The renderer-visible choice carried by one preserved `p:bg` subtree.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BackgroundRendering {
+    Properties(Option<Box<Fill>>),
+    Reference {
+        index: u32,
+        color: Option<ColorChoice>,
+    },
+    Unsupported(&'static str),
+}
+
+/// A slide background whose original bytes remain the sole serialisation source.
+#[allow(non_camel_case_types)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CT_Background {
+    raw_xml: Vec<u8>,
+    rendering: BackgroundRendering,
+}
+
+impl CT_Background {
+    /// Returns the original subtree used as the sole serialisation source.
+    pub fn raw_xml(&self) -> &[u8] {
+        &self.raw_xml
+    }
+
+    /// Returns the typed projection used only by inheritance resolution.
+    pub fn rendering(&self) -> &BackgroundRendering {
+        &self.rendering
+    }
+
+    fn from_fragment(xml: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(start) => {
+                    let namespaces = inherited.with_start(&start)?;
+                    if local_name(start.name().as_ref()) != b"bg"
+                        || namespaces.element_uri(start.name().as_ref()) != Some(P_NS)
+                    {
+                        return Err(unexpected(&start));
+                    }
+                    let rendering = parse_background_rendering(&mut reader, &namespaces)?;
+                    return Ok(Self {
+                        raw_xml: xml.to_vec(),
+                        rendering,
+                    });
+                }
+                Event::Empty(start) => {
+                    return Err(OxmlError::MissingElement(format!(
+                        "{} requires p:bgPr or p:bgRef",
+                        String::from_utf8_lossy(start.name().as_ref())
+                    )));
+                }
+                Event::Eof => return Err(OxmlError::MissingElement("p:bg".to_owned())),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
 }
 
 #[allow(non_camel_case_types)]
@@ -634,7 +697,7 @@ impl CT_CommonSlideData {
             .into_iter()
             .filter(|(key, _)| key != "name" && !is_fixed_xmlns(key, FIXED_MODEL_PREFIXES))
             .collect();
-        let mut background_xml = None;
+        let mut background = None;
         let mut shape_tree = None;
         let mut raw_children = OrderedRawChildren::default();
         let mut boundary = 0usize;
@@ -650,7 +713,7 @@ impl CT_CommonSlideData {
                         &local,
                         is_p,
                         raw,
-                        &mut background_xml,
+                        &mut background,
                         &mut shape_tree,
                         &child_ns,
                         &mut raw_children,
@@ -666,7 +729,7 @@ impl CT_CommonSlideData {
                         &local,
                         is_p,
                         raw,
-                        &mut background_xml,
+                        &mut background,
                         &mut shape_tree,
                         &child_ns,
                         &mut raw_children,
@@ -681,7 +744,7 @@ impl CT_CommonSlideData {
         }
         Ok(Self {
             name,
-            background_xml,
+            background,
             shape_tree: required(shape_tree, "p:spTree")?,
             raw_attributes,
             raw_children,
@@ -696,8 +759,8 @@ impl CT_CommonSlideData {
         push_attributes(&mut start, &self.raw_attributes);
         writer.write_event(Event::Start(start))?;
         emit_raw(writer, self.raw_children.at(0))?;
-        if let Some(background) = &self.background_xml {
-            writer.get_mut().write_all(background)?;
+        if let Some(background) = &self.background {
+            writer.get_mut().write_all(background.raw_xml())?;
         }
         emit_raw(writer, self.raw_children.at(1))?;
         self.shape_tree.write_xml(writer)?;
@@ -714,14 +777,15 @@ fn capture_common_child(
     name: &[u8],
     is_p: bool,
     raw: Vec<u8>,
-    background: &mut Option<Vec<u8>>,
+    background: &mut Option<CT_Background>,
     shape_tree: &mut Option<CT_ShapeTree>,
     namespaces: &NamespaceBindings,
     children: &mut OrderedRawChildren,
     boundary: &mut usize,
 ) -> Result<()> {
     if is_p && name == b"bg" {
-        if background.replace(raw).is_some() {
+        let parsed = CT_Background::from_fragment(&raw, namespaces)?;
+        if background.replace(parsed).is_some() {
             return Err(duplicate("bg"));
         }
         *boundary = (*boundary).max(1);
@@ -751,6 +815,241 @@ fn capture_common_child(
         }
     }
     Ok(())
+}
+
+fn parse_background_rendering(
+    reader: &mut Reader<&[u8]>,
+    namespaces: &NamespaceBindings,
+) -> Result<BackgroundRendering> {
+    let mut rendering = None;
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(child) => {
+                let child_ns = namespaces.with_start(&child)?;
+                let is_p = child_ns.element_uri(child.name().as_ref()) == Some(P_NS);
+                let raw = capture_element(reader, &child)?;
+                let parsed = match (is_p, local_name(child.name().as_ref())) {
+                    (true, b"bgPr") => Some(parse_background_properties(&raw, &child_ns)?),
+                    (true, b"bgRef") => Some(parse_background_reference(&raw, &child_ns)?),
+                    _ => None,
+                };
+                if let Some(parsed) = parsed
+                    && rendering.replace(parsed).is_some()
+                {
+                    return Err(duplicate("background choice"));
+                }
+            }
+            Event::Empty(child) => {
+                let child_ns = namespaces.with_start(&child)?;
+                let is_p = child_ns.element_uri(child.name().as_ref()) == Some(P_NS);
+                let raw = capture_empty_element(&child)?;
+                let parsed = match (is_p, local_name(child.name().as_ref())) {
+                    (true, b"bgPr") => Some(BackgroundRendering::Properties(None)),
+                    (true, b"bgRef") => Some(parse_background_reference(&raw, &child_ns)?),
+                    _ => None,
+                };
+                if let Some(parsed) = parsed
+                    && rendering.replace(parsed).is_some()
+                {
+                    return Err(duplicate("background choice"));
+                }
+            }
+            Event::End(end) if local_name(end.name().as_ref()) == b"bg" => break,
+            Event::Eof => return Err(OxmlError::MissingElement("closing p:bg".to_owned())),
+            _ => {}
+        }
+        buffer.clear();
+    }
+    required(rendering, "p:bgPr or p:bgRef")
+}
+
+fn parse_background_properties(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+) -> Result<BackgroundRendering> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) => {
+                let namespaces = inherited.with_start(&start)?;
+                if local_name(start.name().as_ref()) != b"bgPr"
+                    || namespaces.element_uri(start.name().as_ref()) != Some(P_NS)
+                {
+                    return Err(unexpected(&start));
+                }
+                return parse_background_fill_children(&mut reader, &namespaces);
+            }
+            Event::Empty(_) => return Ok(BackgroundRendering::Properties(None)),
+            Event::Eof => return Err(OxmlError::MissingElement("p:bgPr".to_owned())),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn parse_background_fill_children(
+    reader: &mut Reader<&[u8]>,
+    namespaces: &NamespaceBindings,
+) -> Result<BackgroundRendering> {
+    let mut fill = None;
+    let mut unsupported = false;
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(child) => {
+                let child_ns = namespaces.with_start(&child)?;
+                let is_drawing = child_ns.element_uri(child.name().as_ref()) == Some(A_NS);
+                let qualified_name = child.name();
+                let name = local_name(qualified_name.as_ref());
+                let is_fill = is_drawing && is_fill_name(name);
+                let raw = capture_element(reader, &child)?;
+                if is_fill {
+                    let parsed = Fill::from_xml(&raw).map_err(map_drawing_error)?;
+                    if fill.replace(parsed).is_some() {
+                        return Err(duplicate("background fill"));
+                    }
+                } else if is_drawing && name == b"grpFill" {
+                    unsupported = true;
+                }
+            }
+            Event::Empty(child) => {
+                let child_ns = namespaces.with_start(&child)?;
+                let is_drawing = child_ns.element_uri(child.name().as_ref()) == Some(A_NS);
+                let qualified_name = child.name();
+                let name = local_name(qualified_name.as_ref());
+                if is_drawing && is_fill_name(name) {
+                    let raw = capture_empty_element(&child)?;
+                    let parsed = Fill::from_xml(&raw).map_err(map_drawing_error)?;
+                    if fill.replace(parsed).is_some() {
+                        return Err(duplicate("background fill"));
+                    }
+                } else if is_drawing && name == b"grpFill" {
+                    unsupported = true;
+                }
+            }
+            Event::End(end) if local_name(end.name().as_ref()) == b"bgPr" => break,
+            Event::Eof => return Err(OxmlError::MissingElement("closing p:bgPr".to_owned())),
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if unsupported {
+        Ok(BackgroundRendering::Unsupported("group fill"))
+    } else {
+        Ok(BackgroundRendering::Properties(fill.map(Box::new)))
+    }
+}
+
+fn parse_background_reference(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+) -> Result<BackgroundRendering> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) => {
+                let namespaces = inherited.with_start(&start)?;
+                if local_name(start.name().as_ref()) != b"bgRef"
+                    || namespaces.element_uri(start.name().as_ref()) != Some(P_NS)
+                {
+                    return Err(unexpected(&start));
+                }
+                let index = required_attribute(&start, "idx")?.parse::<u32>()?;
+                let (color, unsupported) =
+                    parse_background_reference_color(&mut reader, &namespaces)?;
+                return if unsupported {
+                    Ok(BackgroundRendering::Unsupported("reference colour"))
+                } else {
+                    Ok(BackgroundRendering::Reference { index, color })
+                };
+            }
+            Event::Empty(start) => {
+                let index = required_attribute(&start, "idx")?.parse::<u32>()?;
+                return Ok(BackgroundRendering::Reference { index, color: None });
+            }
+            Event::Eof => return Err(OxmlError::MissingElement("p:bgRef".to_owned())),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn parse_background_reference_color(
+    reader: &mut Reader<&[u8]>,
+    namespaces: &NamespaceBindings,
+) -> Result<(Option<ColorChoice>, bool)> {
+    let mut color = None;
+    let mut unsupported = false;
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(child) => {
+                let child_ns = namespaces.with_start(&child)?;
+                let is_drawing = child_ns.element_uri(child.name().as_ref()) == Some(A_NS);
+                let qualified_name = child.name();
+                let name = local_name(qualified_name.as_ref());
+                if is_drawing && is_color_name(name) {
+                    let parsed =
+                        ColorChoice::from_xml(reader, &child).map_err(map_drawing_error)?;
+                    if color.replace(parsed).is_some() {
+                        return Err(duplicate("background reference colour"));
+                    }
+                } else {
+                    capture_element(reader, &child)?;
+                    unsupported |= is_drawing && is_unmodelled_color_name(name);
+                }
+            }
+            Event::Empty(child) => {
+                let child_ns = namespaces.with_start(&child)?;
+                let is_drawing = child_ns.element_uri(child.name().as_ref()) == Some(A_NS);
+                let qualified_name = child.name();
+                let name = local_name(qualified_name.as_ref());
+                if is_drawing && is_color_name(name) {
+                    let parsed = ColorChoice::from_empty_xml(&child).map_err(map_drawing_error)?;
+                    if color.replace(parsed).is_some() {
+                        return Err(duplicate("background reference colour"));
+                    }
+                } else {
+                    unsupported |= is_drawing && is_unmodelled_color_name(name);
+                }
+            }
+            Event::End(end) if local_name(end.name().as_ref()) == b"bgRef" => break,
+            Event::Eof => return Err(OxmlError::MissingElement("closing p:bgRef".to_owned())),
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok((color, unsupported))
+}
+
+fn is_fill_name(name: &[u8]) -> bool {
+    matches!(
+        name,
+        b"noFill" | b"solidFill" | b"gradFill" | b"pattFill" | b"blipFill"
+    )
+}
+
+fn is_color_name(name: &[u8]) -> bool {
+    matches!(name, b"srgbClr" | b"schemeClr" | b"sysClr" | b"prstClr")
+}
+
+fn is_unmodelled_color_name(name: &[u8]) -> bool {
+    matches!(name, b"scrgbClr" | b"hslClr")
+}
+
+fn required_attribute(start: &BytesStart<'_>, name: &str) -> Result<String> {
+    all_attributes(start)?
+        .into_iter()
+        .find_map(|(key, value)| (key == name).then_some(value))
+        .ok_or_else(|| {
+            OxmlError::MissingElement(format!(
+                "{} requires @{name}",
+                String::from_utf8_lossy(start.name().as_ref())
+            ))
+        })
 }
 
 impl CT_ColorMapOverride {

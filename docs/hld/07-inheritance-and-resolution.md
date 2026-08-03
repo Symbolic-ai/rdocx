@@ -112,10 +112,11 @@ Unrepresentable content remains visible as a bounds fallback with a stable
 unsupported category and a diagnostic. This includes charts, SmartArt, OLE,
 unknown graphic frames, connectors pending concrete geometry, image media
 pending relationship resolution, preset geometry pending evaluation, and fill
-forms that the backend-neutral paint model cannot represent exactly. A raw
-modelled `p:bg` remains unresolved with a diagnostic until background paint
-resolution lands. Theme fallback backgrounds already resolve to concrete
-paint.
+forms that the backend-neutral paint model cannot represent exactly. Explicit
+`p:bgPr` fills, `p:bgRef` theme styles, and the theme fallback resolve to
+concrete background paint before crossing the renderer boundary. A background
+fill form that the neutral paint model cannot represent leaves the page on its
+white default and records a specific diagnostic.
 
 **Freeze this contract when the resolver lands, or the resolver and renderer
 tracks diverge.** It is versioned with the crate.
@@ -160,9 +161,13 @@ backend-neutral group transform. Recursive groups and the selected immediate
 `mc:Fallback` are walked in document order.
 
 The background view identifies slide, layout, master, or theme fallback as its
-producer. A raw `p:bg` remains borrowed XML. The theme fallback borrows the
-first background fill style. Both forms retain a reference to the context's
-per-master colour map for concrete resolution.
+producer. An explicit `p:bg` borrows its typed rendering projection while its
+raw subtree remains the sole PresentationML serialisation source. The theme
+fallback borrows the first background fill style. Both forms retain a reference
+to the context's per-master colour map for concrete resolution. `p:bgRef`
+selects the indexed normal or background format-scheme fill and substitutes its
+reference colour for every `phClr`. Direct and theme-fallback `phClr` use the
+effective `bg1` colour.
 
 The layout `showMasterSp` controls only the master non-placeholder pass. The
 slide `showMasterSp` controls only the layout non-placeholder pass. An absent

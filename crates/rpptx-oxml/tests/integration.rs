@@ -22,7 +22,9 @@ use rpptx_oxml::placeholder::{CT_Placeholder, PhType, PlaceholderKey};
 use rpptx_oxml::presentation::CT_Presentation;
 use rpptx_oxml::relmap::rewrite_rel_ids;
 use rpptx_oxml::shape_tree::{CT_Shape, CT_ShapeTree, ShapeTreeChild};
-use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind};
+use rpptx_oxml::slide_parts::{
+    BackgroundRendering, CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind,
+};
 
 const MANIFEST: &str = include_str!("../../../scripts/pptx-corpus-manifest.tsv");
 const EXPECTED_DECKS: usize = 50;
@@ -776,6 +778,66 @@ fn slide_layout_and_master_write_their_own_schema_order() {
             "<p:extLst",
         ],
     );
+}
+
+#[test]
+fn background_projection_preserves_the_source_subtree_verbatim() {
+    let properties = format!(
+        r#"<q:sld xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><q:cSld><q:bg x:keep="background"><q:bgPr shadeToTitle="1"><x:before/><d:gradFill rotWithShape="1"><d:gsLst><d:gs pos="0"><d:srgbClr val="102030"/></d:gs><d:gs pos="100000"><d:srgbClr val="D0E0F0"/></d:gs></d:gsLst><d:lin ang="0"/></d:gradFill><d:effectLst><x:effect/></d:effectLst><x:after/></q:bgPr></q:bg><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld></q:sld>"#
+    );
+    let expected = r#"<q:bg x:keep="background"><q:bgPr shadeToTitle="1"><x:before/><d:gradFill rotWithShape="1"><d:gsLst><d:gs pos="0"><d:srgbClr val="102030"/></d:gs><d:gs pos="100000"><d:srgbClr val="D0E0F0"/></d:gs></d:gsLst><d:lin ang="0"/></d:gradFill><d:effectLst><x:effect/></d:effectLst><x:after/></q:bgPr></q:bg>"#;
+    let parsed = CT_Slide::from_xml(properties.as_bytes()).unwrap();
+    let background = parsed.common_slide_data.background.as_ref().unwrap();
+    assert_eq!(background.raw_xml(), expected.as_bytes());
+    assert!(matches!(
+        background.rendering(),
+        BackgroundRendering::Properties(Some(fill))
+            if matches!(fill.as_ref(), oxml_drawing::fill::Fill::Gradient(_))
+    ));
+    let written = parsed.to_xml().unwrap();
+    assert!(
+        written
+            .windows(expected.len())
+            .any(|window| window == expected.as_bytes())
+    );
+    assert_order(&written, &["<q:bg ", "<p:spTree"]);
+    assert_eq!(parsed, CT_Slide::from_xml(&written).unwrap());
+
+    let reference = format!(
+        r#"<q:sld xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><q:cSld><q:bg><q:bgRef idx="1001"><x:before/><d:schemeClr val="accent2"><d:tint val="25000"/></d:schemeClr><x:after/></q:bgRef></q:bg><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld></q:sld>"#
+    );
+    let expected = r#"<q:bg><q:bgRef idx="1001"><x:before/><d:schemeClr val="accent2"><d:tint val="25000"/></d:schemeClr><x:after/></q:bgRef></q:bg>"#;
+    let parsed = CT_Slide::from_xml(reference.as_bytes()).unwrap();
+    let background = parsed.common_slide_data.background.as_ref().unwrap();
+    assert_eq!(background.raw_xml(), expected.as_bytes());
+    assert!(matches!(
+        background.rendering(),
+        BackgroundRendering::Reference {
+            index: 1001,
+            color: Some(_)
+        }
+    ));
+    let written = parsed.to_xml().unwrap();
+    assert!(
+        written
+            .windows(expected.len())
+            .any(|window| window == expected.as_bytes())
+    );
+    assert_eq!(parsed, CT_Slide::from_xml(&written).unwrap());
+
+    let wrong_namespace = format!(
+        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><p:cSld><p:bg><p:bgPr><x:gradFill/></p:bgPr></p:bg><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld></p:sld>"#
+    );
+    let parsed = CT_Slide::from_xml(wrong_namespace.as_bytes()).unwrap();
+    assert!(matches!(
+        parsed
+            .common_slide_data
+            .background
+            .as_ref()
+            .unwrap()
+            .rendering(),
+        BackgroundRendering::Properties(None)
+    ));
 }
 
 #[test]

@@ -199,12 +199,9 @@ pub fn layout_slide(input: &RenderInput, index: usize) -> Result<PageFrame, Rend
         .iter()
         .map(|shape| lower_shape(input, shape))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(PageFrame::new(
-        index + 1,
-        slide.size.0,
-        slide.size.1,
-        elements,
-    ))
+    let mut page = PageFrame::new(index + 1, slide.size.0, slide.size.1, elements);
+    page.background.clone_from(&slide.background);
+    Ok(page)
 }
 
 fn lower_shape(
@@ -1022,11 +1019,13 @@ pub fn resolve_media_relationship(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oxml_drawing::color::ColorMap;
+    use oxml_drawing::text::CT_TextListStyle;
     use oxml_layout::{
         Color, Diagnostic, FillRule, GradientStop, GroupElement, Paint, Path, PathCommand, Point,
         PositionedElement, Rect, Stroke, Transform,
     };
-    use rpptx_layout::{ResolvedContent, ResolvedGeometry, ResolvedShape};
+    use rpptx_layout::{ResolveCtx, ResolvedContent, ResolvedGeometry, ResolvedShape};
 
     const IMAGE_RELATIONSHIP: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
@@ -2166,6 +2165,79 @@ mod tests {
                 slide_count: 1,
             }
         );
+    }
+
+    #[test]
+    fn master_gradient_background_renders_when_slide_and_layout_omit_one() {
+        const P_NS: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
+        const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        let shape_tree = "<p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree>";
+        let slide = CT_Slide::from_xml(
+            format!(
+                "<p:sld xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\"><p:cSld>{shape_tree}</p:cSld></p:sld>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let layout = CT_SlideLayout::from_xml(
+            format!(
+                "<p:sldLayout xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\"><p:cSld>{shape_tree}</p:cSld></p:sldLayout>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let background = r#"<p:bg><p:bgPr><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill></p:bgPr></p:bg>"#;
+        let master = CT_SlideMaster::from_xml(
+            format!(
+                "<p:sldMaster xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\"><p:cSld>{background}{shape_tree}</p:cSld><p:clrMap bg1=\"lt1\" tx1=\"dk1\" bg2=\"lt2\" tx2=\"dk2\" accent1=\"accent1\" accent2=\"accent2\" accent3=\"accent3\" accent4=\"accent4\" accent5=\"accent5\" accent6=\"accent6\" hlink=\"hlink\" folHlink=\"folHlink\"/></p:sldMaster>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let theme = CT_OfficeStyleSheet::office_default();
+        let default_text_style = CT_TextListStyle::default();
+        let resolved = ResolveCtx::new(
+            &theme,
+            ColorMap::default(),
+            &master,
+            &layout,
+            &slide,
+            &default_text_style,
+        )
+        .resolve_slide((40.0, 20.0))
+        .unwrap();
+        let resolved_background = resolved.background.clone();
+        let rendered = layout_presentation(&render_input(vec![resolved])).unwrap();
+
+        assert_eq!(rendered.pages[0].background, resolved_background);
+        assert!(rendered.pages[0].elements.is_empty());
+        let png = oxml_pdf::render_page_to_png(&rendered, 0, 72.0)
+            .expect("rasterise inherited master gradient");
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).expect("decode background raster");
+        let left = rgb_at(&pixmap, 2, 10);
+        let right = rgb_at(&pixmap, 37, 10);
+        assert!(
+            left.0 > left.2,
+            "left sample should be red-dominant: {left:?}"
+        );
+        assert!(
+            right.2 > right.0,
+            "right sample should be blue-dominant: {right:?}"
+        );
+    }
+
+    #[test]
+    fn background_is_not_duplicated_in_page_elements() {
+        let mut resolved = slide((20.0, 10.0), Vec::new());
+        resolved.background = Some(Paint::Solid(Color::from_hex("102030")));
+
+        let page = layout_slide(&render_input(vec![resolved]), 0).unwrap();
+
+        assert_eq!(
+            page.background,
+            Some(Paint::Solid(Color::from_hex("102030")))
+        );
+        assert!(page.elements.is_empty());
     }
 
     #[test]

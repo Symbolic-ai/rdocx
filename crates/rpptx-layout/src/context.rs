@@ -25,9 +25,10 @@ use oxml_layout::{
 use rpptx_oxml::graphic_frame::GraphicDataPayload;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType, PlaceholderKey};
 use rpptx_oxml::shape_tree::{CT_Shape, ShapeTreeChild};
-use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster};
+use rpptx_oxml::slide_parts::{BackgroundRendering, CT_Slide, CT_SlideLayout, CT_SlideMaster};
 
 use crate::ResolveError;
+use crate::style::{referenced_fill, substitute_fill};
 use crate::text::EffectiveListStyle;
 use crate::{
     ParagraphAlignment, ResolvedAutofit, ResolvedBullet, ResolvedBulletSize, ResolvedContent,
@@ -50,7 +51,7 @@ pub enum BackgroundSource {
 /// The borrowed background payload selected for one slide.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BackgroundContent<'a> {
-    Xml(&'a [u8]),
+    Model(&'a BackgroundRendering),
     ThemeFill(&'a Fill),
 }
 
@@ -179,24 +180,24 @@ impl<'a> ResolveCtx<'a> {
 
     /// Selects the first background in slide, layout, master, and theme order.
     pub fn effective_background(&self) -> Option<EffectiveBackground<'_>> {
-        for (source, xml) in [
+        for (source, background) in [
             (
                 BackgroundSource::Slide,
-                self.slide.common_slide_data.background_xml.as_deref(),
+                self.slide.common_slide_data.background.as_ref(),
             ),
             (
                 BackgroundSource::Layout,
-                self.layout.common_slide_data.background_xml.as_deref(),
+                self.layout.common_slide_data.background.as_ref(),
             ),
             (
                 BackgroundSource::Master,
-                self.master.common_slide_data.background_xml.as_deref(),
+                self.master.common_slide_data.background.as_ref(),
             ),
         ] {
-            if let Some(xml) = xml {
+            if let Some(background) = background {
                 return Some(EffectiveBackground {
                     source,
-                    content: BackgroundContent::Xml(xml),
+                    content: BackgroundContent::Model(background.rendering()),
                     color_map: &self.color_map,
                 });
             }
@@ -295,14 +296,32 @@ impl<'a> ResolveCtx<'a> {
         };
         for item in self.flatten() {
             match item {
-                FlattenedItem::Background(background) => match background.content {
-                    BackgroundContent::ThemeFill(fill) => {
-                        slide.background = self.concrete_background_fill(fill, size)?.0;
+                FlattenedItem::Background(background) => {
+                    let (paint, unsupported) = match background.content {
+                        BackgroundContent::ThemeFill(fill) => {
+                            self.concrete_background_fill(fill, size)?
+                        }
+                        BackgroundContent::Model(BackgroundRendering::Properties(fill)) => {
+                            match fill {
+                                Some(fill) => self.concrete_background_fill(fill, size)?,
+                                None => (None, None),
+                            }
+                        }
+                        BackgroundContent::Model(BackgroundRendering::Reference {
+                            index,
+                            color,
+                        }) => self.concrete_background_reference(*index, color.as_ref(), size)?,
+                        BackgroundContent::Model(BackgroundRendering::Unsupported(detail)) => {
+                            (None, Some(*detail))
+                        }
+                    };
+                    slide.background = paint;
+                    if let Some(unsupported) = unsupported {
+                        slide.diagnostics.push(Diagnostic {
+                            message: format!("unsupported background {unsupported}"),
+                        });
                     }
-                    BackgroundContent::Xml(_) => slide.diagnostics.push(Diagnostic {
-                        message: "modelled slide background paint is not available".to_owned(),
-                    }),
-                },
+                }
                 FlattenedItem::Shape {
                     source,
                     child,
@@ -787,17 +806,27 @@ impl ResolveCtx<'_> {
         fill: &Fill,
         size: (f64, f64),
     ) -> Result<(Option<Paint>, Option<&'static str>), ResolveError> {
-        if let Fill::Solid(solid) = fill
-            && matches!(
-                solid.color.as_ref(),
-                Some(ColorChoice::Scheme { value, .. }) if value == "phClr"
-            )
-        {
-            let slot = self.color_map.theme_slot(ColorMapSlot::Background1);
-            let choice = self.theme.theme_elements.color_scheme.color(slot);
-            return Ok((Some(Paint::Solid(self.concrete_color(choice)?)), None));
-        }
-        self.concrete_fill(fill, size)
+        let mut fill = fill.clone();
+        let slot = self.color_map.theme_slot(ColorMapSlot::Background1);
+        let reference = self.theme.theme_elements.color_scheme.color(slot);
+        substitute_fill(&mut fill, Some(reference), "background")?;
+        self.concrete_fill(&fill, size)
+    }
+
+    fn concrete_background_reference(
+        &self,
+        index: u32,
+        color: Option<&ColorChoice>,
+        size: (f64, f64),
+    ) -> Result<(Option<Paint>, Option<&'static str>), ResolveError> {
+        let matrix = &self.theme.theme_elements.format_scheme;
+        let Some(mut fill) =
+            referenced_fill(index, &matrix.fill_styles, &matrix.background_fill_styles)?
+        else {
+            return Ok((None, None));
+        };
+        substitute_fill(&mut fill, color, "background")?;
+        self.concrete_fill(&fill, size)
     }
 
     fn concrete_fill(
@@ -2188,7 +2217,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_background_uses_fallback_order_and_master_color_map() {
+    fn background_precedence_is_slide_layout_master_then_theme() {
         let slide_first = Fixture::from_xml(
             &slide_xml_with("", "<p:bg><p:bgPr/></p:bg>", ""),
             &layout_xml_with("", "<p:bg><p:bgPr/></p:bg>", "", ""),
@@ -2216,6 +2245,117 @@ mod tests {
         let context = theme_fallback.context();
         let background = context.effective_background().unwrap();
         assert!(std::ptr::eq(background.color_map, &context.color_map));
+    }
+
+    #[test]
+    fn master_gradient_background_resolves_when_slide_and_layout_omit_one() {
+        let background = r#"<p:bg><p:bgPr><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill></p:bgPr></p:bg>"#;
+        let fixture = Fixture::from_xml(
+            &slide_xml_with("", "", ""),
+            &layout_xml_with("", "", "", ""),
+            &master_xml_with(background, "", ""),
+        );
+
+        let resolved = fixture.context().resolve_slide((40.0, 20.0)).unwrap();
+        let Some(Paint::Linear { stops, .. }) = resolved.background else {
+            panic!("expected inherited master gradient paint");
+        };
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, Color::from_hex("FF0000"));
+        assert_eq!(stops[1].color, Color::from_hex("0000FF"));
+        assert!(resolved.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn background_reference_resolves_phclr_through_the_master_colour_map() {
+        let master = master_xml_with(
+            r#"<p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg>"#,
+            "",
+            "",
+        )
+        .replace("bg1=\"lt1\"", "bg1=\"accent6\"");
+        let fixture = Fixture::from_xml(
+            &slide_xml_with("", "", ""),
+            &layout_xml_with("", "", "", ""),
+            &master,
+        );
+        let context = ResolveCtx::new(
+            &fixture.theme,
+            fixture.master.color_map.clone(),
+            &fixture.master,
+            &fixture.layout,
+            &fixture.slide,
+            &fixture.default_text_style,
+        );
+
+        let resolved = context.resolve_slide((40.0, 20.0)).unwrap();
+        assert_eq!(
+            resolved.background,
+            Some(Paint::Solid(Color::from_hex("4EA72E")))
+        );
+        assert!(resolved.diagnostics.is_empty());
+
+        let mut transformed = Fixture::from_xml(
+            &slide_xml_with("", "", ""),
+            &layout_xml_with("", "", "", ""),
+            &master_xml_with(
+                r#"<p:bg><p:bgRef idx="1001"><a:srgbClr val="C0504D"><a:tint val="60000"/></a:srgbClr></p:bgRef></p:bg>"#,
+                "",
+                "",
+            ),
+        );
+        transformed
+            .theme
+            .theme_elements
+            .format_scheme
+            .background_fill_styles[0] = oxml_drawing::fill::Fill::from_xml(
+            br#"<a:solidFill><a:schemeClr val="phClr"><a:shade val="70000"/></a:schemeClr></a:solidFill>"#,
+        )
+        .unwrap();
+
+        let transformed = transformed.context().resolve_slide((40.0, 20.0)).unwrap();
+        assert_eq!(
+            transformed.background,
+            Some(Paint::Solid(Color::from_hex("BC9897")))
+        );
+    }
+
+    #[test]
+    fn unsupported_background_fill_records_a_specific_diagnostic() {
+        let fixture = Fixture::from_xml(
+            &slide_xml_with(
+                "",
+                r#"<p:bg><p:bgPr><a:pattFill prst="pct5"><a:fgClr><a:srgbClr val="FF0000"/></a:fgClr><a:bgClr><a:srgbClr val="FFFFFF"/></a:bgClr></a:pattFill></p:bgPr></p:bg>"#,
+                "",
+            ),
+            &layout_xml_with("", "", "", ""),
+            &master_xml_with("", "", ""),
+        );
+
+        let resolved = fixture.context().resolve_slide((40.0, 20.0)).unwrap();
+        assert!(resolved.background.is_none());
+        assert_eq!(
+            resolved.diagnostics,
+            vec![oxml_layout::Diagnostic {
+                message: "unsupported background pattern fill".to_owned(),
+            }]
+        );
+
+        let group_fill = Fixture::from_xml(
+            &slide_xml_with("", r#"<p:bg><p:bgPr><a:grpFill/></p:bgPr></p:bg>"#, ""),
+            &layout_xml_with("", "", "", ""),
+            &master_xml_with("", "", ""),
+        )
+        .context()
+        .resolve_slide((40.0, 20.0))
+        .unwrap();
+        assert!(group_fill.background.is_none());
+        assert_eq!(
+            group_fill.diagnostics,
+            vec![oxml_layout::Diagnostic {
+                message: "unsupported background group fill".to_owned(),
+            }]
+        );
     }
 
     #[test]

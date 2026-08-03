@@ -1,6 +1,6 @@
 # F-097, Backgrounds
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S23
 **Size**: S
 **Depends on**: F-086
@@ -107,12 +107,12 @@ connected to the released Word renderer.
 
 ## Implementation checklist
 
-- [ ] Add preserving `p:bgPr` and `p:bgRef` rendering projections in existing slide-part code.
-- [ ] Resolve explicit slide, layout, and master background paint plus theme fallback.
-- [ ] Resolve background style references and `phClr` through the effective colour map.
-- [ ] Assign resolved paint to the page background before shape elements.
-- [ ] Prove round-trip preservation, precedence, inherited gradient pixels, and no duplication.
-- [ ] Reconcile the PresentationML and resolver HLD sections with current behavior.
+- [x] Add preserving `p:bgPr` and `p:bgRef` rendering projections in existing slide-part code.
+- [x] Resolve explicit slide, layout, and master background paint plus theme fallback.
+- [x] Resolve background style references and `phClr` through the effective colour map.
+- [x] Assign resolved paint to the page background before shape elements.
+- [x] Prove round-trip preservation, precedence, inherited gradient pixels, and no duplication.
+- [x] Reconcile the PresentationML and resolver HLD sections with current behavior.
 
 ## Open questions
 
