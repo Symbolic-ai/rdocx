@@ -714,8 +714,10 @@ dependencies = [
  "oxml-drawing",
  "oxml-layout",
  "oxml-media",
+ "oxml-pdf",
  "rpptx-layout",
  "rpptx-oxml",
+ "tiny-skia",
 ]
 
 [[package]]

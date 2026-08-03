@@ -1,6 +1,6 @@
 # F-093, Shape geometry, fills and lines
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S23
 **Size**: L
 **Depends on**: F-091, F-092
@@ -107,14 +107,24 @@ to any released Word rendering path.
 
 ## Implementation checklist
 
-- [ ] Add presentation and single-slide layout entry points with contextual index errors.
-- [ ] Lower resolved rectangle, custom, and visibly outlined fallback geometry to path elements.
-- [ ] Carry solid and gradient fills plus stroke width, cap, join, and dash.
-- [ ] Preserve page order, page size, metadata, and resolver diagnostics.
-- [ ] Prove solid, gradient, and outline pixels through deterministic raster output.
+- [x] Add presentation and single-slide layout entry points with contextual index errors.
+- [x] Lower resolved rectangle, custom, and visibly outlined fallback geometry to path elements.
+- [x] Carry solid and gradient fills plus stroke width, cap, join, and dash.
+- [x] Preserve page order, page size, metadata, and resolver diagnostics.
+- [x] Prove solid, gradient, and outline pixels through deterministic raster output.
 
 ## Open questions
 
 Resolved. The user approved a deterministic 1 point black outline for an
 otherwise unpainted bounds fallback. This matches the existing neutral stroke
 defaults and avoids adding a renderer option for one fallback policy.
+
+## Design deviations
+
+The sampled-pixel gate exposed that `oxml-pdf` applied an accumulated group
+transform once to path geometry and a second time to a gradient shader. The
+approved implementation corrects the existing raster backend to keep shader
+coordinates local and adds
+`translated_group_gradient_uses_local_coordinates_exactly_once`. This brings
+the backend into conformance with HLD08 and does not change the HLD impact or
+dependency graph.

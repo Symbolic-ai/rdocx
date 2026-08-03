@@ -6,8 +6,11 @@ use std::fmt;
 use std::sync::Arc;
 
 use oxml_drawing::theme::CT_OfficeStyleSheet;
-use oxml_layout::{DocumentMetadata, FontFile, MediaId};
-use rpptx_layout::ResolvedSlide;
+use oxml_layout::{
+    Color, DocumentMetadata, FontFile, GroupElement, LayoutResult, MediaId, PageFrame, Paint, Path,
+    PathElement, PositionedElement, Rect, Stroke, Transform,
+};
+use rpptx_layout::{ResolvedGeometry, ResolvedShape, ResolvedSlide};
 use rpptx_oxml::notes_parts::CT_NotesSlide;
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster};
 
@@ -84,6 +87,10 @@ pub enum RenderInputError {
         relationship_id: String,
         target: String,
     },
+    SlideIndexOutOfBounds {
+        index: usize,
+        slide_count: usize,
+    },
 }
 
 impl fmt::Display for RenderInputError {
@@ -100,6 +107,10 @@ impl fmt::Display for RenderInputError {
             } => write!(
                 formatter,
                 "missing media target {target} for {scope} relationship {relationship_id}"
+            ),
+            Self::SlideIndexOutOfBounds { index, slide_count } => write!(
+                formatter,
+                "slide index {index} is out of bounds for {slide_count} slides"
             ),
         }
     }
@@ -128,6 +139,78 @@ pub struct RenderInput {
     pub metadata: Option<DocumentMetadata>,
 }
 
+/// Lower every resolved slide to one fixed-size page in presentation order.
+pub fn layout_presentation(input: &RenderInput) -> Result<LayoutResult, RenderInputError> {
+    let pages = (0..input.slides.len())
+        .map(|index| layout_slide(input, index))
+        .collect::<Result<Vec<_>, _>>()?;
+    let diagnostics = input
+        .slides
+        .iter()
+        .flat_map(|slide| slide.diagnostics.iter().cloned())
+        .collect();
+    let mut layout = LayoutResult::new(pages, Vec::new(), input.metadata.clone(), Vec::new());
+    layout.diagnostics = diagnostics;
+    Ok(layout)
+}
+
+/// Lower one zero-based resolved slide to a fixed-size page.
+pub fn layout_slide(input: &RenderInput, index: usize) -> Result<PageFrame, RenderInputError> {
+    let slide = input
+        .slides
+        .get(index)
+        .ok_or(RenderInputError::SlideIndexOutOfBounds {
+            index,
+            slide_count: input.slides.len(),
+        })?;
+    let elements = slide.shapes.iter().map(lower_shape).collect();
+    Ok(PageFrame::new(
+        index + 1,
+        slide.size.0,
+        slide.size.1,
+        elements,
+    ))
+}
+
+fn lower_shape(shape: &ResolvedShape) -> PositionedElement {
+    let paths = match &shape.geometry {
+        ResolvedGeometry::Rectangle | ResolvedGeometry::BoundsFallback => vec![Path::rect(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: shape.bounds.width,
+            height: shape.bounds.height,
+        })],
+        ResolvedGeometry::Custom { paths, .. } => paths.clone(),
+    };
+    let stroke = match (&shape.geometry, &shape.fill, &shape.line) {
+        (ResolvedGeometry::BoundsFallback, None, None) => {
+            Some(Stroke::new(Paint::Solid(Color::BLACK), 1.0))
+        }
+        _ => shape.line.clone(),
+    };
+    let children = paths
+        .into_iter()
+        .map(|path| {
+            PositionedElement::Path(PathElement {
+                path,
+                fill: shape.fill.clone(),
+                stroke: stroke.clone(),
+            })
+        })
+        .collect();
+    PositionedElement::Group(GroupElement {
+        transform: Transform {
+            e: shape.bounds.x,
+            f: shape.bounds.y,
+            ..Transform::IDENTITY
+        },
+        clip: None,
+        opacity: 1.0,
+        effects: Vec::new(),
+        children,
+    })
+}
+
 /// Resolve one scoped media relationship into the deck's content-addressed store.
 pub fn resolve_media_relationship(
     relationships: &RelScopes,
@@ -152,6 +235,11 @@ pub fn resolve_media_relationship(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oxml_layout::{
+        Color, Diagnostic, FillRule, GradientStop, GroupElement, Paint, Path, PathCommand, Point,
+        PositionedElement, Rect, Stroke, Transform,
+    };
+    use rpptx_layout::{ResolvedContent, ResolvedGeometry, ResolvedShape};
 
     const IMAGE_RELATIONSHIP: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
@@ -168,6 +256,327 @@ mod tests {
             target: target.to_owned(),
             relationship_type: IMAGE_RELATIONSHIP.to_owned(),
         }
+    }
+
+    fn color(red: f64, green: f64, blue: f64) -> Color {
+        Color {
+            r: red,
+            g: green,
+            b: blue,
+            a: 1.0,
+        }
+    }
+
+    fn shape(
+        bounds: Rect,
+        geometry: ResolvedGeometry,
+        fill: Option<Paint>,
+        line: Option<Stroke>,
+    ) -> ResolvedShape {
+        ResolvedShape {
+            group_transform: Transform::IDENTITY,
+            bounds,
+            rotation_deg: 0.0,
+            flip_h: false,
+            flip_v: false,
+            geometry,
+            fill,
+            line,
+            shadow: None,
+            content: ResolvedContent::None,
+            unsupported: None,
+        }
+    }
+
+    fn slide(size: (f64, f64), shapes: Vec<ResolvedShape>) -> ResolvedSlide {
+        ResolvedSlide {
+            size,
+            background: None,
+            shapes,
+            diagnostics: Vec::new(),
+        }
+    }
+
+    fn render_input(slides: Vec<ResolvedSlide>) -> RenderInput {
+        RenderInput {
+            slides,
+            media: HashMap::new(),
+            fonts: Vec::new(),
+            metadata: None,
+        }
+    }
+
+    fn only_group(element: &PositionedElement) -> &GroupElement {
+        let PositionedElement::Group(group) = element else {
+            panic!("shape should lower to one group");
+        };
+        group
+    }
+
+    #[test]
+    fn solid_gradient_and_outlined_shapes_rasterise_at_sampled_pixels() {
+        let red = color(1.0, 0.0, 0.0);
+        let blue = color(0.0, 0.0, 1.0);
+        let green = color(0.0, 1.0, 0.0);
+        let gradient = Paint::linear(
+            Point { x: 0.0, y: 0.0 },
+            Point { x: 8.0, y: 0.0 },
+            vec![
+                GradientStop {
+                    offset: 0.0,
+                    color: red,
+                },
+                GradientStop {
+                    offset: 0.49,
+                    color: red,
+                },
+                GradientStop {
+                    offset: 0.51,
+                    color: blue,
+                },
+                GradientStop {
+                    offset: 1.0,
+                    color: blue,
+                },
+            ],
+            (true, true),
+        );
+        let input = render_input(vec![slide(
+            (40.0, 14.0),
+            vec![
+                shape(
+                    Rect {
+                        x: 2.0,
+                        y: 2.0,
+                        width: 8.0,
+                        height: 8.0,
+                    },
+                    ResolvedGeometry::Rectangle,
+                    Some(Paint::Solid(red)),
+                    None,
+                ),
+                shape(
+                    Rect {
+                        x: 14.0,
+                        y: 2.0,
+                        width: 8.0,
+                        height: 8.0,
+                    },
+                    ResolvedGeometry::Rectangle,
+                    Some(gradient),
+                    None,
+                ),
+                shape(
+                    Rect {
+                        x: 26.0,
+                        y: 2.0,
+                        width: 8.0,
+                        height: 8.0,
+                    },
+                    ResolvedGeometry::Rectangle,
+                    None,
+                    Some(Stroke::new(Paint::Solid(green), 2.0)),
+                ),
+            ],
+        )]);
+
+        let layout = layout_presentation(&input).expect("lower shape slide");
+        let png = oxml_pdf::render_page_to_png(&layout, 0, 72.0).expect("rasterise shape slide");
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).expect("decode shape slide");
+        let rgb = |x, y| {
+            let pixel = pixmap.pixel(x, y).expect("sample lies inside page");
+            (pixel.red(), pixel.green(), pixel.blue())
+        };
+
+        assert_eq!(rgb(5, 5), (255, 0, 0));
+        assert_eq!(rgb(15, 5), (255, 0, 0));
+        assert_eq!(rgb(20, 5), (0, 0, 255));
+        assert_eq!(rgb(26, 5), (0, 255, 0));
+        assert_eq!(rgb(30, 5), (255, 255, 255));
+        assert_eq!(rgb(38, 5), (255, 255, 255));
+    }
+
+    #[test]
+    fn preset_and_custom_geometry_lower_to_ordered_paths() {
+        let first = Path {
+            commands: vec![
+                PathCommand::MoveTo(Point { x: 0.0, y: 0.0 }),
+                PathCommand::LineTo(Point { x: 4.0, y: 0.0 }),
+            ],
+            fill_rule: FillRule::NonZero,
+        };
+        let second = Path {
+            commands: vec![
+                PathCommand::MoveTo(Point { x: 0.0, y: 1.0 }),
+                PathCommand::LineTo(Point { x: 4.0, y: 1.0 }),
+            ],
+            fill_rule: FillRule::EvenOdd,
+        };
+        let fill = Paint::Solid(Color::BLACK);
+        let line = Stroke::new(Paint::Solid(Color::WHITE), 2.0);
+        let input = render_input(vec![slide(
+            (20.0, 20.0),
+            vec![
+                shape(
+                    Rect {
+                        x: 2.0,
+                        y: 3.0,
+                        width: 4.0,
+                        height: 5.0,
+                    },
+                    ResolvedGeometry::Rectangle,
+                    Some(fill.clone()),
+                    Some(line.clone()),
+                ),
+                shape(
+                    Rect {
+                        x: 8.0,
+                        y: 9.0,
+                        width: 4.0,
+                        height: 5.0,
+                    },
+                    ResolvedGeometry::Custom {
+                        paths: vec![first.clone(), second.clone()],
+                        text_rect: None,
+                    },
+                    Some(fill.clone()),
+                    Some(line.clone()),
+                ),
+            ],
+        )]);
+
+        let page = layout_slide(&input, 0).expect("lower first slide");
+        assert_eq!(page.elements.len(), 2);
+        let rectangle = only_group(&page.elements[0]);
+        assert_eq!(
+            rectangle.transform,
+            Transform {
+                e: 2.0,
+                f: 3.0,
+                ..Transform::IDENTITY
+            }
+        );
+        let PositionedElement::Path(rectangle) = &rectangle.children[0] else {
+            panic!("rectangle should lower to a path");
+        };
+        assert_eq!(
+            rectangle.path,
+            Path::rect(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 4.0,
+                height: 5.0
+            })
+        );
+        assert_eq!(rectangle.fill, Some(fill.clone()));
+        assert_eq!(rectangle.stroke, Some(line.clone()));
+
+        let custom = only_group(&page.elements[1]);
+        assert_eq!(custom.children.len(), 2);
+        for (element, expected) in custom.children.iter().zip([first, second]) {
+            let PositionedElement::Path(element) = element else {
+                panic!("custom geometry should lower to paths");
+            };
+            assert_eq!(element.path, expected);
+            assert_eq!(element.fill, Some(fill.clone()));
+            assert_eq!(element.stroke, Some(line.clone()));
+        }
+    }
+
+    #[test]
+    fn bounds_fallback_emits_a_visible_black_outline() {
+        let input = render_input(vec![slide(
+            (20.0, 20.0),
+            vec![shape(
+                Rect {
+                    x: 2.0,
+                    y: 3.0,
+                    width: 4.0,
+                    height: 5.0,
+                },
+                ResolvedGeometry::BoundsFallback,
+                None,
+                None,
+            )],
+        )]);
+
+        let page = layout_slide(&input, 0).expect("lower fallback slide");
+        let group = only_group(&page.elements[0]);
+        let PositionedElement::Path(path) = &group.children[0] else {
+            panic!("fallback should lower to a path");
+        };
+        assert_eq!(path.fill, None);
+        assert_eq!(
+            path.stroke,
+            Some(Stroke::new(Paint::Solid(Color::BLACK), 1.0))
+        );
+    }
+
+    #[test]
+    fn layout_slide_rejects_an_out_of_range_index() {
+        let input = render_input(vec![slide((20.0, 10.0), Vec::new())]);
+
+        assert_eq!(
+            layout_slide(&input, 4).unwrap_err(),
+            RenderInputError::SlideIndexOutOfBounds {
+                index: 4,
+                slide_count: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn layout_presentation_preserves_page_order_and_diagnostics() {
+        let mut first = slide((20.0, 10.0), Vec::new());
+        first.diagnostics.push(Diagnostic {
+            message: "first diagnostic".to_owned(),
+        });
+        let mut second = slide((30.0, 15.0), Vec::new());
+        second.diagnostics.push(Diagnostic {
+            message: "second diagnostic".to_owned(),
+        });
+        let mut input = render_input(vec![first, second]);
+        input.metadata = Some(DocumentMetadata {
+            title: Some("shape deck".to_owned()),
+            author: Some("rpptx-render".to_owned()),
+            ..DocumentMetadata::default()
+        });
+
+        let layout = layout_presentation(&input).expect("lower presentation");
+        assert_eq!(layout.pages.len(), 2);
+        assert_eq!(
+            (
+                layout.pages[0].page_number,
+                layout.pages[0].width,
+                layout.pages[0].height
+            ),
+            (1, 20.0, 10.0)
+        );
+        assert_eq!(
+            (
+                layout.pages[1].page_number,
+                layout.pages[1].width,
+                layout.pages[1].height
+            ),
+            (2, 30.0, 15.0)
+        );
+        assert_eq!(
+            layout
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.title.as_deref()),
+            Some("shape deck")
+        );
+        assert_eq!(
+            layout
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first diagnostic", "second diagnostic"]
+        );
+        assert!(layout.fonts.is_empty());
+        assert!(layout.outlines.is_empty());
     }
 
     #[test]
