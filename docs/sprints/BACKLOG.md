@@ -25,12 +25,12 @@ regenerated, never hand-edited.
 | M7, DrawingML                               | 19 | 19 | 0 | 0  |
 | M8, PresentationML                          | 14 | 14 | 0 | 0  |
 | M9, Inheritance resolver                    | 8  | 8 | 0 | 0  |
-| M10, Renderer                               | 16 | 4 | 0 | 12 |
+| M10, Renderer                               | 16 | 4 | 1 | 11 |
 | M11, Write API                              | 12 | 0 | 0 | 12 |
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **154** | **85** | **0** | **69** |
+| **Total** | **154** | **85** | **1** | **68** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -199,7 +199,7 @@ regenerated, never hand-edited.
 | F-090 | Preset table generator                       | S22 | L | done |
 | F-091 | Preset evaluation and fallback               | S22 | M | done |
 | F-092 | rpptx-render skeleton and RenderInput        | S22 | M | done |
-| F-093 | Shape geometry, fills and lines              | S23 | L | pending |
+| F-093 | Shape geometry, fills and lines              | S23 | L | in-progress |
 | F-094 | Rotation, flips and groups                   | S23 | M | pending |
 | F-095 | Arrowheads                                   | S23 | S | pending |
 | F-096 | Pictures with crop and tile                  | S23 | M | pending |
