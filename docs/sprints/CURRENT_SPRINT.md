@@ -1,58 +1,64 @@
-# Current Sprint, S22
+# Current Sprint, S23
 
 **Milestone**: M10 Renderer.
 
-**Goal**: Settle the licensed source for preset shape definitions, generate a
-reproducible checked-in preset table, and evaluate known and unknown preset
-geometry without dropping visible content. Establish the `rpptx-render` input
-boundary so M10 can consume the frozen resolver contract with relationship
-scopes and media resolved correctly, while keeping every PowerPoint development
-crate unpublished.
+**Goal**: Build the first concrete `rpptx-render` output path so slides with
+backgrounds, shapes, gradients, outlines, rotations, groups, arrowheads, and
+cropped or tiled pictures render without text. Preserve the frozen resolver
+boundary and keep every PowerPoint development crate unpublished while S24
+adds shape text.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for the `rpptx-layout` to `rpptx-render` seam
-  and one-way dependency graph.
-- `docs/hld/08-rendering-spec.md`, for the preset generator, evaluator,
-  fallback, and `RenderInput`, `SlideBundle`, and `RelScopes` contracts.
-- `docs/hld/12-testing-strategy.md`, for the 50-deck corpus and render-fidelity
-  evidence requirements.
-- `docs/hld/13-risks-and-open-questions.md`, for preset-table provenance and
-  rejection of the MPL-2.0 LibreOffice source.
-- `docs/hld/14-development-backlog.md`, for F-089 through F-092 dependencies,
+- `docs/hld/03-architecture.md`, for the one-way `rpptx-layout` to
+  `rpptx-render` seam and the shared `oxml-layout` output boundary.
+- `docs/hld/05-drawingml-model.md`, for geometry, fill, line, transform,
+  arrowhead, picture-fill, and raw-preservation inputs.
+- `docs/hld/06-presentationml-model.md`, for the recursive shape tree and typed
+  picture crop and relationship data consumed by rendering.
+- `docs/hld/07-inheritance-and-resolution.md`, for the owned `ResolvedSlide`
+  contract, accumulated group transforms, concrete paint, and effective
+  backgrounds.
+- `docs/hld/08-rendering-spec.md`, for page-frame lowering, group recursion,
+  paths, gradients, images, backgrounds, and the renderer input boundary.
+- `docs/hld/12-testing-strategy.md`, for deterministic rendering, sampled-pixel
+  evidence, the 50-deck corpus, and the later M10 fidelity gate.
+- `docs/hld/14-development-backlog.md`, for F-093 through F-097 dependencies,
   story gates, and the M10 boundary.
-- `docs/hld/15-build-and-toolchain.md`, for checked-in generated artifacts and
-  the version 0.0.0, publication-disabled policy.
+- `docs/hld/15-build-and-toolchain.md`, for deterministic font mode and the
+  version 0.0.0, publication-disabled policy.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-089 | Resolve the preset geometry licensing question | S | done | - |
-| F-092 | rpptx-render skeleton and RenderInput | M | done | - |
-| F-090 | Preset table generator | L | done | - |
-| F-091 | Preset evaluation and fallback | M | done | - |
+| F-093 | Shape geometry, fills and lines | L | pending | - |
+| F-096 | Pictures with crop and tile | M | pending | - |
+| F-097 | Backgrounds | S | pending | - |
+| F-094 | Rotation, flips and groups | M | pending | - |
+| F-095 | Arrowheads | S | pending | - |
 
 ## Sequencing note
 
-F-089 must settle the permitted source before F-090 generates the preset table.
-F-091 then consumes that table. F-092 depends only on the completed F-036 and
-F-087 contracts, so it may proceed in parallel with the F-089 through F-091
-chain. The row order puts the two independent starting stories first.
+F-093 consumes the completed preset evaluator and renderer input boundary, and
+it blocks F-094 and F-095. F-096 depends on the existing picture and media
+contracts, while F-097 depends on the completed flattener, so both may proceed
+alongside F-093. Rotation, flips, groups, and arrowheads follow only after the
+base shape lowering is stable.
 
 ## Definition of done for this sprint
 
-- A written HLD decision records the preset geometry source and its licensing
-  basis. No MPL-2.0 LibreOffice table or code is used.
-- The offline preset generator covers every preset name found in the corpus,
-  checks its output into the repository, and regenerates byte-identically.
-- Known presets evaluate through the generated table. An unknown preset falls
-  back to its shape bounds, preserves its text, and emits a diagnostic.
-- The `rpptx-render` skeleton consumes the frozen resolver contract through
-  `RenderInput`, `SlideBundle`, and three distinct relationship scopes. Equal
-  relationship IDs in slide, layout, and master scopes resolve to their own
-  targets.
-- The package and dependency direction follows the architecture contract.
-  Every PowerPoint development crate remains version 0.0.0 with publication
-  disabled, and no crate is published to crates.io.
-- The full workspace gate passes with all 28 deterministic hashes unchanged.
+- Preset and custom shape geometry lower to page-frame paths with solid,
+  gradient, and outline paint matching sampled colours.
+- Rotation, flips, and nested group transforms place corners at independently
+  computed coordinates.
+- Line head and tail ends lower to the required filled arrowhead paths.
+- Pictures render through content-addressed media with crop and tile behavior
+  proven by focused image-region tests.
+- Slide, layout, and master backgrounds lower through the resolved background
+  contract, including inherited gradient backgrounds.
+- Slides containing shapes and pictures render without dropped visible content.
+  Shape text remains explicitly deferred to S24.
+- Every PowerPoint development crate remains version 0.0.0 with publication
+  disabled, no crate is published, and the full workspace gate passes with all
+  28 deterministic hashes unchanged.
