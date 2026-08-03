@@ -229,8 +229,10 @@ non-extended gradient domain is clipped before painting. Line and path dash
 arrays use tiny-skia's phase-zero stroke dash support. Page background paint is
 drawn over the white default before page elements.
 
-Tile paint and group effects are not rendered by the raster backend. In
-particular, the `blur` field on an outer shadow has no raster approximation.
+Tile paint and group effects are not rendered by the raster backend. Picture
+tiles are different. `rpptx-render` lowers them to bounded row-major image
+elements before the shared backend sees them. In particular, the `blur` field
+on an outer shadow has no raster approximation.
 
 ## Preset geometry
 
@@ -393,3 +395,24 @@ slide, layout, and master parts never alias. Blips are resolved to bytes
 **before** constructing `RenderInput` and keyed by `MediaId::from_bytes`. This
 is why `embed_id` cannot survive the port, and it deduplicates a logo that
 appears on every slide.
+
+Upstream package assembly also constructs the source-neutral `ScopedMediaIds`
+maps consumed by `ResolveCtx::resolve_slide_with_media`. Only embedded picture
+relationships enter those maps. Linked media remains diagnosed and no renderer
+performs network access.
+
+An uncropped rectangular stretch picture that rotates with its shape lowers to
+one image in local shape bounds. Source crop clamps each edge to the zero-to-one
+range, rejects an empty retained width or height, expands the source image
+rectangle, and clips it to the destination and picture geometry. When picture
+content does not rotate with the shape, stretch and tile coverage expands to
+the rotated geometry's axis-aligned bounds before inverse rotation, then clips
+to the rotated picture path. Picture content is emitted before its outline.
+
+Tile size starts from probed pixel dimensions. A positive declared blip DPI
+overrides both embedded axes, embedded DPI overrides the 96 DPI fallback, and
+the existing truncating native-size conversion supplies EMU before conversion
+to points. Translation, fractional scale, alternating axis flips, nine-way
+alignment, source crop, and `rotate_with_shape` are applied in presentation
+lowering. Repeats use deterministic row-major order and are bounded by element
+and cloned-media byte limits before allocation.

@@ -55,8 +55,26 @@ pub enum ResolvedGeometry {
 pub enum ResolvedContent {
     None,
     Text(ResolvedTextBody),
-    Image { media: MediaId, src_rect: Option<CropRect> },
+    Image {
+        media: MediaId,
+        src_rect: Option<CropRect>,
+        placement: ResolvedImagePlacement,
+        dpi: Option<f64>,
+        rotate_with_shape: bool,
+    },
     Table(ResolvedTable),
+}
+
+pub enum ResolvedImagePlacement {
+    Stretch { fill_rect: Option<CropRect> },
+    Tile(ResolvedTilePlacement),
+}
+
+pub struct ResolvedTilePlacement {
+    pub translation: Point,             // points
+    pub scale_x: f64, pub scale_y: f64, // fractions
+    pub flip: ResolvedTileFlip,
+    pub alignment: ResolvedRectAlignment,
 }
 ```
 
@@ -75,6 +93,15 @@ table content without part-tree lifetimes. Text bodies retain concrete insets,
 anchor, wrap, direction, autofit, paragraphs, runs, paragraph spacing, and
 bullets. Character and auto-number bullets both retain their independently
 inherited font, colour, size, and choice values.
+
+`ResolveCtx::resolve_slide_with_media` additionally accepts `ScopedMediaIds`,
+whose slide, layout, and master maps keep relationship namespaces separate.
+Each flattened picture uses its producing source to resolve an embedded
+relationship to `MediaId`. External links remain unsupported and produce a
+diagnostic without network access. Missing picture placement defaults to
+stretch. Tile translation defaults to zero, scale to 100 percent, flip to none,
+alignment to top-left, and `rotate_with_shape` to true. Tile translation crosses
+the boundary in points using 12,700 EMU per point.
 
 Each flattened leaf carries an accumulated `group_transform`. Nested group
 transforms map child coordinates through `chOff`, `chExt`, `off`, and `ext`,

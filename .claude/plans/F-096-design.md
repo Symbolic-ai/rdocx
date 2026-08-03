@@ -1,6 +1,6 @@
 # F-096, Pictures with crop and tile
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S23
 **Size**: M
 **Depends on**: F-092, F-072
@@ -119,13 +119,13 @@ unpublished PowerPoint renderer.
 
 ## Implementation checklist
 
-- [ ] Add source-scoped relationship-to-media input and neutral picture placement.
-- [ ] Resolve embedded picture bytes only by content-addressed `MediaId` and diagnose external links.
-- [ ] Lower uncropped and cropped pictures through image and clip primitives.
-- [ ] Lower tile placement, crop, flip, alignment, DPI, and rotation to bounded repeated images.
-- [ ] Preserve outline order above picture and tile content.
-- [ ] Prove crop, tile, deduplication, and invalid-input behavior with focused tests.
-- [ ] Update the HLD to describe presentation-side tile lowering.
+- [x] Add source-scoped relationship-to-media input and neutral picture placement.
+- [x] Resolve embedded picture bytes only by content-addressed `MediaId` and diagnose external links.
+- [x] Lower uncropped and cropped pictures through image and clip primitives.
+- [x] Lower tile placement, crop, flip, alignment, DPI, and rotation to bounded repeated images.
+- [x] Preserve outline order above picture and tile content.
+- [x] Prove crop, tile, deduplication, and invalid-input behavior with focused tests.
+- [x] Update the HLD to describe presentation-side tile lowering.
 
 ## Open questions
 
