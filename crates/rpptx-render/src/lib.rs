@@ -8,9 +8,12 @@ use std::sync::Arc;
 use oxml_drawing::theme::CT_OfficeStyleSheet;
 use oxml_layout::{
     Color, DocumentMetadata, FontFile, GroupElement, LayoutResult, MediaId, PageFrame, Paint, Path,
-    PathElement, PositionedElement, Rect, Stroke, Transform,
+    PathCommand, PathElement, Point, PositionedElement, Rect, Stroke, Transform,
 };
-use rpptx_layout::{ResolvedGeometry, ResolvedShape, ResolvedSlide};
+use rpptx_layout::{
+    ResolvedGeometry, ResolvedLineEnd, ResolvedLineEndKind, ResolvedLineEndSize, ResolvedShape,
+    ResolvedSlide,
+};
 use rpptx_oxml::notes_parts::CT_NotesSlide;
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster};
 
@@ -188,8 +191,9 @@ fn lower_shape(shape: &ResolvedShape) -> PositionedElement {
         }
         _ => shape.line.clone(),
     };
-    let children = paths
-        .into_iter()
+    let mut children = paths
+        .iter()
+        .cloned()
         .map(|path| {
             PositionedElement::Path(PathElement {
                 path,
@@ -197,13 +201,255 @@ fn lower_shape(shape: &ResolvedShape) -> PositionedElement {
                 stroke: stroke.clone(),
             })
         })
-        .collect();
+        .collect::<Vec<_>>();
+    if let Some(line) = &shape.line {
+        let (head_tangent, tail_tangent) = endpoint_tangents(&paths);
+        if let Some(path) = shape
+            .head_end
+            .as_ref()
+            .zip(head_tangent)
+            .and_then(|(end, tangent)| line_end_path(end, tangent, line.width))
+        {
+            children.push(filled_line_end(path, &line.paint));
+        }
+        if let Some(path) = shape
+            .tail_end
+            .as_ref()
+            .zip(tail_tangent)
+            .and_then(|(end, tangent)| line_end_path(end, tangent, line.width))
+        {
+            children.push(filled_line_end(path, &line.paint));
+        }
+    }
     PositionedElement::Group(GroupElement {
         transform: shape_transform(shape),
         clip: None,
         opacity: 1.0,
         effects: Vec::new(),
         children,
+    })
+}
+
+#[derive(Clone, Copy)]
+struct EndpointTangent {
+    point: Point,
+    outward: Point,
+}
+
+fn endpoint_tangents(paths: &[Path]) -> (Option<EndpointTangent>, Option<EndpointTangent>) {
+    let mut head = None;
+    let mut tail = None;
+    for path in paths {
+        let mut current = None;
+        let mut subpath_start = None;
+        for command in &path.commands {
+            match *command {
+                PathCommand::MoveTo(point) => {
+                    current = Some(point);
+                    subpath_start = Some(point);
+                }
+                PathCommand::LineTo(to) => {
+                    if let Some(from) = current
+                        && let Some(direction) = unit_direction(from, to)
+                    {
+                        head.get_or_insert(EndpointTangent {
+                            point: from,
+                            outward: Point {
+                                x: -direction.x,
+                                y: -direction.y,
+                            },
+                        });
+                        tail = Some(EndpointTangent {
+                            point: to,
+                            outward: direction,
+                        });
+                    }
+                    current = Some(to);
+                }
+                PathCommand::CurveTo { c1, c2, to } => {
+                    if let Some(from) = current {
+                        let start_direction = [c1, c2, to]
+                            .into_iter()
+                            .find_map(|candidate| unit_direction(from, candidate));
+                        let end_direction = [c2, c1, from]
+                            .into_iter()
+                            .find_map(|candidate| unit_direction(candidate, to));
+                        if let Some(direction) = start_direction {
+                            head.get_or_insert(EndpointTangent {
+                                point: from,
+                                outward: Point {
+                                    x: -direction.x,
+                                    y: -direction.y,
+                                },
+                            });
+                        }
+                        if let Some(direction) = end_direction {
+                            tail = Some(EndpointTangent {
+                                point: to,
+                                outward: direction,
+                            });
+                        }
+                    }
+                    current = Some(to);
+                }
+                PathCommand::Close => {
+                    if let (Some(from), Some(to)) = (current, subpath_start)
+                        && let Some(direction) = unit_direction(from, to)
+                    {
+                        head.get_or_insert(EndpointTangent {
+                            point: from,
+                            outward: Point {
+                                x: -direction.x,
+                                y: -direction.y,
+                            },
+                        });
+                        tail = Some(EndpointTangent {
+                            point: to,
+                            outward: direction,
+                        });
+                    }
+                    current = subpath_start;
+                }
+            }
+        }
+    }
+    (head, tail)
+}
+
+fn unit_direction(from: Point, to: Point) -> Option<Point> {
+    let dx = to.x - from.x;
+    let dy = to.y - from.y;
+    let length = dx.hypot(dy);
+    (length.is_finite() && length > 1.0e-10).then_some(Point {
+        x: dx / length,
+        y: dy / length,
+    })
+}
+
+fn line_end_path(
+    end: &ResolvedLineEnd,
+    tangent: EndpointTangent,
+    stroke_width: f64,
+) -> Option<Path> {
+    if !stroke_width.is_finite() || stroke_width <= 0.0 {
+        return None;
+    }
+    let width = line_end_factor(end.width) * stroke_width;
+    let length = line_end_factor(end.length) * stroke_width;
+    let point = |along: f64, across: f64| Point {
+        x: tangent.point.x + tangent.outward.x * along - tangent.outward.y * across,
+        y: tangent.point.y + tangent.outward.y * along + tangent.outward.x * across,
+    };
+    let path = match end.kind {
+        ResolvedLineEndKind::Triangle => closed_polygon(vec![
+            point(0.0, 0.0),
+            point(-length, width / 2.0),
+            point(-length, -width / 2.0),
+        ]),
+        ResolvedLineEndKind::Stealth => closed_polygon(vec![
+            point(0.0, 0.0),
+            point(-length, width / 2.0),
+            point(-length / 2.0, 0.0),
+            point(-length, -width / 2.0),
+        ]),
+        ResolvedLineEndKind::Diamond => closed_polygon(vec![
+            point(0.0, 0.0),
+            point(-length / 2.0, width / 2.0),
+            point(-length, 0.0),
+            point(-length / 2.0, -width / 2.0),
+        ]),
+        ResolvedLineEndKind::Oval => oval_line_end(&point, width, length),
+        ResolvedLineEndKind::Arrow => {
+            let arm = stroke_width.min(width / 2.0);
+            closed_polygon(vec![
+                point(0.0, 0.0),
+                point(-length, width / 2.0),
+                point(-length, width / 2.0 - arm),
+                point(-arm, 0.0),
+                point(-length, -width / 2.0 + arm),
+                point(-length, -width / 2.0),
+            ])
+        }
+    };
+    path_is_finite(&path).then_some(path)
+}
+
+fn line_end_factor(size: ResolvedLineEndSize) -> f64 {
+    match size {
+        ResolvedLineEndSize::Small => 2.0,
+        ResolvedLineEndSize::Medium => 3.0,
+        ResolvedLineEndSize::Large => 5.0,
+    }
+}
+
+fn closed_polygon(points: Vec<Point>) -> Path {
+    let mut points = points.into_iter();
+    let mut commands = points
+        .next()
+        .map(PathCommand::MoveTo)
+        .into_iter()
+        .collect::<Vec<_>>();
+    commands.extend(points.map(PathCommand::LineTo));
+    commands.push(PathCommand::Close);
+    Path {
+        commands,
+        fill_rule: oxml_layout::FillRule::NonZero,
+    }
+}
+
+fn oval_line_end(point: &impl Fn(f64, f64) -> Point, width: f64, length: f64) -> Path {
+    const KAPPA: f64 = 0.552_284_749_830_793_6;
+    let rx = length / 2.0;
+    let ry = width / 2.0;
+    let center = -rx;
+    Path {
+        commands: vec![
+            PathCommand::MoveTo(point(0.0, 0.0)),
+            PathCommand::CurveTo {
+                c1: point(0.0, KAPPA * ry),
+                c2: point(center + KAPPA * rx, ry),
+                to: point(center, ry),
+            },
+            PathCommand::CurveTo {
+                c1: point(center - KAPPA * rx, ry),
+                c2: point(-length, KAPPA * ry),
+                to: point(-length, 0.0),
+            },
+            PathCommand::CurveTo {
+                c1: point(-length, -KAPPA * ry),
+                c2: point(center - KAPPA * rx, -ry),
+                to: point(center, -ry),
+            },
+            PathCommand::CurveTo {
+                c1: point(center + KAPPA * rx, -ry),
+                c2: point(0.0, -KAPPA * ry),
+                to: point(0.0, 0.0),
+            },
+            PathCommand::Close,
+        ],
+        fill_rule: oxml_layout::FillRule::NonZero,
+    }
+}
+
+fn path_is_finite(path: &Path) -> bool {
+    path.commands.iter().all(|command| match command {
+        PathCommand::MoveTo(point) | PathCommand::LineTo(point) => point_is_finite(*point),
+        PathCommand::CurveTo { c1, c2, to } => {
+            point_is_finite(*c1) && point_is_finite(*c2) && point_is_finite(*to)
+        }
+        PathCommand::Close => true,
+    })
+}
+
+fn point_is_finite(point: Point) -> bool {
+    point.x.is_finite() && point.y.is_finite()
+}
+
+fn filled_line_end(path: Path, paint: &Paint) -> PositionedElement {
+    PositionedElement::Path(PathElement {
+        path,
+        fill: Some(paint.clone()),
+        stroke: None,
     })
 }
 
@@ -309,6 +555,8 @@ mod tests {
             geometry,
             fill,
             line,
+            head_end: None,
+            tail_end: None,
             shadow: None,
             content: ResolvedContent::None,
             unsupported: None,
@@ -728,6 +976,163 @@ mod tests {
             path.stroke,
             Some(Stroke::new(Paint::Solid(Color::BLACK), 1.0))
         );
+    }
+
+    #[test]
+    fn triangular_tail_end_emits_an_extra_filled_path() {
+        let paint = Paint::Solid(color(1.0, 0.0, 0.0));
+        let mut arrow = shape(
+            Rect {
+                x: 2.0,
+                y: 3.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            ResolvedGeometry::Custom {
+                paths: vec![open_line(
+                    Point { x: 0.0, y: 5.0 },
+                    Point { x: 10.0, y: 5.0 },
+                )],
+                text_rect: None,
+            },
+            None,
+            Some(Stroke::new(paint.clone(), 2.0)),
+        );
+        arrow.tail_end = Some(line_end(ResolvedLineEndKind::Triangle));
+
+        let layout = layout_presentation(&render_input(vec![slide((20.0, 20.0), vec![arrow])]))
+            .expect("lower triangular tail");
+        let group = only_group(&layout.pages[0].elements[0]);
+        assert_eq!(group.children.len(), 2);
+        let PositionedElement::Path(end) = &group.children[1] else {
+            panic!("tail end should lower to a path");
+        };
+        assert_eq!(end.fill, Some(paint));
+        assert_eq!(end.stroke, None);
+        assert!(matches!(end.path.commands.last(), Some(PathCommand::Close)));
+        assert_eq!(
+            end.path.commands.first(),
+            Some(&PathCommand::MoveTo(Point { x: 10.0, y: 5.0 }))
+        );
+
+        let png =
+            oxml_pdf::render_page_to_png(&layout, 0, 72.0).expect("rasterise triangular tail");
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).expect("decode triangular tail");
+        let endpoint_pixel = pixmap.pixel(7, 6).expect("sample lies inside page");
+        assert_eq!(
+            (
+                endpoint_pixel.red(),
+                endpoint_pixel.green(),
+                endpoint_pixel.blue()
+            ),
+            (255, 0, 0)
+        );
+    }
+
+    #[test]
+    fn head_end_uses_the_reversed_start_tangent() {
+        let mut arrow = shape(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 10.0,
+            },
+            ResolvedGeometry::Custom {
+                paths: vec![open_line(
+                    Point { x: 5.0, y: 5.0 },
+                    Point { x: 15.0, y: 5.0 },
+                )],
+                text_rect: None,
+            },
+            None,
+            Some(Stroke::new(Paint::Solid(Color::BLACK), 2.0)),
+        );
+        arrow.head_end = Some(line_end(ResolvedLineEndKind::Triangle));
+        arrow.tail_end = Some(line_end(ResolvedLineEndKind::Triangle));
+
+        let page = layout_slide(&render_input(vec![slide((20.0, 10.0), vec![arrow])]), 0)
+            .expect("lower opposite ends");
+        let group = only_group(&page.elements[0]);
+        let PositionedElement::Path(head) = &group.children[1] else {
+            panic!("head end should be a path");
+        };
+        let PositionedElement::Path(tail) = &group.children[2] else {
+            panic!("tail end should be a path");
+        };
+        assert_eq!(
+            head.path.commands[1],
+            PathCommand::LineTo(Point { x: 11.0, y: 2.0 })
+        );
+        assert_eq!(
+            tail.path.commands[1],
+            PathCommand::LineTo(Point { x: 9.0, y: 8.0 })
+        );
+    }
+
+    #[test]
+    fn all_supported_line_end_kinds_produce_finite_geometry() {
+        let tangent = EndpointTangent {
+            point: Point { x: 10.0, y: 5.0 },
+            outward: Point { x: 1.0, y: 0.0 },
+        };
+        for kind in [
+            ResolvedLineEndKind::Triangle,
+            ResolvedLineEndKind::Stealth,
+            ResolvedLineEndKind::Diamond,
+            ResolvedLineEndKind::Oval,
+            ResolvedLineEndKind::Arrow,
+        ] {
+            let path = line_end_path(&line_end(kind), tangent, 2.0)
+                .expect("supported endpoint should produce geometry");
+            assert!(path_is_finite(&path));
+            assert!(matches!(path.commands.last(), Some(PathCommand::Close)));
+            let bounds = path.bounds().expect("endpoint should have bounds");
+            assert!(bounds.x >= 4.0 && bounds.x + bounds.width <= 10.0);
+            assert!(bounds.y >= 2.0 && bounds.y + bounds.height <= 8.0);
+        }
+        assert_eq!(line_end_factor(ResolvedLineEndSize::Small), 2.0);
+        assert_eq!(line_end_factor(ResolvedLineEndSize::Medium), 3.0);
+        assert_eq!(line_end_factor(ResolvedLineEndSize::Large), 5.0);
+    }
+
+    #[test]
+    fn zero_length_segment_omits_arrowhead_without_panicking() {
+        let point = Point { x: 5.0, y: 5.0 };
+        let mut arrow = shape(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            ResolvedGeometry::Custom {
+                paths: vec![open_line(point, point)],
+                text_rect: None,
+            },
+            None,
+            Some(Stroke::new(Paint::Solid(Color::BLACK), 2.0)),
+        );
+        arrow.tail_end = Some(line_end(ResolvedLineEndKind::Triangle));
+
+        let page = layout_slide(&render_input(vec![slide((10.0, 10.0), vec![arrow])]), 0)
+            .expect("lower zero-length line");
+        assert_eq!(only_group(&page.elements[0]).children.len(), 1);
+    }
+
+    fn open_line(from: Point, to: Point) -> Path {
+        Path {
+            commands: vec![PathCommand::MoveTo(from), PathCommand::LineTo(to)],
+            fill_rule: FillRule::NonZero,
+        }
+    }
+
+    fn line_end(kind: ResolvedLineEndKind) -> ResolvedLineEnd {
+        ResolvedLineEnd {
+            kind,
+            width: ResolvedLineEndSize::Medium,
+            length: ResolvedLineEndSize::Medium,
+        }
     }
 
     #[test]

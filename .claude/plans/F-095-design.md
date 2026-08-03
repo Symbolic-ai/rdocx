@@ -1,6 +1,6 @@
 # F-095, Arrowheads
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S23
 **Size**: S
 **Depends on**: F-093
@@ -89,12 +89,12 @@ PowerPoint crates.
 
 ## Implementation checklist
 
-- [ ] Add neutral resolved line-end values without exposing DrawingML types.
-- [ ] Preserve inherited endpoint kind and dimensions during line resolution.
-- [ ] Derive stable start and end tangents from concrete paths.
-- [ ] Lower supported ends into additional filled paths using stroke paint.
-- [ ] Prove triangle tail, direction, all kinds, and degenerate safety.
-- [ ] Reconcile the HLD output contract with the approved narrow amendment.
+- [x] Add neutral resolved line-end values without exposing DrawingML types.
+- [x] Preserve inherited endpoint kind and dimensions during line resolution.
+- [x] Derive stable start and end tangents from concrete paths.
+- [x] Lower supported ends into additional filled paths using stroke paint.
+- [x] Prove triangle tail, direction, all kinds, and degenerate safety.
+- [x] Reconcile the HLD output contract with the approved narrow amendment.
 
 ## Open questions
 

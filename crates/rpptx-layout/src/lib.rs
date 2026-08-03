@@ -37,10 +37,39 @@ pub struct ResolvedShape {
     pub geometry: ResolvedGeometry,
     pub fill: Option<Paint>,
     pub line: Option<Stroke>,
+    pub head_end: Option<ResolvedLineEnd>,
+    pub tail_end: Option<ResolvedLineEnd>,
     pub shadow: Option<Effect>,
     pub content: ResolvedContent,
     /// Stable fallback category when the renderer cannot reproduce the source.
     pub unsupported: Option<&'static str>,
+}
+
+/// One source-neutral line endpoint ready for renderer geometry lowering.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolvedLineEnd {
+    pub kind: ResolvedLineEndKind,
+    pub width: ResolvedLineEndSize,
+    pub length: ResolvedLineEndSize,
+}
+
+/// A visible line endpoint kind. DrawingML `none` resolves to no endpoint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolvedLineEndKind {
+    Triangle,
+    Stealth,
+    Diamond,
+    Oval,
+    Arrow,
+}
+
+/// A line endpoint width or length multiplier category.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ResolvedLineEndSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
 }
 
 /// Concrete geometry ready for the renderer, or a visible bounds fallback.

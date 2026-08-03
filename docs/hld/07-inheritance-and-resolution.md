@@ -29,11 +29,22 @@ pub struct ResolvedShape {
     pub geometry: ResolvedGeometry,
     pub fill: Option<Paint>,
     pub line: Option<Stroke>,
+    pub head_end: Option<ResolvedLineEnd>,
+    pub tail_end: Option<ResolvedLineEnd>,
     pub shadow: Option<Effect>,
     pub content: ResolvedContent,
     /// Set when we fell back: unknown preset, SmartArt, chart, ink.
     pub unsupported: Option<&'static str>,
 }
+
+pub struct ResolvedLineEnd {
+    pub kind: ResolvedLineEndKind,
+    pub width: ResolvedLineEndSize,
+    pub length: ResolvedLineEndSize,
+}
+
+pub enum ResolvedLineEndKind { Triangle, Stealth, Diamond, Oval, Arrow }
+pub enum ResolvedLineEndSize { Small, Medium, Large }
 
 pub enum ResolvedGeometry {
     Rectangle,
@@ -52,6 +63,10 @@ pub enum ResolvedContent {
 Every theme reference, colour transform, inherited property and list-style level
 is **already collapsed to a concrete value**. The renderer consumes this and
 nothing else, and never sees a `p:` or `a:` type.
+
+Line endpoint kinds and sizes cross the boundary as source-neutral values on
+`ResolvedShape`. A missing kind or DrawingML `none` becomes no endpoint.
+Missing width and length use the DrawingML medium default.
 
 `ResolveCtx::resolve_slide` owns this boundary. It converts EMU coordinates to
 points, resolves colours through the effective colour map and theme, evaluates

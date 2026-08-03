@@ -124,8 +124,14 @@ components leave that group's contribution as identity, while a zero child
 extent cannot produce a non-finite matrix.
 
 Rotated text, rotated pictures, rotated gradients and clipped picture frames all
-follow for free. Arrowheads lower into extra filled `Path` elements, so they
-need no backend support at all.
+follow for free. Arrowheads lower into extra closed, filled `Path` elements
+using the line paint, so they need no backend support. The renderer selects the
+first and last non-degenerate path tangents and reverses the first tangent for a
+head endpoint. Small, medium and large endpoint width or length use 2, 3 and 5
+times the stroke width. Triangle has a tip and straight base, stealth adds a
+half-length inset notch, diamond places its widest points at half length, oval
+uses four cubic segments, and arrow is a closed chevron with one-stroke-wide
+arms. Degenerate geometry emits no endpoint.
 
 ## The recursion hazard
 

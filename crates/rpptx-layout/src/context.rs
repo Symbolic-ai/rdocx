@@ -7,7 +7,8 @@ use oxml_drawing::effect::CT_OuterShadowEffect;
 use oxml_drawing::fill::{Fill, GradientGeometry};
 use oxml_drawing::geometry::EvaluatedPathCommand;
 use oxml_drawing::line::{
-    CT_LineProperties, LineCap as DrawingLineCap, LineDash, LineJoin as DrawingLineJoin,
+    CT_LineProperties, LineCap as DrawingLineCap, LineDash, LineEnd, LineEndSize, LineEndType,
+    LineJoin as DrawingLineJoin,
 };
 use oxml_drawing::text::{
     CT_TextBody, CT_TextBodyProperties, CT_TextCharacterProperties, CT_TextListStyle,
@@ -30,9 +31,10 @@ use crate::ResolveError;
 use crate::text::EffectiveListStyle;
 use crate::{
     ParagraphAlignment, ResolvedAutofit, ResolvedBullet, ResolvedBulletSize, ResolvedContent,
-    ResolvedGeometry, ResolvedParagraph, ResolvedRunStyle, ResolvedShape, ResolvedSlide,
-    ResolvedTable, ResolvedTableCell, ResolvedTableRow, ResolvedTextBody, ResolvedTextRun,
-    ResolvedTextSpacing, TextAnchor, TextDirection, TextInsets,
+    ResolvedGeometry, ResolvedLineEnd, ResolvedLineEndKind, ResolvedLineEndSize, ResolvedParagraph,
+    ResolvedRunStyle, ResolvedShape, ResolvedSlide, ResolvedTable, ResolvedTableCell,
+    ResolvedTableRow, ResolvedTextBody, ResolvedTextRun, ResolvedTextSpacing, TextAnchor,
+    TextDirection, TextInsets,
 };
 
 /// The producer part that supplied the effective background.
@@ -330,6 +332,8 @@ impl<'a> ResolveCtx<'a> {
                     geometry: ResolvedGeometry::Rectangle,
                     fill: None,
                     line: None,
+                    head_end: None,
+                    tail_end: None,
                     shadow: None,
                     content: ResolvedContent::None,
                     unsupported: Some(category),
@@ -370,6 +374,8 @@ impl<'a> ResolveCtx<'a> {
                     },
                     fill: None,
                     line: None,
+                    head_end: None,
+                    tail_end: None,
                     shadow: None,
                     content,
                     unsupported,
@@ -395,6 +401,12 @@ impl<'a> ResolveCtx<'a> {
                     .map(|line| self.concrete_line(line, (bounds.width, bounds.height)))
                     .transpose()?
                     .flatten();
+                let (head_end, tail_end) = connector
+                    .shape_properties
+                    .line
+                    .as_ref()
+                    .map(resolved_line_ends)
+                    .unwrap_or((None, None));
                 let unsupported = fill_unsupported.or(Some("connector geometry"));
                 diagnostics.push(Diagnostic {
                     message: format!(
@@ -411,6 +423,8 @@ impl<'a> ResolveCtx<'a> {
                     geometry: ResolvedGeometry::BoundsFallback,
                     fill,
                     line,
+                    head_end,
+                    tail_end,
                     shadow: None,
                     content: ResolvedContent::None,
                     unsupported,
@@ -444,6 +458,11 @@ impl<'a> ResolveCtx<'a> {
             .map(|line| self.concrete_line(line, (bounds.width, bounds.height)))
             .transpose()?
             .flatten();
+        let (head_end, tail_end) = effective
+            .line
+            .as_ref()
+            .map(resolved_line_ends)
+            .unwrap_or((None, None));
         let shadow = effective
             .effects
             .as_ref()
@@ -515,10 +534,45 @@ impl<'a> ResolveCtx<'a> {
             geometry,
             fill,
             line,
+            head_end,
+            tail_end,
             shadow,
             content,
             unsupported: fill_unsupported.or(geometry_unsupported),
         }))
+    }
+}
+
+fn resolved_line_ends(
+    line: &CT_LineProperties,
+) -> (Option<ResolvedLineEnd>, Option<ResolvedLineEnd>) {
+    (
+        line.head_end.as_ref().and_then(resolved_line_end),
+        line.tail_end.as_ref().and_then(resolved_line_end),
+    )
+}
+
+fn resolved_line_end(end: &LineEnd) -> Option<ResolvedLineEnd> {
+    let kind = match end.kind? {
+        LineEndType::None => return None,
+        LineEndType::Triangle => ResolvedLineEndKind::Triangle,
+        LineEndType::Stealth => ResolvedLineEndKind::Stealth,
+        LineEndType::Diamond => ResolvedLineEndKind::Diamond,
+        LineEndType::Oval => ResolvedLineEndKind::Oval,
+        LineEndType::Arrow => ResolvedLineEndKind::Arrow,
+    };
+    Some(ResolvedLineEnd {
+        kind,
+        width: resolved_line_end_size(end.width),
+        length: resolved_line_end_size(end.length),
+    })
+}
+
+fn resolved_line_end_size(size: Option<LineEndSize>) -> ResolvedLineEndSize {
+    match size.unwrap_or(LineEndSize::Medium) {
+        LineEndSize::Small => ResolvedLineEndSize::Small,
+        LineEndSize::Medium => ResolvedLineEndSize::Medium,
+        LineEndSize::Large => ResolvedLineEndSize::Large,
     }
 }
 
@@ -1609,8 +1663,8 @@ mod tests {
     use super::{BackgroundSource, FlattenedItem, FlattenedSource, ResolveCtx, transform_values};
     use crate::{
         ResolvedAutofit, ResolvedBullet, ResolvedBulletSize, ResolvedContent, ResolvedGeometry,
-        ResolvedSlide, ResolvedTextRun, ResolvedTextSpacing, TextAnchor as ResolvedTextAnchor,
-        TextDirection,
+        ResolvedLineEnd, ResolvedLineEndKind, ResolvedLineEndSize, ResolvedSlide, ResolvedTextRun,
+        ResolvedTextSpacing, TextAnchor as ResolvedTextAnchor, TextDirection,
     };
     use oxml_layout::{Color, Effect, Paint, PathCommand, Point};
 
@@ -2097,6 +2151,35 @@ mod tests {
             assert!(!type_name.contains("rpptx_oxml"));
             assert!(!type_name.contains("oxml_drawing"));
         }
+    }
+
+    #[test]
+    fn line_end_resolution_keeps_kind_width_and_length() {
+        let properties = format!(
+            r#"{}<a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln w="25400"><a:solidFill><a:prstClr val="black"/></a:solidFill><a:headEnd type="diamond" w="sm"/><a:tailEnd type="triangle" len="lg"/></a:ln>"#,
+            transform(0)
+        );
+        let fixture = Fixture::new(&shape_with_details(None, None, &properties, None), "", "");
+
+        let resolved = fixture.context().resolve_slide((720.0, 540.0)).unwrap();
+        let shape = &resolved.shapes[0];
+        assert_eq!(
+            shape.head_end,
+            Some(ResolvedLineEnd {
+                kind: ResolvedLineEndKind::Diamond,
+                width: ResolvedLineEndSize::Small,
+                length: ResolvedLineEndSize::Medium,
+            })
+        );
+        assert_eq!(
+            shape.tail_end,
+            Some(ResolvedLineEnd {
+                kind: ResolvedLineEndKind::Triangle,
+                width: ResolvedLineEndSize::Medium,
+                length: ResolvedLineEndSize::Large,
+            })
+        );
+        assert_eq!(shape.line.as_ref().map(|line| line.width), Some(2.0));
     }
 
     #[test]
