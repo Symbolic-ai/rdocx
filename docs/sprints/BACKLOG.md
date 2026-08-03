@@ -25,12 +25,12 @@ regenerated, never hand-edited.
 | M7, DrawingML                               | 19 | 19 | 0 | 0  |
 | M8, PresentationML                          | 14 | 14 | 0 | 0  |
 | M9, Inheritance resolver                    | 8  | 8 | 0 | 0  |
-| M10, Renderer                               | 16 | 4 | 3 | 9  |
+| M10, Renderer                               | 16 | 4 | 4 | 8  |
 | M11, Write API                              | 12 | 0 | 0 | 12 |
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **154** | **85** | **3** | **66** |
+| **Total** | **154** | **85** | **4** | **65** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -202,7 +202,7 @@ regenerated, never hand-edited.
 | F-093 | Shape geometry, fills and lines              | S23 | L | in-progress |
 | F-094 | Rotation, flips and groups                   | S23 | M | in-progress |
 | F-095 | Arrowheads                                   | S23 | S | in-progress |
-| F-096 | Pictures with crop and tile                  | S23 | M | pending |
+| F-096 | Pictures with crop and tile                  | S23 | M | in-progress |
 | F-097 | Backgrounds                                  | S23 | S | pending |
 | F-098 | Shape text layout                            | S24 | XL | pending |
 | F-099 | Bullets                                      | S24 | M | pending |

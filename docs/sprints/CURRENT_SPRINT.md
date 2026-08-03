@@ -33,7 +33,7 @@ adds shape text.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-093 | Shape geometry, fills and lines | L | in-progress | codex |
-| F-096 | Pictures with crop and tile | M | pending | - |
+| F-096 | Pictures with crop and tile | M | in-progress | codex |
 | F-097 | Backgrounds | S | pending | - |
 | F-094 | Rotation, flips and groups | M | in-progress | codex |
 | F-095 | Arrowheads | S | in-progress | codex |
