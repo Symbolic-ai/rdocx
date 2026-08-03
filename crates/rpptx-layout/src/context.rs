@@ -450,21 +450,44 @@ impl<'a> ResolveCtx<'a> {
             .and_then(|effects| effects.outer_shadow.as_ref())
             .map(|shadow| self.concrete_shadow(shadow))
             .transpose()?;
-        let (geometry, geometry_unsupported) =
-            if let Some(custom) = &shape.shape_properties.custom_geometry {
-                match self.concrete_custom_geometry(custom, (bounds.width, bounds.height)) {
-                    Ok(geometry) => (geometry, None),
-                    Err(_) => (
-                        ResolvedGeometry::BoundsFallback,
-                        Some("custom geometry evaluation"),
-                    ),
-                }
-            } else {
-                (
+        let (geometry, geometry_unsupported, geometry_diagnostic) = if let Some(custom) =
+            &shape.shape_properties.custom_geometry
+        {
+            match self.concrete_custom_geometry(custom, (bounds.width, bounds.height)) {
+                Ok(geometry) => (geometry, None, None),
+                Err(_) => (
                     ResolvedGeometry::BoundsFallback,
-                    Some("preset geometry pending evaluation"),
-                )
-            };
+                    Some("custom geometry evaluation"),
+                    None,
+                ),
+            }
+        } else if let Some(preset) = &shape.shape_properties.preset_geometry {
+            match self.concrete_preset_geometry(preset, (bounds.width, bounds.height)) {
+                Ok(Some(geometry)) => (geometry, None, None),
+                Ok(None) => (
+                    ResolvedGeometry::BoundsFallback,
+                    Some("unknown preset geometry"),
+                    Some(format!(
+                        "unknown preset geometry `{}` retained as shape bounds",
+                        preset.preset
+                    )),
+                ),
+                Err(error) => (
+                    ResolvedGeometry::BoundsFallback,
+                    Some("preset geometry evaluation"),
+                    Some(format!(
+                        "preset geometry `{}` evaluation failed: {error}; retained as shape bounds",
+                        preset.preset
+                    )),
+                ),
+            }
+        } else {
+            (
+                ResolvedGeometry::BoundsFallback,
+                Some("preset geometry pending evaluation"),
+                None,
+            )
+        };
         let content = shape
             .text_body
             .as_ref()
@@ -479,7 +502,8 @@ impl<'a> ResolveCtx<'a> {
         }
         if let Some(category) = geometry_unsupported {
             diagnostics.push(Diagnostic {
-                message: format!("unsupported {category} retained as shape bounds"),
+                message: geometry_diagnostic
+                    .unwrap_or_else(|| format!("unsupported {category} retained as shape bounds")),
             });
         }
         Ok(Some(ResolvedShape {
@@ -745,6 +769,39 @@ impl ResolveCtx<'_> {
             height: (rectangle.bottom - rectangle.top) * text_scale_y,
         });
         Ok(ResolvedGeometry::Custom { paths, text_rect })
+    }
+
+    fn concrete_preset_geometry(
+        &self,
+        geometry: &oxml_drawing::geometry::CT_PresetGeometry2D,
+        size: (f64, f64),
+    ) -> Result<Option<ResolvedGeometry>, ResolveError> {
+        let evaluated = geometry
+            .evaluate(size)
+            .map_err(|error| ResolveError::ConcreteValue {
+                kind: "preset geometry",
+                detail: error.to_string(),
+            })?;
+        Ok(evaluated.map(|evaluated| {
+            let paths = evaluated
+                .paths
+                .into_iter()
+                .map(|commands| Path {
+                    commands: commands
+                        .into_iter()
+                        .map(|command| concrete_path_command(command, 1.0, 1.0))
+                        .collect(),
+                    fill_rule: FillRule::NonZero,
+                })
+                .collect();
+            let text_rect = evaluated.text_rectangle.map(|rectangle| Rect {
+                x: rectangle.left,
+                y: rectangle.top,
+                width: rectangle.right - rectangle.left,
+                height: rectangle.bottom - rectangle.top,
+            });
+            ResolvedGeometry::Custom { paths, text_rect }
+        }))
     }
 
     fn resolve_text_body(
@@ -1549,10 +1606,11 @@ mod tests {
     use rpptx_oxml::shape_tree::{CT_Shape, ShapeTreeChild};
     use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind};
 
-    use super::{BackgroundSource, FlattenedItem, FlattenedSource, ResolveCtx};
+    use super::{BackgroundSource, FlattenedItem, FlattenedSource, ResolveCtx, transform_values};
     use crate::{
         ResolvedAutofit, ResolvedBullet, ResolvedBulletSize, ResolvedContent, ResolvedGeometry,
-        ResolvedSlide, ResolvedTextSpacing, TextAnchor as ResolvedTextAnchor, TextDirection,
+        ResolvedSlide, ResolvedTextRun, ResolvedTextSpacing, TextAnchor as ResolvedTextAnchor,
+        TextDirection,
     };
     use oxml_layout::{Color, Effect, Paint, PathCommand, Point};
 
@@ -2112,6 +2170,33 @@ mod tests {
     }
 
     #[test]
+    fn unknown_preset_keeps_bounds_text_and_diagnostic() {
+        let shape = format!(
+            "<p:sp><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>{}<a:prstGeom prst=\"futureBurst\"/></p:spPr><p:txBody><a:bodyPr/><a:p><a:r><a:t>keep this text</a:t></a:r></a:p></p:txBody></p:sp>",
+            transform(0)
+        );
+        let fixture = Fixture::new(&shape, "", "");
+
+        let resolved = fixture.context().resolve_slide((720.0, 540.0)).unwrap();
+        let shape = &resolved.shapes[0];
+        assert_eq!(shape.geometry, ResolvedGeometry::BoundsFallback);
+        assert_eq!(shape.bounds.width, 100.0 / 12_700.0);
+        assert_eq!(shape.bounds.height, 100.0 / 12_700.0);
+        assert_eq!(shape.unsupported, Some("unknown preset geometry"));
+        let ResolvedContent::Text(text) = &shape.content else {
+            panic!("unknown preset lost its text body");
+        };
+        assert!(matches!(
+            &text.paragraphs[0].runs[0],
+            ResolvedTextRun::Text { text, .. } if text == "keep this text"
+        ));
+        assert!(resolved.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("unknown preset geometry")
+                && diagnostic.message.contains("futureBurst")
+        }));
+    }
+
+    #[test]
     fn preset_black_and_white_resolve_to_concrete_paint() {
         let black = format!(
             "{}<a:solidFill><a:prstClr val=\"black\"/></a:solidFill>",
@@ -2319,6 +2404,25 @@ mod tests {
         assert_eq!(stats.resolved + stats.contextual_errors, stats.slides);
     }
 
+    #[test]
+    fn all_corpus_preset_geometries_evaluate_or_fallback() {
+        let stats = resolve_pinned_corpus();
+
+        assert_eq!(stats.decks, EXPECTED_CORPUS_DECKS);
+        assert_eq!(stats.contextual_errors, 0, "{}", stats.errors.join("\n"));
+        assert!(
+            stats.preset_inputs > 0,
+            "corpus exercised no preset geometry"
+        );
+        assert_eq!(stats.preset_errors, 0, "{}", stats.errors.join("\n"));
+        assert_eq!(
+            stats.preset_inputs,
+            stats.preset_evaluated + stats.preset_unknown,
+            "not every corpus preset produced geometry or a named unknown fallback"
+        );
+        assert_eq!(stats.preset_fallbacks, stats.preset_unknown);
+    }
+
     #[derive(Default)]
     struct CorpusResolveStats {
         decks: usize,
@@ -2326,6 +2430,11 @@ mod tests {
         resolved: usize,
         contextual_errors: usize,
         theme_references: usize,
+        preset_inputs: usize,
+        preset_evaluated: usize,
+        preset_unknown: usize,
+        preset_errors: usize,
+        preset_fallbacks: usize,
         errors: Vec<String>,
     }
 
@@ -2401,6 +2510,39 @@ mod tests {
                     &slide,
                     &default_text_style,
                 );
+                for item in context.flatten() {
+                    let FlattenedItem::Shape {
+                        child: ShapeTreeChild::Shape(shape),
+                        ..
+                    } = item
+                    else {
+                        continue;
+                    };
+                    if shape.shape_properties.custom_geometry.is_some() {
+                        continue;
+                    }
+                    let Some(preset) = shape.shape_properties.preset_geometry.as_ref() else {
+                        continue;
+                    };
+                    let Some((bounds, _, _, _)) =
+                        transform_values(context.effective_xfrm(shape).as_ref())
+                    else {
+                        continue;
+                    };
+                    stats.preset_inputs += 1;
+                    match context.concrete_preset_geometry(preset, (bounds.width, bounds.height)) {
+                        Ok(Some(_)) => stats.preset_evaluated += 1,
+                        Ok(None) => stats.preset_unknown += 1,
+                        Err(error) => {
+                            stats.preset_errors += 1;
+                            stats.errors.push(format!(
+                                "{} {slide_part}: preset {}: {error}",
+                                path.display(),
+                                preset.preset
+                            ));
+                        }
+                    }
+                }
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     context.resolve_slide(size)
                 }))
@@ -2411,6 +2553,16 @@ mod tests {
                         stats.theme_references += ["schemeClr", "sysClr", "scrgbClr", "prstClr"]
                             .into_iter()
                             .filter(|marker| debug.contains(marker))
+                            .count();
+                        stats.preset_fallbacks += resolved
+                            .shapes
+                            .iter()
+                            .filter(|shape| {
+                                matches!(
+                                    shape.unsupported,
+                                    Some("unknown preset geometry" | "preset geometry evaluation")
+                                )
+                            })
                             .count();
                         stats.resolved += 1;
                     }

@@ -12,6 +12,41 @@ from scripts import sprint_workflow as workflow
 
 
 class SprintWorkflowTests(unittest.TestCase):
+    def test_preset_geometry_provenance_is_recorded(self) -> None:
+        rendering = (workflow.REPO / "docs/hld/08-rendering-spec.md").read_text(
+            encoding="utf-8"
+        )
+        risks = (
+            workflow.REPO / "docs/hld/13-risks-and-open-questions.md"
+        ).read_text(encoding="utf-8")
+        decision = rendering + risks
+
+        self.assertIn("ECMA-376-1_5th_edition_december_2016.zip", decision)
+        self.assertIn(
+            "OfficeOpenXML-DrawingMLGeometries.zip/presetShapeDefinitions.xml",
+            decision,
+        )
+        self.assertIn("187 preset shape definitions", decision)
+        self.assertIn(
+            "2f7c868d857c1e3c4b5a6068759fe0e07d77ad58377a6618d1b02ba3507b6939",
+            decision,
+        )
+        self.assertIn("Ecma software policy", decision)
+        self.assertIn("three-clause BSD", decision)
+        self.assertIn("retain the Ecma copyright notice", decision)
+
+    def test_libreoffice_preset_table_remains_rejected(self) -> None:
+        rendering = (workflow.REPO / "docs/hld/08-rendering-spec.md").read_text(
+            encoding="utf-8"
+        )
+        risks = (
+            workflow.REPO / "docs/hld/13-risks-and-open-questions.md"
+        ).read_text(encoding="utf-8")
+        decision = rendering + risks
+
+        self.assertIn("LibreOffice's preset table must not be used", decision)
+        self.assertIn("MPL-2.0 file-level copyleft", decision)
+
     def test_validation_only_sprint_initialises_without_wave_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

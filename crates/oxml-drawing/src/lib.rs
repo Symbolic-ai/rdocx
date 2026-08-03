@@ -5,6 +5,7 @@ pub mod geometry;
 pub mod line;
 pub mod namespace;
 pub mod order;
+mod preset_shape_data;
 pub mod shape_props;
 pub mod style_ref;
 pub mod table;
@@ -45,7 +46,122 @@ mod table_gate_tests {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    use quick_xml::Reader;
+    use quick_xml::events::Event;
+
+    use super::geometry::CT_CustomGeometry2D;
     use super::namespace::{A_NS, A_PREFIX, PIC_NS, PIC_PREFIX};
+    use super::preset_shape_data::preset_shape_definition;
+
+    fn workspace_file(path: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(path)
+    }
+
+    fn run_generator(arguments: &[&str]) -> std::process::Output {
+        Command::new("python3")
+            .arg(workspace_file("tools/gen-presets/generate.py"))
+            .args(arguments)
+            .current_dir(workspace_file("."))
+            .output()
+            .expect("run the preset shape generator")
+    }
+
+    #[test]
+    fn generator_reproduces_checked_in_table() {
+        let output = run_generator(&["--check"]);
+        assert!(
+            output.status.success(),
+            "generator check failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn generated_table_covers_every_corpus_preset() {
+        let corpus = std::env::var_os("RDOCX_PPTX_CORPUS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| workspace_file("corpus/pptx"));
+        if !corpus.is_dir() {
+            assert_ne!(
+                std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").as_deref(),
+                Some(std::ffi::OsStr::new("1")),
+                "the pinned corpus is required but {} does not exist",
+                corpus.display()
+            );
+            eprintln!("corpus gate skipped because {} is absent", corpus.display());
+            return;
+        }
+        let corpus = corpus.to_str().expect("corpus path is UTF-8");
+        let output = run_generator(&["--check", "--corpus", corpus]);
+        assert!(
+            output.status.success(),
+            "corpus preset check failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn source_has_187_direct_definitions() {
+        let source = std::fs::read(workspace_file(
+            "tools/gen-presets/presetShapeDefinitions.xml",
+        ))
+        .expect("read the pinned official preset source");
+        let mut reader = Reader::from_reader(source.as_slice());
+        let mut buffer = Vec::new();
+        let mut depth = 0usize;
+        let mut direct_definitions = 0usize;
+        let mut names = HashSet::new();
+        loop {
+            match reader
+                .read_event_into(&mut buffer)
+                .expect("parse source XML")
+            {
+                Event::Start(element) => {
+                    if depth == 1 {
+                        direct_definitions += 1;
+                        names.insert(element.name().as_ref().to_vec());
+                    }
+                    depth += 1;
+                }
+                Event::Empty(element) if depth == 1 => {
+                    direct_definitions += 1;
+                    names.insert(element.name().as_ref().to_vec());
+                }
+                Event::End(_) => depth -= 1,
+                Event::Eof => break,
+                _ => {}
+            }
+            buffer.clear();
+        }
+        assert_eq!(direct_definitions, 187);
+        assert_eq!(names.len(), 186);
+        let source = String::from_utf8(source).expect("source XML is UTF-8");
+        let duplicates: Vec<_> = source
+            .split("<upDownArrow>")
+            .skip(1)
+            .map(|suffix| {
+                suffix
+                    .split("</upDownArrow>")
+                    .next()
+                    .expect("complete upDownArrow definition")
+            })
+            .collect();
+        assert_eq!(duplicates.len(), 2);
+        assert_eq!(duplicates[0].as_bytes(), duplicates[1].as_bytes());
+    }
+
+    #[test]
+    fn generated_lookup_has_known_and_unknown_cases() {
+        let rectangle = preset_shape_definition("rect").expect("known rectangle preset");
+        assert!(CT_CustomGeometry2D::from_xml(rectangle).is_ok());
+        assert!(preset_shape_definition("notAStandardPreset").is_none());
+    }
 
     #[test]
     fn drawingml_namespace_uris_match_the_specification() {

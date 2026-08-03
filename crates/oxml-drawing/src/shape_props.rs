@@ -11,7 +11,7 @@ use crate::effect::{
     CT_EffectList, EffectError, raw_contains_placeholder_color, raw_is_effect_dag,
 };
 use crate::fill::{Fill, FillError};
-use crate::geometry::{CT_CustomGeometry2D, GeometryError};
+use crate::geometry::{CT_CustomGeometry2D, CT_PresetGeometry2D, GeometryError};
 use crate::line::{CT_LineProperties, LineError};
 use crate::order::OrderedRawChildren;
 use crate::xfrm::{CT_Transform2D, TransformError};
@@ -105,6 +105,7 @@ pub type Result<T> = std::result::Result<T, ShapePropertiesError>;
 pub struct CT_ShapeProperties {
     pub transform: Option<CT_Transform2D>,
     pub custom_geometry: Option<CT_CustomGeometry2D>,
+    pub preset_geometry: Option<CT_PresetGeometry2D>,
     pub fill: Option<Fill>,
     pub line: Option<CT_LineProperties>,
     pub effects: Option<CT_EffectList>,
@@ -200,6 +201,9 @@ impl CT_ShapeProperties {
             b"custGeom" if self.custom_geometry.is_none() => {
                 self.custom_geometry = Some(CT_CustomGeometry2D::from_xml(raw)?);
             }
+            b"prstGeom" if self.preset_geometry.is_none() => {
+                self.preset_geometry = Some(CT_PresetGeometry2D::from_xml(raw)?);
+            }
             name if is_fill(name) && self.fill.is_none() => {
                 self.fill = Some(Fill::from_xml(raw)?);
             }
@@ -232,6 +236,7 @@ impl CT_ShapeProperties {
         push_raw_attributes(&mut start, &self.raw_attributes);
         if self.transform.is_none()
             && self.custom_geometry.is_none()
+            && self.preset_geometry.is_none()
             && self.fill.is_none()
             && self.line.is_none()
             && self.effects.is_none()
@@ -252,6 +257,11 @@ impl CT_ShapeProperties {
         }
         emit_raw(writer, self.raw_children.at(1))?;
         if let Some(geometry) = &self.custom_geometry {
+            writer
+                .get_mut()
+                .write_all(&geometry.to_xml()?)
+                .map_err(OxmlError::from)?;
+        } else if let Some(geometry) = &self.preset_geometry {
             writer
                 .get_mut()
                 .write_all(&geometry.to_xml()?)
@@ -307,7 +317,7 @@ fn is_fill(name: &[u8]) -> bool {
 fn modelled_boundary(name: &[u8]) -> usize {
     match name {
         b"xfrm" => 1,
-        b"custGeom" => 2,
+        b"custGeom" | b"prstGeom" => 2,
         name if is_fill(name) => 3,
         b"ln" => 4,
         b"effectLst" => 5,
@@ -398,6 +408,45 @@ mod tests {
         assert_eq!(
             properties.to_xml().unwrap(),
             br#"<a:spPr bwMode="gray" x:future="keep &amp; stay"/>"#
+        );
+    }
+
+    #[test]
+    fn preset_geometry_round_trips_with_unknown_children_verbatim() {
+        let xml = br#"<p:spPr><u:before/><q:prstGeom prst="trapezoid"><u:first id="1"><u:nested/></u:first><q:avLst><u:inside/><q:gd name="adj" fmla="val 50000"/></q:avLst><u:last>keep &amp; stay</u:last></q:prstGeom><u:after/></p:spPr>"#;
+        let properties = CT_ShapeProperties::from_xml(xml).unwrap();
+        let preset = properties.preset_geometry.as_ref().unwrap();
+        assert_eq!(preset.preset, "trapezoid");
+        assert_eq!(preset.adjust_values().len(), 1);
+
+        let written = String::from_utf8(properties.to_xml().unwrap()).unwrap();
+        assert!(written.starts_with("<a:spPr>"));
+        assert!(written.contains("<a:prstGeom prst=\"trapezoid\">"));
+        for raw in [
+            "<u:before/>",
+            "<u:first id=\"1\"><u:nested/></u:first>",
+            "<u:inside/>",
+            "<u:last>keep &amp; stay</u:last>",
+            "<u:after/>",
+        ] {
+            assert!(written.contains(raw), "missing raw subtree {raw}");
+        }
+        let before = written.find("<u:before/>").unwrap();
+        let preset_start = written.find("<a:prstGeom").unwrap();
+        let first = written.find("<u:first").unwrap();
+        let adjustments = written.find("<a:avLst").unwrap();
+        let inside = written.find("<u:inside/>").unwrap();
+        let guide = written.find("<a:gd ").unwrap();
+        let last = written.find("<u:last>").unwrap();
+        let preset_end = written.find("</a:prstGeom>").unwrap();
+        let after = written.find("<u:after/>").unwrap();
+        assert!(before < preset_start);
+        assert!(preset_start < first && first < adjustments);
+        assert!(adjustments < inside && inside < guide);
+        assert!(guide < last && last < preset_end && preset_end < after);
+        assert_eq!(
+            CT_ShapeProperties::from_xml(written.as_bytes()).unwrap(),
+            properties
         );
     }
 }

@@ -1,21 +1,30 @@
 # 13, Risks and open questions
 
+## Settled decisions
+
+### Preset shape definition provenance
+
+The 187 preset geometries use the official
+[ECMA-376 fifth-edition Part 1 archive](https://ecma-international.org/publications-and-standards/standards/ecma-376/),
+`ECMA-376-1_5th_edition_december_2016.zip`. The precise source is
+`OfficeOpenXML-DrawingMLGeometries.zip/presetShapeDefinitions.xml`, whose
+SHA-256 is
+`2f7c868d857c1e3c4b5a6068759fe0e07d77ad58377a6618d1b02ba3507b6939`.
+The exact count and digest are generator inputs, not advisory metadata.
+
+The [Ecma software policy](https://ecma-international.org/policies/by-ipr/ecma-international-policy-on-submission-inclusion-and-licensing-of-software/)
+classifies XML data sets as source code. Software incorporated in an Ecma
+standard is available under the policy's three-clause BSD licence. Any checked-in
+table derived from this XML must retain the Ecma copyright notice, all three
+conditions, and the disclaimer. This third-party notice does not change the
+repository's MIT OR Apache-2.0 licence.
+
+LibreOffice's preset table must not be used. Its MPL-2.0 file-level copyleft is
+outside the repository's approved licensing model. Derivation from the
+specification text remains the fallback if the official archive, count, digest,
+or notice cannot be reproduced exactly.
+
 ## Open questions, to settle before the milestone that needs them
-
-### Q1, preset shape definition provenance (blocks M10)
-
-The roughly 187 preset geometries are defined in ECMA-376 as parameterised
-paths. Three sources exist and only one is usable:
-
-- **LibreOffice's table is MPL-2.0**, which is file-level copyleft and
-  incompatible with this repository's MIT OR Apache-2.0. **Rejected.**
-- The ECMA-376 accompanying files. Licensing needs confirming.
-- Deriving the tables from the specification text, which enumerates every
-  preset's guides. Slower, but unencumbered.
-
-**Settle this before writing the generator, not after.** The guide evaluator is
-needed for `a:custGeom` regardless, so that work is never wasted whichever way
-this lands.
 
 ### Q2, PyPI name availability
 
@@ -143,6 +152,6 @@ except `document.xml` and `styles.xml`. Detailed in `10-bindings-spec.md`.
 - **That `OpcPackage` reads a `.pptx` unmodified.** Verified through
   `main_document_part()` keying off `officeDocument`. Worth an actual test in M2
   rather than continued confidence.
-- **That preset geometry is a data problem once the evaluator exists.** True
-  only if Q1 resolves favourably. If it does not, M10 grows by roughly a week
-  for a hand-derived table.
+- **That preset geometry is a data problem once the evaluator exists.** Verified
+  by the official 187-definition ECMA-376 data set. The specification-text
+  derivation remains available if the pinned source cannot be reproduced.

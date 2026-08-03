@@ -2644,3 +2644,145 @@ suppression, and footer visibility matched the remediated evidence.
 **Notes for future sessions.** Keep native visibility policy in the flattener,
 keep the Python comparison structural, and preserve explicit unsupported
 diagnostics until modelled background paint and media resolution land.
+
+### F-089, Resolve the preset geometry licensing question
+
+**Sprint.** S22
+**Completed.** 2026-08-02
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The renderer specification and risk record now identify
+the official ECMA-376 fifth-edition Part 1 electronic addendum as the permitted
+source for preset geometry definitions. They record the inner archive path,
+187-definition count, exact SHA-256, Ecma software-policy basis, and retained
+BSD three-clause notice requirement.
+
+**Non-obvious choices.** The decision permits only the official Ecma data set.
+The MPL-2.0 LibreOffice implementation table remains rejected, and derivation
+from specification text remains the fallback if the official file or notice
+cannot be reproduced exactly.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md` records the chosen
+source and generator input. `docs/hld/13-risks-and-open-questions.md` closes the
+provenance question with its licensing evidence.
+
+**Tests.** `preset_geometry_provenance_is_recorded`,
+`libreoffice_preset_table_remains_rejected`, repository prose checks, and the
+integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Retain the vendored Ecma notice with the source
+XML and generated table. Do not substitute an implementation-owned table.
+
+### F-090, Preset table generator
+
+**Sprint.** S22
+**Completed.** 2026-08-02
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `tools/gen-presets/` now vendors the permitted Ecma XML and
+licence notice and generates a checked-in Rust lookup table offline. Check mode
+verifies the exact source hash, byte-identical regeneration, all 187 direct
+definitions, 186 unique preset names, and coverage of every preset used by the
+50-deck corpus.
+
+**Non-obvious choices.** The official source repeats `upDownArrow` twice with
+byte-identical XML. The generator rejects conflicting duplicate names and
+deduplicates only this identical pair, leaving a deterministic 186-key table.
+
+**Deviations from the design plan.** Source inspection corrected the planned
+187 unique names to 187 direct definitions and 186 unique names. Microscope
+pass 1 also found that the corpus scan accepted foreign-namespace elements and
+that duplicate comparison passed through XML reserialization. Both checks now
+operate on namespace-qualified input and exact source bytes. Pass 2 was clean.
+
+**Spec sections touched.** None. F-089 had already recorded the source and the
+rendering specification already required the offline checked-in mechanism.
+
+**Tests.** `generator_reproduces_checked_in_table`,
+`generated_table_covers_every_corpus_preset`,
+`source_has_187_direct_definitions`, `generated_lookup_has_known_and_unknown_cases`,
+the 50-deck scan covering 2,141 uses and 26 corpus names, and the integrated
+full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Regenerate only from the pinned XML after its
+hash check. A repeated name with different source bytes is a hard failure.
+
+### F-091, Preset evaluation and fallback
+
+**Sprint.** S22
+**Completed.** 2026-08-02
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** DrawingML preset geometry now models the preset name,
+adjustment guides, and ordered raw children while preserving unknown XML.
+Known presets use the generated definitions and shared custom-geometry guide
+engine to produce backend-neutral paths and text rectangles. Unknown presets
+retain shape bounds and text and emit a diagnostic naming the preset.
+
+**Non-obvious choices.** Preset definitions are parsed through the existing
+custom-geometry path instead of gaining a second evaluator. Shape-level
+adjustments override generated defaults, and custom geometry retains schema
+choice precedence when both forms are encountered.
+
+**Deviations from the design plan.** Microscope pass 1 found that the corpus
+gate could pass without proving evaluation. The strengthened gate exposed the
+standard `wd12` and `hd10` fractional guides, which are now seeded by the
+existing evaluator. Pass 2 was clean.
+
+**Spec sections touched.** None. The implementation follows the existing
+DrawingML parsing, resolver output, and preset fallback contracts.
+
+**Tests.** `preset_geometry_round_trips_with_unknown_children_verbatim`,
+`rectangle_preset_evaluates_to_expected_bounds_and_text_rect`,
+`preset_adjustments_override_generated_defaults`,
+`unknown_preset_keeps_bounds_text_and_diagnostic`, the non-vacuous 50-deck
+corpus gate across 921 preset inputs, and the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep preset and custom geometry on the shared
+guide engine. Unknown names must remain visible and diagnosed.
+
+### F-092, rpptx-render skeleton and RenderInput
+
+**Sprint.** S22
+**Completed.** 2026-08-02
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The workspace now contains an unpublished `rpptx-render`
+crate. Its `RenderInput` consumes owned `ResolvedSlide` values, content-addressed
+media, fonts, and metadata. Upstream `SlideBundle` assembly carries slide,
+layout, master, parsed theme, notes, visibility, and three explicitly scoped
+relationship maps.
+
+**Non-obvious choices.** Relationship lookup always names slide, layout, or
+master scope, so identical relationship IDs cannot alias. Media keys derive
+from bytes and deduplicate shared content. Raw PresentationML stays upstream of
+the rendering boundary.
+
+**Deviations from the design plan.** The implementation added the direct
+inward `oxml-drawing` dependency required by `SlideBundle`'s concrete
+`CT_OfficeStyleSheet` field. The dependency-direction rider confirms that no
+reverse `oxml-*` to `rpptx-*` edge was introduced. Microscope pass 1 was clean.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md` now separates raw
+assembly through `SlideBundle` from renderer consumption through `RenderInput`.
+
+**Tests.** `same_relationship_id_resolves_independently_in_all_three_scopes`,
+`equal_media_bytes_deduplicate_to_one_media_entry`,
+`missing_relationship_reports_scope_and_id`,
+`render_input_contains_only_resolved_slides`,
+`rpptx_render_dependency_direction_is_one_way`, the publication dry-run, and
+the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep raw OOXML in `SlideBundle` assembly and
+feed renderers only the frozen owned resolver contract. All PowerPoint crates
+remain version 0.0.0 with publication disabled until development is complete.
