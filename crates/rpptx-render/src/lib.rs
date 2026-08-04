@@ -18,6 +18,8 @@ use rpptx_layout::{
 use rpptx_oxml::notes_parts::CT_NotesSlide;
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster};
 
+mod text;
+
 /// The source part whose relationship map owns an identifier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RelScope {
@@ -240,6 +242,10 @@ fn lower_shape(
             *dpi,
             *rotate_with_shape,
         )?,
+        ResolvedContent::Text(text_body) => {
+            let _content_box = text::content_box(shape, text_body);
+            Vec::new()
+        }
         _ => Vec::new(),
     };
     children.extend(

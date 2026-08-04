@@ -1,6 +1,6 @@
 # F-098a, Text content box
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S24
 **Size**: M
 **Depends on**: F-083, F-030
@@ -69,11 +69,11 @@ Expected to be unchanged. This is an unpublished PowerPoint-only content box.
 
 ## Implementation checklist
 
-- [ ] Wire the approved private text module into `rpptx-render`.
-- [ ] Compute the geometry text rectangle or local-bounds fallback.
-- [ ] Apply four resolved insets and clamp negative extents.
-- [ ] Add exact-coordinate and malformed-box regressions.
-- [ ] Run focused `rpptx-render` checks.
+- [x] Wire the approved private text module into `rpptx-render`.
+- [x] Compute the geometry text rectangle or local-bounds fallback.
+- [x] Apply four resolved insets and clamp negative extents.
+- [x] Add exact-coordinate and malformed-box regressions.
+- [x] Run focused `rpptx-render` checks.
 
 ## Open questions
 
