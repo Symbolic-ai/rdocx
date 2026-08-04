@@ -25,12 +25,12 @@ regenerated, never hand-edited.
 | M7, DrawingML                               | 19 | 19 | 0 | 0  |
 | M8, PresentationML                          | 14 | 14 | 0 | 0  |
 | M9, Inheritance resolver                    | 8  | 8 | 0 | 0  |
-| M10, Renderer                               | 16 | 9 | 0 | 7  |
+| M10, Renderer                               | 20 | 9 | 1 | 10 |
 | M11, Write API                              | 12 | 0 | 0 | 12 |
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **154** | **90** | **0** | **64** |
+| **Total** | **158** | **90** | **1** | **67** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -205,7 +205,7 @@ regenerated, never hand-edited.
 | F-096 | Pictures with crop and tile                  | S23 | M | done |
 | F-097 | Backgrounds                                  | S23 | S | done |
 | F-098 | Shape text layout                            | S24 | XL | pending |
-| F-098a | Text content box                             | S24 | M | pending |
+| F-098a | Text content box                             | S24 | M | in-progress |
 | F-098b | Paragraph inline resolution                  | S24 | L | pending |
 | F-098c | Line stacking                                | S24 | M | pending |
 | F-098d | Text anchoring                               | S24 | S | pending |

@@ -33,7 +33,7 @@ keeping every PowerPoint development crate unpublished.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-098 | Shape text layout | XL | pending | - |
-| F-098a | Text content box | M | pending | - |
+| F-098a | Text content box | M | in-progress | codex |
 | F-098b | Paragraph inline resolution | L | pending | - |
 | F-098c | Line stacking | M | pending | - |
 | F-098d | Text anchoring | S | pending | - |
