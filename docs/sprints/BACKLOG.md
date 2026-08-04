@@ -205,6 +205,10 @@ regenerated, never hand-edited.
 | F-096 | Pictures with crop and tile                  | S23 | M | done |
 | F-097 | Backgrounds                                  | S23 | S | done |
 | F-098 | Shape text layout                            | S24 | XL | pending |
+| F-098a | Text content box                             | S24 | M | pending |
+| F-098b | Paragraph inline resolution                  | S24 | L | pending |
+| F-098c | Line stacking                                | S24 | M | pending |
+| F-098d | Text anchoring                               | S24 | S | pending |
 | F-099 | Bullets                                      | S24 | M | pending |
 | F-100 | Autofit                                      | S24 | M | pending |
 | F-101 | Vertical text                                | S24 | S | pending |

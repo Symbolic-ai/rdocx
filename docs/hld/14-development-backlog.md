@@ -756,22 +756,53 @@ rectangle.
 **Test gate**: text anchored bottom-centre in an inset box lands at the computed
 baseline.
 
+F-098 is split into the four implementation stories below. The parent closes
+only after every child closes.
+
+### F-098a, Text content box (M)
+Use the preset or custom geometry text rectangle, falling back to the shape
+bounds, then apply the resolved body insets without producing negative extents.
+**Depends on**: F-083, F-030.
+**Test gate**: a preset text rectangle minus four unequal insets produces the
+hand-computed content box.
+
+### F-098b, Paragraph inline resolution (L)
+Resolve concrete run style into shaped inline items and preserve explicit line
+breaks without introducing a second text model.
+**Depends on**: F-098a.
+**Test gate**: resolved text runs emit glyph items with the expected font size,
+colour, style, and explicit break boundaries.
+
+### F-098c, Line stacking (M)
+Break paragraphs against the content width, apply paragraph indents and spacing,
+and stack their lines in shape-local coordinates.
+**Depends on**: F-098b.
+**Test gate**: wrapped paragraphs stack at hand-computed baselines while
+`wrap="none"` breaks only at explicit line breaks.
+
+### F-098d, Text anchoring (S)
+Lower stacked line items to glyph runs, apply horizontal paragraph alignment,
+and place the complete block through the resolved vertical anchor.
+**Depends on**: F-098c.
+**Test gate**: text anchored bottom-centre in an inset box lands at the computed
+baseline.
+
 ### F-099, Bullets (M)
 Character, auto-number with the eight common schemes, none, size, colour, and
 the Wingdings codepoint table.
-**Depends on**: F-098.
+**Depends on**: F-098d.
 **Test gate**: a Wingdings `F0B7` bullet renders as a visible bullet glyph, not
 a missing-glyph box.
 
 ### F-100, Autofit (M)
 Stored `normAutofit` applied verbatim, `spAutoFit` trusted, `noAutofit`
 overflowing without clipping, and the 2.5 percent ladder for the bare case.
-**Depends on**: F-098.
+**Depends on**: F-098d.
 **Test gate**: a stored `fontScale` of 62500 renders at exactly 62.5 percent.
 
 ### F-101, Vertical text (S)
 Transposed layout wrapped in a rotated group, with `eaVert` degrading.
-**Depends on**: F-098.
+**Depends on**: F-098d.
 **Test gate**: vertical text renders rotated and records a diagnostic for `eaVert`.
 
 ### F-102, Table rendering (L)

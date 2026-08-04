@@ -33,22 +33,26 @@ keeping every PowerPoint development crate unpublished.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-098 | Shape text layout | XL | pending | - |
+| F-098a | Text content box | M | pending | - |
+| F-098b | Paragraph inline resolution | L | pending | - |
+| F-098c | Line stacking | M | pending | - |
+| F-098d | Text anchoring | S | pending | - |
 | F-099 | Bullets | M | pending | - |
 | F-100 | Autofit | M | pending | - |
 | F-101 | Vertical text | S | pending | - |
 
 ## Sequencing note
 
-Rows are listed in dependency order, not merely by F-ID. F-098 is the common
-foundation and splits at implementation into the content box, paragraph
-resolution, line stacking, and anchoring. F-099, F-100, and F-101 all depend on
-that stable shape-text path, after which their focused behavior may proceed
-independently.
+Rows are listed in dependency order, not merely by F-ID. F-098 is the umbrella
+gate for the sequential F-098a through F-098d implementation chain. F-099,
+F-100, and F-101 all depend on the completed anchoring child. Their behavior is
+logically independent, but they share the same renderer text path and therefore
+run in separate waves.
 
 ## Definition of done for this sprint
 
-- F-098 is split into natural child stories with their own design and delivery
-  records, and every child closes before the umbrella story closes.
+- F-098a through F-098d have their own design and delivery records, and every
+  child closes before the F-098 umbrella story closes.
 - Shape text uses the preset text rectangle and resolved insets to produce a
   fixed content box with correct wrapping, paragraph resolution, line stacking,
   and vertical anchoring.
