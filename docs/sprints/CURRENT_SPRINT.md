@@ -34,7 +34,7 @@ keeping every PowerPoint development crate unpublished.
 |------|-------|------|--------|-------|
 | F-098 | Shape text layout | XL | pending | - |
 | F-098a | Text content box | M | in-progress | codex |
-| F-098b | Paragraph inline resolution | L | pending | - |
+| F-098b | Paragraph inline resolution | L | in-progress | codex |
 | F-098c | Line stacking | M | pending | - |
 | F-098d | Text anchoring | S | pending | - |
 | F-099 | Bullets | M | pending | - |
