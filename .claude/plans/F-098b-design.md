@@ -1,6 +1,6 @@
 # F-098b, Paragraph inline resolution
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S24
 **Size**: L
 **Depends on**: F-098a
@@ -73,11 +73,11 @@ renderer.
 
 ## Implementation checklist
 
-- [ ] Convert resolved text and fields to shaped inline text segments.
-- [ ] Preserve explicit line breaks and concrete run styling.
-- [ ] Reuse one font manager per presentation and collect used font data.
-- [ ] Return explicit text-layout errors.
-- [ ] Add deterministic structural and shaping regressions.
+- [x] Convert resolved text and fields to shaped inline text segments.
+- [x] Preserve explicit line breaks and concrete run styling.
+- [x] Reuse one font manager per presentation and collect used font data.
+- [x] Return explicit text-layout errors.
+- [x] Add deterministic structural and shaping regressions.
 
 ## Open questions
 
