@@ -3076,8 +3076,8 @@ or distributed vertical placement inside the content box, then render above the
 shape path within the existing group transform.
 
 **Non-obvious choices.** Overflow remains visible. Justified anchoring allocates
-spare height only between paragraphs, while distributed anchoring allocates it
-between every adjacent line.
+spare height between line boxes, while distributed anchoring uses equal line
+gaps with half a gap before the first line and after the last.
 
 **Deviations from the design plan.** None. Microscope pass 1 was clean.
 

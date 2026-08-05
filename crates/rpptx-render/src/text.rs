@@ -664,7 +664,7 @@ fn emit_line_items(
 
     for item in &line.items {
         match item {
-            LineItem::Text(segment) | LineItem::Marker(segment) => {
+            LineItem::Text(segment) => {
                 let (advances, effective_width) =
                     distributed_advances(segment, distribute, &mut distributed_gaps);
                 emit_segment(
@@ -677,6 +677,18 @@ fn emit_line_items(
                     elements,
                 );
                 x += effective_width;
+            }
+            LineItem::Marker(segment) => {
+                emit_segment(
+                    segment,
+                    segment.advances.clone(),
+                    segment.width,
+                    x,
+                    baseline,
+                    line.height,
+                    elements,
+                );
+                x += segment.width;
             }
             LineItem::Tab { width, leader } => {
                 if let Some(segment) = leader {
@@ -778,17 +790,13 @@ fn emit_segment(
 fn word_gap_count(items: &[LineItem]) -> usize {
     items
         .iter()
-        .filter_map(line_text_segment)
+        .filter_map(text_segment)
         .map(|segment| {
-            if segment.text.chars().count() == segment.advances.len() {
-                segment
-                    .text
-                    .chars()
-                    .filter(|character| *character == ' ')
-                    .count()
-            } else {
-                0
-            }
+            segment
+                .text
+                .chars()
+                .filter(|character| character.is_whitespace())
+                .count()
         })
         .sum()
 }
@@ -796,16 +804,16 @@ fn word_gap_count(items: &[LineItem]) -> usize {
 fn glyph_gap_count(items: &[LineItem]) -> usize {
     items
         .iter()
-        .filter_map(line_text_segment)
+        .filter_map(text_segment)
         .map(|segment| segment.advances.len())
         .sum::<usize>()
         .saturating_sub(1)
 }
 
-fn line_text_segment(item: &LineItem) -> Option<&TextSegment> {
+fn text_segment(item: &LineItem) -> Option<&TextSegment> {
     match item {
-        LineItem::Text(segment) | LineItem::Marker(segment) => Some(segment),
-        LineItem::Tab { .. } | LineItem::Image { .. } => None,
+        LineItem::Text(segment) => Some(segment),
+        LineItem::Marker(_) | LineItem::Tab { .. } | LineItem::Image { .. } => None,
     }
 }
 
@@ -828,11 +836,23 @@ fn distributed_advances(
             additions += 1;
             *distributed_gaps -= 1;
         }
-    } else if segment.text.chars().count() == advances.len() {
-        for (character, advance) in segment.text.chars().zip(&mut advances) {
-            if character == ' ' {
-                *advance += extra;
-                additions += 1;
+    } else {
+        let characters = segment.text.chars().collect::<Vec<_>>();
+        if characters.len() == advances.len() {
+            for (character, advance) in characters.into_iter().zip(&mut advances) {
+                if character.is_whitespace() {
+                    *advance += extra;
+                    additions += 1;
+                }
+            }
+        } else if let Some(last) = advances.last_mut() {
+            let whitespace_count = characters
+                .into_iter()
+                .filter(|character| character.is_whitespace())
+                .count();
+            if whitespace_count > 0 {
+                *last += extra * whitespace_count as f64;
+                additions = whitespace_count;
             }
         }
     }
@@ -1747,6 +1767,52 @@ mod tests {
     }
 
     #[test]
+    fn justified_ligature_text_still_expands_its_word_gap() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let segment = shape_run(
+            &mut fonts,
+            "office space",
+            &ResolvedRunStyle {
+                font_size: Some(12.0),
+                latin_typeface: Some("Carlito".to_owned()),
+                ..ResolvedRunStyle::default()
+            },
+        )
+        .expect("shape ligature-bearing text");
+        assert_ne!(
+            segment.text.chars().count(),
+            segment.advances.len(),
+            "fixture must exercise a non-1:1 shaped run"
+        );
+        let available_width = segment.width + 30.0;
+        let line = LayoutLine {
+            items: vec![LineItem::Text(segment)],
+            width: available_width - 30.0,
+            ascent: 8.0,
+            descent: 2.0,
+            height: 10.0,
+            indent_left: 0.0,
+            available_width,
+            is_last: false,
+        };
+        let mut elements = Vec::new();
+
+        let width = emit_line_items(
+            &line,
+            ParagraphAlignment::Justified,
+            0.0,
+            20.0,
+            &mut elements,
+        );
+
+        assert_close(width, available_width);
+        assert_close(
+            glyph_runs(&elements)[0].advances.iter().sum(),
+            available_width,
+        );
+    }
+
+    #[test]
     fn top_center_and_bottom_anchors_use_zero_half_and_full_spare_height() {
         let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
         let paragraph = ResolvedParagraph {
@@ -2237,6 +2303,37 @@ mod tests {
                 .skip(1)
                 .all(|run| (run.origin.x - 20.0).abs() < 0.001)
         );
+    }
+
+    #[test]
+    fn distributed_bullet_keeps_the_fixed_hanging_slot() {
+        let mut paragraph = bullet_paragraph(
+            0,
+            Some(ResolvedBullet::Character {
+                character: "*".to_owned(),
+                font: None,
+                color: None,
+                size: None,
+            }),
+            "ab",
+        );
+        paragraph.left_margin = 20.0;
+        paragraph.indent = -10.0;
+        paragraph.alignment = ParagraphAlignment::Distributed;
+        let body = ResolvedTextBody {
+            paragraphs: vec![paragraph],
+            ..text_body(TextInsets::default())
+        };
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+
+        let stacked =
+            stack_text(&mut fonts, test_content_box(55.0), &body).expect("stack bullet text");
+        let runs = glyph_runs(&stacked.elements);
+        let marker = runs.iter().find(|run| run.text == "*").expect("marker");
+        let text = runs.iter().find(|run| run.text == "ab").expect("body text");
+
+        assert_close(marker.origin.x, 10.0);
+        assert_close(text.origin.x, 20.0);
     }
 
     #[test]
