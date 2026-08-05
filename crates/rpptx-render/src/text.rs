@@ -4,11 +4,78 @@ use oxml_layout::{
     break_into_lines,
 };
 use rpptx_layout::{
-    ParagraphAlignment, ResolvedParagraph, ResolvedRunStyle, ResolvedShape, ResolvedTextBody,
-    ResolvedTextRun, ResolvedTextSpacing, TextAnchor,
+    ParagraphAlignment, ResolvedBullet, ResolvedBulletSize, ResolvedParagraph, ResolvedRunStyle,
+    ResolvedShape, ResolvedTextBody, ResolvedTextRun, ResolvedTextSpacing, TextAnchor,
 };
 
 const DEFAULT_FONT_SIZE: f64 = 18.0;
+
+struct AutoNumberSequence {
+    scheme: String,
+    next: u32,
+}
+
+struct NumberingState {
+    levels: Vec<Option<AutoNumberSequence>>,
+}
+
+impl Default for NumberingState {
+    fn default() -> Self {
+        Self {
+            levels: std::iter::repeat_with(|| None).take(9).collect(),
+        }
+    }
+}
+
+impl NumberingState {
+    fn marker(
+        &mut self,
+        font_manager: &mut FontManager,
+        paragraph: &ResolvedParagraph,
+    ) -> Result<Option<TextSegment>, LayoutError> {
+        let level = usize::from(paragraph.level.min(8));
+        self.levels[level + 1..].fill_with(|| None);
+
+        let (text, font, color, size) = match paragraph.bullet.as_ref() {
+            Some(ResolvedBullet::Character {
+                character,
+                font,
+                color,
+                size,
+            }) => {
+                self.levels[level] = None;
+                (map_bullet_characters(character), font, color, size)
+            }
+            Some(ResolvedBullet::AutoNumber {
+                scheme,
+                start_at,
+                font,
+                color,
+                size,
+            }) => {
+                let value = self.levels[level]
+                    .as_ref()
+                    .filter(|sequence| sequence.scheme == *scheme)
+                    .map_or(*start_at, |sequence| sequence.next);
+                self.levels[level] = Some(AutoNumberSequence {
+                    scheme: scheme.clone(),
+                    next: value.saturating_add(1),
+                });
+                (format_auto_number(scheme, value), font, color, size)
+            }
+            None => {
+                self.levels[level] = None;
+                return Ok(None);
+            }
+        };
+
+        let mut marker = shape_marker(font_manager, paragraph, &text, font, *color, size)?;
+        if paragraph.indent < 0.0 {
+            marker.width = -paragraph.indent;
+        }
+        Ok(Some(marker))
+    }
+}
 
 pub(super) fn inline_items(
     font_manager: &mut FontManager,
@@ -66,6 +133,121 @@ fn shape_run(
         field_kind: None,
         footnote_id: None,
     })
+}
+
+fn shape_marker(
+    font_manager: &mut FontManager,
+    paragraph: &ResolvedParagraph,
+    text: &str,
+    font: &Option<String>,
+    color: Option<Color>,
+    size: &Option<ResolvedBulletSize>,
+) -> Result<TextSegment, LayoutError> {
+    let mut style = first_run_style(paragraph).clone();
+    let base_size = style.font_size.unwrap_or(DEFAULT_FONT_SIZE);
+    style.font_size = Some(match size {
+        Some(ResolvedBulletSize::Percent(factor)) => base_size * factor,
+        Some(ResolvedBulletSize::Points(points)) => *points,
+        None => base_size,
+    });
+    if let Some(font) = font {
+        style.latin_typeface = Some(font.clone());
+        style.east_asian_typeface = Some(font.clone());
+        style.complex_script_typeface = Some(font.clone());
+        style.symbol_typeface = Some(font.clone());
+    }
+    if let Some(color) = color {
+        style.fill = Some(Paint::Solid(color));
+    }
+    shape_run(font_manager, text, &style)
+}
+
+fn first_run_style(paragraph: &ResolvedParagraph) -> &ResolvedRunStyle {
+    paragraph
+        .runs
+        .iter()
+        .find_map(|run| match run {
+            ResolvedTextRun::Text { style, .. } | ResolvedTextRun::Field { style, .. } => {
+                Some(style)
+            }
+            ResolvedTextRun::Break => None,
+        })
+        .unwrap_or(&DEFAULT_RUN_STYLE)
+}
+
+static DEFAULT_RUN_STYLE: ResolvedRunStyle = ResolvedRunStyle {
+    font_size: None,
+    bold: false,
+    italic: false,
+    underline: false,
+    strike: false,
+    spacing: None,
+    baseline: None,
+    fill: None,
+    latin_typeface: None,
+    east_asian_typeface: None,
+    complex_script_typeface: None,
+    symbol_typeface: None,
+};
+
+fn map_bullet_characters(character: &str) -> String {
+    character.replace('\u{f0b7}', "\u{2022}")
+}
+
+fn format_auto_number(scheme: &str, value: u32) -> String {
+    match scheme {
+        "arabicPlain" => value.to_string(),
+        "arabicParenR" => format!("{value})"),
+        "arabicParenBoth" => format!("({value})"),
+        "alphaLcPeriod" => format!("{}.", alphabetic_number(value, false)),
+        "alphaUcPeriod" => format!("{}.", alphabetic_number(value, true)),
+        "romanLcPeriod" => format!("{}.", roman_number(value, false)),
+        "romanUcPeriod" => format!("{}.", roman_number(value, true)),
+        "arabicPeriod" => format!("{value}."),
+        _ => format!("{value}."),
+    }
+}
+
+fn alphabetic_number(value: u32, uppercase: bool) -> String {
+    let mut value = value.max(1);
+    let mut letters = Vec::new();
+    while value > 0 {
+        value -= 1;
+        let base = if uppercase { b'A' } else { b'a' };
+        letters.push(char::from(base + (value % 26) as u8));
+        value /= 26;
+    }
+    letters.into_iter().rev().collect()
+}
+
+fn roman_number(value: u32, uppercase: bool) -> String {
+    let mut value = value.max(1);
+    let mut result = String::new();
+    for (amount, numeral) in [
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    ] {
+        while value >= amount {
+            result.push_str(numeral);
+            value -= amount;
+        }
+    }
+    if uppercase {
+        result
+    } else {
+        result.to_ascii_lowercase()
+    }
 }
 
 fn typeface_for_text<'a>(style: &'a ResolvedRunStyle, text: &str) -> Option<&'a str> {
@@ -134,11 +316,16 @@ pub(super) fn stack_text(
     let mut line_ranges = Vec::new();
     let mut y = content.y;
     let mut width = 0.0_f64;
+    let mut numbering = NumberingState::default();
 
     for paragraph in &text.paragraphs {
         let font_size = first_run_font_size(paragraph);
         y += paragraph_spacing(paragraph.space_before.as_ref(), font_size);
-        let items = inline_items(font_manager, paragraph)?;
+        let marker = numbering.marker(font_manager, paragraph)?;
+        let mut items = inline_items(font_manager, paragraph)?;
+        if let Some(marker) = marker {
+            items.insert(0, InlineItem::Marker(marker));
+        }
         let params = line_break_params(paragraph, content.width, text.wrap, font_size);
         let lines = break_into_lines(&items, &params, font_manager)?;
 
@@ -516,8 +703,9 @@ mod tests {
 
     use oxml_layout::{Color, Paint, Transform};
     use rpptx_layout::{
-        ParagraphAlignment, ResolvedAutofit, ResolvedContent, ResolvedGeometry, ResolvedRunStyle,
-        ResolvedSlide, ResolvedTextRun, ResolvedTextSpacing, TextAnchor, TextDirection, TextInsets,
+        ParagraphAlignment, ResolvedAutofit, ResolvedBullet, ResolvedBulletSize, ResolvedContent,
+        ResolvedGeometry, ResolvedRunStyle, ResolvedSlide, ResolvedTextRun, ResolvedTextSpacing,
+        TextAnchor, TextDirection, TextInsets,
     };
 
     use crate::{RenderInput, RenderInputError, layout_presentation, layout_slide_with_fonts};
@@ -1491,6 +1679,332 @@ mod tests {
                 .fold(0.0_f64, f64::max)
                 > 10.0
         );
+    }
+
+    #[test]
+    fn wingdings_f0b7_bullet_renders_as_a_visible_unicode_glyph() {
+        let body = ResolvedTextBody {
+            paragraphs: vec![bullet_paragraph(
+                0,
+                Some(ResolvedBullet::Character {
+                    character: "\u{f0b7}".to_owned(),
+                    font: Some("Wingdings".to_owned()),
+                    color: None,
+                    size: None,
+                }),
+                "visible",
+            )],
+            ..text_body(TextInsets::default())
+        };
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let stacked =
+            stack_text(&mut fonts, test_content_box(120.0), &body).expect("stack character bullet");
+        let runs = glyph_runs(&stacked.elements);
+
+        assert_eq!(runs[0].text, "\u{2022}");
+        assert!(runs[0].glyph_ids.iter().all(|glyph| *glyph != 0));
+    }
+
+    #[test]
+    fn eight_common_auto_number_schemes_format_exact_markers() {
+        let schemes = [
+            "arabicPlain",
+            "arabicPeriod",
+            "arabicParenR",
+            "arabicParenBoth",
+            "alphaLcPeriod",
+            "alphaUcPeriod",
+            "romanLcPeriod",
+            "romanUcPeriod",
+        ];
+        let body = ResolvedTextBody {
+            paragraphs: schemes
+                .into_iter()
+                .map(|scheme| {
+                    bullet_paragraph(
+                        0,
+                        Some(ResolvedBullet::AutoNumber {
+                            scheme: scheme.to_owned(),
+                            start_at: 1,
+                            font: None,
+                            color: None,
+                            size: None,
+                        }),
+                        "item",
+                    )
+                })
+                .collect(),
+            ..text_body(TextInsets::default())
+        };
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let stacked = stack_text(&mut fonts, test_content_box(120.0), &body)
+            .expect("stack automatic bullets");
+        let markers: Vec<&str> = glyph_runs(&stacked.elements)
+            .into_iter()
+            .map(|run| run.text.as_str())
+            .filter(|text| *text != "item")
+            .collect();
+
+        assert_eq!(markers, ["1", "1.", "1)", "(1)", "a.", "A.", "i.", "I."]);
+    }
+
+    #[test]
+    fn automatic_bullets_increment_and_reset_by_level() {
+        let auto = |level, scheme: &str, start_at| {
+            bullet_paragraph(
+                level,
+                Some(ResolvedBullet::AutoNumber {
+                    scheme: scheme.to_owned(),
+                    start_at,
+                    font: None,
+                    color: None,
+                    size: None,
+                }),
+                "item",
+            )
+        };
+        let body = ResolvedTextBody {
+            paragraphs: vec![
+                auto(0, "arabicPeriod", 3),
+                auto(1, "alphaLcPeriod", 1),
+                auto(1, "alphaLcPeriod", 1),
+                auto(0, "arabicPeriod", 3),
+                auto(1, "alphaLcPeriod", 1),
+                auto(0, "romanUcPeriod", 4),
+                bullet_paragraph(0, None, "plain"),
+                auto(0, "romanUcPeriod", 4),
+                bullet_paragraph(
+                    0,
+                    Some(ResolvedBullet::Character {
+                        character: "*".to_owned(),
+                        font: None,
+                        color: None,
+                        size: None,
+                    }),
+                    "item",
+                ),
+                auto(0, "romanUcPeriod", 4),
+            ],
+            ..text_body(TextInsets::default())
+        };
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let stacked =
+            stack_text(&mut fonts, test_content_box(120.0), &body).expect("stack numbered outline");
+        let markers: Vec<&str> = glyph_runs(&stacked.elements)
+            .into_iter()
+            .map(|run| run.text.as_str())
+            .filter(|text| *text != "item" && *text != "plain")
+            .collect();
+
+        assert_eq!(
+            markers,
+            ["3.", "a.", "b.", "4.", "a.", "IV.", "IV.", "*", "IV."]
+        );
+    }
+
+    #[test]
+    fn bullet_style_overrides_and_fallbacks_are_independent() {
+        let fallback_style = ResolvedRunStyle {
+            font_size: Some(20.0),
+            bold: true,
+            fill: Some(Paint::Solid(Color {
+                r: 0.1,
+                g: 0.2,
+                b: 0.8,
+                a: 1.0,
+            })),
+            latin_typeface: Some("Carlito".to_owned()),
+            ..ResolvedRunStyle::default()
+        };
+        let bullet = |font, color, size| ResolvedBullet::Character {
+            character: "*".to_owned(),
+            font,
+            color,
+            size,
+        };
+        let paragraph = |bullet| ResolvedParagraph {
+            bullet: Some(bullet),
+            runs: vec![ResolvedTextRun::Text {
+                text: "item".to_owned(),
+                style: fallback_style.clone(),
+            }],
+            ..ResolvedParagraph::default()
+        };
+        let override_color = Color {
+            r: 0.8,
+            g: 0.2,
+            b: 0.1,
+            a: 1.0,
+        };
+        let body = ResolvedTextBody {
+            paragraphs: vec![
+                paragraph(bullet(Some("Caladea".to_owned()), None, None)),
+                paragraph(bullet(
+                    None,
+                    Some(override_color),
+                    Some(ResolvedBulletSize::Points(11.0)),
+                )),
+                paragraph(bullet(None, None, Some(ResolvedBulletSize::Percent(1.5)))),
+            ],
+            ..text_body(TextInsets::default())
+        };
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let stacked =
+            stack_text(&mut fonts, test_content_box(120.0), &body).expect("stack styled bullets");
+        let markers: Vec<_> = glyph_runs(&stacked.elements)
+            .into_iter()
+            .filter(|run| run.text == "*")
+            .collect();
+        let families: HashMap<_, _> = fonts
+            .all_font_data()
+            .into_iter()
+            .map(|font| (font.id, font.family))
+            .collect();
+
+        assert_eq!(families[&markers[0].font_id], "Caladea");
+        assert_eq!(markers[0].font_size, 20.0);
+        assert_eq!(markers[0].color, text_color(fallback_style.fill.as_ref()));
+        assert!(markers[0].bold);
+        assert_eq!(families[&markers[1].font_id], "Carlito");
+        assert_eq!(markers[1].font_size, 11.0);
+        assert_eq!(markers[1].color, override_color);
+        assert_eq!(markers[2].font_size, 30.0);
+    }
+
+    #[test]
+    fn bullet_marker_uses_left_and_hanging_indent() {
+        let mut paragraph = bullet_paragraph(
+            0,
+            Some(ResolvedBullet::Character {
+                character: "*".to_owned(),
+                font: None,
+                color: None,
+                size: None,
+            }),
+            "one two three four five",
+        );
+        paragraph.left_margin = 20.0;
+        paragraph.indent = -10.0;
+        let body = ResolvedTextBody {
+            paragraphs: vec![paragraph],
+            ..text_body(TextInsets::default())
+        };
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let stacked =
+            stack_text(&mut fonts, test_content_box(55.0), &body).expect("stack indented bullet");
+        let runs = glyph_runs(&stacked.elements);
+        let marker_x = runs
+            .iter()
+            .find(|run| run.text == "*")
+            .expect("marker")
+            .origin
+            .x;
+        let text_runs: Vec<_> = runs.into_iter().filter(|run| run.text != "*").collect();
+
+        assert_close(marker_x, 10.0);
+        assert_close(text_runs[0].origin.x, 20.0);
+        assert!(
+            text_runs
+                .iter()
+                .skip(1)
+                .all(|run| (run.origin.x - 20.0).abs() < 0.001)
+        );
+    }
+
+    #[test]
+    fn wide_auto_number_marker_keeps_text_on_the_paragraph_margin() {
+        let mut paragraph = bullet_paragraph(
+            0,
+            Some(ResolvedBullet::AutoNumber {
+                scheme: "arabicPeriod".to_owned(),
+                start_at: 12_345,
+                font: None,
+                color: None,
+                size: None,
+            }),
+            "one two three four five",
+        );
+        paragraph.left_margin = 20.0;
+        paragraph.indent = -10.0;
+        let body = ResolvedTextBody {
+            paragraphs: vec![paragraph],
+            ..text_body(TextInsets::default())
+        };
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let stacked = stack_text(&mut fonts, test_content_box(55.0), &body)
+            .expect("stack wide automatic bullet");
+        let runs = glyph_runs(&stacked.elements);
+        let marker = runs
+            .iter()
+            .find(|run| run.text == "12345.")
+            .expect("automatic marker");
+        let text_runs: Vec<_> = runs.iter().filter(|run| run.text != "12345.").collect();
+
+        assert!(marker.advances.iter().sum::<f64>() > 10.0);
+        assert_close(marker.origin.x, 10.0);
+        assert_close(text_runs[0].origin.x, 20.0);
+        assert!(
+            text_runs
+                .iter()
+                .skip(1)
+                .all(|run| (run.origin.x - 20.0).abs() < 0.001)
+        );
+    }
+
+    #[test]
+    fn unsupported_auto_number_scheme_keeps_a_visible_marker() {
+        let body = ResolvedTextBody {
+            paragraphs: vec![bullet_paragraph(
+                0,
+                Some(ResolvedBullet::AutoNumber {
+                    scheme: "thaiNumPeriod".to_owned(),
+                    start_at: 7,
+                    font: None,
+                    color: None,
+                    size: None,
+                }),
+                "item",
+            )],
+            ..text_body(TextInsets::default())
+        };
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let stacked =
+            stack_text(&mut fonts, test_content_box(120.0), &body).expect("stack fallback bullet");
+        let runs = glyph_runs(&stacked.elements);
+
+        assert_eq!(runs[0].text, "7.");
+        assert!(runs[0].glyph_ids.iter().all(|glyph| *glyph != 0));
+    }
+
+    fn bullet_paragraph(
+        level: u8,
+        bullet: Option<ResolvedBullet>,
+        text: &str,
+    ) -> ResolvedParagraph {
+        ResolvedParagraph {
+            level,
+            left_margin: 10.0,
+            indent: -5.0,
+            bullet,
+            runs: vec![ResolvedTextRun::Text {
+                text: text.to_owned(),
+                style: ResolvedRunStyle {
+                    font_size: Some(12.0),
+                    latin_typeface: Some("Carlito".to_owned()),
+                    ..ResolvedRunStyle::default()
+                },
+            }],
+            ..ResolvedParagraph::default()
+        }
+    }
+
+    fn test_content_box(width: f64) -> Rect {
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height: 400.0,
+        }
     }
 
     fn glyph_runs(elements: &[oxml_layout::PositionedElement]) -> Vec<&oxml_layout::GlyphRun> {

@@ -304,10 +304,22 @@ line and leave an overflowing stack undistributed. Anchoring never adds a clip.
 v1 and degrades to rotated vertical with a diagnostic.
 
 **Bullets** become marker inline items, with `marL` and `indent` mapping onto
-the existing left and hanging indent support. The Wingdings trap: `a:buChar`
-codepoints are usually private-use `F0xx`, and `FontManager::map_font_name`
-aliases Wingdings to Symbol, which renders garbage. A small codepoint-to-Unicode
-table is applied **before** font resolution.
+the existing left and hanging indent support. The marker font, colour, and
+point or percentage size resolve independently. An omitted value uses the
+paragraph's first effective run style.
+
+Automatic numbering keeps one counter per text body and list level. The first
+automatic paragraph at a level uses `startAt`, and the next paragraph at that
+level with the same scheme increments it. Returning to a shallower level resets
+deeper counters. A scheme change, character bullet, or paragraph without a
+bullet resets the affected level. The renderer formats `arabicPlain`,
+`arabicPeriod`, `arabicParenR`, `arabicParenBoth`, `alphaLcPeriod`,
+`alphaUcPeriod`, `romanLcPeriod`, and `romanUcPeriod`. Any other schema scheme
+uses a visible `arabicPeriod` marker.
+
+The Wingdings trap is handled before font resolution. `a:buChar` U+F0B7 maps
+to the visible Unicode bullet U+2022 instead of passing through the Wingdings
+to Symbol alias as a private-use codepoint.
 
 ### Autofit
 

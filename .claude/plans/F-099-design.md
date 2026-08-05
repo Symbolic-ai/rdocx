@@ -1,6 +1,6 @@
 # F-099, Bullets
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S24
 **Size**: M
 **Depends on**: F-098d
@@ -86,11 +86,11 @@ PowerPoint path.
 
 ## Implementation checklist
 
-- [ ] Add per-body, per-level automatic numbering state and the eight formatters.
-- [ ] Reset sequences on shallower levels, scheme changes, character bullets, and no bullet.
-- [ ] Map Wingdings F0B7 to a Unicode bullet before font resolution.
-- [ ] Shape marker style and size independently from the paragraph run.
-- [ ] Reuse the shared marker emitter and prove indent placement.
+- [x] Add per-body, per-level automatic numbering state and the eight formatters.
+- [x] Reset sequences on shallower levels, scheme changes, character bullets, and no bullet.
+- [x] Map Wingdings F0B7 to a Unicode bullet before font resolution.
+- [x] Shape marker style and size independently from the paragraph run.
+- [x] Reuse the shared marker emitter and prove indent placement.
 
 ## Open questions
 
