@@ -37,7 +37,7 @@ keeping every PowerPoint development crate unpublished.
 | F-098b | Paragraph inline resolution | L | in-progress | codex |
 | F-098c | Line stacking | M | in-progress | codex |
 | F-098d | Text anchoring | S | in-progress | codex |
-| F-099 | Bullets | M | pending | - |
+| F-099 | Bullets | M | in-progress | codex |
 | F-100 | Autofit | M | pending | - |
 | F-101 | Vertical text | S | pending | - |
 
