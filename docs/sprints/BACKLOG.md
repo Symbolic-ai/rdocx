@@ -25,12 +25,12 @@ regenerated, never hand-edited.
 | M7, DrawingML                               | 19 | 19 | 0 | 0  |
 | M8, PresentationML                          | 14 | 14 | 0 | 0  |
 | M9, Inheritance resolver                    | 8  | 8 | 0 | 0  |
-| M10, Renderer                               | 20 | 17 | 1 | 2  |
+| M10, Renderer                               | 20 | 17 | 2 | 1  |
 | M11, Write API                              | 12 | 0 | 0 | 12 |
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **158** | **98** | **1** | **59** |
+| **Total** | **158** | **98** | **2** | **58** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -213,7 +213,7 @@ regenerated, never hand-edited.
 | F-100 | Autofit                                      | S24 | M | done |
 | F-101 | Vertical text                                | S24 | S | done |
 | F-102 | Table rendering                              | S25 | L | in-progress |
-| F-103 | Hyperlinks, fields and diagnostics           | S25 | M | pending |
+| F-103 | Hyperlinks, fields and diagnostics           | S25 | M | in-progress |
 | F-104 | SSIM fidelity harness                        | S25 | L | pending |
 <!-- AUTOGEN:backlog-M10 END -->
 
