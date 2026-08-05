@@ -247,6 +247,7 @@ fn lower_shape(
         }
         _ => shape.line.clone(),
     };
+    let mut text_children = Vec::new();
     let mut children = match &shape.content {
         ResolvedContent::Image {
             media,
@@ -265,14 +266,15 @@ fn lower_shape(
             *rotate_with_shape,
         )?,
         ResolvedContent::Text(text_body) => {
-            let _content_box = text::content_box(shape, text_body);
-            for paragraph in &text_body.paragraphs {
-                text::inline_items(font_manager, paragraph).map_err(|error| {
+            let content_box = text::content_box(shape, text_body);
+            let stacked =
+                text::stack_text(font_manager, content_box, text_body).map_err(|error| {
                     RenderInputError::TextLayout {
                         detail: error.to_string(),
                     }
                 })?;
-            }
+            debug_assert!(stacked.width.is_finite() && stacked.height.is_finite());
+            text_children = stacked.elements;
             Vec::new()
         }
         _ => Vec::new(),
@@ -309,6 +311,7 @@ fn lower_shape(
             children.push(filled_line_end(path, &line.paint));
         }
     }
+    children.extend(text_children);
     Ok(PositionedElement::Group(GroupElement {
         transform: shape_transform(shape),
         clip: None,

@@ -1,6 +1,6 @@
 # F-098c, Line stacking
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S24
 **Size**: M
 **Depends on**: F-098b
@@ -72,11 +72,11 @@ renderer.
 
 ## Implementation checklist
 
-- [ ] Map resolved margins, indents, spacing, alignment, and wrap to line-break parameters.
-- [ ] Break and stack every paragraph in shape-local coordinates.
-- [ ] Emit glyph, underline, strike, and future marker items through one path.
-- [ ] Preserve overflow without clipping.
-- [ ] Add deterministic baseline and alignment regressions.
+- [x] Map resolved margins, indents, spacing, alignment, and wrap to line-break parameters.
+- [x] Break and stack every paragraph in shape-local coordinates.
+- [x] Emit glyph, underline, strike, and future marker items through one path.
+- [x] Preserve overflow without clipping.
+- [x] Add deterministic baseline and alignment regressions.
 
 ## Open questions
 
