@@ -38,7 +38,7 @@ keeping every PowerPoint development crate unpublished.
 | F-098c | Line stacking | M | in-progress | codex |
 | F-098d | Text anchoring | S | in-progress | codex |
 | F-099 | Bullets | M | in-progress | codex |
-| F-100 | Autofit | M | pending | - |
+| F-100 | Autofit | M | in-progress | codex |
 | F-101 | Vertical text | S | pending | - |
 
 ## Sequencing note
