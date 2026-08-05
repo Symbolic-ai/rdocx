@@ -1,6 +1,6 @@
 # F-103, Hyperlinks, fields and diagnostics
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S25
 **Size**: M
 **Depends on**: F-092
@@ -95,13 +95,13 @@ Word output harness.
 
 ## Implementation checklist
 
-- [ ] Resolve direct hyperlink relationships in the producing shape's scope.
-- [ ] Preserve visible text and add diagnostics for missing or unsupported
+- [x] Resolve direct hyperlink relationships in the producing shape's scope.
+- [x] Preserve visible text and add diagnostics for missing or unsupported
   link actions.
-- [ ] Emit transformed URI annotations through the existing segment path.
-- [ ] Substitute one-based slide numbers before shaping and set
+- [x] Emit transformed URI annotations through the existing segment path.
+- [x] Substitute one-based slide numbers before shaping and set
   `FieldKind::Page`.
-- [ ] Cover typed and untyped slide-number fields plus grouped link bounds.
+- [x] Cover typed and untyped slide-number fields plus grouped link bounds.
 
 ## Open questions
 

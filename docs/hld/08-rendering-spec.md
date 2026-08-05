@@ -327,6 +327,17 @@ The Wingdings trap is handled before font resolution. `a:buChar` U+F0B7 maps
 to the visible Unicode bullet U+2022 instead of passing through the Wingdings
 to Symbol alias as a private-use codepoint.
 
+Slide-number fields substitute the one-based `PageFrame` number before text
+shaping and carry `FieldKind::Page` into the emitted glyph run. An untyped field
+that the resolver normalized from an effective `sldNum` placeholder follows the
+same path. Other fields retain their stored display text.
+
+An external URI frozen on `ResolvedRunStyle` is copied into each shaped
+`TextSegment`. The line emitter creates one `LinkAnnotation` for every laid-out
+run fragment. The PDF backend's recursive leaf walk applies the complete nested
+group transform to each annotation rectangle. Unsupported actions never create
+an annotation, but their visible text remains in the line.
+
 ## Tables
 
 Table lowering derives cumulative row and column offsets from the resolved
@@ -430,6 +441,7 @@ pub enum RelScope {
 pub struct ResolvedRel {
     pub target: String,
     pub relationship_type: String,
+    pub target_mode: Option<String>,
 }
 
 pub struct MediaData {
@@ -448,6 +460,11 @@ Upstream package assembly also constructs the source-neutral `ScopedMediaIds`
 maps consumed by `ResolveCtx::resolve_slide_with_media`. Only embedded picture
 relationships enter those maps. Linked media remains diagnosed and no renderer
 performs network access.
+
+The same relationship scopes project hyperlink relationships with
+`TargetMode="External"` into `ScopedHyperlinkTargets`. Internal package targets
+never enter that map. The resolver uses the producing shape's scope so equal
+relationship identifiers on a slide, layout, and master cannot alias.
 
 An uncropped rectangular stretch picture that rotates with its shape lowers to
 one image in local shape bounds. Source crop clamps each edge to the zero-to-one

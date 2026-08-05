@@ -14,6 +14,7 @@ use rpptx_layout::{
     CropRect, ResolvedContent, ResolvedGeometry, ResolvedImagePlacement, ResolvedLineEnd,
     ResolvedLineEndKind, ResolvedLineEndSize, ResolvedRectAlignment, ResolvedShape, ResolvedSlide,
     ResolvedTable, ResolvedTableBorder, ResolvedTileFlip, ResolvedTilePlacement,
+    ScopedHyperlinkTargets,
 };
 use rpptx_oxml::notes_parts::CT_NotesSlide;
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster};
@@ -43,6 +44,7 @@ impl fmt::Display for RelScope {
 pub struct ResolvedRel {
     pub target: String,
     pub relationship_type: String,
+    pub target_mode: Option<String>,
 }
 
 /// Relationship maps kept separate by their source-part scope.
@@ -72,7 +74,32 @@ impl RelScopes {
                 relationship_id: relationship_id.to_owned(),
             })
     }
+
+    /// Project external hyperlink relationships into layout's source-scoped map.
+    pub fn external_hyperlink_targets(&self) -> ScopedHyperlinkTargets {
+        fn external_targets(
+            relationships: &HashMap<String, ResolvedRel>,
+        ) -> HashMap<String, String> {
+            relationships
+                .iter()
+                .filter(|(_, relationship)| {
+                    relationship.relationship_type == HYPERLINK_RELATIONSHIP
+                        && relationship.target_mode.as_deref() == Some("External")
+                })
+                .map(|(id, relationship)| (id.clone(), relationship.target.clone()))
+                .collect()
+        }
+
+        ScopedHyperlinkTargets {
+            slide: external_targets(&self.slide),
+            layout: external_targets(&self.layout),
+            master: external_targets(&self.master),
+        }
+    }
 }
+
+const HYPERLINK_RELATIONSHIP: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
 
 /// Media bytes available to a renderer, with their package content type.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -220,7 +247,7 @@ fn layout_slide_with_fonts(
     let elements = slide
         .shapes
         .iter()
-        .map(|shape| lower_shape(input, shape, font_manager))
+        .map(|shape| lower_shape(input, shape, font_manager, index + 1))
         .collect::<Result<Vec<_>, _>>()?;
     let mut page = PageFrame::new(index + 1, slide.size.0, slide.size.1, elements);
     page.background.clone_from(&slide.background);
@@ -231,6 +258,7 @@ fn lower_shape(
     input: &RenderInput,
     shape: &ResolvedShape,
     font_manager: &mut FontManager,
+    page_number: usize,
 ) -> Result<PositionedElement, RenderInputError> {
     let paths = if matches!(shape.content, ResolvedContent::Table(_)) {
         Vec::new()
@@ -276,11 +304,10 @@ fn lower_shape(
             let (content_box, text_transform) =
                 text::oriented_content_box(content_box, text_body.vertical);
             let stacked =
-                text::stack_text(font_manager, content_box, text_body).map_err(|error| {
-                    RenderInputError::TextLayout {
+                text::stack_text_for_page(font_manager, content_box, text_body, page_number)
+                    .map_err(|error| RenderInputError::TextLayout {
                         detail: error.to_string(),
-                    }
-                })?;
+                    })?;
             debug_assert!(stacked.width.is_finite() && stacked.height.is_finite());
             text_children = if let Some(transform) = text_transform {
                 vec![PositionedElement::Group(GroupElement {
@@ -295,7 +322,7 @@ fn lower_shape(
             };
             Vec::new()
         }
-        ResolvedContent::Table(table) => lower_table(table, font_manager)?,
+        ResolvedContent::Table(table) => lower_table(table, font_manager, page_number)?,
         _ => Vec::new(),
     };
     children.extend(
@@ -343,6 +370,7 @@ fn lower_shape(
 fn lower_table(
     table: &ResolvedTable,
     font_manager: &mut FontManager,
+    page_number: usize,
 ) -> Result<Vec<PositionedElement>, RenderInputError> {
     let mut physical_column_widths = table.column_widths.clone();
     if table.right_to_left {
@@ -405,11 +433,10 @@ fn lower_table(
                 };
                 let (content, transform) = text::oriented_content_box(content, text_body.vertical);
                 let stacked =
-                    text::stack_text(font_manager, content, &text_body).map_err(|error| {
-                        RenderInputError::TextLayout {
+                    text::stack_text_for_page(font_manager, content, &text_body, page_number)
+                        .map_err(|error| RenderInputError::TextLayout {
                             detail: error.to_string(),
-                        }
-                    })?;
+                        })?;
                 if let Some(transform) = transform {
                     texts.push(PositionedElement::Group(GroupElement {
                         transform,
@@ -1329,8 +1356,8 @@ mod tests {
     use oxml_drawing::color::ColorMap;
     use oxml_drawing::text::CT_TextListStyle;
     use oxml_layout::{
-        Color, Diagnostic, FillRule, GradientStop, GroupElement, Paint, Path, PathCommand, Point,
-        PositionedElement, Rect, Stroke, Transform,
+        Color, Diagnostic, FieldKind, FillRule, GradientStop, GroupElement, Paint, Path,
+        PathCommand, Point, PositionedElement, Rect, Stroke, Transform, walk,
     };
     use rpptx_layout::{
         ResolveCtx, ResolvedAutofit, ResolvedContent, ResolvedGeometry, ResolvedParagraph,
@@ -1352,6 +1379,15 @@ mod tests {
         ResolvedRel {
             target: target.to_owned(),
             relationship_type: IMAGE_RELATIONSHIP.to_owned(),
+            target_mode: None,
+        }
+    }
+
+    fn hyperlink_relationship(target: &str, target_mode: Option<&str>) -> ResolvedRel {
+        ResolvedRel {
+            target: target.to_owned(),
+            relationship_type: HYPERLINK_RELATIONSHIP.to_owned(),
+            target_mode: target_mode.map(str::to_owned),
         }
     }
 
@@ -1428,6 +1464,135 @@ mod tests {
             stroke: Some(Stroke::new(Paint::Solid(Color::BLACK), 1.0)),
             priority: 1,
         }
+    }
+
+    fn linked_field_shape(group_transform: Transform) -> ResolvedShape {
+        let mut linked = shape(
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 120.0,
+                height: 40.0,
+            },
+            ResolvedGeometry::Rectangle,
+            None,
+            None,
+        );
+        linked.group_transform = group_transform;
+        linked.content = ResolvedContent::Text(ResolvedTextBody {
+            insets: TextInsets::default(),
+            anchor: TextAnchor::Top,
+            wrap: true,
+            vertical: TextDirection::Horizontal,
+            autofit: ResolvedAutofit::None,
+            paragraphs: vec![ResolvedParagraph {
+                runs: vec![
+                    ResolvedTextRun::Field {
+                        text: "stored".to_owned(),
+                        field_type: Some("slidenum".to_owned()),
+                        style: ResolvedRunStyle {
+                            font_size: Some(12.0),
+                            ..ResolvedRunStyle::default()
+                        },
+                    },
+                    ResolvedTextRun::Text {
+                        text: " linked".to_owned(),
+                        style: ResolvedRunStyle {
+                            font_size: Some(12.0),
+                            hyperlink_url: Some("https://example.com/deck".to_owned()),
+                            ..ResolvedRunStyle::default()
+                        },
+                    },
+                ],
+                ..ResolvedParagraph::default()
+            }],
+        });
+        linked
+    }
+
+    fn rendered_text_and_links(
+        page: &PageFrame,
+    ) -> (Vec<(String, Option<FieldKind>)>, Vec<String>) {
+        let mut text = Vec::new();
+        let mut links = Vec::new();
+        walk(&page.elements, &mut |element, _| match element {
+            PositionedElement::Text(run) => text.push((run.text.clone(), run.field_kind)),
+            PositionedElement::LinkAnnotation { url, .. } => links.push(url.clone()),
+            _ => {}
+        });
+        (text, links)
+    }
+
+    fn transformed_link_rect(page: &PageFrame) -> Rect {
+        let mut result = None;
+        walk(&page.elements, &mut |element, transform| {
+            if let PositionedElement::LinkAnnotation { rect, .. } = element {
+                let top_left = transform.apply(Point {
+                    x: rect.x,
+                    y: rect.y,
+                });
+                let bottom_right = transform.apply(Point {
+                    x: rect.x + rect.width,
+                    y: rect.y + rect.height,
+                });
+                result = Some(Rect {
+                    x: top_left.x,
+                    y: top_left.y,
+                    width: bottom_right.x - top_left.x,
+                    height: bottom_right.y - top_left.y,
+                });
+            }
+        });
+        result.expect("rendered hyperlink annotation")
+    }
+
+    #[test]
+    fn slide_number_field_renders_current_page_and_hyperlink_emits_annotation() {
+        let input = render_input(vec![
+            slide((200.0, 100.0), Vec::new()),
+            slide(
+                (200.0, 100.0),
+                vec![linked_field_shape(Transform::IDENTITY)],
+            ),
+        ]);
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+
+        let page = layout_slide_with_fonts(&input, 1, &mut fonts).expect("render slide two");
+        let (text, links) = rendered_text_and_links(&page);
+
+        assert_eq!(text[0], ("2".to_owned(), Some(FieldKind::Page)));
+        assert!(!links.is_empty());
+        assert!(links.iter().all(|url| url == "https://example.com/deck"));
+    }
+
+    #[test]
+    fn grouped_hyperlink_annotation_keeps_transformed_run_bounds() {
+        let translation = Transform {
+            e: 30.0,
+            f: 40.0,
+            ..Transform::IDENTITY
+        };
+        let plain_input = render_input(vec![slide(
+            (240.0, 180.0),
+            vec![linked_field_shape(Transform::IDENTITY)],
+        )]);
+        let grouped_input = render_input(vec![slide(
+            (240.0, 180.0),
+            vec![linked_field_shape(translation)],
+        )]);
+        let mut plain_fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let mut grouped_fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let plain = layout_slide_with_fonts(&plain_input, 0, &mut plain_fonts)
+            .expect("render ungrouped hyperlink");
+        let grouped = layout_slide_with_fonts(&grouped_input, 0, &mut grouped_fonts)
+            .expect("render grouped hyperlink");
+        let plain_rect = transformed_link_rect(&plain);
+        let grouped_rect = transformed_link_rect(&grouped);
+
+        assert!((grouped_rect.x - plain_rect.x - 30.0).abs() < 1.0e-10);
+        assert!((grouped_rect.y - plain_rect.y - 40.0).abs() < 1.0e-10);
+        assert!((grouped_rect.width - plain_rect.width).abs() < 1.0e-10);
+        assert!((grouped_rect.height - plain_rect.height).abs() < 1.0e-10);
     }
 
     #[test]
@@ -2917,6 +3082,46 @@ mod tests {
         assert_eq!(layout, MediaId::from_bytes(b"layout image"));
         assert_eq!(master, MediaId::from_bytes(b"master image"));
         assert_eq!(deck_media.len(), 3);
+    }
+
+    #[test]
+    fn external_hyperlink_projection_keeps_scopes_and_excludes_internal_targets() {
+        let relationships = RelScopes {
+            slide: HashMap::from([
+                (
+                    "rId7".to_owned(),
+                    hyperlink_relationship("https://slide.example", Some("External")),
+                ),
+                (
+                    "rId8".to_owned(),
+                    hyperlink_relationship("../slides/slide2.xml", None),
+                ),
+            ]),
+            layout: HashMap::from([(
+                "rId7".to_owned(),
+                hyperlink_relationship("https://layout.example", Some("External")),
+            )]),
+            master: HashMap::from([(
+                "rId7".to_owned(),
+                hyperlink_relationship("https://master.example", Some("External")),
+            )]),
+        };
+
+        let targets = relationships.external_hyperlink_targets();
+
+        assert_eq!(
+            targets.slide.get("rId7").map(String::as_str),
+            Some("https://slide.example")
+        );
+        assert!(!targets.slide.contains_key("rId8"));
+        assert_eq!(
+            targets.layout.get("rId7").map(String::as_str),
+            Some("https://layout.example")
+        );
+        assert_eq!(
+            targets.master.get("rId7").map(String::as_str),
+            Some("https://master.example")
+        );
     }
 
     #[test]

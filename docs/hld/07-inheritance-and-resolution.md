@@ -124,6 +124,20 @@ anchor, wrap, direction, autofit, paragraphs, runs, paragraph spacing, and
 bullets. Character and auto-number bullets both retain their independently
 inherited font, colour, size, and choice values.
 
+A run or field's direct `a:hlinkClick` does not enter the text cascade.
+`resolve_slide_with_resources` resolves its relationship identifier through a
+`ScopedHyperlinkTargets` map for the producing slide, layout, or master part,
+then freezes only an external URI in `ResolvedRunStyle`. A missing relationship,
+an internal slide jump, or an action-only hyperlink keeps its text and records a
+stable source-scoped diagnostic. No hyperlink property is inherited from list,
+paragraph, placeholder, or theme defaults.
+
+An untyped field in an effective `sldNum` placeholder is normalized to the
+`slidenum` field type. This includes a slide placeholder whose type comes from
+its layout or master match. Typed slide-number fields retain that type across
+the resolver boundary so the renderer can substitute the current page before
+shaping.
+
 Table resolution selects the explicit table style or the table style list's
 default. It applies whole-table, row and column bands, first and last columns,
 first and last rows, then corner regions. Direct cell properties apply last.

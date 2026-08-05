@@ -38,6 +38,28 @@ impl ScopedMediaIds {
     }
 }
 
+/// External hyperlink targets kept separate by relationship scope.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ScopedHyperlinkTargets {
+    pub slide: HashMap<String, String>,
+    pub layout: HashMap<String, String>,
+    pub master: HashMap<String, String>,
+}
+
+impl ScopedHyperlinkTargets {
+    /// Look up an external hyperlink only in its producing part's scope.
+    pub fn get(&self, source: FlattenedSource, relationship_id: &str) -> Option<&str> {
+        match source {
+            FlattenedSource::Slide => &self.slide,
+            FlattenedSource::Layout => &self.layout,
+            FlattenedSource::Master => &self.master,
+            FlattenedSource::Background => return None,
+        }
+        .get(relationship_id)
+        .map(String::as_str)
+    }
+}
+
 /// An owned slide with every renderer-visible value resolved.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedSlide {
@@ -318,6 +340,8 @@ pub struct ResolvedRunStyle {
     pub east_asian_typeface: Option<String>,
     pub complex_script_typeface: Option<String>,
     pub symbol_typeface: Option<String>,
+    /// Direct external URI resolved in the run's producing relationship scope.
+    pub hyperlink_url: Option<String>,
 }
 
 /// One table with concrete dimensions and owned cell text.

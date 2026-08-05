@@ -40,7 +40,8 @@ use crate::{
     ResolvedLineEndSize, ResolvedParagraph, ResolvedRectAlignment, ResolvedRunStyle, ResolvedShape,
     ResolvedSlide, ResolvedTable, ResolvedTableBorder, ResolvedTableCell, ResolvedTableRow,
     ResolvedTextBody, ResolvedTextRun, ResolvedTextSpacing, ResolvedTileFlip,
-    ResolvedTilePlacement, ScopedMediaIds, TextAnchor, TextDirection, TextInsets,
+    ResolvedTilePlacement, ScopedHyperlinkTargets, ScopedMediaIds, TextAnchor, TextDirection,
+    TextInsets,
 };
 
 /// The producer part that supplied the effective background.
@@ -167,6 +168,23 @@ impl<'a> ResolveCtx<'a> {
         (Some(layout_shape), master_shape)
     }
 
+    fn is_slide_number_placeholder(&self, shape: &CT_Shape) -> bool {
+        if shape
+            .placeholder
+            .as_ref()
+            .is_some_and(|placeholder| placeholder.ph_type == Some(PhType::SlideNumber))
+        {
+            return true;
+        }
+        let (layout, master) = self.placeholder_chain(shape);
+        [layout, master].into_iter().flatten().any(|shape| {
+            shape
+                .placeholder
+                .as_ref()
+                .is_some_and(|placeholder| placeholder.ph_type == Some(PhType::SlideNumber))
+        })
+    }
+
     /// Resolves an owned transform from the slide, layout, then master shape.
     pub fn effective_xfrm(&self, shape: &CT_Shape) -> Option<CT_Transform2D> {
         let (layout, master) = self.placeholder_chain(shape);
@@ -283,7 +301,7 @@ impl<'a> ResolveCtx<'a> {
 
     /// Resolves one owned renderer-facing slide at the supplied point size.
     pub fn resolve_slide(&self, size: (f64, f64)) -> Result<ResolvedSlide, ResolveError> {
-        self.resolve_slide_inner(size, None)
+        self.resolve_slide_inner(size, None, None)
     }
 
     /// Resolves one slide using embedded media identifiers scoped to source parts.
@@ -292,13 +310,24 @@ impl<'a> ResolveCtx<'a> {
         size: (f64, f64),
         media: &ScopedMediaIds,
     ) -> Result<ResolvedSlide, ResolveError> {
-        self.resolve_slide_inner(size, Some(media))
+        self.resolve_slide_inner(size, Some(media), None)
+    }
+
+    /// Resolves one slide with source-scoped media and external hyperlink targets.
+    pub fn resolve_slide_with_resources(
+        &self,
+        size: (f64, f64),
+        media: &ScopedMediaIds,
+        hyperlinks: &ScopedHyperlinkTargets,
+    ) -> Result<ResolvedSlide, ResolveError> {
+        self.resolve_slide_inner(size, Some(media), Some(hyperlinks))
     }
 
     fn resolve_slide_inner(
         &self,
         size: (f64, f64),
         media: Option<&ScopedMediaIds>,
+        hyperlinks: Option<&ScopedHyperlinkTargets>,
     ) -> Result<ResolvedSlide, ResolveError> {
         let mut slide = ResolvedSlide {
             size,
@@ -344,6 +373,7 @@ impl<'a> ResolveCtx<'a> {
                         child,
                         group_transform,
                         media,
+                        hyperlinks,
                         &mut slide.diagnostics,
                     )? {
                         slide.shapes.push(shape);
@@ -360,11 +390,12 @@ impl<'a> ResolveCtx<'a> {
         child: &ShapeTreeChild,
         group_transform: Transform,
         media: Option<&ScopedMediaIds>,
+        hyperlinks: Option<&ScopedHyperlinkTargets>,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<Option<ResolvedShape>, ResolveError> {
         match child {
             ShapeTreeChild::Shape(shape) => {
-                self.resolve_ordinary_shape(shape, group_transform, diagnostics)
+                self.resolve_ordinary_shape(shape, source, group_transform, hyperlinks, diagnostics)
             }
             ShapeTreeChild::Picture(picture) => {
                 let Some((bounds, rotation_deg, flip_h, flip_v)) =
@@ -420,7 +451,12 @@ impl<'a> ResolveCtx<'a> {
                 };
                 let (content, unsupported) = match &frame.graphic_data.payload {
                     GraphicDataPayload::Table(table) => (
-                        ResolvedContent::Table(self.resolve_table(table, diagnostics)?),
+                        ResolvedContent::Table(self.resolve_table(
+                            table,
+                            source,
+                            hyperlinks,
+                            diagnostics,
+                        )?),
                         None,
                     ),
                     GraphicDataPayload::Chart(_) => (ResolvedContent::None, Some("chart")),
@@ -511,7 +547,9 @@ impl<'a> ResolveCtx<'a> {
     fn resolve_ordinary_shape(
         &self,
         shape: &CT_Shape,
+        source: FlattenedSource,
         group_transform: Transform,
+        hyperlinks: Option<&ScopedHyperlinkTargets>,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<Option<ResolvedShape>, ResolveError> {
         let transform = self.effective_xfrm(shape);
@@ -584,7 +622,7 @@ impl<'a> ResolveCtx<'a> {
         let content = shape
             .text_body
             .as_ref()
-            .map(|body| self.resolve_text_body(shape, body))
+            .map(|body| self.resolve_text_body(shape, body, source, hyperlinks, diagnostics))
             .transpose()?
             .map(ResolvedContent::Text)
             .unwrap_or(ResolvedContent::None);
@@ -745,6 +783,43 @@ fn flattened_source_name(source: FlattenedSource) -> &'static str {
         FlattenedSource::Layout => "layout",
         FlattenedSource::Slide => "slide",
     }
+}
+
+fn resolve_direct_hyperlink(
+    properties: Option<&CT_TextCharacterProperties>,
+    source: FlattenedSource,
+    hyperlinks: Option<&ScopedHyperlinkTargets>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<String> {
+    let hyperlink = properties?.hyperlink_click.as_ref()?;
+    if let Some(action) = hyperlink.action.as_deref() {
+        diagnostics.push(Diagnostic {
+            message: format!(
+                "unsupported {} hyperlink action `{action}`",
+                flattened_source_name(source)
+            ),
+        });
+        return None;
+    }
+    let Some(relationship_id) = hyperlink.relationship_id.as_deref() else {
+        diagnostics.push(Diagnostic {
+            message: format!(
+                "unsupported {} hyperlink without an external relationship",
+                flattened_source_name(source)
+            ),
+        });
+        return None;
+    };
+    let Some(target) = hyperlinks.and_then(|targets| targets.get(source, relationship_id)) else {
+        diagnostics.push(Diagnostic {
+            message: format!(
+                "missing {} hyperlink relationship `{relationship_id}`",
+                flattened_source_name(source)
+            ),
+        });
+        return None;
+    };
+    Some(target.to_owned())
 }
 
 fn resolved_crop_rect(rect: &RelativeRect) -> crate::CropRect {
@@ -1116,12 +1191,25 @@ impl ResolveCtx<'_> {
         &self,
         shape: &CT_Shape,
         body: &CT_TextBody,
+        source: FlattenedSource,
+        hyperlinks: Option<&ScopedHyperlinkTargets>,
+        diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<ResolvedTextBody, ResolveError> {
         let properties = self.effective_body_pr(shape);
+        let slide_number_placeholder = self.is_slide_number_placeholder(shape);
         let paragraphs = body
             .paragraphs()
             .iter()
-            .map(|paragraph| self.resolve_paragraph(shape, paragraph))
+            .map(|paragraph| {
+                self.resolve_paragraph(
+                    shape,
+                    paragraph,
+                    source,
+                    hyperlinks,
+                    slide_number_placeholder,
+                    diagnostics,
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         resolved_text_body(&properties, paragraphs)
     }
@@ -1130,6 +1218,10 @@ impl ResolveCtx<'_> {
         &self,
         shape: &CT_Shape,
         paragraph: &oxml_drawing::text::CT_TextParagraph,
+        source: FlattenedSource,
+        hyperlinks: Option<&ScopedHyperlinkTargets>,
+        slide_number_placeholder: bool,
+        diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<ResolvedParagraph, ResolveError> {
         let effective = self.effective_text_properties(shape, paragraph.properties.as_ref(), None);
         let paragraph_properties = &effective.paragraph;
@@ -1137,11 +1229,17 @@ impl ResolveCtx<'_> {
         for run in &paragraph.runs {
             match run {
                 TextRun::Run(run) => {
-                    let style = self.resolve_run_style(
+                    let mut style = self.resolve_run_style(
                         shape,
                         paragraph.properties.as_ref(),
                         run.properties.as_ref(),
                     )?;
+                    style.hyperlink_url = resolve_direct_hyperlink(
+                        run.properties.as_ref(),
+                        source,
+                        hyperlinks,
+                        diagnostics,
+                    );
                     runs.push(ResolvedTextRun::Text {
                         text: run.text.value.clone(),
                         style,
@@ -1149,18 +1247,27 @@ impl ResolveCtx<'_> {
                 }
                 TextRun::Break(_) => runs.push(ResolvedTextRun::Break),
                 TextRun::Field(field) => {
-                    let style = self.resolve_run_style(
+                    let mut style = self.resolve_run_style(
                         shape,
                         paragraph.properties.as_ref(),
                         field.run_properties.as_ref(),
                     )?;
+                    style.hyperlink_url = resolve_direct_hyperlink(
+                        field.run_properties.as_ref(),
+                        source,
+                        hyperlinks,
+                        diagnostics,
+                    );
                     runs.push(ResolvedTextRun::Field {
                         text: field
                             .text
                             .as_ref()
                             .map(|text| text.value.clone())
                             .unwrap_or_default(),
-                        field_type: field.field_type.clone(),
+                        field_type: field
+                            .field_type
+                            .clone()
+                            .or_else(|| slide_number_placeholder.then(|| "slidenum".to_owned())),
                         style,
                     });
                 }
@@ -1245,6 +1352,7 @@ impl ResolveCtx<'_> {
                 .symbol
                 .as_ref()
                 .map(|font| self.resolve_typeface(&font.typeface, None)),
+            hyperlink_url: None,
         })
     }
 
@@ -1290,6 +1398,8 @@ impl ResolveCtx<'_> {
     fn resolve_table(
         &self,
         table: &oxml_drawing::table::CT_Table,
+        source: FlattenedSource,
+        hyperlinks: Option<&ScopedHyperlinkTargets>,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<ResolvedTable, ResolveError> {
         let column_widths = table
@@ -1465,7 +1575,16 @@ impl ResolveCtx<'_> {
                         let mut text = cell
                             .text_body
                             .as_ref()
-                            .map(|body| resolve_standalone_text_body(self, body, &table_text_style))
+                            .map(|body| {
+                                resolve_standalone_text_body(
+                                    self,
+                                    body,
+                                    &table_text_style,
+                                    source,
+                                    hyperlinks,
+                                    diagnostics,
+                                )
+                            })
                             .transpose()?;
                         if let Some(body) = text.as_mut()
                             && body.autofit != ResolvedAutofit::None
@@ -1920,6 +2039,9 @@ fn resolve_standalone_text_body(
     context: &ResolveCtx<'_>,
     body: &CT_TextBody,
     table_style: &CT_TextCharacterProperties,
+    source: FlattenedSource,
+    hyperlinks: Option<&ScopedHyperlinkTargets>,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<ResolvedTextBody, ResolveError> {
     let mut properties = default_body_properties();
     merge_body_properties(&mut properties, &body.body_properties);
@@ -1937,28 +2059,46 @@ fn resolve_standalone_text_body(
                 .runs
                 .iter()
                 .map(|run| match run {
-                    TextRun::Run(run) => Ok(ResolvedTextRun::Text {
-                        text: run.text.value.clone(),
-                        style: context.resolve_table_run_style(
+                    TextRun::Run(run) => {
+                        let mut style = context.resolve_table_run_style(
                             table_style,
                             paragraph.properties.as_ref(),
                             run.properties.as_ref(),
-                        )?,
-                    }),
+                        )?;
+                        style.hyperlink_url = resolve_direct_hyperlink(
+                            run.properties.as_ref(),
+                            source,
+                            hyperlinks,
+                            diagnostics,
+                        );
+                        Ok(ResolvedTextRun::Text {
+                            text: run.text.value.clone(),
+                            style,
+                        })
+                    }
                     TextRun::Break(_) => Ok(ResolvedTextRun::Break),
-                    TextRun::Field(field) => Ok(ResolvedTextRun::Field {
-                        text: field
-                            .text
-                            .as_ref()
-                            .map(|text| text.value.clone())
-                            .unwrap_or_default(),
-                        field_type: field.field_type.clone(),
-                        style: context.resolve_table_run_style(
+                    TextRun::Field(field) => {
+                        let mut style = context.resolve_table_run_style(
                             table_style,
                             paragraph.properties.as_ref(),
                             field.run_properties.as_ref(),
-                        )?,
-                    }),
+                        )?;
+                        style.hyperlink_url = resolve_direct_hyperlink(
+                            field.run_properties.as_ref(),
+                            source,
+                            hyperlinks,
+                            diagnostics,
+                        );
+                        Ok(ResolvedTextRun::Field {
+                            text: field
+                                .text
+                                .as_ref()
+                                .map(|text| text.value.clone())
+                                .unwrap_or_default(),
+                            field_type: field.field_type.clone(),
+                            style,
+                        })
+                    }
                 })
                 .collect::<Result<Vec<_>, ResolveError>>()?;
             Ok(ResolvedParagraph {
@@ -2388,7 +2528,8 @@ mod tests {
         ResolvedAutofit, ResolvedBullet, ResolvedBulletSize, ResolvedContent, ResolvedGeometry,
         ResolvedImagePlacement, ResolvedLineEnd, ResolvedLineEndKind, ResolvedLineEndSize,
         ResolvedRectAlignment, ResolvedSlide, ResolvedTextRun, ResolvedTextSpacing,
-        ResolvedTileFlip, ScopedMediaIds, TextAnchor as ResolvedTextAnchor, TextDirection,
+        ResolvedTileFlip, ScopedHyperlinkTargets, ScopedMediaIds, TextAnchor as ResolvedTextAnchor,
+        TextDirection,
     };
     use oxml_layout::{Color, Effect, MediaId, Paint, PathCommand, Point};
 
@@ -3971,6 +4112,120 @@ mod tests {
 
     fn background_source(fixture: &Fixture) -> BackgroundSource {
         fixture.context().effective_background().unwrap().source
+    }
+
+    #[test]
+    fn same_relationship_id_resolves_hyperlink_in_its_shape_source_scope() {
+        let linked_shape = |label: &str, x: i64| {
+            shape_with_details(None, None, &transform(x), Some("<a:bodyPr/>"))
+                .replace(
+                    "<a:p/>",
+                    &format!(r#"<a:p><a:r><a:rPr><a:hlinkClick xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId7"/></a:rPr><a:t>{label}</a:t></a:r></a:p>"#),
+                )
+        };
+        let fixture = Fixture::new(
+            &linked_shape("slide", 200),
+            &linked_shape("layout", 100),
+            &linked_shape("master", 0),
+        );
+        let hyperlinks = ScopedHyperlinkTargets {
+            slide: HashMap::from([("rId7".to_owned(), "https://slide.example".to_owned())]),
+            layout: HashMap::from([("rId7".to_owned(), "https://layout.example".to_owned())]),
+            master: HashMap::from([("rId7".to_owned(), "https://master.example".to_owned())]),
+        };
+
+        let resolved = fixture
+            .context()
+            .resolve_slide_with_resources((720.0, 540.0), &ScopedMediaIds::default(), &hyperlinks)
+            .expect("resolve source-scoped hyperlinks");
+        let targets = resolved
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.content {
+                ResolvedContent::Text(body) => body.paragraphs[0].runs.first(),
+                _ => None,
+            })
+            .filter_map(|run| match run {
+                ResolvedTextRun::Text { style, .. } => style.hyperlink_url.as_deref(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            targets,
+            vec![
+                "https://master.example",
+                "https://layout.example",
+                "https://slide.example"
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_hyperlink_relationship_keeps_text_and_records_diagnostic() {
+        let shape = shape_with_details(None, None, &transform(0), Some("<a:bodyPr/>"))
+            .replace(
+                "<a:p/>",
+                r#"<a:p><a:r><a:rPr><a:hlinkClick xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId404"/></a:rPr><a:t>missing</a:t></a:r><a:r><a:rPr><a:hlinkClick action="ppaction://macro"/></a:rPr><a:t> action</a:t></a:r><a:r><a:rPr><a:hlinkClick xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId8" action="ppaction://hlinksldjump"/></a:rPr><a:t> internal</a:t></a:r></a:p>"#,
+            );
+        let resolved = Fixture::new(&shape, "", "")
+            .context()
+            .resolve_slide_with_resources(
+                (720.0, 540.0),
+                &ScopedMediaIds::default(),
+                &ScopedHyperlinkTargets::default(),
+            )
+            .expect("resolve unsupported hyperlinks without dropping text");
+        let ResolvedContent::Text(body) = &resolved.shapes[0].content else {
+            panic!("linked text should remain visible")
+        };
+
+        assert_eq!(
+            body.paragraphs[0]
+                .runs
+                .iter()
+                .filter_map(|run| match run {
+                    ResolvedTextRun::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<String>(),
+            "missing action internal"
+        );
+        let diagnostics = resolved
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+        for expected in [
+            "missing slide hyperlink relationship `rId404`",
+            "unsupported slide hyperlink action `ppaction://macro`",
+            "unsupported slide hyperlink action `ppaction://hlinksldjump`",
+        ] {
+            assert!(diagnostics.contains(&expected), "missing `{expected}`");
+        }
+    }
+
+    #[test]
+    fn untyped_slide_number_placeholder_uses_the_current_page_number() {
+        let slide_shape = shape_with_details(None, Some(4), &transform(0), Some("<a:bodyPr/>"))
+            .replace(
+                "<a:p/>",
+                r#"<a:p><a:fld id="{00112233-4455-6677-8899-AABBCCDDEEFF}"><a:t>stored</a:t></a:fld></a:p>"#,
+            );
+        let layout_shape =
+            shape_with_details(Some("sldNum"), Some(4), &transform(0), Some("<a:bodyPr/>"));
+        let resolved = Fixture::new(&slide_shape, &layout_shape, "")
+            .context()
+            .resolve_slide((720.0, 540.0))
+            .expect("resolve inherited slide-number placeholder");
+        let ResolvedContent::Text(body) = &resolved.shapes[0].content else {
+            panic!("slide-number field should remain visible")
+        };
+        let ResolvedTextRun::Field { field_type, .. } = &body.paragraphs[0].runs[0] else {
+            panic!("expected a field")
+        };
+
+        assert_eq!(field_type.as_deref(), Some("slidenum"));
     }
 
     fn shape_with_details(

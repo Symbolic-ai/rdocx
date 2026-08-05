@@ -1,7 +1,7 @@
 use oxml_layout::{
-    Align, Color, FontManager, GlyphRun, InlineItem, LayoutError, LayoutLine, LineBreakParams,
-    LineItem, LineSpacing, Paint, Point, PositionedElement, Rect, TextSegment, Underline,
-    break_into_lines,
+    Align, Color, FieldKind, FontManager, GlyphRun, InlineItem, LayoutError, LayoutLine,
+    LineBreakParams, LineItem, LineSpacing, Paint, Point, PositionedElement, Rect, TextSegment,
+    Underline, break_into_lines,
 };
 use rpptx_layout::{
     ParagraphAlignment, ResolvedAutofit, ResolvedBullet, ResolvedBulletSize, ResolvedParagraph,
@@ -118,24 +118,46 @@ pub(super) fn inline_items(
     font_manager: &mut FontManager,
     paragraph: &ResolvedParagraph,
 ) -> Result<Vec<InlineItem>, LayoutError> {
-    inline_items_cached(font_manager, &mut ShapingCache::default(), paragraph)
+    inline_items_cached(font_manager, &mut ShapingCache::default(), paragraph, 1)
 }
 
 fn inline_items_cached(
     font_manager: &mut FontManager,
     shaping_cache: &mut ShapingCache,
     paragraph: &ResolvedParagraph,
+    page_number: usize,
 ) -> Result<Vec<InlineItem>, LayoutError> {
     let mut items = Vec::with_capacity(paragraph.runs.len());
     for run in &paragraph.runs {
         match run {
-            ResolvedTextRun::Text { text, style } | ResolvedTextRun::Field { text, style, .. } => {
+            ResolvedTextRun::Text { text, style } => {
                 if !text.is_empty() {
                     items.push(InlineItem::Text(shaping_cache.shape(
                         font_manager,
                         text,
                         style,
                     )?));
+                }
+            }
+            ResolvedTextRun::Field {
+                text,
+                field_type,
+                style,
+            } => {
+                let slide_number = field_type
+                    .as_deref()
+                    .is_some_and(|field_type| field_type.eq_ignore_ascii_case("slidenum"));
+                let rendered = if slide_number {
+                    page_number.to_string()
+                } else {
+                    text.clone()
+                };
+                if !rendered.is_empty() {
+                    let mut segment = shaping_cache.shape(font_manager, &rendered, style)?;
+                    if slide_number {
+                        segment.field_kind = Some(FieldKind::Page);
+                    }
+                    items.push(InlineItem::Text(segment));
                 }
             }
             ResolvedTextRun::Break => items.push(InlineItem::LineBreak),
@@ -178,7 +200,7 @@ fn shape_run(
         dstrike: false,
         highlight: None,
         baseline_offset: style.baseline.unwrap_or(0.0) * font_size,
-        hyperlink_url: None,
+        hyperlink_url: style.hyperlink_url.clone(),
         field_kind: None,
         footnote_id: None,
     })
@@ -238,6 +260,7 @@ static DEFAULT_RUN_STYLE: ResolvedRunStyle = ResolvedRunStyle {
     east_asian_typeface: None,
     complex_script_typeface: None,
     symbol_typeface: None,
+    hyperlink_url: None,
 };
 
 fn map_bullet_characters(character: &str) -> String {
@@ -358,12 +381,22 @@ pub(super) struct StackedText {
     width_fits: bool,
 }
 
+#[cfg(test)]
 pub(super) fn stack_text(
     font_manager: &mut FontManager,
     content: Rect,
     text: &ResolvedTextBody,
 ) -> Result<StackedText, LayoutError> {
-    let shaped_paragraphs = shape_paragraphs(font_manager, text)?;
+    stack_text_for_page(font_manager, content, text, 1)
+}
+
+pub(super) fn stack_text_for_page(
+    font_manager: &mut FontManager,
+    content: Rect,
+    text: &ResolvedTextBody,
+    page_number: usize,
+) -> Result<StackedText, LayoutError> {
+    let shaped_paragraphs = shape_paragraphs(font_manager, text, page_number)?;
     match text.autofit {
         ResolvedAutofit::None | ResolvedAutofit::Shape => {
             stack_shaped_text(font_manager, content, text, &shaped_paragraphs, 1.0, None)
@@ -411,6 +444,7 @@ pub(super) fn stack_text(
 fn shape_paragraphs(
     font_manager: &mut FontManager,
     text: &ResolvedTextBody,
+    page_number: usize,
 ) -> Result<Vec<Vec<InlineItem>>, LayoutError> {
     let mut numbering = NumberingState::default();
     let mut shaping_cache = ShapingCache::default();
@@ -418,7 +452,8 @@ fn shape_paragraphs(
         .iter()
         .map(|paragraph| {
             let marker = numbering.marker(font_manager, &mut shaping_cache, paragraph)?;
-            let mut items = inline_items_cached(font_manager, &mut shaping_cache, paragraph)?;
+            let mut items =
+                inline_items_cached(font_manager, &mut shaping_cache, paragraph, page_number)?;
             if let Some(marker) = marker {
                 items.insert(0, InlineItem::Marker(marker));
             }
@@ -1256,10 +1291,11 @@ mod tests {
         assert!(first.glyph_ids.iter().any(|glyph| *glyph != 0));
         assert!(matches!(items[1], InlineItem::LineBreak));
         let InlineItem::Text(field) = &items[2] else {
-            panic!("field should retain its display text as a text item");
+            panic!("field should become a text item");
         };
-        assert_eq!(field.text, "42");
+        assert_eq!(field.text, "1");
         assert_eq!(field.font_size, 22.0);
+        assert_eq!(field.field_kind, Some(FieldKind::Page));
     }
 
     #[test]
