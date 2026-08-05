@@ -1,6 +1,6 @@
 # F-100, Autofit
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S24
 **Size**: M
 **Depends on**: F-098d
@@ -80,11 +80,11 @@ only.
 
 ## Implementation checklist
 
-- [ ] Apply stored font scale and line-spacing reduction verbatim.
-- [ ] Preserve unscaled no-autofit and shape-autofit behavior without clipping.
-- [ ] Implement the 31-value quantised ladder and 25 percent visible floor.
-- [ ] Cache shaping work within one autofit calculation.
-- [ ] Add deterministic scale, spacing, ladder, and overflow regressions.
+- [x] Apply stored font scale and line-spacing reduction verbatim.
+- [x] Preserve unscaled no-autofit and shape-autofit behavior without clipping.
+- [x] Implement the 31-value quantised ladder and 25 percent visible floor.
+- [x] Cache shaping work within one autofit calculation.
+- [x] Add deterministic scale, spacing, ladder, and overflow regressions.
 
 ## Open questions
 

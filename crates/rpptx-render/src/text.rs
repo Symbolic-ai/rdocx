@@ -4,8 +4,9 @@ use oxml_layout::{
     break_into_lines,
 };
 use rpptx_layout::{
-    ParagraphAlignment, ResolvedBullet, ResolvedBulletSize, ResolvedParagraph, ResolvedRunStyle,
-    ResolvedShape, ResolvedTextBody, ResolvedTextRun, ResolvedTextSpacing, TextAnchor,
+    ParagraphAlignment, ResolvedAutofit, ResolvedBullet, ResolvedBulletSize, ResolvedParagraph,
+    ResolvedRunStyle, ResolvedShape, ResolvedTextBody, ResolvedTextRun, ResolvedTextSpacing,
+    TextAnchor,
 };
 
 const DEFAULT_FONT_SIZE: f64 = 18.0;
@@ -17,6 +18,32 @@ struct AutoNumberSequence {
 
 struct NumberingState {
     levels: Vec<Option<AutoNumberSequence>>,
+}
+
+#[derive(Default)]
+struct ShapingCache {
+    entries: Vec<(String, ResolvedRunStyle, TextSegment)>,
+}
+
+impl ShapingCache {
+    fn shape(
+        &mut self,
+        font_manager: &mut FontManager,
+        text: &str,
+        style: &ResolvedRunStyle,
+    ) -> Result<TextSegment, LayoutError> {
+        if let Some((_, _, segment)) = self
+            .entries
+            .iter()
+            .find(|(cached_text, cached_style, _)| cached_text == text && cached_style == style)
+        {
+            return Ok(segment.clone());
+        }
+        let segment = shape_run(font_manager, text, style)?;
+        self.entries
+            .push((text.to_owned(), style.clone(), segment.clone()));
+        Ok(segment)
+    }
 }
 
 impl Default for NumberingState {
@@ -31,6 +58,7 @@ impl NumberingState {
     fn marker(
         &mut self,
         font_manager: &mut FontManager,
+        shaping_cache: &mut ShapingCache,
         paragraph: &ResolvedParagraph,
     ) -> Result<Option<TextSegment>, LayoutError> {
         let level = usize::from(paragraph.level.min(8));
@@ -69,7 +97,15 @@ impl NumberingState {
             }
         };
 
-        let mut marker = shape_marker(font_manager, paragraph, &text, font, *color, size)?;
+        let mut marker = shape_marker(
+            font_manager,
+            shaping_cache,
+            paragraph,
+            &text,
+            font,
+            *color,
+            size,
+        )?;
         if paragraph.indent < 0.0 {
             marker.width = -paragraph.indent;
         }
@@ -77,8 +113,17 @@ impl NumberingState {
     }
 }
 
+#[cfg(test)]
 pub(super) fn inline_items(
     font_manager: &mut FontManager,
+    paragraph: &ResolvedParagraph,
+) -> Result<Vec<InlineItem>, LayoutError> {
+    inline_items_cached(font_manager, &mut ShapingCache::default(), paragraph)
+}
+
+fn inline_items_cached(
+    font_manager: &mut FontManager,
+    shaping_cache: &mut ShapingCache,
     paragraph: &ResolvedParagraph,
 ) -> Result<Vec<InlineItem>, LayoutError> {
     let mut items = Vec::with_capacity(paragraph.runs.len());
@@ -86,7 +131,11 @@ pub(super) fn inline_items(
         match run {
             ResolvedTextRun::Text { text, style } | ResolvedTextRun::Field { text, style, .. } => {
                 if !text.is_empty() {
-                    items.push(InlineItem::Text(shape_run(font_manager, text, style)?));
+                    items.push(InlineItem::Text(shaping_cache.shape(
+                        font_manager,
+                        text,
+                        style,
+                    )?));
                 }
             }
             ResolvedTextRun::Break => items.push(InlineItem::LineBreak),
@@ -137,6 +186,7 @@ fn shape_run(
 
 fn shape_marker(
     font_manager: &mut FontManager,
+    shaping_cache: &mut ShapingCache,
     paragraph: &ResolvedParagraph,
     text: &str,
     font: &Option<String>,
@@ -159,7 +209,7 @@ fn shape_marker(
     if let Some(color) = color {
         style.fill = Some(Paint::Solid(color));
     }
-    shape_run(font_manager, text, &style)
+    shaping_cache.shape(font_manager, text, &style)
 }
 
 fn first_run_style(paragraph: &ResolvedParagraph) -> &ResolvedRunStyle {
@@ -305,6 +355,7 @@ pub(super) struct StackedText {
     pub(super) elements: Vec<PositionedElement>,
     pub(super) width: f64,
     pub(super) height: f64,
+    width_fits: bool,
 }
 
 pub(super) fn stack_text(
@@ -312,24 +363,96 @@ pub(super) fn stack_text(
     content: Rect,
     text: &ResolvedTextBody,
 ) -> Result<StackedText, LayoutError> {
+    let shaped_paragraphs = shape_paragraphs(font_manager, text)?;
+    match text.autofit {
+        ResolvedAutofit::None | ResolvedAutofit::Shape => {
+            stack_shaped_text(font_manager, content, text, &shaped_paragraphs, 1.0, None)
+        }
+        ResolvedAutofit::Normal {
+            font_scale: None,
+            line_spacing_reduction: None,
+        } => {
+            let mut floor =
+                stack_shaped_text(font_manager, content, text, &shaped_paragraphs, 1.0, None)?;
+            if floor.width_fits && floor.height <= content.height + 0.01 {
+                return Ok(floor);
+            }
+            for step in 1..=30 {
+                let scale = 1.0 - f64::from(step) * 0.025;
+                let candidate = stack_shaped_text(
+                    font_manager,
+                    content,
+                    text,
+                    &shaped_paragraphs,
+                    scale,
+                    None,
+                )?;
+                if candidate.width_fits && candidate.height <= content.height + 0.01 {
+                    return Ok(candidate);
+                }
+                floor = candidate;
+            }
+            Ok(floor)
+        }
+        ResolvedAutofit::Normal {
+            font_scale,
+            line_spacing_reduction,
+        } => stack_shaped_text(
+            font_manager,
+            content,
+            text,
+            &shaped_paragraphs,
+            font_scale.unwrap_or(1.0),
+            line_spacing_reduction,
+        ),
+    }
+}
+
+fn shape_paragraphs(
+    font_manager: &mut FontManager,
+    text: &ResolvedTextBody,
+) -> Result<Vec<Vec<InlineItem>>, LayoutError> {
+    let mut numbering = NumberingState::default();
+    let mut shaping_cache = ShapingCache::default();
+    text.paragraphs
+        .iter()
+        .map(|paragraph| {
+            let marker = numbering.marker(font_manager, &mut shaping_cache, paragraph)?;
+            let mut items = inline_items_cached(font_manager, &mut shaping_cache, paragraph)?;
+            if let Some(marker) = marker {
+                items.insert(0, InlineItem::Marker(marker));
+            }
+            Ok(items)
+        })
+        .collect()
+}
+
+fn stack_shaped_text(
+    font_manager: &FontManager,
+    content: Rect,
+    text: &ResolvedTextBody,
+    shaped_paragraphs: &[Vec<InlineItem>],
+    font_scale: f64,
+    line_spacing_reduction: Option<f64>,
+) -> Result<StackedText, LayoutError> {
     let mut elements = Vec::new();
     let mut line_ranges = Vec::new();
     let mut y = content.y;
     let mut width = 0.0_f64;
-    let mut numbering = NumberingState::default();
+    let mut width_fits = true;
 
-    for paragraph in &text.paragraphs {
-        let font_size = first_run_font_size(paragraph);
+    for (paragraph, shaped_items) in text.paragraphs.iter().zip(shaped_paragraphs) {
+        let font_size = first_run_font_size(paragraph) * font_scale;
         y += paragraph_spacing(paragraph.space_before.as_ref(), font_size);
-        let marker = numbering.marker(font_manager, paragraph)?;
-        let mut items = inline_items(font_manager, paragraph)?;
-        if let Some(marker) = marker {
-            items.insert(0, InlineItem::Marker(marker));
-        }
+        let items = scaled_inline_items(shaped_items, font_scale, paragraph.indent);
         let params = line_break_params(paragraph, content.width, text.wrap, font_size);
-        let lines = break_into_lines(&items, &params, font_manager)?;
+        let mut lines = break_into_lines(&items, &params, font_manager)?;
+        if let Some(reduction) = line_spacing_reduction {
+            reduce_extra_leading(&mut lines, reduction);
+        }
 
         for line in &lines {
+            width_fits &= line.width <= line.available_width + 0.01;
             let baseline = y + line.ascent;
             let element_start = elements.len();
             let occupied_width = emit_line_items(
@@ -359,7 +482,48 @@ pub(super) fn stack_text(
         elements,
         width,
         height,
+        width_fits,
     })
+}
+
+fn scaled_inline_items(items: &[InlineItem], scale: f64, indent: f64) -> Vec<InlineItem> {
+    items
+        .iter()
+        .cloned()
+        .map(|item| match item {
+            InlineItem::Text(mut segment) => {
+                scale_segment(&mut segment, scale);
+                InlineItem::Text(segment)
+            }
+            InlineItem::Marker(mut segment) => {
+                scale_segment(&mut segment, scale);
+                if indent < 0.0 {
+                    segment.width = -indent;
+                }
+                InlineItem::Marker(segment)
+            }
+            other => other,
+        })
+        .collect()
+}
+
+fn scale_segment(segment: &mut TextSegment, scale: f64) {
+    segment.font_size *= scale;
+    segment.width *= scale;
+    segment.ascent *= scale;
+    segment.descent *= scale;
+    segment.baseline_offset *= scale;
+    for advance in &mut segment.advances {
+        *advance *= scale;
+    }
+}
+
+fn reduce_extra_leading(lines: &mut [LayoutLine], reduction: f64) {
+    for line in lines {
+        let natural_height = line.ascent + line.descent;
+        let extra_leading = (line.height - natural_height).max(0.0);
+        line.height = (line.height - extra_leading * reduction).max(natural_height);
+    }
 }
 
 fn anchor_lines(
@@ -1976,6 +2140,216 @@ mod tests {
         assert!(runs[0].glyph_ids.iter().all(|glyph| *glyph != 0));
     }
 
+    #[test]
+    fn stored_font_scale_renders_at_exactly_sixty_two_point_five_percent() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let mut body = autofit_body(
+            ResolvedAutofit::Normal {
+                font_scale: Some(0.625),
+                line_spacing_reduction: None,
+            },
+            20.0,
+            "stored scale",
+        );
+        body.paragraphs[0].bullet = Some(ResolvedBullet::Character {
+            character: "*".to_owned(),
+            font: None,
+            color: None,
+            size: Some(ResolvedBulletSize::Points(10.0)),
+        });
+
+        let stacked = stack_text(&mut fonts, test_content_box(200.0), &body)
+            .expect("stack stored autofit text");
+        let runs = glyph_runs(&stacked.elements);
+
+        assert_close(runs[0].font_size, 6.25);
+        assert_close(runs[1].font_size, 12.5);
+    }
+
+    #[test]
+    fn repeated_resolved_runs_reuse_one_shaped_cache_entry() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let style = ResolvedRunStyle {
+            font_size: Some(20.0),
+            latin_typeface: Some("Carlito".to_owned()),
+            ..ResolvedRunStyle::default()
+        };
+        let mut cache = ShapingCache::default();
+
+        let first = cache
+            .shape(&mut fonts, "cached", &style)
+            .expect("shape first cached run");
+        let second = cache
+            .shape(&mut fonts, "cached", &style)
+            .expect("reuse cached run");
+
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(first.glyph_ids, second.glyph_ids);
+        assert_eq!(first.advances, second.advances);
+    }
+
+    #[test]
+    fn stored_line_spacing_reduction_reduces_only_extra_leading() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let mut body = autofit_body(
+            ResolvedAutofit::Normal {
+                font_scale: Some(1.0),
+                line_spacing_reduction: Some(0.75),
+            },
+            20.0,
+            "leading",
+        );
+        body.paragraphs[0].line_spacing = Some(ResolvedTextSpacing::Points(30.0));
+        let segment = shape_run(&mut fonts, "leading", first_run_style(&body.paragraphs[0]))
+            .expect("shape natural line");
+        let natural_height = segment.ascent + segment.descent;
+
+        let stacked =
+            stack_text(&mut fonts, test_content_box(200.0), &body).expect("stack reduced leading");
+
+        assert_close(
+            stacked.height,
+            natural_height + (30.0 - natural_height) * 0.25,
+        );
+
+        body.paragraphs[0].line_spacing = Some(ResolvedTextSpacing::Points(1.0));
+        let floor = stack_text(&mut fonts, test_content_box(200.0), &body)
+            .expect("stack reduced leading at natural floor");
+        assert_close(floor.height, natural_height);
+    }
+
+    #[test]
+    fn shape_autofit_trusts_the_stored_extent() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let body = autofit_body(ResolvedAutofit::Shape, 20.0, "stored shape extent");
+        let content = Rect {
+            width: 1.0,
+            height: 1.0,
+            ..test_content_box(0.0)
+        };
+
+        let stacked = stack_text(&mut fonts, content, &body).expect("stack shape autofit text");
+
+        assert_close(glyph_runs(&stacked.elements)[0].font_size, 20.0);
+        assert!(stacked.width > content.width || stacked.height > content.height);
+    }
+
+    #[test]
+    fn no_autofit_overflows_without_a_clip() {
+        let text = autofit_body(ResolvedAutofit::None, 20.0, "visible overflow");
+        let mut text_shape = shape(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            ResolvedGeometry::Rectangle,
+        );
+        text_shape.content = ResolvedContent::Text(text);
+        let input = RenderInput {
+            slides: vec![ResolvedSlide {
+                size: (100.0, 50.0),
+                background: None,
+                shapes: vec![text_shape],
+                diagnostics: Vec::new(),
+            }],
+            media: HashMap::new(),
+            fonts: Vec::new(),
+            metadata: None,
+        };
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+
+        let page = layout_slide_with_fonts(&input, 0, &mut fonts).expect("layout visible overflow");
+        let PositionedElement::Group(shape_group) = &page.elements[0] else {
+            panic!("shape should lower to a group");
+        };
+        let run = glyph_runs(&shape_group.children)[0];
+
+        assert!(shape_group.clip.is_none());
+        assert_close(run.font_size, 20.0);
+        assert!(run.advances.iter().sum::<f64>() > 1.0);
+    }
+
+    #[test]
+    fn bare_normal_autofit_uses_quantised_two_point_five_percent_steps() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let body = autofit_body(
+            ResolvedAutofit::Normal {
+                font_scale: None,
+                line_spacing_reduction: None,
+            },
+            10.0,
+            "quantised ladder",
+        );
+        let segment = shape_run(
+            &mut fonts,
+            "quantised ladder",
+            first_run_style(&body.paragraphs[0]),
+        )
+        .expect("shape ladder text");
+        let content = Rect {
+            width: segment.width * 0.94,
+            ..test_content_box(0.0)
+        };
+
+        let stacked = stack_text(&mut fonts, content, &body).expect("stack ladder text");
+
+        assert_close(glyph_runs(&stacked.elements)[0].font_size, 9.25);
+    }
+
+    #[test]
+    fn bare_normal_autofit_measures_text_inside_paragraph_margins() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let mut body = autofit_body(
+            ResolvedAutofit::Normal {
+                font_scale: None,
+                line_spacing_reduction: None,
+            },
+            10.0,
+            "margin fit",
+        );
+        let segment = shape_run(
+            &mut fonts,
+            "margin fit",
+            first_run_style(&body.paragraphs[0]),
+        )
+        .expect("shape margin text");
+        body.paragraphs[0].left_margin = segment.width * 0.15;
+        let content = Rect {
+            width: segment.width * 1.1,
+            ..test_content_box(0.0)
+        };
+
+        let stacked = stack_text(&mut fonts, content, &body).expect("stack margin text");
+
+        assert_close(glyph_runs(&stacked.elements)[0].font_size, 9.5);
+    }
+
+    #[test]
+    fn bare_normal_autofit_keeps_the_twenty_five_percent_floor_visible() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let body = autofit_body(
+            ResolvedAutofit::Normal {
+                font_scale: None,
+                line_spacing_reduction: None,
+            },
+            20.0,
+            "visible at the floor",
+        );
+        let content = Rect {
+            width: 1.0,
+            height: 1.0,
+            ..test_content_box(0.0)
+        };
+
+        let stacked = stack_text(&mut fonts, content, &body).expect("stack floor text");
+        let run = glyph_runs(&stacked.elements)[0];
+
+        assert_close(run.font_size, 5.0);
+        assert!(stacked.width > content.width || stacked.height > content.height);
+    }
+
     fn bullet_paragraph(
         level: u8,
         bullet: Option<ResolvedBullet>,
@@ -1995,6 +2369,25 @@ mod tests {
                 },
             }],
             ..ResolvedParagraph::default()
+        }
+    }
+
+    fn autofit_body(autofit: ResolvedAutofit, font_size: f64, text: &str) -> ResolvedTextBody {
+        ResolvedTextBody {
+            wrap: false,
+            autofit,
+            paragraphs: vec![ResolvedParagraph {
+                runs: vec![ResolvedTextRun::Text {
+                    text: text.to_owned(),
+                    style: ResolvedRunStyle {
+                        font_size: Some(font_size),
+                        latin_typeface: Some("Carlito".to_owned()),
+                        ..ResolvedRunStyle::default()
+                    },
+                }],
+                ..ResolvedParagraph::default()
+            }],
+            ..text_body(TextInsets::default())
         }
     }
 

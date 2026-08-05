@@ -331,12 +331,16 @@ to Symbol alias as a private-use codepoint.
   resize.
 - `a:normAutofit fontScale="62500" lnSpcReduction="20000"`: apply verbatim. This
   is both cheapest and most faithful, because it reproduces exactly what the
-  authoring application decided.
+  authoring application decided. Font scale applies to every effective run and
+  bullet size. Line-spacing reduction removes only extra leading and never
+  reduces a line below its natural ascent plus descent.
 - Only a bare `<a:normAutofit/>` needs iteration, and then walk PowerPoint's own
   quantised 2.5 percent ladder rather than binary-searching a continuous scale,
-  so the computed value matches what PowerPoint would have written. At most 31
-  steps, typically one to three, and a shaping cache makes repeat passes nearly
-  free.
+  so the computed value matches what PowerPoint would have written. The ladder
+  runs from 100 percent through a 25 percent floor, at most 31 candidates and
+  typically one to three. A per-layout shaping cache makes repeat passes nearly
+  free. If the 25 percent candidate still does not fit, draw it visibly without
+  clipping.
 
 ## Performance
 
