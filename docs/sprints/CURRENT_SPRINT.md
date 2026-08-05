@@ -32,14 +32,14 @@ keeping every PowerPoint development crate unpublished.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-098 | Shape text layout | XL | done | |
-| F-098a | Text content box | M | done | |
-| F-098b | Paragraph inline resolution | L | done | |
-| F-098c | Line stacking | M | done | |
-| F-098d | Text anchoring | S | done | |
-| F-099 | Bullets | M | done | |
-| F-100 | Autofit | M | done | |
-| F-101 | Vertical text | S | done | |
+| F-098 | Shape text layout | XL | done | - |
+| F-098a | Text content box | M | done | - |
+| F-098b | Paragraph inline resolution | L | done | - |
+| F-098c | Line stacking | M | done | - |
+| F-098d | Text anchoring | S | done | - |
+| F-099 | Bullets | M | done | - |
+| F-100 | Autofit | M | done | - |
+| F-101 | Vertical text | S | done | - |
 
 ## Sequencing note
 
