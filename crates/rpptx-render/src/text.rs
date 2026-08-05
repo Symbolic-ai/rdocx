@@ -5,7 +5,7 @@ use oxml_layout::{
 };
 use rpptx_layout::{
     ParagraphAlignment, ResolvedParagraph, ResolvedRunStyle, ResolvedShape, ResolvedTextBody,
-    ResolvedTextRun, ResolvedTextSpacing,
+    ResolvedTextRun, ResolvedTextSpacing, TextAnchor,
 };
 
 const DEFAULT_FONT_SIZE: f64 = 18.0;
@@ -131,6 +131,7 @@ pub(super) fn stack_text(
     text: &ResolvedTextBody,
 ) -> Result<StackedText, LayoutError> {
     let mut elements = Vec::new();
+    let mut line_ranges = Vec::new();
     let mut y = content.y;
     let mut width = 0.0_f64;
 
@@ -143,6 +144,7 @@ pub(super) fn stack_text(
 
         for line in &lines {
             let baseline = y + line.ascent;
+            let element_start = elements.len();
             let occupied_width = emit_line_items(
                 line,
                 paragraph.alignment,
@@ -150,6 +152,7 @@ pub(super) fn stack_text(
                 baseline,
                 &mut elements,
             );
+            line_ranges.push((element_start, elements.len()));
             width = width.max(occupied_width);
             y += line.height;
         }
@@ -157,11 +160,66 @@ pub(super) fn stack_text(
         y += paragraph_spacing(paragraph.space_after.as_ref(), font_size);
     }
 
+    let height = y - content.y;
+    anchor_lines(
+        &mut elements,
+        &line_ranges,
+        text.anchor,
+        content.height - height,
+    );
+
     Ok(StackedText {
         elements,
         width,
-        height: y - content.y,
+        height,
     })
+}
+
+fn anchor_lines(
+    elements: &mut [PositionedElement],
+    line_ranges: &[(usize, usize)],
+    anchor: TextAnchor,
+    spare_height: f64,
+) {
+    let line_count = line_ranges.len();
+    for (line_index, &(start, end)) in line_ranges.iter().enumerate() {
+        let offset = match anchor {
+            TextAnchor::Top => 0.0,
+            TextAnchor::Center => spare_height / 2.0,
+            TextAnchor::Bottom => spare_height,
+            TextAnchor::Justified if spare_height > 0.0 && line_count > 1 => {
+                spare_height * line_index as f64 / (line_count - 1) as f64
+            }
+            TextAnchor::Distributed if spare_height > 0.0 && line_count > 1 => {
+                spare_height * (line_index as f64 + 0.5) / line_count as f64
+            }
+            TextAnchor::Justified | TextAnchor::Distributed
+                if spare_height > 0.0 && line_count == 1 =>
+            {
+                spare_height / 2.0
+            }
+            TextAnchor::Justified | TextAnchor::Distributed => 0.0,
+        };
+        for element in &mut elements[start..end] {
+            translate_element_y(element, offset);
+        }
+    }
+}
+
+fn translate_element_y(element: &mut PositionedElement, offset: f64) {
+    match element {
+        PositionedElement::Text(run) => run.origin.y += offset,
+        PositionedElement::Line { start, end, .. } => {
+            start.y += offset;
+            end.y += offset;
+        }
+        PositionedElement::FilledRect { rect, .. }
+        | PositionedElement::Image { rect, .. }
+        | PositionedElement::LinkAnnotation { rect, .. } => rect.y += offset,
+        PositionedElement::Group(group) => group.transform.f += offset,
+        PositionedElement::Path(_) => {}
+        _ => {}
+    }
 }
 
 fn line_break_params(
@@ -1170,6 +1228,208 @@ mod tests {
         );
         assert_close(width, 15.0);
         assert_close(glyph_runs(&elements)[0].advances.iter().sum(), 15.0);
+    }
+
+    #[test]
+    fn top_center_and_bottom_anchors_use_zero_half_and_full_spare_height() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let paragraph = ResolvedParagraph {
+            line_spacing: Some(ResolvedTextSpacing::Points(20.0)),
+            runs: vec![ResolvedTextRun::Text {
+                text: "anchor".to_owned(),
+                style: ResolvedRunStyle {
+                    font_size: Some(12.0),
+                    latin_typeface: Some("Carlito".to_owned()),
+                    ..ResolvedRunStyle::default()
+                },
+            }],
+            ..ResolvedParagraph::default()
+        };
+        let content = Rect {
+            x: 0.0,
+            y: 7.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let mut baselines = Vec::new();
+
+        for anchor in [TextAnchor::Top, TextAnchor::Center, TextAnchor::Bottom] {
+            let body = ResolvedTextBody {
+                anchor,
+                paragraphs: vec![paragraph.clone()],
+                ..text_body(TextInsets::default())
+            };
+            let stacked = stack_text(&mut fonts, content, &body).expect("stack anchored text");
+            baselines.push(glyph_runs(&stacked.elements)[0].origin.y);
+        }
+
+        assert_close(baselines[1] - baselines[0], 40.0);
+        assert_close(baselines[2] - baselines[0], 80.0);
+    }
+
+    #[test]
+    fn overflowing_anchored_text_remains_visible_without_a_clip() {
+        let text = ResolvedTextBody {
+            anchor: TextAnchor::Bottom,
+            wrap: false,
+            paragraphs: vec![ResolvedParagraph {
+                line_spacing: Some(ResolvedTextSpacing::Points(20.0)),
+                runs: vec![ResolvedTextRun::Text {
+                    text: "visible overflow".to_owned(),
+                    style: ResolvedRunStyle {
+                        font_size: Some(12.0),
+                        latin_typeface: Some("Carlito".to_owned()),
+                        ..ResolvedRunStyle::default()
+                    },
+                }],
+                ..ResolvedParagraph::default()
+            }],
+            ..text_body(TextInsets::default())
+        };
+        let mut text_shape = shape(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 5.0,
+            },
+            ResolvedGeometry::Rectangle,
+        );
+        text_shape.content = ResolvedContent::Text(text);
+        let input = RenderInput {
+            slides: vec![ResolvedSlide {
+                size: (100.0, 50.0),
+                background: None,
+                shapes: vec![text_shape],
+                diagnostics: Vec::new(),
+            }],
+            media: HashMap::new(),
+            fonts: Vec::new(),
+            metadata: None,
+        };
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+
+        let page = layout_slide_with_fonts(&input, 0, &mut fonts).expect("layout overflow");
+        let PositionedElement::Group(shape_group) = &page.elements[0] else {
+            panic!("shape should lower to a group");
+        };
+        let baseline = glyph_runs(&shape_group.children)[0].origin.y;
+
+        assert!(shape_group.clip.is_none());
+        assert!(
+            baseline < 0.0,
+            "bottom anchor should preserve negative offset"
+        );
+    }
+
+    #[test]
+    fn justified_and_distributed_anchors_allocate_positive_spare_height() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let paragraph = || ResolvedParagraph {
+            line_spacing: Some(ResolvedTextSpacing::Points(10.0)),
+            runs: vec![ResolvedTextRun::Text {
+                text: "line".to_owned(),
+                style: ResolvedRunStyle {
+                    font_size: Some(8.0),
+                    latin_typeface: Some("Carlito".to_owned()),
+                    ..ResolvedRunStyle::default()
+                },
+            }],
+            ..ResolvedParagraph::default()
+        };
+        let content = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 60.0,
+        };
+
+        let baselines = |anchor, fonts: &mut FontManager| {
+            let body = ResolvedTextBody {
+                anchor,
+                paragraphs: vec![paragraph(), paragraph(), paragraph()],
+                ..text_body(TextInsets::default())
+            };
+            let stacked = stack_text(fonts, content, &body).expect("stack distributed text");
+            distinct_baselines(&glyph_runs(&stacked.elements))
+        };
+
+        let justified = baselines(TextAnchor::Justified, &mut fonts);
+        assert_close(justified[1] - justified[0], 25.0);
+        assert_close(justified[2] - justified[1], 25.0);
+        let distributed = baselines(TextAnchor::Distributed, &mut fonts);
+        assert_close(distributed[0] - justified[0], 5.0);
+        assert_close(distributed[1] - distributed[0], 20.0);
+        assert_close(distributed[2] - distributed[1], 20.0);
+    }
+
+    #[test]
+    fn bottom_center_text_in_an_inset_box_lands_at_the_computed_baseline() {
+        let insets = TextInsets {
+            left: 10.0,
+            top: 8.0,
+            right: 14.0,
+            bottom: 12.0,
+        };
+        let style = ResolvedRunStyle {
+            font_size: Some(12.0),
+            latin_typeface: Some("Carlito".to_owned()),
+            ..ResolvedRunStyle::default()
+        };
+        let text = ResolvedTextBody {
+            anchor: TextAnchor::Bottom,
+            paragraphs: vec![ResolvedParagraph {
+                alignment: ParagraphAlignment::Center,
+                line_spacing: Some(ResolvedTextSpacing::Points(20.0)),
+                runs: vec![ResolvedTextRun::Text {
+                    text: "baseline".to_owned(),
+                    style: style.clone(),
+                }],
+                ..ResolvedParagraph::default()
+            }],
+            ..text_body(insets)
+        };
+        let mut text_shape = shape(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 80.0,
+            },
+            ResolvedGeometry::Rectangle,
+        );
+        text_shape.content = ResolvedContent::Text(text);
+        let input = RenderInput {
+            slides: vec![ResolvedSlide {
+                size: (120.0, 80.0),
+                background: None,
+                shapes: vec![text_shape],
+                diagnostics: Vec::new(),
+            }],
+            media: HashMap::new(),
+            fonts: Vec::new(),
+            metadata: None,
+        };
+        let mut expected_fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let expected = shape_run(&mut expected_fonts, "baseline", &style).expect("shape baseline");
+        let content_width = 120.0 - insets.left - insets.right;
+        let content_height = 80.0 - insets.top - insets.bottom;
+        let expected_x = insets.left + (content_width - expected.width) / 2.0;
+        let expected_y = insets.top + (content_height - 20.0) + expected.ascent;
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+
+        let page = layout_slide_with_fonts(&input, 0, &mut fonts).expect("layout anchored text");
+        let PositionedElement::Group(shape_group) = &page.elements[0] else {
+            panic!("shape should lower to a group");
+        };
+        let run = glyph_runs(&shape_group.children)[0];
+
+        assert!(matches!(
+            shape_group.children.first(),
+            Some(PositionedElement::Path(_))
+        ));
+        assert_close(run.origin.x, expected_x);
+        assert_close(run.origin.y, expected_y);
     }
 
     #[test]

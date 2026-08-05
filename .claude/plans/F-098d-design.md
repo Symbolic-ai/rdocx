@@ -1,6 +1,6 @@
 # F-098d, Text anchoring
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S24
 **Size**: S
 **Depends on**: F-098c
@@ -71,11 +71,11 @@ Word output corpus.
 
 ## Implementation checklist
 
-- [ ] Measure the complete unanchored block and its spare height.
-- [ ] Apply top, centre, and bottom offsets without clipping overflow.
-- [ ] Apply the approved justified and distributed gap policies.
-- [ ] Attach text after the shape path inside the existing transform group.
-- [ ] Prove the bottom-centre baseline with deterministic independent arithmetic.
+- [x] Measure the complete unanchored block and its spare height.
+- [x] Apply top, centre, and bottom offsets without clipping overflow.
+- [x] Apply the approved justified and distributed gap policies.
+- [x] Attach text after the shape path inside the existing transform group.
+- [x] Prove the bottom-centre baseline with deterministic independent arithmetic.
 
 ## Open questions
 

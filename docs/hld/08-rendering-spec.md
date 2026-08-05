@@ -292,6 +292,13 @@ The algorithm: resolve `a:bodyPr`, compute the content box from the preset's
 text rectangle minus insets, resolve each paragraph through the nine-level
 chain, build inline items, stack lines from the box top, then anchor.
 
+Top anchoring uses no translation, centre uses half the spare content height,
+and bottom uses all of it. These offsets remain negative when the complete text
+stack overflows. With positive spare height, justified anchoring divides the
+space between line boxes, while distributed anchoring uses equal line gaps with
+half a gap before the first line and after the last. Both forms centre a single
+line and leave an overflowing stack undistributed. Anchoring never adds a clip.
+
 **Vertical text** is laid out horizontally in a transposed box and wrapped in a
 `Group` with a 90 degree rotation. `eaVert` upright stacking is not supported in
 v1 and degrades to rotated vertical with a diagnostic.
