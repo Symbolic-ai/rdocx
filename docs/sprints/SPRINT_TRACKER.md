@@ -36,6 +36,7 @@ defended.
 | S21 | M9 | 3 | 3 | 0 | 8 | 3 | Completed M9 with the frozen ResolvedSlide contract, strict all-slide corpus resolution, native PowerPoint acceptance, all 28 hashes unchanged, and no publication |
 | S22 | M10 | 4 | 4 | 0 | 9 | 4 | Completed preset provenance, generation, evaluation, fallback, and the unpublished renderer input boundary with all 28 hashes unchanged and no publication |
 | S23 | M10 | 5 | 5 | 0 | 10 | 5 | Completed shapes, transforms, arrowheads, cropped and tiled pictures, and backgrounds in the unpublished renderer with all 28 hashes unchanged and no publication |
+| S24 | M10 | 8 | 8 | 0 | 14 | 8 | Completed shape text layout, bullets, autofit, and vertical text in the unpublished renderer with all 28 hashes unchanged and no publication |
 
 ## Completed features
 
@@ -175,6 +176,7 @@ five working days.
 | S21 | 3 | 3 | 5.00 |
 | S22 | 4 | 4 | 5.00 |
 | S23 | 5 | 5 | 5.00 |
+| S24 | 8 | 8 | 5.00 |
 
 ## Escalation record
 
@@ -202,3 +204,4 @@ was done about it. Empty is the expected state.
 | 2026-08-02 | Sprint estimate variance exceeded 30 percent | S21 | Record 3 actual days against 8 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
 | 2026-08-03 | Sprint estimate variance exceeded 30 percent | S22 | Record 4 actual days against 9 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
 | 2026-08-03 | Sprint estimate variance exceeded 30 percent | S23 | Record 5 actual days against 10 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
+| 2026-08-05 | Sprint estimate variance exceeded 30 percent | S24 | Record 8 actual days against 14 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
