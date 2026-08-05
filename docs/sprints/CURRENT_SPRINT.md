@@ -30,7 +30,7 @@ quality target, and keep every PowerPoint development crate unpublished.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-102 | Table rendering | L | pending | - |
+| F-102 | Table rendering | L | in-progress | codex |
 | F-103 | Hyperlinks, fields and diagnostics | M | pending | - |
 | F-104 | SSIM fidelity harness | L | pending | - |
 
