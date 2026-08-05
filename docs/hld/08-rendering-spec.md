@@ -299,9 +299,15 @@ space between line boxes, while distributed anchoring uses equal line gaps with
 half a gap before the first line and after the last. Both forms centre a single
 line and leave an overflowing stack undistributed. Anchoring never adds a clip.
 
-**Vertical text** is laid out horizontally in a transposed box and wrapped in a
-`Group` with a 90 degree rotation. `eaVert` upright stacking is not supported in
-v1 and degrades to rotated vertical with a diagnostic.
+**Vertical text** is laid out horizontally in a same-centre transposed box and
+wrapped in a `Group`. `vert` rotates the group 90 degrees and `vert270` rotates
+it -90 degrees. `eaVert` and `wordArtVert` use the `vert` path.
+`mongolianVert` and `wordArtVertRtl` use the `vert270` path. Unsupported upright
+or WordArt stacking stays visible and records, respectively,
+`east Asian vertical text rendered as rotated vertical text`,
+`Mongolian vertical text rendered as rotated vertical-270 text`,
+`WordArt vertical text rendered as rotated vertical text`, or
+`right-to-left WordArt vertical text rendered as rotated vertical-270 text`.
 
 **Bullets** become marker inline items, with `marL` and `indent` mapping onto
 the existing left and hanging indent support. The marker font, colour, and

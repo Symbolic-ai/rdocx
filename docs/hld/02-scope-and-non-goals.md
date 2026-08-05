@@ -97,6 +97,8 @@ causes data loss, only reduced fidelity when rendering.
 | WordArt text warp, `a:prstTxWarp` | Rendered as plain unwarped text |
 | EMF and WMF images | Outline placeholder. Writing an EMF interpreter is out of scope |
 | `eaVert` upright stacked CJK | Falls back to rotated vertical text |
+| `mongolianVert` upright stacking | Falls back to rotated vertical-270 text |
+| `wordArtVert` and `wordArtVertRtl` glyph stacking | Fall back to rotated vertical and vertical-270 text respectively |
 | Gradient stop alpha | Stop colour composited, alpha dropped |
 | Justified text inside shapes | Treated as left-aligned |
 | Table cell text autofit | Not attempted |

@@ -6,7 +6,7 @@ use oxml_layout::{
 use rpptx_layout::{
     ParagraphAlignment, ResolvedAutofit, ResolvedBullet, ResolvedBulletSize, ResolvedParagraph,
     ResolvedRunStyle, ResolvedShape, ResolvedTextBody, ResolvedTextRun, ResolvedTextSpacing,
-    TextAnchor,
+    TextAnchor, TextDirection,
 };
 
 const DEFAULT_FONT_SIZE: f64 = 18.0;
@@ -860,6 +860,34 @@ pub(super) fn content_box(shape: &ResolvedShape, text: &ResolvedTextBody) -> Rec
     }
 }
 
+pub(super) fn oriented_content_box(
+    content: Rect,
+    direction: TextDirection,
+) -> (Rect, Option<oxml_layout::Transform>) {
+    let degrees = match direction {
+        TextDirection::Horizontal => return (content, None),
+        TextDirection::Vertical
+        | TextDirection::EastAsianVertical
+        | TextDirection::WordArtVertical => 90.0,
+        TextDirection::Vertical270
+        | TextDirection::MongolianVertical
+        | TextDirection::WordArtVerticalRtl => -90.0,
+    };
+    let center_x = content.x + content.width / 2.0;
+    let center_y = content.y + content.height / 2.0;
+    (
+        Rect {
+            x: center_x - content.height / 2.0,
+            y: center_y - content.width / 2.0,
+            width: content.height,
+            height: content.width,
+        },
+        Some(oxml_layout::Transform::rotate_about(
+            degrees, center_x, center_y,
+        )),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1034,6 +1062,142 @@ mod tests {
         assert!(content.y.is_finite());
         assert!(content.width.is_finite());
         assert!(content.height.is_finite());
+    }
+
+    #[test]
+    fn vertical_text_uses_a_transposed_box_and_rotated_group() {
+        let content = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 80.0,
+            height: 30.0,
+        };
+
+        let (transposed, transform) = oriented_content_box(content, TextDirection::Vertical);
+
+        assert_eq!(
+            transposed,
+            Rect {
+                x: 35.0,
+                y: -5.0,
+                width: 30.0,
+                height: 80.0,
+            }
+        );
+        let transform = transform.expect("vertical transform");
+        assert_close(transform.a, 0.0);
+        assert_close(transform.b, 1.0);
+        assert_close(transform.c, -1.0);
+        assert_close(transform.d, 0.0);
+        assert_close(transform.e, 85.0);
+        assert_close(transform.f, -15.0);
+
+        let text = ResolvedTextBody {
+            vertical: TextDirection::Vertical,
+            paragraphs: vec![ResolvedParagraph {
+                runs: vec![ResolvedTextRun::Text {
+                    text: "Visible".to_owned(),
+                    style: ResolvedRunStyle {
+                        font_size: Some(12.0),
+                        latin_typeface: Some("Carlito".to_owned()),
+                        ..ResolvedRunStyle::default()
+                    },
+                }],
+                ..ResolvedParagraph::default()
+            }],
+            ..text_body(TextInsets::default())
+        };
+        let mut text_shape = shape(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 80.0,
+                height: 30.0,
+            },
+            ResolvedGeometry::Rectangle,
+        );
+        text_shape.content = ResolvedContent::Text(text);
+        let input = RenderInput {
+            slides: vec![ResolvedSlide {
+                size: (80.0, 30.0),
+                background: None,
+                shapes: vec![text_shape],
+                diagnostics: Vec::new(),
+            }],
+            media: HashMap::new(),
+            fonts: Vec::new(),
+            metadata: None,
+        };
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+
+        let page = layout_slide_with_fonts(&input, 0, &mut fonts).expect("layout vertical text");
+        let oxml_layout::PositionedElement::Group(shape_group) = &page.elements[0] else {
+            panic!("shape should lower to a group");
+        };
+        let text_group = shape_group
+            .children
+            .iter()
+            .find_map(|element| match element {
+                oxml_layout::PositionedElement::Group(group) => Some(group),
+                _ => None,
+            })
+            .expect("vertical text should lower to a nested group");
+        assert_close(text_group.transform.b, 1.0);
+        assert_close(text_group.transform.c, -1.0);
+        assert_eq!(glyph_runs(&text_group.children)[0].text, "Visible");
+    }
+
+    #[test]
+    fn vertical_270_uses_the_opposite_quarter_turn() {
+        let content = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 80.0,
+            height: 30.0,
+        };
+
+        let (_, vertical) = oriented_content_box(content, TextDirection::Vertical);
+        let (_, vertical_270) = oriented_content_box(content, TextDirection::Vertical270);
+
+        let vertical = vertical.expect("vertical transform");
+        let vertical_270 = vertical_270.expect("vertical-270 transform");
+        assert_close(vertical.b, 1.0);
+        assert_close(vertical.c, -1.0);
+        assert_close(vertical_270.b, -1.0);
+        assert_close(vertical_270.c, 1.0);
+        assert_eq!(
+            vertical.apply(Point { x: 50.0, y: 20.0 }),
+            vertical_270.apply(Point { x: 50.0, y: 50.0 })
+        );
+    }
+
+    #[test]
+    fn unsupported_vertical_variants_use_the_documented_quarter_turns() {
+        let content = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 80.0,
+            height: 30.0,
+        };
+
+        for direction in [
+            TextDirection::EastAsianVertical,
+            TextDirection::WordArtVertical,
+        ] {
+            let (_, transform) = oriented_content_box(content, direction);
+            let transform = transform.expect("vertical fallback transform");
+            assert_close(transform.b, 1.0);
+            assert_close(transform.c, -1.0);
+        }
+        for direction in [
+            TextDirection::MongolianVertical,
+            TextDirection::WordArtVerticalRtl,
+        ] {
+            let (_, transform) = oriented_content_box(content, direction);
+            let transform = transform.expect("vertical-270 fallback transform");
+            assert_close(transform.b, -1.0);
+            assert_close(transform.c, 1.0);
+        }
     }
 
     #[test]

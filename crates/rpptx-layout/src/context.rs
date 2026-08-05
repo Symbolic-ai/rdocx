@@ -575,6 +575,13 @@ impl<'a> ResolveCtx<'a> {
             .transpose()?
             .map(ResolvedContent::Text)
             .unwrap_or(ResolvedContent::None);
+        if let ResolvedContent::Text(text) = &content
+            && let Some(message) = vertical_text_diagnostic(text.vertical)
+        {
+            diagnostics.push(Diagnostic {
+                message: message.to_owned(),
+            });
+        }
         if let Some(category) = fill_unsupported {
             diagnostics.push(Diagnostic {
                 message: format!("unsupported {category} retained as shape bounds"),
@@ -1434,6 +1441,24 @@ fn paragraph_alignment(alignment: Option<TextAlignment>) -> ParagraphAlignment {
     }
 }
 
+fn vertical_text_diagnostic(direction: TextDirection) -> Option<&'static str> {
+    match direction {
+        TextDirection::EastAsianVertical => {
+            Some("east Asian vertical text rendered as rotated vertical text")
+        }
+        TextDirection::MongolianVertical => {
+            Some("Mongolian vertical text rendered as rotated vertical-270 text")
+        }
+        TextDirection::WordArtVertical => {
+            Some("WordArt vertical text rendered as rotated vertical text")
+        }
+        TextDirection::WordArtVerticalRtl => {
+            Some("right-to-left WordArt vertical text rendered as rotated vertical-270 text")
+        }
+        TextDirection::Horizontal | TextDirection::Vertical | TextDirection::Vertical270 => None,
+    }
+}
+
 fn resolve_standalone_text_body(
     context: &ResolveCtx<'_>,
     body: &CT_TextBody,
@@ -2148,6 +2173,83 @@ mod tests {
         assert_eq!(properties.wrap, Some(TextWrap::Square));
         assert_eq!(properties.vertical, Some(TextVertical::Horizontal));
         assert_eq!(properties.autofit, Some(TextAutofit::NoAutofit));
+    }
+
+    #[test]
+    fn east_asian_vertical_text_degrades_to_rotated_with_a_diagnostic() {
+        let shape = shape_with_details(
+            None,
+            None,
+            &transform(0),
+            Some(r#"<a:bodyPr vert="eaVert"/>"#),
+        )
+        .replace("<a:p/>", "<a:p><a:r><a:t>visible</a:t></a:r></a:p>");
+        let resolved = Fixture::new(&shape, "", "")
+            .context()
+            .resolve_slide((720.0, 540.0))
+            .expect("resolve East Asian vertical text");
+
+        let ResolvedContent::Text(text) = &resolved.shapes[0].content else {
+            panic!("fallback text should remain visible");
+        };
+        assert_eq!(text.vertical, TextDirection::EastAsianVertical);
+        assert!(matches!(
+            &text.paragraphs[0].runs[0],
+            ResolvedTextRun::Text { text, .. } if text == "visible"
+        ));
+        assert!(resolved.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message == "east Asian vertical text rendered as rotated vertical text"
+        }));
+    }
+
+    #[test]
+    fn other_vertical_variants_remain_visible_with_diagnostics() {
+        let cases = [
+            (
+                "mongolianVert",
+                TextDirection::MongolianVertical,
+                "Mongolian vertical text rendered as rotated vertical-270 text",
+            ),
+            (
+                "wordArtVert",
+                TextDirection::WordArtVertical,
+                "WordArt vertical text rendered as rotated vertical text",
+            ),
+            (
+                "wordArtVertRtl",
+                TextDirection::WordArtVerticalRtl,
+                "right-to-left WordArt vertical text rendered as rotated vertical-270 text",
+            ),
+        ];
+
+        for (value, expected_direction, expected_diagnostic) in cases {
+            let shape = shape_with_details(
+                None,
+                None,
+                &transform(0),
+                Some(&format!(r#"<a:bodyPr vert="{value}"/>"#)),
+            )
+            .replace("<a:p/>", "<a:p><a:r><a:t>visible</a:t></a:r></a:p>");
+            let resolved = Fixture::new(&shape, "", "")
+                .context()
+                .resolve_slide((720.0, 540.0))
+                .expect("resolve visible vertical fallback");
+
+            let ResolvedContent::Text(text) = &resolved.shapes[0].content else {
+                panic!("fallback text should remain visible");
+            };
+            assert_eq!(text.vertical, expected_direction);
+            assert!(matches!(
+                &text.paragraphs[0].runs[0],
+                ResolvedTextRun::Text { text, .. } if text == "visible"
+            ));
+            assert!(
+                resolved
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| { diagnostic.message == expected_diagnostic })
+            );
+        }
     }
 
     #[test]

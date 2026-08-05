@@ -267,6 +267,8 @@ fn lower_shape(
         )?,
         ResolvedContent::Text(text_body) => {
             let content_box = text::content_box(shape, text_body);
+            let (content_box, text_transform) =
+                text::oriented_content_box(content_box, text_body.vertical);
             let stacked =
                 text::stack_text(font_manager, content_box, text_body).map_err(|error| {
                     RenderInputError::TextLayout {
@@ -274,7 +276,17 @@ fn lower_shape(
                     }
                 })?;
             debug_assert!(stacked.width.is_finite() && stacked.height.is_finite());
-            text_children = stacked.elements;
+            text_children = if let Some(transform) = text_transform {
+                vec![PositionedElement::Group(GroupElement {
+                    transform,
+                    clip: None,
+                    opacity: 1.0,
+                    effects: Vec::new(),
+                    children: stacked.elements,
+                })]
+            } else {
+                stacked.elements
+            };
             Vec::new()
         }
         _ => Vec::new(),

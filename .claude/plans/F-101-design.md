@@ -1,6 +1,6 @@
 # F-101, Vertical text
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S24
 **Size**: S
 **Depends on**: F-098d
@@ -78,11 +78,11 @@ harness.
 
 ## Implementation checklist
 
-- [ ] Transpose the content box and reuse the horizontal layout pipeline.
-- [ ] Apply opposite same-centre quarter turns for vertical and vertical-270.
-- [ ] Degrade East Asian vertical text visibly with the stable diagnostic.
-- [ ] Preserve other vertical variants through documented visible fallbacks.
-- [ ] Add deterministic transform, diagnostic, and visibility regressions.
+- [x] Transpose the content box and reuse the horizontal layout pipeline.
+- [x] Apply opposite same-centre quarter turns for vertical and vertical-270.
+- [x] Degrade East Asian vertical text visibly with the stable diagnostic.
+- [x] Preserve other vertical variants through documented visible fallbacks.
+- [x] Add deterministic transform, diagnostic, and visibility regressions.
 
 ## Open questions
 
