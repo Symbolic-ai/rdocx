@@ -39,7 +39,7 @@ keeping every PowerPoint development crate unpublished.
 | F-098d | Text anchoring | S | in-progress | codex |
 | F-099 | Bullets | M | in-progress | codex |
 | F-100 | Autofit | M | in-progress | codex |
-| F-101 | Vertical text | S | pending | - |
+| F-101 | Vertical text | S | in-progress | codex |
 
 ## Sequencing note
 
