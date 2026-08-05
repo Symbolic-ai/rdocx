@@ -25,12 +25,12 @@ regenerated, never hand-edited.
 | M7, DrawingML                               | 19 | 19 | 0 | 0  |
 | M8, PresentationML                          | 14 | 14 | 0 | 0  |
 | M9, Inheritance resolver                    | 8  | 8 | 0 | 0  |
-| M10, Renderer                               | 20 | 9 | 7 | 4  |
+| M10, Renderer                               | 20 | 17 | 0 | 3  |
 | M11, Write API                              | 12 | 0 | 0 | 12 |
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **158** | **90** | **7** | **61** |
+| **Total** | **158** | **98** | **0** | **60** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -204,14 +204,14 @@ regenerated, never hand-edited.
 | F-095 | Arrowheads                                   | S23 | S | done |
 | F-096 | Pictures with crop and tile                  | S23 | M | done |
 | F-097 | Backgrounds                                  | S23 | S | done |
-| F-098 | Shape text layout                            | S24 | XL | pending |
-| F-098a | Text content box                             | S24 | M | in-progress |
-| F-098b | Paragraph inline resolution                  | S24 | L | in-progress |
-| F-098c | Line stacking                                | S24 | M | in-progress |
-| F-098d | Text anchoring                               | S24 | S | in-progress |
-| F-099 | Bullets                                      | S24 | M | in-progress |
-| F-100 | Autofit                                      | S24 | M | in-progress |
-| F-101 | Vertical text                                | S24 | S | in-progress |
+| F-098 | Shape text layout                            | S24 | XL | done |
+| F-098a | Text content box                             | S24 | M | done |
+| F-098b | Paragraph inline resolution                  | S24 | L | done |
+| F-098c | Line stacking                                | S24 | M | done |
+| F-098d | Text anchoring                               | S24 | S | done |
+| F-099 | Bullets                                      | S24 | M | done |
+| F-100 | Autofit                                      | S24 | M | done |
+| F-101 | Vertical text                                | S24 | S | done |
 | F-102 | Table rendering                              | S25 | L | pending |
 | F-103 | Hyperlinks, fields and diagnostics           | S25 | M | pending |
 | F-104 | SSIM fidelity harness                        | S25 | L | pending |

@@ -131,6 +131,14 @@ defended.
 | F-095 | S23 | S | 1 | 1 | 2026-08-03 | Source-neutral resolved line ends lowered to filled paths |
 | F-096 | S23 | M | 2 | 1 | 2026-08-03 | Source-scoped cropped, stretched, and tiled picture rendering |
 | F-097 | S23 | S | 1 | 1 | 2026-08-03 | Preserving explicit background projection and concrete paint resolution |
+| F-098a | S24 | M | 2 | 1 | 2026-08-05 | Preset text rectangle, insets, bounds fallback, and clamped content box |
+| F-098b | S24 | L | 4 | 1 | 2026-08-05 | Concrete resolved runs, script-aware typefaces, fields, and explicit breaks |
+| F-098c | S24 | M | 2 | 1 | 2026-08-05 | Paragraph wrapping, spacing, alignment, line stacking, and shared emission |
+| F-098d | S24 | S | 1 | 1 | 2026-08-05 | Top, centre, bottom, justified, and distributed text anchoring |
+| F-098 | S24 | XL | 0 | 1 | 2026-08-05 | Umbrella closed after four child stories and integrated gates |
+| F-099 | S24 | M | 2 | 1 | 2026-08-05 | Character and automatic bullet markers with deterministic numbering |
+| F-100 | S24 | M | 2 | 1 | 2026-08-05 | Stored and computed autofit with visible overflow policies |
+| F-101 | S24 | S | 1 | 1 | 2026-08-05 | Rotated vertical text with visible diagnosed fallbacks |
 
 ## Velocity
 

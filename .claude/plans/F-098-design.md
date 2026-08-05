@@ -1,6 +1,6 @@
 # F-098, Shape text layout
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S24
 **Size**: XL
 **Depends on**: F-083, F-030
@@ -73,10 +73,10 @@ feed the 28 Word sample outputs.
 
 ## Implementation checklist
 
-- [ ] Approve the F-098a through F-098d split in the HLD backlog, delivery backlog, sprint plan, and current sprint.
-- [ ] Complete F-098a, F-098b, F-098c, and F-098d with individual evidence.
-- [ ] Confirm the integrated bottom-centre baseline gate passes in deterministic font mode.
-- [ ] Close the parent only after every child is complete.
+- [x] Approve the F-098a through F-098d split in the HLD backlog, delivery backlog, sprint plan, and current sprint.
+- [x] Complete F-098a, F-098b, F-098c, and F-098d with individual evidence.
+- [x] Confirm the integrated bottom-centre baseline gate passes in deterministic font mode.
+- [x] Close the parent only after every child is complete.
 
 ## Open questions
 

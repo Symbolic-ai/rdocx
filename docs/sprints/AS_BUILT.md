@@ -2969,3 +2969,255 @@ passed.
 
 **Notes for future sessions.** Keep the captured background subtree as the
 only serialization source and the typed form as a rendering projection only.
+
+### F-098a, Text content box
+
+**Sprint.** S24
+**Completed.** 2026-08-05
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Shape text now starts from the evaluated preset or custom
+geometry text rectangle, falls back to local shape bounds when needed, applies
+all four resolved insets, and clamps malformed negative extents to zero.
+
+**Non-obvious choices.** The content box remains in shape-local coordinates so
+the existing shape group transform places paths and text through one boundary.
+Missing geometry uses a visible bounds fallback instead of dropping text.
+
+**Deviations from the design plan.** Microscope pass 1 found that the fallback
+regression omitted the diagnosed bounds-fallback case. The test was expanded,
+and pass 2 was clean.
+
+**Spec sections touched.** None. The implementation follows the existing text
+rectangle and body-inset contract.
+
+**Tests.** `preset_text_rectangle_minus_unequal_insets_produces_the_computed_content_box`,
+`missing_text_rectangle_falls_back_to_local_shape_bounds`,
+`insets_larger_than_the_text_rectangle_do_not_create_negative_extents`, and the
+integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep the box local and finite before shaping.
+Do not clip overflowing text at the shape boundary.
+
+### F-098b, Paragraph inline resolution
+
+**Sprint.** S24
+**Completed.** 2026-08-05
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Resolved paragraphs now become shaped inline segments with
+concrete size, fill, style, typeface, fields, and explicit break boundaries.
+One font manager and shaping cache are reused across presentation layout.
+
+**Non-obvious choices.** Typeface selection follows the script actually present
+in the text, then uses the resolved Latin, East Asian, or complex-script slot.
+Visible 18 point black sans-serif defaults cover missing resolved styling.
+
+**Deviations from the design plan.** Microscope pass 1 found that a populated
+Latin slot incorrectly overrode script-specific faces. Text-driven slot
+selection and regressions fixed it, and pass 2 was clean.
+
+**Spec sections touched.** None. The frozen resolver and shared shaping
+boundaries already describe the implemented ownership.
+
+**Tests.** `resolved_runs_emit_glyph_items_with_concrete_style_and_break_boundaries`,
+`script_specific_text_selects_its_resolved_concrete_typeface`,
+`repeated_resolved_runs_reuse_one_shaped_cache_entry`,
+`text_shaping_failures_return_a_render_error_without_panicking`, and the
+integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Select a concrete typeface before shaping and
+keep shaping failures contextual instead of substituting silent empty output.
+
+### F-098c, Line stacking
+
+**Sprint.** S24
+**Completed.** 2026-08-05
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Paragraph margins, hanging indents, wrapping, explicit
+breaks, point and percentage spacing, horizontal alignment, and stacked
+baselines now lower into positioned text and marker items without clipping.
+
+**Non-obvious choices.** Text and markers share one baseline emitter. Percentage
+line spacing uses the effective first-run size, while justified final lines
+retain their ordinary alignment.
+
+**Deviations from the design plan.** Microscope pass 1 corrected percentage
+spacing that used natural metrics. Pass 2 added proof for justified lines and
+production draw order. Pass 3 was clean.
+
+**Spec sections touched.** None. The line-breaking and paragraph-order
+contracts already cover the implementation.
+
+**Tests.** `paragraphs_stack_wrapped_lines_with_spacing_and_alignment`,
+`wrap_none_breaks_only_at_explicit_line_breaks`,
+`percentage_line_spacing_uses_effective_first_run_font_size`,
+`shape_text_stays_above_the_path_and_overflows_without_a_clip`, and the
+integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep line breaking and baseline emission shared
+between body text and markers so later decorations cannot drift vertically.
+
+### F-098d, Text anchoring
+
+**Sprint.** S24
+**Completed.** 2026-08-05
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Complete text blocks now use top, centre, bottom, justified,
+or distributed vertical placement inside the content box, then render above the
+shape path within the existing group transform.
+
+**Non-obvious choices.** Overflow remains visible. Justified anchoring allocates
+spare height only between paragraphs, while distributed anchoring allocates it
+between every adjacent line.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md` now defines the exact
+justified and distributed anchoring policy.
+
+**Tests.** `bottom_center_text_in_an_inset_box_lands_at_the_computed_baseline`,
+`top_center_and_bottom_anchors_use_zero_half_and_full_spare_height`,
+`justified_and_distributed_anchors_allocate_positive_spare_height`,
+`overflowing_anchored_text_remains_visible_without_a_clip`, and the integrated
+full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Measure the whole unanchored block first, then
+apply one vertical placement policy without adding a clip.
+
+### F-098, Shape text layout
+
+**Sprint.** S24
+**Completed.** 2026-08-05
+**Size.** XL, estimated 0 days, actual 1 day
+
+**What was built.** The umbrella closes the integrated content-box, inline
+resolution, line-stacking, and anchoring pipeline delivered by F-098a through
+F-098d. Shape text now follows the frozen resolved-slide boundary end to end.
+
+**Non-obvious choices.** The umbrella has no independent source diff. Its gate
+is the combined child evidence and deterministic bottom-centre baseline.
+
+**Deviations from the design plan.** None. Every child completed its own plan,
+review, tests, and delivery record before the parent closed.
+
+**Spec sections touched.** `docs/hld/14-development-backlog.md` defines the four
+implemented ownership boundaries and the combined parent gate.
+
+**Tests.** F-098a through F-098d focused gates, the deterministic
+`bottom_center_text_in_an_inset_box_lands_at_the_computed_baseline` regression,
+and the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Extend the existing private text module and
+shared layout primitives. Do not introduce a second presentation text model.
+
+### F-099, Bullets
+
+**Sprint.** S24
+**Completed.** 2026-08-05
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Character and automatic bullets now render with independent
+size, colour, and typeface styling. Automatic counters are scoped per body and
+level across eight common formats, and Wingdings F0B7 maps to a visible Unicode
+bullet.
+
+**Non-obvious choices.** Scheme changes, character bullets, no-bullet
+paragraphs, and shallower levels reset the relevant sequence. Unsupported
+schemes retain a visible Arabic-period marker, and the hanging slot stays fixed
+even when a marker is wider than it.
+
+**Deviations from the design plan.** Microscope pass 1 found that long markers
+expanded the fixed hanging slot. The slot was fixed and an oversized-marker
+regression added. Pass 2 was clean.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md` now records the eight
+formats, counter resets, visible fallback, and Wingdings mapping.
+
+**Tests.** `wingdings_f0b7_bullet_renders_as_a_visible_unicode_glyph`,
+`automatic_bullets_increment_and_reset_by_level`,
+`eight_common_auto_number_schemes_format_exact_markers`,
+`wide_auto_number_marker_keeps_text_on_the_paragraph_margin`, and the integrated
+full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep numbering state inside one resolved body and
+keep marker measurement independent from the fixed text margin.
+
+### F-100, Autofit
+
+**Sprint.** S24
+**Completed.** 2026-08-05
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Stored normal-autofit font scale and line-spacing reduction
+now apply verbatim. Bare normal autofit selects from a deterministic 2.5 percent
+ladder down to 25 percent, while no-autofit and shape-autofit keep visible
+overflow behavior.
+
+**Non-obvious choices.** Only extra leading is reduced, never the font metrics.
+Each ladder attempt measures inside paragraph margins and reuses shaping work
+within the calculation.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean and added
+no remediation.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md` now defines the
+25 percent floor, line-spacing floor, and visible smallest-candidate overflow.
+
+**Tests.** `stored_font_scale_renders_at_exactly_sixty_two_point_five_percent`,
+`stored_line_spacing_reduction_reduces_only_extra_leading`,
+`bare_normal_autofit_uses_quantised_two_point_five_percent_steps`,
+`bare_normal_autofit_keeps_the_twenty_five_percent_floor_visible`, and the
+integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep the ladder deterministic and avoid clipping
+when even its smallest candidate cannot fit.
+
+### F-101, Vertical text
+
+**Sprint.** S24
+**Completed.** 2026-08-05
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Vertical and vertical-270 text reuse horizontal layout in a
+transposed content box, then apply opposite centre-preserving quarter turns.
+East Asian vertical and other unsupported variants remain visible through
+documented rotations and stable diagnostics.
+
+**Non-obvious choices.** The resolver owns fallback diagnostics, while the
+renderer receives only concrete direction and applies the affine transform to
+one grouped text block.
+
+**Deviations from the design plan.** Microscope pass 1 found an exact renderer
+mapping coverage gap. The regression was added, and pass 2 was clean.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md` and
+`docs/hld/08-rendering-spec.md` now define direction mapping and visible
+diagnosed fallbacks.
+
+**Tests.** `vertical_text_uses_a_transposed_box_and_rotated_group`,
+`vertical_270_uses_the_opposite_quarter_turn`,
+`east_asian_vertical_text_degrades_to_rotated_with_a_diagnostic`,
+`other_vertical_variants_remain_visible_with_diagnostics`, and the integrated
+full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep vertical fallbacks visible and diagnosed.
+Do not add a separate vertical shaping pipeline.

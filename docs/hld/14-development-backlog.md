@@ -756,8 +756,10 @@ rectangle.
 **Test gate**: text anchored bottom-centre in an inset box lands at the computed
 baseline.
 
-F-098 is split into the four implementation stories below. The parent closes
-only after every child closes.
+F-098 is implemented through the four stories below. F-098a owns content-box
+geometry, F-098b owns shaped inline resolution, F-098c owns line stacking, and
+F-098d owns horizontal and vertical anchoring. The parent is complete only when
+all four child gates pass together in deterministic font mode.
 
 ### F-098a, Text content box (M)
 Use the preset or custom geometry text rectangle, falling back to the shape
