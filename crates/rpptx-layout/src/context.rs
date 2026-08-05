@@ -4,16 +4,20 @@ use std::collections::HashMap;
 
 use oxml_drawing::color::{ColorChoice, ColorMap, ColorMapSlot, RgbColor, resolve_color};
 use oxml_drawing::effect::CT_OuterShadowEffect;
-use oxml_drawing::fill::{BlipMode, Fill, GradientGeometry, RelativeRect};
+use oxml_drawing::fill::{BlipMode, Fill, GradientGeometry, RelativeRect, SolidFill};
 use oxml_drawing::geometry::EvaluatedPathCommand;
 use oxml_drawing::line::{
     CT_LineProperties, LineCap as DrawingLineCap, LineDash, LineEnd, LineEndSize, LineEndType,
     LineJoin as DrawingLineJoin,
 };
+use oxml_drawing::style_ref::{FontCollectionIndex, StyleReference};
+use oxml_drawing::table::{
+    CT_TableBorders, CT_TableCellStyle, CT_TablePartStyle, CT_TableStyleList, CT_TableTextStyle,
+};
 use oxml_drawing::text::{
     CT_TextBody, CT_TextBodyProperties, CT_TextCharacterProperties, CT_TextListStyle,
     Coordinate32Value, TextAlignment, TextAnchor as DrawingTextAnchor, TextAutofit,
-    TextBulletChoice, TextBulletSizeValue, TextPointValue, TextRun, TextSpacing,
+    TextBulletChoice, TextBulletSizeValue, TextFont, TextPointValue, TextRun, TextSpacing,
     TextVertical as DrawingTextVertical, TextWrap,
 };
 use oxml_drawing::theme::CT_OfficeStyleSheet;
@@ -34,9 +38,9 @@ use crate::{
     ParagraphAlignment, ResolvedAutofit, ResolvedBullet, ResolvedBulletSize, ResolvedContent,
     ResolvedGeometry, ResolvedImagePlacement, ResolvedLineEnd, ResolvedLineEndKind,
     ResolvedLineEndSize, ResolvedParagraph, ResolvedRectAlignment, ResolvedRunStyle, ResolvedShape,
-    ResolvedSlide, ResolvedTable, ResolvedTableCell, ResolvedTableRow, ResolvedTextBody,
-    ResolvedTextRun, ResolvedTextSpacing, ResolvedTileFlip, ResolvedTilePlacement, ScopedMediaIds,
-    TextAnchor, TextDirection, TextInsets,
+    ResolvedSlide, ResolvedTable, ResolvedTableBorder, ResolvedTableCell, ResolvedTableRow,
+    ResolvedTextBody, ResolvedTextRun, ResolvedTextSpacing, ResolvedTileFlip,
+    ResolvedTilePlacement, ScopedMediaIds, TextAnchor, TextDirection, TextInsets,
 };
 
 /// The producer part that supplied the effective background.
@@ -101,6 +105,7 @@ pub struct ResolveCtx<'a> {
     pub layout: &'a CT_SlideLayout,
     pub slide: &'a CT_Slide,
     pub default_text_style: &'a CT_TextListStyle,
+    pub table_styles: Option<&'a CT_TableStyleList>,
     pub(crate) list_style_cache: RefCell<HashMap<Option<PlaceholderKey>, EffectiveListStyle>>,
 }
 
@@ -120,8 +125,15 @@ impl<'a> ResolveCtx<'a> {
             layout,
             slide,
             default_text_style,
+            table_styles: None,
             list_style_cache: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// Adds the optional `ppt/tableStyles.xml` projection used by table frames.
+    pub fn with_table_styles(mut self, table_styles: &'a CT_TableStyleList) -> Self {
+        self.table_styles = Some(table_styles);
+        self
     }
 
     pub(crate) fn placeholder_chain<'ctx>(
@@ -407,9 +419,10 @@ impl<'a> ResolveCtx<'a> {
                     return Ok(None);
                 };
                 let (content, unsupported) = match &frame.graphic_data.payload {
-                    GraphicDataPayload::Table(table) => {
-                        (ResolvedContent::Table(self.resolve_table(table)?), None)
-                    }
+                    GraphicDataPayload::Table(table) => (
+                        ResolvedContent::Table(self.resolve_table(table, diagnostics)?),
+                        None,
+                    ),
                     GraphicDataPayload::Chart(_) => (ResolvedContent::None, Some("chart")),
                     GraphicDataPayload::SmartArt(_) => (ResolvedContent::None, Some("SmartArt")),
                     GraphicDataPayload::Ole(_) => (ResolvedContent::None, Some("OLE")),
@@ -1183,10 +1196,13 @@ impl ResolveCtx<'_> {
 
     fn resolve_table_run_style(
         &self,
+        table_style: &CT_TextCharacterProperties,
         paragraph: Option<&oxml_drawing::text::CT_TextParagraphProperties>,
         run: Option<&CT_TextCharacterProperties>,
     ) -> Result<ResolvedRunStyle, ResolveError> {
-        let effective = self.effective_table_text_properties(paragraph, run).run;
+        let effective = self
+            .effective_table_text_properties(Some(table_style), paragraph, run)
+            .run;
         self.resolved_run_style(effective)
     }
 
@@ -1274,6 +1290,7 @@ impl ResolveCtx<'_> {
     fn resolve_table(
         &self,
         table: &oxml_drawing::table::CT_Table,
+        diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<ResolvedTable, ResolveError> {
         let column_widths = table
             .grid
@@ -1281,21 +1298,202 @@ impl ResolveCtx<'_> {
             .iter()
             .map(|width| emu_to_points(width.0))
             .collect();
+        let style = self.table_styles.and_then(|styles| {
+            styles.style(
+                table
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.style_id.as_deref()),
+            )
+        });
+        let row_count = table.rows.len();
+        let column_count = table.grid.columns.len();
+        let table_properties = table.properties.as_ref();
         let rows = table
             .rows
             .iter()
-            .map(|row| {
+            .enumerate()
+            .map(|(row_index, row)| {
                 let cells = row
                     .cells
                     .iter()
-                    .map(|cell| {
-                        let text = cell
+                    .enumerate()
+                    .map(|(column_index, cell)| {
+                        let mut cascade = TableCellCascade::default();
+                        let position = TableCellPosition {
+                            row: row_index,
+                            column: column_index,
+                            row_count,
+                            column_count,
+                        };
+                        if let Some(style) = style {
+                            let mut priority = 1u8;
+                            cascade.apply_region(
+                                style.whole_table.as_ref(),
+                                true,
+                                position,
+                                priority,
+                            );
+                            priority += 1;
+                            if table_properties.is_some_and(|properties| properties.band_rows) {
+                                let offset = usize::from(
+                                    table_properties.is_some_and(|properties| properties.first_row),
+                                );
+                                let region = if row_index.saturating_sub(offset) % 2 == 0 {
+                                    style.band1_horizontal.as_ref()
+                                } else {
+                                    style.band2_horizontal.as_ref()
+                                };
+                                cascade.apply_region(region, false, position, priority);
+                                priority += 1;
+                            }
+                            if table_properties.is_some_and(|properties| properties.band_columns) {
+                                let offset = usize::from(
+                                    table_properties
+                                        .is_some_and(|properties| properties.first_column),
+                                );
+                                let region = if column_index.saturating_sub(offset) % 2 == 0 {
+                                    style.band1_vertical.as_ref()
+                                } else {
+                                    style.band2_vertical.as_ref()
+                                };
+                                cascade.apply_region(region, false, position, priority);
+                                priority += 1;
+                            }
+                            if column_index == 0
+                                && table_properties
+                                    .is_some_and(|properties| properties.first_column)
+                            {
+                                cascade.apply_region(
+                                    style.first_column.as_ref(),
+                                    false,
+                                    position,
+                                    priority,
+                                );
+                                priority += 1;
+                            }
+                            if column_index + 1 == column_count
+                                && table_properties.is_some_and(|properties| properties.last_column)
+                            {
+                                cascade.apply_region(
+                                    style.last_column.as_ref(),
+                                    false,
+                                    position,
+                                    priority,
+                                );
+                                priority += 1;
+                            }
+                            if row_index == 0
+                                && table_properties.is_some_and(|properties| properties.first_row)
+                            {
+                                cascade.apply_region(
+                                    style.first_row.as_ref(),
+                                    false,
+                                    position,
+                                    priority,
+                                );
+                                priority += 1;
+                            }
+                            if row_index + 1 == row_count
+                                && table_properties.is_some_and(|properties| properties.last_row)
+                            {
+                                cascade.apply_region(
+                                    style.last_row.as_ref(),
+                                    false,
+                                    position,
+                                    priority,
+                                );
+                                priority += 1;
+                            }
+                            let first_row =
+                                table_properties.is_some_and(|properties| properties.first_row);
+                            let last_row =
+                                table_properties.is_some_and(|properties| properties.last_row);
+                            let first_column =
+                                table_properties.is_some_and(|properties| properties.first_column);
+                            let last_column =
+                                table_properties.is_some_and(|properties| properties.last_column);
+                            let corner = match (row_index, column_index) {
+                                (0, 0) if first_row && first_column => {
+                                    style.north_west_cell.as_ref()
+                                }
+                                (0, column)
+                                    if column + 1 == column_count && first_row && last_column =>
+                                {
+                                    style.north_east_cell.as_ref()
+                                }
+                                (row, 0) if row + 1 == row_count && last_row && first_column => {
+                                    style.south_west_cell.as_ref()
+                                }
+                                (row, column)
+                                    if row + 1 == row_count
+                                        && column + 1 == column_count
+                                        && last_row
+                                        && last_column =>
+                                {
+                                    style.south_east_cell.as_ref()
+                                }
+                                _ => None,
+                            };
+                            cascade.apply_region(corner, false, position, priority);
+                        }
+                        if let Some(properties) = &cell.properties {
+                            cascade.apply_direct(properties);
+                            for unsupported in &properties.unsupported {
+                                push_table_diagnostic(diagnostics, unsupported);
+                            }
+                        }
+                        for unsupported in &cascade.unsupported {
+                            push_table_diagnostic(diagnostics, unsupported);
+                        }
+                        let referenced_fill = cascade
+                            .fill_reference
+                            .as_ref()
+                            .map(|reference| self.table_referenced_fill(reference))
+                            .transpose()?
+                            .flatten();
+                        let (fill, fill_unsupported) = referenced_fill
+                            .as_ref()
+                            .or(cascade.fill.as_ref())
+                            .map(|fill| self.concrete_fill(fill, (1.0, 1.0)))
+                            .transpose()?
+                            .unwrap_or((None, None));
+                        if let Some(unsupported) = fill_unsupported {
+                            push_table_diagnostic(diagnostics, unsupported);
+                        }
+                        let table_text_style = table_character_properties(&cascade.text_style)?;
+                        let mut text = cell
                             .text_body
                             .as_ref()
-                            .map(|body| resolve_standalone_text_body(self, body))
+                            .map(|body| resolve_standalone_text_body(self, body, &table_text_style))
                             .transpose()?;
+                        if let Some(body) = text.as_mut()
+                            && body.autofit != ResolvedAutofit::None
+                        {
+                            body.autofit = ResolvedAutofit::None;
+                            let message = "table cell autofit is unsupported and was ignored";
+                            if !diagnostics
+                                .iter()
+                                .any(|diagnostic| diagnostic.message == message)
+                            {
+                                diagnostics.push(Diagnostic {
+                                    message: message.to_owned(),
+                                });
+                            }
+                        }
                         Ok(ResolvedTableCell {
                             text,
+                            fill,
+                            margins: TextInsets {
+                                left: emu_to_points(cascade.margin_left.unwrap_or(91_440)),
+                                top: emu_to_points(cascade.margin_top.unwrap_or(45_720)),
+                                right: emu_to_points(cascade.margin_right.unwrap_or(91_440)),
+                                bottom: emu_to_points(cascade.margin_bottom.unwrap_or(45_720)),
+                            },
+                            left: self.resolve_table_border(cascade.left, diagnostics)?,
+                            right: self.resolve_table_border(cascade.right, diagnostics)?,
+                            top: self.resolve_table_border(cascade.top, diagnostics)?,
+                            bottom: self.resolve_table_border(cascade.bottom, diagnostics)?,
                             row_span: cell.row_span,
                             grid_span: cell.grid_span,
                             horizontal_merge: cell.horizontal_merge,
@@ -1310,9 +1508,268 @@ impl ResolveCtx<'_> {
             })
             .collect::<Result<Vec<_>, ResolveError>>()?;
         Ok(ResolvedTable {
+            right_to_left: table_properties.is_some_and(|properties| properties.right_to_left),
             column_widths,
             rows,
         })
+    }
+
+    fn resolve_table_border(
+        &self,
+        border: Option<(CT_LineProperties, u8)>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<Option<ResolvedTableBorder>, ResolveError> {
+        border
+            .map(|(line, priority)| {
+                let stroke = self.concrete_line(&line, (1.0, 1.0))?;
+                if stroke.is_none()
+                    && let Some(fill) = &line.fill
+                {
+                    let (_, unsupported) = self.concrete_fill(fill, (1.0, 1.0))?;
+                    if let Some(unsupported) = unsupported {
+                        push_table_diagnostic(diagnostics, unsupported);
+                    }
+                }
+                Ok(ResolvedTableBorder { stroke, priority })
+            })
+            .transpose()
+    }
+
+    fn table_referenced_fill(
+        &self,
+        reference: &StyleReference,
+    ) -> Result<Option<Fill>, ResolveError> {
+        let StyleReference::Fill(reference) = reference else {
+            return Ok(None);
+        };
+        let matrix = &self.theme.theme_elements.format_scheme;
+        let Some(mut fill) = referenced_fill(
+            reference.index,
+            &matrix.fill_styles,
+            &matrix.background_fill_styles,
+        )?
+        else {
+            return Ok(None);
+        };
+        substitute_fill(&mut fill, reference.color.as_ref(), "table cell")?;
+        Ok(Some(fill))
+    }
+}
+
+#[derive(Default)]
+struct TableCellCascade {
+    fill: Option<Fill>,
+    fill_reference: Option<StyleReference>,
+    left: Option<(CT_LineProperties, u8)>,
+    right: Option<(CT_LineProperties, u8)>,
+    top: Option<(CT_LineProperties, u8)>,
+    bottom: Option<(CT_LineProperties, u8)>,
+    margin_left: Option<i64>,
+    margin_right: Option<i64>,
+    margin_top: Option<i64>,
+    margin_bottom: Option<i64>,
+    text_style: TableTextCascade,
+    unsupported: Vec<String>,
+}
+
+#[derive(Default)]
+struct TableTextCascade {
+    bold: Option<bool>,
+    italic: Option<bool>,
+    font_collection: Option<FontCollectionIndex>,
+    color: Option<ColorChoice>,
+}
+
+#[derive(Clone, Copy)]
+struct TableCellPosition {
+    row: usize,
+    column: usize,
+    row_count: usize,
+    column_count: usize,
+}
+
+fn table_character_properties(
+    style: &TableTextCascade,
+) -> Result<CT_TextCharacterProperties, ResolveError> {
+    let mut properties = CT_TextCharacterProperties::default();
+    properties.bold = style.bold;
+    properties.italic = style.italic;
+    if let Some(color) = &style.color {
+        let mut solid = SolidFill::default();
+        solid.color = Some(color.clone());
+        properties.fill = Some(Fill::Solid(solid));
+    }
+    let font_tokens = match style.font_collection {
+        Some(FontCollectionIndex::Major) => Some(("+mj-lt", "+mj-ea", "+mj-cs")),
+        Some(FontCollectionIndex::Minor) => Some(("+mn-lt", "+mn-ea", "+mn-cs")),
+        Some(FontCollectionIndex::None) | None => None,
+    };
+    if let Some((latin, east_asian, complex_script)) = font_tokens {
+        let font = |typeface| {
+            TextFont::new(typeface).map_err(|error| ResolveError::ConcreteValue {
+                kind: "table font",
+                detail: error.to_string(),
+            })
+        };
+        properties.latin = Some(font(latin)?);
+        properties.east_asian = Some(font(east_asian)?);
+        properties.complex_script = Some(font(complex_script)?);
+    }
+    Ok(properties)
+}
+
+impl TableCellCascade {
+    fn apply_region(
+        &mut self,
+        region: Option<&CT_TablePartStyle>,
+        whole_table: bool,
+        position: TableCellPosition,
+        priority: u8,
+    ) {
+        let Some(region) = region else {
+            return;
+        };
+        if let Some(cell_style) = &region.cell_style {
+            self.apply_cell_style(cell_style, whole_table, position, priority);
+        }
+        if let Some(text_style) = &region.text_style {
+            self.apply_text_style(text_style);
+        }
+    }
+
+    fn apply_cell_style(
+        &mut self,
+        style: &CT_TableCellStyle,
+        whole_table: bool,
+        position: TableCellPosition,
+        priority: u8,
+    ) {
+        if let Some(fill) = &style.fill {
+            self.fill = Some(fill.clone());
+            self.fill_reference = None;
+        }
+        if let Some(reference) = &style.fill_reference {
+            self.fill_reference = Some(reference.clone());
+            self.fill = None;
+        }
+        if let Some(borders) = &style.borders {
+            self.apply_borders(borders, whole_table, position, priority);
+            self.unsupported.extend(borders.unsupported.iter().cloned());
+        }
+        self.unsupported.extend(style.unsupported.iter().cloned());
+    }
+
+    fn apply_borders(
+        &mut self,
+        borders: &CT_TableBorders,
+        whole_table: bool,
+        position: TableCellPosition,
+        priority: u8,
+    ) {
+        let left = if whole_table {
+            if position.column > 0 {
+                borders.inside_vertical.as_ref()
+            } else {
+                borders.left.as_ref()
+            }
+        } else {
+            borders.left.as_ref().or(borders.inside_vertical.as_ref())
+        };
+        let right = if whole_table {
+            if position.column + 1 < position.column_count {
+                borders.inside_vertical.as_ref()
+            } else {
+                borders.right.as_ref()
+            }
+        } else {
+            borders.right.as_ref().or(borders.inside_vertical.as_ref())
+        };
+        let top = if whole_table {
+            if position.row > 0 {
+                borders.inside_horizontal.as_ref()
+            } else {
+                borders.top.as_ref()
+            }
+        } else {
+            borders.top.as_ref().or(borders.inside_horizontal.as_ref())
+        };
+        let bottom = if whole_table {
+            if position.row + 1 < position.row_count {
+                borders.inside_horizontal.as_ref()
+            } else {
+                borders.bottom.as_ref()
+            }
+        } else {
+            borders
+                .bottom
+                .as_ref()
+                .or(borders.inside_horizontal.as_ref())
+        };
+        apply_table_edge(&mut self.left, left, priority);
+        apply_table_edge(&mut self.right, right, priority);
+        apply_table_edge(&mut self.top, top, priority);
+        apply_table_edge(&mut self.bottom, bottom, priority);
+    }
+
+    fn apply_text_style(&mut self, style: &CT_TableTextStyle) {
+        if style.bold.is_some() {
+            self.text_style.bold = style.bold;
+        }
+        if style.italic.is_some() {
+            self.text_style.italic = style.italic;
+        }
+        if let Some(StyleReference::Font(reference)) = &style.font_reference {
+            self.text_style.font_collection = Some(reference.index);
+            if reference.color.is_some() {
+                self.text_style.color = reference.color.clone();
+            }
+        }
+        if style.color.is_some() {
+            self.text_style.color = style.color.clone();
+        }
+    }
+
+    fn apply_direct(&mut self, properties: &oxml_drawing::table::CT_TableCellProperties) {
+        if let Some(fill) = &properties.fill {
+            self.fill = Some(fill.clone());
+            self.fill_reference = None;
+        }
+        if let Some(value) = properties.margin_left {
+            self.margin_left = Some(value.0);
+        }
+        if let Some(value) = properties.margin_right {
+            self.margin_right = Some(value.0);
+        }
+        if let Some(value) = properties.margin_top {
+            self.margin_top = Some(value.0);
+        }
+        if let Some(value) = properties.margin_bottom {
+            self.margin_bottom = Some(value.0);
+        }
+        apply_table_edge(&mut self.left, properties.left.as_ref(), u8::MAX);
+        apply_table_edge(&mut self.right, properties.right.as_ref(), u8::MAX);
+        apply_table_edge(&mut self.top, properties.top.as_ref(), u8::MAX);
+        apply_table_edge(&mut self.bottom, properties.bottom.as_ref(), u8::MAX);
+    }
+}
+
+fn apply_table_edge(
+    target: &mut Option<(CT_LineProperties, u8)>,
+    source: Option<&CT_LineProperties>,
+    priority: u8,
+) {
+    if let Some(source) = source {
+        *target = Some((source.clone(), priority));
+    }
+}
+
+fn push_table_diagnostic(diagnostics: &mut Vec<Diagnostic>, unsupported: &str) {
+    let message = format!("unsupported table cell {unsupported} was ignored");
+    if !diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message == message)
+    {
+        diagnostics.push(Diagnostic { message });
     }
 }
 
@@ -1462,6 +1919,7 @@ fn vertical_text_diagnostic(direction: TextDirection) -> Option<&'static str> {
 fn resolve_standalone_text_body(
     context: &ResolveCtx<'_>,
     body: &CT_TextBody,
+    table_style: &CT_TextCharacterProperties,
 ) -> Result<ResolvedTextBody, ResolveError> {
     let mut properties = default_body_properties();
     merge_body_properties(&mut properties, &body.body_properties);
@@ -1469,8 +1927,11 @@ fn resolve_standalone_text_body(
         .paragraphs()
         .iter()
         .map(|paragraph| {
-            let effective =
-                context.effective_table_text_properties(paragraph.properties.as_ref(), None);
+            let effective = context.effective_table_text_properties(
+                Some(table_style),
+                paragraph.properties.as_ref(),
+                None,
+            );
             let paragraph_properties = &effective.paragraph;
             let runs = paragraph
                 .runs
@@ -1479,6 +1940,7 @@ fn resolve_standalone_text_body(
                     TextRun::Run(run) => Ok(ResolvedTextRun::Text {
                         text: run.text.value.clone(),
                         style: context.resolve_table_run_style(
+                            table_style,
                             paragraph.properties.as_ref(),
                             run.properties.as_ref(),
                         )?,
@@ -1492,6 +1954,7 @@ fn resolve_standalone_text_body(
                             .unwrap_or_default(),
                         field_type: field.field_type.clone(),
                         style: context.resolve_table_run_style(
+                            table_style,
                             paragraph.properties.as_ref(),
                             field.run_properties.as_ref(),
                         )?,
@@ -2976,11 +3439,155 @@ mod tests {
         assert_eq!(body.insets.left, 1.0);
         assert_eq!(body.anchor, ResolvedTextAnchor::Bottom);
         assert_eq!(body.vertical, TextDirection::Vertical);
-        assert_eq!(body.autofit, ResolvedAutofit::Shape);
+        assert_eq!(body.autofit, ResolvedAutofit::None);
         assert_eq!(body.paragraphs[0].left_margin, 2.0);
         assert_eq!(
             body.paragraphs[0].alignment,
             crate::ParagraphAlignment::Center
+        );
+        assert!(resolved.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message == "table cell autofit is unsupported and was ignored"
+        }));
+    }
+
+    #[test]
+    fn table_style_regions_resolve_in_documented_precedence() {
+        let frame = r#"<p:graphicFrame><p:nvGraphicFramePr/><p:xfrm><a:off x="0" y="0"/><a:ext cx="254000" cy="254000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr firstRow="1" firstCol="1" bandRow="1"><a:tableStyleId>style</a:tableStyleId></a:tblPr><a:tblGrid><a:gridCol w="127000"/><a:gridCol w="127000"/></a:tblGrid><a:tr h="127000"><a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>styled</a:t></a:r></a:p></a:txBody></a:tc><a:tc/></a:tr><a:tr h="127000"><a:tc/><a:tc/></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#;
+        let styles = oxml_drawing::table::CT_TableStyleList::from_xml(br#"<a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" def="style"><a:tblStyle styleId="style" styleName="Style"><a:wholeTbl><a:tcStyle><a:solidFill><a:srgbClr val="111111"/></a:solidFill></a:tcStyle></a:wholeTbl><a:band1H><a:tcStyle><a:solidFill><a:srgbClr val="222222"/></a:solidFill></a:tcStyle></a:band1H><a:firstRow><a:tcTxStyle b="on" i="1"><a:fontRef idx="major"/><a:srgbClr val="AABBCC"/></a:tcTxStyle><a:tcStyle><a:solidFill><a:srgbClr val="333333"/></a:solidFill></a:tcStyle></a:firstRow><a:nwCell><a:tcStyle><a:solidFill><a:srgbClr val="444444"/></a:solidFill></a:tcStyle></a:nwCell></a:tblStyle></a:tblStyleLst>"#).unwrap();
+        let fixture = Fixture::new(frame, "", "");
+
+        let resolved = fixture
+            .context()
+            .with_table_styles(&styles)
+            .resolve_slide((20.0, 20.0))
+            .unwrap();
+        let ResolvedContent::Table(table) = &resolved.shapes[0].content else {
+            panic!("expected table");
+        };
+
+        assert_eq!(
+            table.rows[0].cells[0].fill,
+            Some(Paint::Solid(Color::from_hex("444444")))
+        );
+        assert_eq!(
+            table.rows[0].cells[1].fill,
+            Some(Paint::Solid(Color::from_hex("333333")))
+        );
+        assert_eq!(
+            table.rows[1].cells[0].fill,
+            Some(Paint::Solid(Color::from_hex("222222")))
+        );
+        let ResolvedTextRun::Text { style, .. } =
+            &table.rows[0].cells[0].text.as_ref().unwrap().paragraphs[0].runs[0]
+        else {
+            panic!("expected styled text run")
+        };
+        assert!(style.bold && style.italic);
+        assert_eq!(style.fill, Some(Paint::Solid(Color::from_hex("AABBCC"))));
+        assert_eq!(style.latin_typeface.as_deref(), Some("Aptos Display"));
+    }
+
+    #[test]
+    fn direct_table_text_and_inside_borders_override_style_defaults() {
+        let frame = r#"<p:graphicFrame><p:nvGraphicFramePr/><p:xfrm><a:off x="0" y="0"/><a:ext cx="254000" cy="127000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr><a:tableStyleId>style</a:tableStyleId></a:tblPr><a:tblGrid><a:gridCol w="127000"/><a:gridCol w="127000"/></a:tblGrid><a:tr h="127000"><a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:rPr b="0"><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill><a:latin typeface="Courier New"/></a:rPr><a:t>direct</a:t></a:r></a:p></a:txBody></a:tc><a:tc/></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#;
+        let styles = oxml_drawing::table::CT_TableStyleList::from_xml(br#"<a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" def="style"><a:tblStyle styleId="style" styleName="Style"><a:wholeTbl><a:tcTxStyle b="on"><a:fontRef idx="major"/><a:srgbClr val="FF0000"/></a:tcTxStyle><a:tcStyle><a:tcBdr><a:left><a:ln w="12700"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></a:left><a:right><a:ln w="12700"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></a:right><a:insideV><a:ln w="25400"><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></a:ln></a:insideV></a:tcBdr></a:tcStyle></a:wholeTbl></a:tblStyle></a:tblStyleLst>"#).unwrap();
+        let fixture = Fixture::new(frame, "", "");
+
+        let resolved = fixture
+            .context()
+            .with_table_styles(&styles)
+            .resolve_slide((20.0, 10.0))
+            .unwrap();
+        let ResolvedContent::Table(table) = &resolved.shapes[0].content else {
+            panic!("expected table");
+        };
+        let ResolvedTextRun::Text { style, .. } =
+            &table.rows[0].cells[0].text.as_ref().unwrap().paragraphs[0].runs[0]
+        else {
+            panic!("expected direct run");
+        };
+        assert!(!style.bold);
+        assert_eq!(style.fill, Some(Paint::Solid(Color::from_hex("00FF00"))));
+        assert_eq!(style.latin_typeface.as_deref(), Some("Courier New"));
+
+        let first = &table.rows[0].cells[0];
+        let second = &table.rows[0].cells[1];
+        assert_eq!(
+            first.left.as_ref().unwrap().stroke.as_ref().unwrap().paint,
+            Paint::Solid(Color::from_hex("FF0000"))
+        );
+        assert_eq!(
+            first.right.as_ref().unwrap().stroke.as_ref().unwrap().paint,
+            Paint::Solid(Color::from_hex("0000FF"))
+        );
+        assert_eq!(
+            second.left.as_ref().unwrap().stroke.as_ref().unwrap().paint,
+            Paint::Solid(Color::from_hex("0000FF"))
+        );
+        assert_eq!(
+            second
+                .right
+                .as_ref()
+                .unwrap()
+                .stroke
+                .as_ref()
+                .unwrap()
+                .paint,
+            Paint::Solid(Color::from_hex("FF0000"))
+        );
+    }
+
+    #[test]
+    fn table_corners_require_both_flags_and_unsupported_fills_are_diagnosed() {
+        let frame = r#"<p:graphicFrame><p:nvGraphicFramePr/><p:xfrm><a:off x="0" y="0"/><a:ext cx="254000" cy="127000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr firstRow="1"><a:tableStyleId>style</a:tableStyleId></a:tblPr><a:tblGrid><a:gridCol w="127000"/><a:gridCol w="127000"/></a:tblGrid><a:tr h="127000"><a:tc/><a:tc><a:tcPr><a:lnL><a:pattFill prst="pct5"><a:fgClr><a:srgbClr val="FF0000"/></a:fgClr><a:bgClr><a:srgbClr val="FFFFFF"/></a:bgClr></a:pattFill></a:lnL><a:pattFill prst="pct5"><a:fgClr><a:srgbClr val="FF0000"/></a:fgClr><a:bgClr><a:srgbClr val="FFFFFF"/></a:bgClr></a:pattFill></a:tcPr></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#;
+        let styles = oxml_drawing::table::CT_TableStyleList::from_xml(br#"<a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" def="style"><a:tblStyle styleId="style" styleName="Style"><a:wholeTbl><a:tcStyle><a:solidFill><a:srgbClr val="111111"/></a:solidFill></a:tcStyle></a:wholeTbl><a:firstRow><a:tcStyle><a:solidFill><a:srgbClr val="333333"/></a:solidFill></a:tcStyle></a:firstRow><a:nwCell><a:tcStyle><a:solidFill><a:srgbClr val="444444"/></a:solidFill></a:tcStyle></a:nwCell></a:tblStyle></a:tblStyleLst>"#).unwrap();
+        let fixture = Fixture::new(frame, "", "");
+
+        let resolved = fixture
+            .context()
+            .with_table_styles(&styles)
+            .resolve_slide((20.0, 10.0))
+            .unwrap();
+        let ResolvedContent::Table(table) = &resolved.shapes[0].content else {
+            panic!("expected table");
+        };
+
+        assert_eq!(
+            table.rows[0].cells[0].fill,
+            Some(Paint::Solid(Color::from_hex("333333")))
+        );
+        assert_eq!(table.rows[0].cells[1].fill, None);
+        assert!(
+            table.rows[0].cells[1]
+                .left
+                .as_ref()
+                .is_some_and(|border| border.stroke.is_none())
+        );
+        assert!(resolved.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message == "unsupported table cell pattern fill was ignored"
+        }));
+    }
+
+    #[test]
+    fn table_cell_autofit_is_ignored_and_records_a_diagnostic() {
+        let frame = r#"<p:graphicFrame><p:nvGraphicFramePr/><p:xfrm><a:off x="0" y="0"/><a:ext cx="127000" cy="127000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblGrid><a:gridCol w="127000"/></a:tblGrid><a:tr h="127000"><a:tc><a:txBody><a:bodyPr><a:spAutoFit/></a:bodyPr><a:p><a:r><a:t>cell</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#;
+        let fixture = Fixture::new(frame, "", "");
+
+        let resolved = fixture.context().resolve_slide((10.0, 10.0)).unwrap();
+        let ResolvedContent::Table(table) = &resolved.shapes[0].content else {
+            panic!("expected table");
+        };
+
+        assert_eq!(
+            table.rows[0].cells[0].text.as_ref().unwrap().autofit,
+            ResolvedAutofit::None
+        );
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message
+                    == "table cell autofit is unsupported and was ignored")
         );
     }
 

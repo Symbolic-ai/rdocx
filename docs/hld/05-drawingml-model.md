@@ -198,13 +198,27 @@ both directions.
 
 Table properties expose right-to-left order, first and last row and column
 flags, row and column banding, and the optional table style id. Unsupported
-fills, borders, margins, effects, extensions, attributes, and child elements
-remain raw XML at their schema boundary. Writers use fixed `a:` prefixes and
-emit `a:tblPr`, `a:tblGrid`, then `a:tr`, with cell text before cell
-properties. A caller that extracts `a:tbl` from a larger XML part passes the
-ancestor namespace bindings to `from_xml_with_inherited_namespaces`, which
-keeps opaque producer-prefixed content namespace-complete in standalone
-output.
+cell properties remain raw XML at their schema boundary. The rendering subset
+types cell margins, DrawingML fills, and the left, right, top, and bottom line
+properties. Diagonal borders, effects, 3-D properties, and unsupported wrapper
+forms stay opaque and carry unsupported metadata for the resolver. A modelled
+fill or line form that the neutral paint model cannot render remains typed and
+produces a stable resolver diagnostic.
+
+`CT_TableStyleList` models the optional default style id and the ordered style
+records. Each style can expose whole-table, band, edge, and corner regions. A
+region models its cell fill or fill reference, text bold and italic state,
+theme font reference, text colour, outer borders, and inside horizontal and
+vertical borders. Producer wrapper elements such as `a:fill`, `a:tcBdr`, and
+its edge children remain part of the modelled schema path. Empty wrappers and
+unmodelled siblings retain their original form.
+
+Readers accept any element prefix. Writers use fixed `a:` prefixes and schema
+child order for the modelled subset. Table writers emit `a:tblPr`,
+`a:tblGrid`, then `a:tr`, with cell text before cell properties. A caller that
+extracts `a:tbl` from a larger XML part passes the ancestor namespace bindings
+to `from_xml_with_inherited_namespaces`, which keeps opaque producer-prefixed
+content namespace-complete in standalone output.
 
 ## Theme
 

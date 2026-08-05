@@ -78,6 +78,7 @@ impl ResolveCtx<'_> {
     /// Resolves presentation defaults and the master's other style for table text.
     pub(crate) fn effective_table_text_properties(
         &self,
+        table_style: Option<&CT_TextCharacterProperties>,
         paragraph: Option<&CT_TextParagraphProperties>,
         run: Option<&CT_TextCharacterProperties>,
     ) -> EffectiveTextProperties {
@@ -93,6 +94,9 @@ impl ResolveCtx<'_> {
             .level(level)
             .cloned()
             .unwrap_or_else(EffectiveTextProperties::default);
+        if let Some(properties) = table_style {
+            merge_character(&mut effective, properties);
+        }
         if let Some(properties) = paragraph {
             merge_paragraph(&mut effective, properties);
         }

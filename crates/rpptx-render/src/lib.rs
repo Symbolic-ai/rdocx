@@ -13,7 +13,7 @@ use oxml_layout::{
 use rpptx_layout::{
     CropRect, ResolvedContent, ResolvedGeometry, ResolvedImagePlacement, ResolvedLineEnd,
     ResolvedLineEndKind, ResolvedLineEndSize, ResolvedRectAlignment, ResolvedShape, ResolvedSlide,
-    ResolvedTileFlip, ResolvedTilePlacement,
+    ResolvedTable, ResolvedTableBorder, ResolvedTileFlip, ResolvedTilePlacement,
 };
 use rpptx_oxml::notes_parts::CT_NotesSlide;
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster};
@@ -232,14 +232,20 @@ fn lower_shape(
     shape: &ResolvedShape,
     font_manager: &mut FontManager,
 ) -> Result<PositionedElement, RenderInputError> {
-    let paths = match &shape.geometry {
-        ResolvedGeometry::Rectangle | ResolvedGeometry::BoundsFallback => vec![Path::rect(Rect {
-            x: 0.0,
-            y: 0.0,
-            width: shape.bounds.width,
-            height: shape.bounds.height,
-        })],
-        ResolvedGeometry::Custom { paths, .. } => paths.clone(),
+    let paths = if matches!(shape.content, ResolvedContent::Table(_)) {
+        Vec::new()
+    } else {
+        match &shape.geometry {
+            ResolvedGeometry::Rectangle | ResolvedGeometry::BoundsFallback => {
+                vec![Path::rect(Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: shape.bounds.width,
+                    height: shape.bounds.height,
+                })]
+            }
+            ResolvedGeometry::Custom { paths, .. } => paths.clone(),
+        }
     };
     let stroke = match (&shape.geometry, &shape.fill, &shape.line) {
         (ResolvedGeometry::BoundsFallback, None, None) => {
@@ -289,6 +295,7 @@ fn lower_shape(
             };
             Vec::new()
         }
+        ResolvedContent::Table(table) => lower_table(table, font_manager)?,
         _ => Vec::new(),
     };
     children.extend(
@@ -331,6 +338,256 @@ fn lower_shape(
         effects: Vec::new(),
         children,
     }))
+}
+
+fn lower_table(
+    table: &ResolvedTable,
+    font_manager: &mut FontManager,
+) -> Result<Vec<PositionedElement>, RenderInputError> {
+    let mut physical_column_widths = table.column_widths.clone();
+    if table.right_to_left {
+        physical_column_widths.reverse();
+    }
+    let column_offsets = cumulative_offsets(&physical_column_widths);
+    let row_heights = table.rows.iter().map(|row| row.height).collect::<Vec<_>>();
+    let row_offsets = cumulative_offsets(&row_heights);
+    let mut fills = Vec::new();
+    let mut texts = Vec::new();
+    let mut borders: HashMap<(bool, usize, usize), TableBorderCandidate> = HashMap::new();
+
+    for (row_index, row) in table.rows.iter().enumerate() {
+        for (column_index, cell) in row.cells.iter().enumerate() {
+            if cell.horizontal_merge
+                || cell.vertical_merge
+                || column_index >= table.column_widths.len()
+            {
+                continue;
+            }
+            let row_span = usize::try_from(cell.row_span)
+                .unwrap_or(usize::MAX)
+                .max(1)
+                .min(table.rows.len().saturating_sub(row_index));
+            let column_span = usize::try_from(cell.grid_span)
+                .unwrap_or(usize::MAX)
+                .max(1)
+                .min(table.column_widths.len().saturating_sub(column_index));
+            let visual_column = if table.right_to_left {
+                table
+                    .column_widths
+                    .len()
+                    .saturating_sub(column_index + column_span)
+            } else {
+                column_index
+            };
+            let rectangle = Rect {
+                x: column_offsets[visual_column],
+                y: row_offsets[row_index],
+                width: column_offsets[visual_column + column_span] - column_offsets[visual_column],
+                height: row_offsets[row_index + row_span] - row_offsets[row_index],
+            };
+            if let Some(fill) = &cell.fill {
+                fills.push(PositionedElement::Path(PathElement {
+                    path: Path::rect(rectangle),
+                    fill: Some(fill.clone()),
+                    stroke: None,
+                }));
+            }
+            if let Some(text_body) = &cell.text {
+                let mut text_body = text_body.clone();
+                text_body.insets = cell.margins;
+                let content = Rect {
+                    x: rectangle.x + text_body.insets.left,
+                    y: rectangle.y + text_body.insets.top,
+                    width: (rectangle.width - text_body.insets.left - text_body.insets.right)
+                        .max(0.0),
+                    height: (rectangle.height - text_body.insets.top - text_body.insets.bottom)
+                        .max(0.0),
+                };
+                let (content, transform) = text::oriented_content_box(content, text_body.vertical);
+                let stacked =
+                    text::stack_text(font_manager, content, &text_body).map_err(|error| {
+                        RenderInputError::TextLayout {
+                            detail: error.to_string(),
+                        }
+                    })?;
+                if let Some(transform) = transform {
+                    texts.push(PositionedElement::Group(GroupElement {
+                        transform,
+                        clip: None,
+                        opacity: 1.0,
+                        effects: Vec::new(),
+                        children: stacked.elements,
+                    }));
+                } else {
+                    texts.extend(stacked.elements);
+                }
+            }
+
+            let last_row = row_index + row_span - 1;
+            let last_column = column_index + column_span - 1;
+            for logical_column in column_index..=last_column {
+                let physical_column = if table.right_to_left {
+                    table.column_widths.len() - logical_column - 1
+                } else {
+                    logical_column
+                };
+                let top = table.rows[row_index]
+                    .cells
+                    .get(logical_column)
+                    .and_then(|covered| covered.top.as_ref())
+                    .or(cell.top.as_ref());
+                let bottom = table.rows[last_row]
+                    .cells
+                    .get(logical_column)
+                    .and_then(|covered| covered.bottom.as_ref())
+                    .or(cell.bottom.as_ref());
+                insert_table_border(&mut borders, (true, row_index, physical_column), top, 4);
+                insert_table_border(
+                    &mut borders,
+                    (true, row_index + row_span, physical_column),
+                    bottom,
+                    2,
+                );
+            }
+            let left_column = if table.right_to_left {
+                last_column
+            } else {
+                column_index
+            };
+            let right_column = if table.right_to_left {
+                column_index
+            } else {
+                last_column
+            };
+            for covered_row in row_index..=last_row {
+                let left = table.rows[covered_row]
+                    .cells
+                    .get(left_column)
+                    .and_then(|covered| covered.left.as_ref())
+                    .or(cell.left.as_ref());
+                let right = table.rows[covered_row]
+                    .cells
+                    .get(right_column)
+                    .and_then(|covered| covered.right.as_ref())
+                    .or(cell.right.as_ref());
+                insert_table_border(&mut borders, (false, visual_column, covered_row), left, 3);
+                insert_table_border(
+                    &mut borders,
+                    (false, visual_column + column_span, covered_row),
+                    right,
+                    1,
+                );
+            }
+        }
+    }
+
+    let mut ordered_borders = borders.into_iter().collect::<Vec<_>>();
+    ordered_borders.sort_by_key(|(key, _)| *key);
+    let mut border_elements = Vec::new();
+    for ((horizontal, boundary, segment), candidate) in ordered_borders {
+        let Some(stroke) = candidate.border.stroke else {
+            continue;
+        };
+        let path = if horizontal {
+            open_path(
+                Point {
+                    x: column_offsets[segment],
+                    y: row_offsets[boundary],
+                },
+                Point {
+                    x: column_offsets[segment + 1],
+                    y: row_offsets[boundary],
+                },
+            )
+        } else {
+            open_path(
+                Point {
+                    x: column_offsets[boundary],
+                    y: row_offsets[segment],
+                },
+                Point {
+                    x: column_offsets[boundary],
+                    y: row_offsets[segment + 1],
+                },
+            )
+        };
+        border_elements.push(PositionedElement::Path(PathElement {
+            path,
+            fill: None,
+            stroke: Some(stroke),
+        }));
+    }
+    fills.extend(texts);
+    fills.extend(border_elements);
+    Ok(fills)
+}
+
+struct TableBorderCandidate {
+    border: ResolvedTableBorder,
+    side_rank: u8,
+}
+
+fn insert_table_border(
+    borders: &mut HashMap<(bool, usize, usize), TableBorderCandidate>,
+    key: (bool, usize, usize),
+    border: Option<&ResolvedTableBorder>,
+    side_rank: u8,
+) {
+    let Some(border) = border else {
+        return;
+    };
+    let candidate = TableBorderCandidate {
+        border: border.clone(),
+        side_rank,
+    };
+    let replace = borders.get(&key).is_none_or(|current| {
+        let candidate_width = candidate
+            .border
+            .stroke
+            .as_ref()
+            .map_or(0.0, |stroke| stroke.width);
+        let current_width = current
+            .border
+            .stroke
+            .as_ref()
+            .map_or(0.0, |stroke| stroke.width);
+        (
+            candidate.border.priority,
+            ordered_width(candidate_width),
+            candidate.side_rank,
+        ) > (
+            current.border.priority,
+            ordered_width(current_width),
+            current.side_rank,
+        )
+    });
+    if replace {
+        borders.insert(key, candidate);
+    }
+}
+
+fn ordered_width(width: f64) -> u64 {
+    if width.is_finite() && width >= 0.0 {
+        width.to_bits()
+    } else {
+        0
+    }
+}
+
+fn cumulative_offsets(lengths: &[f64]) -> Vec<f64> {
+    let mut offsets = Vec::with_capacity(lengths.len() + 1);
+    offsets.push(0.0);
+    for length in lengths {
+        offsets.push(offsets.last().copied().unwrap_or(0.0) + length.max(0.0));
+    }
+    offsets
+}
+
+fn open_path(start: Point, end: Point) -> Path {
+    Path {
+        commands: vec![PathCommand::MoveTo(start), PathCommand::LineTo(end)],
+        fill_rule: oxml_layout::FillRule::NonZero,
+    }
 }
 
 const MAX_TILE_ELEMENTS: usize = 4_096;
@@ -1075,7 +1332,11 @@ mod tests {
         Color, Diagnostic, FillRule, GradientStop, GroupElement, Paint, Path, PathCommand, Point,
         PositionedElement, Rect, Stroke, Transform,
     };
-    use rpptx_layout::{ResolveCtx, ResolvedContent, ResolvedGeometry, ResolvedShape};
+    use rpptx_layout::{
+        ResolveCtx, ResolvedAutofit, ResolvedContent, ResolvedGeometry, ResolvedParagraph,
+        ResolvedRunStyle, ResolvedShape, ResolvedTable, ResolvedTableBorder, ResolvedTableCell,
+        ResolvedTableRow, ResolvedTextBody, ResolvedTextRun, TextAnchor, TextDirection, TextInsets,
+    };
 
     const IMAGE_RELATIONSHIP: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
@@ -1124,6 +1385,275 @@ mod tests {
             content: ResolvedContent::None,
             unsupported: None,
         }
+    }
+
+    fn table_shape(table: ResolvedTable) -> ResolvedShape {
+        let mut table_shape = shape(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            ResolvedGeometry::Rectangle,
+            None,
+            None,
+        );
+        table_shape.content = ResolvedContent::Table(table);
+        table_shape
+    }
+
+    fn table_text(value: &str) -> ResolvedTextBody {
+        ResolvedTextBody {
+            insets: TextInsets::default(),
+            anchor: TextAnchor::Top,
+            wrap: true,
+            vertical: TextDirection::Horizontal,
+            autofit: ResolvedAutofit::None,
+            paragraphs: vec![ResolvedParagraph {
+                runs: vec![ResolvedTextRun::Text {
+                    text: value.to_owned(),
+                    style: ResolvedRunStyle {
+                        font_size: Some(6.0),
+                        ..ResolvedRunStyle::default()
+                    },
+                }],
+                ..ResolvedParagraph::default()
+            }],
+        }
+    }
+
+    fn table_border() -> ResolvedTableBorder {
+        ResolvedTableBorder {
+            stroke: Some(Stroke::new(Paint::Solid(Color::BLACK), 1.0)),
+            priority: 1,
+        }
+    }
+
+    #[test]
+    fn banded_merged_table_renders_correct_fills_without_duplicated_borders() {
+        let table = ResolvedTable {
+            right_to_left: false,
+            column_widths: vec![10.0, 10.0],
+            rows: vec![
+                ResolvedTableRow {
+                    height: 10.0,
+                    cells: vec![
+                        ResolvedTableCell {
+                            fill: Some(Paint::Solid(Color::from_hex("FF0000"))),
+                            text: Some(table_text("merged")),
+                            left: Some(table_border()),
+                            right: Some(table_border()),
+                            top: Some(table_border()),
+                            bottom: Some(table_border()),
+                            grid_span: 2,
+                            row_span: 1,
+                            ..ResolvedTableCell::default()
+                        },
+                        ResolvedTableCell {
+                            horizontal_merge: true,
+                            ..ResolvedTableCell::default()
+                        },
+                    ],
+                },
+                ResolvedTableRow {
+                    height: 10.0,
+                    cells: vec![
+                        ResolvedTableCell {
+                            fill: Some(Paint::Solid(Color::from_hex("00FF00"))),
+                            left: Some(table_border()),
+                            right: Some(table_border()),
+                            top: Some(table_border()),
+                            bottom: Some(table_border()),
+                            ..ResolvedTableCell::default()
+                        },
+                        ResolvedTableCell {
+                            fill: Some(Paint::Solid(Color::from_hex("0000FF"))),
+                            left: Some(table_border()),
+                            right: Some(table_border()),
+                            top: Some(table_border()),
+                            bottom: Some(table_border()),
+                            ..ResolvedTableCell::default()
+                        },
+                    ],
+                },
+            ],
+        };
+        let layout = layout_presentation(&render_input(vec![slide(
+            (20.0, 20.0),
+            vec![table_shape(table)],
+        )]))
+        .unwrap();
+        let png = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+
+        let red = rgb_at(&pixmap, 5, 5);
+        assert!(red.0 > 200 && red.1 < 30 && red.2 < 30, "{red:?}");
+        assert_eq!(rgb_at(&pixmap, 5, 15), (0, 255, 0));
+        assert_eq!(rgb_at(&pixmap, 15, 15), (0, 0, 255));
+        let group = only_group(&layout.pages[0].elements[0]);
+        assert_eq!(
+            group
+                .children
+                .iter()
+                .filter(|element| matches!(element, PositionedElement::Path(path) if path.stroke.is_some()))
+                .count(),
+            11,
+            "the merged top row removes its internal vertical segment"
+        );
+        assert!(group.children.iter().any(
+            |element| matches!(element, PositionedElement::Text(run) if run.text == "merged")
+        ));
+    }
+
+    #[test]
+    fn merged_continuation_cells_do_not_render_fill_border_or_text_twice() {
+        let table = ResolvedTable {
+            right_to_left: false,
+            column_widths: vec![10.0, 10.0],
+            rows: vec![ResolvedTableRow {
+                height: 10.0,
+                cells: vec![
+                    ResolvedTableCell {
+                        fill: Some(Paint::Solid(Color::BLACK)),
+                        grid_span: 2,
+                        ..ResolvedTableCell::default()
+                    },
+                    ResolvedTableCell {
+                        fill: Some(Paint::Solid(Color::WHITE)),
+                        horizontal_merge: true,
+                        ..ResolvedTableCell::default()
+                    },
+                ],
+            }],
+        };
+        let page = layout_slide(
+            &render_input(vec![slide((20.0, 10.0), vec![table_shape(table)])]),
+            0,
+        )
+        .unwrap();
+        let group = only_group(&page.elements[0]);
+
+        assert_eq!(group.children.iter().filter(|element| matches!(element, PositionedElement::Path(path) if path.fill.is_some())).count(), 1);
+    }
+
+    #[test]
+    fn right_to_left_table_keeps_unequal_logical_column_widths() {
+        let table = ResolvedTable {
+            right_to_left: true,
+            column_widths: vec![10.0, 20.0],
+            rows: vec![ResolvedTableRow {
+                height: 10.0,
+                cells: vec![
+                    ResolvedTableCell {
+                        fill: Some(Paint::Solid(Color::from_hex("FF0000"))),
+                        ..ResolvedTableCell::default()
+                    },
+                    ResolvedTableCell {
+                        fill: Some(Paint::Solid(Color::from_hex("0000FF"))),
+                        ..ResolvedTableCell::default()
+                    },
+                ],
+            }],
+        };
+        let layout = layout_presentation(&render_input(vec![slide(
+            (30.0, 10.0),
+            vec![table_shape(table)],
+        )]))
+        .unwrap();
+        let png = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+
+        assert_eq!(rgb_at(&pixmap, 5, 5), (0, 0, 255));
+        assert_eq!(rgb_at(&pixmap, 25, 5), (255, 0, 0));
+    }
+
+    #[test]
+    fn merged_table_uses_far_continuation_border() {
+        let outer = ResolvedTableBorder {
+            stroke: Some(Stroke::new(Paint::Solid(Color::from_hex("FF0000")), 3.0)),
+            priority: 2,
+        };
+        let table = ResolvedTable {
+            right_to_left: false,
+            column_widths: vec![10.0, 10.0],
+            rows: vec![ResolvedTableRow {
+                height: 10.0,
+                cells: vec![
+                    ResolvedTableCell {
+                        grid_span: 2,
+                        right: Some(table_border()),
+                        ..ResolvedTableCell::default()
+                    },
+                    ResolvedTableCell {
+                        horizontal_merge: true,
+                        right: Some(outer),
+                        ..ResolvedTableCell::default()
+                    },
+                ],
+            }],
+        };
+        let page = layout_slide(
+            &render_input(vec![slide((20.0, 10.0), vec![table_shape(table)])]),
+            0,
+        )
+        .unwrap();
+        let group = only_group(&page.elements[0]);
+        let far_border = group.children.iter().find_map(|element| {
+            let PositionedElement::Path(path) = element else {
+                return None;
+            };
+            match path.path.commands.as_slice() {
+                [PathCommand::MoveTo(start), PathCommand::LineTo(end)]
+                    if start.x == 20.0 && end.x == 20.0 =>
+                {
+                    path.stroke.as_ref()
+                }
+                _ => None,
+            }
+        });
+
+        let far_border = far_border.expect("merged far edge should be emitted");
+        assert_eq!(far_border.width, 3.0);
+        assert_eq!(far_border.paint, Paint::Solid(Color::from_hex("FF0000")));
+    }
+
+    #[test]
+    fn table_cell_margins_place_text_in_the_fixed_content_box() {
+        let table = ResolvedTable {
+            right_to_left: false,
+            column_widths: vec![20.0],
+            rows: vec![ResolvedTableRow {
+                height: 20.0,
+                cells: vec![ResolvedTableCell {
+                    text: Some(table_text("cell")),
+                    margins: TextInsets {
+                        left: 2.0,
+                        top: 3.0,
+                        right: 4.0,
+                        bottom: 5.0,
+                    },
+                    ..ResolvedTableCell::default()
+                }],
+            }],
+        };
+        let page = layout_slide(
+            &render_input(vec![slide((20.0, 20.0), vec![table_shape(table)])]),
+            0,
+        )
+        .unwrap();
+        let group = only_group(&page.elements[0]);
+        let PositionedElement::Text(run) = group
+            .children
+            .iter()
+            .find(|element| matches!(element, PositionedElement::Text(_)))
+            .expect("cell text should remain visible")
+        else {
+            unreachable!()
+        };
+
+        assert!(run.origin.x >= 2.0);
+        assert!(run.origin.y >= 3.0);
     }
 
     fn slide(size: (f64, f64), shapes: Vec<ResolvedShape>) -> ResolvedSlide {

@@ -327,6 +327,25 @@ The Wingdings trap is handled before font resolution. `a:buChar` U+F0B7 maps
 to the visible Unicode bullet U+2022 instead of passing through the Wingdings
 to Symbol alias as a private-use codepoint.
 
+## Tables
+
+Table lowering derives cumulative row and column offsets from the resolved
+grid. Right-to-left tables reverse visual column placement without changing
+logical cell ownership. A merge continuation emits nothing. Its origin spans
+the covered row heights and column widths, then emits one fill and one fixed-box
+text body. Resolved cell margins define that text body's content box.
+
+Borders are physical row or column segments rather than four strokes per cell.
+The renderer maps every logical cell edge onto those segments and emits each
+segment once. An adjacent-edge conflict selects the higher style-region
+priority, then the wider stroke, then the deterministic side order top, left,
+bottom, right. This keeps shared borders stable across merge origins and table
+direction.
+
+Each table origin draws its fill before its text. The table's unique border
+segments draw after all cell fills and text so a neighbouring fill cannot cover
+them. Table cells do not use the shape autofit algorithm.
+
 ### Autofit
 
 **PowerPoint stores its own computed answer in the file.** Trust it.

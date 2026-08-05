@@ -76,6 +76,36 @@ pub struct ResolvedTilePlacement {
     pub flip: ResolvedTileFlip,
     pub alignment: ResolvedRectAlignment,
 }
+
+pub struct ResolvedTable {
+    pub column_widths: Vec<f64>,
+    pub rows: Vec<ResolvedTableRow>,
+    pub right_to_left: bool,
+}
+
+pub struct ResolvedTableRow {
+    pub height: f64,
+    pub cells: Vec<ResolvedTableCell>,
+}
+
+pub struct ResolvedTableCell {
+    pub text: Option<ResolvedTextBody>,
+    pub row_span: u32,
+    pub grid_span: u32,
+    pub horizontal_merge: bool,
+    pub vertical_merge: bool,
+    pub fill: Option<Paint>,
+    pub margins: TextInsets,
+    pub left: Option<ResolvedTableBorder>,
+    pub right: Option<ResolvedTableBorder>,
+    pub top: Option<ResolvedTableBorder>,
+    pub bottom: Option<ResolvedTableBorder>,
+}
+
+pub struct ResolvedTableBorder {
+    pub stroke: Option<Stroke>,
+    pub priority: u8,
+}
 ```
 
 Every theme reference, colour transform, inherited property and list-style level
@@ -93,6 +123,19 @@ table content without part-tree lifetimes. Text bodies retain concrete insets,
 anchor, wrap, direction, autofit, paragraphs, runs, paragraph spacing, and
 bullets. Character and auto-number bullets both retain their independently
 inherited font, colour, size, and choice values.
+
+Table resolution selects the explicit table style or the table style list's
+default. It applies whole-table, row and column bands, first and last columns,
+first and last rows, then corner regions. Direct cell properties apply last.
+The result carries concrete fills, text styles, margins, four borders, spans,
+merge ownership, and right-to-left order. Border values retain region priority
+so the renderer can settle adjacent edge conflicts after all cells resolve.
+
+Table cell text always uses fixed-box layout. Cell autofit is ignored and
+records one stable diagnostic. Unsupported diagonal borders, effects, and 3-D
+cell properties remain visible through stable diagnostics while their XML
+stays preserved by the DrawingML model. Unsupported concrete cell or border
+fills also produce a stable diagnostic instead of disappearing silently.
 
 `ResolveCtx::resolve_slide_with_media` additionally accepts `ScopedMediaIds`,
 whose slide, layout, and master maps keep relationship namespaces separate.

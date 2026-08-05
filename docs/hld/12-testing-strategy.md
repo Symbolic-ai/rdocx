@@ -110,7 +110,9 @@ Four gates run against it:
 1. **DrawingML structural round-trip**: every `a:txBody` and `a:spPr` parses,
    serialises and reparses to a structurally equal value. The pinned corpus has
    6,898 text bodies and 8,643 shape-property elements. This is the carried M7
-   exit gate at the first point where the external corpus exists.
+   exit gate at the first point where the external corpus exists. Every
+   `ppt/tableStyles.xml` part also parses, serialises, and reparses through the
+   typed table style model while retaining unsupported XML at its boundary.
 2. **Raw round-trip**: open and canonically save with every document part
    treated as opaque. Every decompressed part stays byte-identical, while
    content types and relationships stay structurally equal. ZIP metadata and
@@ -161,6 +163,13 @@ therefore review-required, not automatic failures.** Spot-check against real
 PowerPoint output once per milestone.
 
 Stand this harness up in M10 alongside the first text rendering, not afterwards.
+
+Table rendering has an additional deterministic gate. A banded table with a
+two-dimensional merge must produce the expected sampled fills, visible text,
+merged bounds, and exactly one physical stroke per border segment. Separate
+regressions prove that continuation cells emit no duplicate fill, border, or
+text and that cell margins feed the shared fixed-box text path. Raster evidence
+uses deterministic font mode.
 
 ## New tests the extracted crates need
 

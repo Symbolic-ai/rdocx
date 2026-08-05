@@ -323,6 +323,7 @@ pub struct ResolvedRunStyle {
 /// One table with concrete dimensions and owned cell text.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ResolvedTable {
+    pub right_to_left: bool,
     pub column_widths: Vec<f64>,
     pub rows: Vec<ResolvedTableRow>,
 }
@@ -333,11 +334,42 @@ pub struct ResolvedTableRow {
     pub cells: Vec<ResolvedTableCell>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedTableCell {
     pub text: Option<ResolvedTextBody>,
+    pub fill: Option<Paint>,
+    pub margins: TextInsets,
+    pub left: Option<ResolvedTableBorder>,
+    pub right: Option<ResolvedTableBorder>,
+    pub top: Option<ResolvedTableBorder>,
+    pub bottom: Option<ResolvedTableBorder>,
     pub row_span: u32,
     pub grid_span: u32,
     pub horizontal_merge: bool,
     pub vertical_merge: bool,
+}
+
+impl Default for ResolvedTableCell {
+    fn default() -> Self {
+        Self {
+            text: None,
+            fill: None,
+            margins: TextInsets::default(),
+            left: None,
+            right: None,
+            top: None,
+            bottom: None,
+            row_span: 1,
+            grid_span: 1,
+            horizontal_merge: false,
+            vertical_merge: false,
+        }
+    }
+}
+
+/// One table edge plus its resolved style-precedence rank.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResolvedTableBorder {
+    pub stroke: Option<Stroke>,
+    pub priority: u8,
 }

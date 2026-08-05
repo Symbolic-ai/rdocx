@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::Write;
 
 use oxml_core::OxmlError;
@@ -8,8 +9,11 @@ use oxml_core::xml_text::read_element_text;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 
+use crate::fill::Fill;
+use crate::line::CT_LineProperties;
 use crate::namespace::{A_NS, reject_conflicting_a_prefix};
 use crate::order::OrderedRawChildren;
+use crate::style_ref::StyleReference;
 use crate::text::CT_TextBody;
 
 pub type Result<T> = std::result::Result<T, OxmlError>;
@@ -74,7 +78,7 @@ pub struct CT_TableCell {
     pub grid_span: u32,
     pub horizontal_merge: bool,
     pub vertical_merge: bool,
-    cell_properties: Option<CellPropertiesRaw>,
+    pub properties: Option<CT_TableCellProperties>,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
     origin_index: usize,
@@ -95,10 +99,103 @@ impl PartialEq for GridColumnRaw {
 
 impl Eq for GridColumnRaw {}
 
+#[allow(non_camel_case_types)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct CellPropertiesRaw {
-    attributes: RawAttributes,
-    children: Vec<Vec<u8>>,
+pub struct CT_TableCellProperties {
+    pub margin_left: Option<Emu>,
+    pub margin_right: Option<Emu>,
+    pub margin_top: Option<Emu>,
+    pub margin_bottom: Option<Emu>,
+    pub fill: Option<Fill>,
+    pub left: Option<CT_LineProperties>,
+    pub right: Option<CT_LineProperties>,
+    pub top: Option<CT_LineProperties>,
+    pub bottom: Option<CT_LineProperties>,
+    pub unsupported: Vec<String>,
+    raw_attributes: RawAttributes,
+    raw_children: OrderedRawChildren,
+}
+
+/// One DrawingML table style list from `ppt/tableStyles.xml`.
+#[allow(non_camel_case_types)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CT_TableStyleList {
+    pub default_style_id: Option<String>,
+    pub styles: Vec<CT_TableStyle>,
+    raw_attributes: RawAttributes,
+    raw_children: OrderedRawChildren,
+}
+
+/// One named table style and its ordered region overlays.
+#[allow(non_camel_case_types)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CT_TableStyle {
+    pub style_id: String,
+    pub style_name: String,
+    pub whole_table: Option<CT_TablePartStyle>,
+    pub band1_horizontal: Option<CT_TablePartStyle>,
+    pub band2_horizontal: Option<CT_TablePartStyle>,
+    pub band1_vertical: Option<CT_TablePartStyle>,
+    pub band2_vertical: Option<CT_TablePartStyle>,
+    pub first_column: Option<CT_TablePartStyle>,
+    pub last_column: Option<CT_TablePartStyle>,
+    pub first_row: Option<CT_TablePartStyle>,
+    pub last_row: Option<CT_TablePartStyle>,
+    pub north_west_cell: Option<CT_TablePartStyle>,
+    pub north_east_cell: Option<CT_TablePartStyle>,
+    pub south_west_cell: Option<CT_TablePartStyle>,
+    pub south_east_cell: Option<CT_TablePartStyle>,
+    raw_attributes: RawAttributes,
+    raw_children: OrderedRawChildren,
+}
+
+/// Cell and text formatting contributed by one table region.
+#[allow(non_camel_case_types)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CT_TablePartStyle {
+    pub cell_style: Option<CT_TableCellStyle>,
+    pub text_style: Option<CT_TableTextStyle>,
+    raw_attributes: RawAttributes,
+    raw_children: OrderedRawChildren,
+}
+
+/// Fill and edge formatting contributed by a table style region.
+#[allow(non_camel_case_types)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CT_TableCellStyle {
+    pub fill: Option<Fill>,
+    pub fill_reference: Option<StyleReference>,
+    pub borders: Option<CT_TableBorders>,
+    pub unsupported: Vec<String>,
+    raw_attributes: RawAttributes,
+    raw_children: OrderedRawChildren,
+}
+
+/// The four renderer-visible table-cell edges.
+#[allow(non_camel_case_types)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CT_TableBorders {
+    pub left: Option<CT_LineProperties>,
+    pub right: Option<CT_LineProperties>,
+    pub top: Option<CT_LineProperties>,
+    pub bottom: Option<CT_LineProperties>,
+    pub inside_horizontal: Option<CT_LineProperties>,
+    pub inside_vertical: Option<CT_LineProperties>,
+    pub unsupported: Vec<String>,
+    raw_attributes: RawAttributes,
+    raw_children: OrderedRawChildren,
+}
+
+/// Bold, italic, colour, and theme-font formatting for one table region.
+#[allow(non_camel_case_types)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CT_TableTextStyle {
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub font_reference: Option<StyleReference>,
+    pub color: Option<crate::color::ColorChoice>,
+    raw_attributes: RawAttributes,
+    raw_children: OrderedRawChildren,
 }
 
 impl PartialEq for CT_Table {
@@ -182,7 +279,7 @@ impl PartialEq for CT_TableCell {
                     && self.grid_span == other.grid_span
                     && self.horizontal_merge == other.horizontal_merge
                     && self.vertical_merge == other.vertical_merge
-                    && self.cell_properties == other.cell_properties
+                    && self.properties == other.properties
                     && self.raw_attributes == other.raw_attributes
                     && self.raw_children == other.raw_children
             }
@@ -1005,7 +1102,7 @@ impl CT_TableCell {
 
     fn from_element(reader: &mut Reader<&[u8]>, start: &BytesStart<'_>) -> Result<Self> {
         let mut text_body = None;
-        let mut cell_properties = None;
+        let mut properties = None;
         let mut raw_children = OrderedRawChildren::default();
         let mut boundary = 0usize;
         let mut buffer = Vec::new();
@@ -1021,7 +1118,7 @@ impl CT_TableCell {
                         &name,
                         raw,
                         &mut text_body,
-                        &mut cell_properties,
+                        &mut properties,
                         &mut raw_children,
                         &mut boundary,
                     )?;
@@ -1036,7 +1133,7 @@ impl CT_TableCell {
                         &name,
                         raw,
                         &mut text_body,
-                        &mut cell_properties,
+                        &mut properties,
                         &mut raw_children,
                         &mut boundary,
                     )?;
@@ -1047,13 +1144,13 @@ impl CT_TableCell {
             }
             buffer.clear();
         }
-        Self::from_start(start, text_body, cell_properties, raw_children)
+        Self::from_start(start, text_body, properties, raw_children)
     }
 
     fn from_start(
         start: &BytesStart<'_>,
         text_body: Option<CT_TextBody>,
-        cell_properties: Option<CellPropertiesRaw>,
+        properties: Option<CT_TableCellProperties>,
         raw_children: OrderedRawChildren,
     ) -> Result<Self> {
         Ok(Self {
@@ -1062,7 +1159,7 @@ impl CT_TableCell {
             grid_span: positive_u32_attr(start, b"gridSpan")?.unwrap_or(1),
             horizontal_merge: bool_attr(start, b"hMerge")?.unwrap_or(false),
             vertical_merge: bool_attr(start, b"vMerge")?.unwrap_or(false),
-            cell_properties,
+            properties,
             raw_attributes: raw_attributes(
                 start,
                 &[b"rowSpan", b"gridSpan", b"hMerge", b"vMerge"],
@@ -1091,10 +1188,7 @@ impl CT_TableCell {
         push_true(&mut start, "hMerge", self.horizontal_merge);
         push_true(&mut start, "vMerge", self.vertical_merge);
         push_attributes(&mut start, &self.raw_attributes);
-        if self.text_body.is_none()
-            && self.cell_properties.is_none()
-            && self.raw_children.is_empty()
-        {
+        if self.text_body.is_none() && self.properties.is_none() && self.raw_children.is_empty() {
             writer.write_event(Event::Empty(start))?;
             return Ok(());
         }
@@ -1108,18 +1202,8 @@ impl CT_TableCell {
                 })?)?;
         }
         emit_raw(writer, self.raw_children.at(1))?;
-        if let Some(properties) = &self.cell_properties {
-            let mut start = BytesStart::new("a:tcPr");
-            push_attributes(&mut start, &properties.attributes);
-            if properties.children.is_empty() {
-                writer.write_event(Event::Empty(start))?;
-            } else {
-                writer.write_event(Event::Start(start))?;
-                for child in &properties.children {
-                    writer.get_mut().write_all(child)?;
-                }
-                writer.write_event(Event::End(BytesEnd::new("a:tcPr")))?;
-            }
+        if let Some(properties) = &self.properties {
+            properties.write_xml(writer)?;
         }
         emit_raw(writer, self.raw_children.at(2))?;
         writer.write_event(Event::End(BytesEnd::new("a:tc")))?;
@@ -1131,7 +1215,7 @@ fn capture_cell_child(
     name: &[u8],
     raw: Vec<u8>,
     text_body: &mut Option<CT_TextBody>,
-    cell_properties: &mut Option<CellPropertiesRaw>,
+    properties: &mut Option<CT_TableCellProperties>,
     raw_children: &mut OrderedRawChildren,
     boundary: &mut usize,
 ) -> Result<()> {
@@ -1142,8 +1226,8 @@ fn capture_cell_child(
             })?);
             *boundary = 1;
         }
-        b"tcPr" if *boundary <= 1 && cell_properties.is_none() => {
-            *cell_properties = Some(parse_cell_properties(&raw)?);
+        b"tcPr" if *boundary <= 1 && properties.is_none() => {
+            *properties = Some(CT_TableCellProperties::from_xml(&raw)?);
             *boundary = 2;
         }
         b"txBody" | b"tcPr" => {
@@ -1156,41 +1240,1116 @@ fn capture_cell_child(
     Ok(())
 }
 
-fn parse_cell_properties(xml: &[u8]) -> Result<CellPropertiesRaw> {
+impl CT_TableCellProperties {
+    fn from_xml(xml: &[u8]) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(start) if matches_local_name(start.name().as_ref(), b"tcPr") => {
+                    return Self::from_element(&mut reader, &start);
+                }
+                Event::Empty(start) if matches_local_name(start.name().as_ref(), b"tcPr") => {
+                    return Self::from_start(&start);
+                }
+                Event::Start(start) | Event::Empty(start) => return Err(unexpected(&start)),
+                Event::Eof => return Err(missing("a:tcPr")),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn from_start(start: &BytesStart<'_>) -> Result<Self> {
+        Ok(Self {
+            margin_left: optional_emu_attr(start, b"marL")?,
+            margin_right: optional_emu_attr(start, b"marR")?,
+            margin_top: optional_emu_attr(start, b"marT")?,
+            margin_bottom: optional_emu_attr(start, b"marB")?,
+            raw_attributes: raw_attributes(start, &[b"marL", b"marR", b"marT", b"marB"], false)?,
+            ..Self::default()
+        })
+    }
+
+    fn from_element(reader: &mut Reader<&[u8]>, start: &BytesStart<'_>) -> Result<Self> {
+        let mut properties = Self::from_start(start)?;
+        let mut boundary = 0usize;
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(child) => {
+                    let name = local_name(child.name().as_ref()).to_vec();
+                    let raw = capture_element(reader, &child)?;
+                    properties.capture_child(&name, raw, &mut boundary)?;
+                }
+                Event::Empty(child) => {
+                    let name = local_name(child.name().as_ref()).to_vec();
+                    let raw = capture_empty_element(&child)?;
+                    properties.capture_child(&name, raw, &mut boundary)?;
+                }
+                Event::End(end) if matches_local_name(end.name().as_ref(), b"tcPr") => break,
+                Event::Eof => return Err(missing("closing a:tcPr")),
+                _ => {}
+            }
+            buffer.clear();
+        }
+        Ok(properties)
+    }
+
+    fn capture_child(&mut self, name: &[u8], raw: Vec<u8>, boundary: &mut usize) -> Result<()> {
+        let slot = cell_property_slot(name);
+        ensure_schema_order(slot, *boundary, "a:tcPr")?;
+        match name {
+            b"lnL" => set_once(&mut self.left, parse_named_line(&raw)?, "a:tcPr/a:lnL")?,
+            b"lnR" => set_once(&mut self.right, parse_named_line(&raw)?, "a:tcPr/a:lnR")?,
+            b"lnT" => set_once(&mut self.top, parse_named_line(&raw)?, "a:tcPr/a:lnT")?,
+            b"lnB" => set_once(&mut self.bottom, parse_named_line(&raw)?, "a:tcPr/a:lnB")?,
+            name if is_fill(name) => set_once(&mut self.fill, parse_fill(&raw)?, "a:tcPr fill")?,
+            b"lnTlToBr" | b"lnBlToTr" => {
+                self.unsupported.push("diagonal border".to_owned());
+                self.raw_children.push(slot.unwrap_or(*boundary), raw);
+            }
+            b"cell3D" => {
+                self.unsupported.push("3-D properties".to_owned());
+                self.raw_children.push(slot.unwrap_or(*boundary), raw);
+            }
+            b"effectLst" | b"effectDag" => {
+                self.unsupported.push("effects".to_owned());
+                self.raw_children.push(slot.unwrap_or(*boundary), raw);
+            }
+            _ => self.raw_children.push(slot.unwrap_or(*boundary), raw),
+        }
+        if let Some(slot) = slot {
+            *boundary = (*boundary).max(slot + 1);
+        }
+        Ok(())
+    }
+
+    fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        let mut start = BytesStart::new("a:tcPr");
+        push_optional_emu(&mut start, "marL", self.margin_left);
+        push_optional_emu(&mut start, "marR", self.margin_right);
+        push_optional_emu(&mut start, "marT", self.margin_top);
+        push_optional_emu(&mut start, "marB", self.margin_bottom);
+        push_attributes(&mut start, &self.raw_attributes);
+        let has_modelled = self.left.is_some()
+            || self.right.is_some()
+            || self.top.is_some()
+            || self.bottom.is_some()
+            || self.fill.is_some();
+        if !has_modelled && self.raw_children.is_empty() {
+            writer.write_event(Event::Empty(start))?;
+            return Ok(());
+        }
+        writer.write_event(Event::Start(start))?;
+        emit_raw(writer, self.raw_children.at(0))?;
+        write_optional_named_line(writer, "a:lnL", self.left.as_ref())?;
+        emit_raw(writer, self.raw_children.at(1))?;
+        write_optional_named_line(writer, "a:lnR", self.right.as_ref())?;
+        emit_raw(writer, self.raw_children.at(2))?;
+        write_optional_named_line(writer, "a:lnT", self.top.as_ref())?;
+        emit_raw(writer, self.raw_children.at(3))?;
+        write_optional_named_line(writer, "a:lnB", self.bottom.as_ref())?;
+        for slot in 4..=7 {
+            emit_raw(writer, self.raw_children.at(slot))?;
+        }
+        if let Some(fill) = &self.fill {
+            fill.write_xml(writer).map_err(drawing_error)?;
+        }
+        for slot in 8..=10 {
+            emit_raw(writer, self.raw_children.at(slot))?;
+        }
+        writer.write_event(Event::End(BytesEnd::new("a:tcPr")))?;
+        Ok(())
+    }
+}
+
+impl CT_TableStyleList {
+    /// Parses a complete table-style list with any DrawingML prefix.
+    pub fn from_xml(xml: &[u8]) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(start)
+                    if matches_local_name(start.name().as_ref(), b"tblStyleLst") =>
+                {
+                    reject_conflicting_a_prefix(&start)?;
+                    return Self::from_element(&mut reader, &start);
+                }
+                Event::Empty(start)
+                    if matches_local_name(start.name().as_ref(), b"tblStyleLst") =>
+                {
+                    reject_conflicting_a_prefix(&start)?;
+                    return Ok(Self {
+                        default_style_id: decoded_attr(&start, b"def")?,
+                        styles: Vec::new(),
+                        raw_attributes: raw_attributes(&start, &[b"def"], true)?,
+                        raw_children: OrderedRawChildren::default(),
+                    });
+                }
+                Event::Start(start) | Event::Empty(start) => return Err(unexpected(&start)),
+                Event::Eof => return Err(missing("a:tblStyleLst")),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn from_element(reader: &mut Reader<&[u8]>, start: &BytesStart<'_>) -> Result<Self> {
+        let mut styles = Vec::new();
+        let mut raw_children = OrderedRawChildren::default();
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(child) if matches_local_name(child.name().as_ref(), b"tblStyle") => {
+                    let raw = capture_element(reader, &child)?;
+                    styles.push(CT_TableStyle::from_xml(&raw)?);
+                }
+                Event::Empty(child) if matches_local_name(child.name().as_ref(), b"tblStyle") => {
+                    let raw = capture_empty_element(&child)?;
+                    styles.push(CT_TableStyle::from_xml(&raw)?);
+                }
+                Event::Start(child) => {
+                    raw_children.push(styles.len(), capture_element(reader, &child)?)
+                }
+                Event::Empty(child) => {
+                    raw_children.push(styles.len(), capture_empty_element(&child)?)
+                }
+                Event::End(end) if matches_local_name(end.name().as_ref(), b"tblStyleLst") => break,
+                Event::Eof => return Err(missing("closing a:tblStyleLst")),
+                _ => {}
+            }
+            buffer.clear();
+        }
+        Ok(Self {
+            default_style_id: decoded_attr(start, b"def")?,
+            styles,
+            raw_attributes: raw_attributes(start, &[b"def"], true)?,
+            raw_children,
+        })
+    }
+
+    /// Returns the explicitly selected style, then the list default.
+    pub fn style(&self, style_id: Option<&str>) -> Option<&CT_TableStyle> {
+        style_id
+            .and_then(|style_id| self.styles.iter().find(|style| style.style_id == style_id))
+            .or_else(|| {
+                self.default_style_id.as_deref().and_then(|style_id| {
+                    self.styles.iter().find(|style| style.style_id == style_id)
+                })
+            })
+    }
+
+    /// Serialises with fixed `a:` prefixes and table-style schema order.
+    pub fn to_xml(&self) -> Result<Vec<u8>> {
+        let mut writer = Writer::new(Vec::new());
+        let mut start = BytesStart::new("a:tblStyleLst");
+        start.push_attribute(("xmlns:a", A_NS));
+        if let Some(default_style_id) = &self.default_style_id {
+            start.push_attribute(("def", default_style_id.as_str()));
+        }
+        push_attributes(&mut start, &self.raw_attributes);
+        if self.styles.is_empty() && self.raw_children.is_empty() {
+            writer.write_event(Event::Empty(start))?;
+            return Ok(writer.into_inner());
+        }
+        writer.write_event(Event::Start(start))?;
+        for boundary in 0..=self.styles.len() {
+            emit_raw(&mut writer, self.raw_children.at(boundary))?;
+            if let Some(style) = self.styles.get(boundary) {
+                style.write_xml(&mut writer)?;
+            }
+        }
+        writer.write_event(Event::End(BytesEnd::new("a:tblStyleLst")))?;
+        Ok(writer.into_inner())
+    }
+}
+
+impl CT_TableStyle {
+    fn from_xml(xml: &[u8]) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(start) if matches_local_name(start.name().as_ref(), b"tblStyle") => {
+                    return Self::from_element(&mut reader, &start);
+                }
+                Event::Empty(start) if matches_local_name(start.name().as_ref(), b"tblStyle") => {
+                    return Self::from_start(&start);
+                }
+                Event::Start(start) | Event::Empty(start) => return Err(unexpected(&start)),
+                Event::Eof => return Err(missing("a:tblStyle")),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn from_start(start: &BytesStart<'_>) -> Result<Self> {
+        Ok(Self {
+            style_id: required_string(start, b"styleId")?,
+            style_name: required_string(start, b"styleName")?,
+            raw_attributes: raw_attributes(start, &[b"styleId", b"styleName"], false)?,
+            ..Self::default()
+        })
+    }
+
+    fn from_element(reader: &mut Reader<&[u8]>, start: &BytesStart<'_>) -> Result<Self> {
+        let mut style = Self::from_start(start)?;
+        let mut boundary = 0usize;
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(child) => {
+                    let name = local_name(child.name().as_ref()).to_vec();
+                    let raw = capture_element(reader, &child)?;
+                    style.capture_child(&name, raw, &mut boundary)?;
+                }
+                Event::Empty(child) => {
+                    let name = local_name(child.name().as_ref()).to_vec();
+                    let raw = capture_empty_element(&child)?;
+                    style.capture_child(&name, raw, &mut boundary)?;
+                }
+                Event::End(end) if matches_local_name(end.name().as_ref(), b"tblStyle") => break,
+                Event::Eof => return Err(missing("closing a:tblStyle")),
+                _ => {}
+            }
+            buffer.clear();
+        }
+        Ok(style)
+    }
+
+    fn capture_child(&mut self, name: &[u8], raw: Vec<u8>, boundary: &mut usize) -> Result<()> {
+        let Some(slot) = table_style_slot(name) else {
+            self.raw_children.push(*boundary, raw);
+            return Ok(());
+        };
+        if slot < *boundary {
+            return Err(OxmlError::InvalidValue(
+                "a:tblStyle children violate schema order".to_owned(),
+            ));
+        }
+        let destination = self.region_mut(name);
+        if destination.is_some() {
+            return Err(OxmlError::InvalidValue(format!(
+                "duplicate a:{}",
+                String::from_utf8_lossy(name)
+            )));
+        }
+        *destination = Some(CT_TablePartStyle::from_xml(&raw, name)?);
+        *boundary = slot + 1;
+        Ok(())
+    }
+
+    fn region_mut(&mut self, name: &[u8]) -> &mut Option<CT_TablePartStyle> {
+        match name {
+            b"wholeTbl" => &mut self.whole_table,
+            b"band1H" => &mut self.band1_horizontal,
+            b"band2H" => &mut self.band2_horizontal,
+            b"band1V" => &mut self.band1_vertical,
+            b"band2V" => &mut self.band2_vertical,
+            b"firstCol" => &mut self.first_column,
+            b"lastCol" => &mut self.last_column,
+            b"firstRow" => &mut self.first_row,
+            b"lastRow" => &mut self.last_row,
+            b"nwCell" => &mut self.north_west_cell,
+            b"neCell" => &mut self.north_east_cell,
+            b"swCell" => &mut self.south_west_cell,
+            b"seCell" => &mut self.south_east_cell,
+            _ => unreachable!("modelled table region"),
+        }
+    }
+
+    fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        let mut start = BytesStart::new("a:tblStyle");
+        start.push_attribute(("styleId", self.style_id.as_str()));
+        start.push_attribute(("styleName", self.style_name.as_str()));
+        push_attributes(&mut start, &self.raw_attributes);
+        writer.write_event(Event::Start(start))?;
+        let ordered = [
+            ("a:wholeTbl", self.whole_table.as_ref()),
+            ("a:band1H", self.band1_horizontal.as_ref()),
+            ("a:band2H", self.band2_horizontal.as_ref()),
+            ("a:band1V", self.band1_vertical.as_ref()),
+            ("a:band2V", self.band2_vertical.as_ref()),
+            ("a:lastCol", self.last_column.as_ref()),
+            ("a:firstCol", self.first_column.as_ref()),
+            ("a:lastRow", self.last_row.as_ref()),
+            ("a:seCell", self.south_east_cell.as_ref()),
+            ("a:swCell", self.south_west_cell.as_ref()),
+            ("a:firstRow", self.first_row.as_ref()),
+            ("a:neCell", self.north_east_cell.as_ref()),
+            ("a:nwCell", self.north_west_cell.as_ref()),
+        ];
+        for (slot, (tag, region)) in ordered.into_iter().enumerate() {
+            emit_raw(writer, self.raw_children.at(slot))?;
+            if let Some(region) = region {
+                region.write_xml(writer, tag)?;
+            }
+        }
+        emit_raw(writer, self.raw_children.at(13))?;
+        emit_raw(writer, self.raw_children.at(14))?;
+        writer.write_event(Event::End(BytesEnd::new("a:tblStyle")))?;
+        Ok(())
+    }
+}
+
+impl CT_TablePartStyle {
+    fn from_xml(xml: &[u8], expected: &[u8]) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(start) if matches_local_name(start.name().as_ref(), expected) => {
+                    let mut value = Self {
+                        raw_attributes: raw_attributes(&start, &[], false)?,
+                        ..Self::default()
+                    };
+                    let mut boundary = 0usize;
+                    loop {
+                        buffer.clear();
+                        match reader.read_event_into(&mut buffer)? {
+                            Event::Start(child) => {
+                                let name = local_name(child.name().as_ref()).to_vec();
+                                let raw = capture_element(&mut reader, &child)?;
+                                value.capture_child(&name, raw, &mut boundary)?;
+                            }
+                            Event::Empty(child) => {
+                                let name = local_name(child.name().as_ref()).to_vec();
+                                let raw = capture_empty_element(&child)?;
+                                value.capture_child(&name, raw, &mut boundary)?;
+                            }
+                            Event::End(end)
+                                if matches_local_name(end.name().as_ref(), expected) =>
+                            {
+                                return Ok(value);
+                            }
+                            Event::Eof => return Err(missing("closing table style region")),
+                            _ => {}
+                        }
+                    }
+                }
+                Event::Empty(start) if matches_local_name(start.name().as_ref(), expected) => {
+                    return Ok(Self {
+                        raw_attributes: raw_attributes(&start, &[], false)?,
+                        ..Self::default()
+                    });
+                }
+                Event::Start(start) | Event::Empty(start) => return Err(unexpected(&start)),
+                Event::Eof => return Err(missing("table style region")),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn capture_child(&mut self, name: &[u8], raw: Vec<u8>, boundary: &mut usize) -> Result<()> {
+        match name {
+            b"tcTxStyle" if self.text_style.is_none() && *boundary == 0 => {
+                self.text_style = Some(CT_TableTextStyle::from_xml(&raw)?);
+                *boundary = 1;
+            }
+            b"tcStyle" if self.cell_style.is_none() => {
+                self.cell_style = Some(CT_TableCellStyle::from_xml(&raw)?);
+                *boundary = 2;
+            }
+            b"tcTxStyle" | b"tcStyle" => {
+                return Err(OxmlError::InvalidValue(
+                    "table region style children violate schema order or are duplicated".to_owned(),
+                ));
+            }
+            _ => self.raw_children.push(*boundary, raw),
+        }
+        Ok(())
+    }
+
+    fn write_xml<W: Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
+        let mut start = BytesStart::new(tag);
+        push_attributes(&mut start, &self.raw_attributes);
+        if self.text_style.is_none() && self.cell_style.is_none() && self.raw_children.is_empty() {
+            writer.write_event(Event::Empty(start))?;
+            return Ok(());
+        }
+        writer.write_event(Event::Start(start))?;
+        emit_raw(writer, self.raw_children.at(0))?;
+        if let Some(text_style) = &self.text_style {
+            text_style.write_xml(writer)?;
+        }
+        emit_raw(writer, self.raw_children.at(1))?;
+        if let Some(cell_style) = &self.cell_style {
+            cell_style.write_xml(writer)?;
+        }
+        emit_raw(writer, self.raw_children.at(2))?;
+        writer.write_event(Event::End(BytesEnd::new(tag)))?;
+        Ok(())
+    }
+}
+
+impl CT_TableCellStyle {
+    fn from_xml(xml: &[u8]) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(start) if matches_local_name(start.name().as_ref(), b"tcStyle") => {
+                    let mut value = Self {
+                        raw_attributes: raw_attributes(&start, &[], false)?,
+                        ..Self::default()
+                    };
+                    let mut boundary = 0usize;
+                    loop {
+                        buffer.clear();
+                        match reader.read_event_into(&mut buffer)? {
+                            Event::Start(child) => {
+                                let name = local_name(child.name().as_ref()).to_vec();
+                                let raw = capture_element(&mut reader, &child)?;
+                                value.capture_child(&name, raw, &mut boundary)?;
+                            }
+                            Event::Empty(child) => {
+                                let name = local_name(child.name().as_ref()).to_vec();
+                                let raw = capture_empty_element(&child)?;
+                                value.capture_child(&name, raw, &mut boundary)?;
+                            }
+                            Event::End(end)
+                                if matches_local_name(end.name().as_ref(), b"tcStyle") =>
+                            {
+                                return Ok(value);
+                            }
+                            Event::Eof => return Err(missing("closing a:tcStyle")),
+                            _ => {}
+                        }
+                    }
+                }
+                Event::Empty(start) if matches_local_name(start.name().as_ref(), b"tcStyle") => {
+                    return Ok(Self {
+                        raw_attributes: raw_attributes(&start, &[], false)?,
+                        ..Self::default()
+                    });
+                }
+                Event::Start(start) | Event::Empty(start) => return Err(unexpected(&start)),
+                Event::Eof => return Err(missing("a:tcStyle")),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn capture_child(&mut self, name: &[u8], raw: Vec<u8>, boundary: &mut usize) -> Result<()> {
+        let slot = match name {
+            b"tcBdr" => Some(0),
+            b"fill" => Some(1),
+            name if is_fill(name) => Some(1),
+            b"fillRef" => Some(2),
+            b"cell3D" => Some(3),
+            _ => None,
+        };
+        ensure_schema_order(slot, *boundary, "a:tcStyle")?;
+        match name {
+            b"tcBdr" if self.borders.is_some() => {
+                return Err(OxmlError::InvalidValue("duplicate a:tcBdr".to_owned()));
+            }
+            b"tcBdr" => self.borders = Some(CT_TableBorders::from_xml(&raw)?),
+            b"fill" => {
+                if self.fill.is_some() || self.fill_reference.is_some() {
+                    return Err(OxmlError::InvalidValue(
+                        "duplicate a:tcStyle fill choice".to_owned(),
+                    ));
+                }
+                if let Some(fill) = parse_fill_wrapper(&raw)? {
+                    self.fill = Some(fill);
+                } else {
+                    self.unsupported.push("fill form".to_owned());
+                    self.raw_children.push(slot.unwrap(), raw);
+                }
+            }
+            name if is_fill(name) => {
+                if self.fill.is_some() || self.fill_reference.is_some() {
+                    return Err(OxmlError::InvalidValue(
+                        "duplicate a:tcStyle fill choice".to_owned(),
+                    ));
+                }
+                self.fill = Some(parse_fill(&raw)?);
+            }
+            b"fillRef" => {
+                if self.fill.is_some() || self.fill_reference.is_some() {
+                    return Err(OxmlError::InvalidValue(
+                        "duplicate a:tcStyle fill choice".to_owned(),
+                    ));
+                }
+                self.fill_reference = Some(parse_style_reference(&raw)?);
+            }
+            b"cell3D" => {
+                self.unsupported.push("3-D properties".to_owned());
+                self.raw_children.push(slot.unwrap(), raw);
+            }
+            _ => self.raw_children.push(*boundary, raw),
+        }
+        if let Some(slot) = slot {
+            *boundary = (*boundary).max(slot + 1);
+        }
+        Ok(())
+    }
+
+    fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        let mut start = BytesStart::new("a:tcStyle");
+        push_attributes(&mut start, &self.raw_attributes);
+        let has_modelled =
+            self.borders.is_some() || self.fill.is_some() || self.fill_reference.is_some();
+        if !has_modelled && self.raw_children.is_empty() {
+            writer.write_event(Event::Empty(start))?;
+            return Ok(());
+        }
+        writer.write_event(Event::Start(start))?;
+        emit_raw(writer, self.raw_children.at(0))?;
+        if let Some(borders) = &self.borders {
+            borders.write_xml(writer)?;
+        }
+        emit_raw(writer, self.raw_children.at(1))?;
+        if let Some(fill) = &self.fill {
+            writer.write_event(Event::Start(BytesStart::new("a:fill")))?;
+            fill.write_xml(writer).map_err(drawing_error)?;
+            writer.write_event(Event::End(BytesEnd::new("a:fill")))?;
+        }
+        emit_raw(writer, self.raw_children.at(2))?;
+        if let Some(reference) = &self.fill_reference {
+            reference.write_xml(writer).map_err(drawing_error)?;
+        }
+        emit_raw(writer, self.raw_children.at(3))?;
+        emit_raw(writer, self.raw_children.at(4))?;
+        writer.write_event(Event::End(BytesEnd::new("a:tcStyle")))?;
+        Ok(())
+    }
+}
+
+impl CT_TableBorders {
+    fn from_xml(xml: &[u8]) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(start) if matches_local_name(start.name().as_ref(), b"tcBdr") => {
+                    let mut value = Self {
+                        raw_attributes: raw_attributes(&start, &[], false)?,
+                        ..Self::default()
+                    };
+                    let mut boundary = 0usize;
+                    loop {
+                        buffer.clear();
+                        match reader.read_event_into(&mut buffer)? {
+                            Event::Start(child) => {
+                                let name = local_name(child.name().as_ref()).to_vec();
+                                let raw = capture_element(&mut reader, &child)?;
+                                value.capture_child(&name, raw, &mut boundary)?;
+                            }
+                            Event::Empty(child) => {
+                                let name = local_name(child.name().as_ref()).to_vec();
+                                let raw = capture_empty_element(&child)?;
+                                value.capture_child(&name, raw, &mut boundary)?;
+                            }
+                            Event::End(end)
+                                if matches_local_name(end.name().as_ref(), b"tcBdr") =>
+                            {
+                                return Ok(value);
+                            }
+                            Event::Eof => return Err(missing("closing a:tcBdr")),
+                            _ => {}
+                        }
+                    }
+                }
+                Event::Empty(start) if matches_local_name(start.name().as_ref(), b"tcBdr") => {
+                    return Ok(Self {
+                        raw_attributes: raw_attributes(&start, &[], false)?,
+                        ..Self::default()
+                    });
+                }
+                Event::Start(start) | Event::Empty(start) => return Err(unexpected(&start)),
+                Event::Eof => return Err(missing("a:tcBdr")),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn capture_child(&mut self, name: &[u8], raw: Vec<u8>, boundary: &mut usize) -> Result<()> {
+        let slot = table_border_slot(name);
+        ensure_schema_order(slot, *boundary, "a:tcBdr")?;
+        match name {
+            b"left" => self.capture_border(&raw, slot, "left")?,
+            b"right" => self.capture_border(&raw, slot, "right")?,
+            b"top" => self.capture_border(&raw, slot, "top")?,
+            b"bottom" => self.capture_border(&raw, slot, "bottom")?,
+            b"lnL" => self.capture_border(&raw, slot, "lnL")?,
+            b"lnR" => self.capture_border(&raw, slot, "lnR")?,
+            b"lnT" => self.capture_border(&raw, slot, "lnT")?,
+            b"lnB" => self.capture_border(&raw, slot, "lnB")?,
+            b"insideH" => self.capture_border(&raw, slot, "insideH")?,
+            b"insideV" => self.capture_border(&raw, slot, "insideV")?,
+            b"tl2br" | b"tr2bl" | b"lnTlToBr" | b"lnBlToTr" => {
+                self.unsupported.push("diagonal border".to_owned());
+                self.raw_children.push(slot.unwrap_or(*boundary), raw);
+            }
+            _ => self.raw_children.push(slot.unwrap_or(*boundary), raw),
+        }
+        if let Some(slot) = slot {
+            *boundary = (*boundary).max(slot + 1);
+        }
+        Ok(())
+    }
+
+    fn capture_border(&mut self, raw: &[u8], slot: Option<usize>, name: &str) -> Result<()> {
+        let line = if name.starts_with("ln") {
+            Some(parse_named_line(raw)?)
+        } else {
+            parse_border_wrapper(raw)?
+        };
+        let Some(line) = line else {
+            self.unsupported.push("border form".to_owned());
+            self.raw_children.push(slot.unwrap_or(0), raw.to_vec());
+            return Ok(());
+        };
+        let target = match name {
+            "left" | "lnL" => &mut self.left,
+            "right" | "lnR" => &mut self.right,
+            "top" | "lnT" => &mut self.top,
+            "bottom" | "lnB" => &mut self.bottom,
+            "insideH" => &mut self.inside_horizontal,
+            "insideV" => &mut self.inside_vertical,
+            _ => unreachable!("table border name"),
+        };
+        set_once(target, line, "a:tcBdr edge")
+    }
+
+    fn has_values(&self) -> bool {
+        self.left.is_some()
+            || self.right.is_some()
+            || self.top.is_some()
+            || self.bottom.is_some()
+            || self.inside_horizontal.is_some()
+            || self.inside_vertical.is_some()
+            || !self.raw_attributes.is_empty()
+            || !self.raw_children.is_empty()
+    }
+
+    fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        let mut start = BytesStart::new("a:tcBdr");
+        push_attributes(&mut start, &self.raw_attributes);
+        if !self.has_values() {
+            writer.write_event(Event::Empty(start))?;
+            return Ok(());
+        }
+        writer.write_event(Event::Start(start))?;
+        let lines = [
+            ("a:left", self.left.as_ref()),
+            ("a:right", self.right.as_ref()),
+            ("a:top", self.top.as_ref()),
+            ("a:bottom", self.bottom.as_ref()),
+            ("a:insideH", self.inside_horizontal.as_ref()),
+            ("a:insideV", self.inside_vertical.as_ref()),
+        ];
+        for (slot, (tag, line)) in lines.into_iter().enumerate() {
+            emit_raw(writer, self.raw_children.at(slot))?;
+            write_optional_border_wrapper(writer, tag, line)?;
+        }
+        for slot in 6..=8 {
+            emit_raw(writer, self.raw_children.at(slot))?;
+        }
+        writer.write_event(Event::End(BytesEnd::new("a:tcBdr")))?;
+        Ok(())
+    }
+}
+
+impl CT_TableTextStyle {
+    fn from_xml(xml: &[u8]) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(start) if matches_local_name(start.name().as_ref(), b"tcTxStyle") => {
+                    let mut value = Self {
+                        bold: bool_attr(&start, b"b")?,
+                        italic: bool_attr(&start, b"i")?,
+                        raw_attributes: raw_attributes(&start, &[b"b", b"i"], false)?,
+                        ..Self::default()
+                    };
+                    let mut boundary = 0usize;
+                    loop {
+                        buffer.clear();
+                        match reader.read_event_into(&mut buffer)? {
+                            Event::Start(child) => {
+                                let name = local_name(child.name().as_ref()).to_vec();
+                                let raw = capture_element(&mut reader, &child)?;
+                                value.capture_child(&name, raw, &mut boundary)?;
+                            }
+                            Event::Empty(child) => {
+                                let name = local_name(child.name().as_ref()).to_vec();
+                                let raw = capture_empty_element(&child)?;
+                                value.capture_child(&name, raw, &mut boundary)?;
+                            }
+                            Event::End(end)
+                                if matches_local_name(end.name().as_ref(), b"tcTxStyle") =>
+                            {
+                                return Ok(value);
+                            }
+                            Event::Eof => return Err(missing("closing a:tcTxStyle")),
+                            _ => {}
+                        }
+                    }
+                }
+                Event::Empty(start) if matches_local_name(start.name().as_ref(), b"tcTxStyle") => {
+                    return Ok(Self {
+                        bold: bool_attr(&start, b"b")?,
+                        italic: bool_attr(&start, b"i")?,
+                        raw_attributes: raw_attributes(&start, &[b"b", b"i"], false)?,
+                        ..Self::default()
+                    });
+                }
+                Event::Start(start) | Event::Empty(start) => return Err(unexpected(&start)),
+                Event::Eof => return Err(missing("a:tcTxStyle")),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn capture_child(&mut self, name: &[u8], raw: Vec<u8>, boundary: &mut usize) -> Result<()> {
+        match name {
+            b"fontRef" if self.font_reference.is_none() => {
+                self.font_reference = Some(parse_style_reference(&raw)?);
+                *boundary = 1;
+            }
+            name if is_color(name) && self.color.is_none() => {
+                self.color = Some(parse_color(&raw)?);
+                *boundary = 2;
+            }
+            b"fontRef" => {
+                return Err(OxmlError::InvalidValue(
+                    "duplicate a:tcTxStyle/a:fontRef".to_owned(),
+                ));
+            }
+            name if is_color(name) => {
+                return Err(OxmlError::InvalidValue(format!(
+                    "duplicate a:tcTxStyle colour {}",
+                    String::from_utf8_lossy(name)
+                )));
+            }
+            _ => self.raw_children.push(*boundary, raw),
+        }
+        Ok(())
+    }
+
+    fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        let mut start = BytesStart::new("a:tcTxStyle");
+        push_optional_bool(&mut start, "b", self.bold);
+        push_optional_bool(&mut start, "i", self.italic);
+        push_attributes(&mut start, &self.raw_attributes);
+        if self.font_reference.is_none() && self.color.is_none() && self.raw_children.is_empty() {
+            writer.write_event(Event::Empty(start))?;
+            return Ok(());
+        }
+        writer.write_event(Event::Start(start))?;
+        emit_raw(writer, self.raw_children.at(0))?;
+        if let Some(reference) = &self.font_reference {
+            reference.write_xml(writer).map_err(drawing_error)?;
+        }
+        emit_raw(writer, self.raw_children.at(1))?;
+        if let Some(color) = &self.color {
+            color.to_xml(writer).map_err(drawing_error)?;
+        }
+        emit_raw(writer, self.raw_children.at(2))?;
+        writer.write_event(Event::End(BytesEnd::new("a:tcTxStyle")))?;
+        Ok(())
+    }
+}
+
+fn table_style_slot(name: &[u8]) -> Option<usize> {
+    match name {
+        b"wholeTbl" => Some(0),
+        b"band1H" => Some(1),
+        b"band2H" => Some(2),
+        b"band1V" => Some(3),
+        b"band2V" => Some(4),
+        b"lastCol" => Some(5),
+        b"firstCol" => Some(6),
+        b"lastRow" => Some(7),
+        b"seCell" => Some(8),
+        b"swCell" => Some(9),
+        b"firstRow" => Some(10),
+        b"neCell" => Some(11),
+        b"nwCell" => Some(12),
+        _ => None,
+    }
+}
+
+fn table_border_slot(name: &[u8]) -> Option<usize> {
+    match name {
+        b"left" | b"lnL" => Some(0),
+        b"right" | b"lnR" => Some(1),
+        b"top" | b"lnT" => Some(2),
+        b"bottom" | b"lnB" => Some(3),
+        b"insideH" => Some(4),
+        b"insideV" => Some(5),
+        b"tl2br" | b"lnTlToBr" => Some(6),
+        b"tr2bl" | b"lnBlToTr" => Some(7),
+        _ => None,
+    }
+}
+
+fn cell_property_slot(name: &[u8]) -> Option<usize> {
+    match name {
+        b"lnL" => Some(0),
+        b"lnR" => Some(1),
+        b"lnT" => Some(2),
+        b"lnB" => Some(3),
+        b"lnTlToBr" => Some(4),
+        b"lnBlToTr" => Some(5),
+        b"cell3D" | b"effectLst" | b"effectDag" => Some(6),
+        name if is_fill(name) => Some(7),
+        b"headers" => Some(8),
+        b"extLst" => Some(9),
+        _ => None,
+    }
+}
+
+fn ensure_schema_order(slot: Option<usize>, boundary: usize, parent: &str) -> Result<()> {
+    if slot.is_some_and(|slot| slot < boundary) {
+        return Err(OxmlError::InvalidValue(format!(
+            "{parent} children violate schema order"
+        )));
+    }
+    Ok(())
+}
+
+fn set_once<T>(target: &mut Option<T>, value: T, name: &str) -> Result<()> {
+    if target.replace(value).is_some() {
+        return Err(OxmlError::InvalidValue(format!("duplicate {name}")));
+    }
+    Ok(())
+}
+
+fn is_fill(name: &[u8]) -> bool {
+    matches!(
+        name,
+        b"noFill" | b"solidFill" | b"gradFill" | b"pattFill" | b"blipFill"
+    )
+}
+
+fn is_color(name: &[u8]) -> bool {
+    matches!(
+        name,
+        b"scrgbClr" | b"srgbClr" | b"hslClr" | b"sysClr" | b"schemeClr" | b"prstClr"
+    )
+}
+
+fn parse_fill(xml: &[u8]) -> Result<Fill> {
+    Fill::from_xml(xml).map_err(drawing_error)
+}
+
+fn parse_fill_wrapper(xml: &[u8]) -> Result<Option<Fill>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root_seen = false;
+    let mut fill = None;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if !root_seen => {
+                root_seen = true;
+                if start.attributes().next().is_some() {
+                    return Ok(None);
+                }
+            }
+            Event::Start(child) if root_seen && is_fill(local_name(child.name().as_ref())) => {
+                if fill.is_some() {
+                    return Ok(None);
+                }
+                fill = Some(parse_fill(&capture_element(&mut reader, &child)?)?);
+            }
+            Event::Empty(child) if root_seen && is_fill(local_name(child.name().as_ref())) => {
+                if fill.is_some() {
+                    return Ok(None);
+                }
+                fill = Some(parse_fill(&capture_empty_element(&child)?)?);
+            }
+            Event::Start(child) if root_seen => {
+                let _ = capture_element(&mut reader, &child)?;
+                return Ok(None);
+            }
+            Event::Empty(_) if root_seen => return Ok(None),
+            Event::End(_) if root_seen => return Ok(fill),
+            Event::Eof => return Err(missing("closing a:fill")),
+            Event::Text(text) if !xml_text_is_whitespace(&text) => {
+                return Ok(None);
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn parse_style_reference(xml: &[u8]) -> Result<StyleReference> {
+    StyleReference::from_xml(xml).map_err(drawing_error)
+}
+
+fn parse_color(xml: &[u8]) -> Result<crate::color::ColorChoice> {
     let mut reader = Reader::from_reader(xml);
     let mut buffer = Vec::new();
     loop {
         match reader.read_event_into(&mut buffer)? {
             Event::Start(start) => {
-                let attributes = raw_attributes(&start, &[], false)?;
-                let mut children = Vec::new();
-                loop {
-                    buffer.clear();
-                    match reader.read_event_into(&mut buffer)? {
-                        Event::Start(child) => children.push(capture_element(&mut reader, &child)?),
-                        Event::Empty(child) => children.push(capture_empty_element(&child)?),
-                        Event::End(end) if matches_local_name(end.name().as_ref(), b"tcPr") => {
-                            break;
-                        }
-                        Event::Eof => return Err(missing("closing a:tcPr")),
-                        _ => {}
-                    }
-                }
-                return Ok(CellPropertiesRaw {
-                    attributes,
-                    children,
-                });
+                return crate::color::ColorChoice::from_xml(&mut reader, &start)
+                    .map_err(drawing_error);
             }
             Event::Empty(start) => {
-                return Ok(CellPropertiesRaw {
-                    attributes: raw_attributes(&start, &[], false)?,
-                    children: Vec::new(),
-                });
+                return crate::color::ColorChoice::from_empty_xml(&start).map_err(drawing_error);
             }
-            Event::Eof => return Err(missing("a:tcPr")),
+            Event::Eof => return Err(missing("DrawingML colour")),
             _ => {}
         }
         buffer.clear();
+    }
+}
+
+fn parse_named_line(xml: &[u8]) -> Result<CT_LineProperties> {
+    let text = std::str::from_utf8(xml)?;
+    let name_start = text.find('<').ok_or_else(|| missing("table border"))? + 1;
+    let name_end = text[name_start..]
+        .find(|character: char| character.is_whitespace() || matches!(character, '>' | '/'))
+        .map(|offset| name_start + offset)
+        .ok_or_else(|| missing("table border name"))?;
+    let original_name = &text[name_start..name_end];
+    let mut renamed = String::with_capacity(text.len() + 8);
+    renamed.push_str(&text[..name_start]);
+    renamed.push_str("a:ln");
+    renamed.push_str(&text[name_end..]);
+    let closing = format!("</{original_name}>");
+    if renamed.ends_with(&closing) {
+        renamed.truncate(renamed.len() - closing.len());
+        renamed.push_str("</a:ln>");
+    }
+    CT_LineProperties::from_xml(renamed.as_bytes()).map_err(drawing_error)
+}
+
+fn parse_border_wrapper(xml: &[u8]) -> Result<Option<CT_LineProperties>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root_seen = false;
+    let mut line = None;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if !root_seen => {
+                root_seen = true;
+                if start.attributes().next().is_some() {
+                    return Ok(None);
+                }
+            }
+            Event::Start(child)
+                if root_seen && matches_local_name(child.name().as_ref(), b"ln") =>
+            {
+                if line.is_some() {
+                    return Ok(None);
+                }
+                line = Some(parse_named_line(&capture_element(&mut reader, &child)?)?);
+            }
+            Event::Empty(child)
+                if root_seen && matches_local_name(child.name().as_ref(), b"ln") =>
+            {
+                if line.is_some() {
+                    return Ok(None);
+                }
+                line = Some(parse_named_line(&capture_empty_element(&child)?)?);
+            }
+            Event::Start(child) if root_seen => {
+                let _ = capture_element(&mut reader, &child)?;
+                return Ok(None);
+            }
+            Event::Empty(_) if root_seen => return Ok(None),
+            Event::End(_) if root_seen => return Ok(line),
+            Event::Eof => return Err(missing("closing table border wrapper")),
+            Event::Text(text) if !xml_text_is_whitespace(&text) => {
+                return Ok(None);
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn write_optional_named_line<W: Write>(
+    writer: &mut Writer<W>,
+    tag: &str,
+    line: Option<&CT_LineProperties>,
+) -> Result<()> {
+    let Some(line) = line else {
+        return Ok(());
+    };
+    let xml = line.to_xml().map_err(drawing_error)?;
+    let text = std::str::from_utf8(&xml)?;
+    let mut renamed = text.replacen("<a:ln", &format!("<{tag}"), 1);
+    if renamed.ends_with("</a:ln>") {
+        renamed.truncate(renamed.len() - "</a:ln>".len());
+        renamed.push_str("</");
+        renamed.push_str(tag);
+        renamed.push('>');
+    }
+    writer.get_mut().write_all(renamed.as_bytes())?;
+    Ok(())
+}
+
+fn write_optional_border_wrapper<W: Write>(
+    writer: &mut Writer<W>,
+    tag: &str,
+    line: Option<&CT_LineProperties>,
+) -> Result<()> {
+    let Some(line) = line else {
+        return Ok(());
+    };
+    writer.write_event(Event::Start(BytesStart::new(tag)))?;
+    line.write_xml(writer).map_err(drawing_error)?;
+    writer.write_event(Event::End(BytesEnd::new(tag)))?;
+    Ok(())
+}
+
+fn drawing_error(error: impl std::fmt::Display) -> OxmlError {
+    OxmlError::InvalidValue(error.to_string())
+}
+
+fn xml_text_is_whitespace(text: &BytesText<'_>) -> bool {
+    let bytes: &[u8] = text.as_ref();
+    bytes.iter().all(u8::is_ascii_whitespace)
+}
+
+fn required_string(start: &BytesStart<'_>, name: &[u8]) -> Result<String> {
+    decoded_attr(start, name)?.ok_or_else(|| {
+        missing(&format!(
+            "{}@{}",
+            String::from_utf8_lossy(local_name(start.name().as_ref())),
+            String::from_utf8_lossy(name)
+        ))
+    })
+}
+
+fn optional_emu_attr(start: &BytesStart<'_>, name: &[u8]) -> Result<Option<Emu>> {
+    decoded_attr(start, name)?
+        .map(|value| {
+            value.parse::<i64>().map(Emu).map_err(|error| {
+                OxmlError::InvalidValue(format!(
+                    "invalid {}: {error}",
+                    String::from_utf8_lossy(name)
+                ))
+            })
+        })
+        .transpose()
+}
+
+fn push_optional_emu(start: &mut BytesStart<'_>, name: &'static str, value: Option<Emu>) {
+    if let Some(value) = value {
+        start.push_attribute((name, Cow::Owned(value.0.to_string())));
+    }
+}
+
+fn push_optional_bool(start: &mut BytesStart<'_>, name: &'static str, value: Option<bool>) {
+    if let Some(value) = value {
+        start.push_attribute((name, if value { "1" } else { "0" }));
     }
 }
 
@@ -1271,8 +2430,8 @@ fn bool_attr(start: &BytesStart<'_>, name: &[u8]) -> Result<Option<bool>> {
         return Ok(None);
     };
     match value.as_str() {
-        "true" | "1" => Ok(Some(true)),
-        "false" | "0" => Ok(Some(false)),
+        "true" | "1" | "on" => Ok(Some(true)),
+        "false" | "0" | "off" => Ok(Some(false)),
         _ => Err(OxmlError::InvalidValue(format!(
             "invalid {}@{} boolean: {value}",
             String::from_utf8_lossy(local_name(start.name().as_ref())),
@@ -1313,7 +2472,143 @@ fn unexpected(start: &BytesStart<'_>) -> OxmlError {
 
 #[cfg(test)]
 mod tests {
-    use super::{A_NS, CT_Table, Emu, OxmlError};
+    use std::path::PathBuf;
+
+    use oxml_opc::OpcPackage;
+
+    use super::{A_NS, CT_Table, CT_TableStyleList, Emu, OxmlError};
+
+    #[test]
+    fn table_style_and_cell_properties_preserve_unmodelled_xml_byte_for_byte() {
+        let xml = br#"<q:tblStyleLst xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer" def="style"><x:before/><q:tblStyle styleId="style" styleName="Style"><q:wholeTbl><q:tcStyle><q:solidFill><q:srgbClr val="112233"/></q:solidFill><x:unsupported value="kept"/></q:tcStyle></q:wholeTbl></q:tblStyle><x:after/></q:tblStyleLst>"#;
+
+        let styles = CT_TableStyleList::from_xml(xml).expect("parse table style list");
+        let written = styles.to_xml().expect("write table style list");
+
+        assert!(
+            written
+                .windows(b"<x:before/>".len())
+                .any(|part| part == b"<x:before/>")
+        );
+        assert!(
+            written
+                .windows(b"<x:unsupported value=\"kept\"/>".len())
+                .any(|part| part == b"<x:unsupported value=\"kept\"/>")
+        );
+        assert!(
+            written
+                .windows(b"<x:after/>".len())
+                .any(|part| part == b"<x:after/>")
+        );
+        assert!(written.starts_with(
+            br#"<a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main""#
+        ));
+        assert_eq!(styles, CT_TableStyleList::from_xml(&written).unwrap());
+
+        let producer_style = br#"<a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" def="style"><a:tblStyle styleId="style" styleName="Producer"><a:wholeTbl><a:tcTxStyle b="on"><a:fontRef idx="minor"><a:prstClr val="black"/></a:fontRef><a:schemeClr val="dk1"/></a:tcTxStyle><a:tcStyle><a:tcBdr><a:left><a:ln w="12700"><a:solidFill><a:schemeClr val="lt1"/></a:solidFill></a:ln></a:left><a:insideH><a:ln w="25400"><a:solidFill><a:schemeClr val="lt1"/></a:solidFill></a:ln></a:insideH></a:tcBdr><a:fill><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></a:fill></a:tcStyle></a:wholeTbl></a:tblStyle></a:tblStyleLst>"#;
+        let producer_style = CT_TableStyleList::from_xml(producer_style).unwrap();
+        let whole = producer_style.styles[0].whole_table.as_ref().unwrap();
+        assert_eq!(whole.text_style.as_ref().unwrap().bold, Some(true));
+        assert!(whole.cell_style.as_ref().unwrap().fill.is_some());
+        assert!(
+            whole
+                .cell_style
+                .as_ref()
+                .unwrap()
+                .borders
+                .as_ref()
+                .unwrap()
+                .left
+                .is_some()
+        );
+        assert!(
+            whole
+                .cell_style
+                .as_ref()
+                .unwrap()
+                .borders
+                .as_ref()
+                .unwrap()
+                .inside_horizontal
+                .is_some()
+        );
+        let producer_written = producer_style.to_xml().unwrap();
+        assert_eq!(
+            producer_style,
+            CT_TableStyleList::from_xml(&producer_written).unwrap()
+        );
+
+        let direct_edge_alias = br#"<a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:tblStyle styleId="alias" styleName="Alias"><a:wholeTbl><a:tcStyle><a:tcBdr><a:lnL w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:lnL></a:tcBdr></a:tcStyle></a:wholeTbl></a:tblStyle></a:tblStyleLst>"#;
+        let direct_edge_alias = CT_TableStyleList::from_xml(direct_edge_alias).unwrap();
+        let borders = direct_edge_alias.styles[0]
+            .whole_table
+            .as_ref()
+            .unwrap()
+            .cell_style
+            .as_ref()
+            .unwrap()
+            .borders
+            .as_ref()
+            .unwrap();
+        assert!(borders.left.is_some());
+        assert!(borders.unsupported.is_empty());
+
+        let table_xml = br#"<q:tbl xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><q:tblGrid><q:gridCol w="127000"/></q:tblGrid><q:tr h="127000"><q:tc><q:tcPr marL="12700" marR="25400" marT="38100" marB="50800"><q:lnL w="12700"><q:solidFill><q:srgbClr val="000000"/></q:solidFill></q:lnL><q:lnTlToBr><x:diagonal/></q:lnTlToBr><q:solidFill><q:srgbClr val="ABCDEF"/></q:solidFill><x:after-fill/></q:tcPr></q:tc></q:tr></q:tbl>"#;
+        let table = CT_Table::from_xml(table_xml).unwrap();
+        let properties = table.rows[0].cells[0].properties.as_ref().unwrap();
+        assert_eq!(properties.margin_left, Some(Emu(12_700)));
+        assert_eq!(properties.margin_bottom, Some(Emu(50_800)));
+        assert!(properties.left.is_some());
+        assert!(properties.fill.is_some());
+        assert_eq!(properties.unsupported, ["diagonal border"]);
+        let table_written = table.to_xml().unwrap();
+        assert!(
+            table_written
+                .windows(b"<x:diagonal/>".len())
+                .any(|part| part == b"<x:diagonal/>")
+        );
+        assert!(
+            table_written
+                .windows(b"<x:after-fill/>".len())
+                .any(|part| part == b"<x:after-fill/>")
+        );
+        assert_eq!(table, CT_Table::from_xml(&table_written).unwrap());
+    }
+
+    #[test]
+    fn every_corpus_table_style_list_parses_and_round_trips() {
+        let corpus = std::env::var_os("RDOCX_PPTX_CORPUS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/pptx"));
+        if !corpus.is_dir() {
+            assert_ne!(
+                std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").as_deref(),
+                Some(std::ffi::OsStr::new("1")),
+                "the required pinned corpus is missing at {}",
+                corpus.display()
+            );
+            return;
+        }
+        for entry in std::fs::read_dir(&corpus).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("pptx") {
+                continue;
+            }
+            let package = OpcPackage::open(&path).unwrap();
+            let Some(xml) = package.get_part("/ppt/tableStyles.xml") else {
+                continue;
+            };
+            let styles = CT_TableStyleList::from_xml(xml)
+                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            let written = styles.to_xml().unwrap();
+            assert_eq!(
+                styles,
+                CT_TableStyleList::from_xml(&written).unwrap(),
+                "{}",
+                path.display()
+            );
+        }
+    }
 
     #[test]
     fn table_properties_preserve_style_and_banding_flags() {

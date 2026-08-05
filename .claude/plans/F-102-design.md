@@ -1,6 +1,6 @@
 # F-102, Table rendering
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S25
 **Size**: L
 **Depends on**: F-074, F-098
@@ -112,13 +112,13 @@ development crates.
 
 ## Implementation checklist
 
-- [ ] Type the rendering subset of table styles and direct cell properties.
-- [ ] Preserve unsupported table XML and schema order on round-trip.
-- [ ] Resolve style regions, direct overrides, margins, text style, and merge
+- [x] Type the rendering subset of table styles and direct cell properties.
+- [x] Preserve unsupported table XML and schema order on round-trip.
+- [x] Resolve style regions, direct overrides, margins, text style, and merge
   ownership to source-neutral values.
-- [ ] Lower merge origins to fills, unique border segments, and fixed-box text.
-- [ ] Diagnose and ignore unsupported table-cell autofit.
-- [ ] Add deterministic structural and pixel regressions for the backlog gate.
+- [x] Lower merge origins to fills, unique border segments, and fixed-box text.
+- [x] Diagnose and ignore unsupported table-cell autofit.
+- [x] Add deterministic structural and pixel regressions for the backlog gate.
 
 ## Open questions
 
