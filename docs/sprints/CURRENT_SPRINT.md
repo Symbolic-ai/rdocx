@@ -1,64 +1,71 @@
-# Current Sprint, S23
+# Current Sprint, S24
 
 **Milestone**: M10 Renderer.
 
-**Goal**: Build the first concrete `rpptx-render` output path so slides with
-backgrounds, shapes, gradients, outlines, rotations, groups, arrowheads, and
-cropped or tiled pictures render without text. Preserve the frozen resolver
-boundary and keep every PowerPoint development crate unpublished while S24
-adds shape text.
+**Goal**: Make rendered slides useful by laying out shape text inside the
+resolved preset text rectangle with concrete insets, wrapping, paragraph
+formatting, line stacking, and anchoring. Add bullets, stored and computed
+autofit, and vertical text while preserving the frozen resolver boundary and
+keeping every PowerPoint development crate unpublished.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for the one-way `rpptx-layout` to
-  `rpptx-render` seam and the shared `oxml-layout` output boundary.
-- `docs/hld/05-drawingml-model.md`, for geometry, fill, line, transform,
-  arrowhead, picture-fill, and raw-preservation inputs.
-- `docs/hld/06-presentationml-model.md`, for the recursive shape tree and typed
-  picture crop and relationship data consumed by rendering.
-- `docs/hld/07-inheritance-and-resolution.md`, for the owned `ResolvedSlide`
-  contract, accumulated group transforms, concrete paint, and effective
-  backgrounds.
-- `docs/hld/08-rendering-spec.md`, for page-frame lowering, group recursion,
-  paths, gradients, images, backgrounds, and the renderer input boundary.
-- `docs/hld/12-testing-strategy.md`, for deterministic rendering, sampled-pixel
-  evidence, the 50-deck corpus, and the later M10 fidelity gate.
-- `docs/hld/14-development-backlog.md`, for F-093 through F-097 dependencies,
-  story gates, and the M10 boundary.
-- `docs/hld/15-build-and-toolchain.md`, for deterministic font mode and the
-  version 0.0.0, publication-disabled policy.
+- `docs/hld/02-scope-and-non-goals.md`, for the v1 text capabilities and the
+  explicit `eaVert` rotated fallback with a diagnostic.
+- `docs/hld/03-architecture.md`, for the shared `oxml-layout` text machinery
+  and the one-way `rpptx-layout` to `rpptx-render` seam.
+- `docs/hld/05-drawingml-model.md`, for the typed text body, body properties,
+  paragraph, run, list-style, and bullet inputs.
+- `docs/hld/07-inheritance-and-resolution.md`, for concrete body properties,
+  nine-level paragraph resolution, bullets, text runs, direction, and autofit
+  at the frozen renderer boundary.
+- `docs/hld/08-rendering-spec.md`, for content-box construction, line layout,
+  anchoring, bullet markers, the autofit ladder, and rotated vertical text.
+- `docs/hld/12-testing-strategy.md`, for deterministic rendering and the pinned
+  50-deck corpus that exercises ordinary shape text.
+- `docs/hld/14-development-backlog.md`, for F-098 through F-101 dependencies,
+  split requirement, and focused test gates.
+- `docs/hld/15-build-and-toolchain.md`, for the version 0.0.0 and
+  publication-disabled policy for every PowerPoint development crate.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-093 | Shape geometry, fills and lines | L | done | - |
-| F-096 | Pictures with crop and tile | M | done | - |
-| F-097 | Backgrounds | S | done | - |
-| F-094 | Rotation, flips and groups | M | done | - |
-| F-095 | Arrowheads | S | done | - |
+| F-098 | Shape text layout | XL | done | - |
+| F-098a | Text content box | M | done | - |
+| F-098b | Paragraph inline resolution | L | done | - |
+| F-098c | Line stacking | M | done | - |
+| F-098d | Text anchoring | S | done | - |
+| F-099 | Bullets | M | done | - |
+| F-100 | Autofit | M | done | - |
+| F-101 | Vertical text | S | done | - |
 
 ## Sequencing note
 
-F-093 consumes the completed preset evaluator and renderer input boundary, and
-it blocks F-094 and F-095. F-096 depends on the existing picture and media
-contracts, while F-097 depends on the completed flattener, so both may proceed
-alongside F-093. Rotation, flips, groups, and arrowheads follow only after the
-base shape lowering is stable.
+Rows are listed in dependency order, not merely by F-ID. F-098 is the umbrella
+gate for the sequential F-098a through F-098d implementation chain. F-099,
+F-100, and F-101 all depend on the completed anchoring child. Their behavior is
+logically independent, but they share the same renderer text path and therefore
+run in separate waves.
 
 ## Definition of done for this sprint
 
-- Preset and custom shape geometry lower to page-frame paths with solid,
-  gradient, and outline paint matching sampled colours.
-- Rotation, flips, and nested group transforms place corners at independently
-  computed coordinates.
-- Line head and tail ends lower to the required filled arrowhead paths.
-- Pictures render through content-addressed media with crop and tile behavior
-  proven by focused image-region tests.
-- Slide, layout, and master backgrounds lower through the resolved background
-  contract, including inherited gradient backgrounds.
-- Slides containing shapes and pictures render without dropped visible content.
-  Shape text remains explicitly deferred to S24.
+- F-098a through F-098d have their own design and delivery records, and every
+  child closes before the F-098 umbrella story closes.
+- Shape text uses the preset text rectangle and resolved insets to produce a
+  fixed content box with correct wrapping, paragraph resolution, line stacking,
+  and vertical anchoring.
+- Bottom-centred text lands at an independently computed baseline inside its
+  inset content box.
+- Character, automatic, and no-bullet forms render with inherited size, colour,
+  and font properties, including a visible Unicode mapping for Wingdings
+  `F0B7`.
+- Stored `normAutofit` values apply verbatim, `spAutoFit` trusts the stored
+  extent, `noAutofit` overflows without clipping, and bare `normAutofit` uses
+  the quantised 2.5 percent ladder.
+- Vertical text renders through a transposed layout and rotated group, while
+  `eaVert` degrades to rotated vertical text with a diagnostic.
 - Every PowerPoint development crate remains version 0.0.0 with publication
   disabled, no crate is published, and the full workspace gate passes with all
   28 deterministic hashes unchanged.

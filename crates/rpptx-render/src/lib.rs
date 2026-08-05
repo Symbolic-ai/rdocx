@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use oxml_drawing::theme::CT_OfficeStyleSheet;
 use oxml_layout::{
-    Color, DocumentMetadata, FontFile, GroupElement, LayoutResult, MediaId, PageFrame, Paint, Path,
-    PathCommand, PathElement, Point, PositionedElement, Rect, Stroke, Transform,
+    Color, DocumentMetadata, FontFile, FontManager, GroupElement, LayoutResult, MediaId, PageFrame,
+    Paint, Path, PathCommand, PathElement, Point, PositionedElement, Rect, Stroke, Transform,
 };
 use rpptx_layout::{
     CropRect, ResolvedContent, ResolvedGeometry, ResolvedImagePlacement, ResolvedLineEnd,
@@ -17,6 +17,8 @@ use rpptx_layout::{
 };
 use rpptx_oxml::notes_parts::CT_NotesSlide;
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster};
+
+mod text;
 
 /// The source part whose relationship map owns an identifier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -107,6 +109,9 @@ pub enum RenderInputError {
         requested: usize,
         limit: usize,
     },
+    TextLayout {
+        detail: String,
+    },
 }
 
 impl fmt::Display for RenderInputError {
@@ -143,6 +148,7 @@ impl fmt::Display for RenderInputError {
                 "picture media {} requests {requested} tiles, above the {limit} tile limit",
                 media.0
             ),
+            Self::TextLayout { detail } => write!(formatter, "text layout failed: {detail}"),
         }
     }
 }
@@ -172,21 +178,38 @@ pub struct RenderInput {
 
 /// Lower every resolved slide to one fixed-size page in presentation order.
 pub fn layout_presentation(input: &RenderInput) -> Result<LayoutResult, RenderInputError> {
+    let mut font_manager = FontManager::new();
+    font_manager.load_additional_fonts(&input.fonts);
     let pages = (0..input.slides.len())
-        .map(|index| layout_slide(input, index))
+        .map(|index| layout_slide_with_fonts(input, index, &mut font_manager))
         .collect::<Result<Vec<_>, _>>()?;
     let diagnostics = input
         .slides
         .iter()
         .flat_map(|slide| slide.diagnostics.iter().cloned())
         .collect();
-    let mut layout = LayoutResult::new(pages, Vec::new(), input.metadata.clone(), Vec::new());
+    let mut layout = LayoutResult::new(
+        pages,
+        font_manager.all_font_data(),
+        input.metadata.clone(),
+        Vec::new(),
+    );
     layout.diagnostics = diagnostics;
     Ok(layout)
 }
 
 /// Lower one zero-based resolved slide to a fixed-size page.
 pub fn layout_slide(input: &RenderInput, index: usize) -> Result<PageFrame, RenderInputError> {
+    let mut font_manager = FontManager::new();
+    font_manager.load_additional_fonts(&input.fonts);
+    layout_slide_with_fonts(input, index, &mut font_manager)
+}
+
+fn layout_slide_with_fonts(
+    input: &RenderInput,
+    index: usize,
+    font_manager: &mut FontManager,
+) -> Result<PageFrame, RenderInputError> {
     let slide = input
         .slides
         .get(index)
@@ -197,7 +220,7 @@ pub fn layout_slide(input: &RenderInput, index: usize) -> Result<PageFrame, Rend
     let elements = slide
         .shapes
         .iter()
-        .map(|shape| lower_shape(input, shape))
+        .map(|shape| lower_shape(input, shape, font_manager))
         .collect::<Result<Vec<_>, _>>()?;
     let mut page = PageFrame::new(index + 1, slide.size.0, slide.size.1, elements);
     page.background.clone_from(&slide.background);
@@ -207,6 +230,7 @@ pub fn layout_slide(input: &RenderInput, index: usize) -> Result<PageFrame, Rend
 fn lower_shape(
     input: &RenderInput,
     shape: &ResolvedShape,
+    font_manager: &mut FontManager,
 ) -> Result<PositionedElement, RenderInputError> {
     let paths = match &shape.geometry {
         ResolvedGeometry::Rectangle | ResolvedGeometry::BoundsFallback => vec![Path::rect(Rect {
@@ -223,6 +247,7 @@ fn lower_shape(
         }
         _ => shape.line.clone(),
     };
+    let mut text_children = Vec::new();
     let mut children = match &shape.content {
         ResolvedContent::Image {
             media,
@@ -240,6 +265,30 @@ fn lower_shape(
             *dpi,
             *rotate_with_shape,
         )?,
+        ResolvedContent::Text(text_body) => {
+            let content_box = text::content_box(shape, text_body);
+            let (content_box, text_transform) =
+                text::oriented_content_box(content_box, text_body.vertical);
+            let stacked =
+                text::stack_text(font_manager, content_box, text_body).map_err(|error| {
+                    RenderInputError::TextLayout {
+                        detail: error.to_string(),
+                    }
+                })?;
+            debug_assert!(stacked.width.is_finite() && stacked.height.is_finite());
+            text_children = if let Some(transform) = text_transform {
+                vec![PositionedElement::Group(GroupElement {
+                    transform,
+                    clip: None,
+                    opacity: 1.0,
+                    effects: Vec::new(),
+                    children: stacked.elements,
+                })]
+            } else {
+                stacked.elements
+            };
+            Vec::new()
+        }
         _ => Vec::new(),
     };
     children.extend(
@@ -274,6 +323,7 @@ fn lower_shape(
             children.push(filled_line_end(path, &line.paint));
         }
     }
+    children.extend(text_children);
     Ok(PositionedElement::Group(GroupElement {
         transform: shape_transform(shape),
         clip: None,

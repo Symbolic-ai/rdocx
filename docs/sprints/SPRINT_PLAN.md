@@ -372,13 +372,18 @@ Ships slides with shapes but no text.
 | F-ID | Title | Size |
 |------|-------|------|
 | F-098 | Shape text layout                            | XL |
+| F-098a | Text content box                             | M |
+| F-098b | Paragraph inline resolution                  | L |
+| F-098c | Line stacking                                | M |
+| F-098d | Text anchoring                               | S |
 | F-099 | Bullets                                      | M |
 | F-100 | Autofit                                      | M |
 | F-101 | Vertical text                                | S |
 
-**The milestone that makes the project real.** F-098 is XL and splits at
-implementation into the content box, paragraph resolution, line stacking and
-anchoring.
+**The milestone that makes the project real.** F-098 is the umbrella gate for
+F-098a through F-098d, which implement the content box, paragraph inline
+resolution, line stacking, and anchoring. The parent closes only after every
+child closes.
 
 #### Sprint S25, Tables and the fidelity gate
 

@@ -292,15 +292,40 @@ The algorithm: resolve `a:bodyPr`, compute the content box from the preset's
 text rectangle minus insets, resolve each paragraph through the nine-level
 chain, build inline items, stack lines from the box top, then anchor.
 
-**Vertical text** is laid out horizontally in a transposed box and wrapped in a
-`Group` with a 90 degree rotation. `eaVert` upright stacking is not supported in
-v1 and degrades to rotated vertical with a diagnostic.
+Top anchoring uses no translation, centre uses half the spare content height,
+and bottom uses all of it. These offsets remain negative when the complete text
+stack overflows. With positive spare height, justified anchoring divides the
+space between line boxes, while distributed anchoring uses equal line gaps with
+half a gap before the first line and after the last. Both forms centre a single
+line and leave an overflowing stack undistributed. Anchoring never adds a clip.
+
+**Vertical text** is laid out horizontally in a same-centre transposed box and
+wrapped in a `Group`. `vert` rotates the group 90 degrees and `vert270` rotates
+it -90 degrees. `eaVert` and `wordArtVert` use the `vert` path.
+`mongolianVert` and `wordArtVertRtl` use the `vert270` path. Unsupported upright
+or WordArt stacking stays visible and records, respectively,
+`east Asian vertical text rendered as rotated vertical text`,
+`Mongolian vertical text rendered as rotated vertical-270 text`,
+`WordArt vertical text rendered as rotated vertical text`, or
+`right-to-left WordArt vertical text rendered as rotated vertical-270 text`.
 
 **Bullets** become marker inline items, with `marL` and `indent` mapping onto
-the existing left and hanging indent support. The Wingdings trap: `a:buChar`
-codepoints are usually private-use `F0xx`, and `FontManager::map_font_name`
-aliases Wingdings to Symbol, which renders garbage. A small codepoint-to-Unicode
-table is applied **before** font resolution.
+the existing left and hanging indent support. The marker font, colour, and
+point or percentage size resolve independently. An omitted value uses the
+paragraph's first effective run style.
+
+Automatic numbering keeps one counter per text body and list level. The first
+automatic paragraph at a level uses `startAt`, and the next paragraph at that
+level with the same scheme increments it. Returning to a shallower level resets
+deeper counters. A scheme change, character bullet, or paragraph without a
+bullet resets the affected level. The renderer formats `arabicPlain`,
+`arabicPeriod`, `arabicParenR`, `arabicParenBoth`, `alphaLcPeriod`,
+`alphaUcPeriod`, `romanLcPeriod`, and `romanUcPeriod`. Any other schema scheme
+uses a visible `arabicPeriod` marker.
+
+The Wingdings trap is handled before font resolution. `a:buChar` U+F0B7 maps
+to the visible Unicode bullet U+2022 instead of passing through the Wingdings
+to Symbol alias as a private-use codepoint.
 
 ### Autofit
 
@@ -312,12 +337,16 @@ table is applied **before** font resolution.
   resize.
 - `a:normAutofit fontScale="62500" lnSpcReduction="20000"`: apply verbatim. This
   is both cheapest and most faithful, because it reproduces exactly what the
-  authoring application decided.
+  authoring application decided. Font scale applies to every effective run and
+  bullet size. Line-spacing reduction removes only extra leading and never
+  reduces a line below its natural ascent plus descent.
 - Only a bare `<a:normAutofit/>` needs iteration, and then walk PowerPoint's own
   quantised 2.5 percent ladder rather than binary-searching a continuous scale,
-  so the computed value matches what PowerPoint would have written. At most 31
-  steps, typically one to three, and a shaping cache makes repeat passes nearly
-  free.
+  so the computed value matches what PowerPoint would have written. The ladder
+  runs from 100 percent through a 25 percent floor, at most 31 candidates and
+  typically one to three. A per-layout shaping cache makes repeat passes nearly
+  free. If the 25 percent candidate still does not fit, draw it visibly without
+  clipping.
 
 ## Performance
 
