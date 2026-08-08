@@ -1,68 +1,64 @@
-# Current Sprint, S26
+# Current Sprint, S27
 
 **Milestone**: M11 Write API.
 
-**Goal**: Establish the slide-creation foundation with a bundled zero-slide
-template, collision-safe shape and media allocation, synthesised slide creation,
-and a complete validation surface. End with a three-slide generated deck that
-opens without repair and a validator that accepts the pinned corpus while
-identifying every deliberately corrupted package.
+**Goal**: Add mutable shape and text APIs to the presentation facade, including
+direct geometry and styling setters, shape creation, picture insertion, and
+text-frame editing. End with saved decks that round-trip every mutation, render
+edited placeholder text, and open in PowerPoint without repair.
 
 ## Spec references
 
-- `docs/hld/01-glossary.md`, for placeholder `idx` as the inheritance join key
-  that new slides must preserve.
-- `docs/hld/02-scope-and-non-goals.md`, for the bundled `Presentation::new()`,
-  synthesised `add_slide`, slide collection, and content-hash media deduplication
-  contract.
-- `docs/hld/03-architecture.md`, for the `rpptx` facade and its crate-local
-  `assets/default.pptx` ownership.
-- `docs/hld/04-opc-and-packaging.md`, for cheap non-panicking package integrity
-  validation before debug saves.
-- `docs/hld/06-presentationml-model.md`, for slide and shape identifier rules,
-  recursive shape-tree allocation, the nine-step slide synthesis sequence,
-  every `ValidationIssue`, and the bundled template contents.
-- `docs/hld/12-testing-strategy.md`, for pinned corpus validation and the
-  milestone requirement to open saved decks without repair.
-- `docs/hld/13-risks-and-open-questions.md`, for synthesising placeholders
-  instead of deep-copying raw XML with hidden relationship identifiers.
-- `docs/hld/14-development-backlog.md`, for F-105 through F-108 dependencies,
+- `docs/hld/01-glossary.md`, for placeholder identity and the `idx` join key
+  that text mutation must preserve.
+- `docs/hld/02-scope-and-non-goals.md`, for the complete v1 shape, picture, and
+  text mutation surface.
+- `docs/hld/03-architecture.md`, for facade ownership in `rpptx` and the
+  dependency direction through PresentationML and shared DrawingML crates.
+- `docs/hld/04-opc-and-packaging.md`, for image sniffing, intrinsic EMU sizing,
+  media naming, and package integrity after picture insertion.
+- `docs/hld/05-drawingml-model.md`, for transforms, geometry adjustments,
+  fills, lines, text bodies, whitespace, and schema-ordered writing.
+- `docs/hld/06-presentationml-model.md`, for recursive shape-tree handles,
+  collision-safe non-visual ids, presentation writing, and validation.
+- `docs/hld/07-inheritance-and-resolution.md`, for the direct properties that
+  mutation adds before the resolver collapses them to concrete render values.
+- `docs/hld/12-testing-strategy.md`, for round-trip, rendering, corpus, and
+  native PowerPoint acceptance evidence.
+- `docs/hld/13-risks-and-open-questions.md`, for schema child ordering and safe
+  mutation in the presence of preserved XML.
+- `docs/hld/14-development-backlog.md`, for F-109 through F-112 dependencies,
   sizes, and focused test gates.
-- `docs/hld/15-build-and-toolchain.md`, for the default-template feature,
-  crate-local asset packaging, and unpublished PresentationML crates.
+- `docs/hld/15-build-and-toolchain.md`, for keeping every PowerPoint development
+  crate at version 0.0.0 with publication disabled.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-105 | Bundled default.pptx | M | done | - |
-| F-106 | ShapeIdAllocator and MediaStore | M | done | - |
-| F-107 | add_slide | L | done | - |
-| F-108 | validate() | M | done | - |
+| F-109 | Shape mutation facade | L | pending | - |
+| F-110 | add_textbox, add_shape, add_connector, group | M | pending | - |
+| F-111 | add_picture | M | pending | - |
+| F-112 | Text frame mutation | L | pending | - |
 
 ## Sequencing note
 
-F-105 and F-106 have completed prerequisites and can begin independently.
-F-107 follows both because slide synthesis needs the bundled template plus safe
-shape and media allocation. F-108 follows F-107 so validation covers the new
-creation path and protects every later M11 mutation story.
+F-109 establishes the mutable shape handle used by F-110 and F-112, which can
+then proceed independently. F-111 is independent of F-109 because its F-106
+media store and F-026 intrinsic-size prerequisites are already complete.
 
 ## Definition of done for this sprint
 
-- `Presentation::new()` loads a crate-local 16:9 template containing one
-  master, eleven standard layouts, a full theme, notes infrastructure, table
-  styles, and zero slides, and PowerPoint opens it without repair.
-- `ShapeIdAllocator` scans nested groups and `mc:AlternateContent` fallbacks,
-  while `MediaStore` deduplicates equal image bytes by content hash.
-- `add_slide` synthesises minimal non-latent placeholders, preserves their
-  `type` and `idx`, creates the layout and presentation relationships, registers
-  the content type, and allocates unique slide ids at or above 256.
-- A generated three-slide deck opens in PowerPoint without repair and preserves
-  the selected layouts and placeholder inheritance.
-- `Presentation::validate()` reports every documented `ValidationIssue` without
-  panicking, runs under debug assertions before save, detects one deliberate
-  corruption per variant, and accepts all 50 pinned corpus decks.
-- The default template is included in the `rpptx` package through the existing
-  default-on feature. Every PowerPoint development crate remains version 0.0.0
-  with publication disabled, no crate is published, the full workspace gate
-  passes, and all 28 deterministic hashes remain unchanged.
+- Shape position, size, rotation, name, fill, line, and adjustment setters each
+  survive save and reload without disturbing unmodelled XML.
+- `add_textbox`, `add_shape`, `add_connector`, and `add_group_shape` allocate
+  collision-free ids, emit schema-ordered XML, validate cleanly, and produce
+  shapes that PowerPoint opens without repair.
+- `add_picture` deduplicates media through the existing content-addressed store
+  and uses native dimensions when no explicit size is supplied.
+- Text frames expose paragraphs, runs, font properties, and bullets for
+  mutation. Setting text on a placeholder round-trips and renders visibly.
+- The full workspace gate passes, native PowerPoint acceptance covers the new
+  shape constructors, all 28 deterministic hashes remain unchanged, every
+  PowerPoint development crate remains unpublished at version 0.0.0, and no
+  crate is published.

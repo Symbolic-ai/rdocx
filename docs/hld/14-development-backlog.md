@@ -873,7 +873,7 @@ Position, size, rotation, name, fill, line, adjust values.
 **Test gate**: each produces a shape PowerPoint opens without repair.
 
 ### F-111, add_picture (M)
-**Depends on**: F-106, F-028.
+**Depends on**: F-106, F-026.
 **Test gate**: a picture added with no explicit size uses its native dimensions.
 
 ### F-112, Text frame mutation (L)
