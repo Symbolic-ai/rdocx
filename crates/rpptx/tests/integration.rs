@@ -183,6 +183,108 @@ fn rpptx_is_an_unpublished_workspace_member() {
     assert!(manifest.contains("name = \"rpptx\""));
     assert!(manifest.contains("version = \"0.0.0\""));
     assert!(manifest.contains("publish = false"));
+    assert!(manifest.contains("default = [\"default-template\"]"));
+    assert!(manifest.contains("default-template = []"));
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn new_presentation_uses_the_bundled_zero_slide_template() {
+    let presentation = Presentation::new().expect("open bundled presentation template");
+    assert!(presentation.is_empty());
+
+    let bytes = presentation.to_bytes().expect("serialize new presentation");
+    if let Some(path) = std::env::var_os("RDOCX_F105_SAVE_PATH") {
+        fs::write(&path, &bytes)
+            .unwrap_or_else(|error| panic!("write {}: {error}", Path::new(&path).display()));
+    }
+    let reopened = Presentation::from_bytes(&bytes).expect("reopen new presentation");
+    assert!(reopened.is_empty());
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn bundled_template_has_the_documented_part_graph() {
+    let asset = workspace_root().join("crates/rpptx/assets/default.pptx");
+    let bytes = fs::read(&asset)
+        .unwrap_or_else(|error| panic!("read bundled template {}: {error}", asset.display()));
+    let package = open_opc(&bytes, "default.pptx");
+    let presentation_part = package
+        .main_document_part()
+        .expect("bundled template main presentation part");
+    let presentation = CT_Presentation::from_xml(
+        package
+            .get_part(&presentation_part)
+            .expect("bundled template presentation XML"),
+    )
+    .expect("parse bundled template presentation XML");
+
+    assert!(presentation.slide_ids.is_empty());
+    assert_eq!(presentation.slide_master_ids.len(), 1);
+    let slide_size = presentation
+        .slide_size
+        .expect("bundled template slide size");
+    assert_eq!((slide_size.cx.0, slide_size.cy.0), (12_192_000, 6_858_000));
+
+    let count = |content_type: &str| {
+        package
+            .content_types
+            .overrides
+            .values()
+            .filter(|actual| actual.as_str() == content_type)
+            .count()
+    };
+    assert_eq!(count(content_types::SLIDE_MASTER), 1);
+    assert_eq!(count(content_types::SLIDE_LAYOUT), 11);
+    assert!(count(content_types::THEME) >= 1);
+    assert_eq!(count(content_types::PRES_PROPS), 1);
+    assert_eq!(count(content_types::VIEW_PROPS), 1);
+    assert_eq!(count(content_types::TABLE_STYLES), 1);
+    assert_eq!(count(content_types::NOTES_MASTER), 1);
+    assert_eq!(count(content_types::SLIDE), 0);
+
+    for (part_name, content_type) in &package.content_types.overrides {
+        if content_type == content_types::THEME {
+            CT_OfficeStyleSheet::from_xml(
+                package
+                    .get_part(part_name)
+                    .unwrap_or_else(|| panic!("missing bundled theme {part_name}")),
+            )
+            .unwrap_or_else(|error| panic!("parse bundled theme {part_name}: {error}"));
+        }
+    }
+
+    let presentation_relationships = package
+        .get_part_rels(&presentation_part)
+        .expect("bundled template presentation relationships");
+    for relationship_type in [
+        rel_types::SLIDE_MASTER,
+        rel_types::PRES_PROPS,
+        rel_types::VIEW_PROPS,
+        rel_types::TABLE_STYLES,
+        rel_types::NOTES_MASTER,
+    ] {
+        assert!(
+            presentation_relationships
+                .get_by_type(relationship_type)
+                .is_some(),
+            "bundled template lacks relationship type {relationship_type}"
+        );
+    }
+
+    let table_styles = package
+        .parts
+        .iter()
+        .find(|(part_name, _)| {
+            package.content_types.content_type_for(part_name) == Some(content_types::TABLE_STYLES)
+        })
+        .map(|(_, bytes)| bytes)
+        .expect("bundled template table styles");
+    assert!(
+        table_styles
+            .windows(b"{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}".len())
+            .any(|window| window == b"{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}")
+    );
 }
 
 #[test]

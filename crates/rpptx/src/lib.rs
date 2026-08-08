@@ -1,4 +1,9 @@
-//! Public read facade for PresentationML packages.
+//! Public facade for PresentationML packages.
+//!
+//! The `default-template` feature embeds a 16:9 zero-slide template derived
+//! from the MIT-licensed python-pptx 1.0.2 default template. The slide size was
+//! changed to 12,192,000 by 6,858,000 EMU, the size kind was changed to
+//! `screen16x9`, and python-pptx generated the notes-master infrastructure.
 
 use std::io::Cursor;
 use std::path::Path;
@@ -11,6 +16,9 @@ use rpptx_oxml::presentation::CT_Presentation;
 use rpptx_oxml::shape_tree::ShapeTreeChild;
 use rpptx_oxml::slide_parts::CT_Slide;
 use thiserror::Error;
+
+#[cfg(feature = "default-template")]
+const DEFAULT_TEMPLATE: &[u8] = include_bytes!("../assets/default.pptx");
 
 /// A result returned by the `rpptx` read facade.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -78,6 +86,12 @@ struct NotesRecord {
 }
 
 impl Presentation {
+    /// Creates an empty 16:9 presentation from the bundled standard template.
+    #[cfg(feature = "default-template")]
+    pub fn new() -> Result<Self> {
+        Self::from_bytes(DEFAULT_TEMPLATE)
+    }
+
     /// Opens a presentation from a `.pptx` path.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         Self::from_package(OpcPackage::open(path)?)

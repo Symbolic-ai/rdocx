@@ -1,6 +1,6 @@
 # F-105, Bundled default.pptx
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S26
 **Size**: M
 **Depends on**: F-065
@@ -99,13 +99,28 @@ participate in the Word rendering hashes.
 
 ## Implementation checklist
 
-- [ ] Add the crate-local zero-slide template with recorded provenance.
-- [ ] Add the default-enabled `default-template` feature.
-- [ ] Add `Presentation::new()` through the existing parser path.
-- [ ] Verify the exact template package graph and deterministic reopen.
-- [ ] Prove both feature modes compile and the package archive contains the
+- [x] Add the crate-local zero-slide template with recorded provenance.
+- [x] Add the default-enabled `default-template` feature.
+- [x] Add `Presentation::new()` through the existing parser path.
+- [x] Verify the exact template package graph and deterministic reopen.
+- [x] Prove both feature modes compile and the package archive contains the
   asset.
-- [ ] Produce native PowerPoint no-repair evidence for the backlog gate.
+- [x] Produce native PowerPoint no-repair evidence for the backlog gate.
+
+## Completion evidence
+
+The asset was generated with python-pptx 1.0.2 from its MIT-licensed default
+template. The slide size is 12,192,000 by 6,858,000 EMU with
+`type="screen16x9"`, and the notes-master infrastructure was materialized before
+the temporary slide was removed. The checked-in asset SHA-256 is
+`8ecd98d4e52c8ece061cb36c8baa9f0424b362454d820f6df1e425c662b9a057`.
+
+On 2026-08-08, `Presentation::new()` emitted
+`/private/tmp/F-105-new.pptx` with SHA-256
+`cd7982cd0ffeb2c5155bb0b2de0536ee599b1eccd3016a5aeadb52f7a40bfa05`.
+Microsoft PowerPoint 16.104 opened it as the sole presentation at the expected
+path and returned to zero open presentations after a no-save close. The
+AppleScript run completed without a timeout or repair flow.
 
 ## Open questions
 
