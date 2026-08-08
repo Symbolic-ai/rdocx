@@ -848,14 +848,15 @@ fn normalized_visual_oracle_records(decks: &[ResolvedVisualDeck]) -> String {
                 if metadata.is_latent {
                     continue;
                 }
+                let bounds = shape.group_transform.transform_rect_bbox(shape.bounds);
                 writeln!(
                     output,
                     "shape\t{slide_index}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{}",
                     metadata.kind,
-                    shape.bounds.x,
-                    shape.bounds.y,
-                    shape.bounds.width,
-                    shape.bounds.height,
+                    bounds.x,
+                    bounds.y,
+                    bounds.width,
+                    bounds.height,
                     escape_record(&resolved_content_text(&shape.content))
                 )
                 .unwrap();
@@ -934,7 +935,7 @@ fn resolved_run_fills(content: &ResolvedContent) -> Vec<String> {
                 collect_body(body);
             }
         }
-        ResolvedContent::None | ResolvedContent::Image { .. } => {}
+        ResolvedContent::None | ResolvedContent::Image(_) => {}
     }
     fills
 }
@@ -954,7 +955,7 @@ fn resolved_content_text(content: &ResolvedContent) -> String {
             })
             .collect::<Vec<_>>()
             .join("\n"),
-        ResolvedContent::None | ResolvedContent::Image { .. } => String::new(),
+        ResolvedContent::None | ResolvedContent::Image(_) => String::new(),
     }
 }
 
@@ -1504,16 +1505,87 @@ def shape_kind(shape):
         "cxnSp": "Connector",
     }[local]
 
-def leaves(shapes):
+IDENTITY = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+
+def then(first, second):
+    a, b, c, d, e, f = first
+    g, h, i, j, k, l = second
+    return (
+        g * a + i * b,
+        h * a + j * b,
+        g * c + i * d,
+        h * c + j * d,
+        g * e + i * f + k,
+        h * e + j * f + l,
+    )
+
+def rotate_about(degrees, cx, cy):
+    import math
+    radians = math.radians(degrees)
+    sine, cosine = math.sin(radians), math.cos(radians)
+    return (
+        cosine,
+        sine,
+        -sine,
+        cosine,
+        cx - cosine * cx + sine * cy,
+        cy - sine * cx - cosine * cy,
+    )
+
+def group_mapping(group):
+    xfrm = group._element.grpSpPr.xfrm
+    width, height = group.width, group.height
+    child_width, child_height = xfrm.chExt.cx, xfrm.chExt.cy
+    scale_x = 1.0 if child_width == 0 else width / child_width
+    scale_y = 1.0 if child_height == 0 else height / child_height
+    mapping = (
+        scale_x,
+        0.0,
+        0.0,
+        scale_y,
+        group.left - xfrm.chOff.x * scale_x,
+        group.top - xfrm.chOff.y * scale_y,
+    )
+    center_x = group.left + width / 2.0
+    center_y = group.top + height / 2.0
+    mapping = then(mapping, rotate_about(group.rotation, center_x, center_y))
+    if xfrm.flipH or xfrm.flipV:
+        mapping = then(
+            mapping,
+            (
+                -1.0 if xfrm.flipH else 1.0,
+                0.0,
+                0.0,
+                -1.0 if xfrm.flipV else 1.0,
+                2.0 * center_x if xfrm.flipH else 0.0,
+                2.0 * center_y if xfrm.flipV else 0.0,
+            ),
+        )
+    return mapping
+
+def mapped_bounds(shape, mapping):
+    a, b, c, d, e, f = mapping
+    corners = (
+        (shape.left, shape.top),
+        (shape.left + shape.width, shape.top),
+        (shape.left, shape.top + shape.height),
+        (shape.left + shape.width, shape.top + shape.height),
+    )
+    points = tuple((a * x + c * y + e, b * x + d * y + f) for x, y in corners)
+    xs, ys = tuple(point[0] for point in points), tuple(point[1] for point in points)
+    return min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)
+
+def leaves(shapes, parent_mapping=IDENTITY):
     for shape in shapes:
         if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
-            yield from leaves(shape.shapes)
+            mapping = then(group_mapping(shape), parent_mapping)
+            yield from leaves(shape.shapes, mapping)
         elif not (
             shape.is_placeholder
             and shape.placeholder_format.type
             in (PP_PLACEHOLDER.DATE, PP_PLACEHOLDER.FOOTER, PP_PLACEHOLDER.SLIDE_NUMBER)
         ):
-            yield shape
+            yield shape, parent_mapping
 
 def visible_shapes(slide):
     layout = slide.slide_layout
@@ -1530,8 +1602,8 @@ for filename in sys.argv[1:]:
     print("deck\t" + path.name)
     for slide_index, slide in enumerate(presentation.slides):
         print(f"slide\t{slide_index}\t{presentation.slide_width / 12700:.3f}\t{presentation.slide_height / 12700:.3f}")
-        for shape in visible_shapes(slide):
-            bounds = (shape.left, shape.top, shape.width, shape.height)
+        for shape, mapping in visible_shapes(slide):
+            bounds = mapped_bounds(shape, mapping)
             if any(value is None for value in bounds):
                 continue
             print(

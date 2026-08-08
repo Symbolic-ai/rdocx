@@ -53,6 +53,12 @@ methods still load system fonts for library users.
 The hash harness, golden-PNG gate and SSIM harness use the deterministic path.
 The normal rendering API does not change its font-discovery behaviour.
 
+`rpptx-render::layout_presentation_deterministic` applies the same rule to a
+whole presentation. It shares page lowering with
+`layout_presentation`, bypasses system-font discovery, and adds only explicit
+font files from `RenderInput`. The `rpptx` corpus example is an unpublished
+development target and does not change any crate publication setting.
+
 The `oxml-layout` `--no-default-features` path disables host system font
 discovery while retaining bundled fonts for deterministic construction. This is
 also the same font-isolation path the WASM build needs.
@@ -182,6 +188,18 @@ unresolved-symbol link failure that is easy to misdiagnose as something else.
 
 **A `wasm32-unknown-unknown` check job**, without which the binding crates drift
 again exactly as `rdocx-wasm` already has.
+
+**A dedicated Presentation fidelity job** fetches the pinned 50-deck corpus,
+installs LibreOffice and Poppler, and runs `scripts/pptx_ssim_harness.py
+--check` on macOS. The harness rejects any LibreOffice version other than
+26.2.5.2 build `cd7284b4cbbfeb507e630c1aac019f4157393acb` and any pdftoppm
+version other than 26.01.0 before rendering begins. This turns a package-manager
+upgrade into an explicit pin review rather than an unexplained score delta. The
+job records the 0.95 SSIM on 80 percent trend reference. It fails on incomplete
+corpus coverage, renderer or oracle failure, missing output, dimension mismatch,
+or a dropped bounded shape, but not solely on a missed SSIM trend. The job
+retains the gate JSON, render manifest, and per-slide score TSV as its evidence
+artifact.
 
 ## Dependency policy
 

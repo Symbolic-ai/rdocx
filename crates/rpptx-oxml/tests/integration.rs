@@ -2255,8 +2255,8 @@ fn graphic_data_uri_dispatch_recognises_table_chart_smartart_and_ole() {
         let raw = match (&frame.graphic_data.payload, expected) {
             (GraphicDataPayload::Chart(raw), "chart")
             | (GraphicDataPayload::SmartArt(raw), "smartart")
-            | (GraphicDataPayload::Ole(raw), "ole")
             | (GraphicDataPayload::Other(raw), "other") => raw,
+            (GraphicDataPayload::Ole { raw, .. }, "ole") => raw,
             (actual, _) => panic!("{uri} selected the wrong branch: {actual:?}"),
         };
         assert_eq!(raw, payload.as_bytes());
@@ -2265,6 +2265,62 @@ fn graphic_data_uri_dispatch_recognises_table_chart_smartart_and_ole() {
             CT_GraphicFrame::from_xml(&frame.to_xml().unwrap()).unwrap()
         );
     }
+}
+
+#[test]
+fn ole_payload_projects_optional_fallback_picture_without_rewriting_raw_bytes() {
+    let payload = r#"<mc:AlternateContent><mc:Choice Requires="p"><p:oleObj name="object"><p:embed/></p:oleObj></mc:Choice><mc:Fallback><p:oleObj name="object"><p:embed/><p:pic><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId7"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="11" y="22"/><a:ext cx="33" cy="44"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic></p:oleObj></mc:Fallback></mc:AlternateContent>"#;
+    let frame = CT_GraphicFrame::from_xml(
+        graphic_frame_fixture(
+            "http://schemas.openxmlformats.org/presentationml/2006/ole",
+            payload,
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    let GraphicDataPayload::Ole { raw, preview } = &frame.graphic_data.payload else {
+        panic!("OLE URI did not select the OLE branch");
+    };
+
+    assert_eq!(raw, payload.as_bytes());
+    let preview = preview
+        .as_ref()
+        .expect("fallback picture was not projected");
+    assert_eq!(
+        preview
+            .blip_fill
+            .as_ref()
+            .and_then(|fill| fill.blip.as_ref())
+            .and_then(|blip| blip.embed.as_deref()),
+        Some("rId7")
+    );
+    let transform = preview
+        .shape_properties
+        .transform
+        .as_ref()
+        .expect("fallback picture transform was not projected");
+    assert_eq!(transform.offset.as_ref().map(|offset| offset.x.0), Some(11));
+    assert_eq!(
+        transform.extent.as_ref().map(|extents| extents.cx.0),
+        Some(33)
+    );
+    assert_eq!(
+        frame,
+        CT_GraphicFrame::from_xml(&frame.to_xml().unwrap()).unwrap()
+    );
+
+    let absent = CT_GraphicFrame::from_xml(
+        graphic_frame_fixture(
+            "http://schemas.openxmlformats.org/presentationml/2006/ole",
+            r#"<p:oleObj name="object"><p:embed/></p:oleObj>"#,
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    assert!(matches!(
+        absent.graphic_data.payload,
+        GraphicDataPayload::Ole { preview: None, .. }
+    ));
 }
 
 #[test]
@@ -2702,7 +2758,7 @@ fn verify_graphic_frames(
                     }
                     GraphicDataPayload::Chart(_) => coverage.charts += 1,
                     GraphicDataPayload::SmartArt(_) => coverage.smartart += 1,
-                    GraphicDataPayload::Ole(_) => coverage.ole += 1,
+                    GraphicDataPayload::Ole { .. } => coverage.ole += 1,
                     GraphicDataPayload::Other(_) => coverage.other += 1,
                 }
             }

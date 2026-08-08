@@ -25,12 +25,12 @@ regenerated, never hand-edited.
 | M7, DrawingML                               | 19 | 19 | 0 | 0  |
 | M8, PresentationML                          | 14 | 14 | 0 | 0  |
 | M9, Inheritance resolver                    | 8  | 8 | 0 | 0  |
-| M10, Renderer                               | 20 | 17 | 0 | 3  |
+| M10, Renderer                               | 20 | 20 | 0 | 0  |
 | M11, Write API                              | 12 | 0 | 0 | 12 |
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **158** | **98** | **0** | **60** |
+| **Total** | **158** | **101** | **0** | **57** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -212,9 +212,9 @@ regenerated, never hand-edited.
 | F-099 | Bullets                                      | S24 | M | done |
 | F-100 | Autofit                                      | S24 | M | done |
 | F-101 | Vertical text                                | S24 | S | done |
-| F-102 | Table rendering                              | S25 | L | pending |
-| F-103 | Hyperlinks, fields and diagnostics           | S25 | M | pending |
-| F-104 | SSIM fidelity harness                        | S25 | L | pending |
+| F-102 | Table rendering                              | S25 | L | done |
+| F-103 | Hyperlinks, fields and diagnostics           | S25 | M | done |
+| F-104 | SSIM fidelity harness                        | S25 | L | done |
 <!-- AUTOGEN:backlog-M10 END -->
 
 ### M11, Write API

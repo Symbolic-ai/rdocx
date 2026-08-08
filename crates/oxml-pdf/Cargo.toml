@@ -20,3 +20,4 @@ subsetter = { workspace = true }
 ttf-parser = { workspace = true }
 miniz_oxide = { workspace = true }
 tiny-skia = { workspace = true }
+zune-jpeg = { workspace = true }

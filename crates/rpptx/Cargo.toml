@@ -18,4 +18,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 oxml-drawing.workspace = true
+oxml-layout.workspace = true
+oxml-pdf.workspace = true
 rpptx-layout.workspace = true
+rpptx-render.workspace = true

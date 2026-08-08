@@ -22,6 +22,8 @@ pub struct ScopedMediaIds {
     pub slide: HashMap<String, MediaId>,
     pub layout: HashMap<String, MediaId>,
     pub master: HashMap<String, MediaId>,
+    /// Package content type for each content-addressed media item.
+    pub media_content_types: HashMap<MediaId, String>,
 }
 
 impl ScopedMediaIds {
@@ -36,6 +38,34 @@ impl ScopedMediaIds {
         .get(relationship_id)
         .copied()
     }
+
+    /// Return the package content type for a relationship-resolved media item.
+    pub fn content_type(&self, source: FlattenedSource, relationship_id: &str) -> Option<&str> {
+        let media_id = self.get(source, relationship_id)?;
+        self.media_content_types.get(&media_id).map(String::as_str)
+    }
+}
+
+/// External hyperlink targets kept separate by relationship scope.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ScopedHyperlinkTargets {
+    pub slide: HashMap<String, String>,
+    pub layout: HashMap<String, String>,
+    pub master: HashMap<String, String>,
+}
+
+impl ScopedHyperlinkTargets {
+    /// Look up an external hyperlink only in its producing part's scope.
+    pub fn get(&self, source: FlattenedSource, relationship_id: &str) -> Option<&str> {
+        match source {
+            FlattenedSource::Slide => &self.slide,
+            FlattenedSource::Layout => &self.layout,
+            FlattenedSource::Master => &self.master,
+            FlattenedSource::Background => return None,
+        }
+        .get(relationship_id)
+        .map(String::as_str)
+    }
 }
 
 /// An owned slide with every renderer-visible value resolved.
@@ -43,10 +73,17 @@ impl ScopedMediaIds {
 pub struct ResolvedSlide {
     /// Slide width and height in typographic points.
     pub size: (f64, f64),
-    pub background: Option<Paint>,
+    pub background: Option<ResolvedBackground>,
     /// Shapes in final draw order.
     pub shapes: Vec<ResolvedShape>,
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// One concrete slide background ready for renderer lowering.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ResolvedBackground {
+    Paint(Paint),
+    Image(ResolvedImage),
 }
 
 /// One renderer-facing shape with no OOXML model types or part-tree lifetimes.
@@ -60,6 +97,7 @@ pub struct ResolvedShape {
     pub flip_v: bool,
     pub geometry: ResolvedGeometry,
     pub fill: Option<Paint>,
+    pub image_fill: Option<ResolvedImage>,
     pub line: Option<Stroke>,
     pub head_end: Option<ResolvedLineEnd>,
     pub tail_end: Option<ResolvedLineEnd>,
@@ -112,14 +150,18 @@ pub enum ResolvedGeometry {
 pub enum ResolvedContent {
     None,
     Text(ResolvedTextBody),
-    Image {
-        media: MediaId,
-        src_rect: Option<CropRect>,
-        placement: ResolvedImagePlacement,
-        dpi: Option<f64>,
-        rotate_with_shape: bool,
-    },
+    Image(ResolvedImage),
     Table(ResolvedTable),
+}
+
+/// One resolved image shared by shape pictures and slide backgrounds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedImage {
+    pub media: MediaId,
+    pub src_rect: Option<CropRect>,
+    pub placement: ResolvedImagePlacement,
+    pub dpi: Option<f64>,
+    pub rotate_with_shape: bool,
 }
 
 /// Destination placement for one resolved picture.
@@ -186,6 +228,7 @@ pub struct ResolvedTextBody {
     pub anchor: TextAnchor,
     pub wrap: bool,
     pub vertical: TextDirection,
+    pub space_first_last_paragraph: bool,
     pub autofit: ResolvedAutofit,
     pub paragraphs: Vec<ResolvedParagraph>,
 }
@@ -244,6 +287,7 @@ pub struct ResolvedParagraph {
     pub space_before: Option<ResolvedTextSpacing>,
     pub space_after: Option<ResolvedTextSpacing>,
     pub bullet: Option<ResolvedBullet>,
+    pub end_style: ResolvedRunStyle,
     pub runs: Vec<ResolvedTextRun>,
 }
 
@@ -309,6 +353,7 @@ pub struct ResolvedRunStyle {
     pub font_size: Option<f64>,
     pub bold: bool,
     pub italic: bool,
+    pub all_caps: bool,
     pub underline: bool,
     pub strike: bool,
     pub spacing: Option<f64>,
@@ -318,11 +363,14 @@ pub struct ResolvedRunStyle {
     pub east_asian_typeface: Option<String>,
     pub complex_script_typeface: Option<String>,
     pub symbol_typeface: Option<String>,
+    /// Direct external URI resolved in the run's producing relationship scope.
+    pub hyperlink_url: Option<String>,
 }
 
 /// One table with concrete dimensions and owned cell text.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ResolvedTable {
+    pub right_to_left: bool,
     pub column_widths: Vec<f64>,
     pub rows: Vec<ResolvedTableRow>,
 }
@@ -333,11 +381,42 @@ pub struct ResolvedTableRow {
     pub cells: Vec<ResolvedTableCell>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedTableCell {
     pub text: Option<ResolvedTextBody>,
+    pub fill: Option<Paint>,
+    pub margins: TextInsets,
+    pub left: Option<ResolvedTableBorder>,
+    pub right: Option<ResolvedTableBorder>,
+    pub top: Option<ResolvedTableBorder>,
+    pub bottom: Option<ResolvedTableBorder>,
     pub row_span: u32,
     pub grid_span: u32,
     pub horizontal_merge: bool,
     pub vertical_merge: bool,
+}
+
+impl Default for ResolvedTableCell {
+    fn default() -> Self {
+        Self {
+            text: None,
+            fill: None,
+            margins: TextInsets::default(),
+            left: None,
+            right: None,
+            top: None,
+            bottom: None,
+            row_span: 1,
+            grid_span: 1,
+            horizontal_merge: false,
+            vertical_merge: false,
+        }
+    }
+}
+
+/// One table edge plus its resolved style-precedence rank.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResolvedTableBorder {
+    pub stroke: Option<Stroke>,
+    pub priority: u8,
 }

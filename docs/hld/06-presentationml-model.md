@@ -13,7 +13,8 @@ Owner: `rpptx-oxml`, with the facade in `rpptx`.
 | `/ppt/theme/themeN.xml` | `CT_OfficeStyleSheet` | one per master |
 | `/ppt/notesSlides/notesSlideN.xml` | `CT_NotesSlide` | optional |
 | `/ppt/notesMasters/notesMaster1.xml` | `CT_NotesMaster` | required if any notes slide exists |
-| `presProps.xml`, `viewProps.xml`, `tableStyles.xml` | | conventional, not fatal if absent |
+| `/ppt/tableStyles.xml` | `CT_TableStyleList` | conventional, not fatal if absent |
+| `presProps.xml`, `viewProps.xml` | | conventional, not fatal if absent |
 
 **Hard structural constraints.** Every slide has exactly one `slideLayout`
 relationship. Every layout has exactly one `slideMaster` relationship. Every
@@ -50,6 +51,12 @@ concrete facade error.
 slide order. A slide exposes its producer id, optional `p:cSld` name, immediate
 z-order shapes, recursive visible text, and optional speaker-note text. Indexed
 access returns `Option` and does not panic.
+
+The table style part is typed for layout resolution. A caller may pass its
+`CT_TableStyleList` to `ResolveCtx`, which uses either the table's explicit
+style id or the part's default id. An absent part or unmatched id leaves direct
+cell formatting and DrawingML defaults in force. Package parts outside the
+typed model continue to use the normal preservation path.
 
 `ShapeRef` normalizes the six typed shape-tree members to `ShapeKind`. Immediate
 group members and the selected `mc:Fallback` view are exposed through child

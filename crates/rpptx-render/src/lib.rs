@@ -11,9 +11,10 @@ use oxml_layout::{
     Paint, Path, PathCommand, PathElement, Point, PositionedElement, Rect, Stroke, Transform,
 };
 use rpptx_layout::{
-    CropRect, ResolvedContent, ResolvedGeometry, ResolvedImagePlacement, ResolvedLineEnd,
-    ResolvedLineEndKind, ResolvedLineEndSize, ResolvedRectAlignment, ResolvedShape, ResolvedSlide,
-    ResolvedTileFlip, ResolvedTilePlacement,
+    CropRect, ResolvedBackground, ResolvedContent, ResolvedGeometry, ResolvedImage,
+    ResolvedImagePlacement, ResolvedLineEnd, ResolvedLineEndKind, ResolvedLineEndSize,
+    ResolvedRectAlignment, ResolvedShape, ResolvedSlide, ResolvedTable, ResolvedTableBorder,
+    ResolvedTileFlip, ResolvedTilePlacement, ScopedHyperlinkTargets,
 };
 use rpptx_oxml::notes_parts::CT_NotesSlide;
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster};
@@ -43,6 +44,7 @@ impl fmt::Display for RelScope {
 pub struct ResolvedRel {
     pub target: String,
     pub relationship_type: String,
+    pub target_mode: Option<String>,
 }
 
 /// Relationship maps kept separate by their source-part scope.
@@ -72,7 +74,32 @@ impl RelScopes {
                 relationship_id: relationship_id.to_owned(),
             })
     }
+
+    /// Project external hyperlink relationships into layout's source-scoped map.
+    pub fn external_hyperlink_targets(&self) -> ScopedHyperlinkTargets {
+        fn external_targets(
+            relationships: &HashMap<String, ResolvedRel>,
+        ) -> HashMap<String, String> {
+            relationships
+                .iter()
+                .filter(|(_, relationship)| {
+                    relationship.relationship_type == HYPERLINK_RELATIONSHIP
+                        && relationship.target_mode.as_deref() == Some("External")
+                })
+                .map(|(id, relationship)| (id.clone(), relationship.target.clone()))
+                .collect()
+        }
+
+        ScopedHyperlinkTargets {
+            slide: external_targets(&self.slide),
+            layout: external_targets(&self.layout),
+            master: external_targets(&self.master),
+        }
+    }
 }
+
+const HYPERLINK_RELATIONSHIP: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
 
 /// Media bytes available to a renderer, with their package content type.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -180,6 +207,28 @@ pub struct RenderInput {
 pub fn layout_presentation(input: &RenderInput) -> Result<LayoutResult, RenderInputError> {
     let mut font_manager = FontManager::new();
     font_manager.load_additional_fonts(&input.fonts);
+    layout_presentation_with_fonts(input, font_manager)
+}
+
+/// Lower every resolved slide using only bundled and presentation-embedded fonts.
+///
+/// Unlike [`layout_presentation`], this entry point never discovers host system
+/// fonts, so its raster output is suitable for deterministic comparison gates.
+pub fn layout_presentation_deterministic(
+    input: &RenderInput,
+) -> Result<LayoutResult, RenderInputError> {
+    let mut font_manager =
+        FontManager::new_deterministic().map_err(|error| RenderInputError::TextLayout {
+            detail: error.to_string(),
+        })?;
+    font_manager.load_additional_fonts(&input.fonts);
+    layout_presentation_with_fonts(input, font_manager)
+}
+
+fn layout_presentation_with_fonts(
+    input: &RenderInput,
+    mut font_manager: FontManager,
+) -> Result<LayoutResult, RenderInputError> {
     let pages = (0..input.slides.len())
         .map(|index| layout_slide_with_fonts(input, index, &mut font_manager))
         .collect::<Result<Vec<_>, _>>()?;
@@ -217,13 +266,51 @@ fn layout_slide_with_fonts(
             index,
             slide_count: input.slides.len(),
         })?;
-    let elements = slide
-        .shapes
-        .iter()
-        .map(|shape| lower_shape(input, shape, font_manager))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut elements = Vec::new();
+    let mut background_paint = None;
+    match slide.background.as_ref() {
+        Some(ResolvedBackground::Paint(paint)) => background_paint = Some(paint.clone()),
+        Some(ResolvedBackground::Image(image)) => {
+            let shape = ResolvedShape {
+                group_transform: Transform::IDENTITY,
+                bounds: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: slide.size.0,
+                    height: slide.size.1,
+                },
+                rotation_deg: 0.0,
+                flip_h: false,
+                flip_v: false,
+                geometry: ResolvedGeometry::Rectangle,
+                fill: None,
+                image_fill: None,
+                line: None,
+                head_end: None,
+                tail_end: None,
+                shadow: None,
+                content: ResolvedContent::None,
+                unsupported: None,
+            };
+            let paths = [Path::rect(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: slide.size.0,
+                height: slide.size.1,
+            })];
+            elements.extend(lower_picture(input, &shape, &paths, image)?);
+        }
+        None => {}
+    }
+    elements.extend(
+        slide
+            .shapes
+            .iter()
+            .map(|shape| lower_shape(input, shape, font_manager, index + 1))
+            .collect::<Result<Vec<_>, _>>()?,
+    );
     let mut page = PageFrame::new(index + 1, slide.size.0, slide.size.1, elements);
-    page.background.clone_from(&slide.background);
+    page.background = background_paint;
     Ok(page)
 }
 
@@ -231,50 +318,49 @@ fn lower_shape(
     input: &RenderInput,
     shape: &ResolvedShape,
     font_manager: &mut FontManager,
+    page_number: usize,
 ) -> Result<PositionedElement, RenderInputError> {
-    let paths = match &shape.geometry {
-        ResolvedGeometry::Rectangle | ResolvedGeometry::BoundsFallback => vec![Path::rect(Rect {
-            x: 0.0,
-            y: 0.0,
-            width: shape.bounds.width,
-            height: shape.bounds.height,
-        })],
-        ResolvedGeometry::Custom { paths, .. } => paths.clone(),
+    let paths = if matches!(shape.content, ResolvedContent::Table(_)) {
+        Vec::new()
+    } else {
+        match &shape.geometry {
+            ResolvedGeometry::Rectangle | ResolvedGeometry::BoundsFallback => {
+                vec![Path::rect(Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: shape.bounds.width,
+                    height: shape.bounds.height,
+                })]
+            }
+            ResolvedGeometry::Custom { paths, .. } => paths.clone(),
+        }
     };
-    let stroke = match (&shape.geometry, &shape.fill, &shape.line) {
-        (ResolvedGeometry::BoundsFallback, None, None) => {
+    let stroke = match (&shape.geometry, &shape.fill, &shape.image_fill, &shape.line) {
+        (ResolvedGeometry::BoundsFallback, None, None, None) => {
             Some(Stroke::new(Paint::Solid(Color::BLACK), 1.0))
         }
         _ => shape.line.clone(),
     };
     let mut text_children = Vec::new();
-    let mut children = match &shape.content {
-        ResolvedContent::Image {
-            media,
-            src_rect,
-            placement,
-            dpi,
-            rotate_with_shape,
-        } => lower_picture(
-            input,
-            shape,
-            &paths,
-            *media,
-            *src_rect,
-            placement,
-            *dpi,
-            *rotate_with_shape,
-        )?,
+    let mut children = shape
+        .image_fill
+        .as_ref()
+        .map(|image| lower_picture(input, shape, &paths, image))
+        .transpose()?
+        .unwrap_or_default();
+    match &shape.content {
+        ResolvedContent::Image(image) => {
+            children.extend(lower_picture(input, shape, &paths, image)?)
+        }
         ResolvedContent::Text(text_body) => {
             let content_box = text::content_box(shape, text_body);
             let (content_box, text_transform) =
                 text::oriented_content_box(content_box, text_body.vertical);
             let stacked =
-                text::stack_text(font_manager, content_box, text_body).map_err(|error| {
-                    RenderInputError::TextLayout {
+                text::stack_text_for_page(font_manager, content_box, text_body, page_number)
+                    .map_err(|error| RenderInputError::TextLayout {
                         detail: error.to_string(),
-                    }
-                })?;
+                    })?;
             debug_assert!(stacked.width.is_finite() && stacked.height.is_finite());
             text_children = if let Some(transform) = text_transform {
                 vec![PositionedElement::Group(GroupElement {
@@ -287,10 +373,12 @@ fn lower_shape(
             } else {
                 stacked.elements
             };
-            Vec::new()
         }
-        _ => Vec::new(),
-    };
+        ResolvedContent::Table(table) => {
+            children.extend(lower_table(table, font_manager, page_number)?);
+        }
+        _ => {}
+    }
     children.extend(
         paths
             .iter()
@@ -328,44 +416,292 @@ fn lower_shape(
         transform: shape_transform(shape),
         clip: None,
         opacity: 1.0,
-        effects: Vec::new(),
+        effects: shape.shadow.iter().cloned().collect(),
         children,
     }))
+}
+
+fn lower_table(
+    table: &ResolvedTable,
+    font_manager: &mut FontManager,
+    page_number: usize,
+) -> Result<Vec<PositionedElement>, RenderInputError> {
+    let mut physical_column_widths = table.column_widths.clone();
+    if table.right_to_left {
+        physical_column_widths.reverse();
+    }
+    let column_offsets = cumulative_offsets(&physical_column_widths);
+    let row_heights = table.rows.iter().map(|row| row.height).collect::<Vec<_>>();
+    let row_offsets = cumulative_offsets(&row_heights);
+    let mut fills = Vec::new();
+    let mut texts = Vec::new();
+    let mut borders: HashMap<(bool, usize, usize), TableBorderCandidate> = HashMap::new();
+
+    for (row_index, row) in table.rows.iter().enumerate() {
+        for (column_index, cell) in row.cells.iter().enumerate() {
+            if cell.horizontal_merge
+                || cell.vertical_merge
+                || column_index >= table.column_widths.len()
+            {
+                continue;
+            }
+            let row_span = usize::try_from(cell.row_span)
+                .unwrap_or(usize::MAX)
+                .max(1)
+                .min(table.rows.len().saturating_sub(row_index));
+            let column_span = usize::try_from(cell.grid_span)
+                .unwrap_or(usize::MAX)
+                .max(1)
+                .min(table.column_widths.len().saturating_sub(column_index));
+            let visual_column = if table.right_to_left {
+                table
+                    .column_widths
+                    .len()
+                    .saturating_sub(column_index + column_span)
+            } else {
+                column_index
+            };
+            let rectangle = Rect {
+                x: column_offsets[visual_column],
+                y: row_offsets[row_index],
+                width: column_offsets[visual_column + column_span] - column_offsets[visual_column],
+                height: row_offsets[row_index + row_span] - row_offsets[row_index],
+            };
+            if let Some(fill) = &cell.fill {
+                fills.push(PositionedElement::Path(PathElement {
+                    path: Path::rect(rectangle),
+                    fill: Some(fill.clone()),
+                    stroke: None,
+                }));
+            }
+            if let Some(text_body) = &cell.text {
+                let mut text_body = text_body.clone();
+                text_body.insets = cell.margins;
+                let content = Rect {
+                    x: rectangle.x + text_body.insets.left,
+                    y: rectangle.y + text_body.insets.top,
+                    width: (rectangle.width - text_body.insets.left - text_body.insets.right)
+                        .max(0.0),
+                    height: (rectangle.height - text_body.insets.top - text_body.insets.bottom)
+                        .max(0.0),
+                };
+                let (content, transform) = text::oriented_content_box(content, text_body.vertical);
+                let stacked =
+                    text::stack_text_for_page(font_manager, content, &text_body, page_number)
+                        .map_err(|error| RenderInputError::TextLayout {
+                            detail: error.to_string(),
+                        })?;
+                if let Some(transform) = transform {
+                    texts.push(PositionedElement::Group(GroupElement {
+                        transform,
+                        clip: None,
+                        opacity: 1.0,
+                        effects: Vec::new(),
+                        children: stacked.elements,
+                    }));
+                } else {
+                    texts.extend(stacked.elements);
+                }
+            }
+
+            let last_row = row_index + row_span - 1;
+            let last_column = column_index + column_span - 1;
+            for logical_column in column_index..=last_column {
+                let physical_column = if table.right_to_left {
+                    table.column_widths.len() - logical_column - 1
+                } else {
+                    logical_column
+                };
+                let top = table.rows[row_index]
+                    .cells
+                    .get(logical_column)
+                    .and_then(|covered| covered.top.as_ref())
+                    .or(cell.top.as_ref());
+                let bottom = table.rows[last_row]
+                    .cells
+                    .get(logical_column)
+                    .and_then(|covered| covered.bottom.as_ref())
+                    .or(cell.bottom.as_ref());
+                insert_table_border(&mut borders, (true, row_index, physical_column), top, 4);
+                insert_table_border(
+                    &mut borders,
+                    (true, row_index + row_span, physical_column),
+                    bottom,
+                    2,
+                );
+            }
+            let left_column = if table.right_to_left {
+                last_column
+            } else {
+                column_index
+            };
+            let right_column = if table.right_to_left {
+                column_index
+            } else {
+                last_column
+            };
+            for covered_row in row_index..=last_row {
+                let left = table.rows[covered_row]
+                    .cells
+                    .get(left_column)
+                    .and_then(|covered| covered.left.as_ref())
+                    .or(cell.left.as_ref());
+                let right = table.rows[covered_row]
+                    .cells
+                    .get(right_column)
+                    .and_then(|covered| covered.right.as_ref())
+                    .or(cell.right.as_ref());
+                insert_table_border(&mut borders, (false, visual_column, covered_row), left, 3);
+                insert_table_border(
+                    &mut borders,
+                    (false, visual_column + column_span, covered_row),
+                    right,
+                    1,
+                );
+            }
+        }
+    }
+
+    let mut ordered_borders = borders.into_iter().collect::<Vec<_>>();
+    ordered_borders.sort_by_key(|(key, _)| *key);
+    let mut border_elements = Vec::new();
+    for ((horizontal, boundary, segment), candidate) in ordered_borders {
+        let Some(stroke) = candidate.border.stroke else {
+            continue;
+        };
+        let path = if horizontal {
+            open_path(
+                Point {
+                    x: column_offsets[segment],
+                    y: row_offsets[boundary],
+                },
+                Point {
+                    x: column_offsets[segment + 1],
+                    y: row_offsets[boundary],
+                },
+            )
+        } else {
+            open_path(
+                Point {
+                    x: column_offsets[boundary],
+                    y: row_offsets[segment],
+                },
+                Point {
+                    x: column_offsets[boundary],
+                    y: row_offsets[segment + 1],
+                },
+            )
+        };
+        border_elements.push(PositionedElement::Path(PathElement {
+            path,
+            fill: None,
+            stroke: Some(stroke),
+        }));
+    }
+    fills.extend(texts);
+    fills.extend(border_elements);
+    Ok(fills)
+}
+
+struct TableBorderCandidate {
+    border: ResolvedTableBorder,
+    side_rank: u8,
+}
+
+fn insert_table_border(
+    borders: &mut HashMap<(bool, usize, usize), TableBorderCandidate>,
+    key: (bool, usize, usize),
+    border: Option<&ResolvedTableBorder>,
+    side_rank: u8,
+) {
+    let Some(border) = border else {
+        return;
+    };
+    let candidate = TableBorderCandidate {
+        border: border.clone(),
+        side_rank,
+    };
+    let replace = borders.get(&key).is_none_or(|current| {
+        let candidate_width = candidate
+            .border
+            .stroke
+            .as_ref()
+            .map_or(0.0, |stroke| stroke.width);
+        let current_width = current
+            .border
+            .stroke
+            .as_ref()
+            .map_or(0.0, |stroke| stroke.width);
+        (
+            candidate.border.priority,
+            ordered_width(candidate_width),
+            candidate.side_rank,
+        ) > (
+            current.border.priority,
+            ordered_width(current_width),
+            current.side_rank,
+        )
+    });
+    if replace {
+        borders.insert(key, candidate);
+    }
+}
+
+fn ordered_width(width: f64) -> u64 {
+    if width.is_finite() && width >= 0.0 {
+        width.to_bits()
+    } else {
+        0
+    }
+}
+
+fn cumulative_offsets(lengths: &[f64]) -> Vec<f64> {
+    let mut offsets = Vec::with_capacity(lengths.len() + 1);
+    offsets.push(0.0);
+    for length in lengths {
+        offsets.push(offsets.last().copied().unwrap_or(0.0) + length.max(0.0));
+    }
+    offsets
+}
+
+fn open_path(start: Point, end: Point) -> Path {
+    Path {
+        commands: vec![PathCommand::MoveTo(start), PathCommand::LineTo(end)],
+        fill_rule: oxml_layout::FillRule::NonZero,
+    }
 }
 
 const MAX_TILE_ELEMENTS: usize = 4_096;
 const MAX_TILED_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 
-#[allow(clippy::too_many_arguments)]
 fn lower_picture(
     input: &RenderInput,
     shape: &ResolvedShape,
     paths: &[Path],
-    media_id: MediaId,
-    crop: Option<CropRect>,
-    placement: &ResolvedImagePlacement,
-    declared_dpi: Option<f64>,
-    rotate_with_shape: bool,
+    resolved_image: &ResolvedImage,
 ) -> Result<Vec<PositionedElement>, RenderInputError> {
+    let media_id = resolved_image.media;
     let media = input
         .media
         .get(&media_id)
         .ok_or(RenderInputError::MissingMedia { media: media_id })?;
-    let crop = normalized_insets(crop, media_id, "source crop")?;
-    let elements = match placement {
+    let crop = normalized_insets(resolved_image.src_rect, media_id, "source crop")?;
+    let elements = match &resolved_image.placement {
         ResolvedImagePlacement::Stretch { fill_rect } => {
             let fill_rect = normalized_insets(*fill_rect, media_id, "stretch fill rectangle")?;
-            let destination =
-                inset_rect(picture_coverage_rect(shape, rotate_with_shape), fill_rect);
+            let destination = inset_rect(
+                picture_coverage_rect(shape, resolved_image.rotate_with_shape),
+                fill_rect,
+            );
             let image = picture_image(media_id, media, expanded_crop_rect(destination, crop));
-            let image = counter_rotate_image(image, shape, rotate_with_shape);
+            let image = counter_rotate_image(image, shape, resolved_image.rotate_with_shape);
             let mut image = if crop.is_some() {
                 clipped_group(Path::rect(destination), vec![image])
             } else {
                 image
             };
             if !matches!(shape.geometry, ResolvedGeometry::Rectangle)
-                || (!rotate_with_shape && shape.rotation_deg != 0.0)
+                || (!resolved_image.rotate_with_shape && shape.rotation_deg != 0.0)
             {
                 image = clip_to_picture_shape(shape, paths, vec![image]);
             }
@@ -378,8 +714,8 @@ fn lower_picture(
             media,
             crop,
             tile,
-            declared_dpi,
-            rotate_with_shape,
+            resolved_image.dpi,
+            resolved_image.rotate_with_shape,
         )?,
     };
     Ok(elements)
@@ -1072,10 +1408,14 @@ mod tests {
     use oxml_drawing::color::ColorMap;
     use oxml_drawing::text::CT_TextListStyle;
     use oxml_layout::{
-        Color, Diagnostic, FillRule, GradientStop, GroupElement, Paint, Path, PathCommand, Point,
-        PositionedElement, Rect, Stroke, Transform,
+        Color, Diagnostic, Effect, FieldKind, FillRule, GradientStop, GroupElement, Paint, Path,
+        PathCommand, Point, PositionedElement, Rect, Stroke, Transform, walk,
     };
-    use rpptx_layout::{ResolveCtx, ResolvedContent, ResolvedGeometry, ResolvedShape};
+    use rpptx_layout::{
+        ResolveCtx, ResolvedAutofit, ResolvedContent, ResolvedGeometry, ResolvedParagraph,
+        ResolvedRunStyle, ResolvedShape, ResolvedTable, ResolvedTableBorder, ResolvedTableCell,
+        ResolvedTableRow, ResolvedTextBody, ResolvedTextRun, TextAnchor, TextDirection, TextInsets,
+    };
 
     const IMAGE_RELATIONSHIP: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
@@ -1091,6 +1431,15 @@ mod tests {
         ResolvedRel {
             target: target.to_owned(),
             relationship_type: IMAGE_RELATIONSHIP.to_owned(),
+            target_mode: None,
+        }
+    }
+
+    fn hyperlink_relationship(target: &str, target_mode: Option<&str>) -> ResolvedRel {
+        ResolvedRel {
+            target: target.to_owned(),
+            relationship_type: HYPERLINK_RELATIONSHIP.to_owned(),
+            target_mode: target_mode.map(str::to_owned),
         }
     }
 
@@ -1117,6 +1466,7 @@ mod tests {
             flip_v: false,
             geometry,
             fill,
+            image_fill: None,
             line,
             head_end: None,
             tail_end: None,
@@ -1124,6 +1474,406 @@ mod tests {
             content: ResolvedContent::None,
             unsupported: None,
         }
+    }
+
+    fn table_shape(table: ResolvedTable) -> ResolvedShape {
+        let mut table_shape = shape(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            ResolvedGeometry::Rectangle,
+            None,
+            None,
+        );
+        table_shape.content = ResolvedContent::Table(table);
+        table_shape
+    }
+
+    fn table_text(value: &str) -> ResolvedTextBody {
+        ResolvedTextBody {
+            insets: TextInsets::default(),
+            anchor: TextAnchor::Top,
+            wrap: true,
+            vertical: TextDirection::Horizontal,
+            space_first_last_paragraph: false,
+            autofit: ResolvedAutofit::None,
+            paragraphs: vec![ResolvedParagraph {
+                runs: vec![ResolvedTextRun::Text {
+                    text: value.to_owned(),
+                    style: ResolvedRunStyle {
+                        font_size: Some(6.0),
+                        ..ResolvedRunStyle::default()
+                    },
+                }],
+                ..ResolvedParagraph::default()
+            }],
+        }
+    }
+
+    fn table_border() -> ResolvedTableBorder {
+        ResolvedTableBorder {
+            stroke: Some(Stroke::new(Paint::Solid(Color::BLACK), 1.0)),
+            priority: 1,
+        }
+    }
+
+    fn linked_field_shape(group_transform: Transform) -> ResolvedShape {
+        let mut linked = shape(
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 120.0,
+                height: 40.0,
+            },
+            ResolvedGeometry::Rectangle,
+            None,
+            None,
+        );
+        linked.group_transform = group_transform;
+        linked.content = ResolvedContent::Text(ResolvedTextBody {
+            insets: TextInsets::default(),
+            anchor: TextAnchor::Top,
+            wrap: true,
+            vertical: TextDirection::Horizontal,
+            space_first_last_paragraph: false,
+            autofit: ResolvedAutofit::None,
+            paragraphs: vec![ResolvedParagraph {
+                runs: vec![
+                    ResolvedTextRun::Field {
+                        text: "stored".to_owned(),
+                        field_type: Some("slidenum".to_owned()),
+                        style: ResolvedRunStyle {
+                            font_size: Some(12.0),
+                            ..ResolvedRunStyle::default()
+                        },
+                    },
+                    ResolvedTextRun::Text {
+                        text: " linked".to_owned(),
+                        style: ResolvedRunStyle {
+                            font_size: Some(12.0),
+                            hyperlink_url: Some("https://example.com/deck".to_owned()),
+                            ..ResolvedRunStyle::default()
+                        },
+                    },
+                ],
+                ..ResolvedParagraph::default()
+            }],
+        });
+        linked
+    }
+
+    fn rendered_text_and_links(
+        page: &PageFrame,
+    ) -> (Vec<(String, Option<FieldKind>)>, Vec<String>) {
+        let mut text = Vec::new();
+        let mut links = Vec::new();
+        walk(&page.elements, &mut |element, _| match element {
+            PositionedElement::Text(run) => text.push((run.text.clone(), run.field_kind)),
+            PositionedElement::LinkAnnotation { url, .. } => links.push(url.clone()),
+            _ => {}
+        });
+        (text, links)
+    }
+
+    fn transformed_link_rect(page: &PageFrame) -> Rect {
+        let mut result = None;
+        walk(&page.elements, &mut |element, transform| {
+            if let PositionedElement::LinkAnnotation { rect, .. } = element {
+                let top_left = transform.apply(Point {
+                    x: rect.x,
+                    y: rect.y,
+                });
+                let bottom_right = transform.apply(Point {
+                    x: rect.x + rect.width,
+                    y: rect.y + rect.height,
+                });
+                result = Some(Rect {
+                    x: top_left.x,
+                    y: top_left.y,
+                    width: bottom_right.x - top_left.x,
+                    height: bottom_right.y - top_left.y,
+                });
+            }
+        });
+        result.expect("rendered hyperlink annotation")
+    }
+
+    #[test]
+    fn slide_number_field_renders_current_page_and_hyperlink_emits_annotation() {
+        let input = render_input(vec![
+            slide((200.0, 100.0), Vec::new()),
+            slide(
+                (200.0, 100.0),
+                vec![linked_field_shape(Transform::IDENTITY)],
+            ),
+        ]);
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+
+        let page = layout_slide_with_fonts(&input, 1, &mut fonts).expect("render slide two");
+        let (text, links) = rendered_text_and_links(&page);
+
+        assert_eq!(text[0], ("2".to_owned(), Some(FieldKind::Page)));
+        assert!(!links.is_empty());
+        assert!(links.iter().all(|url| url == "https://example.com/deck"));
+    }
+
+    #[test]
+    fn grouped_hyperlink_annotation_keeps_transformed_run_bounds() {
+        let translation = Transform {
+            e: 30.0,
+            f: 40.0,
+            ..Transform::IDENTITY
+        };
+        let plain_input = render_input(vec![slide(
+            (240.0, 180.0),
+            vec![linked_field_shape(Transform::IDENTITY)],
+        )]);
+        let grouped_input = render_input(vec![slide(
+            (240.0, 180.0),
+            vec![linked_field_shape(translation)],
+        )]);
+        let mut plain_fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let mut grouped_fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let plain = layout_slide_with_fonts(&plain_input, 0, &mut plain_fonts)
+            .expect("render ungrouped hyperlink");
+        let grouped = layout_slide_with_fonts(&grouped_input, 0, &mut grouped_fonts)
+            .expect("render grouped hyperlink");
+        let plain_rect = transformed_link_rect(&plain);
+        let grouped_rect = transformed_link_rect(&grouped);
+
+        assert!((grouped_rect.x - plain_rect.x - 30.0).abs() < 1.0e-10);
+        assert!((grouped_rect.y - plain_rect.y - 40.0).abs() < 1.0e-10);
+        assert!((grouped_rect.width - plain_rect.width).abs() < 1.0e-10);
+        assert!((grouped_rect.height - plain_rect.height).abs() < 1.0e-10);
+    }
+
+    #[test]
+    fn banded_merged_table_renders_correct_fills_without_duplicated_borders() {
+        let table = ResolvedTable {
+            right_to_left: false,
+            column_widths: vec![10.0, 10.0],
+            rows: vec![
+                ResolvedTableRow {
+                    height: 10.0,
+                    cells: vec![
+                        ResolvedTableCell {
+                            fill: Some(Paint::Solid(Color::from_hex("FF0000"))),
+                            text: Some(table_text("merged")),
+                            left: Some(table_border()),
+                            right: Some(table_border()),
+                            top: Some(table_border()),
+                            bottom: Some(table_border()),
+                            grid_span: 2,
+                            row_span: 1,
+                            ..ResolvedTableCell::default()
+                        },
+                        ResolvedTableCell {
+                            horizontal_merge: true,
+                            ..ResolvedTableCell::default()
+                        },
+                    ],
+                },
+                ResolvedTableRow {
+                    height: 10.0,
+                    cells: vec![
+                        ResolvedTableCell {
+                            fill: Some(Paint::Solid(Color::from_hex("00FF00"))),
+                            left: Some(table_border()),
+                            right: Some(table_border()),
+                            top: Some(table_border()),
+                            bottom: Some(table_border()),
+                            ..ResolvedTableCell::default()
+                        },
+                        ResolvedTableCell {
+                            fill: Some(Paint::Solid(Color::from_hex("0000FF"))),
+                            left: Some(table_border()),
+                            right: Some(table_border()),
+                            top: Some(table_border()),
+                            bottom: Some(table_border()),
+                            ..ResolvedTableCell::default()
+                        },
+                    ],
+                },
+            ],
+        };
+        let layout = layout_presentation(&render_input(vec![slide(
+            (20.0, 20.0),
+            vec![table_shape(table)],
+        )]))
+        .unwrap();
+        let png = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+
+        let red = rgb_at(&pixmap, 5, 5);
+        assert!(red.0 > 200 && red.1 < 30 && red.2 < 30, "{red:?}");
+        assert_eq!(rgb_at(&pixmap, 5, 15), (0, 255, 0));
+        assert_eq!(rgb_at(&pixmap, 15, 15), (0, 0, 255));
+        let group = only_group(&layout.pages[0].elements[0]);
+        assert_eq!(
+            group
+                .children
+                .iter()
+                .filter(|element| matches!(element, PositionedElement::Path(path) if path.stroke.is_some()))
+                .count(),
+            11,
+            "the merged top row removes its internal vertical segment"
+        );
+        assert!(group.children.iter().any(
+            |element| matches!(element, PositionedElement::Text(run) if run.text == "merged")
+        ));
+    }
+
+    #[test]
+    fn merged_continuation_cells_do_not_render_fill_border_or_text_twice() {
+        let table = ResolvedTable {
+            right_to_left: false,
+            column_widths: vec![10.0, 10.0],
+            rows: vec![ResolvedTableRow {
+                height: 10.0,
+                cells: vec![
+                    ResolvedTableCell {
+                        fill: Some(Paint::Solid(Color::BLACK)),
+                        grid_span: 2,
+                        ..ResolvedTableCell::default()
+                    },
+                    ResolvedTableCell {
+                        fill: Some(Paint::Solid(Color::WHITE)),
+                        horizontal_merge: true,
+                        ..ResolvedTableCell::default()
+                    },
+                ],
+            }],
+        };
+        let page = layout_slide(
+            &render_input(vec![slide((20.0, 10.0), vec![table_shape(table)])]),
+            0,
+        )
+        .unwrap();
+        let group = only_group(&page.elements[0]);
+
+        assert_eq!(group.children.iter().filter(|element| matches!(element, PositionedElement::Path(path) if path.fill.is_some())).count(), 1);
+    }
+
+    #[test]
+    fn right_to_left_table_keeps_unequal_logical_column_widths() {
+        let table = ResolvedTable {
+            right_to_left: true,
+            column_widths: vec![10.0, 20.0],
+            rows: vec![ResolvedTableRow {
+                height: 10.0,
+                cells: vec![
+                    ResolvedTableCell {
+                        fill: Some(Paint::Solid(Color::from_hex("FF0000"))),
+                        ..ResolvedTableCell::default()
+                    },
+                    ResolvedTableCell {
+                        fill: Some(Paint::Solid(Color::from_hex("0000FF"))),
+                        ..ResolvedTableCell::default()
+                    },
+                ],
+            }],
+        };
+        let layout = layout_presentation(&render_input(vec![slide(
+            (30.0, 10.0),
+            vec![table_shape(table)],
+        )]))
+        .unwrap();
+        let png = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+
+        assert_eq!(rgb_at(&pixmap, 5, 5), (0, 0, 255));
+        assert_eq!(rgb_at(&pixmap, 25, 5), (255, 0, 0));
+    }
+
+    #[test]
+    fn merged_table_uses_far_continuation_border() {
+        let outer = ResolvedTableBorder {
+            stroke: Some(Stroke::new(Paint::Solid(Color::from_hex("FF0000")), 3.0)),
+            priority: 2,
+        };
+        let table = ResolvedTable {
+            right_to_left: false,
+            column_widths: vec![10.0, 10.0],
+            rows: vec![ResolvedTableRow {
+                height: 10.0,
+                cells: vec![
+                    ResolvedTableCell {
+                        grid_span: 2,
+                        right: Some(table_border()),
+                        ..ResolvedTableCell::default()
+                    },
+                    ResolvedTableCell {
+                        horizontal_merge: true,
+                        right: Some(outer),
+                        ..ResolvedTableCell::default()
+                    },
+                ],
+            }],
+        };
+        let page = layout_slide(
+            &render_input(vec![slide((20.0, 10.0), vec![table_shape(table)])]),
+            0,
+        )
+        .unwrap();
+        let group = only_group(&page.elements[0]);
+        let far_border = group.children.iter().find_map(|element| {
+            let PositionedElement::Path(path) = element else {
+                return None;
+            };
+            match path.path.commands.as_slice() {
+                [PathCommand::MoveTo(start), PathCommand::LineTo(end)]
+                    if start.x == 20.0 && end.x == 20.0 =>
+                {
+                    path.stroke.as_ref()
+                }
+                _ => None,
+            }
+        });
+
+        let far_border = far_border.expect("merged far edge should be emitted");
+        assert_eq!(far_border.width, 3.0);
+        assert_eq!(far_border.paint, Paint::Solid(Color::from_hex("FF0000")));
+    }
+
+    #[test]
+    fn table_cell_margins_place_text_in_the_fixed_content_box() {
+        let table = ResolvedTable {
+            right_to_left: false,
+            column_widths: vec![20.0],
+            rows: vec![ResolvedTableRow {
+                height: 20.0,
+                cells: vec![ResolvedTableCell {
+                    text: Some(table_text("cell")),
+                    margins: TextInsets {
+                        left: 2.0,
+                        top: 3.0,
+                        right: 4.0,
+                        bottom: 5.0,
+                    },
+                    ..ResolvedTableCell::default()
+                }],
+            }],
+        };
+        let page = layout_slide(
+            &render_input(vec![slide((20.0, 20.0), vec![table_shape(table)])]),
+            0,
+        )
+        .unwrap();
+        let group = only_group(&page.elements[0]);
+        let PositionedElement::Text(run) = group
+            .children
+            .iter()
+            .find(|element| matches!(element, PositionedElement::Text(_)))
+            .expect("cell text should remain visible")
+        else {
+            unreachable!()
+        };
+
+        assert!(run.origin.x >= 2.0);
+        assert!(run.origin.y >= 3.0);
     }
 
     fn slide(size: (f64, f64), shapes: Vec<ResolvedShape>) -> ResolvedSlide {
@@ -1149,6 +1899,38 @@ mod tests {
             panic!("shape should lower to one group");
         };
         group
+    }
+
+    #[test]
+    fn resolved_outer_shadow_is_lowered_to_the_shape_group() {
+        let effect = Effect::OuterShadow {
+            dx: 3.0,
+            dy: 4.0,
+            blur: 2.0,
+            color: Color {
+                r: 0.5,
+                g: 0.25,
+                b: 0.0,
+                a: 0.75,
+            },
+        };
+        let mut shadowed = shape(
+            Rect {
+                x: 2.0,
+                y: 3.0,
+                width: 8.0,
+                height: 6.0,
+            },
+            ResolvedGeometry::Rectangle,
+            Some(Paint::Solid(Color::WHITE)),
+            None,
+        );
+        shadowed.shadow = Some(effect.clone());
+
+        let page =
+            layout_slide(&render_input(vec![slide((20.0, 20.0), vec![shadowed])]), 0).unwrap();
+
+        assert_eq!(only_group(&page.elements[0]).effects, vec![effect]);
     }
 
     fn assert_point_close(actual: Point, expected: Point) {
@@ -1285,6 +2067,35 @@ mod tests {
         assert_point_close(
             transform.apply(Point { x: 8.0, y: 4.0 }),
             Point { x: 37.0, y: 85.0 },
+        );
+    }
+
+    #[test]
+    fn group_mapping_does_not_clip_a_child_outside_group_bounds() {
+        let mut outside = shape(
+            Rect {
+                x: 40.0,
+                y: 20.0,
+                width: 8.0,
+                height: 4.0,
+            },
+            ResolvedGeometry::Rectangle,
+            Some(Paint::Solid(Color::BLACK)),
+            None,
+        );
+        outside.group_transform = Transform {
+            e: 30.0,
+            f: 10.0,
+            ..Transform::IDENTITY
+        };
+        let page = layout_slide(&render_input(vec![slide((60.0, 40.0), vec![outside])]), 0)
+            .expect("lower grouped child outside nominal group bounds");
+        let group = only_group(&page.elements[0]);
+
+        assert_eq!(group.clip, None);
+        assert_point_close(
+            group.transform.apply(Point { x: 0.0, y: 0.0 }),
+            Point { x: 70.0, y: 30.0 },
         );
     }
 
@@ -1787,6 +2598,86 @@ mod tests {
     }
 
     #[test]
+    fn shape_picture_fill_is_clipped_below_stroke_and_text() {
+        let media_id = MediaId(22);
+        let clip_path = Path {
+            commands: vec![
+                PathCommand::MoveTo(Point { x: 0.0, y: 0.0 }),
+                PathCommand::LineTo(Point { x: 10.0, y: 0.0 }),
+                PathCommand::LineTo(Point { x: 5.0, y: 10.0 }),
+                PathCommand::Close,
+            ],
+            fill_rule: FillRule::NonZero,
+        };
+        let mut filled = shape(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            ResolvedGeometry::Custom {
+                paths: vec![clip_path.clone()],
+                text_rect: None,
+            },
+            None,
+            Some(Stroke::new(Paint::Solid(Color::BLACK), 1.0)),
+        );
+        filled.image_fill = Some(ResolvedImage {
+            media: media_id,
+            src_rect: None,
+            placement: ResolvedImagePlacement::default(),
+            dpi: None,
+            rotate_with_shape: true,
+        });
+        filled.content = ResolvedContent::Text(table_text("caption"));
+
+        let mut fallback = shape(
+            Rect {
+                x: 10.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            ResolvedGeometry::BoundsFallback,
+            None,
+            None,
+        );
+        fallback.image_fill = filled.image_fill.clone();
+        let input = render_input_with_media(
+            vec![slide((20.0, 10.0), vec![filled, fallback])],
+            HashMap::from([(media_id, media(b"image"))]),
+        );
+
+        let page = layout_slide(&input, 0).expect("lower shape picture fill");
+        let filled_group = only_group(&page.elements[0]);
+        assert!(
+            filled_group.children.len() > 2,
+            "text must follow image and stroke"
+        );
+        let image_clip = only_group(&filled_group.children[0]);
+        assert_eq!(image_clip.clip, Some(clip_path));
+        assert!(matches!(
+            image_clip.children.as_slice(),
+            [PositionedElement::Image { media_id: id, .. }] if *id == media_id
+        ));
+        let PositionedElement::Path(outline) = &filled_group.children[1] else {
+            panic!("shape stroke must follow its image fill");
+        };
+        assert!(outline.fill.is_none());
+        assert!(outline.stroke.is_some());
+
+        let fallback_group = only_group(&page.elements[1]);
+        let PositionedElement::Path(bounds) = &fallback_group.children[1] else {
+            panic!("bounds path must follow its image fill");
+        };
+        assert!(
+            bounds.stroke.is_none(),
+            "image fill suppresses synthetic border"
+        );
+    }
+
+    #[test]
     fn tile_picture_repeats_media_in_row_major_order_inside_shape_clip() {
         let png = horizontal_png(&[[255, 0, 0, 255]]);
         let media_id = MediaId::from_bytes(&png);
@@ -1927,13 +2818,10 @@ mod tests {
             None,
         );
         picture.rotation_deg = 45.0;
-        let ResolvedContent::Image {
-            rotate_with_shape, ..
-        } = &mut picture.content
-        else {
+        let ResolvedContent::Image(image) = &mut picture.content else {
             unreachable!();
         };
-        *rotate_with_shape = false;
+        image.rotate_with_shape = false;
         let mut tiled_picture = picture_shape(
             Rect {
                 x: 25.0,
@@ -1953,13 +2841,10 @@ mod tests {
             Some(72.0),
         );
         tiled_picture.rotation_deg = 45.0;
-        let ResolvedContent::Image {
-            rotate_with_shape, ..
-        } = &mut tiled_picture.content
-        else {
+        let ResolvedContent::Image(image) = &mut tiled_picture.content else {
             unreachable!();
         };
-        *rotate_with_shape = false;
+        image.rotate_with_shape = false;
         let input = render_input_with_media(
             vec![slide((40.0, 20.0), vec![picture, tiled_picture])],
             HashMap::from([(media_id, media(&png))]),
@@ -2142,13 +3027,13 @@ mod tests {
         dpi: Option<f64>,
     ) -> ResolvedShape {
         let mut picture = shape(bounds, ResolvedGeometry::Rectangle, None, None);
-        picture.content = ResolvedContent::Image {
+        picture.content = ResolvedContent::Image(ResolvedImage {
             media,
             src_rect,
             placement,
             dpi,
             rotate_with_shape: true,
-        };
+        });
         picture
     }
 
@@ -2256,10 +3141,13 @@ mod tests {
         )
         .resolve_slide((40.0, 20.0))
         .unwrap();
-        let resolved_background = resolved.background.clone();
+        let Some(ResolvedBackground::Paint(resolved_background)) = resolved.background.clone()
+        else {
+            panic!("expected resolved paint background");
+        };
         let rendered = layout_presentation(&render_input(vec![resolved])).unwrap();
 
-        assert_eq!(rendered.pages[0].background, resolved_background);
+        assert_eq!(rendered.pages[0].background, Some(resolved_background));
         assert!(rendered.pages[0].elements.is_empty());
         let png = oxml_pdf::render_page_to_png(&rendered, 0, 72.0)
             .expect("rasterise inherited master gradient");
@@ -2277,9 +3165,66 @@ mod tests {
     }
 
     #[test]
+    fn absent_background_keeps_the_default_white_raster() {
+        const P_NS: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
+        const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        let shape_tree = "<p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree>";
+        let slide = CT_Slide::from_xml(
+            format!(
+                "<p:sld xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\"><p:cSld>{shape_tree}</p:cSld></p:sld>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let layout = CT_SlideLayout::from_xml(
+            format!(
+                "<p:sldLayout xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\"><p:cSld>{shape_tree}</p:cSld></p:sldLayout>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let master = CT_SlideMaster::from_xml(
+            format!(
+                "<p:sldMaster xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\"><p:cSld>{shape_tree}</p:cSld><p:clrMap bg1=\"lt1\" tx1=\"dk1\" bg2=\"lt2\" tx2=\"dk2\" accent1=\"accent1\" accent2=\"accent2\" accent3=\"accent3\" accent4=\"accent4\" accent5=\"accent5\" accent6=\"accent6\" hlink=\"hlink\" folHlink=\"folHlink\"/></p:sldMaster>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let mut theme = CT_OfficeStyleSheet::office_default();
+        theme
+            .theme_elements
+            .format_scheme
+            .background_fill_styles[0] = oxml_drawing::fill::Fill::from_xml(
+            br#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:srgbClr val="000000"/></a:solidFill>"#,
+        )
+        .unwrap();
+        let default_text_style = CT_TextListStyle::default();
+        let resolved = ResolveCtx::new(
+            &theme,
+            ColorMap::default(),
+            &master,
+            &layout,
+            &slide,
+            &default_text_style,
+        )
+        .resolve_slide((10.0, 10.0))
+        .unwrap();
+
+        assert!(resolved.background.is_none());
+        let rendered = layout_presentation(&render_input(vec![resolved])).unwrap();
+        assert!(rendered.pages[0].background.is_none());
+        let png = oxml_pdf::render_page_to_png(&rendered, 0, 72.0)
+            .expect("rasterise absent presentation background");
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).expect("decode white background raster");
+        assert_eq!(rgb_at(&pixmap, 5, 5), (255, 255, 255));
+    }
+
+    #[test]
     fn background_is_not_duplicated_in_page_elements() {
         let mut resolved = slide((20.0, 10.0), Vec::new());
-        resolved.background = Some(Paint::Solid(Color::from_hex("102030")));
+        resolved.background = Some(ResolvedBackground::Paint(Paint::Solid(Color::from_hex(
+            "102030",
+        ))));
 
         let page = layout_slide(&render_input(vec![resolved]), 0).unwrap();
 
@@ -2288,6 +3233,52 @@ mod tests {
             Some(Paint::Solid(Color::from_hex("102030")))
         );
         assert!(page.elements.is_empty());
+    }
+
+    #[test]
+    fn background_image_is_lowered_before_slide_shapes() {
+        let png = horizontal_png(&[[0, 0, 255, 255]]);
+        let media_id = MediaId::from_bytes(&png);
+        let foreground = shape(
+            Rect {
+                x: 2.0,
+                y: 2.0,
+                width: 6.0,
+                height: 6.0,
+            },
+            ResolvedGeometry::Rectangle,
+            Some(Paint::Solid(Color::from_hex("FF0000"))),
+            None,
+        );
+        let mut resolved = slide((10.0, 10.0), vec![foreground]);
+        resolved.background = Some(ResolvedBackground::Image(ResolvedImage {
+            media: media_id,
+            src_rect: None,
+            placement: ResolvedImagePlacement::default(),
+            dpi: None,
+            rotate_with_shape: true,
+        }));
+        let input =
+            render_input_with_media(vec![resolved], HashMap::from([(media_id, media(&png))]));
+
+        let page = layout_slide(&input, 0).unwrap();
+        assert!(matches!(
+            page.elements.first(),
+            Some(PositionedElement::Image { media_id: id, .. }) if *id == media_id
+        ));
+        assert!(matches!(
+            page.elements.get(1),
+            Some(PositionedElement::Group(_))
+        ));
+        let rendered = oxml_pdf::render_page_to_png(
+            &LayoutResult::new(vec![page], Vec::new(), None, Vec::new()),
+            0,
+            72.0,
+        )
+        .expect("rasterise background image ordering");
+        let pixmap = tiny_skia::Pixmap::decode_png(&rendered).unwrap();
+        assert_eq!(rgb_at(&pixmap, 0, 0), (0, 0, 255));
+        assert_eq!(rgb_at(&pixmap, 5, 5), (255, 0, 0));
     }
 
     #[test]
@@ -2387,6 +3378,46 @@ mod tests {
         assert_eq!(layout, MediaId::from_bytes(b"layout image"));
         assert_eq!(master, MediaId::from_bytes(b"master image"));
         assert_eq!(deck_media.len(), 3);
+    }
+
+    #[test]
+    fn external_hyperlink_projection_keeps_scopes_and_excludes_internal_targets() {
+        let relationships = RelScopes {
+            slide: HashMap::from([
+                (
+                    "rId7".to_owned(),
+                    hyperlink_relationship("https://slide.example", Some("External")),
+                ),
+                (
+                    "rId8".to_owned(),
+                    hyperlink_relationship("../slides/slide2.xml", None),
+                ),
+            ]),
+            layout: HashMap::from([(
+                "rId7".to_owned(),
+                hyperlink_relationship("https://layout.example", Some("External")),
+            )]),
+            master: HashMap::from([(
+                "rId7".to_owned(),
+                hyperlink_relationship("https://master.example", Some("External")),
+            )]),
+        };
+
+        let targets = relationships.external_hyperlink_targets();
+
+        assert_eq!(
+            targets.slide.get("rId7").map(String::as_str),
+            Some("https://slide.example")
+        );
+        assert!(!targets.slide.contains_key("rId8"));
+        assert_eq!(
+            targets.layout.get("rId7").map(String::as_str),
+            Some("https://layout.example")
+        );
+        assert_eq!(
+            targets.master.get("rId7").map(String::as_str),
+            Some("https://master.example")
+        );
     }
 
     #[test]

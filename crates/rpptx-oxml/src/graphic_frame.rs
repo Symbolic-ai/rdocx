@@ -14,6 +14,7 @@ use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, NamespaceBindings, P_NS, all_attributes, root_attributes,
     self_contained_attributes,
 };
+use crate::picture::CT_Picture;
 
 const TABLE_URI: &str = "http://schemas.openxmlformats.org/drawingml/2006/table";
 const CHART_URI: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
@@ -25,12 +26,15 @@ pub type Result<T> = std::result::Result<T, OxmlError>;
 type RawAttributes = Vec<(String, String)>;
 
 /// The payload selected by `a:graphicData@uri`.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum GraphicDataPayload {
     Table(Box<CT_Table>),
     Chart(Vec<u8>),
     SmartArt(Vec<u8>),
-    Ole(Vec<u8>),
+    Ole {
+        raw: Vec<u8>,
+        preview: Option<Box<CT_Picture>>,
+    },
     Other(Vec<u8>),
 }
 
@@ -38,9 +42,10 @@ impl GraphicDataPayload {
     fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         match self {
             Self::Table(table) => writer.get_mut().write_all(&table.to_xml()?)?,
-            Self::Chart(xml) | Self::SmartArt(xml) | Self::Ole(xml) | Self::Other(xml) => {
+            Self::Chart(xml) | Self::SmartArt(xml) | Self::Other(xml) => {
                 writer.get_mut().write_all(xml)?
             }
+            Self::Ole { raw, .. } => writer.get_mut().write_all(raw)?,
         }
         Ok(())
     }
@@ -48,7 +53,7 @@ impl GraphicDataPayload {
 
 /// One URI-dispatched `a:graphicData` payload.
 #[allow(non_camel_case_types)]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CT_GraphicData {
     pub uri: String,
     pub payload: GraphicDataPayload,
@@ -58,7 +63,7 @@ pub struct CT_GraphicData {
 
 /// One typed PresentationML `p:graphicFrame`.
 #[allow(non_camel_case_types)]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CT_GraphicFrame {
     pub transform: CT_Transform2D,
     pub graphic_data: CT_GraphicData,
@@ -517,10 +522,35 @@ fn capture_payload(
         }
         CHART_URI => GraphicDataPayload::Chart(raw),
         DIAGRAM_URI => GraphicDataPayload::SmartArt(raw),
-        OLE_URI => GraphicDataPayload::Ole(raw),
+        OLE_URI => GraphicDataPayload::Ole {
+            preview: parse_ole_preview(&raw, &namespaces.entries())
+                .ok()
+                .flatten()
+                .map(Box::new),
+            raw,
+        },
         _ => GraphicDataPayload::Other(raw),
     });
     Ok(())
+}
+
+fn parse_ole_preview(raw: &[u8], inherited: &[(String, String)]) -> Result<Option<CT_Picture>> {
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if local_name(start.name().as_ref()) == b"pic" => {
+                let picture = capture_element(&mut reader, &start)?;
+                return CT_Picture::from_fragment(&picture, inherited).map(Some);
+            }
+            Event::Empty(start) if local_name(start.name().as_ref()) == b"pic" => {
+                return Ok(None);
+            }
+            Event::Eof => return Ok(None),
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 impl RawElementShell {

@@ -76,6 +76,36 @@ pub struct ResolvedTilePlacement {
     pub flip: ResolvedTileFlip,
     pub alignment: ResolvedRectAlignment,
 }
+
+pub struct ResolvedTable {
+    pub column_widths: Vec<f64>,
+    pub rows: Vec<ResolvedTableRow>,
+    pub right_to_left: bool,
+}
+
+pub struct ResolvedTableRow {
+    pub height: f64,
+    pub cells: Vec<ResolvedTableCell>,
+}
+
+pub struct ResolvedTableCell {
+    pub text: Option<ResolvedTextBody>,
+    pub row_span: u32,
+    pub grid_span: u32,
+    pub horizontal_merge: bool,
+    pub vertical_merge: bool,
+    pub fill: Option<Paint>,
+    pub margins: TextInsets,
+    pub left: Option<ResolvedTableBorder>,
+    pub right: Option<ResolvedTableBorder>,
+    pub top: Option<ResolvedTableBorder>,
+    pub bottom: Option<ResolvedTableBorder>,
+}
+
+pub struct ResolvedTableBorder {
+    pub stroke: Option<Stroke>,
+    pub priority: u8,
+}
 ```
 
 Every theme reference, colour transform, inherited property and list-style level
@@ -94,6 +124,33 @@ anchor, wrap, direction, autofit, paragraphs, runs, paragraph spacing, and
 bullets. Character and auto-number bullets both retain their independently
 inherited font, colour, size, and choice values.
 
+A run or field's direct `a:hlinkClick` does not enter the text cascade.
+`resolve_slide_with_resources` resolves its relationship identifier through a
+`ScopedHyperlinkTargets` map for the producing slide, layout, or master part,
+then freezes only an external URI in `ResolvedRunStyle`. A missing relationship,
+an internal slide jump, or an action-only hyperlink keeps its text and records a
+stable source-scoped diagnostic. No hyperlink property is inherited from list,
+paragraph, placeholder, or theme defaults.
+
+An untyped field in an effective `sldNum` placeholder is normalized to the
+`slidenum` field type. This includes a slide placeholder whose type comes from
+its layout or master match. Typed slide-number fields retain that type across
+the resolver boundary so the renderer can substitute the current page before
+shaping.
+
+Table resolution selects the explicit table style or the table style list's
+default. It applies whole-table, row and column bands, first and last columns,
+first and last rows, then corner regions. Direct cell properties apply last.
+The result carries concrete fills, text styles, margins, four borders, spans,
+merge ownership, and right-to-left order. Border values retain region priority
+so the renderer can settle adjacent edge conflicts after all cells resolve.
+
+Table cell text always uses fixed-box layout. Cell autofit is ignored and
+records one stable diagnostic. Unsupported diagonal borders, effects, and 3-D
+cell properties remain visible through stable diagnostics while their XML
+stays preserved by the DrawingML model. Unsupported concrete cell or border
+fills also produce a stable diagnostic instead of disappearing silently.
+
 `ResolveCtx::resolve_slide_with_media` additionally accepts `ScopedMediaIds`,
 whose slide, layout, and master maps keep relationship namespaces separate.
 Each flattened picture uses its producing source to resolve an embedded
@@ -101,7 +158,26 @@ relationship to `MediaId`. External links remain unsupported and produce a
 diagnostic without network access. Missing picture placement defaults to
 stretch. Tile translation defaults to zero, scale to 100 percent, flip to none,
 alignment to top-left, and `rotate_with_shape` to true. Tile translation crosses
-the boundary in points using 12,700 EMU per point.
+the boundary in points using 12,700 EMU per point. The same scoped resource
+value records each resolved media item's package content type when format
+support must be decided before the renderer boundary.
+
+An OLE graphic frame retains its raw payload as the sole serialization source
+and may project a standard fallback `p:pic` for static rendering. Layout uses
+that projection only when the blip is embedded, its relationship resolves in
+the producing slide, layout, or master scope, and its package content type is
+PNG. The outer graphic-frame transform remains authoritative for placement.
+The nested picture supplies image crop and placement only. A rendered preview
+records that embedded OLE interactivity is not rendered. A missing preview,
+linked blip, unresolved relationship, or unsupported media type keeps the
+visible bounds fallback and the existing OLE diagnostic.
+
+An ordinary shape carries picture fill separately from text or other content.
+A direct `spPr` blip resolves in the flattened slide, layout, or master source
+that owns the shape. A blip selected through the theme style matrix belongs to
+theme relationship scope. Until that scope is present, it remains absent with
+a precise diagnostic and cannot consume a colliding relationship ID from a
+slide, layout, or master.
 
 Each flattened leaf carries an accumulated `group_transform`. Nested group
 transforms map child coordinates through `chOff`, `chExt`, `off`, and `ext`,
@@ -109,14 +185,33 @@ then apply rotation and centre flips in DrawingML order. A leaf outside a group
 carries `Transform::IDENTITY`.
 
 Unrepresentable content remains visible as a bounds fallback with a stable
-unsupported category and a diagnostic. This includes charts, SmartArt, OLE,
-unknown graphic frames, connectors pending concrete geometry, image media
-pending relationship resolution, preset geometry pending evaluation, and fill
-forms that the backend-neutral paint model cannot represent exactly. Explicit
-`p:bgPr` fills, `p:bgRef` theme styles, and the theme fallback resolve to
-concrete background paint before crossing the renderer boundary. A background
-fill form that the neutral paint model cannot represent leaves the page on its
-white default and records a specific diagnostic.
+unsupported category and a diagnostic. This includes charts, SmartArt, OLE
+without a supported resolved static preview, unknown graphic frames,
+connectors with absent, unknown, or failed geometry,
+image media pending relationship resolution, preset geometry pending
+evaluation, and fill forms that the backend-neutral paint model cannot
+represent exactly. A connector preset uses the same generated preset evaluator
+as an ordinary shape and retains its transform, direct line, fill, and
+arrowheads. A horizontal or vertical connector may have a zero extent on its
+collapsed axis and remains a finite stroked path. A connector without a direct
+line keeps a visible default line and a diagnostic until its preserved
+`p:style` reference has a typed resolution path. Explicit
+`p:bgPr` fills and `p:bgRef` theme styles resolve to concrete background paint
+before crossing the renderer boundary. If slide, layout, and master all omit
+`p:bg`, the resolved background remains absent and the raster backend keeps its
+white page default. A background fill form that the neutral paint model cannot
+represent leaves the page on that default and records a specific diagnostic.
+Linear gradients project the DrawingML angle onto the complete rectangular
+fill bounds. Omitted or false `scaled` keeps the normalized `(cos x, sin x)`
+direction. True `scaled` normalizes `(width cos x, height sin x)` first. The
+axis endpoints are the minimum and maximum rectangle projections along that
+direction, so non-square fills expose the complete stop domain. A background
+ignores `rotWithShape="0"` because it has no enclosing shape rotation. Shape
+fills with that value use the same concrete linear paint when their effective
+own and group transforms are unrotated and unflipped. A rotated or flipped
+shape continues to diagnose the independent rotation policy. Unsupported
+circle, rectangle, and shape path gradients, tile rectangles, and each
+non-none flip variant retain distinct diagnostic categories.
 
 **Freeze this contract when the resolver lands, or the resolver and renderer
 tracks diverge.** It is versioned with the crate.
@@ -126,8 +221,8 @@ tracks diverge.** It is versioned with the crate.
 The single most common source of visibly wrong output. For each slide, in
 order:
 
-1. **Background.** Slide `p:bg`, else layout `p:bg`, else master `p:bg`, else
-   the theme's first background fill style.
+1. **Background.** Slide `p:bg`, else layout `p:bg`, else master `p:bg`. An
+   absent background at all three levels produces no background paint.
 2. **The master's non-placeholder shapes**, if the layout's `showMasterSp` is
    not `0`.
 3. **The layout's non-placeholder shapes**, if the slide's `showMasterSp` is not
@@ -156,18 +251,31 @@ This logic belongs in the flattener, not the renderer.
 `ResolveCtx::flatten()` returns a borrowed `Vec<FlattenedItem<'_>>`. The first
 item is the effective background when one exists, followed by master, layout,
 and slide shape-tree leaves in final draw order. Each shape item retains its
-source, a reference to the selected `ShapeTreeChild`, and the accumulated
-backend-neutral group transform. Recursive groups and the selected immediate
-`mc:Fallback` are walked in document order.
+source, a reference to the selected `ShapeTreeChild`, materialized
+child-coordinate scale, and the remaining backend-neutral rigid group mapping.
+For a non-shearing group mapping, accumulated child-coordinate scale changes
+the leaf anchor and extent before concrete geometry and text-box resolution.
+It does not change absolute line widths, font sizes, or effect metrics. Nested
+groups apply the inner mapping before the outer mapping. Group bounds do not
+clip children. Recursive groups and the selected immediate `mc:Fallback` are
+walked in document order. A zero child extent uses finite unit scale on that
+axis and emits a stable diagnostic. A sheared or singular accumulated mapping
+emits a distinct diagnostic and retains the affine fallback. The resolver does
+not claim general shear support.
 
-The background view identifies slide, layout, master, or theme fallback as its
-producer. An explicit `p:bg` borrows its typed rendering projection while its
-raw subtree remains the sole PresentationML serialisation source. The theme
-fallback borrows the first background fill style. Both forms retain a reference
-to the context's per-master colour map for concrete resolution. `p:bgRef`
-selects the indexed normal or background format-scheme fill and substitutes its
-reference colour for every `phClr`. Direct and theme-fallback `phClr` use the
-effective `bg1` colour.
+The background view identifies slide, layout, or master as its producer. An
+explicit `p:bg` borrows its typed rendering projection while its raw subtree
+remains the sole PresentationML serialisation source. It retains a reference to
+the context's per-master colour map for concrete resolution. `p:bgRef` selects
+the indexed normal or background format-scheme fill and substitutes its
+reference colour for every `phClr`. Direct `p:bgPr` `phClr` uses the effective
+`bg1` colour. The first theme background fill style is used only when selected
+by an explicit `p:bgRef` index. A direct `p:bgPr` picture fill resolves its
+embedded relationship in the selected slide, layout, or master producer scope.
+A picture fill selected through `p:bgRef` belongs to the theme relationship
+scope, which is not yet present in `ScopedMediaIds`. It remains absent with a
+precise diagnostic. A colliding relationship ID in the master scope must not
+satisfy it.
 
 The layout `showMasterSp` controls only the master non-placeholder pass. The
 slide `showMasterSp` controls only the layout non-placeholder pass. An absent
@@ -195,9 +303,11 @@ no extent is skipped rather than treated as an error.
 
 Body properties resolve independently per field. Resolution starts with exact
 defaults of 91,440 EMU left and right, 45,720 EMU top and bottom, top anchor,
-square wrap, horizontal text, and no autofit. The master, layout, and slide
-shape then overlay their present `p:txBody/a:bodyPr` fields in that order, so a
-later partial value does not erase unrelated inherited fields.
+square wrap, horizontal text, no first-or-last paragraph edge spacing, and no
+autofit. The master, layout, and slide shape then overlay their present
+`p:txBody/a:bodyPr` fields in that order, so a later partial value does not
+erase unrelated inherited fields. `spcFirstLastPara` accepts either XML boolean
+spelling. An absent value means false.
 
 ### 3. The nine-level list style
 
@@ -218,7 +328,14 @@ Within each list-style source, `a:defPPr` is applied to all nine levels before
 the matching `a:lvlNpPr`. Paragraph fields and nested default character fields
 overlay independently. Bullet colour, size, font and choice are independent
 properties, while each fill and typeface slot is atomic. Effective values do
-not inherit opaque XML or hyperlink actions.
+not inherit opaque XML or hyperlink actions. `cap="all"` and `cap="none"`
+overlay as character properties through the same chain. Other capitalization
+values remain unmodelled and preserved.
+
+Each paragraph also resolves `a:endParaRPr` as a final character-property
+overlay on the same inherited paragraph style. This terminal style supplies
+the font, size, and metrics for an empty paragraph. It does not replace the
+effective style of a nonempty run.
 
 ### 4. Style references
 

@@ -78,6 +78,7 @@ impl ResolveCtx<'_> {
     /// Resolves presentation defaults and the master's other style for table text.
     pub(crate) fn effective_table_text_properties(
         &self,
+        table_style: Option<&CT_TextCharacterProperties>,
         paragraph: Option<&CT_TextParagraphProperties>,
         run: Option<&CT_TextCharacterProperties>,
     ) -> EffectiveTextProperties {
@@ -93,6 +94,9 @@ impl ResolveCtx<'_> {
             .level(level)
             .cloned()
             .unwrap_or_else(EffectiveTextProperties::default);
+        if let Some(properties) = table_style {
+            merge_character(&mut effective, properties);
+        }
         if let Some(properties) = paragraph {
             merge_paragraph(&mut effective, properties);
         }
@@ -208,6 +212,9 @@ fn merge_character_properties(
     }
     if source.italic.is_some() {
         effective.italic = source.italic;
+    }
+    if source.all_caps.is_some() {
+        effective.all_caps = source.all_caps;
     }
     if source.underline.is_some() {
         effective.underline = source.underline;
@@ -326,6 +333,30 @@ mod tests {
         assert_eq!(effective.paragraph.right_margin, Some(200));
         assert_eq!(effective.run.font_size, Some(2200));
         assert_eq!(effective.run.bold, Some(true));
+    }
+
+    #[test]
+    fn all_caps_inherits_and_a_direct_none_value_overrides_it() {
+        let fixture = Fixture::new(
+            "<a:defPPr><a:defRPr cap=\"all\"/></a:defPPr>",
+            "",
+            "",
+            "",
+            &[""],
+        );
+        let inherited =
+            fixture
+                .context()
+                .effective_text_properties(fixture.slide_shape(0), None, None);
+        assert_eq!(inherited.run.all_caps, Some(true));
+
+        let direct = character("<a:rPr cap=\"none\"></a:rPr>");
+        let overridden = fixture.context().effective_text_properties(
+            fixture.slide_shape(0),
+            None,
+            Some(&direct),
+        );
+        assert_eq!(overridden.run.all_caps, Some(false));
     }
 
     #[test]
