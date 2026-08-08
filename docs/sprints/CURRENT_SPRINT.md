@@ -38,7 +38,7 @@ identifying every deliberately corrupted package.
 | F-105 | Bundled default.pptx | M | in-progress | codex |
 | F-106 | ShapeIdAllocator and MediaStore | M | in-progress | codex |
 | F-107 | add_slide | L | in-progress | codex |
-| F-108 | validate() | M | pending | - |
+| F-108 | validate() | M | in-progress | codex |
 
 ## Sequencing note
 
