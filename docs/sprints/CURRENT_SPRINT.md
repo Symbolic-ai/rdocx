@@ -36,7 +36,7 @@ edited placeholder text, and open in PowerPoint without repair.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-109 | Shape mutation facade | L | pending | - |
+| F-109 | Shape mutation facade | L | in-progress | codex |
 | F-110 | add_textbox, add_shape, add_connector, group | M | pending | - |
 | F-111 | add_picture | M | pending | - |
 | F-112 | Text frame mutation | L | pending | - |

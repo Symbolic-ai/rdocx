@@ -26,11 +26,11 @@ regenerated, never hand-edited.
 | M8, PresentationML                          | 14 | 14 | 0 | 0  |
 | M9, Inheritance resolver                    | 8  | 8 | 0 | 0  |
 | M10, Renderer                               | 20 | 20 | 0 | 0  |
-| M11, Write API                              | 12 | 4 | 0 | 8  |
+| M11, Write API                              | 12 | 4 | 1 | 7  |
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **158** | **105** | **0** | **53** |
+| **Total** | **158** | **105** | **1** | **52** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -226,7 +226,7 @@ regenerated, never hand-edited.
 | F-106 | ShapeIdAllocator and MediaStore              | S26 | M | done |
 | F-107 | add_slide                                    | S26 | L | done |
 | F-108 | validate()                                   | S26 | M | done |
-| F-109 | Shape mutation facade                        | S27 | L | pending |
+| F-109 | Shape mutation facade                        | S27 | L | in-progress |
 | F-110 | add_textbox, add_shape, add_connector, group | S27 | M | pending |
 | F-111 | add_picture                                  | S27 | M | pending |
 | F-112 | Text frame mutation                          | S27 | L | pending |
