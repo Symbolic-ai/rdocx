@@ -252,6 +252,29 @@ pub(crate) struct ParsedColorMap {
 }
 
 impl CT_Slide {
+    /// Creates a minimal slide that inherits its colour map from the master.
+    pub fn new(shape_tree: CT_ShapeTree) -> Self {
+        Self {
+            common_slide_data: CT_CommonSlideData {
+                name: None,
+                background: None,
+                shape_tree,
+                raw_attributes: Vec::new(),
+                raw_children: OrderedRawChildren::default(),
+            },
+            color_map_override: Some(CT_ColorMapOverride {
+                kind: ColorMapOverrideKind::Master,
+                raw_attributes: Vec::new(),
+                mapping_attributes: Vec::new(),
+                mapping_children: OrderedRawChildren::default(),
+                raw_children: OrderedRawChildren::default(),
+            }),
+            show_master_shapes: None,
+            raw_attributes: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+        }
+    }
+
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         let parsed = parse_root(xml, RootKind::Slide)?;
         Ok(Self {

@@ -492,6 +492,33 @@ struct ParsedGroup {
 }
 
 impl CT_Shape {
+    /// Creates a minimal placeholder shape whose position inherits from layout.
+    pub fn new_placeholder(id: u32, placeholder: CT_Placeholder) -> Result<Self> {
+        let text_body = CT_TextBody::from_xml(
+            br#"<a:txBody xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:bodyPr/><a:lstStyle/><a:p/></a:txBody>"#,
+        )
+        .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+        Ok(Self {
+            placeholder: Some(placeholder),
+            shape_properties: Box::new(CT_ShapeProperties::default()),
+            text_body: Some(text_body),
+            raw: Box::new(ShapeRaw {
+                raw_attributes: Vec::new(),
+                non_visual_attributes: Vec::new(),
+                non_visual_children: OrderedRawChildren::default(),
+                non_visual_drawing_properties: format!(
+                    r#"<p:cNvPr id="{id}" name="Placeholder {id}"/>"#
+                )
+                .into_bytes(),
+                non_visual_shape_properties: b"<p:cNvSpPr/>".to_vec(),
+                application_properties_attributes: Vec::new(),
+                application_properties_raw_children: OrderedRawChildren::default(),
+                style: None,
+                raw_children: OrderedRawChildren::default(),
+            }),
+        })
+    }
+
     pub(crate) fn non_visual_id(&self) -> Option<u32> {
         non_visual_drawing_id(&self.raw.non_visual_drawing_properties)
     }
@@ -903,6 +930,29 @@ fn capture_non_visual_shape_child(
 }
 
 impl CT_ShapeTree {
+    /// Creates the required empty slide shape tree with root id 1.
+    pub fn new() -> Self {
+        Self {
+            non_visual_group_properties: NonVisualGroupProperties {
+                non_visual_id: Some(1),
+                raw_attributes: Vec::new(),
+                raw_children: vec![
+                    b"<p:cNvPr id=\"1\" name=\"\"/>".to_vec(),
+                    b"<p:cNvGrpSpPr/>".to_vec(),
+                    b"<p:nvPr/>".to_vec(),
+                ],
+            },
+            group_properties: GroupProperties {
+                transform: None,
+                raw_attributes: Vec::new(),
+                raw_children: OrderedRawChildren::default(),
+            },
+            children: Vec::new(),
+            raw_attributes: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+        }
+    }
+
     /// Parses a complete `p:spTree` with any prefix bound to PresentationML.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         Self::from_fragment(xml, &[])
@@ -942,6 +992,12 @@ impl CT_ShapeTree {
             &self.raw_children,
             true,
         )
+    }
+}
+
+impl Default for CT_ShapeTree {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

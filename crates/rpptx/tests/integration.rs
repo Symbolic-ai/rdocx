@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Cursor;
@@ -30,6 +30,9 @@ const PRESENTATION_PART: &str = "/custom/presentation-main.xml";
 const SLIDE_ONE_PART: &str = "/custom/slides/first.xml";
 const SLIDE_TWO_PART: &str = "/custom/slides/second.xml";
 const NOTES_PART: &str = "/custom/notes/speaker.xml";
+const POWERPOINT_VERSION: &str = "16.104";
+const POWERPOINT_BUILD: &str = "16.104.25121423";
+const POWERPOINT_APP_BUILD: &str = "1214";
 const MODELLED_CONTENT_TYPES: [&str; 7] = [
     content_types::PRESENTATION,
     content_types::SLIDE,
@@ -84,6 +87,65 @@ fn all_corpus_modelled_parts_reparse_structurally() {
             "corpus has no modelled part with content type {content_type}"
         );
     }
+}
+
+#[test]
+fn three_added_slides_have_unique_ids_and_reopen() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    assert!(presentation.layout_count() > 0);
+    assert!(presentation.layout_name(0).is_some());
+    for _ in 0..3 {
+        presentation.add_slide(0).expect("add slide");
+    }
+
+    let ids = presentation
+        .slides()
+        .map(|slide| slide.id())
+        .collect::<HashSet<_>>();
+    assert_eq!(ids.len(), 3);
+    assert!(ids.iter().all(|id| *id >= 256));
+    let bytes = presentation.to_bytes().expect("serialize three-slide deck");
+    assert_eq!(
+        Presentation::from_bytes(&bytes)
+            .expect("reopen three-slide deck")
+            .len(),
+        3
+    );
+
+    if let Some(path) = std::env::var_os("RPPTX_ACCEPTANCE_OUTPUT") {
+        fs::write(path, bytes).expect("write native acceptance deck");
+    }
+}
+
+#[test]
+#[ignore = "requires pinned Microsoft PowerPoint"]
+fn three_added_slides_open_in_powerpoint_without_repair() {
+    assert_powerpoint_build();
+    let mut presentation = Presentation::new().expect("open bundled template");
+    for _ in 0..3 {
+        presentation.add_slide(0).expect("add slide");
+    }
+    let output = std::env::temp_dir().join(format!(
+        "rpptx-f107-three-slides-{}.pptx",
+        std::process::id()
+    ));
+    fs::write(&output, presentation.to_bytes().expect("serialize deck"))
+        .expect("write native acceptance deck");
+    let name = output.file_name().unwrap().to_string_lossy();
+    let path = output.to_string_lossy();
+    let script = format!(
+        "with timeout of 120 seconds\ntell application \"Microsoft PowerPoint\"\nset previousStartUpDialog to start up dialog\ntry\nif (Version as text) is not \"{POWERPOINT_VERSION}\" then error \"PowerPoint version mismatch\"\nif (build as text) is not \"{POWERPOINT_APP_BUILD}\" then error \"PowerPoint build mismatch\"\nset start up dialog to false\nset deckPath to \"{path}\"\nopen my POSIX file deckPath\nset checkedDeck to presentation \"{name}\"\nif (count of slides of checkedDeck) is not 3 then error \"slide count mismatch\"\nclose checkedDeck saving no\nset start up dialog to previousStartUpDialog\non error errorMessage number errorNumber\ntry\nclose checkedDeck saving no\nend try\nset start up dialog to previousStartUpDialog\nerror errorMessage number errorNumber\nend try\nend tell\nend timeout\n"
+    );
+    let result = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .expect("launch PowerPoint acceptance script");
+    fs::remove_file(&output).expect("remove native acceptance deck");
+    assert!(
+        result.status.success(),
+        "PowerPoint no-repair open failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
 }
 
 #[test]
@@ -1360,6 +1422,28 @@ fn sha256(path: &Path) -> String {
 
 fn open_package(package: OpcPackage) -> Result<Presentation, Error> {
     Presentation::from_bytes(&package_bytes(package))
+}
+
+fn assert_powerpoint_build() {
+    let app = "/Applications/Microsoft PowerPoint.app/Contents/Info.plist";
+    let version = Command::new("/usr/libexec/PlistBuddy")
+        .args(["-c", "Print :CFBundleShortVersionString", app])
+        .output()
+        .expect("read PowerPoint version");
+    let build = Command::new("/usr/libexec/PlistBuddy")
+        .args(["-c", "Print :CFBundleVersion", app])
+        .output()
+        .expect("read PowerPoint build");
+    assert!(version.status.success());
+    assert!(build.status.success());
+    assert_eq!(
+        String::from_utf8(version.stdout).unwrap().trim(),
+        POWERPOINT_VERSION
+    );
+    assert_eq!(
+        String::from_utf8(build.stdout).unwrap().trim(),
+        POWERPOINT_BUILD
+    );
 }
 
 fn fixture_bytes() -> Vec<u8> {

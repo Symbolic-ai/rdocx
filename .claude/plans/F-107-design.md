@@ -1,6 +1,6 @@
 # F-107, add_slide
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S26
 **Size**: L
 **Depends on**: F-105, F-106
@@ -104,12 +104,12 @@ PresentationML crates and assets.
 
 ## Implementation checklist
 
-- [ ] Resolve presentation layouts into private facade records.
-- [ ] Add direct layout count and name lookup plus index-based `add_slide`.
-- [ ] Add narrow OOXML constructors for the synthesized slide shell.
-- [ ] Implement the nine-step package mutation in specification order.
-- [ ] Preserve placeholder type and idx while excluding latent placeholders.
-- [ ] Add structural, sparse-allocation, negative, and native acceptance tests.
+- [x] Resolve presentation layouts into private facade records.
+- [x] Add direct layout count and name lookup plus index-based `add_slide`.
+- [x] Add narrow OOXML constructors for the synthesized slide shell.
+- [x] Implement the nine-step package mutation in specification order.
+- [x] Preserve placeholder type and idx while excluding latent placeholders.
+- [x] Add structural, sparse-allocation, negative, and native acceptance tests.
 
 ## Open questions
 
