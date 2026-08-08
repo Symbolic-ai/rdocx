@@ -30,9 +30,9 @@ quality target, and keep every PowerPoint development crate unpublished.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-102 | Table rendering | L | done | |
-| F-103 | Hyperlinks, fields and diagnostics | M | done | |
-| F-104 | SSIM fidelity harness | L | done | |
+| F-102 | Table rendering | L | done | - |
+| F-103 | Hyperlinks, fields and diagnostics | M | done | - |
+| F-104 | SSIM fidelity harness | L | done | - |
 
 ## Sequencing note
 
