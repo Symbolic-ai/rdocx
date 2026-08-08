@@ -822,8 +822,10 @@ emits an annotation.
 ### F-104, SSIM fidelity harness (L)
 Corpus renders compared with LibreOffice.
 **Depends on**: F-102.
-**Test gate**: at least 0.95 SSIM on at least 80 percent of slides, and 100
-percent render without panic or dropped shape.
+**Test gate**: all pinned corpus slides render without panic, missing output,
+dimension mismatch, or a dropped bounded shape. The harness records 0.95 SSIM
+on 80 percent as a trend, and the native PowerPoint representative review is
+accepted.
 
 ---
 

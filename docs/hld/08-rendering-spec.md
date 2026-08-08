@@ -114,14 +114,20 @@ translate(-chOffX, -chOffY)
   · scale(flipH ? -1 : 1, flipV ? -1 : 1) about the centre
 ```
 
-`rpptx-layout` freezes this mapping before the renderer boundary. Every
-`ResolvedShape` carries a backend-neutral `group_transform` accumulated from
-its parent groups. The shape's own point bounds, rotation, and flips remain
-separate, so the renderer can group the shape's geometry, paint, outline, and
-text once and then apply the accumulated parent transform. Nested composition
-applies the child transform before the parent transform. Missing group mapping
-components leave that group's contribution as identity, while a zero child
-extent cannot produce a non-finite matrix.
+`rpptx-layout` freezes this mapping before the renderer boundary. For the
+non-shearing path, the resolver factors accumulated group mappings into
+child-coordinate scale and a remaining rigid transform. It materializes the
+scale into every leaf's point bounds before resolving concrete geometry and
+text boxes. Absolute line widths, font sizes, and effect metrics remain
+unchanged. Every `ResolvedShape` carries only the remaining backend-neutral
+rigid `group_transform`, which the renderer applies around the complete leaf.
+Nested composition applies the child mapping before the parent mapping. Group
+bounds do not create an implicit clip, and depth-first document order is
+preserved. Missing group mapping components leave that group's contribution as
+identity. A zero child extent uses finite unit scale on that axis and records a
+stable diagnostic. A sheared or singular accumulated mapping records a
+separate diagnostic and retains the previous affine fallback without claiming
+general shear support.
 
 Rotated text, rotated pictures, rotated gradients and clipped picture frames all
 follow for free. Arrowheads lower into extra closed, filled `Path` elements
@@ -229,10 +235,15 @@ non-extended gradient domain is clipped before painting. Line and path dash
 arrays use tiny-skia's phase-zero stroke dash support. Page background paint is
 drawn over the white default before page elements.
 
-Tile paint and group effects are not rendered by the raster backend. Picture
-tiles are different. `rpptx-render` lowers them to bounded row-major image
-elements before the shared backend sees them. In particular, the `blur` field
-on an outer shadow has no raster approximation.
+Tile paint is not rendered by the raster backend. Picture tiles are different.
+`rpptx-render` lowers them to bounded row-major image elements before the
+shared backend sees them. The raster backend supports the neutral outer-shadow
+group effect. It renders the composited group subtree to a transparent layer,
+uses the layer alpha as the shadow silhouette, applies a deterministic
+device-scale box blur, offsets and tints the result, then composites the
+unchanged group content above it. Resolved colour alpha is part of the shadow.
+Group opacity applies once to the shadow and content together. PDF group
+effects remain unsupported.
 
 ## Preset geometry
 
@@ -247,6 +258,14 @@ zero**, because `a:custGeom` uses the identical guide and path machinery. The
 evaluator gets written either way, so the presets become data rather than code.
 Presets additionally carry the `<a:rect>` text rectangle needed to place text
 inside non-rectangular shapes.
+
+Presentation connectors reuse these generated definitions. `line` and
+`straightConnector1` produce a single open segment. Bent and curved connector
+presets retain their adjustment values and produce the generated ordered line
+or cubic commands. Their direct stroke, dash, and endpoints use the normal
+shape lowering path. A horizontal or vertical connector may collapse one
+extent to zero. Its finite path and stroke remain visible rather than being
+dropped as an empty shape.
 
 Mechanism: an offline generator under `tools/gen-presets/` emitting a
 **checked-in** generated file. Not a `build.rs`, because checked-in generated
@@ -291,6 +310,30 @@ one new behaviour: `wrap: false` never breaks except on an explicit break.
 The algorithm: resolve `a:bodyPr`, compute the content box from the preset's
 text rectangle minus insets, resolve each paragraph through the nine-level
 chain, build inline items, stack lines from the box top, then anchor.
+
+Every shaped segment carries the selected font's ascent, descent, and `hhea`
+line gap. A line's natural advance is the greater of its combined maximum
+ascent and descent and the tallest complete run advance. Omitted line spacing
+uses that natural advance, while percentage line spacing multiplies the largest
+effective run point size. Exact point spacing remains exact, including when it
+is smaller than the glyph box.
+Non-negative leading is divided equally above and below the glyph box. A
+below-natural exact line keeps its stated height and places no negative leading
+before the baseline. Stored normal-autofit line-spacing reduction applies only
+to explicit percentage line spacing.
+
+An empty paragraph shapes a zero-width metrics carrier from its resolved
+`a:endParaRPr` style. Its line height and font-relative paragraph spacing use
+that resolved font and size. Nonempty paragraphs continue to use their first
+effective run. `cap="all"` transforms run and field text to Unicode uppercase
+before script-specific font selection and shaping. `cap="small"` has no render
+projection and remains preserved as unmodelled XML. A paragraph with no visible
+text or field emits no bullet, but it retains its empty line metrics.
+
+`a:bodyPr/@spcFirstLastPara` controls only the text body's edge spacing. When
+false, including when absent, the first paragraph's `spcBef` and the last
+paragraph's `spcAft` do not contribute to the stack. Interior paragraph
+spacing remains unchanged. A true value applies both edge values normally.
 
 Top anchoring uses no translation, centre uses half the spare content height,
 and bottom uses all of it. These offsets remain negative when the complete text
@@ -368,8 +411,10 @@ them. Table cells do not use the shape autofit algorithm.
 - `a:normAutofit fontScale="62500" lnSpcReduction="20000"`: apply verbatim. This
   is both cheapest and most faithful, because it reproduces exactly what the
   authoring application decided. Font scale applies to every effective run and
-  bullet size. Line-spacing reduction removes only extra leading and never
-  reduces a line below its natural ascent plus descent.
+  bullet size. Line-spacing reduction multiplies explicit percentage spacing by
+  `1 - lnSpcReduction`. Explicit percentage spacing remains based on the largest
+  effective run point size. Omitted Single and exact point spacing are
+  unchanged.
 - Only a bare `<a:normAutofit/>` needs iteration, and then walk PowerPoint's own
   quantised 2.5 percent ladder rather than binary-searching a continuous scale,
   so the computed value matches what PowerPoint would have written. The ladder
@@ -394,8 +439,20 @@ when it is added.
 
 ```rust
 pub fn layout_presentation(input: &RenderInput) -> Result<LayoutResult>;
+pub fn layout_presentation_deterministic(input: &RenderInput) -> Result<LayoutResult>;
 pub fn layout_slide(input: &RenderInput, index: usize) -> Result<PageFrame>;
 ```
+
+Both whole-presentation entry points use the same private page-lowering path.
+The normal entry point retains system-font discovery. The deterministic entry
+point starts from `FontManager::new_deterministic()`, then adds only explicit
+font files already present in `RenderInput` before lowering every slide.
+
+The corpus driver in `crates/rpptx/examples/render_deck.rs` assembles all 50
+pinned decks into this input, renders every page at 150 dpi, and writes one TSV
+row per slide. Each row records the positive-extent source leaf count, resolved
+shape count, dropped count, diagnostics, and PNG path. A panic, missing page,
+or source-to-resolved count difference fails the driver.
 
 ## The renderer's input
 
@@ -411,6 +468,25 @@ pub struct RenderInput {
 `RenderInput` is the rendering boundary. It contains only owned,
 format-neutral `ResolvedSlide` values from `rpptx-layout`. Raw PresentationML
 parts remain on the upstream assembly side of that boundary:
+
+`ResolvedSlide::background` is an optional `ResolvedBackground`, either a
+backend-neutral `Paint` or a shared `ResolvedImage`. `ResolvedContent::Image`
+and `ResolvedShape::image_fill` use the same `ResolvedImage` structure, which
+carries media ID, source crop, stretch or tile placement, declared DPI, and
+rotation policy. A background image lowers through the existing picture path
+before every slide shape. A shape image fill lowers through that path and its
+concrete geometry clip before the shape stroke and text. It stays separate from
+`ResolvedContent`, so picture-filled text retains both layers. Paint backgrounds
+remain in `PageFrame::background`.
+
+Linear-gradient paints already contain their final local-space axis. The
+resolver applies DrawingML angle scaling and rectangle projection before this
+boundary. A `rotWithShape="0"` linear fill crosses that boundary only when the
+effective shape transform is unrotated and unflipped, where its local axis is
+identical to the shape-relative result. A rotated or flipped case remains a
+resolver diagnostic until the neutral paint contract can represent its
+independent transform. Backends consume concrete endpoints without
+reinterpreting `scaled`, the source fill bounds, or rotation policy.
 
 ```rust
 
@@ -457,9 +533,22 @@ is why `embed_id` cannot survive the port, and it deduplicates a logo that
 appears on every slide.
 
 Upstream package assembly also constructs the source-neutral `ScopedMediaIds`
-maps consumed by `ResolveCtx::resolve_slide_with_media`. Only embedded picture
-relationships enter those maps. Linked media remains diagnosed and no renderer
-performs network access.
+maps consumed by `ResolveCtx::resolve_slide_with_media` and records package
+content types by resolved media ID. Only embedded picture relationships enter
+those maps. Linked media remains diagnosed and no renderer performs network
+access. Direct background picture fills use the scope of the slide, layout, or
+master that supplied `p:bg`. Theme-referenced picture fills are rejected
+precisely until a theme media scope exists. They never fall back to a same-named
+identifier in another scope.
+
+An OLE payload remains raw for serialization. Its optional standard fallback
+`p:pic` is an upstream projection only. When that picture has an embedded PNG
+relationship in the producing part scope, it crosses the renderer boundary as
+ordinary `ResolvedContent::Image` and uses the graphic-frame bounds. The
+diagnostic states that the static preview is visible while embedded OLE
+interactivity is not rendered. Missing previews, linked or unresolved media,
+and non-PNG media retain the visible bounds fallback. In particular, a WMF
+preview is not passed to a backend that cannot decode it.
 
 The same relationship scopes project hyperlink relationships with
 `TargetMode="External"` into `ScopedHyperlinkTargets`. Internal package targets

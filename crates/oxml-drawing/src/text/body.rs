@@ -311,6 +311,7 @@ pub struct CT_TextBodyProperties {
     pub anchor: Option<TextAnchor>,
     pub wrap: Option<TextWrap>,
     pub vertical: Option<TextVertical>,
+    pub space_first_last_paragraph: Option<bool>,
     pub autofit: Option<TextAutofit>,
     raw_children: OrderedRawChildren,
 }
@@ -388,6 +389,7 @@ impl CT_TextBodyProperties {
             anchor: parse_enum(start, b"anchor", TextAnchor::parse)?,
             wrap: parse_enum(start, b"wrap", TextWrap::parse)?,
             vertical: parse_enum(start, b"vert", TextVertical::parse)?,
+            space_first_last_paragraph: parse_optional_bool(start, b"spcFirstLastPara")?,
             ..Self::default()
         })
     }
@@ -465,6 +467,9 @@ impl CT_TextBodyProperties {
         if let Some(vertical) = self.vertical {
             start.push_attribute(("vert", vertical.as_str()));
         }
+        if let Some(value) = self.space_first_last_paragraph {
+            start.push_attribute(("spcFirstLastPara", if value { "1" } else { "0" }));
+        }
 
         if self.autofit.is_none() && self.raw_children.is_empty() {
             return write_empty(writer, start);
@@ -508,6 +513,21 @@ fn parse_enum<T>(
     parse(&value)
         .map(Some)
         .ok_or_else(|| invalid_attribute("bodyPr", &String::from_utf8_lossy(attribute), value))
+}
+
+fn parse_optional_bool(start: &BytesStart<'_>, attribute: &[u8]) -> Result<Option<bool>> {
+    let Some(value) = get_attr(start, attribute) else {
+        return Ok(None);
+    };
+    match value.as_str() {
+        "1" | "true" => Ok(Some(true)),
+        "0" | "false" => Ok(Some(false)),
+        _ => Err(invalid_attribute(
+            "bodyPr",
+            &String::from_utf8_lossy(attribute),
+            value,
+        )),
+    }
 }
 
 fn is_autofit(name: &[u8]) -> bool {
@@ -667,8 +687,8 @@ mod tests {
     fn every_body_property_autofit_form_round_trips_in_schema_order() {
         let cases: &[(&[u8], &[u8])] = &[
             (
-                br#"<q:bodyPr lIns="-2147483648" tIns="2147483647" rIns="1.25in" bIns="0" anchor="dist" wrap="square" vert="wordArtVertRtl"><x:warp/><q:prstTxWarp prst="textPlain"/><x:beforeFit/><q:noAutofit/></q:bodyPr>"#,
-                br#"<a:bodyPr lIns="-2147483648" tIns="2147483647" rIns="1.25in" bIns="0" anchor="dist" wrap="square" vert="wordArtVertRtl"><x:warp/><q:prstTxWarp prst="textPlain"/><x:beforeFit/><a:noAutofit/></a:bodyPr>"#,
+                br#"<q:bodyPr lIns="-2147483648" tIns="2147483647" rIns="1.25in" bIns="0" anchor="dist" wrap="square" vert="wordArtVertRtl" spcFirstLastPara="true"><x:warp/><q:prstTxWarp prst="textPlain"/><x:beforeFit/><q:noAutofit/></q:bodyPr>"#,
+                br#"<a:bodyPr lIns="-2147483648" tIns="2147483647" rIns="1.25in" bIns="0" anchor="dist" wrap="square" vert="wordArtVertRtl" spcFirstLastPara="1"><x:warp/><q:prstTxWarp prst="textPlain"/><x:beforeFit/><a:noAutofit/></a:bodyPr>"#,
             ),
             (
                 br#"<q:bodyPr><q:spAutoFit/></q:bodyPr>"#,
@@ -689,6 +709,7 @@ mod tests {
 
         let parsed = CT_TextBodyProperties::from_xml(cases[0].0).unwrap();
         assert_eq!(parsed.left_inset, Some(Coordinate32Value::Emu(i32::MIN)));
+        assert_eq!(parsed.space_first_last_paragraph, Some(true));
         assert!(matches!(parsed.autofit, Some(TextAutofit::NoAutofit)));
     }
 
@@ -711,6 +732,7 @@ mod tests {
             br#"<q:bodyPr vert="sideways"/>"#,
             br#"<q:bodyPr lIns="2147483648"/>"#,
             br#"<q:bodyPr rIns="1.in"/>"#,
+            br#"<q:bodyPr spcFirstLastPara="yes"/>"#,
             br#"<q:bodyPr><q:normAutofit fontScale="999"/></q:bodyPr>"#,
             br#"<q:bodyPr><q:normAutofit fontScale="100001"/></q:bodyPr>"#,
             br#"<q:bodyPr><q:normAutofit fontScale=".5%"/></q:bodyPr>"#,

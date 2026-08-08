@@ -213,6 +213,9 @@ fn merge_character_properties(
     if source.italic.is_some() {
         effective.italic = source.italic;
     }
+    if source.all_caps.is_some() {
+        effective.all_caps = source.all_caps;
+    }
     if source.underline.is_some() {
         effective.underline = source.underline;
     }
@@ -330,6 +333,30 @@ mod tests {
         assert_eq!(effective.paragraph.right_margin, Some(200));
         assert_eq!(effective.run.font_size, Some(2200));
         assert_eq!(effective.run.bold, Some(true));
+    }
+
+    #[test]
+    fn all_caps_inherits_and_a_direct_none_value_overrides_it() {
+        let fixture = Fixture::new(
+            "<a:defPPr><a:defRPr cap=\"all\"/></a:defPPr>",
+            "",
+            "",
+            "",
+            &[""],
+        );
+        let inherited =
+            fixture
+                .context()
+                .effective_text_properties(fixture.slide_shape(0), None, None);
+        assert_eq!(inherited.run.all_caps, Some(true));
+
+        let direct = character("<a:rPr cap=\"none\"></a:rPr>");
+        let overridden = fixture.context().effective_text_properties(
+            fixture.slide_shape(0),
+            None,
+            Some(&direct),
+        );
+        assert_eq!(overridden.run.all_caps, Some(false));
     }
 
     #[test]

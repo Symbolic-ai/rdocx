@@ -149,20 +149,71 @@ present after review.
 
 ## The render fidelity gate
 
-Roughly 50 decks rendered to PNG at 150 dpi and compared with
-`libreoffice --convert-to png` using a perceptual diff.
+The 50-deck pinned corpus is rendered through bundled fonts at 150 dpi.
+LibreOffice 26.2.5.2 with build
+`cd7284b4cbbfeb507e630c1aac019f4157393acb` exports PDF through the
+`impress_pdf_Export` filter with `ExportHiddenSlides=true`, then pdftoppm
+26.01.0 rasterises every page at the same 150 dpi. The hidden-slide option is
+part of the asserted command because a default PDF export omits five corpus
+slides.
 
-**Target: at least 0.95 SSIM on at least 80 percent of slides, and 100 percent
-of slides rendering without a panic or a dropped shape.**
+The harness decodes both PNGs through the existing strict decoder and computes
+global luminance SSIM after compositing RGBA over white. It uses population
+variance and covariance with the standard 8-bit constants `K1=0.01`,
+`K2=0.03`, and `L=255`. Dimensions must match exactly. Per-slide scores and
+paths are written to TSV, while the summary reports coverage, minimum, median,
+and maximum.
 
-The second half of that is the hard gate. The first is a trend line.
+**Trend reference: at least 0.95 SSIM on at least 80 percent of slides. Hard
+automatic gate: every slide renders without panic, missing output, dimension
+mismatch, or a dropped bounded shape. Hard manual gate: the pinned native
+PowerPoint representative review is recorded and accepted.**
+
+The trend line is not a PowerPoint-conformance threshold. A calibration over
+all 34 slides of the ecodesign representative uses Microsoft PowerPoint 16.104
+and the same pdftoppm 26.01.0 raster path. Native PowerPoint against the pinned
+LibreOffice oracle produces zero slides at or above 0.95 SSIM, with median
+0.650406194 and maximum 0.940934972. Slide 25 reproduces the recorded native PNG
+hash, which confirms that the calibration uses the accepted native pipeline.
+An implementation can therefore agree more closely with PowerPoint and still
+move away from the LibreOffice trend line.
 
 LibreOffice is the oracle only because PowerPoint is not scriptable on CI
 runners, and LibreOffice has its own rendering bugs. **SSIM regressions are
 therefore review-required, not automatic failures.** Spot-check against real
-PowerPoint output once per milestone.
+PowerPoint output once per milestone. The CI comparison records whether the
+trend reference was met but does not fail solely because it was missed. Exact
+oracle versions, full corpus coverage, valid dimensions, successful rendering,
+and zero dropped bounded shapes remain enforced.
+
+CI retains `gate-evidence.json`, `render-manifest.tsv`, and
+`ssim-results.tsv` as the Presentation fidelity evidence artifact. The image
+trees stay job-local because the TSV identifies every deck, slide, score, and
+paired path without uploading hundreds of redundant raster files.
 
 Stand this harness up in M10 alongside the first text rendering, not afterwards.
+
+The M10 native spot-check uses Microsoft PowerPoint 16.104, Info.plist build
+16.104.25121423 and AppleScript build 1214. PowerPoint PDF exports are
+rasterised by pdftoppm 26.01.0 at 150 dpi. The low representative is
+`sample_pptx_grouping_issues.pptx` slide 1 at LibreOffice SSIM -0.177170506.
+PowerPoint confirms the white background and complete grouped geometry, while
+the Rust render has a wrong red background and missing or misplaced groups.
+The median representative is
+`at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx` slide 25 at
+SSIM 0.172346895. PowerPoint confirms a full chart and product image which are
+absent from the Rust render. The high representative is `crop-to-0.pptx` slide
+2 at SSIM 1.0, an intentionally blank white slide matching at a glance.
+LibreOffice follows PowerPoint for the substantive low and median content.
+
+The temporary native PDF SHA-256 values are
+`bd1511f546c970cddb9602f6b5421a3490e3ff22e5da74ca183e2e57b73a8f24`,
+`99503f6dce0773c64da5b52e917d0d3f1f21aaddb0214532dda4c5131fdaa320`,
+and `d5ce8e607f805914768d314ed6bb0f7f8fb762f9f62d680666e119f5c1afdf65`
+for low, median, and high. Their 150 dpi PNG SHA-256 values are
+`6ee02b21b8ee7ec1dd741ffd3a4b0bc2fe7a0d917c5b3c1d6c1b2aa69d7a088b`,
+`85610d4b6778432355ab498f2a5da3bce6831cf502703d08caae70988307a49c`,
+and `100875bd72e1c1ebe08263aac08bfb28dfd974a7f0f270ea98e0bbf9b9c7cbd2`.
 
 Table rendering has an additional deterministic gate. A banded table with a
 two-dimensional merge must produce the expected sampled fills, visible text,

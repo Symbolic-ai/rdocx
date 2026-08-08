@@ -593,13 +593,26 @@ impl CT_CustomGeometry2D {
         &self,
         overrides: &BTreeMap<String, f64>,
     ) -> Result<EvaluatedCustomGeometry, GeometryError> {
-        self.evaluate_with_default_dimensions(overrides, None)
+        self.evaluate_with_default_dimensions(overrides, None, None)
+    }
+
+    /// Evaluates paths with the containing shape size on omitted coordinate axes.
+    pub fn evaluate_with_size(
+        &self,
+        overrides: &BTreeMap<String, f64>,
+        size: (f64, f64),
+    ) -> Result<EvaluatedCustomGeometry, GeometryError> {
+        let text_dimensions = self.paths().first().map_or(size, |path| {
+            (path.width.unwrap_or(size.0), path.height.unwrap_or(size.1))
+        });
+        self.evaluate_with_default_dimensions(overrides, Some(size), Some(text_dimensions))
     }
 
     fn evaluate_with_default_dimensions(
         &self,
         overrides: &BTreeMap<String, f64>,
         default_dimensions: Option<(f64, f64)>,
+        text_dimensions: Option<(f64, f64)>,
     ) -> Result<EvaluatedCustomGeometry, GeometryError> {
         let mut paths = Vec::with_capacity(self.path_list.paths.len());
         let mut text_rectangle = None;
@@ -629,7 +642,7 @@ impl CT_CustomGeometry2D {
                     .transpose()?;
             }
         }
-        if let Some((width, height)) = default_dimensions {
+        if let Some((width, height)) = text_dimensions {
             let mut evaluator = GuideEvaluator::new(width, height)?;
             evaluator.apply_adjust_values(self.adjust_values(), overrides)?;
             evaluator.evaluate_guides(self.guides())?;
@@ -784,10 +797,11 @@ impl CT_PresetGeometry2D {
             .iter()
             .map(|guide| Ok((guide.name.clone(), override_evaluator.value(&guide.name)?)))
             .collect::<Result<BTreeMap<_, _>, GeometryError>>()?;
-        let mut evaluated = definition.evaluate_with_default_dimensions(&overrides, Some(size))?;
+        let mut evaluated =
+            definition.evaluate_with_default_dimensions(&overrides, Some(size), Some(size))?;
         for (commands, path) in evaluated.paths.iter_mut().zip(definition.paths()) {
-            let scale_x = size.0 / path.width.unwrap_or(size.0);
-            let scale_y = size.1 / path.height.unwrap_or(size.1);
+            let scale_x = path.width.map_or(1.0, |width| size.0 / width);
+            let scale_y = path.height.map_or(1.0, |height| size.1 / height);
             for command in commands {
                 scale_evaluated_path_command(command, scale_x, scale_y);
             }
@@ -1581,9 +1595,15 @@ impl GuideEvaluator {
     }
 
     pub fn evaluate_guides(&mut self, guides: &[Guide]) -> Result<(), GeometryError> {
+        let mut evaluated = BTreeSet::new();
         for guide in guides {
             let value = self.evaluate_operation(guide.op, &guide.args)?;
-            self.insert_named(&guide.name, value)?;
+            if evaluated.insert(guide.name.clone()) {
+                self.insert_named(&guide.name, value)?;
+            } else {
+                ensure_finite(value, &guide.name)?;
+                self.values.insert(guide.name.clone(), value);
+            }
         }
         Ok(())
     }
@@ -1902,6 +1922,40 @@ mod tests {
                 EvaluatedPathCommand::MoveTo { x: 20.0, y: 25.0 },
                 EvaluatedPathCommand::LineTo { x: 80.0, y: 75.0 },
             ]
+        );
+    }
+
+    #[test]
+    fn ordinary_guides_replace_in_order_without_relaxing_adjustment_validation() {
+        let mut evaluator = GuideEvaluator::new(100.0, 100.0).unwrap();
+        evaluator
+            .evaluate_guides(&[
+                Guide::parse("connsiteX0", "val 10").unwrap(),
+                Guide::parse("connsiteX0", "val 20").unwrap(),
+            ])
+            .unwrap();
+        assert_eq!(evaluator.value("connsiteX0").unwrap(), 20.0);
+
+        let duplicate_adjustments = [
+            Guide::parse("adj", "val 10").unwrap(),
+            Guide::parse("adj", "val 20").unwrap(),
+        ];
+        let error = GuideEvaluator::new(100.0, 100.0)
+            .unwrap()
+            .apply_adjust_values(&duplicate_adjustments, &BTreeMap::new())
+            .unwrap_err();
+        assert_eq!(error, GeometryError::DuplicateGuide("adj".to_owned()));
+
+        let error = GuideEvaluator::new(100.0, 100.0)
+            .unwrap()
+            .apply_adjust_values(
+                &[Guide::parse("adj", "val 10").unwrap()],
+                &BTreeMap::from([("unknown".to_owned(), 20.0)]),
+            )
+            .unwrap_err();
+        assert_eq!(
+            error,
+            GeometryError::UnknownAdjustOverride("unknown".to_owned())
         );
     }
 

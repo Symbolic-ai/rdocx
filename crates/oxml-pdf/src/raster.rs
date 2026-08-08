@@ -1,12 +1,16 @@
 //! Page-to-image rendering using tiny-skia software rasterizer.
 
 use oxml_layout::{
-    LayoutResult, LineCap, LineJoin, PageFrame, Paint as LayoutPaint, Path as LayoutPath,
+    Effect, LayoutResult, LineCap, LineJoin, PageFrame, Paint as LayoutPaint, Path as LayoutPath,
     PathCommand, PositionedElement, Stroke as LayoutStroke,
 };
 use tiny_skia::{
     FillRule, Mask, Paint, PathBuilder, Pixmap, PixmapPaint, Stroke, StrokeDash, Transform,
 };
+use zune_jpeg::JpegDecoder;
+use zune_jpeg::zune_core::bytestream::ZCursor;
+use zune_jpeg::zune_core::colorspace::ColorSpace;
+use zune_jpeg::zune_core::options::DecoderOptions;
 
 /// Render a single page to PNG bytes.
 ///
@@ -174,7 +178,7 @@ fn render_elements(
                 if opacity == 0.0 {
                     continue;
                 }
-                if opacity == 1.0 {
+                if opacity == 1.0 && group.effects.is_empty() {
                     render_elements(
                         pixmap,
                         fonts,
@@ -190,20 +194,184 @@ fn render_elements(
                         child_transform,
                         child_mask_ref,
                     );
-                    pixmap.draw_pixmap(
-                        0,
-                        0,
-                        layer.as_ref(),
-                        &PixmapPaint {
-                            opacity,
-                            ..PixmapPaint::default()
-                        },
-                        Transform::identity(),
-                        None,
-                    );
+                    if group.effects.is_empty() {
+                        pixmap.draw_pixmap(
+                            0,
+                            0,
+                            layer.as_ref(),
+                            &PixmapPaint {
+                                opacity,
+                                ..PixmapPaint::default()
+                            },
+                            Transform::identity(),
+                            None,
+                        );
+                    } else if let Some(mut composited) =
+                        Pixmap::new(pixmap.width(), pixmap.height())
+                    {
+                        render_group_effects(
+                            &mut composited,
+                            &layer,
+                            &group.effects,
+                            child_transform,
+                            mask,
+                        );
+                        composited.draw_pixmap(
+                            0,
+                            0,
+                            layer.as_ref(),
+                            &PixmapPaint::default(),
+                            Transform::identity(),
+                            None,
+                        );
+                        pixmap.draw_pixmap(
+                            0,
+                            0,
+                            composited.as_ref(),
+                            &PixmapPaint {
+                                opacity,
+                                ..PixmapPaint::default()
+                            },
+                            Transform::identity(),
+                            None,
+                        );
+                    }
                 }
             }
             _ => {}
+        }
+    }
+}
+
+fn render_group_effects(
+    pixmap: &mut Pixmap,
+    layer: &Pixmap,
+    effects: &[Effect],
+    transform: Transform,
+    mask: Option<&Mask>,
+) {
+    for effect in effects {
+        if let Effect::OuterShadow {
+            dx,
+            dy,
+            blur,
+            color,
+        } = effect
+        {
+            let Some((left, top, right, bottom)) = alpha_bounds(layer) else {
+                continue;
+            };
+            let (scale_x, scale_y) = transform.get_scale();
+            let scale = ((scale_x + scale_y) * 0.5).max(0.0);
+            let blur_radius = ((*blur as f32 * scale).max(0.0).ceil() as usize)
+                .min(layer.width().max(layer.height()) as usize);
+            let source_width = right - left + 1;
+            let source_height = bottom - top + 1;
+            let width = source_width.saturating_add(blur_radius.saturating_mul(2));
+            let height = source_height.saturating_add(blur_radius.saturating_mul(2));
+            let Some(pixel_count) = width.checked_mul(height) else {
+                continue;
+            };
+            let mut alpha = vec![0_u8; pixel_count];
+            for y in 0..source_height {
+                let source_start = ((top + y) * layer.width() as usize + left) * 4;
+                let source = &layer.data()[source_start..source_start + source_width * 4];
+                let target_start = (y + blur_radius) * width + blur_radius;
+                for (target, pixel) in alpha[target_start..target_start + source_width]
+                    .iter_mut()
+                    .zip(source.chunks_exact(4))
+                {
+                    *target = pixel[3];
+                }
+            }
+            box_blur_alpha(&mut alpha, width, height, blur_radius);
+
+            let (Ok(shadow_width), Ok(shadow_height)) =
+                (u32::try_from(width), u32::try_from(height))
+            else {
+                continue;
+            };
+            let Some(mut shadow) = Pixmap::new(shadow_width, shadow_height) else {
+                continue;
+            };
+            let color_alpha = color.a.clamp(0.0, 1.0);
+            for (pixel, source_alpha) in shadow.data_mut().chunks_exact_mut(4).zip(alpha) {
+                let alpha = (f64::from(source_alpha) * color_alpha).round() as u8;
+                pixel[0] = (color.r.clamp(0.0, 1.0) * f64::from(alpha)).round() as u8;
+                pixel[1] = (color.g.clamp(0.0, 1.0) * f64::from(alpha)).round() as u8;
+                pixel[2] = (color.b.clamp(0.0, 1.0) * f64::from(alpha)).round() as u8;
+                pixel[3] = alpha;
+            }
+
+            let mut origin = tiny_skia::Point::from_xy(0.0, 0.0);
+            let mut offset = tiny_skia::Point::from_xy(*dx as f32, *dy as f32);
+            transform.map_point(&mut origin);
+            transform.map_point(&mut offset);
+            pixmap.draw_pixmap(
+                left as i32 - blur_radius as i32 + (offset.x - origin.x).round() as i32,
+                top as i32 - blur_radius as i32 + (offset.y - origin.y).round() as i32,
+                shadow.as_ref(),
+                &PixmapPaint::default(),
+                Transform::identity(),
+                mask,
+            );
+        }
+    }
+}
+
+fn alpha_bounds(layer: &Pixmap) -> Option<(usize, usize, usize, usize)> {
+    let width = layer.width() as usize;
+    let mut left = width;
+    let mut top = layer.height() as usize;
+    let mut right = 0;
+    let mut bottom = 0;
+    let mut found = false;
+    for (index, pixel) in layer.data().chunks_exact(4).enumerate() {
+        if pixel[3] == 0 {
+            continue;
+        }
+        let x = index % width;
+        let y = index / width;
+        left = left.min(x);
+        top = top.min(y);
+        right = right.max(x);
+        bottom = bottom.max(y);
+        found = true;
+    }
+    found.then_some((left, top, right, bottom))
+}
+
+fn box_blur_alpha(alpha: &mut [u8], width: usize, height: usize, radius: usize) {
+    if radius == 0 || width == 0 || height == 0 {
+        return;
+    }
+    let mut horizontal = vec![0_u8; alpha.len()];
+    let mut prefix = vec![0_u64; width.max(height) + 1];
+    let diameter = radius.saturating_mul(2).saturating_add(1) as u64;
+
+    for y in 0..height {
+        let row = &alpha[y * width..(y + 1) * width];
+        let target = &mut horizontal[y * width..(y + 1) * width];
+        prefix[0] = 0;
+        for (index, value) in row.iter().enumerate() {
+            prefix[index + 1] = prefix[index] + u64::from(*value);
+        }
+        for (x, target) in target.iter_mut().enumerate() {
+            let left = x.saturating_sub(radius);
+            let right = (x + radius + 1).min(width);
+            *target = ((prefix[right] - prefix[left]) / diameter) as u8;
+        }
+    }
+
+    for x in 0..width {
+        prefix[0] = 0;
+        for y in 0..height {
+            prefix[y + 1] = prefix[y] + u64::from(horizontal[y * width + x]);
+        }
+        for y in 0..height {
+            let top = y.saturating_sub(radius);
+            let bottom = (y + radius + 1).min(height);
+            alpha[y * width + x] = ((prefix[bottom] - prefix[top]) / diameter) as u8;
         }
     }
 }
@@ -598,18 +766,20 @@ fn render_image(
     pixmap: &mut Pixmap,
     rect: &oxml_layout::Rect,
     data: &[u8],
-    _content_type: &str,
+    content_type: &str,
     transform: Transform,
     mask: Option<&Mask>,
 ) {
     // Decode the image
-    let decoded = crate::image::decode_image(data, _content_type);
+    let decoded = crate::image::decode_image(data, content_type);
     let Some(decoded) = decoded else {
         return;
     };
 
     // Create a pixmap from the decoded image data
-    let img_pixmap = if decoded.is_jpeg || decoded.color_space == "DeviceRGB" {
+    let img_pixmap = if decoded.is_jpeg {
+        decode_jpeg_pixmap(data, decoded.width, decoded.height)
+    } else if decoded.color_space == "DeviceRGB" {
         // Convert RGB to RGBA
         let mut rgba = Vec::with_capacity(decoded.width as usize * decoded.height as usize * 4);
         if let Some(alpha) = &decoded.alpha {
@@ -674,12 +844,24 @@ fn render_image(
     }
 }
 
+fn decode_jpeg_pixmap(data: &[u8], width: u32, height: u32) -> Option<Pixmap> {
+    let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
+    let mut decoder = JpegDecoder::new_with_options(ZCursor::new(data), options);
+    let rgba = decoder.decode().ok()?;
+    let (decoded_width, decoded_height) = decoder.dimensions()?;
+    if decoded_width != width as usize || decoded_height != height as usize {
+        return None;
+    }
+    let size = tiny_skia::IntSize::from_wh(width, height)?;
+    Pixmap::from_vec(rgba, size)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::render_page_to_pixmap;
+    use super::{decode_jpeg_pixmap, render_page_to_pixmap};
     use oxml_layout::{
-        Color, FillRule, GradientStop, GroupElement, PageFrame, Paint, Path, PathCommand,
-        PathElement, Point, PositionedElement, Rect, Stroke, Transform,
+        Color, Effect, FillRule, GradientStop, GroupElement, MediaId, PageFrame, Paint, Path,
+        PathCommand, PathElement, Point, PositionedElement, Rect, Stroke, Transform,
     };
 
     fn rgb(pixel: tiny_skia::PremultipliedColorU8) -> (u8, u8, u8) {
@@ -723,6 +905,82 @@ mod tests {
         let pixmap = render_page_to_pixmap(&page, &[], 72.0).expect("one-pixel page");
         let pixel = pixmap.pixel(0, 0).expect("one-pixel page has one pixel");
         assert_eq!((pixel.red(), pixel.green(), pixel.blue()), (128, 128, 128));
+    }
+
+    #[test]
+    fn jpeg_is_decoded_before_raster_composition() {
+        let jpeg = vec![
+            0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x01,
+            0x00, 0x60, 0x00, 0x60, 0x00, 0x00, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x08, 0x06, 0x06,
+            0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07, 0x09, 0x09, 0x08, 0x0a, 0x0c, 0x14, 0x0d,
+            0x0c, 0x0b, 0x0b, 0x0c, 0x19, 0x12, 0x13, 0x0f, 0x14, 0x1d, 0x1a, 0x1f, 0x1e, 0x1d,
+            0x1a, 0x1c, 0x1c, 0x20, 0x24, 0x2e, 0x27, 0x20, 0x22, 0x2c, 0x23, 0x1c, 0x1c, 0x28,
+            0x37, 0x29, 0x2c, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1f, 0x27, 0x39, 0x3d, 0x38, 0x32,
+            0x3c, 0x2e, 0x33, 0x34, 0x32, 0xff, 0xdb, 0x00, 0x43, 0x01, 0x09, 0x09, 0x09, 0x0c,
+            0x0b, 0x0c, 0x18, 0x0d, 0x0d, 0x18, 0x32, 0x21, 0x1c, 0x21, 0x32, 0x32, 0x32, 0x32,
+            0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32,
+            0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32,
+            0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32,
+            0x32, 0x32, 0x32, 0x32, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x19, 0x00, 0x06, 0x03,
+            0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01, 0xff, 0xc4, 0x00, 0x1f, 0x00,
+            0x00, 0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
+            0xff, 0xc4, 0x00, 0xb5, 0x10, 0x00, 0x02, 0x01, 0x03, 0x03, 0x02, 0x04, 0x03, 0x05,
+            0x05, 0x04, 0x04, 0x00, 0x00, 0x01, 0x7d, 0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05,
+            0x12, 0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07, 0x22, 0x71, 0x14, 0x32, 0x81,
+            0x91, 0xa1, 0x08, 0x23, 0x42, 0xb1, 0xc1, 0x15, 0x52, 0xd1, 0xf0, 0x24, 0x33, 0x62,
+            0x72, 0x82, 0x09, 0x0a, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x25, 0x26, 0x27, 0x28, 0x29,
+            0x2a, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48,
+            0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x63, 0x64, 0x65, 0x66,
+            0x67, 0x68, 0x69, 0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x83, 0x84,
+            0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99,
+            0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5,
+            0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca,
+            0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5,
+            0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9,
+            0xfa, 0xff, 0xc4, 0x00, 0x1f, 0x01, 0x00, 0x03, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+            0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
+            0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0xff, 0xc4, 0x00, 0xb5, 0x11, 0x00, 0x02, 0x01,
+            0x02, 0x04, 0x04, 0x03, 0x04, 0x07, 0x05, 0x04, 0x04, 0x00, 0x01, 0x02, 0x77, 0x00,
+            0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21, 0x31, 0x06, 0x12, 0x41, 0x51, 0x07, 0x61,
+            0x71, 0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91, 0xa1, 0xb1, 0xc1, 0x09, 0x23,
+            0x33, 0x52, 0xf0, 0x15, 0x62, 0x72, 0xd1, 0x0a, 0x16, 0x24, 0x34, 0xe1, 0x25, 0xf1,
+            0x17, 0x18, 0x19, 0x1a, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x35, 0x36, 0x37, 0x38, 0x39,
+            0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57,
+            0x58, 0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74, 0x75,
+            0x76, 0x77, 0x78, 0x79, 0x7a, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a,
+            0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6,
+            0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2,
+            0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7,
+            0xd8, 0xd9, 0xda, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf2, 0xf3,
+            0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xff, 0xda, 0x00, 0x0c, 0x03, 0x01, 0x00,
+            0x02, 0x11, 0x03, 0x11, 0x00, 0x3f, 0x00, 0xaf, 0xf0, 0x53, 0xfe, 0x44, 0xdb, 0xcf,
+            0xfb, 0x08, 0x3f, 0xfe, 0x8b, 0x8e, 0x8a, 0x3e, 0x0a, 0x7f, 0xc8, 0x9b, 0x79, 0xff,
+            0x00, 0x61, 0x07, 0xff, 0x00, 0xd1, 0x71, 0xd1, 0x40, 0x07, 0xc1, 0x4f, 0xf9, 0x13,
+            0x6f, 0x3f, 0xec, 0x20, 0xff, 0x00, 0xfa, 0x2e, 0x3a, 0x28, 0xf8, 0x29, 0xff, 0x00,
+            0x22, 0x6d, 0xe7, 0xfd, 0x84, 0x1f, 0xff, 0x00, 0x45, 0xc7, 0x45, 0x00, 0x7f, 0xff,
+            0xd9,
+        ];
+        let image = PositionedElement::Image {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 6.0,
+                height: 25.0,
+            },
+            data: jpeg.clone(),
+            content_type: "image/jpeg".to_owned(),
+            media_id: MediaId(1),
+        };
+        let decoded =
+            decode_jpeg_pixmap(&jpeg, 6, 25).expect("valid JPEG fixture must decode to a pixmap");
+        assert_eq!(rgb(decoded.pixel(0, 0).unwrap()), (1, 1, 1));
+        assert_eq!(rgb(decoded.pixel(5, 0).unwrap()), (192, 192, 192));
+        let pixmap = render_page_to_pixmap(&PageFrame::new(1, 6.0, 25.0, vec![image]), &[], 72.0)
+            .expect("JPEG page must rasterise");
+
+        assert_eq!(rgb(pixmap.pixel(0, 0).unwrap()), (1, 1, 1));
+        assert_eq!(rgb(pixmap.pixel(5, 0).unwrap()), (192, 192, 192));
     }
 
     #[test]
@@ -881,6 +1139,72 @@ mod tests {
 
         assert_eq!(rgb(pixmap.pixel(4, 4).unwrap()), (128, 128, 128));
         assert_eq!(rgb(pixmap.pixel(10, 4).unwrap()), (128, 128, 128));
+    }
+
+    #[test]
+    fn outer_shadow_is_coloured_offset_and_behind_group_content() {
+        let element = PositionedElement::Group(GroupElement {
+            transform: Transform::IDENTITY,
+            clip: None,
+            opacity: 1.0,
+            effects: vec![Effect::OuterShadow {
+                dx: 4.0,
+                dy: 0.0,
+                blur: 0.0,
+                color: Color {
+                    r: 1.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+            }],
+            children: vec![solid_path(
+                Path::rect(Rect {
+                    x: 4.0,
+                    y: 4.0,
+                    width: 8.0,
+                    height: 8.0,
+                }),
+                Color::BLACK,
+            )],
+        });
+        let pixmap = render_page_to_pixmap(&page(vec![element]), &[], 72.0).unwrap();
+
+        assert_eq!(rgb(pixmap.pixel(6, 6).unwrap()), (0, 0, 0));
+        assert_eq!(rgb(pixmap.pixel(14, 6).unwrap()), (255, 0, 0));
+        assert_eq!(rgb(pixmap.pixel(2, 6).unwrap()), (255, 255, 255));
+    }
+
+    #[test]
+    fn outer_shadow_blur_extends_alpha_and_obeys_group_opacity() {
+        let element = PositionedElement::Group(GroupElement {
+            transform: Transform::IDENTITY,
+            clip: None,
+            opacity: 0.5,
+            effects: vec![Effect::OuterShadow {
+                dx: 0.0,
+                dy: 0.0,
+                blur: 2.0,
+                color: Color::BLACK,
+            }],
+            children: vec![solid_path(
+                Path::rect(Rect {
+                    x: 12.0,
+                    y: 12.0,
+                    width: 4.0,
+                    height: 4.0,
+                }),
+                Color::BLACK,
+            )],
+        });
+        let pixmap = render_page_to_pixmap(&page(vec![element]), &[], 72.0).unwrap();
+
+        assert_eq!(rgb(pixmap.pixel(13, 13).unwrap()), (128, 128, 128));
+        let blurred = rgb(pixmap.pixel(10, 13).unwrap());
+        assert!(blurred.0 < 255 && blurred.0 > 128, "{blurred:?}");
+        assert_eq!(blurred.0, blurred.1);
+        assert_eq!(blurred.1, blurred.2);
+        assert_eq!(rgb(pixmap.pixel(8, 13).unwrap()), (255, 255, 255));
     }
 
     #[test]

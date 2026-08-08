@@ -132,8 +132,10 @@ slides, bullets, tables, images, theme colours and a gradient title bar, a
 150 dpi PNG should be indistinguishable from PowerPoint's own export at a
 glance: text baselines within about one point, shape edges exact, colours exact.
 
-Gated in CI against roughly 50 real decks compared with LibreOffice's render,
-targeting at least 0.95 SSIM on at least 80 percent of slides, and 100 percent
-of slides rendering without a panic or a dropped shape. LibreOffice is the CI
-oracle only because PowerPoint is not scriptable on runners, so SSIM regressions
-are review-required rather than automatic failures.
+CI compares the pinned 50-deck corpus with LibreOffice's render and records at
+least 0.95 SSIM on at least 80 percent of slides as a trend reference. The hard
+automatic gate requires every slide to render without panic, missing output,
+dimension mismatch, or a dropped bounded shape. LibreOffice is the CI oracle
+only because PowerPoint is not scriptable on runners, so SSIM regressions are
+review-required rather than automatic failures. A pinned native PowerPoint
+representative review is the hard manual fidelity gate.

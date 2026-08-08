@@ -585,6 +585,7 @@ pub struct CT_TextCharacterProperties {
     pub font_size: Option<i32>,
     pub bold: Option<bool>,
     pub italic: Option<bool>,
+    pub all_caps: Option<bool>,
     pub underline: Option<TextUnderline>,
     pub strike: Option<TextStrike>,
     pub spacing: Option<TextPointValue>,
@@ -625,18 +626,28 @@ impl CT_TextCharacterProperties {
         if let Some(value) = baseline.as_deref() {
             validate_baseline(value)?;
         }
+        let all_caps = match text_attr(start, b"cap")?.as_deref() {
+            Some("all") => Some(true),
+            Some("none") => Some(false),
+            _ => None,
+        };
+        let mut raw_attributes = capture_raw_attributes(
+            start,
+            &[b"sz", b"b", b"i", b"u", b"strike", b"spc", b"baseline"],
+        )?;
+        if all_caps.is_some() {
+            raw_attributes.retain(|(name, _)| name != "cap");
+        }
         Ok(Self {
             font_size,
             bold: parse_optional_bool(start, b"b")?,
             italic: parse_optional_bool(start, b"i")?,
+            all_caps,
             underline: parse_optional_enum(start, b"u", TextUnderline::parse)?,
             strike: parse_optional_enum(start, b"strike", TextStrike::parse)?,
             spacing,
             baseline,
-            raw_attributes: capture_raw_attributes(
-                start,
-                &[b"sz", b"b", b"i", b"u", b"strike", b"spc", b"baseline"],
-            )?,
+            raw_attributes,
             ..Self::default()
         })
     }
@@ -718,6 +729,9 @@ impl CT_TextCharacterProperties {
         }
         push_optional_bool(&mut start, "b", self.bold);
         push_optional_bool(&mut start, "i", self.italic);
+        if let Some(value) = self.all_caps {
+            start.push_attribute(("cap", if value { "all" } else { "none" }));
+        }
         if let Some(value) = self.underline {
             start.push_attribute(("u", value.as_str()));
         }
@@ -1933,6 +1947,32 @@ mod tests {
             writer.into_inner(),
             br#"<a:rPr><a:hlinkClick x:id="not-a-relationship"/></a:rPr>"#
         );
+    }
+
+    #[test]
+    fn character_all_caps_round_trips_while_small_caps_stays_unmodelled() {
+        let all = CT_TextCharacterProperties::from_xml(
+            br#"<q:rPr cap="all" sz="1800" x:producer="kept"/>"#,
+        )
+        .unwrap();
+        assert_eq!(all.all_caps, Some(true));
+        let mut writer = quick_xml::Writer::new(Vec::new());
+        all.write_xml(&mut writer, "a:rPr").unwrap();
+        let written = writer.into_inner();
+        assert_eq!(
+            written,
+            br#"<a:rPr sz="1800" cap="all" x:producer="kept"/>"#
+        );
+        assert_eq!(CT_TextCharacterProperties::from_xml(&written).unwrap(), all);
+
+        let none = CT_TextCharacterProperties::from_xml(br#"<q:rPr cap="none"/>"#).unwrap();
+        assert_eq!(none.all_caps, Some(false));
+
+        let small = CT_TextCharacterProperties::from_xml(br#"<q:rPr cap="small"/>"#).unwrap();
+        assert_eq!(small.all_caps, None);
+        let mut writer = quick_xml::Writer::new(Vec::new());
+        small.write_xml(&mut writer, "a:rPr").unwrap();
+        assert_eq!(writer.into_inner(), br#"<a:rPr cap="small"/>"#);
     }
 
     #[test]

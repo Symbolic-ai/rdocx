@@ -171,11 +171,17 @@ fn shape_run(
     text: &str,
     style: &ResolvedRunStyle,
 ) -> Result<TextSegment, LayoutError> {
+    let rendered_text = if style.all_caps {
+        text.to_uppercase()
+    } else {
+        text.to_owned()
+    };
     let font_size = style.font_size.unwrap_or(DEFAULT_FONT_SIZE);
-    let typeface = typeface_for_text(style, text);
-    let font_id = font_manager.resolve_font_for_text(typeface, style.bold, style.italic, text)?;
+    let typeface = typeface_for_text(style, &rendered_text);
+    let font_id =
+        font_manager.resolve_font_for_text(typeface, style.bold, style.italic, &rendered_text)?;
     let metrics = font_manager.metrics(font_id, font_size)?;
-    let mut shaped = font_manager.shape_text(font_id, text, font_size)?;
+    let mut shaped = font_manager.shape_text(font_id, &rendered_text, font_size)?;
     if let Some(spacing) = style.spacing {
         for advance in &mut shaped.advances {
             *advance += spacing;
@@ -184,7 +190,7 @@ fn shape_run(
     }
 
     Ok(TextSegment {
-        text: text.to_owned(),
+        text: rendered_text,
         font_id,
         font_size,
         glyph_ids: shaped.glyph_ids,
@@ -192,6 +198,7 @@ fn shape_run(
         width: shaped.width,
         ascent: metrics.ascent,
         descent: metrics.descent,
+        line_gap: metrics.line_gap,
         color: text_color(style.fill.as_ref()),
         bold: style.bold,
         italic: style.italic,
@@ -251,6 +258,7 @@ static DEFAULT_RUN_STYLE: ResolvedRunStyle = ResolvedRunStyle {
     font_size: None,
     bold: false,
     italic: false,
+    all_caps: false,
     underline: false,
     strike: false,
     spacing: None,
@@ -454,7 +462,17 @@ fn shape_paragraphs(
             let marker = numbering.marker(font_manager, &mut shaping_cache, paragraph)?;
             let mut items =
                 inline_items_cached(font_manager, &mut shaping_cache, paragraph, page_number)?;
-            if let Some(marker) = marker {
+            let has_visible_text = items
+                .iter()
+                .any(|item| matches!(item, InlineItem::Text(segment) if !segment.text.is_empty()));
+            if items.is_empty() {
+                items.push(InlineItem::Text(shaping_cache.shape(
+                    font_manager,
+                    "",
+                    &paragraph.end_style,
+                )?));
+            }
+            if let Some(marker) = marker.filter(|_| has_visible_text) {
                 items.insert(0, InlineItem::Marker(marker));
             }
             Ok(items)
@@ -476,19 +494,24 @@ fn stack_shaped_text(
     let mut width = 0.0_f64;
     let mut width_fits = true;
 
-    for (paragraph, shaped_items) in text.paragraphs.iter().zip(shaped_paragraphs) {
+    let last_paragraph = text.paragraphs.len().saturating_sub(1);
+    for (index, (paragraph, shaped_items)) in
+        text.paragraphs.iter().zip(shaped_paragraphs).enumerate()
+    {
         let font_size = first_run_font_size(paragraph) * font_scale;
-        y += paragraph_spacing(paragraph.space_before.as_ref(), font_size);
+        if index > 0 || text.space_first_last_paragraph {
+            y += paragraph_spacing(paragraph.space_before.as_ref(), font_size);
+        }
         let items = scaled_inline_items(shaped_items, font_scale, paragraph.indent);
-        let params = line_break_params(paragraph, content.width, text.wrap, font_size);
+        let params = line_break_params(paragraph, content.width, text.wrap);
         let mut lines = break_into_lines(&items, &params, font_manager)?;
         if let Some(reduction) = line_spacing_reduction {
-            reduce_extra_leading(&mut lines, reduction);
+            reduce_line_spacing(&mut lines, paragraph.line_spacing.as_ref(), reduction);
         }
 
         for line in &lines {
             width_fits &= line.width <= line.available_width + 0.01;
-            let baseline = y + line.ascent;
+            let baseline = y + line.baseline_offset();
             let element_start = elements.len();
             let occupied_width = emit_line_items(
                 line,
@@ -502,7 +525,9 @@ fn stack_shaped_text(
             y += line.height;
         }
 
-        y += paragraph_spacing(paragraph.space_after.as_ref(), font_size);
+        if index < last_paragraph || text.space_first_last_paragraph {
+            y += paragraph_spacing(paragraph.space_after.as_ref(), font_size);
+        }
     }
 
     let height = y - content.y;
@@ -547,17 +572,24 @@ fn scale_segment(segment: &mut TextSegment, scale: f64) {
     segment.width *= scale;
     segment.ascent *= scale;
     segment.descent *= scale;
+    segment.line_gap *= scale;
     segment.baseline_offset *= scale;
     for advance in &mut segment.advances {
         *advance *= scale;
     }
 }
 
-fn reduce_extra_leading(lines: &mut [LayoutLine], reduction: f64) {
+fn reduce_line_spacing(
+    lines: &mut [LayoutLine],
+    spacing: Option<&ResolvedTextSpacing>,
+    reduction: f64,
+) {
+    if !matches!(spacing, Some(ResolvedTextSpacing::Percent(_))) {
+        return;
+    }
+    let factor = (1.0 - reduction).max(0.0);
     for line in lines {
-        let natural_height = line.ascent + line.descent;
-        let extra_leading = (line.height - natural_height).max(0.0);
-        line.height = (line.height - extra_leading * reduction).max(natural_height);
+        line.height *= factor;
     }
 }
 
@@ -612,7 +644,6 @@ fn line_break_params(
     paragraph: &ResolvedParagraph,
     available_width: f64,
     wrap: bool,
-    font_size: f64,
 ) -> LineBreakParams {
     let (ind_first_line, ind_hanging) = if paragraph.indent < 0.0 {
         (0.0, -paragraph.indent)
@@ -627,7 +658,7 @@ fn line_break_params(
         ind_hanging,
         tab_stops: Vec::new(),
         line_spacing: match paragraph.line_spacing.as_ref() {
-            Some(ResolvedTextSpacing::Percent(factor)) => LineSpacing::Exact(font_size * factor),
+            Some(ResolvedTextSpacing::Percent(factor)) => LineSpacing::Multiple(*factor),
             Some(ResolvedTextSpacing::Points(points)) => LineSpacing::Exact(*points),
             None => LineSpacing::Single,
         },
@@ -656,7 +687,7 @@ fn first_run_font_size(paragraph: &ResolvedParagraph) -> f64 {
             }
             ResolvedTextRun::Break => None,
         })
-        .unwrap_or(DEFAULT_FONT_SIZE)
+        .unwrap_or_else(|| paragraph.end_style.font_size.unwrap_or(DEFAULT_FONT_SIZE))
 }
 
 fn paragraph_spacing(spacing: Option<&ResolvedTextSpacing>, font_size: f64) -> f64 {
@@ -754,6 +785,9 @@ fn emit_segment(
     line_height: f64,
     elements: &mut Vec<PositionedElement>,
 ) {
+    if segment.text.is_empty() {
+        return;
+    }
     let adjusted_baseline = baseline - segment.baseline_offset;
     if let Some(color) = segment.highlight {
         elements.push(PositionedElement::FilledRect {
@@ -895,7 +929,17 @@ fn distributed_advances(
 }
 
 pub(super) fn content_box(shape: &ResolvedShape, text: &ResolvedTextBody) -> Rect {
-    let boundary = match &shape.geometry {
+    let boundary = text_boundary(shape);
+    Rect {
+        x: boundary.x + text.insets.left,
+        y: boundary.y + text.insets.top,
+        width: (boundary.width - text.insets.left - text.insets.right).max(0.0),
+        height: (boundary.height - text.insets.top - text.insets.bottom).max(0.0),
+    }
+}
+
+fn text_boundary(shape: &ResolvedShape) -> Rect {
+    match &shape.geometry {
         rpptx_layout::ResolvedGeometry::Custom {
             text_rect: Some(rect),
             ..
@@ -906,12 +950,6 @@ pub(super) fn content_box(shape: &ResolvedShape, text: &ResolvedTextBody) -> Rec
             width: shape.bounds.width,
             height: shape.bounds.height,
         },
-    };
-    Rect {
-        x: boundary.x + text.insets.left,
-        y: boundary.y + text.insets.top,
-        width: (boundary.width - text.insets.left - text.insets.right).max(0.0),
-        height: (boundary.height - text.insets.top - text.insets.bottom).max(0.0),
     }
 }
 
@@ -986,6 +1024,7 @@ mod tests {
             flip_v: false,
             geometry,
             fill: None,
+            image_fill: None,
             line: None,
             head_end: None,
             tail_end: None,
@@ -1001,6 +1040,7 @@ mod tests {
             anchor: TextAnchor::Top,
             wrap: true,
             vertical: TextDirection::Horizontal,
+            space_first_last_paragraph: false,
             autofit: ResolvedAutofit::None,
             paragraphs: Vec::new(),
         }
@@ -1341,6 +1381,7 @@ mod tests {
             anchor: TextAnchor::Top,
             wrap: true,
             vertical: TextDirection::Horizontal,
+            space_first_last_paragraph: false,
             autofit: ResolvedAutofit::None,
             paragraphs: vec![ResolvedParagraph {
                 runs: vec![ResolvedTextRun::Text {
@@ -1386,6 +1427,7 @@ mod tests {
             anchor: TextAnchor::Top,
             wrap: true,
             vertical: TextDirection::Horizontal,
+            space_first_last_paragraph: false,
             autofit: ResolvedAutofit::None,
             paragraphs: vec![ResolvedParagraph {
                 runs: vec![
@@ -1613,7 +1655,8 @@ mod tests {
             width: decorated.width * 2.0,
             ascent: decorated.ascent,
             descent: decorated.descent,
-            height: decorated.ascent + decorated.descent,
+            line_gap: decorated.line_gap,
+            height: decorated.ascent + decorated.descent + decorated.line_gap,
             indent_left: 0.0,
             available_width: 100.0,
             is_last: true,
@@ -1652,14 +1695,14 @@ mod tests {
             ..ResolvedParagraph::default()
         };
 
-        let params = line_break_params(&paragraph, 80.0, false, 20.0);
+        let params = line_break_params(&paragraph, 80.0, false);
 
         assert_eq!(params.available_width, 80.0);
         assert_eq!(params.ind_left, 12.0);
         assert_eq!(params.ind_right, 7.0);
         assert_eq!(params.ind_first_line, 0.0);
         assert_eq!(params.ind_hanging, 5.0);
-        assert_eq!(params.line_spacing, LineSpacing::Exact(25.0));
+        assert_eq!(params.line_spacing, LineSpacing::Multiple(1.25));
         assert_eq!(params.jc, Some(Align::End));
         assert!(!params.wrap);
     }
@@ -1682,7 +1725,6 @@ mod tests {
             }],
             ..text_body(TextInsets::default())
         };
-
         let stacked = stack_text(
             &mut fonts,
             Rect {
@@ -1699,6 +1741,100 @@ mod tests {
     }
 
     #[test]
+    fn empty_paragraph_uses_end_style_metrics_and_size_for_spacing() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let end_style = ResolvedRunStyle {
+            font_size: Some(30.0),
+            latin_typeface: Some("Carlito".to_owned()),
+            ..ResolvedRunStyle::default()
+        };
+        let expected = shape_run(&mut fonts, "", &end_style).expect("shape empty metrics");
+        let body = ResolvedTextBody {
+            space_first_last_paragraph: true,
+            paragraphs: vec![ResolvedParagraph {
+                space_before: Some(ResolvedTextSpacing::Percent(0.5)),
+                end_style,
+                ..ResolvedParagraph::default()
+            }],
+            ..text_body(TextInsets::default())
+        };
+
+        let stacked = stack_text(
+            &mut fonts,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            },
+            &body,
+        )
+        .expect("stack empty paragraph");
+
+        assert!(stacked.elements.is_empty());
+        assert_close(
+            stacked.height,
+            expected.ascent + expected.descent + expected.line_gap + 15.0,
+        );
+    }
+
+    #[test]
+    fn empty_paragraph_suppresses_bullet_and_keeps_end_metrics() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let end_style = ResolvedRunStyle {
+            font_size: Some(30.0),
+            latin_typeface: Some("Carlito".to_owned()),
+            ..ResolvedRunStyle::default()
+        };
+        let expected = shape_run(&mut fonts, "", &end_style).expect("shape empty metrics");
+        let body = ResolvedTextBody {
+            paragraphs: vec![ResolvedParagraph {
+                bullet: Some(ResolvedBullet::Character {
+                    character: "•".to_owned(),
+                    font: Some("Carlito".to_owned()),
+                    color: None,
+                    size: None,
+                }),
+                end_style,
+                ..ResolvedParagraph::default()
+            }],
+            ..text_body(TextInsets::default())
+        };
+
+        let stacked = stack_text(&mut fonts, test_content_box(100.0), &body)
+            .expect("stack empty bullet paragraph");
+        assert!(stacked.elements.is_empty());
+        assert_close(
+            stacked.height,
+            expected.ascent + expected.descent + expected.line_gap,
+        );
+    }
+
+    #[test]
+    fn all_caps_transforms_text_before_font_resolution_and_shaping() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let caps_style = ResolvedRunStyle {
+            font_size: Some(18.0),
+            all_caps: true,
+            latin_typeface: Some("Carlito".to_owned()),
+            ..ResolvedRunStyle::default()
+        };
+        let normal_style = ResolvedRunStyle {
+            all_caps: false,
+            ..caps_style.clone()
+        };
+
+        let caps = shape_run(&mut fonts, "Straße", &caps_style).expect("shape all caps");
+        let expected = shape_run(&mut fonts, "STRASSE", &normal_style).expect("shape uppercase");
+
+        assert_eq!(caps.text, "STRASSE");
+        assert_eq!(caps.font_id, expected.font_id);
+        assert_eq!(caps.glyph_ids, expected.glyph_ids);
+        assert_eq!(caps.advances, expected.advances);
+        assert_close(caps.width, expected.width);
+    }
+
+    #[test]
     fn horizontal_alignment_and_distribution_use_the_available_line_width() {
         let segment = TextSegment {
             text: "ab".to_owned(),
@@ -1709,6 +1845,7 @@ mod tests {
             width: 10.0,
             ascent: 8.0,
             descent: 2.0,
+            line_gap: 0.0,
             color: Color::BLACK,
             bold: false,
             italic: false,
@@ -1729,6 +1866,7 @@ mod tests {
             width: 20.0,
             ascent: 8.0,
             descent: 2.0,
+            line_gap: 0.0,
             height: 10.0,
             indent_left: 10.0,
             available_width: 80.0,
@@ -1773,6 +1911,7 @@ mod tests {
             width: 15.0,
             ascent: 8.0,
             descent: 2.0,
+            line_gap: 0.0,
             height: 10.0,
             indent_left: 0.0,
             available_width: 45.0,
@@ -1826,6 +1965,7 @@ mod tests {
             width: available_width - 30.0,
             ascent: 8.0,
             descent: 2.0,
+            line_gap: 0.0,
             height: 10.0,
             indent_left: 0.0,
             available_width,
@@ -1881,6 +2021,18 @@ mod tests {
             baselines.push(glyph_runs(&stacked.elements)[0].origin.y);
         }
 
+        let expected = shape_run(
+            &mut fonts,
+            "anchor",
+            &ResolvedRunStyle {
+                font_size: Some(12.0),
+                latin_typeface: Some("Carlito".to_owned()),
+                ..ResolvedRunStyle::default()
+            },
+        )
+        .expect("shape anchor metrics");
+        let half_leading = (20.0 - expected.ascent - expected.descent) / 2.0;
+        assert_close(baselines[0], content.y + expected.ascent + half_leading);
         assert_close(baselines[1] - baselines[0], 40.0);
         assert_close(baselines[2] - baselines[0], 80.0);
     }
@@ -2033,7 +2185,8 @@ mod tests {
         let content_width = 120.0 - insets.left - insets.right;
         let content_height = 80.0 - insets.top - insets.bottom;
         let expected_x = insets.left + (content_width - expected.width) / 2.0;
-        let expected_y = insets.top + (content_height - 20.0) + expected.ascent;
+        let half_leading = (20.0 - expected.ascent - expected.descent) / 2.0;
+        let expected_y = insets.top + (content_height - 20.0) + expected.ascent + half_leading;
         let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
 
         let page = layout_slide_with_fonts(&input, 0, &mut fonts).expect("layout anchored text");
@@ -2486,7 +2639,7 @@ mod tests {
     }
 
     #[test]
-    fn stored_line_spacing_reduction_reduces_only_extra_leading() {
+    fn stored_line_spacing_reduction_applies_to_percentage_not_point_spacing() {
         let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
         let mut body = autofit_body(
             ResolvedAutofit::Normal {
@@ -2496,23 +2649,64 @@ mod tests {
             20.0,
             "leading",
         );
-        body.paragraphs[0].line_spacing = Some(ResolvedTextSpacing::Points(30.0));
         let segment = shape_run(&mut fonts, "leading", first_run_style(&body.paragraphs[0]))
             .expect("shape natural line");
-        let natural_height = segment.ascent + segment.descent;
+        let natural_height = segment.ascent + segment.descent + segment.line_gap;
 
-        let stacked =
-            stack_text(&mut fonts, test_content_box(200.0), &body).expect("stack reduced leading");
+        let single =
+            stack_text(&mut fonts, test_content_box(200.0), &body).expect("stack natural single");
+        assert_close(single.height, natural_height);
 
-        assert_close(
-            stacked.height,
-            natural_height + (30.0 - natural_height) * 0.25,
-        );
+        body.paragraphs[0].line_spacing = Some(ResolvedTextSpacing::Percent(1.5));
+        let percentage = stack_text(&mut fonts, test_content_box(200.0), &body)
+            .expect("stack reduced percentage");
+        assert_close(percentage.height, 20.0 * 1.5 * 0.25);
 
-        body.paragraphs[0].line_spacing = Some(ResolvedTextSpacing::Points(1.0));
-        let floor = stack_text(&mut fonts, test_content_box(200.0), &body)
-            .expect("stack reduced leading at natural floor");
-        assert_close(floor.height, natural_height);
+        body.paragraphs[0].line_spacing = Some(ResolvedTextSpacing::Points(30.0));
+        let points =
+            stack_text(&mut fonts, test_content_box(200.0), &body).expect("stack exact points");
+        assert_close(points.height, 30.0);
+    }
+
+    #[test]
+    fn first_and_last_paragraph_spacing_obeys_body_property() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let run = || ResolvedTextRun::Text {
+            text: "line".to_owned(),
+            style: ResolvedRunStyle {
+                font_size: Some(20.0),
+                latin_typeface: Some("Carlito".to_owned()),
+                ..ResolvedRunStyle::default()
+            },
+        };
+        let mut body = ResolvedTextBody {
+            paragraphs: vec![
+                ResolvedParagraph {
+                    line_spacing: Some(ResolvedTextSpacing::Points(20.0)),
+                    space_before: Some(ResolvedTextSpacing::Points(7.0)),
+                    space_after: Some(ResolvedTextSpacing::Points(3.0)),
+                    runs: vec![run()],
+                    ..ResolvedParagraph::default()
+                },
+                ResolvedParagraph {
+                    line_spacing: Some(ResolvedTextSpacing::Points(20.0)),
+                    space_before: Some(ResolvedTextSpacing::Points(5.0)),
+                    space_after: Some(ResolvedTextSpacing::Points(11.0)),
+                    runs: vec![run()],
+                    ..ResolvedParagraph::default()
+                },
+            ],
+            ..text_body(TextInsets::default())
+        };
+
+        let default_edges = stack_text(&mut fonts, test_content_box(200.0), &body)
+            .expect("stack default edge spacing");
+        assert_close(default_edges.height, 48.0);
+
+        body.space_first_last_paragraph = true;
+        let explicit_edges = stack_text(&mut fonts, test_content_box(200.0), &body)
+            .expect("stack explicit edge spacing");
+        assert_close(explicit_edges.height, 66.0);
     }
 
     #[test]

@@ -31,6 +31,36 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: python3 scripts/hash_harness.py --check
 
+  presentation-fidelity:
+    name: Presentation fidelity
+    runs-on: macos-26
+    env:
+      RDOCX_PPTX_CORPUS_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: Swatinem/rust-cache@v2
+      - name: Install pinned render oracle
+        run: |
+          brew install --cask libreoffice
+          brew install poppler
+      - name: Fetch pinned presentation corpus
+        run: python3 scripts/fetch_pptx_corpus.py
+      - name: Run all-slide SSIM trend and completeness gate
+        run: >-
+          python3 scripts/pptx_ssim_harness.py --check
+          --output-dir "${RUNNER_TEMP}/presentation-fidelity"
+      - name: Retain presentation fidelity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: presentation-fidelity-evidence
+          path: |
+            ${{ runner.temp }}/presentation-fidelity/gate-evidence.json
+            ${{ runner.temp }}/presentation-fidelity/render-manifest.tsv
+            ${{ runner.temp }}/presentation-fidelity/ssim-results.tsv
+          if-no-files-found: warn
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

@@ -63,6 +63,7 @@ pub enum Underline {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LineSpacing {
     Single,
+    /// A multiple of the largest text point size on the line.
     Multiple(f64),
     Exact(f64),
     AtLeast(f64),
@@ -102,6 +103,8 @@ pub struct TextSegment {
     pub width: f64,
     pub ascent: f64,
     pub descent: f64,
+    /// Additional font leading included in the natural line advance.
+    pub line_gap: f64,
     pub color: Color,
     pub bold: bool,
     pub italic: bool,
@@ -161,6 +164,8 @@ pub struct LayoutLine {
     pub ascent: f64,
     /// Maximum descent on this line (below baseline).
     pub descent: f64,
+    /// Effective leading needed to preserve the tallest run's natural advance.
+    pub line_gap: f64,
     /// Total line height.
     pub height: f64,
     /// Left indent for this line.
@@ -169,6 +174,14 @@ pub struct LayoutLine {
     pub available_width: f64,
     /// Whether this is the last line of the paragraph.
     pub is_last: bool,
+}
+
+impl LayoutLine {
+    /// Distance from the line-box top to its text baseline.
+    pub fn baseline_offset(&self) -> f64 {
+        let leading = self.height - self.ascent - self.descent;
+        self.ascent + if leading >= 0.0 { leading / 2.0 } else { 0.0 }
+    }
 }
 
 /// Parameters for line breaking.
@@ -222,7 +235,8 @@ pub fn break_into_lines(
             width: 0.0,
             ascent: 0.0,
             descent: 0.0,
-            height: compute_line_height(0.0, 0.0, params),
+            line_gap: 0.0,
+            height: compute_line_height(0.0, 0.0, 0.0, 0.0, params),
             indent_left: params.ind_left + params.ind_first_line,
             available_width: params.available_width,
             is_last: true,
@@ -234,6 +248,8 @@ pub fn break_into_lines(
     let mut current_width: f64 = 0.0;
     let mut current_ascent: f64 = 0.0;
     let mut current_descent: f64 = 0.0;
+    let mut current_natural_height: f64 = 0.0;
+    let mut current_font_size: f64 = 0.0;
     let mut is_first_line = true;
 
     let first_line_width = compute_first_line_width(params);
@@ -252,7 +268,7 @@ pub fn break_into_lines(
     }
 
     // Build breakable segments from inline items
-    let segments = build_breakable_segments(items);
+    let segments = build_breakable_segments(items, fm)?;
 
     for seg in &segments {
         match seg {
@@ -269,12 +285,21 @@ pub fn break_into_lines(
                     } else {
                         subsequent_line_indent(params)
                     };
+                    let line_gap =
+                        effective_line_gap(current_ascent, current_descent, current_natural_height);
                     lines.push(LayoutLine {
                         items: std::mem::take(&mut current_items),
                         width: current_width,
                         ascent: current_ascent,
                         descent: current_descent,
-                        height: compute_line_height(current_ascent, current_descent, params),
+                        line_gap,
+                        height: compute_line_height(
+                            current_ascent,
+                            current_descent,
+                            line_gap,
+                            current_font_size,
+                            params,
+                        ),
                         indent_left: indent,
                         available_width: line_avail,
                         is_last: false,
@@ -282,13 +307,15 @@ pub fn break_into_lines(
                     current_width = 0.0;
                     current_ascent = 0.0;
                     current_descent = 0.0;
+                    current_natural_height = 0.0;
+                    current_font_size = 0.0;
                     is_first_line = false;
                     line_avail = subsequent_line_width;
                 }
 
                 // Add segment items to current line
                 for item in seg_items {
-                    let (w, a, d) = item_metrics(item);
+                    let (w, a, d, natural_height, font_size) = item_metrics(item);
                     current_width += w;
                     if a > current_ascent {
                         current_ascent = a;
@@ -296,6 +323,8 @@ pub fn break_into_lines(
                     if d > current_descent {
                         current_descent = d;
                     }
+                    current_natural_height = current_natural_height.max(natural_height);
+                    current_font_size = current_font_size.max(font_size);
                     // Update font context from text segments
                     if let InlineItem::Text(seg) | InlineItem::Marker(seg) = item {
                         font_ctx = Some((seg.font_id, seg.font_size));
@@ -315,12 +344,21 @@ pub fn break_into_lines(
                 } else {
                     subsequent_line_indent(params)
                 };
+                let line_gap =
+                    effective_line_gap(current_ascent, current_descent, current_natural_height);
                 lines.push(LayoutLine {
                     items: std::mem::take(&mut current_items),
                     width: current_width,
                     ascent: current_ascent,
                     descent: current_descent,
-                    height: compute_line_height(current_ascent, current_descent, params),
+                    line_gap,
+                    height: compute_line_height(
+                        current_ascent,
+                        current_descent,
+                        line_gap,
+                        current_font_size,
+                        params,
+                    ),
                     indent_left: indent,
                     available_width: line_avail,
                     is_last: matches!(break_type, ForcedBreakType::Page | ForcedBreakType::Column),
@@ -328,6 +366,8 @@ pub fn break_into_lines(
                 current_width = 0.0;
                 current_ascent = 0.0;
                 current_descent = 0.0;
+                current_natural_height = 0.0;
+                current_font_size = 0.0;
                 is_first_line = false;
                 line_avail = subsequent_line_width;
             }
@@ -340,12 +380,20 @@ pub fn break_into_lines(
     } else {
         subsequent_line_indent(params)
     };
+    let line_gap = effective_line_gap(current_ascent, current_descent, current_natural_height);
     lines.push(LayoutLine {
         items: current_items,
         width: current_width,
         ascent: current_ascent,
         descent: current_descent,
-        height: compute_line_height(current_ascent, current_descent, params),
+        line_gap,
+        height: compute_line_height(
+            current_ascent,
+            current_descent,
+            line_gap,
+            current_font_size,
+            params,
+        ),
         indent_left: indent,
         available_width: line_avail,
         is_last: true,
@@ -376,7 +424,10 @@ enum ForcedBreakType {
 /// Text items are split at unicode line-break opportunities (word boundaries,
 /// hyphens, etc.). Non-text items (tabs, images, markers) are treated as
 /// atomic units with break opportunities around them.
-fn build_breakable_segments(items: &[InlineItem]) -> Vec<BreakableSegment> {
+fn build_breakable_segments(
+    items: &[InlineItem],
+    fm: &FontManager,
+) -> Result<Vec<BreakableSegment>> {
     let mut segments = Vec::new();
     let mut current_group: Vec<InlineItem> = Vec::new();
 
@@ -408,6 +459,13 @@ fn build_breakable_segments(items: &[InlineItem]) -> Vec<BreakableSegment> {
                 segments.push(BreakableSegment::Items(vec![item.clone()]));
             }
             InlineItem::Text(seg) => {
+                if seg.text.is_empty() {
+                    if !current_group.is_empty() {
+                        segments.push(BreakableSegment::Items(std::mem::take(&mut current_group)));
+                    }
+                    segments.push(BreakableSegment::Items(vec![item.clone()]));
+                    continue;
+                }
                 // Use unicode-linebreak to find break opportunities within text
                 let breaks = split_text_at_break_opportunities(seg);
 
@@ -423,7 +481,7 @@ fn build_breakable_segments(items: &[InlineItem]) -> Vec<BreakableSegment> {
                     }
 
                     // Create a sub-segment for just this chunk (not the entire text)
-                    let sub_item = split_text_subsegment(seg, tb.start, tb.end);
+                    let sub_item = split_text_subsegment(seg, tb.start, tb.end, fm)?;
                     current_group.push(sub_item);
 
                     if tb.is_break {
@@ -446,56 +504,47 @@ fn build_breakable_segments(items: &[InlineItem]) -> Vec<BreakableSegment> {
         segments.push(BreakableSegment::Items(current_group));
     }
 
-    segments
+    Ok(segments)
 }
 
 /// Create a sub-segment InlineItem from a byte range within a TextSegment.
 ///
-/// Slices the text, glyph_ids, and advances to the specified byte range,
-/// preserving all formatting properties from the parent segment.
-fn split_text_subsegment(seg: &TextSegment, byte_start: usize, byte_end: usize) -> InlineItem {
+/// Reshapes the selected text and preserves formatting from the parent segment.
+fn split_text_subsegment(
+    seg: &TextSegment,
+    byte_start: usize,
+    byte_end: usize,
+    fm: &FontManager,
+) -> Result<InlineItem> {
     // If this is the full segment, just clone it
     if byte_start == 0 && byte_end == seg.text.len() {
-        return InlineItem::Text(seg.clone());
+        return Ok(InlineItem::Text(seg.clone()));
     }
 
     let sub_text = seg.text[byte_start..byte_end].to_string();
-    let total_chars = seg.text.chars().count();
-    let char_start = seg.text[..byte_start].chars().count();
-    let char_count = sub_text.chars().count();
-
-    let (sub_glyphs, sub_advances, sub_width) = if seg.glyph_ids.len() == total_chars {
-        // 1:1 char-to-glyph mapping (common for Latin text)
-        let end = (char_start + char_count).min(seg.glyph_ids.len());
-        let glyphs = seg.glyph_ids[char_start..end].to_vec();
-        let advances = seg.advances[char_start..end].to_vec();
-        let width: f64 = advances.iter().sum();
-        (glyphs, advances, width)
-    } else if seg.glyph_ids.is_empty() || seg.text.is_empty() {
-        // No glyphs, or no text to apportion them across
-        (vec![], vec![], 0.0)
+    let mut shaped = fm.shape_text(seg.font_id, &sub_text, seg.font_size)?;
+    let original = fm.shape_text(seg.font_id, &seg.text, seg.font_size)?;
+    let spacing = if original.advances.len() == seg.advances.len() && !original.advances.is_empty()
+    {
+        (seg.width - original.width) / original.advances.len() as f64
     } else {
-        // Non-1:1 mapping (ligatures, complex scripts) — proportional estimate
-        let byte_frac = (byte_end - byte_start) as f64 / seg.text.len() as f64;
-        let est_glyphs = (seg.glyph_ids.len() as f64 * byte_frac).round() as usize;
-        let glyph_start = (seg.glyph_ids.len() as f64 * byte_start as f64 / seg.text.len() as f64)
-            .round() as usize;
-        let glyph_end = (glyph_start + est_glyphs).min(seg.glyph_ids.len());
-        let glyphs = seg.glyph_ids[glyph_start..glyph_end].to_vec();
-        let advances = seg.advances[glyph_start..glyph_end].to_vec();
-        let width: f64 = advances.iter().sum();
-        (glyphs, advances, width)
+        0.0
     };
+    for advance in &mut shaped.advances {
+        *advance += spacing;
+    }
+    shaped.width += spacing * shaped.advances.len() as f64;
 
-    InlineItem::Text(TextSegment {
+    Ok(InlineItem::Text(TextSegment {
         text: sub_text,
         font_id: seg.font_id,
         font_size: seg.font_size,
-        glyph_ids: sub_glyphs,
-        advances: sub_advances,
-        width: sub_width,
+        glyph_ids: shaped.glyph_ids,
+        advances: shaped.advances,
+        width: shaped.width,
         ascent: seg.ascent,
         descent: seg.descent,
+        line_gap: seg.line_gap,
         color: seg.color,
         bold: seg.bold,
         italic: seg.italic,
@@ -507,7 +556,7 @@ fn split_text_subsegment(seg: &TextSegment, byte_start: usize, byte_end: usize) 
         hyperlink_url: seg.hyperlink_url.clone(),
         field_kind: seg.field_kind,
         footnote_id: seg.footnote_id,
-    })
+    }))
 }
 
 struct TextBreakInfo {
@@ -569,14 +618,28 @@ fn inline_item_width(item: &InlineItem) -> f64 {
     }
 }
 
-fn item_metrics(item: &InlineItem) -> (f64, f64, f64) {
-    // Returns (width, ascent, descent)
+fn item_metrics(item: &InlineItem) -> (f64, f64, f64, f64, f64) {
+    // Returns (width, ascent, descent, natural height, text font size)
     match item {
-        InlineItem::Text(seg) => (seg.width, seg.ascent, seg.descent),
-        InlineItem::Marker(seg) => (seg.width, seg.ascent, seg.descent),
-        InlineItem::Tab => (36.0, 0.0, 0.0),
-        InlineItem::Image { width, height, .. } => (*width, *height, 0.0),
-        InlineItem::LineBreak | InlineItem::PageBreak | InlineItem::ColumnBreak => (0.0, 0.0, 0.0),
+        InlineItem::Text(seg) => (
+            seg.width,
+            seg.ascent,
+            seg.descent,
+            seg.ascent + seg.descent + seg.line_gap,
+            seg.font_size,
+        ),
+        InlineItem::Marker(seg) => (
+            seg.width,
+            seg.ascent,
+            seg.descent,
+            seg.ascent + seg.descent + seg.line_gap,
+            0.0,
+        ),
+        InlineItem::Tab => (36.0, 0.0, 0.0, 0.0, 0.0),
+        InlineItem::Image { width, height, .. } => (*width, *height, 0.0, *height, 0.0),
+        InlineItem::LineBreak | InlineItem::PageBreak | InlineItem::ColumnBreak => {
+            (0.0, 0.0, 0.0, 0.0, 0.0)
+        }
     }
 }
 
@@ -672,6 +735,7 @@ fn shape_leader(
         width: tab_width, // fill the entire tab gap
         ascent: metrics.ascent,
         descent: metrics.descent,
+        line_gap: metrics.line_gap,
         color: Color::BLACK,
         bold: false,
         italic: false,
@@ -741,13 +805,24 @@ fn subsequent_line_indent(params: &LineBreakParams) -> f64 {
 }
 
 /// Compute line height based on spacing rules.
-fn compute_line_height(ascent: f64, descent: f64, params: &LineBreakParams) -> f64 {
-    let natural = ascent + descent;
+fn effective_line_gap(ascent: f64, descent: f64, natural_height: f64) -> f64 {
+    (natural_height - ascent - descent).max(0.0)
+}
+
+fn compute_line_height(
+    ascent: f64,
+    descent: f64,
+    line_gap: f64,
+    font_size: f64,
+    params: &LineBreakParams,
+) -> f64 {
+    let natural = ascent + descent + line_gap;
     let natural = if natural < 1.0 { 12.0 } else { natural }; // minimum for empty lines
+    let font_size = if font_size < 1.0 { 12.0 } else { font_size };
 
     match params.line_spacing {
         LineSpacing::Single => natural,
-        LineSpacing::Multiple(factor) => natural * factor,
+        LineSpacing::Multiple(factor) => font_size * factor,
         LineSpacing::Exact(points) => points,
         LineSpacing::AtLeast(points) => natural.max(points),
     }
@@ -767,6 +842,7 @@ mod tests {
             width,
             ascent: 10.0,
             descent: 3.0,
+            line_gap: 0.0,
             color: Color::BLACK,
             bold: false,
             italic: false,
@@ -783,6 +859,40 @@ mod tests {
 
     fn deterministic_font_manager() -> FontManager {
         FontManager::new_deterministic().expect("bundled fonts should load")
+    }
+
+    fn shaped_text_segment(fm: &mut FontManager, text: &str, spacing: f64) -> TextSegment {
+        let font_id = fm
+            .resolve_font(Some("Carlito"), false, false)
+            .expect("bundled Carlito should resolve");
+        let metrics = fm.metrics(font_id, 30.0).expect("Carlito metrics");
+        let mut shaped = fm.shape_text(font_id, text, 30.0).expect("shape text");
+        for advance in &mut shaped.advances {
+            *advance += spacing;
+        }
+        shaped.width += spacing * shaped.advances.len() as f64;
+        TextSegment {
+            text: text.to_owned(),
+            font_id,
+            font_size: 30.0,
+            glyph_ids: shaped.glyph_ids,
+            advances: shaped.advances,
+            width: shaped.width,
+            ascent: metrics.ascent,
+            descent: metrics.descent,
+            line_gap: metrics.line_gap,
+            color: Color::BLACK,
+            bold: false,
+            italic: false,
+            underline: None,
+            strike: false,
+            dstrike: false,
+            highlight: None,
+            baseline_offset: 0.0,
+            hyperlink_url: None,
+            field_kind: None,
+            footnote_id: None,
+        }
     }
 
     #[test]
@@ -818,6 +928,49 @@ mod tests {
     }
 
     #[test]
+    fn ligature_runs_reshape_each_break_chunk_without_duplicate_glyphs() {
+        let mut fm = deterministic_font_manager();
+        let text = "by providing opportunities to crawl in cluttered spaces and handle 3-dimensional objects";
+        let spacing = 0.4;
+        let segment = shaped_text_segment(&mut fm, text, spacing);
+        assert_ne!(segment.glyph_ids.len(), text.chars().count());
+
+        let lines = break_into_lines(
+            &[InlineItem::Text(segment)],
+            &LineBreakParams {
+                available_width: 260.0,
+                ..LineBreakParams::default()
+            },
+            &fm,
+        )
+        .expect("wrap ligature-bearing text");
+        assert!(lines.len() > 1);
+
+        let mut rendered_text = String::new();
+        for text_segment in lines.iter().flat_map(|line| {
+            line.items.iter().filter_map(|item| match item {
+                LineItem::Text(segment) => Some(segment),
+                _ => None,
+            })
+        }) {
+            rendered_text.push_str(&text_segment.text);
+            let exact = fm
+                .shape_text(
+                    text_segment.font_id,
+                    &text_segment.text,
+                    text_segment.font_size,
+                )
+                .expect("reshape emitted chunk");
+            assert_eq!(text_segment.glyph_ids, exact.glyph_ids);
+            assert_eq!(text_segment.advances.len(), exact.advances.len());
+            for (actual, unspaced) in text_segment.advances.iter().zip(exact.advances) {
+                assert!((actual - (unspaced + spacing)).abs() < 1.0e-10);
+            }
+        }
+        assert_eq!(rendered_text, text);
+    }
+
+    #[test]
     fn forced_line_break() {
         let fm = deterministic_font_manager();
         let items = vec![
@@ -835,7 +988,7 @@ mod tests {
             line_spacing: LineSpacing::Exact(24.0),
             ..Default::default()
         };
-        let h = compute_line_height(10.0, 3.0, &params);
+        let h = compute_line_height(10.0, 3.0, 5.0, 12.0, &params);
         assert!((h - 24.0).abs() < 0.01);
     }
 
@@ -845,8 +998,8 @@ mod tests {
             line_spacing: LineSpacing::Multiple(2.0),
             ..Default::default()
         };
-        let h = compute_line_height(10.0, 3.0, &params);
-        assert!((h - 26.0).abs() < 0.01); // 13 * 2.0
+        let h = compute_line_height(10.0, 3.0, 2.0, 15.0, &params);
+        assert!((h - 30.0).abs() < 0.01); // 15 * 2.0
     }
 
     #[test]
@@ -924,6 +1077,8 @@ mod tests {
             compute_line_height(
                 10.0,
                 3.0,
+                2.0,
+                11.0,
                 &LineBreakParams {
                     line_spacing,
                     ..Default::default()
@@ -931,11 +1086,106 @@ mod tests {
             )
         };
 
-        assert!((height(LineSpacing::Single) - 13.0).abs() < 0.01);
-        assert!((height(LineSpacing::Multiple(1.5)) - 19.5).abs() < 0.01);
+        assert!((height(LineSpacing::Single) - 15.0).abs() < 0.01);
+        assert!((height(LineSpacing::Multiple(1.5)) - 16.5).abs() < 0.01);
         assert!((height(LineSpacing::Exact(8.25)) - 8.25).abs() < 0.01);
-        assert!((height(LineSpacing::AtLeast(8.25)) - 13.0).abs() < 0.01);
+        assert!((height(LineSpacing::AtLeast(8.25)) - 15.0).abs() < 0.01);
         assert!((height(LineSpacing::AtLeast(18.5)) - 18.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn mixed_font_line_uses_tallest_full_natural_advance() {
+        let fm = deterministic_font_manager();
+        let mut first = make_text_segment("first", 20.0);
+        first.ascent = 10.0;
+        first.descent = 2.0;
+        first.line_gap = 4.0;
+        let mut second = make_text_segment("second", 20.0);
+        second.ascent = 8.0;
+        second.descent = 5.0;
+        second.line_gap = 1.0;
+
+        let lines = break_into_lines(
+            &[InlineItem::Text(first), InlineItem::Text(second)],
+            &LineBreakParams::default(),
+            &fm,
+        )
+        .expect("lay out mixed-font line");
+
+        assert_eq!(lines.len(), 1);
+        assert!((lines[0].ascent - 10.0).abs() < 0.01);
+        assert!((lines[0].descent - 5.0).abs() < 0.01);
+        assert!((lines[0].line_gap - 1.0).abs() < 0.01);
+        assert!((lines[0].height - 16.0).abs() < 0.01);
+        assert!((lines[0].baseline_offset() - 10.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn multiple_spacing_uses_largest_text_point_size_on_each_line() {
+        let fm = deterministic_font_manager();
+        let mut first = make_text_segment("first", 20.0);
+        first.font_size = 12.0;
+        first.line_gap = 4.0;
+        let mut second = make_text_segment("second", 20.0);
+        second.font_size = 20.0;
+        second.line_gap = 1.0;
+
+        let lines = break_into_lines(
+            &[InlineItem::Text(first), InlineItem::Text(second)],
+            &LineBreakParams {
+                line_spacing: LineSpacing::Multiple(1.25),
+                ..LineBreakParams::default()
+            },
+            &fm,
+        )
+        .expect("lay out percentage-spaced mixed-size line");
+
+        assert_eq!(lines.len(), 1);
+        assert!((lines[0].height - 25.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn positive_leading_is_split_and_below_natural_exact_spacing_is_not_clamped() {
+        let positive = LayoutLine {
+            items: Vec::new(),
+            width: 0.0,
+            ascent: 10.0,
+            descent: 3.0,
+            line_gap: 5.0,
+            height: 18.0,
+            indent_left: 0.0,
+            available_width: 100.0,
+            is_last: true,
+        };
+        let below_natural = LayoutLine {
+            height: 8.0,
+            ..positive.clone()
+        };
+
+        assert!((positive.baseline_offset() - 12.5).abs() < 0.01);
+        assert!((below_natural.height - 8.0).abs() < 0.01);
+        assert!((below_natural.baseline_offset() - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn zero_gap_and_empty_segment_preserve_natural_height_rules() {
+        let fm = deterministic_font_manager();
+        let zero_gap = make_text_segment("zero", 20.0);
+        let mut empty = make_text_segment("", 0.0);
+        empty.line_gap = 4.0;
+
+        let zero_gap_line = break_into_lines(
+            &[InlineItem::Text(zero_gap)],
+            &LineBreakParams::default(),
+            &fm,
+        )
+        .expect("lay out zero-gap line");
+        let empty_line =
+            break_into_lines(&[InlineItem::Text(empty)], &LineBreakParams::default(), &fm)
+                .expect("lay out styled empty line");
+
+        assert!((zero_gap_line[0].height - 13.0).abs() < 0.01);
+        assert!((empty_line[0].height - 17.0).abs() < 0.01);
     }
 
     #[test]
