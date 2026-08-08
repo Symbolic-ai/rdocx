@@ -35,10 +35,10 @@ identifying every deliberately corrupted package.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-105 | Bundled default.pptx | M | in-progress | codex |
-| F-106 | ShapeIdAllocator and MediaStore | M | in-progress | codex |
-| F-107 | add_slide | L | in-progress | codex |
-| F-108 | validate() | M | in-progress | codex |
+| F-105 | Bundled default.pptx | M | done | |
+| F-106 | ShapeIdAllocator and MediaStore | M | done | |
+| F-107 | add_slide | L | done | |
+| F-108 | validate() | M | done | |
 
 ## Sequencing note
 

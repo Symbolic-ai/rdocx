@@ -144,6 +144,10 @@ defended.
 | F-102 | S25 | L | 4 | 1 | 2026-08-08 | Styled table resolution and merged-cell rendering with unique borders |
 | F-103 | S25 | M | 2 | 1 | 2026-08-08 | Source-scoped hyperlinks, slide-number fields, and visible diagnostics |
 | F-104 | S25 | L | 4 | 1 | 2026-08-08 | Complete corpus rendering with retained SSIM trend and native evidence |
+| F-105 | S26 | M | 2 | 1 | 2026-08-08 | Bundled zero-slide PowerPoint template and concrete constructor |
+| F-106 | S26 | M | 2 | 1 | 2026-08-08 | Recursive shape-id allocation and content-addressed media deduplication |
+| F-107 | S26 | L | 4 | 1 | 2026-08-08 | Layout-based slide synthesis with unique package and slide identifiers |
+| F-108 | S26 | M | 2 | 1 | 2026-08-08 | Deterministic presentation validation and guarded save boundaries |
 
 ## Velocity
 

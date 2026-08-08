@@ -3345,3 +3345,155 @@ native PowerPoint spot-check, and the integrated 50-deck gate passed for all
 `/private/tmp/s25-integrated-fidelity-escalated-20260808`. On macOS, sandboxed
 headless LibreOffice can abort during AppKit application registration before it
 opens a deck. The same exact command and deck succeed outside that boundary.
+
+### F-105, Bundled default.pptx
+
+**Sprint.** S26
+**Completed.** 2026-08-08
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The unpublished `rpptx` facade now owns a crate-local
+zero-slide PowerPoint template and exposes `Presentation::new()` when the
+default-on `default-template` feature is enabled. The 16:9 template contains
+one master, eleven layouts, a full theme, notes infrastructure, and table
+styles.
+
+**Non-obvious choices.** The template is loaded through the normal parser and
+serialized through the deterministic package writer. Shipping a reviewed
+binary template avoids thousands of lines of write-only theme and layout
+construction code.
+
+**Deviations from the design plan.** None. The native PowerPoint gate and both
+feature modes passed as planned.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/06-presentationml-model.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `new_presentation_uses_the_bundled_zero_slide_template`,
+`bundled_template_has_the_documented_part_graph`, default and no-default
+feature checks, package-list inspection, native PowerPoint no-repair
+acceptance, and the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep the binary asset inside the `rpptx` crate
+and retain its recorded source and licence evidence when replacing it.
+
+### F-106, ShapeIdAllocator and MediaStore
+
+**Sprint.** S26
+**Completed.** 2026-08-08
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** PresentationML shape trees now expose typed non-visual ids
+and allocate fresh ids across root shapes, nested groups, and selected
+alternate-content fallbacks. The facade-owned media store deduplicates equal
+bytes by content hash and allocates collision-free package part names.
+
+**Non-obvious choices.** Hash equality is confirmed with the original bytes so
+a hash collision cannot alias different media. Parsed non-visual properties
+remain backed by their preserved raw XML, and allocation starts at id 2 because
+the shape-tree root owns id 1 in generated decks.
+
+**Deviations from the design plan.** Microscope pass 1 found that insertion
+order could change which duplicate media part was reused. Sorting existing
+part names made reuse deterministic, and pass 2 was clean.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, and
+`docs/hld/06-presentationml-model.md`.
+
+**Tests.** `shape_id_allocator_scans_nested_groups_and_alternate_content`,
+`shape_id_allocator_starts_at_two_and_skips_sparse_ids`,
+`typed_non_visual_ids_preserve_original_shape_xml`,
+`equal_media_bytes_inserted_twice_reuse_one_part`,
+`media_store_compares_bytes_inside_a_hash_bucket`,
+`media_store_allocates_after_the_highest_existing_suffix`, and the integrated
+full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep `MediaStore` private to the facade and keep
+the allocator scan aligned with every recursive shape-tree container.
+
+### F-107, add_slide
+
+**Sprint.** S26
+**Completed.** 2026-08-08
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `Presentation::add_slide()` now selects a resolved layout,
+synthesizes a minimal slide with its non-latent placeholders, assigns unique
+shape and slide ids, creates the relative layout and presentation
+relationships, registers the content type, and appends the slide to the owned
+read model.
+
+**Non-obvious choices.** Placeholder type and `idx` are copied without cloning
+the layout XML, which avoids hidden relationship identifiers. Date, footer,
+and slide-number placeholders remain latent, while every synthesized text body
+contains its required paragraph.
+
+**Deviations from the design plan.** Microscope passes strengthened sparse
+part-name allocation and the test oracle for placeholder inheritance. The
+native three-slide deck then opened in PowerPoint 16.104 without repair.
+
+**Spec sections touched.** `docs/hld/01-glossary.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/06-presentationml-model.md`, and
+`docs/hld/13-risks-and-open-questions.md`.
+
+**Tests.** `three_added_slides_have_unique_ids_and_reopen`,
+`add_slide_allocates_after_the_highest_existing_part_suffix`,
+`add_slide_synthesizes_only_non_latent_layout_placeholders`,
+`synthesized_slide_uses_schema_order_and_one_relative_layout_relationship`,
+`synthesized_text_bodies_always_contain_a_paragraph`,
+`add_slide_rejects_an_unknown_layout_index_without_mutation`, native
+PowerPoint acceptance, and the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Continue using the nine-step package mutation
+order and allocate from observed maxima so sparse producer packages are never
+overwritten.
+
+### F-108, validate()
+
+**Sprint.** S26
+**Completed.** 2026-08-08
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `Presentation::validate()` now returns all twelve exact
+package and PresentationML issue variants in deterministic order. It checks
+slide and shape ids, text bodies, placeholders, content types, relationships,
+media reachability, custom shows, layouts, and themes. `save()` writes the same
+deterministic bytes as `to_bytes()`, and both debug save boundaries assert a
+clean validation result before writing.
+
+**Non-obvious choices.** Semantic slide-id and empty-text checks are deferred
+from parsers so corrupted decks remain inspectable. Namespace-aware XML scans
+are observational, uppercase media extensions use case-insensitive default
+lookup, and shape traversal uses an explicit heap stack to keep validation
+non-panicking for deeply nested trees.
+
+**Deviations from the design plan.** Microscope pass 1 found a hard-coded root
+shape id, skipped XML parts whose relationship collection was entirely absent,
+and recursive traversal that could overflow the stack. All three were repaired
+with distinguishing regressions, and pass 2 was clean.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/06-presentationml-model.md`, and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** `every_validation_issue_variant_detects_its_corrupted_deck`,
+`validate_collects_all_issues_in_deterministic_order`,
+`all_pinned_corpus_decks_validate_cleanly`,
+`debug_save_boundaries_assert_on_invalid_presentations`,
+`save_writes_the_same_bytes_as_to_bytes`,
+`validation_xml_scan_is_prefix_tolerant_and_non_mutating`, and the integrated
+full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep validation observational and preserve
+corrupt input long enough to report every issue. Relationship scans must cover
+parts even when their entire `.rels` collection is absent.
