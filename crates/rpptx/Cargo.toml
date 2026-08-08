@@ -16,6 +16,8 @@ default = ["default-template"]
 default-template = []
 
 [dependencies]
+oxml-layout.workspace = true
+oxml-media.workspace = true
 oxml-opc.workspace = true
 rpptx-oxml.workspace = true
 thiserror.workspace = true

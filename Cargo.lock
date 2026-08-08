@@ -683,6 +683,7 @@ version = "0.0.0"
 dependencies = [
  "oxml-drawing",
  "oxml-layout",
+ "oxml-media",
  "oxml-opc",
  "oxml-pdf",
  "rpptx-layout",

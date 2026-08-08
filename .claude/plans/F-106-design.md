@@ -1,6 +1,6 @@
 # F-106, ShapeIdAllocator and MediaStore
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S26
 **Size**: M
 **Depends on**: F-070, F-036
@@ -28,14 +28,16 @@ identical bytes.
 
 ## Approach
 
-Type the required non-visual drawing id while parsing each shape-tree child,
-without changing the raw XML used to serialize its `p:cNvPr`. Add one
+Project each concrete shape-tree child's non-visual drawing id without changing
+the raw XML used to serialize its `p:cNvPr`. Keep malformed producer absence
+observable as `None`, which also gives the `AlternateContent` container a total
+result because the container itself has no single drawing id. Add one
 normalized accessor on `ShapeTreeChild`, then add the concrete allocator in the
 existing shape-tree module:
 
 ```rust
 impl ShapeTreeChild {
-    pub fn non_visual_id(&self) -> u32;
+    pub fn non_visual_id(&self) -> Option<u32>;
 }
 
 pub struct ShapeIdAllocator { /* occupied ids and next candidate */ }
@@ -46,11 +48,12 @@ impl ShapeIdAllocator {
 }
 ```
 
-`scan` visits every ordinary child, nested group, and selected fallback child.
-Allocation starts at 2, skips every occupied id, records each returned id, and
-never assigns the shape-tree root id 1. The concrete struct is justified by
-the current allocator story and by F-107's slide-placeholder synthesis. No
-trait or generic is added.
+`scan` visits every concrete child, nested group, and selected fallback child.
+It ignores an absent malformed producer id while preserving that source XML for
+later validation. Allocation starts at 2, skips every occupied id, records each
+returned id, and never assigns the shape-tree root id 1. The concrete struct is
+justified by the current allocator story and by F-107's slide-placeholder
+synthesis. No trait or generic is added.
 
 Add a private concrete `MediaStore` to the existing `rpptx` facade file. It is
 built from `/ppt/media/` parts whenever a presentation is opened. It indexes
@@ -111,16 +114,18 @@ not affect Word rendering output.
 
 ## Implementation checklist
 
-- [ ] Type and expose non-visual ids without replacing preserved raw XML.
-- [ ] Implement recursive tree scanning and collision-free allocation from 2.
-- [ ] Add the facade-owned collision-safe `MediaStore`.
-- [ ] Scan existing media and allocate new names after the greatest suffix.
-- [ ] Add focused allocator, round-trip, deduplication, and collision tests.
-- [ ] Prove the dependency graph still points from the facade to shared leaf
+- [x] Type and expose non-visual ids without replacing preserved raw XML.
+- [x] Implement recursive tree scanning and collision-free allocation from 2.
+- [x] Add the facade-owned collision-safe `MediaStore`.
+- [x] Scan existing media and allocate new names after the greatest suffix.
+- [x] Add focused allocator, round-trip, deduplication, and collision tests.
+- [x] Prove the dependency graph still points from the facade to shared leaf
   crates.
 
 ## Open questions
 
 None. The plan keeps the store private until a public picture API consumes it,
 and reuses the existing `MediaId`, image resolver, and media namer rather than
-creating a second content identity.
+creating a second content identity. The normalized id accessor returns `None`
+for the `AlternateContent` container and for malformed missing producer ids.
+The allocator still visits every selected fallback child.

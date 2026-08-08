@@ -5,9 +5,12 @@
 //! changed to 12,192,000 by 6,858,000 EMU, the size kind was changed to
 //! `screen16x9`, and python-pptx generated the notes-master infrastructure.
 
+use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
 
+use oxml_layout::MediaId;
+use oxml_media::{MediaNamer, resolve};
 use oxml_opc::relationship::{Relationship, rel_types};
 use oxml_opc::{OpcError, OpcPackage};
 use rpptx_oxml::graphic_frame::GraphicDataPayload;
@@ -66,6 +69,7 @@ pub enum Error {
 #[derive(Clone, Debug)]
 pub struct Presentation {
     package: OpcPackage,
+    media_store: MediaStore,
     presentation_part: String,
     presentation: CT_Presentation,
     slides: Vec<SlideRecord>,
@@ -83,6 +87,125 @@ struct SlideRecord {
 struct NotesRecord {
     part_name: String,
     notes: CT_NotesSlide,
+}
+
+#[derive(Clone, Debug)]
+struct MediaEntry {
+    part_name: String,
+    bytes: Vec<u8>,
+    extension: String,
+    content_type: String,
+    newly_inserted: bool,
+}
+
+#[derive(Clone, Debug)]
+struct MediaStore {
+    by_id: HashMap<MediaId, Vec<MediaEntry>>,
+    namer: MediaNamer,
+}
+
+impl MediaStore {
+    fn scan(package: &OpcPackage) -> Self {
+        let namer = MediaNamer::scan(
+            "/ppt/media",
+            "image",
+            package.parts.keys().map(String::as_str),
+        );
+        let mut by_id: HashMap<MediaId, Vec<MediaEntry>> = HashMap::new();
+        let mut parts = package
+            .parts
+            .iter()
+            .filter(|(part_name, _)| part_name.starts_with("/ppt/media/"))
+            .collect::<Vec<_>>();
+        parts.sort_unstable_by_key(|(part_name, _)| part_name.as_str());
+        for (part_name, bytes) in parts {
+            let format = resolve(bytes, part_name);
+            let extension = part_name
+                .rsplit_once('.')
+                .map_or_else(|| format.extension(), |(_, extension)| extension)
+                .to_owned();
+            let content_type = package
+                .content_types
+                .content_type_for(part_name)
+                .unwrap_or_else(|| format.content_type())
+                .to_owned();
+            by_id
+                .entry(MediaId::from_bytes(bytes))
+                .or_default()
+                .push(MediaEntry {
+                    part_name: part_name.clone(),
+                    bytes: bytes.clone(),
+                    extension,
+                    content_type,
+                    newly_inserted: false,
+                });
+        }
+        Self { by_id, namer }
+    }
+
+    #[allow(dead_code)]
+    fn insert(&mut self, package: &mut OpcPackage, bytes: &[u8], filename: &str) -> String {
+        self.insert_with_id(package, MediaId::from_bytes(bytes), bytes, filename)
+    }
+
+    #[allow(dead_code)]
+    fn insert_with_id(
+        &mut self,
+        package: &mut OpcPackage,
+        media_id: MediaId,
+        bytes: &[u8],
+        filename: &str,
+    ) -> String {
+        if let Some(existing) = self
+            .by_id
+            .get(&media_id)
+            .and_then(|bucket| bucket.iter().find(|entry| entry.bytes == bytes))
+        {
+            return existing.part_name.clone();
+        }
+
+        let format = resolve(bytes, filename);
+        let extension = format.extension();
+        let content_type = format.content_type();
+        let part_name = self.namer.next_part_name(extension);
+        package.set_part(&part_name, bytes.to_vec());
+        register_content_type(package, &part_name, extension, content_type);
+        self.by_id.entry(media_id).or_default().push(MediaEntry {
+            part_name: part_name.clone(),
+            bytes: bytes.to_vec(),
+            extension: extension.to_owned(),
+            content_type: content_type.to_owned(),
+            newly_inserted: true,
+        });
+        part_name
+    }
+
+    fn write_new_parts(&self, package: &mut OpcPackage) {
+        for entry in self.by_id.values().flatten() {
+            if entry.newly_inserted {
+                package.set_part(&entry.part_name, entry.bytes.clone());
+                register_content_type(
+                    package,
+                    &entry.part_name,
+                    &entry.extension,
+                    &entry.content_type,
+                );
+            }
+        }
+    }
+}
+
+fn register_content_type(
+    package: &mut OpcPackage,
+    part_name: &str,
+    extension: &str,
+    content_type: &str,
+) {
+    match package.content_types.content_type_for(part_name) {
+        Some(existing) if existing == content_type => {}
+        Some(_) => package.content_types.add_override(part_name, content_type),
+        None => package.content_types.add_default(extension, content_type),
+    }
 }
 
 impl Presentation {
@@ -103,6 +226,7 @@ impl Presentation {
     }
 
     fn from_package(package: OpcPackage) -> Result<Self> {
+        let media_store = MediaStore::scan(&package);
         let main_relationship = package
             .package_rels
             .get_by_type(rel_types::DOCUMENT)
@@ -145,6 +269,7 @@ impl Presentation {
 
         Ok(Self {
             package,
+            media_store,
             presentation_part,
             presentation,
             slides,
@@ -154,6 +279,7 @@ impl Presentation {
     /// Serialises the package through the deterministic OPC writer.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let mut package = self.package.clone();
+        self.media_store.write_new_parts(&mut package);
         package.set_part(
             &self.presentation_part,
             self.presentation
@@ -432,5 +558,99 @@ fn collect_text(children: &[ShapeTreeChild], output: &mut Vec<String>) {
             output.push(text);
         }
         collect_text(shape.child_slice(), output);
+    }
+}
+
+#[cfg(test)]
+mod write_tests {
+    use super::*;
+
+    #[test]
+    fn equal_media_bytes_inserted_twice_reuse_one_part() {
+        let mut package = OpcPackage::new();
+        let mut media = MediaStore::scan(&package);
+        let png = b"\x89PNG\r\n\x1a\nfixture";
+
+        let first = media.insert(&mut package, png, "first.png");
+        let second = media.insert(&mut package, png, "second.png");
+
+        assert_eq!(first, second);
+        assert_eq!(
+            package
+                .parts
+                .keys()
+                .filter(|part| part.starts_with("/ppt/media/"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn media_store_compares_bytes_inside_a_hash_bucket() {
+        let mut package = OpcPackage::new();
+        let mut media = MediaStore::scan(&package);
+        let first = b"\x89PNG\r\n\x1a\nfirst";
+        let second = b"\x89PNG\r\n\x1a\nsecond";
+
+        let first_part = media.insert_with_id(&mut package, MediaId(7), first, "first.png");
+        let second_part = media.insert_with_id(&mut package, MediaId(7), second, "second.png");
+
+        assert_ne!(first_part, second_part);
+        assert_eq!(package.get_part(&first_part), Some(first.as_slice()));
+        assert_eq!(package.get_part(&second_part), Some(second.as_slice()));
+    }
+
+    #[test]
+    fn media_store_allocates_after_the_highest_existing_suffix() {
+        let mut package = OpcPackage::new();
+        package.set_part("/ppt/media/image1.png", b"\x89PNG\r\n\x1a\none".to_vec());
+        package.set_part("/ppt/media/image3.png", b"\x89PNG\r\n\x1a\nthree".to_vec());
+        package.content_types.add_default("png", "image/png");
+        let mut media = MediaStore::scan(&package);
+
+        let part = media.insert(&mut package, b"\x89PNG\r\n\x1a\nfour", "misleading.jpeg");
+
+        assert_eq!(part, "/ppt/media/image4.png");
+        assert_eq!(
+            package.content_types.content_type_for(&part),
+            Some("image/png")
+        );
+    }
+
+    #[test]
+    fn media_store_overrides_a_conflicting_existing_default() {
+        let mut package = OpcPackage::new();
+        package
+            .content_types
+            .add_default("png", "application/octet-stream");
+        let mut media = MediaStore::scan(&package);
+
+        let part = media.insert(&mut package, b"\x89PNG\r\n\x1a\nnew", "new.png");
+
+        assert_eq!(
+            package.content_types.content_type_for(&part),
+            Some("image/png")
+        );
+        assert_eq!(
+            package
+                .content_types
+                .defaults
+                .get("png")
+                .map(String::as_str),
+            Some("application/octet-stream")
+        );
+    }
+
+    #[test]
+    fn media_store_reuses_the_first_sorted_duplicate_part() {
+        let mut package = OpcPackage::new();
+        let png = b"\x89PNG\r\n\x1a\nduplicate";
+        package.set_part("/ppt/media/image2.png", png.to_vec());
+        package.set_part("/ppt/media/image1.png", png.to_vec());
+        let mut media = MediaStore::scan(&package);
+
+        let part = media.insert(&mut package, png, "duplicate.png");
+
+        assert_eq!(part, "/ppt/media/image1.png");
     }
 }
