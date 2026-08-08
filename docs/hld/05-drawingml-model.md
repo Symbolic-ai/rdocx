@@ -165,7 +165,7 @@ a:txBody
   a:lstStyle
     a:defPPr?  paragraph and run defaults shared by every level
     a:lvl1pPr? through a:lvl9pPr?  overrides for one level
-  a:p*
+  a:p+
     a:pPr      alignment, level, indents, spacing, bullet
     (a:r | a:br | a:fld)*
       a:rPr    size in centipoints, bold, italic, underline, strike, spacing,
@@ -180,6 +180,22 @@ plain percentage rather than 240ths of a line.
 
 Bullets are `a:buChar`, `a:buAutoNum`, `a:buNone`, with `a:buFont`, `a:buSzPct`
 or `a:buSzPts`, and `a:buClr`.
+
+`CT_TextBody` maintains at least one paragraph. Its minimal constructor creates
+one empty paragraph, and whole-frame text replacement retains body properties,
+the optional list style, and the first paragraph's formatting and end
+properties while replacing the ordered text choices with one regular run.
+Clearing text therefore leaves one empty paragraph rather than an invalid empty
+body. Paragraph and run append operations preserve caller order. Fields and
+line breaks remain in place unless the caller explicitly replaces that
+paragraph's text.
+
+Paragraph properties, character properties, Latin font, and bullet values use
+their existing typed models and schema-order writers. When paragraph properties
+are absent, inserting them moves preserved boundary-0 content to the slot after
+`a:pPr` and before the first run choice. Later raw boundaries do not move. This
+keeps a preserved `mc:AlternateContent` run substitution after the newly
+inserted properties without changing its bytes.
 
 `CT_TextListStyle` types `a:defPPr` separately from its nine optional level
 properties. The reader accepts any prefix, and the writer emits `a:defPPr`

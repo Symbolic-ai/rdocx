@@ -76,6 +76,34 @@ properties. Adjustment mutation supports finite values on preset geometry.
 Unsupported shape kinds and unsupported geometry return concrete facade
 errors. Indexed access remains total and returns `Option`.
 
+Ordinary shapes expose text mutation through behavior-bearing borrowed
+handles:
+
+```rust
+ShapeMut::set_text(&mut self, text: &str) -> Result<()>;
+ShapeMut::text_frame(&mut self) -> Option<TextFrame<'_>>;
+TextFrame::paragraph_mut(&mut self, index: usize) -> Option<TextParagraphMut<'_>>;
+TextFrame::add_paragraph(&mut self) -> TextParagraphMut<'_>;
+TextParagraphMut::add_run(&mut self, text: &str) -> TextRunMut<'_>;
+```
+
+`TextFrame` also reads and replaces whole-frame text. Paragraph handles replace
+text, paragraph properties, and bullets. Run handles replace text, character
+properties, and the direct Latin font. The typed formatting values are
+re-exported by `rpptx`. Structural append returns the newly inserted borrowed
+item, and Rust's borrow rules prevent a live nested handle from being
+invalidated by another structural mutation.
+
+Whole-frame replacement creates a minimal body when needed and always retains
+one paragraph. It preserves existing body properties, list style,
+first-paragraph formatting, end properties, and placeholder metadata. Existing
+fields and line breaks survive property-only edits. Explicit paragraph text
+replacement removes its old run choices. Inserting absent paragraph properties
+places them before preserved markup-compatibility run content, while later raw
+boundaries and bytes remain unchanged. Unsupported shape kinds return the
+normal contextual mutation error, and a shape without a text body returns no
+text-frame handle.
+
 `SlideMut` also exposes the direct shape construction surface:
 
 ```rust
@@ -158,6 +186,14 @@ The picture native-size comparison uses pinned python-pptx 1.0.2. The ignored
 integration gate `added_picture_validates_and_opens_without_repair` confirms
 that a generated picture deck validates and opens without repair in the same
 pinned PowerPoint bundle.
+
+The text mutation gate
+`setting_text_on_placeholder_round_trips_and_renders` clears and then replaces
+the same placeholder, saves and reopens the deck, resolves it through the
+normal layout path, and compares the blank and changed PNG outputs. It uses
+`layout_presentation_deterministic`, so the observed pixel change comes from
+bundled or presentation-embedded fonts and never from discovered system fonts.
+Placeholder type and `idx` remain unchanged through the mutation.
 
 `to_bytes()` clones the source package, serialises the owned presentation,
 slide, and notes roots back to their relationship-resolved part names, and uses

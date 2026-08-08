@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Cursor;
@@ -10,7 +10,9 @@ use oxml_drawing::theme::CT_OfficeStyleSheet;
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
 use rpptx::{
-    Angle, CT_LineProperties, ConnectorType, Emu, Error, Fill, Presentation, ShapeKind, ShapeRef,
+    Angle, CT_LineProperties, CT_TextCharacterProperties, CT_TextParagraphProperties,
+    ConnectorType, Emu, Error, Fill, Presentation, ShapeKind, ShapeRef, TextBullet,
+    TextBulletCharacter, TextBulletChoice, TextFont,
 };
 use rpptx_layout::{
     FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,
@@ -20,6 +22,7 @@ use rpptx_oxml::placeholder::PhType;
 use rpptx_oxml::presentation::CT_Presentation;
 use rpptx_oxml::shape_tree::ShapeTreeChild;
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind};
+use rpptx_render::{RenderInput, layout_presentation_deterministic};
 
 #[path = "../examples/dump_deck.rs"]
 mod dump_deck;
@@ -54,6 +57,259 @@ fn valid_one_pixel_png() -> Vec<u8> {
         0xcf, 0xc0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc, 0x33, 0x00, 0x00, 0x00,
         0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
     ]
+}
+
+#[test]
+fn setting_text_on_placeholder_round_trips_and_renders() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add title slide");
+    let placeholder_index = presentation
+        .slide(0)
+        .unwrap()
+        .shapes()
+        .position(|shape| shape.text().is_some())
+        .expect("layout clone supplies a text placeholder");
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(placeholder_index)
+        .unwrap()
+        .set_text("")
+        .unwrap();
+    let blank_render = deterministic_render(&presentation.to_bytes().unwrap());
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(placeholder_index)
+        .unwrap()
+        .set_text("Visible changed placeholder")
+        .unwrap();
+
+    let bytes = presentation
+        .to_bytes()
+        .expect("serialize changed placeholder");
+    let reopened = Presentation::from_bytes(&bytes).expect("reopen changed placeholder");
+    assert_eq!(
+        reopened
+            .slide(0)
+            .unwrap()
+            .shape(placeholder_index)
+            .unwrap()
+            .text(),
+        Some("Visible changed placeholder".to_owned())
+    );
+    let changed_render = deterministic_render(&bytes);
+    assert_ne!(
+        changed_render, blank_render,
+        "changed text must alter pixels"
+    );
+}
+
+#[test]
+fn clearing_text_preserves_required_paragraph() {
+    let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_text("")
+        .unwrap();
+    let bytes = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert!(reopened.validate().is_empty());
+    let package = open_opc(&bytes, "F-112 empty text");
+    let slide = CT_Slide::from_xml(package.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let ShapeTreeChild::Shape(shape) = &slide.common_slide_data.shape_tree.children[0] else {
+        panic!("expected ordinary shape");
+    };
+    assert_eq!(shape.text_body.as_ref().unwrap().paragraph_count(), 1);
+}
+
+#[test]
+fn paragraph_run_font_and_bullet_properties_round_trip() {
+    let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut shape = slide.shape_mut(0).unwrap();
+    shape.set_text("first").unwrap();
+    let mut frame = shape.text_frame().unwrap();
+    let mut paragraph = frame.paragraph_mut(0).unwrap();
+    let mut paragraph_properties = CT_TextParagraphProperties::default();
+    paragraph_properties.level = Some(2);
+    paragraph.set_properties(paragraph_properties);
+    paragraph.set_bullet(Some(TextBullet {
+        choice: Some(TextBulletChoice::Character(
+            TextBulletCharacter::new("•").unwrap(),
+        )),
+        ..TextBullet::default()
+    }));
+    let mut run = paragraph.add_run(" second");
+    let mut run_properties = CT_TextCharacterProperties::default();
+    run_properties.font_size = Some(1_800);
+    run_properties.bold = Some(true);
+    run.set_properties(run_properties);
+    run.set_font(Some(TextFont::new("Carlito").unwrap()));
+
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "F-112 formatting round trip");
+    let slide = CT_Slide::from_xml(package.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let ShapeTreeChild::Shape(shape) = &slide.common_slide_data.shape_tree.children[0] else {
+        panic!("expected ordinary shape");
+    };
+    let paragraph = &shape.text_body.as_ref().unwrap().paragraphs()[0];
+    let properties = paragraph.properties.as_ref().unwrap();
+    assert_eq!(properties.level, Some(2));
+    assert!(matches!(
+        properties.bullet.as_ref().and_then(|bullet| bullet.choice.as_ref()),
+        Some(TextBulletChoice::Character(character)) if character.character == "•"
+    ));
+    let oxml_drawing::text::TextRun::Run(run) = &paragraph.runs[1] else {
+        panic!("expected appended regular run");
+    };
+    let properties = run.properties.as_ref().unwrap();
+    assert_eq!(properties.font_size, Some(1_800));
+    assert_eq!(properties.bold, Some(true));
+    assert_eq!(properties.latin.as_ref().unwrap().typeface, "Carlito");
+}
+
+#[test]
+fn text_mutation_preserves_placeholder_identity() {
+    let mut package = open_opc(&mutation_fixture_bytes(), "F-112 placeholder fixture");
+    let original = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let with_placeholder = original.replacen(
+        "<p:nvPr/>",
+        r#"<p:nvPr><p:ph type="body" idx="7"/></p:nvPr>"#,
+        1,
+    );
+    package.set_part(SLIDE_TWO_PART, with_placeholder.into_bytes());
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_text("replacement")
+        .unwrap();
+
+    let output = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "F-112 placeholder output",
+    );
+    let slide = CT_Slide::from_xml(output.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let ShapeTreeChild::Shape(shape) = &slide.common_slide_data.shape_tree.children[0] else {
+        panic!("expected ordinary shape");
+    };
+    let placeholder = shape.placeholder.as_ref().unwrap();
+    assert_eq!(placeholder.ph_type, Some(PhType::Body));
+    assert_eq!(placeholder.idx, Some(7));
+}
+
+#[test]
+fn text_mutation_preserves_unmodelled_xml_and_schema_order() {
+    let mut package = open_opc(&mutation_fixture_bytes(), "F-112 raw fixture");
+    let original = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let enriched = original.replacen(
+        "<a:bodyPr/>",
+        r#"<x:before xmlns:x="urn:f112"/><a:bodyPr/><x:after-body xmlns:x="urn:f112"/>"#,
+        1,
+    ).replacen(
+        "<a:r><a:t>plain</a:t></a:r>",
+        r#"<mc:AlternateContent xmlns:x="urn:f112"><mc:Choice Requires="x"><x:producer-marker value="kept"/></mc:Choice><mc:Fallback><a:r><a:t>fallback</a:t></a:r></mc:Fallback></mc:AlternateContent><a:fld id="{00000000-0000-0000-0000-000000000001}"><a:t>field</a:t></a:fld><a:br/><x:after-runs xmlns:x="urn:f112"/>"#,
+        1,
+    );
+    package.set_part(SLIDE_TWO_PART, enriched.clone().into_bytes());
+    let mut formatted = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let mut slide = formatted.slide_mut(0).unwrap();
+    let mut shape = slide.shape_mut(0).unwrap();
+    let mut frame = shape.text_frame().unwrap();
+    let mut paragraph = frame.paragraph_mut(0).unwrap();
+    let mut properties = CT_TextParagraphProperties::default();
+    properties.level = Some(1);
+    paragraph.set_properties(properties);
+    let formatted_output = open_opc(&formatted.to_bytes().unwrap(), "F-112 formatted raw output");
+    let formatted_xml =
+        String::from_utf8(formatted_output.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let marker = r#"<mc:AlternateContent xmlns:x="urn:f112"><mc:Choice Requires="x"><x:producer-marker value="kept"/></mc:Choice><mc:Fallback><a:r><a:t>fallback</a:t></a:r></mc:Fallback></mc:AlternateContent>"#;
+    let field =
+        r#"<a:fld id="{00000000-0000-0000-0000-000000000001}"><a:t>field</a:t></a:fld><a:br/>"#;
+    let properties_index = formatted_xml.find("<a:pPr lvl=\"1\"").unwrap();
+    let marker_index = formatted_xml.find(marker).unwrap();
+    let field_index = formatted_xml.find(field).unwrap();
+    assert!(properties_index < marker_index);
+    assert!(marker_index < field_index);
+    assert!(formatted_xml.contains(field));
+    let reparsed_xml = String::from_utf8(
+        CT_Slide::from_xml(formatted_output.get_part(SLIDE_TWO_PART).unwrap())
+            .unwrap()
+            .to_xml()
+            .unwrap(),
+    )
+    .unwrap();
+    let properties_index = reparsed_xml.find("<a:pPr lvl=\"1\"").unwrap();
+    let marker_index = reparsed_xml.find(marker).unwrap();
+    let field_index = reparsed_xml.find(field).unwrap();
+    assert!(properties_index < marker_index);
+    assert!(marker_index < field_index);
+
+    let mut package = open_opc(&mutation_fixture_bytes(), "F-112 raw replacement fixture");
+    package.set_part(SLIDE_TWO_PART, enriched.into_bytes());
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_text("ordered")
+        .unwrap();
+
+    let output = open_opc(&presentation.to_bytes().unwrap(), "F-112 raw output");
+    let xml = String::from_utf8(output.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    for marker in [
+        "<x:before ",
+        "<x:after-body ",
+        "<x:producer-marker ",
+        "<x:after-runs ",
+    ] {
+        assert!(xml.contains(marker), "missing preserved marker {marker}");
+    }
+    assert!(xml.find("<a:bodyPr").unwrap() < xml.find("<a:p>").unwrap());
+    assert!(xml.find("<a:r>").unwrap() < xml.find("<a:t>ordered</a:t>").unwrap());
+}
+
+#[test]
+fn text_mutation_indices_and_shape_kinds_are_total() {
+    let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    assert!(slide.shape_mut(999).is_none());
+    let mut shape = slide.shape_mut(0).unwrap();
+    {
+        let mut frame = shape.text_frame().unwrap();
+        assert!(frame.paragraph_mut(999).is_none());
+    }
+    let mut picture = slide.shape_mut(1).unwrap();
+    assert!(picture.text_frame().is_none());
+    assert!(matches!(
+        picture.set_text("unsupported"),
+        Err(Error::UnsupportedShapeMutation { .. })
+    ));
+}
+
+#[test]
+fn text_frame_handles_append_paragraphs_and_runs_in_order() {
+    let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut shape = slide.shape_mut(0).unwrap();
+    shape.set_text("one").unwrap();
+    let mut frame = shape.text_frame().unwrap();
+    frame.paragraph_mut(0).unwrap().add_run(" two");
+    frame.add_paragraph().set_text("three");
+    assert_eq!(frame.text(), "one two\nthree");
+
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened.slide(0).unwrap().shape(0).unwrap().text(),
+        Some("one two\nthree".to_owned())
+    );
 }
 
 #[test]
@@ -2178,6 +2434,62 @@ fn deck_name(path: &Path) -> &str {
 fn open_opc(bytes: &[u8], deck: &str) -> OpcPackage {
     OpcPackage::from_reader(Cursor::new(bytes))
         .unwrap_or_else(|error| panic!("{deck}: open OPC package: {error}"))
+}
+
+fn deterministic_render(bytes: &[u8]) -> Vec<u8> {
+    let package = open_opc(bytes, "F-112 deterministic render");
+    let presentation_part = package.main_document_part().unwrap();
+    let presentation =
+        CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let size = presentation
+        .slide_size
+        .as_ref()
+        .map_or((720.0, 540.0), |size| {
+            (size.cx.0 as f64 / 12_700.0, size.cy.0 as f64 / 12_700.0)
+        });
+    let relationship = package
+        .get_part_rels(&presentation_part)
+        .unwrap()
+        .get_by_id(&presentation.slide_ids[0].relationship_id)
+        .unwrap();
+    let slide_part = OpcPackage::resolve_rel_target(&presentation_part, &relationship.target);
+    let layout_part = related_visual_part(
+        &package,
+        &slide_part,
+        rel_types::SLIDE_LAYOUT,
+        Path::new("F-112"),
+    );
+    let master_part = related_visual_part(
+        &package,
+        &layout_part,
+        rel_types::SLIDE_MASTER,
+        Path::new("F-112"),
+    );
+    let theme_part =
+        related_visual_part(&package, &master_part, rel_types::THEME, Path::new("F-112"));
+    let slide = CT_Slide::from_xml(package.get_part(&slide_part).unwrap()).unwrap();
+    let layout = CT_SlideLayout::from_xml(package.get_part(&layout_part).unwrap()).unwrap();
+    let master = CT_SlideMaster::from_xml(package.get_part(&master_part).unwrap()).unwrap();
+    let theme = CT_OfficeStyleSheet::from_xml(package.get_part(&theme_part).unwrap()).unwrap();
+    let color_map = effective_visual_color_map(&master, &layout, &slide);
+    let resolved = ResolveCtx::new(
+        &theme,
+        color_map,
+        &master,
+        &layout,
+        &slide,
+        &presentation.default_text_style.unwrap_or_default(),
+    )
+    .resolve_slide(size)
+    .unwrap();
+    let render_input = RenderInput {
+        slides: vec![resolved],
+        media: HashMap::new(),
+        fonts: Vec::new(),
+        metadata: None,
+    };
+    let layout = layout_presentation_deterministic(&render_input).unwrap();
+    oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap()
 }
 
 fn modelled_part_bytes(

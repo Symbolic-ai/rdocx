@@ -1,6 +1,6 @@
 # F-112, Text frame mutation
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S27
 **Size**: L
 **Depends on**: F-109
@@ -134,15 +134,15 @@ alter the Word rendering fixtures or baselines.
 
 ## Implementation checklist
 
-- [ ] Add text-body construction and mutation accessors in existing DrawingML
+- [x] Add text-body construction and mutation accessors in existing DrawingML
   text files.
-- [ ] Add `ShapeMut::set_text` and behavior-bearing text-frame, paragraph, and
+- [x] Add `ShapeMut::set_text` and behavior-bearing text-frame, paragraph, and
   run handles.
-- [ ] Preserve the required paragraph and placeholder identity on replacement.
-- [ ] Expose typed paragraph, character, font, and bullet setters.
-- [ ] Add round-trip, negative, preservation, and ordered-append tests.
-- [ ] Run the rendering gate in deterministic font mode.
-- [ ] Update exactly the two listed HLD files.
+- [x] Preserve the required paragraph and placeholder identity on replacement.
+- [x] Expose typed paragraph, character, font, and bullet setters.
+- [x] Add round-trip, negative, preservation, and ordered-append tests.
+- [x] Run the rendering gate in deterministic font mode.
+- [x] Update exactly the two listed HLD files.
 
 ## Open questions
 

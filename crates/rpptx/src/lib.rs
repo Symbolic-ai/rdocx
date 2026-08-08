@@ -14,6 +14,11 @@ pub use oxml_core::units::{Angle, Emu};
 pub use oxml_drawing::fill::Fill;
 pub use oxml_drawing::line::CT_LineProperties;
 use oxml_drawing::shape_props::CT_ShapeProperties;
+use oxml_drawing::text::{CT_RegularTextRun, CT_TextBody, CT_TextParagraph};
+pub use oxml_drawing::text::{
+    CT_TextCharacterProperties, CT_TextParagraphProperties, TextBullet, TextBulletCharacter,
+    TextBulletChoice, TextFont,
+};
 use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
 use oxml_layout::MediaId;
 use oxml_media::{ImageFormat, MediaNamer, probe, resolve};
@@ -1560,6 +1565,30 @@ impl ShapeMut<'_> {
             })
     }
 
+    /// Replaces ordinary shape text without changing placeholder identity.
+    pub fn set_text(&mut self, text: &str) -> Result<()> {
+        let shape_kind = shape_kind(self.child);
+        let ShapeTreeChild::Shape(shape) = self.child else {
+            return Err(Error::UnsupportedShapeMutation {
+                operation: "set text",
+                shape_kind,
+            });
+        };
+        shape
+            .text_body
+            .get_or_insert_with(CT_TextBody::new)
+            .set_text(text);
+        Ok(())
+    }
+
+    /// Returns the ordinary shape text body for in-place mutation.
+    pub fn text_frame(&mut self) -> Option<TextFrame<'_>> {
+        match self.child {
+            ShapeTreeChild::Shape(shape) => shape.text_body.as_mut().map(|body| TextFrame { body }),
+            _ => None,
+        }
+    }
+
     fn transform_mut(&mut self, operation: &'static str) -> Result<&mut CT_Transform2D> {
         match self.child {
             ShapeTreeChild::Shape(shape) => Ok(shape
@@ -1593,6 +1622,103 @@ impl ShapeMut<'_> {
         Error::UnsupportedShapeMutation {
             operation,
             shape_kind: shape_kind(self.child),
+        }
+    }
+}
+
+/// A mutably borrowed ordinary-shape text body.
+pub struct TextFrame<'a> {
+    body: &'a mut CT_TextBody,
+}
+
+impl TextFrame<'_> {
+    /// Returns plain text in paragraph and ordered text-choice order.
+    pub fn text(&self) -> String {
+        self.body.plain_text()
+    }
+
+    /// Replaces the frame content with one paragraph and one regular run.
+    pub fn set_text(&mut self, text: &str) {
+        self.body.set_text(text);
+    }
+
+    /// Returns the number of paragraphs in the text body.
+    pub fn paragraph_count(&self) -> usize {
+        self.body.paragraph_count()
+    }
+
+    /// Returns one paragraph for in-place mutation.
+    pub fn paragraph_mut(&mut self, index: usize) -> Option<TextParagraphMut<'_>> {
+        self.body
+            .paragraph_mut(index)
+            .map(|paragraph| TextParagraphMut { paragraph })
+    }
+
+    /// Appends one empty paragraph.
+    pub fn add_paragraph(&mut self) -> TextParagraphMut<'_> {
+        TextParagraphMut {
+            paragraph: self.body.add_paragraph(),
+        }
+    }
+}
+
+/// A mutably borrowed DrawingML text paragraph.
+pub struct TextParagraphMut<'a> {
+    paragraph: &'a mut CT_TextParagraph,
+}
+
+impl TextParagraphMut<'_> {
+    /// Replaces fields, breaks, and runs with one regular run.
+    pub fn set_text(&mut self, text: &str) {
+        self.paragraph.set_text(text);
+    }
+
+    /// Appends a regular run after the existing ordered text choices.
+    pub fn add_run(&mut self, text: &str) -> TextRunMut<'_> {
+        TextRunMut {
+            run: self.paragraph.add_run(text),
+        }
+    }
+
+    /// Replaces the paragraph's direct typed properties.
+    pub fn set_properties(&mut self, properties: CT_TextParagraphProperties) {
+        *self.paragraph.properties_mut() = properties;
+    }
+
+    /// Sets or clears the direct paragraph bullet.
+    pub fn set_bullet(&mut self, bullet: Option<TextBullet>) {
+        if let Some(properties) = self.paragraph.properties.as_mut() {
+            properties.bullet = bullet;
+        } else if bullet.is_some() {
+            self.paragraph.properties_mut().bullet = bullet;
+        }
+    }
+}
+
+/// A mutably borrowed regular DrawingML text run.
+pub struct TextRunMut<'a> {
+    run: &'a mut CT_RegularTextRun,
+}
+
+impl TextRunMut<'_> {
+    /// Replaces text while retaining the run's typed and unmodelled state.
+    pub fn set_text(&mut self, text: &str) {
+        self.run.set_text(text);
+    }
+
+    /// Replaces the run's direct typed character properties.
+    pub fn set_properties(&mut self, properties: CT_TextCharacterProperties) {
+        self.run.properties = Some(properties);
+    }
+
+    /// Sets or clears the direct Latin typeface.
+    pub fn set_font(&mut self, font: Option<TextFont>) {
+        if let Some(properties) = self.run.properties.as_mut() {
+            properties.latin = font;
+        } else if font.is_some() {
+            let mut properties = CT_TextCharacterProperties::default();
+            properties.latin = font;
+            self.run.properties = Some(properties);
         }
     }
 }
