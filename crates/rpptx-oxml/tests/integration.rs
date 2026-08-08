@@ -610,7 +610,7 @@ fn presentation_reads_any_prefix_and_writes_fixed_prefixes_in_schema_order() {
 }
 
 #[test]
-fn slide_ids_preserve_order_and_enforce_powerpoint_bounds() {
+fn slide_ids_preserve_order_and_defer_semantic_validation() {
     let valid = format!(
         r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:sldIdLst><p:sldId id="2147483647" r:id="last"/><p:sldId id="256" r:id="first"/></p:sldIdLst><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
     );
@@ -624,24 +624,25 @@ fn slide_ids_preserve_order_and_enforce_powerpoint_bounds() {
         vec![2_147_483_647, 256]
     );
 
-    for invalid in [
+    for accepted_for_facade_validation in [
         r#"<p:sldId id="255" r:id="rId1"/>"#,
         r#"<p:sldId id="2147483648" r:id="rId1"/>"#,
-        r#"<p:sldId id="not-an-integer" r:id="rId1"/>"#,
     ] {
         let xml = format!(
-            r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:sldIdLst>{invalid}</p:sldIdLst><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
+            r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:sldIdLst>{accepted_for_facade_validation}</p:sldIdLst><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
         );
-        assert!(
-            CT_Presentation::from_xml(xml.as_bytes()).is_err(),
-            "{invalid}"
-        );
+        assert!(CT_Presentation::from_xml(xml.as_bytes()).is_ok());
     }
+
+    let invalid = format!(
+        r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:sldIdLst><p:sldId id="not-an-integer" r:id="rId1"/></p:sldIdLst><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
+    );
+    assert!(CT_Presentation::from_xml(invalid.as_bytes()).is_err());
 
     let duplicate = format!(
         r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:sldIdLst><p:sldId id="256" r:id="rId1"/><p:sldId id="256" r:id="rId2"/></p:sldIdLst><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
     );
-    assert!(CT_Presentation::from_xml(duplicate.as_bytes()).is_err());
+    assert!(CT_Presentation::from_xml(duplicate.as_bytes()).is_ok());
 
     for invalid_size in [
         r#"<p:notesSz cy="9144000"/>"#,

@@ -1,6 +1,6 @@
 # F-108, validate()
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S26
 **Size**: M
 **Depends on**: F-107
@@ -114,13 +114,13 @@ state and does not alter Word rendering output.
 
 ## Implementation checklist
 
-- [ ] Add the exact public `ValidationIssue` enum and deterministic collector.
-- [ ] Validate slide ids, recursive shapes, text bodies, and placeholders.
-- [ ] Validate content types, relationship references and targets, and media
+- [x] Add the exact public `ValidationIssue` enum and deterministic collector.
+- [x] Validate slide ids, recursive shapes, text bodies, and placeholders.
+- [x] Validate content types, relationship references and targets, and media
   reachability.
-- [ ] Validate custom-show ids plus slide-layout and master-theme links.
-- [ ] Add `save()` and debug assertions at both serialization boundaries.
-- [ ] Add one corrupted-deck gate per variant and require the full corpus.
+- [x] Validate custom-show ids plus slide-layout and master-theme links.
+- [x] Add `save()` and debug assertions at both serialization boundaries.
+- [x] Add one corrupted-deck gate per variant and require the full corpus.
 
 ## Open questions
 

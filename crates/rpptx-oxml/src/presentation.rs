@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::io::Write;
 
 use oxml_core::OxmlError;
@@ -8,7 +7,7 @@ use oxml_drawing::namespace::A_NS;
 use oxml_drawing::order::OrderedRawChildren;
 use oxml_drawing::text::CT_TextListStyle;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::namespace::{
     FIXED_MODEL_PREFIXES, NamespaceBindings, P_NS, R_NS, all_attributes, root_attributes,
@@ -323,16 +322,6 @@ impl CT_Presentation {
     }
 
     fn validate(&self) -> Result<()> {
-        let mut ids = HashSet::new();
-        for slide in &self.slide_ids {
-            validate_slide_id(slide.id)?;
-            if !ids.insert(slide.id) {
-                return Err(invalid_value(format!(
-                    "duplicate PowerPoint slide id {}",
-                    slide.id
-                )));
-            }
-        }
         if let Some(size) = &self.slide_size {
             validate_size("sldSz", size)?;
         }
@@ -383,6 +372,92 @@ impl CT_Presentation {
     }
 }
 
+/// Returns relationship ids referenced by slides inside preserved custom shows.
+pub fn custom_show_relationship_ids(xml: &[u8]) -> Result<Vec<String>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut scopes = vec![NamespaceBindings::default()];
+    let mut depth = 0usize;
+    let mut custom_show_depth = None;
+    let mut ids = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let parent = scopes.last().ok_or_else(|| {
+                    invalid_value("missing custom-show namespace scope".to_owned())
+                })?;
+                let scope = parent.with_start(&element)?;
+                let is_custom_show = scope.element_uri(element.name().as_ref()) == Some(P_NS)
+                    && local_name(element.name().as_ref()) == b"custShowLst";
+                if custom_show_depth.is_some() || is_custom_show {
+                    collect_custom_show_slide_id(&element, &scope, &mut ids)?;
+                }
+                scopes.push(scope);
+                depth += 1;
+                if is_custom_show {
+                    custom_show_depth = Some(depth);
+                }
+            }
+            Event::Empty(element) => {
+                let parent = scopes.last().ok_or_else(|| {
+                    invalid_value("missing custom-show namespace scope".to_owned())
+                })?;
+                let scope = parent.with_start(&element)?;
+                if custom_show_depth.is_some() {
+                    collect_custom_show_slide_id(&element, &scope, &mut ids)?;
+                }
+            }
+            Event::End(_) => {
+                if custom_show_depth == Some(depth) {
+                    custom_show_depth = None;
+                }
+                if depth == 0 || scopes.len() == 1 {
+                    return Err(invalid_value(
+                        "custom-show XML has an unmatched closing tag".to_owned(),
+                    ));
+                }
+                depth -= 1;
+                scopes.pop();
+            }
+            Event::Eof => {
+                if depth != 0 || scopes.len() != 1 {
+                    return Err(invalid_value(
+                        "custom-show XML ended before its root closed".to_owned(),
+                    ));
+                }
+                return Ok(ids);
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn collect_custom_show_slide_id(
+    element: &BytesStart<'_>,
+    scope: &NamespaceBindings,
+    ids: &mut Vec<String>,
+) -> Result<()> {
+    if scope.element_uri(element.name().as_ref()) != Some(P_NS)
+        || local_name(element.name().as_ref()) != b"sld"
+    {
+        return Ok(());
+    }
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        if scope.attribute_uri(attribute.key.as_ref()) == Some(R_NS)
+            && local_name(attribute.key.as_ref()) == b"id"
+        {
+            ids.push(
+                attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
+                    .into_owned(),
+            );
+        }
+    }
+    Ok(())
+}
+
 fn parse_slide_list(xml: &[u8], inherited: &NamespaceBindings) -> Result<ParsedSlideList> {
     let mut reader = Reader::from_reader(xml);
     let mut list_namespaces = inherited.clone();
@@ -425,15 +500,6 @@ fn parse_slide_list(xml: &[u8], inherited: &NamespaceBindings) -> Result<ParsedS
                 }
             }
             Event::End(element) if local_name(element.name().as_ref()) == b"sldIdLst" => {
-                let mut unique = HashSet::new();
-                for item in &items {
-                    if !unique.insert(item.id) {
-                        return Err(invalid_value(format!(
-                            "duplicate PowerPoint slide id {}",
-                            item.id
-                        )));
-                    }
-                }
                 return Ok((items, attributes, raw_children));
             }
             Event::Eof => return Err(OxmlError::MissingElement("closing p:sldIdLst".to_owned())),
@@ -502,7 +568,6 @@ fn parse_slide_id(xml: &[u8], namespaces: &NamespaceBindings) -> Result<CT_Slide
     let (id, relationship_id, raw_attributes, raw_children) =
         parse_identifier(xml, "sldId", namespaces)?;
     let id = id.ok_or_else(|| missing_attribute("sldId", "id"))?;
-    validate_slide_id(id)?;
     Ok(CT_SlideId {
         id,
         relationship_id,

@@ -30,6 +30,7 @@ const PRESENTATION_PART: &str = "/custom/presentation-main.xml";
 const SLIDE_ONE_PART: &str = "/custom/slides/first.xml";
 const SLIDE_TWO_PART: &str = "/custom/slides/second.xml";
 const NOTES_PART: &str = "/custom/notes/speaker.xml";
+const LAYOUT_PART: &str = "/custom/layouts/validation.xml";
 const POWERPOINT_VERSION: &str = "16.104";
 const POWERPOINT_BUILD: &str = "16.104.25121423";
 const POWERPOINT_APP_BUILD: &str = "1214";
@@ -115,6 +116,33 @@ fn three_added_slides_have_unique_ids_and_reopen() {
     if let Some(path) = std::env::var_os("RPPTX_ACCEPTANCE_OUTPUT") {
         fs::write(path, bytes).expect("write native acceptance deck");
     }
+}
+
+#[test]
+fn all_pinned_corpus_decks_validate_cleanly() {
+    let Some(paths) = corpus_paths() else {
+        return;
+    };
+    for path in paths {
+        let deck = deck_name(&path);
+        let bytes = fs::read(&path).unwrap_or_else(|error| panic!("{deck}: {error}"));
+        let presentation = Presentation::from_bytes(&bytes)
+            .unwrap_or_else(|error| panic!("{deck}: open presentation: {error}"));
+        let issues = presentation.validate();
+        assert!(issues.is_empty(), "{deck}: {issues:?}");
+    }
+}
+
+#[test]
+fn save_writes_the_same_bytes_as_to_bytes() {
+    let presentation = Presentation::new().expect("open bundled template");
+    let output = std::env::temp_dir().join(format!("rpptx-f108-save-{}.pptx", std::process::id()));
+    presentation.save(&output).expect("save presentation");
+    assert_eq!(
+        fs::read(&output).expect("read saved deck"),
+        presentation.to_bytes().unwrap()
+    );
+    fs::remove_file(output).expect("remove saved deck");
 }
 
 #[test]
@@ -1477,6 +1505,7 @@ fn fixture_package() -> OpcPackage {
     package.set_part(SLIDE_ONE_PART, simple_slide_xml());
     package.set_part(SLIDE_TWO_PART, rich_slide_xml());
     package.set_part(NOTES_PART, notes_xml());
+    package.set_part(LAYOUT_PART, simple_layout_xml());
     package.set_part("/custom/opaque/data.bin", vec![0, 1, 2, 255]);
     package.set_part(
         "/custom/opaque/raw.xml",
@@ -1491,6 +1520,12 @@ fn fixture_package() -> OpcPackage {
     package
         .content_types
         .add_override(NOTES_PART, content_types::NOTES_SLIDE);
+    package
+        .content_types
+        .add_override(LAYOUT_PART, content_types::SLIDE_LAYOUT);
+    package
+        .content_types
+        .add_default("bin", "application/octet-stream");
     let relationships = package.get_or_create_part_rels(PRESENTATION_PART);
     relationships.add_with_id("ordered-first", rel_types::SLIDE, "slides/second.xml");
     relationships.add_with_id("ordered-second", rel_types::SLIDE, "slides/first.xml");
@@ -1499,6 +1534,12 @@ fn fixture_package() -> OpcPackage {
         rel_types::NOTES_SLIDE,
         "../notes/speaker.xml",
     );
+    package
+        .get_or_create_part_rels(SLIDE_ONE_PART)
+        .add(rel_types::SLIDE_LAYOUT, "../layouts/validation.xml");
+    package
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .add(rel_types::SLIDE_LAYOUT, "../layouts/validation.xml");
     package
 }
 
@@ -1516,6 +1557,13 @@ fn presentation_xml(slides: &[(u32, &str)]) -> Vec<u8> {
 fn simple_slide_xml() -> Vec<u8> {
     format!(
         r#"<p:sld xmlns:p="{P_NS}" xmlns:a="{A_NS}"><p:cSld name="First in storage, second in order"><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld></p:sld>"#
+    )
+    .into_bytes()
+}
+
+fn simple_layout_xml() -> Vec<u8> {
+    format!(
+        r#"<p:sldLayout xmlns:p="{P_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld></p:sldLayout>"#
     )
     .into_bytes()
 }

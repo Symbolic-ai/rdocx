@@ -749,7 +749,6 @@ mod tests {
 
         let shell_cases: &[&[u8]] = &[
             br#"<q:txBody><q:p/></q:txBody>"#,
-            br#"<q:txBody><q:bodyPr/></q:txBody>"#,
             br#"<q:txBody/>"#,
             br#"<q:txBody><q:bodyPr/><q:bodyPr/><q:p/></q:txBody>"#,
             br#"<q:txBody><q:bodyPr/><q:lstStyle/><q:lstStyle/><q:p/></q:txBody>"#,
@@ -759,6 +758,10 @@ mod tests {
             assert!(result.is_ok(), "text-body parser panicked");
             assert!(result.unwrap().is_err(), "malformed text body parsed");
         }
+
+        let empty = CT_TextBody::from_xml(br#"<q:txBody><q:bodyPr/></q:txBody>"#).unwrap();
+        assert_eq!(empty.paragraph_count(), 0);
+        assert!(empty.to_xml().is_ok());
 
         let mut properties = CT_TextBodyProperties {
             left_inset: Some(Coordinate32Value::UniversalMeasure("NaNin".to_owned())),

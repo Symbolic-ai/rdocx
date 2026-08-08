@@ -143,9 +143,6 @@ impl CT_TextBody {
         }
 
         let body_properties = body_properties.ok_or(TextError::MissingBodyProperties)?;
-        if paragraphs.is_empty() {
-            return Err(TextError::MissingParagraph);
-        }
         Ok(Self {
             body_properties,
             list_style,
@@ -168,9 +165,6 @@ impl CT_TextBody {
 
     /// Writes the text body using a caller-selected OOXML wrapper tag.
     pub fn write_xml_as<W: Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
-        if self.paragraphs.is_empty() {
-            return Err(TextError::MissingParagraph);
-        }
         writer
             .write_event(Event::Start(BytesStart::new(tag)))
             .map_err(OxmlError::from)?;

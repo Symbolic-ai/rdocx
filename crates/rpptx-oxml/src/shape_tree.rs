@@ -953,6 +953,11 @@ impl CT_ShapeTree {
         }
     }
 
+    /// Returns the shape tree's own `p:cNvPr/@id`, when present.
+    pub fn non_visual_id(&self) -> Option<u32> {
+        self.non_visual_group_properties.non_visual_id
+    }
+
     /// Parses a complete `p:spTree` with any prefix bound to PresentationML.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         Self::from_fragment(xml, &[])
