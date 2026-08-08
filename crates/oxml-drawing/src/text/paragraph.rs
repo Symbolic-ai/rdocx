@@ -1081,6 +1081,23 @@ pub struct CT_RegularTextRun {
 }
 
 impl CT_RegularTextRun {
+    /// Creates a regular text run without direct character formatting.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            properties: None,
+            text: TextValue {
+                value: text.into(),
+                ..TextValue::default()
+            },
+            raw_children: OrderedRawChildren::default(),
+        }
+    }
+
+    /// Replaces the run text while retaining properties and unmodelled XML.
+    pub fn set_text(&mut self, text: &str) {
+        self.text.value = text.to_owned();
+    }
+
     /// Parses one complete `a:r` element with any prefix.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         parse_complete(xml, b"r", Self::from_element, |_| {
@@ -1407,6 +1424,54 @@ pub struct CT_TextParagraph {
 }
 
 impl CT_TextParagraph {
+    /// Returns direct properties, inserting them before preserved content.
+    pub fn properties_mut(&mut self) -> &mut CT_TextParagraphProperties {
+        if self.properties.is_none() {
+            let mut raw_children = OrderedRawChildren::default();
+            for boundary in 0..=2 + self.runs.len() {
+                let new_boundary = if boundary == 0 { 1 } else { boundary };
+                for child in self.raw_children.at(boundary) {
+                    raw_children.push(new_boundary, child.to_vec());
+                }
+            }
+            self.raw_children = raw_children;
+            self.properties = Some(CT_TextParagraphProperties::default());
+        }
+        self.properties
+            .as_mut()
+            .expect("paragraph properties were inserted")
+    }
+
+    /// Replaces ordered text choices with one regular run.
+    pub fn set_text(&mut self, text: &str) {
+        let old_run_count = self.runs.len();
+        let mut raw_children = OrderedRawChildren::default();
+        for boundary in 0..=2 + old_run_count {
+            let new_boundary = if boundary <= 1 {
+                boundary
+            } else if boundary <= 1 + old_run_count {
+                2
+            } else {
+                3
+            };
+            for child in self.raw_children.at(boundary) {
+                raw_children.push(new_boundary, child.to_vec());
+            }
+        }
+        self.raw_children = raw_children;
+        self.runs = vec![TextRun::Run(CT_RegularTextRun::new(text))];
+    }
+
+    /// Appends one regular run after the existing ordered text choices.
+    pub fn add_run(&mut self, text: &str) -> &mut CT_RegularTextRun {
+        self.raw_children.shift_boundaries_from(2 + self.runs.len());
+        self.runs.push(TextRun::Run(CT_RegularTextRun::new(text)));
+        let Some(TextRun::Run(run)) = self.runs.last_mut() else {
+            unreachable!("the appended text choice is a regular run")
+        };
+        run
+    }
+
     /// Parses one complete `a:p` element with any prefix.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         parse_complete(xml, b"p", Self::from_element, |_| Ok(Self::default()))

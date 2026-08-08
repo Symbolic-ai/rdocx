@@ -6,12 +6,13 @@ use oxml_drawing::fill::BlipFill;
 use oxml_drawing::namespace::A_NS;
 use oxml_drawing::order::OrderedRawChildren;
 use oxml_drawing::shape_props::CT_ShapeProperties;
+use oxml_drawing::xfrm::CT_Transform2D;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, non_visual_drawing_id,
-    root_attributes, self_contained_attributes,
+    root_attributes, self_contained_attributes, set_non_visual_drawing_name,
 };
 use crate::placeholder::{ApplicationProperties, CT_Placeholder, parse_application_properties};
 
@@ -51,8 +52,32 @@ struct ParsedNonVisualPicture {
 }
 
 impl CT_Picture {
+    /// Creates a relationship-backed picture with canonical non-visual shells.
+    pub fn new(
+        id: u32,
+        name: &str,
+        relationship_id: &str,
+        transform: CT_Transform2D,
+    ) -> Result<Self> {
+        let name = quick_xml::escape::escape(name);
+        let relationship_id = quick_xml::escape::escape(relationship_id);
+        let transform_xml = transform.to_xml().map_err(drawing_error)?;
+        let transform_xml = std::str::from_utf8(&transform_xml)?;
+        Self::from_xml(
+            format!(
+                r#"<p:pic xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><p:nvPicPr><p:cNvPr id="{id}" name="{name}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="{relationship_id}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>{transform_xml}</p:spPr></p:pic>"#
+            )
+            .as_bytes(),
+        )
+    }
+
     pub(crate) fn non_visual_id(&self) -> Option<u32> {
         non_visual_drawing_id(&self.raw.non_visual_drawing_properties)
+    }
+
+    /// Changes the producer-facing non-visual picture name.
+    pub fn set_name(&mut self, name: &str) -> Result<()> {
+        set_non_visual_drawing_name(&mut self.raw.non_visual_drawing_properties, name)
     }
 
     /// Parses a complete `p:pic` with any prefix bound to PresentationML.
@@ -649,4 +674,49 @@ fn emit_raw<'a, W: Write>(
         writer.get_mut().write_all(child)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use oxml_core::units::Emu;
+    use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
+
+    use super::CT_Picture;
+
+    #[test]
+    fn picture_constructor_round_trips_in_schema_order() {
+        let mut transform = CT_Transform2D::default();
+        transform.offset = Some(CT_Point2D {
+            x: Emu(10),
+            y: Emu(20),
+        });
+        transform.extent = Some(CT_PositiveSize2D {
+            cx: Emu(30),
+            cy: Emu(40),
+        });
+        let picture = CT_Picture::new(7, "Picture & 7", "rId9", transform).unwrap();
+
+        let xml = picture.to_xml().unwrap();
+        let text = String::from_utf8(xml.clone()).unwrap();
+        assert!(text.contains("<p:cNvPr id=\"7\" name=\"Picture &amp; 7\"/>"));
+        assert!(text.contains("r:embed=\"rId9\""));
+        assert!(text.contains("<a:off x=\"10\" y=\"20\"/>"));
+        assert!(text.contains("<a:ext cx=\"30\" cy=\"40\"/>"));
+        let non_visual = text.find("<p:nvPicPr").unwrap();
+        let blip_fill = text.find("<p:blipFill").unwrap();
+        let shape_properties = text.find("<p:spPr").unwrap();
+        assert!(non_visual < blip_fill);
+        assert!(blip_fill < shape_properties);
+
+        let reparsed = CT_Picture::from_xml(&xml).unwrap();
+        assert_eq!(reparsed.non_visual_id(), Some(7));
+        assert_eq!(
+            reparsed.blip_fill.unwrap().blip.unwrap().embed.as_deref(),
+            Some("rId9")
+        );
+        assert_eq!(
+            reparsed.shape_properties.transform,
+            picture.shape_properties.transform
+        );
+    }
 }

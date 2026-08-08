@@ -157,9 +157,10 @@ impl MediaNamer {
 }
 ```
 
-**Sniffing beats the extension.** Today the extension is trusted, so a `.png`
-that is really a JPEG gets the wrong content type. This is the bug class the
-crate exists to eliminate.
+**Sniffing beats the extension.** `resolve` uses detected image bytes before a
+filename extension, so a `.png` that is really a JPEG receives the JPEG
+extension and content type. Unknown bytes fall back through a recognised
+filename extension and finally to PNG for compatibility.
 
 **`native_size` takes the DPI rather than baking one in**, because the right
 default differs by consumer: python-docx assumes 72 when a file declares none,
@@ -170,8 +171,16 @@ zero. The method returns `None` if either effective DPI is not finite and
 positive, or if a converted dimension is outside the `i64` range.
 
 `NativeSize` keeps the result dependency-free and exposes explicit EMU fields.
-The later rdocx consumer cutover supplies 72 for python-docx parity without
-adding an `oxml-core` edge to `oxml-media`.
+The PresentationML picture insertion path supplies 72 for python-pptx parity
+without adding an `oxml-core` edge to `oxml-media`.
+
+`rpptx::Presentation` scans `/ppt/media/` into a content-hash `MediaStore` when
+it opens. Insertion compares the complete byte string inside each hash bucket,
+reuses an equal package-wide media part, and otherwise allocates the next
+numbered part after the greatest occupied suffix. The sniffed canonical
+extension and content type are registered with the package. Each source slide
+creates or reuses its own internal image relationship to that shared part, with
+a relative target resolved from the slide part name.
 
 Header parsing is lifted from the PDF crate, where `jpeg_dimensions` and the
 PNG IHDR reader are currently private. The JPEG walk classifies SOI, TEM and

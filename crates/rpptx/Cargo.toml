@@ -16,6 +16,8 @@ default = ["default-template"]
 default-template = []
 
 [dependencies]
+oxml-core.workspace = true
+oxml-drawing.workspace = true
 oxml-layout.workspace = true
 oxml-media.workspace = true
 oxml-opc.workspace = true

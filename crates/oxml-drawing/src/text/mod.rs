@@ -40,7 +40,23 @@ pub struct CT_TextBody {
     raw_children: OrderedRawChildren,
 }
 
+impl Default for CT_TextBody {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CT_TextBody {
+    /// Creates a minimal valid text body with one empty paragraph.
+    pub fn new() -> Self {
+        Self {
+            body_properties: CT_TextBodyProperties::default(),
+            list_style: None,
+            paragraphs: vec![CT_TextParagraph::default()],
+            raw_children: OrderedRawChildren::default(),
+        }
+    }
+
     /// Parses a complete `a:txBody` while retaining later text stages.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         let mut reader = Reader::from_reader(xml);
@@ -222,6 +238,36 @@ impl CT_TextBody {
 
     pub fn paragraphs(&self) -> &[CT_TextParagraph] {
         &self.paragraphs
+    }
+
+    /// Replaces all text content while retaining body-level state.
+    pub fn set_text(&mut self, text: &str) {
+        let old_paragraph_count = self.paragraphs.len();
+        let mut paragraph = self.paragraphs.drain(..).next().unwrap_or_default();
+        paragraph.set_text(text);
+        self.paragraphs.push(paragraph);
+
+        let mut raw_children = OrderedRawChildren::default();
+        for boundary in 0..=2 + old_paragraph_count {
+            let new_boundary = boundary.min(3);
+            for child in self.raw_children.at(boundary) {
+                raw_children.push(new_boundary, child.to_vec());
+            }
+        }
+        self.raw_children = raw_children;
+    }
+
+    /// Returns one paragraph for in-place mutation.
+    pub fn paragraph_mut(&mut self, index: usize) -> Option<&mut CT_TextParagraph> {
+        self.paragraphs.get_mut(index)
+    }
+
+    /// Appends one empty paragraph after all existing paragraphs.
+    pub fn add_paragraph(&mut self) -> &mut CT_TextParagraph {
+        self.raw_children
+            .shift_boundaries_from(2 + self.paragraphs.len());
+        self.paragraphs.push(CT_TextParagraph::default());
+        self.paragraphs.last_mut().expect("paragraph was appended")
     }
 
     pub fn raw_children(&self) -> &OrderedRawChildren {

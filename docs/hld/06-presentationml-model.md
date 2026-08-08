@@ -37,7 +37,7 @@ write at their fixed root locations. The modelled `p:hf` writes with the fixed
 attributes, and header-footer children retain their original payload and
 relative positions.
 
-## Public read facade
+## Public facade
 
 `rpptx::Presentation` opens a path or byte slice and owns the OPC package, the
 typed presentation root, and the ordered slides resolved from `p:sldIdLst`.
@@ -64,10 +64,142 @@ iteration. Ordinary shapes return their text-body text. Table frames return
 row-major cell text with tabs between cells and newlines between rows. Other
 shape kinds have no direct text.
 
+`slide_mut(index)` exposes a borrowed `SlideMut` handle. Its `shape(index)`
+method retains read access, while `shape_mut(index)` returns a `ShapeMut` for an
+immediate z-order child. `ShapeMut::child_mut(index)` recurses through group
+children only. The selected `mc:Fallback` view remains read-only.
+
+Position, size, rotation, and name setters support ordinary shapes, pictures,
+graphic frames, groups, and connectors. Fill and line setters support ordinary
+shapes, pictures, and connectors because those kinds own typed shape
+properties. Adjustment mutation supports finite values on preset geometry.
+Unsupported shape kinds and unsupported geometry return concrete facade
+errors. Indexed access remains total and returns `Option`.
+
+Ordinary shapes expose text mutation through behavior-bearing borrowed
+handles:
+
+```rust
+ShapeMut::set_text(&mut self, text: &str) -> Result<()>;
+ShapeMut::text_frame(&mut self) -> Option<TextFrame<'_>>;
+TextFrame::paragraph_mut(&mut self, index: usize) -> Option<TextParagraphMut<'_>>;
+TextFrame::add_paragraph(&mut self) -> TextParagraphMut<'_>;
+TextParagraphMut::add_run(&mut self, text: &str) -> TextRunMut<'_>;
+```
+
+`TextFrame` also reads and replaces whole-frame text. Paragraph handles replace
+text, paragraph properties, and bullets. Run handles replace text, character
+properties, and the direct Latin font. The typed formatting values are
+re-exported by `rpptx`. Structural append returns the newly inserted borrowed
+item, and Rust's borrow rules prevent a live nested handle from being
+invalidated by another structural mutation.
+
+Whole-frame replacement creates a minimal body when needed and always retains
+one paragraph. It preserves existing body properties, list style,
+first-paragraph formatting, end properties, and placeholder metadata. Existing
+fields and line breaks survive property-only edits. Explicit paragraph text
+replacement removes its old run choices. Inserting absent paragraph properties
+places them before preserved markup-compatibility run content, while later raw
+boundaries and bytes remain unchanged. Unsupported shape kinds return the
+normal contextual mutation error, and a shape without a text body returns no
+text-frame handle.
+
+`SlideMut` also exposes the direct shape construction surface:
+
+```rust
+pub enum ConnectorType { Straight, Elbow, Curve }
+
+pub fn add_textbox(
+    &mut self, left: Emu, top: Emu, width: Emu, height: Emu,
+) -> Result<ShapeMut<'_>>;
+pub fn add_shape(
+    &mut self, preset: &str,
+    left: Emu, top: Emu, width: Emu, height: Emu,
+) -> Result<ShapeMut<'_>>;
+pub fn add_connector(
+    &mut self, connector: ConnectorType,
+    begin_x: Emu, begin_y: Emu, end_x: Emu, end_y: Emu,
+) -> Result<ShapeMut<'_>>;
+pub fn add_group_shape(&mut self) -> Result<ShapeMut<'_>>;
+```
+
+The owning facade adds pictures because media parts and relationships belong to
+the presentation package rather than to a borrowed slide handle:
+
+```rust
+pub fn add_picture(
+    &mut self,
+    slide_index: usize,
+    image_data: &[u8],
+    image_filename: &str,
+    left: Emu,
+    top: Emu,
+    width: Option<Emu>,
+    height: Option<Emu>,
+) -> Result<ShapeRef<'_>>;
+```
+
+With neither extent supplied, `add_picture` probes the image and uses its
+native size with a 72-DPI fallback. With exactly one extent supplied, it infers
+the other from the pixel aspect ratio and truncates toward zero. With both
+supplied, it does not require intrinsic metadata. Unsupported bytes, missing
+intrinsic dimensions, out-of-range inference, and an invalid slide index
+return contextual errors without changing the presentation.
+
+Picture insertion reuses equal media bytes package-wide and creates or reuses
+an internal image relationship in the target slide's own scope. Package,
+media-store, and relationship changes remain staged until picture construction
+succeeds. The picture receives a tree-wide allocated id and deterministic name,
+then its canonical `p:nvPicPr`, relationship-backed `p:blipFill`, and typed
+`p:spPr` shell append at top z-order.
+
+An ordinary shape has canonical non-visual properties, a typed transform,
+preset geometry, and a minimal text body. `add_shape` keeps the string API but
+accepts only names in the generated table of all 187 ECMA preset shapes. An
+unknown name returns a contextual error without changing the slide. A textbox
+uses `rect`, sets `txBox="1"`, has `a:noFill`, and contains `a:bodyPr`,
+`a:lstStyle`, and one required paragraph. An empty group contains the required
+`p:nvGrpSpPr` and `p:grpSpPr` shells, with no invented transform or members.
+
+A constructed connector is free-standing and uses `line`, `bentConnector3`,
+or `curvedConnector3` for `Straight`, `Elbow`, or `Curve`. Its transform offset
+is the componentwise minimum endpoint, its extents are the absolute endpoint
+spans, and its horizontal and vertical flips retain endpoint direction. A
+horizontal or vertical connector may have one zero extent. A span that cannot
+fit in the signed EMU representation returns a contextual error.
+
+Every shape constructor, including the owning picture operation, rescans the
+tree immediately before allocation, derives a deterministic producer name from
+the allocated id, and appends at top z-order. The append operation shifts
+raw-child boundaries at the old trailing position before adding the typed
+member. Preserved schema-final content such as `p:extLst` therefore remains
+after the new member, while all raw subtrees retain their bytes and relative
+positions.
+
+The ignored integration gate
+`all_shape_constructors_open_in_powerpoint_without_repair` builds all four
+forms in a tree with preserved schema-final extension content. The generated
+deck opens without repair in pinned Microsoft PowerPoint 16.104, bundle
+16.104.25121423.
+
+The picture native-size comparison uses pinned python-pptx 1.0.2. The ignored
+integration gate `added_picture_validates_and_opens_without_repair` confirms
+that a generated picture deck validates and opens without repair in the same
+pinned PowerPoint bundle.
+
+The text mutation gate
+`setting_text_on_placeholder_round_trips_and_renders` clears and then replaces
+the same placeholder, saves and reopens the deck, resolves it through the
+normal layout path, and compares the blank and changed PNG outputs. It uses
+`layout_presentation_deterministic`, so the observed pixel change comes from
+bundled or presentation-embedded fonts and never from discovered system fonts.
+Placeholder type and `idx` remain unchanged through the mutation.
+
 `to_bytes()` clones the source package, serialises the owned presentation,
 slide, and notes roots back to their relationship-resolved part names, and uses
-the deterministic OPC writer. The read facade has no mutation surface. Parts
-outside those owned roots remain the exact source bytes.
+the deterministic OPC writer. Typed edits retain unmodelled attributes and
+children in their raw slots and preserve schema child order. Parts outside
+those owned roots remain the exact source bytes.
 
 ## `presentation.xml`
 
@@ -198,9 +330,13 @@ and children remain in their ordered schema slots and round-trip without being
 interpreted.
 
 **`p:cNvPr/@id` must be unique within one `spTree`**, including inside nested
-groups and inside `mc:AlternateContent` fallbacks. A `ShapeIdAllocator` scans
-the whole tree and hands out ids from 2, because the tree's own `p:nvGrpSpPr`
-takes 1.
+groups, preserved raw members, and every branch of `mc:AlternateContent`. A
+`ShapeIdAllocator` retains typed recursive scanning and also performs a
+namespace-resolved scan of the complete preserved tree. PresentationML aliases
+are accepted, foreign `cNvPr` elements are ignored, and non-selected
+compatibility choices still reserve their ids. Allocation starts at 2 because
+the tree's own `p:nvGrpSpPr` takes 1, fills unused gaps, and reserves each
+result.
 
 ## Placeholders
 

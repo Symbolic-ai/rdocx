@@ -9,17 +9,32 @@ use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::path::Path;
 
+use oxml_core::OxmlError;
+pub use oxml_core::units::{Angle, Emu};
+pub use oxml_drawing::fill::Fill;
+pub use oxml_drawing::line::CT_LineProperties;
+use oxml_drawing::shape_props::CT_ShapeProperties;
+use oxml_drawing::text::{CT_RegularTextRun, CT_TextBody, CT_TextParagraph};
+pub use oxml_drawing::text::{
+    CT_TextCharacterProperties, CT_TextParagraphProperties, TextBullet, TextBulletCharacter,
+    TextBulletChoice, TextFont,
+};
+use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
 use oxml_layout::MediaId;
-use oxml_media::{MediaNamer, resolve};
+use oxml_media::{ImageFormat, MediaNamer, probe, resolve};
 use oxml_opc::content_types;
 use oxml_opc::relationship::{Relationship, rel_types};
 use oxml_opc::{OpcError, OpcPackage, Relationships};
+use rpptx_oxml::connector::CT_ConnectionShape;
 use rpptx_oxml::graphic_frame::GraphicDataPayload;
 use rpptx_oxml::notes_parts::CT_NotesSlide;
+use rpptx_oxml::picture::CT_Picture;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
 use rpptx_oxml::presentation::{CT_Presentation, CT_SlideId, custom_show_relationship_ids};
 use rpptx_oxml::relmap::relationship_ids;
-use rpptx_oxml::shape_tree::{CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild};
+use rpptx_oxml::shape_tree::{
+    CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild,
+};
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout};
 use thiserror::Error;
 
@@ -70,8 +85,38 @@ pub enum Error {
     #[error("layout index {index} is out of range for {layout_count} layouts")]
     UnknownLayoutIndex { index: usize, layout_count: usize },
 
+    #[error("slide index {index} is out of range for {slide_count} slides")]
+    UnknownSlideIndex { index: usize, slide_count: usize },
+
+    #[error("picture {filename} has unsupported image bytes")]
+    UnsupportedPicture { filename: String },
+
+    #[error("picture {filename} has no usable native dimensions")]
+    UnavailablePictureDimensions { filename: String },
+
+    #[error("picture {filename} has an inferred {axis} outside the EMU range")]
+    PictureDimensionOutOfRange {
+        filename: String,
+        axis: &'static str,
+    },
+
     #[error("PowerPoint slide ids are exhausted")]
     SlideIdExhausted,
+
+    #[error("{operation} is not supported for {shape_kind:?}")]
+    UnsupportedShapeMutation {
+        operation: &'static str,
+        shape_kind: ShapeKind,
+    },
+
+    #[error("{operation} failed: {message}")]
+    InvalidShapeMutation {
+        operation: &'static str,
+        message: String,
+    },
+
+    #[error("adjustment {name} requires a finite value")]
+    NonFiniteAdjustmentValue { name: String },
 }
 
 /// A package or presentation invariant that would make a saved deck unsafe.
@@ -207,7 +252,6 @@ impl MediaStore {
         Self { by_id, namer }
     }
 
-    #[allow(dead_code)]
     fn insert(&mut self, package: &mut OpcPackage, bytes: &[u8], filename: &str) -> String {
         self.insert_with_id(package, MediaId::from_bytes(bytes), bytes, filename)
     }
@@ -627,6 +671,11 @@ impl Presentation {
         self.slides.get(index).map(slide_ref)
     }
 
+    /// Returns one slide for in-place mutation by zero-based index.
+    pub fn slide_mut(&mut self, index: usize) -> Option<SlideMut<'_>> {
+        self.slides.get_mut(index).map(slide_mut)
+    }
+
     /// Iterates slides in `p:sldIdLst` order.
     pub fn slides(&self) -> impl ExactSizeIterator<Item = SlideRef<'_>> {
         self.slides.iter().map(slide_ref)
@@ -749,6 +798,130 @@ impl Presentation {
                 message: "new slide record was not retained".to_owned(),
             })
     }
+
+    /// Appends a relationship-backed picture at the top of one slide's z-order.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_picture(
+        &mut self,
+        slide_index: usize,
+        image_data: &[u8],
+        image_filename: &str,
+        left: Emu,
+        top: Emu,
+        width: Option<Emu>,
+        height: Option<Emu>,
+    ) -> Result<ShapeRef<'_>> {
+        let slide = self
+            .slides
+            .get(slide_index)
+            .ok_or(Error::UnknownSlideIndex {
+                index: slide_index,
+                slide_count: self.slides.len(),
+            })?;
+        let slide_part = slide.part_name.clone();
+        let (width, height) = picture_dimensions(image_data, image_filename, width, height)?;
+        let id = ShapeIdAllocator::scan(&slide.slide.common_slide_data.shape_tree).allocate();
+
+        let mut package = self.package.clone();
+        let mut media_store = self.media_store.clone();
+        let media_part = media_store.insert(&mut package, image_data, image_filename);
+        let mut relationships = package
+            .get_part_rels(&slide_part)
+            .cloned()
+            .unwrap_or_default();
+        let relationship_id = relationships
+            .items
+            .iter()
+            .find(|relationship| {
+                relationship.rel_type == rel_types::IMAGE
+                    && !relationship_is_external(relationship)
+                    && OpcPackage::resolve_rel_target(&slide_part, &relationship.target)
+                        == media_part
+            })
+            .map(|relationship| relationship.id.clone())
+            .unwrap_or_else(|| {
+                relationships.add(
+                    rel_types::IMAGE,
+                    &relative_part_target(&slide_part, &media_part),
+                )
+            });
+        let picture = CT_Picture::new(
+            id,
+            &format!("Picture {id}"),
+            &relationship_id,
+            positioned_transform(left, top, width, height),
+        )
+        .map_err(|error| invalid_shape_construction("add picture", error))?;
+
+        package.part_rels.insert(slide_part, relationships);
+        self.package = package;
+        self.media_store = media_store;
+        let tree = &mut self.slides[slide_index].slide.common_slide_data.shape_tree;
+        Ok(shape_ref(
+            tree.append_child(ShapeTreeChild::Picture(picture)),
+        ))
+    }
+}
+
+fn picture_dimensions(
+    image_data: &[u8],
+    image_filename: &str,
+    width: Option<Emu>,
+    height: Option<Emu>,
+) -> Result<(Emu, Emu)> {
+    if let (Some(width), Some(height)) = (width, height) {
+        return Ok((width, height));
+    }
+    if ImageFormat::sniff(image_data).is_none() {
+        return Err(Error::UnsupportedPicture {
+            filename: image_filename.to_owned(),
+        });
+    }
+    let info = probe(image_data).ok_or_else(|| Error::UnavailablePictureDimensions {
+        filename: image_filename.to_owned(),
+    })?;
+    match (width, height) {
+        (None, None) => info
+            .native_size(72.0)
+            .map(|size| (Emu(size.width_emu), Emu(size.height_emu)))
+            .ok_or_else(|| Error::UnavailablePictureDimensions {
+                filename: image_filename.to_owned(),
+            }),
+        (Some(width), None) => infer_picture_dimension(
+            width,
+            info.height_px,
+            info.width_px,
+            image_filename,
+            "height",
+        )
+        .map(|height| (width, height)),
+        (None, Some(height)) => infer_picture_dimension(
+            height,
+            info.width_px,
+            info.height_px,
+            image_filename,
+            "width",
+        )
+        .map(|width| (width, height)),
+        (Some(_), Some(_)) => unreachable!(),
+    }
+}
+
+fn infer_picture_dimension(
+    provided: Emu,
+    inferred_pixels: u32,
+    provided_pixels: u32,
+    image_filename: &str,
+    axis: &'static str,
+) -> Result<Emu> {
+    let inferred =
+        i128::from(provided.0) * i128::from(inferred_pixels) / i128::from(provided_pixels);
+    i64::try_from(inferred)
+        .map(Emu)
+        .map_err(|_| Error::PictureDimensionOutOfRange {
+            filename: image_filename.to_owned(),
+            axis,
+        })
 }
 
 fn resolve_layouts(
@@ -1046,6 +1219,178 @@ fn slide_ref(record: &SlideRecord) -> SlideRef<'_> {
     SlideRef { record }
 }
 
+/// A mutably borrowed slide in presentation order.
+pub struct SlideMut<'a> {
+    record: &'a mut SlideRecord,
+}
+
+fn slide_mut(record: &mut SlideRecord) -> SlideMut<'_> {
+    SlideMut { record }
+}
+
+impl SlideMut<'_> {
+    /// Appends a no-fill textbox at the top of the slide's z-order.
+    pub fn add_textbox(
+        &mut self,
+        left: Emu,
+        top: Emu,
+        width: Emu,
+        height: Emu,
+    ) -> Result<ShapeMut<'_>> {
+        let tree = &mut self.record.slide.common_slide_data.shape_tree;
+        let id = ShapeIdAllocator::scan(tree).allocate();
+        let shape = CT_Shape::new_textbox(
+            id,
+            &format!("TextBox {id}"),
+            positioned_transform(left, top, width, height),
+        )
+        .map_err(|error| invalid_shape_construction("add textbox", error))?;
+        Ok(shape_mut(tree.append_child(ShapeTreeChild::Shape(shape))))
+    }
+
+    /// Appends an ordinary preset shape at the top of the slide's z-order.
+    pub fn add_shape(
+        &mut self,
+        preset: &str,
+        left: Emu,
+        top: Emu,
+        width: Emu,
+        height: Emu,
+    ) -> Result<ShapeMut<'_>> {
+        let tree = &mut self.record.slide.common_slide_data.shape_tree;
+        let id = ShapeIdAllocator::scan(tree).allocate();
+        let shape = CT_Shape::new_preset(
+            id,
+            &format!("Shape {id}"),
+            preset,
+            positioned_transform(left, top, width, height),
+        )
+        .map_err(|error| invalid_shape_construction("add shape", error))?;
+        Ok(shape_mut(tree.append_child(ShapeTreeChild::Shape(shape))))
+    }
+
+    /// Appends a free-standing connector at the top of the slide's z-order.
+    pub fn add_connector(
+        &mut self,
+        connector: ConnectorType,
+        begin_x: Emu,
+        begin_y: Emu,
+        end_x: Emu,
+        end_y: Emu,
+    ) -> Result<ShapeMut<'_>> {
+        let transform = connector_transform(begin_x, begin_y, end_x, end_y)?;
+        let tree = &mut self.record.slide.common_slide_data.shape_tree;
+        let id = ShapeIdAllocator::scan(tree).allocate();
+        let connector = CT_ConnectionShape::new_free_standing(
+            id,
+            &format!("Connector {id}"),
+            connector.preset_name(),
+            transform,
+        )
+        .map_err(|error| invalid_shape_construction("add connector", error))?;
+        Ok(shape_mut(
+            tree.append_child(ShapeTreeChild::Connector(connector)),
+        ))
+    }
+
+    /// Appends an empty group at the top of the slide's z-order.
+    pub fn add_group_shape(&mut self) -> Result<ShapeMut<'_>> {
+        let tree = &mut self.record.slide.common_slide_data.shape_tree;
+        let id = ShapeIdAllocator::scan(tree).allocate();
+        let group = CT_GroupShape::new_empty(id, &format!("Group {id}"));
+        Ok(shape_mut(
+            tree.append_child(ShapeTreeChild::GroupShape(Box::new(group))),
+        ))
+    }
+
+    /// Returns one immediate z-order child as a read-only handle.
+    pub fn shape(&self, index: usize) -> Option<ShapeRef<'_>> {
+        self.record
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .get(index)
+            .map(shape_ref)
+    }
+
+    /// Returns one immediate z-order child for in-place mutation.
+    pub fn shape_mut(&mut self, index: usize) -> Option<ShapeMut<'_>> {
+        self.record
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .get_mut(index)
+            .map(shape_mut)
+    }
+}
+
+/// The geometry family of a free-standing connector.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConnectorType {
+    Straight,
+    Elbow,
+    Curve,
+}
+
+impl ConnectorType {
+    const fn preset_name(self) -> &'static str {
+        match self {
+            Self::Straight => "line",
+            Self::Elbow => "bentConnector3",
+            Self::Curve => "curvedConnector3",
+        }
+    }
+}
+
+fn positioned_transform(left: Emu, top: Emu, width: Emu, height: Emu) -> CT_Transform2D {
+    let mut transform = CT_Transform2D::default();
+    transform.offset = Some(CT_Point2D { x: left, y: top });
+    transform.extent = Some(CT_PositiveSize2D {
+        cx: width,
+        cy: height,
+    });
+    transform
+}
+
+fn connector_transform(
+    begin_x: Emu,
+    begin_y: Emu,
+    end_x: Emu,
+    end_y: Emu,
+) -> Result<CT_Transform2D> {
+    let width =
+        i64::try_from(begin_x.0.abs_diff(end_x.0)).map_err(|_| Error::InvalidShapeMutation {
+            operation: "add connector",
+            message: "horizontal endpoint span exceeds the EMU range".to_owned(),
+        })?;
+    let height =
+        i64::try_from(begin_y.0.abs_diff(end_y.0)).map_err(|_| Error::InvalidShapeMutation {
+            operation: "add connector",
+            message: "vertical endpoint span exceeds the EMU range".to_owned(),
+        })?;
+    let mut transform = CT_Transform2D::default();
+    transform.offset = Some(CT_Point2D {
+        x: Emu(begin_x.0.min(end_x.0)),
+        y: Emu(begin_y.0.min(end_y.0)),
+    });
+    transform.extent = Some(CT_PositiveSize2D {
+        cx: Emu(width),
+        cy: Emu(height),
+    });
+    transform.flip_horizontal = begin_x.0 > end_x.0;
+    transform.flip_vertical = begin_y.0 > end_y.0;
+    Ok(transform)
+}
+
+fn invalid_shape_construction(operation: &'static str, error: OxmlError) -> Error {
+    Error::InvalidShapeMutation {
+        operation,
+        message: error.to_string(),
+    }
+}
+
 impl SlideRef<'_> {
     /// Returns the producer-assigned slide id.
     pub fn id(&self) -> u32 {
@@ -1119,17 +1464,280 @@ fn shape_ref(child: &ShapeTreeChild) -> ShapeRef<'_> {
     ShapeRef { child }
 }
 
+/// A mutably borrowed shape-tree child.
+pub struct ShapeMut<'a> {
+    child: &'a mut ShapeTreeChild,
+}
+
+fn shape_mut(child: &mut ShapeTreeChild) -> ShapeMut<'_> {
+    ShapeMut { child }
+}
+
+impl ShapeMut<'_> {
+    /// Returns the child's normalized structural kind.
+    pub fn kind(&self) -> ShapeKind {
+        shape_kind(self.child)
+    }
+
+    /// Returns one immediate group child for in-place mutation.
+    ///
+    /// `mc:AlternateContent` fallback children remain a read-only projection.
+    pub fn child_mut(&mut self, index: usize) -> Option<ShapeMut<'_>> {
+        match self.child {
+            ShapeTreeChild::GroupShape(group) => group.children.get_mut(index).map(shape_mut),
+            _ => None,
+        }
+    }
+
+    /// Changes the shape offset in EMU.
+    pub fn set_position(&mut self, left: Emu, top: Emu) -> Result<()> {
+        self.transform_mut("set position")?.offset = Some(CT_Point2D { x: left, y: top });
+        Ok(())
+    }
+
+    /// Changes the shape extent in EMU.
+    pub fn set_size(&mut self, width: Emu, height: Emu) -> Result<()> {
+        self.transform_mut("set size")?.extent = Some(CT_PositiveSize2D {
+            cx: width,
+            cy: height,
+        });
+        Ok(())
+    }
+
+    /// Changes the clockwise DrawingML rotation.
+    pub fn set_rotation(&mut self, rotation: Angle) -> Result<()> {
+        self.transform_mut("set rotation")?.rotation = rotation;
+        Ok(())
+    }
+
+    /// Changes the producer-facing non-visual name.
+    pub fn set_name(&mut self, name: &str) -> Result<()> {
+        let result = match self.child {
+            ShapeTreeChild::Shape(shape) => shape.set_name(name),
+            ShapeTreeChild::Picture(picture) => picture.set_name(name),
+            ShapeTreeChild::GraphicFrame(frame) => frame.set_name(name),
+            ShapeTreeChild::GroupShape(group) => group.set_name(name),
+            ShapeTreeChild::Connector(connector) => connector.set_name(name),
+            ShapeTreeChild::AlternateContent(_) => {
+                return Err(self.unsupported("set name"));
+            }
+        };
+        result.map_err(|error| Error::InvalidShapeMutation {
+            operation: "set name",
+            message: error.to_string(),
+        })
+    }
+
+    /// Replaces the direct fill on a shape with typed shape properties.
+    pub fn set_fill(&mut self, fill: Fill) -> Result<()> {
+        self.shape_properties_mut("set fill")?.fill = Some(fill);
+        Ok(())
+    }
+
+    /// Replaces the direct line on a shape with typed shape properties.
+    pub fn set_line(&mut self, line: CT_LineProperties) -> Result<()> {
+        self.shape_properties_mut("set line")?.line = Some(line);
+        Ok(())
+    }
+
+    /// Inserts or replaces one finite preset-geometry adjustment.
+    pub fn set_adjust_value(&mut self, name: &str, value: f64) -> Result<()> {
+        if !value.is_finite() {
+            return Err(Error::NonFiniteAdjustmentValue {
+                name: name.to_owned(),
+            });
+        }
+        let shape_kind = shape_kind(self.child);
+        let properties = self.shape_properties_mut("set adjustment")?;
+        let geometry =
+            properties
+                .preset_geometry
+                .as_mut()
+                .ok_or(Error::UnsupportedShapeMutation {
+                    operation: "set adjustment",
+                    shape_kind,
+                })?;
+        geometry
+            .set_adjust_value(name, value)
+            .map_err(|error| Error::InvalidShapeMutation {
+                operation: "set adjustment",
+                message: error.to_string(),
+            })
+    }
+
+    /// Replaces ordinary shape text without changing placeholder identity.
+    pub fn set_text(&mut self, text: &str) -> Result<()> {
+        let shape_kind = shape_kind(self.child);
+        let ShapeTreeChild::Shape(shape) = self.child else {
+            return Err(Error::UnsupportedShapeMutation {
+                operation: "set text",
+                shape_kind,
+            });
+        };
+        shape
+            .text_body
+            .get_or_insert_with(CT_TextBody::new)
+            .set_text(text);
+        Ok(())
+    }
+
+    /// Returns the ordinary shape text body for in-place mutation.
+    pub fn text_frame(&mut self) -> Option<TextFrame<'_>> {
+        match self.child {
+            ShapeTreeChild::Shape(shape) => shape.text_body.as_mut().map(|body| TextFrame { body }),
+            _ => None,
+        }
+    }
+
+    fn transform_mut(&mut self, operation: &'static str) -> Result<&mut CT_Transform2D> {
+        match self.child {
+            ShapeTreeChild::Shape(shape) => Ok(shape
+                .shape_properties
+                .transform
+                .get_or_insert_with(CT_Transform2D::default)),
+            ShapeTreeChild::Picture(picture) => Ok(picture
+                .shape_properties
+                .transform
+                .get_or_insert_with(CT_Transform2D::default)),
+            ShapeTreeChild::GraphicFrame(frame) => Ok(&mut frame.transform),
+            ShapeTreeChild::GroupShape(group) => Ok(group.group_transform_mut()),
+            ShapeTreeChild::Connector(connector) => Ok(connector
+                .shape_properties
+                .transform
+                .get_or_insert_with(CT_Transform2D::default)),
+            ShapeTreeChild::AlternateContent(_) => Err(self.unsupported(operation)),
+        }
+    }
+
+    fn shape_properties_mut(&mut self, operation: &'static str) -> Result<&mut CT_ShapeProperties> {
+        match self.child {
+            ShapeTreeChild::Shape(shape) => Ok(&mut shape.shape_properties),
+            ShapeTreeChild::Picture(picture) => Ok(&mut picture.shape_properties),
+            ShapeTreeChild::Connector(connector) => Ok(&mut connector.shape_properties),
+            _ => Err(self.unsupported(operation)),
+        }
+    }
+
+    fn unsupported(&self, operation: &'static str) -> Error {
+        Error::UnsupportedShapeMutation {
+            operation,
+            shape_kind: shape_kind(self.child),
+        }
+    }
+}
+
+/// A mutably borrowed ordinary-shape text body.
+pub struct TextFrame<'a> {
+    body: &'a mut CT_TextBody,
+}
+
+impl TextFrame<'_> {
+    /// Returns plain text in paragraph and ordered text-choice order.
+    pub fn text(&self) -> String {
+        self.body.plain_text()
+    }
+
+    /// Replaces the frame content with one paragraph and one regular run.
+    pub fn set_text(&mut self, text: &str) {
+        self.body.set_text(text);
+    }
+
+    /// Returns the number of paragraphs in the text body.
+    pub fn paragraph_count(&self) -> usize {
+        self.body.paragraph_count()
+    }
+
+    /// Returns one paragraph for in-place mutation.
+    pub fn paragraph_mut(&mut self, index: usize) -> Option<TextParagraphMut<'_>> {
+        self.body
+            .paragraph_mut(index)
+            .map(|paragraph| TextParagraphMut { paragraph })
+    }
+
+    /// Appends one empty paragraph.
+    pub fn add_paragraph(&mut self) -> TextParagraphMut<'_> {
+        TextParagraphMut {
+            paragraph: self.body.add_paragraph(),
+        }
+    }
+}
+
+/// A mutably borrowed DrawingML text paragraph.
+pub struct TextParagraphMut<'a> {
+    paragraph: &'a mut CT_TextParagraph,
+}
+
+impl TextParagraphMut<'_> {
+    /// Replaces fields, breaks, and runs with one regular run.
+    pub fn set_text(&mut self, text: &str) {
+        self.paragraph.set_text(text);
+    }
+
+    /// Appends a regular run after the existing ordered text choices.
+    pub fn add_run(&mut self, text: &str) -> TextRunMut<'_> {
+        TextRunMut {
+            run: self.paragraph.add_run(text),
+        }
+    }
+
+    /// Replaces the paragraph's direct typed properties.
+    pub fn set_properties(&mut self, properties: CT_TextParagraphProperties) {
+        *self.paragraph.properties_mut() = properties;
+    }
+
+    /// Sets or clears the direct paragraph bullet.
+    pub fn set_bullet(&mut self, bullet: Option<TextBullet>) {
+        if let Some(properties) = self.paragraph.properties.as_mut() {
+            properties.bullet = bullet;
+        } else if bullet.is_some() {
+            self.paragraph.properties_mut().bullet = bullet;
+        }
+    }
+}
+
+/// A mutably borrowed regular DrawingML text run.
+pub struct TextRunMut<'a> {
+    run: &'a mut CT_RegularTextRun,
+}
+
+impl TextRunMut<'_> {
+    /// Replaces text while retaining the run's typed and unmodelled state.
+    pub fn set_text(&mut self, text: &str) {
+        self.run.set_text(text);
+    }
+
+    /// Replaces the run's direct typed character properties.
+    pub fn set_properties(&mut self, properties: CT_TextCharacterProperties) {
+        self.run.properties = Some(properties);
+    }
+
+    /// Sets or clears the direct Latin typeface.
+    pub fn set_font(&mut self, font: Option<TextFont>) {
+        if let Some(properties) = self.run.properties.as_mut() {
+            properties.latin = font;
+        } else if font.is_some() {
+            let mut properties = CT_TextCharacterProperties::default();
+            properties.latin = font;
+            self.run.properties = Some(properties);
+        }
+    }
+}
+
+fn shape_kind(child: &ShapeTreeChild) -> ShapeKind {
+    match child {
+        ShapeTreeChild::Shape(_) => ShapeKind::Shape,
+        ShapeTreeChild::Picture(_) => ShapeKind::Picture,
+        ShapeTreeChild::GraphicFrame(_) => ShapeKind::GraphicFrame,
+        ShapeTreeChild::GroupShape(_) => ShapeKind::Group,
+        ShapeTreeChild::Connector(_) => ShapeKind::Connector,
+        ShapeTreeChild::AlternateContent(_) => ShapeKind::AlternateContent,
+    }
+}
+
 impl<'a> ShapeRef<'a> {
     /// Returns the child's normalized structural kind.
     pub fn kind(&self) -> ShapeKind {
-        match self.child {
-            ShapeTreeChild::Shape(_) => ShapeKind::Shape,
-            ShapeTreeChild::Picture(_) => ShapeKind::Picture,
-            ShapeTreeChild::GraphicFrame(_) => ShapeKind::GraphicFrame,
-            ShapeTreeChild::GroupShape(_) => ShapeKind::Group,
-            ShapeTreeChild::Connector(_) => ShapeKind::Connector,
-            ShapeTreeChild::AlternateContent(_) => ShapeKind::AlternateContent,
-        }
+        shape_kind(self.child)
     }
 
     /// Returns ordinary shape text or row-major table text when modelled.
@@ -1206,6 +1814,40 @@ mod write_tests {
     use rpptx_oxml::placeholder::PhType;
 
     use super::*;
+
+    #[test]
+    fn connector_constructor_normalizes_every_direction() {
+        assert_eq!(ConnectorType::Straight.preset_name(), "line");
+        assert_eq!(ConnectorType::Elbow.preset_name(), "bentConnector3");
+        assert_eq!(ConnectorType::Curve.preset_name(), "curvedConnector3");
+        let cases = [
+            ((10, 20), (30, 40), (10, 20, 20, 20, false, false)),
+            ((30, 20), (10, 40), (10, 20, 20, 20, true, false)),
+            ((10, 40), (30, 20), (10, 20, 20, 20, false, true)),
+            ((30, 40), (10, 20), (10, 20, 20, 20, true, true)),
+            ((10, 20), (10, 40), (10, 20, 0, 20, false, false)),
+            ((30, 20), (10, 20), (10, 20, 20, 0, true, false)),
+        ];
+        for (begin, end, expected) in cases {
+            let transform =
+                connector_transform(Emu(begin.0), Emu(begin.1), Emu(end.0), Emu(end.1)).unwrap();
+            let offset = transform.offset.unwrap();
+            let extent = transform.extent.unwrap();
+            assert_eq!(
+                (
+                    offset.x.0,
+                    offset.y.0,
+                    extent.cx.0,
+                    extent.cy.0,
+                    transform.flip_horizontal,
+                    transform.flip_vertical,
+                ),
+                expected
+            );
+        }
+
+        assert!(connector_transform(Emu(i64::MIN), Emu(0), Emu(i64::MAX), Emu(0)).is_err());
+    }
 
     #[test]
     fn every_validation_issue_variant_detects_its_corrupted_deck() {

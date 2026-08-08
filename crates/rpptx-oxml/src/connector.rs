@@ -2,9 +2,11 @@ use std::io::Write;
 
 use oxml_core::OxmlError;
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
+use oxml_drawing::geometry::CT_PresetGeometry2D;
 use oxml_drawing::namespace::A_NS;
 use oxml_drawing::order::OrderedRawChildren;
 use oxml_drawing::shape_props::CT_ShapeProperties;
+use oxml_drawing::xfrm::CT_Transform2D;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
@@ -70,6 +72,55 @@ struct NonVisualConnectorProperties {
 }
 
 impl CT_ConnectionShape {
+    /// Creates a free-standing connector with canonical non-visual shells.
+    pub fn new_free_standing(
+        id: u32,
+        name: &str,
+        preset: &str,
+        transform: CT_Transform2D,
+    ) -> Result<Self> {
+        let mut shape_properties = CT_ShapeProperties::default();
+        shape_properties.transform = Some(transform);
+        shape_properties.preset_geometry = Some(
+            CT_PresetGeometry2D::new(preset)
+                .map_err(|error| OxmlError::InvalidValue(error.to_string()))?,
+        );
+        Ok(Self {
+            start_connection: None,
+            end_connection: None,
+            shape_properties,
+            raw: Box::new(ConnectionShapeRaw {
+                raw_attributes: Vec::new(),
+                non_visual: NonVisualConnectionShape {
+                    raw_attributes: Vec::new(),
+                    drawing_properties: RawElement {
+                        raw_attributes: vec![
+                            ("id".to_owned(), id.to_string()),
+                            ("name".to_owned(), name.to_owned()),
+                        ],
+                        raw_content: Vec::new(),
+                        was_empty: true,
+                    },
+                    connector_properties: NonVisualConnectorProperties {
+                        raw_attributes: Vec::new(),
+                        locks: None,
+                        extension_list: None,
+                        raw_children: OrderedRawChildren::default(),
+                    },
+                    application_properties: RawElement {
+                        raw_attributes: Vec::new(),
+                        raw_content: Vec::new(),
+                        was_empty: true,
+                    },
+                    raw_children: OrderedRawChildren::default(),
+                },
+                style: None,
+                extension_list: None,
+                raw_children: OrderedRawChildren::default(),
+            }),
+        })
+    }
+
     pub(crate) fn non_visual_id(&self) -> Option<u32> {
         self.raw
             .non_visual
@@ -78,6 +129,20 @@ impl CT_ConnectionShape {
             .iter()
             .find(|(name, _)| name == "id")
             .and_then(|(_, value)| value.parse().ok())
+    }
+
+    /// Changes the producer-facing non-visual connector name.
+    pub fn set_name(&mut self, name: &str) -> Result<()> {
+        let attributes = &mut self.raw.non_visual.drawing_properties.raw_attributes;
+        if let Some((_, value)) = attributes
+            .iter_mut()
+            .find(|(attribute, _)| attribute == "name")
+        {
+            *value = name.to_owned();
+        } else {
+            attributes.push(("name".to_owned(), name.to_owned()));
+        }
+        Ok(())
     }
 
     /// Parses a complete `p:cxnSp` with any prefix bound to PresentationML.
@@ -841,4 +906,38 @@ fn local_name(name: &[u8]) -> &[u8] {
 
 fn unexpected(element: &BytesStart<'_>) -> OxmlError {
     OxmlError::UnexpectedElement(String::from_utf8_lossy(element.name().as_ref()).into_owned())
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use oxml_core::units::Emu;
+    use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
+
+    use super::CT_ConnectionShape;
+
+    #[test]
+    fn free_standing_connector_constructor_round_trips_canonical_shell() {
+        let mut transform = CT_Transform2D::default();
+        transform.offset = Some(CT_Point2D {
+            x: Emu(10),
+            y: Emu(20),
+        });
+        transform.extent = Some(CT_PositiveSize2D {
+            cx: Emu(30),
+            cy: Emu(40),
+        });
+        transform.flip_horizontal = true;
+        let connector =
+            CT_ConnectionShape::new_free_standing(2, "Connector & 2", "line", transform.clone())
+                .unwrap();
+        assert_eq!(
+            connector.shape_properties.transform.as_ref(),
+            Some(&transform)
+        );
+        let xml = connector.to_xml().unwrap();
+        let text = String::from_utf8(xml.clone()).unwrap();
+        assert!(text.contains("<p:cNvPr id=\"2\" name=\"Connector &amp; 2\"/>"));
+        assert!(text.find("<p:nvCxnSpPr").unwrap() < text.find("<p:spPr").unwrap());
+        assert_eq!(CT_ConnectionShape::from_xml(&xml).unwrap(), connector);
+    }
 }

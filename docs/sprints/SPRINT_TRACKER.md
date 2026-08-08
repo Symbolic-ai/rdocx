@@ -39,6 +39,7 @@ defended.
 | S24 | M10 | 8 | 8 | 0 | 14 | 8 | Completed shape text layout, bullets, autofit, and vertical text in the unpublished renderer with all 28 hashes unchanged and no publication |
 | S25 | M10 | 3 | 3 | 0 | 10 | 3 | Completed M10 with table rendering, hyperlinks, fields, diagnostics, and the pinned fidelity harness. All 421 slides rendered, the SSIM trend and native PowerPoint evidence were retained, all 28 hashes remained unchanged, and no crate was published |
 | S26 | M11 | 4 | 4 | 0 | 10 | 4 | Established slide creation with the bundled template, collision-safe identifiers and media, layout-based slide synthesis, and deterministic validation. Native PowerPoint accepted the generated decks, all 50 pinned decks validated cleanly, all 28 hashes remained unchanged, and no crate was published |
+| S27 | M11 | 4 | 4 | 0 | 12 | 4 | Added mutable shape and text handles, schema-ordered shape constructors, atomic picture insertion, native image sizing, and typed text formatting. Pinned PowerPoint accepted the generated decks without repair, python-pptx 1.0.2 sizing parity passed, all 28 hashes remained unchanged, and no crate was published |
 
 ## Completed features
 
@@ -149,6 +150,10 @@ defended.
 | F-106 | S26 | M | 2 | 1 | 2026-08-08 | Recursive shape-id allocation and content-addressed media deduplication |
 | F-107 | S26 | L | 4 | 1 | 2026-08-08 | Layout-based slide synthesis with unique package and slide identifiers |
 | F-108 | S26 | M | 2 | 1 | 2026-08-08 | Deterministic presentation validation and guarded save boundaries |
+| F-109 | S27 | L | 4 | 1 | 2026-08-08 | Borrowed shape mutation handles with preservation-aware setters |
+| F-110 | S27 | M | 2 | 1 | 2026-08-08 | Schema-ordered textbox, shape, connector, and group construction |
+| F-111 | S27 | M | 2 | 1 | 2026-08-08 | Atomic picture insertion with native sizing and media deduplication |
+| F-112 | S27 | L | 4 | 1 | 2026-08-08 | Borrowed text-frame editing with typed paragraph and run formatting |
 
 ## Velocity
 
@@ -188,6 +193,7 @@ five working days.
 | S24 | 8 | 8 | 5.00 |
 | S25 | 3 | 3 | 5.00 |
 | S26 | 4 | 4 | 5.00 |
+| S27 | 4 | 4 | 5.00 |
 
 ## Escalation record
 
@@ -218,3 +224,4 @@ was done about it. Empty is the expected state.
 | 2026-08-05 | Sprint estimate variance exceeded 30 percent | S24 | Record 8 actual days against 14 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
 | 2026-08-08 | Sprint estimate variance exceeded 30 percent | S25 | Record 3 actual days against 10 estimated and reforecast 57 pending stories at the observed five stories per active week to about 12 active weeks, retaining dependency-defined sprint boundaries |
 | 2026-08-08 | Sprint estimate variance exceeded 30 percent | S26 | Record 4 actual days against 10 estimated and reforecast 53 pending stories at the observed five stories per active week to about 11 active weeks, retaining dependency-defined sprint boundaries |
+| 2026-08-08 | Sprint estimate variance exceeded 30 percent | S27 | Record 4 actual days against 12 estimated and reforecast 49 pending stories at the observed five stories per active week to about 10 active weeks, retaining dependency-defined sprint boundaries |

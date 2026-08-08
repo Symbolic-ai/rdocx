@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Cursor;
@@ -9,7 +9,11 @@ use oxml_drawing::color::ColorMap;
 use oxml_drawing::theme::CT_OfficeStyleSheet;
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
-use rpptx::{Error, Presentation, ShapeKind, ShapeRef};
+use rpptx::{
+    Angle, CT_LineProperties, CT_TextCharacterProperties, CT_TextParagraphProperties,
+    ConnectorType, Emu, Error, Fill, Presentation, ShapeKind, ShapeRef, TextBullet,
+    TextBulletCharacter, TextBulletChoice, TextFont,
+};
 use rpptx_layout::{
     FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,
 };
@@ -18,6 +22,7 @@ use rpptx_oxml::placeholder::PhType;
 use rpptx_oxml::presentation::CT_Presentation;
 use rpptx_oxml::shape_tree::ShapeTreeChild;
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind};
+use rpptx_render::{RenderInput, layout_presentation_deterministic};
 
 #[path = "../examples/dump_deck.rs"]
 mod dump_deck;
@@ -34,6 +39,606 @@ const LAYOUT_PART: &str = "/custom/layouts/validation.xml";
 const POWERPOINT_VERSION: &str = "16.104";
 const POWERPOINT_BUILD: &str = "16.104.25121423";
 const POWERPOINT_APP_BUILD: &str = "1214";
+
+fn png_header(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    bytes.extend_from_slice(&width.to_be_bytes());
+    bytes.extend_from_slice(&height.to_be_bytes());
+    bytes.extend_from_slice(&[8, 6, 0, 0, 0]);
+    bytes.extend_from_slice(&[0; 4]);
+    bytes
+}
+
+fn valid_one_pixel_png() -> Vec<u8> {
+    vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8,
+        0xcf, 0xc0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc, 0x33, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ]
+}
+
+#[test]
+fn setting_text_on_placeholder_round_trips_and_renders() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add title slide");
+    let placeholder_index = presentation
+        .slide(0)
+        .unwrap()
+        .shapes()
+        .position(|shape| shape.text().is_some())
+        .expect("layout clone supplies a text placeholder");
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(placeholder_index)
+        .unwrap()
+        .set_text("")
+        .unwrap();
+    let blank_render = deterministic_render(&presentation.to_bytes().unwrap());
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(placeholder_index)
+        .unwrap()
+        .set_text("Visible changed placeholder")
+        .unwrap();
+
+    let bytes = presentation
+        .to_bytes()
+        .expect("serialize changed placeholder");
+    let reopened = Presentation::from_bytes(&bytes).expect("reopen changed placeholder");
+    assert_eq!(
+        reopened
+            .slide(0)
+            .unwrap()
+            .shape(placeholder_index)
+            .unwrap()
+            .text(),
+        Some("Visible changed placeholder".to_owned())
+    );
+    let changed_render = deterministic_render(&bytes);
+    assert_ne!(
+        changed_render, blank_render,
+        "changed text must alter pixels"
+    );
+}
+
+#[test]
+fn clearing_text_preserves_required_paragraph() {
+    let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_text("")
+        .unwrap();
+    let bytes = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert!(reopened.validate().is_empty());
+    let package = open_opc(&bytes, "F-112 empty text");
+    let slide = CT_Slide::from_xml(package.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let ShapeTreeChild::Shape(shape) = &slide.common_slide_data.shape_tree.children[0] else {
+        panic!("expected ordinary shape");
+    };
+    assert_eq!(shape.text_body.as_ref().unwrap().paragraph_count(), 1);
+}
+
+#[test]
+fn paragraph_run_font_and_bullet_properties_round_trip() {
+    let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut shape = slide.shape_mut(0).unwrap();
+    shape.set_text("first").unwrap();
+    let mut frame = shape.text_frame().unwrap();
+    let mut paragraph = frame.paragraph_mut(0).unwrap();
+    let mut paragraph_properties = CT_TextParagraphProperties::default();
+    paragraph_properties.level = Some(2);
+    paragraph.set_properties(paragraph_properties);
+    paragraph.set_bullet(Some(TextBullet {
+        choice: Some(TextBulletChoice::Character(
+            TextBulletCharacter::new("•").unwrap(),
+        )),
+        ..TextBullet::default()
+    }));
+    let mut run = paragraph.add_run(" second");
+    let mut run_properties = CT_TextCharacterProperties::default();
+    run_properties.font_size = Some(1_800);
+    run_properties.bold = Some(true);
+    run.set_properties(run_properties);
+    run.set_font(Some(TextFont::new("Carlito").unwrap()));
+
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "F-112 formatting round trip");
+    let slide = CT_Slide::from_xml(package.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let ShapeTreeChild::Shape(shape) = &slide.common_slide_data.shape_tree.children[0] else {
+        panic!("expected ordinary shape");
+    };
+    let paragraph = &shape.text_body.as_ref().unwrap().paragraphs()[0];
+    let properties = paragraph.properties.as_ref().unwrap();
+    assert_eq!(properties.level, Some(2));
+    assert!(matches!(
+        properties.bullet.as_ref().and_then(|bullet| bullet.choice.as_ref()),
+        Some(TextBulletChoice::Character(character)) if character.character == "•"
+    ));
+    let oxml_drawing::text::TextRun::Run(run) = &paragraph.runs[1] else {
+        panic!("expected appended regular run");
+    };
+    let properties = run.properties.as_ref().unwrap();
+    assert_eq!(properties.font_size, Some(1_800));
+    assert_eq!(properties.bold, Some(true));
+    assert_eq!(properties.latin.as_ref().unwrap().typeface, "Carlito");
+}
+
+#[test]
+fn text_mutation_preserves_placeholder_identity() {
+    let mut package = open_opc(&mutation_fixture_bytes(), "F-112 placeholder fixture");
+    let original = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let with_placeholder = original.replacen(
+        "<p:nvPr/>",
+        r#"<p:nvPr><p:ph type="body" idx="7"/></p:nvPr>"#,
+        1,
+    );
+    package.set_part(SLIDE_TWO_PART, with_placeholder.into_bytes());
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_text("replacement")
+        .unwrap();
+
+    let output = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "F-112 placeholder output",
+    );
+    let slide = CT_Slide::from_xml(output.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let ShapeTreeChild::Shape(shape) = &slide.common_slide_data.shape_tree.children[0] else {
+        panic!("expected ordinary shape");
+    };
+    let placeholder = shape.placeholder.as_ref().unwrap();
+    assert_eq!(placeholder.ph_type, Some(PhType::Body));
+    assert_eq!(placeholder.idx, Some(7));
+}
+
+#[test]
+fn text_mutation_preserves_unmodelled_xml_and_schema_order() {
+    let mut package = open_opc(&mutation_fixture_bytes(), "F-112 raw fixture");
+    let original = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let enriched = original.replacen(
+        "<a:bodyPr/>",
+        r#"<x:before xmlns:x="urn:f112"/><a:bodyPr/><x:after-body xmlns:x="urn:f112"/>"#,
+        1,
+    ).replacen(
+        "<a:r><a:t>plain</a:t></a:r>",
+        r#"<mc:AlternateContent xmlns:x="urn:f112"><mc:Choice Requires="x"><x:producer-marker value="kept"/></mc:Choice><mc:Fallback><a:r><a:t>fallback</a:t></a:r></mc:Fallback></mc:AlternateContent><a:fld id="{00000000-0000-0000-0000-000000000001}"><a:t>field</a:t></a:fld><a:br/><x:after-runs xmlns:x="urn:f112"/>"#,
+        1,
+    );
+    package.set_part(SLIDE_TWO_PART, enriched.clone().into_bytes());
+    let mut formatted = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let mut slide = formatted.slide_mut(0).unwrap();
+    let mut shape = slide.shape_mut(0).unwrap();
+    let mut frame = shape.text_frame().unwrap();
+    let mut paragraph = frame.paragraph_mut(0).unwrap();
+    let mut properties = CT_TextParagraphProperties::default();
+    properties.level = Some(1);
+    paragraph.set_properties(properties);
+    let formatted_output = open_opc(&formatted.to_bytes().unwrap(), "F-112 formatted raw output");
+    let formatted_xml =
+        String::from_utf8(formatted_output.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let marker = r#"<mc:AlternateContent xmlns:x="urn:f112"><mc:Choice Requires="x"><x:producer-marker value="kept"/></mc:Choice><mc:Fallback><a:r><a:t>fallback</a:t></a:r></mc:Fallback></mc:AlternateContent>"#;
+    let field =
+        r#"<a:fld id="{00000000-0000-0000-0000-000000000001}"><a:t>field</a:t></a:fld><a:br/>"#;
+    let properties_index = formatted_xml.find("<a:pPr lvl=\"1\"").unwrap();
+    let marker_index = formatted_xml.find(marker).unwrap();
+    let field_index = formatted_xml.find(field).unwrap();
+    assert!(properties_index < marker_index);
+    assert!(marker_index < field_index);
+    assert!(formatted_xml.contains(field));
+    let reparsed_xml = String::from_utf8(
+        CT_Slide::from_xml(formatted_output.get_part(SLIDE_TWO_PART).unwrap())
+            .unwrap()
+            .to_xml()
+            .unwrap(),
+    )
+    .unwrap();
+    let properties_index = reparsed_xml.find("<a:pPr lvl=\"1\"").unwrap();
+    let marker_index = reparsed_xml.find(marker).unwrap();
+    let field_index = reparsed_xml.find(field).unwrap();
+    assert!(properties_index < marker_index);
+    assert!(marker_index < field_index);
+
+    let mut package = open_opc(&mutation_fixture_bytes(), "F-112 raw replacement fixture");
+    package.set_part(SLIDE_TWO_PART, enriched.into_bytes());
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_text("ordered")
+        .unwrap();
+
+    let output = open_opc(&presentation.to_bytes().unwrap(), "F-112 raw output");
+    let xml = String::from_utf8(output.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    for marker in [
+        "<x:before ",
+        "<x:after-body ",
+        "<x:producer-marker ",
+        "<x:after-runs ",
+    ] {
+        assert!(xml.contains(marker), "missing preserved marker {marker}");
+    }
+    assert!(xml.find("<a:bodyPr").unwrap() < xml.find("<a:p>").unwrap());
+    assert!(xml.find("<a:r>").unwrap() < xml.find("<a:t>ordered</a:t>").unwrap());
+}
+
+#[test]
+fn text_mutation_indices_and_shape_kinds_are_total() {
+    let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    assert!(slide.shape_mut(999).is_none());
+    let mut shape = slide.shape_mut(0).unwrap();
+    {
+        let mut frame = shape.text_frame().unwrap();
+        assert!(frame.paragraph_mut(999).is_none());
+    }
+    let mut picture = slide.shape_mut(1).unwrap();
+    assert!(picture.text_frame().is_none());
+    assert!(matches!(
+        picture.set_text("unsupported"),
+        Err(Error::UnsupportedShapeMutation { .. })
+    ));
+}
+
+#[test]
+fn text_frame_handles_append_paragraphs_and_runs_in_order() {
+    let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut shape = slide.shape_mut(0).unwrap();
+    shape.set_text("one").unwrap();
+    let mut frame = shape.text_frame().unwrap();
+    frame.paragraph_mut(0).unwrap().add_run(" two");
+    frame.add_paragraph().set_text("three");
+    assert_eq!(frame.text(), "one two\nthree");
+
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened.slide(0).unwrap().shape(0).unwrap().text(),
+        Some("one two\nthree".to_owned())
+    );
+}
+
+#[test]
+fn picture_without_explicit_size_uses_native_dimensions() {
+    let png = png_header(32, 16);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let original_count = presentation.slide(0).unwrap().shapes().len();
+
+    let picture = presentation
+        .add_picture(0, &png, "image.png", Emu(10), Emu(20), None, None)
+        .expect("add native-size picture");
+    assert_eq!(picture.kind(), ShapeKind::Picture);
+
+    let bytes = presentation.to_bytes().expect("serialize picture");
+    let reopened = Presentation::from_bytes(&bytes).expect("reopen picture");
+    assert!(reopened.validate().is_empty());
+    let package = open_opc(&bytes, "F-111 native picture");
+    let slide = CT_Slide::from_xml(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+    let ShapeTreeChild::Picture(picture) =
+        &slide.common_slide_data.shape_tree.children[original_count]
+    else {
+        panic!("expected appended picture");
+    };
+    let transform = picture.shape_properties.transform.as_ref().unwrap();
+    assert_eq!(transform.offset.unwrap().x, Emu(10));
+    assert_eq!(transform.offset.unwrap().y, Emu(20));
+    assert_eq!(transform.extent.unwrap().cx, Emu(406_400));
+    assert_eq!(transform.extent.unwrap().cy, Emu(203_200));
+}
+
+#[test]
+fn picture_one_dimension_preserves_aspect_ratio_with_truncation() {
+    let png = png_header(3, 2);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let original_count = presentation.slide(0).unwrap().shapes().len();
+    presentation
+        .add_picture(0, &png, "ratio.png", Emu(0), Emu(0), Some(Emu(10)), None)
+        .unwrap();
+    presentation
+        .add_picture(0, &png, "ratio.png", Emu(0), Emu(0), None, Some(Emu(10)))
+        .unwrap();
+
+    let package = open_opc(&presentation.to_bytes().unwrap(), "F-111 aspect ratio");
+    assert_eq!(
+        package
+            .get_part_rels("/ppt/slides/slide1.xml")
+            .unwrap()
+            .get_all_by_type(rel_types::IMAGE)
+            .len(),
+        1,
+        "equal bytes on one slide reuse the slide-scoped relationship"
+    );
+    let slide = CT_Slide::from_xml(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+    let pictures = &slide.common_slide_data.shape_tree.children[original_count..];
+    let ShapeTreeChild::Picture(width_only) = &pictures[0] else {
+        panic!("expected width-only picture");
+    };
+    let ShapeTreeChild::Picture(height_only) = &pictures[1] else {
+        panic!("expected height-only picture");
+    };
+    let width_only = width_only.shape_properties.transform.as_ref().unwrap();
+    let height_only = height_only.shape_properties.transform.as_ref().unwrap();
+    assert_eq!(width_only.extent.unwrap().cx, Emu(10));
+    assert_eq!(width_only.extent.unwrap().cy, Emu(6));
+    assert_eq!(height_only.extent.unwrap().cx, Emu(15));
+    assert_eq!(height_only.extent.unwrap().cy, Emu(10));
+}
+
+#[test]
+fn duplicate_picture_bytes_share_one_media_part_across_slides() {
+    let png = png_header(4, 3);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add first slide");
+    presentation.add_slide(0).expect("add second slide");
+    for slide_index in 0..2 {
+        presentation
+            .add_picture(slide_index, &png, "shared.png", Emu(0), Emu(0), None, None)
+            .unwrap();
+    }
+
+    let bytes = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert!(reopened.validate().is_empty());
+    let package = open_opc(&bytes, "F-111 deduplicated media");
+    let media = package
+        .parts
+        .iter()
+        .filter(|(part_name, bytes)| part_name.starts_with("/ppt/media/") && *bytes == &png)
+        .map(|(part_name, _)| part_name.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(media.len(), 1);
+    for slide_part in ["/ppt/slides/slide1.xml", "/ppt/slides/slide2.xml"] {
+        let relationships = package.get_part_rels(slide_part).unwrap();
+        let images = relationships.get_all_by_type(rel_types::IMAGE);
+        assert_eq!(images.len(), 1);
+        assert_eq!(
+            OpcPackage::resolve_rel_target(slide_part, &images[0].target),
+            media[0]
+        );
+    }
+}
+
+#[test]
+fn picture_sniffs_bytes_when_extension_is_misleading() {
+    let png = png_header(5, 4);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    presentation
+        .add_picture(0, &png, "misleading.jpeg", Emu(0), Emu(0), None, None)
+        .unwrap();
+
+    let package = open_opc(&presentation.to_bytes().unwrap(), "F-111 sniffed media");
+    let part = package
+        .parts
+        .iter()
+        .find(|(part_name, bytes)| part_name.starts_with("/ppt/media/") && *bytes == &png)
+        .map(|(part_name, _)| part_name)
+        .unwrap();
+    assert!(part.ends_with(".png"));
+    assert_eq!(
+        package.content_types.content_type_for(part),
+        Some("image/png")
+    );
+}
+
+#[test]
+fn picture_with_both_dimensions_does_not_require_native_metadata() {
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"/>"#;
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let original_count = presentation.slide(0).unwrap().shapes().len();
+    presentation
+        .add_picture(
+            0,
+            svg,
+            "vector.svg",
+            Emu(1),
+            Emu(2),
+            Some(Emu(300)),
+            Some(Emu(400)),
+        )
+        .unwrap();
+
+    let package = open_opc(&presentation.to_bytes().unwrap(), "F-111 explicit size");
+    let slide = CT_Slide::from_xml(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+    let ShapeTreeChild::Picture(picture) =
+        &slide.common_slide_data.shape_tree.children[original_count]
+    else {
+        panic!("expected explicit-size picture");
+    };
+    let extent = picture
+        .shape_properties
+        .transform
+        .as_ref()
+        .unwrap()
+        .extent
+        .unwrap();
+    assert_eq!(extent.cx, Emu(300));
+    assert_eq!(extent.cy, Emu(400));
+    assert!(package.parts.keys().any(|part| part.ends_with(".svg")));
+}
+
+#[test]
+fn picture_append_preserves_schema_final_content_and_raw_reserved_ids() {
+    const EXTENSION: &str = r#"<p:extLst><p:ext uri="{F110-APPEND-ORDER}"><x:marker xmlns:x="urn:f110" value="kept"/></p:ext></p:extLst>"#;
+    let png = png_header(2, 1);
+    let mut presentation = Presentation::from_bytes(&append_boundary_fixture_bytes()).unwrap();
+    presentation
+        .add_picture(0, &png, "ordered.png", Emu(1), Emu(2), None, None)
+        .unwrap();
+
+    let package = open_opc(&presentation.to_bytes().unwrap(), "F-111 append boundary");
+    let xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    assert!(xml.contains(EXTENSION));
+    assert!(xml.rfind("<p:pic>").unwrap() < xml.find(EXTENSION).unwrap());
+    let slide = CT_Slide::from_xml(xml.as_bytes()).unwrap();
+    let appended = slide.common_slide_data.shape_tree.children.last().unwrap();
+    assert_eq!(appended.non_visual_id(), Some(2));
+    let ShapeTreeChild::Picture(_) = appended else {
+        panic!("expected appended picture");
+    };
+}
+
+#[test]
+fn invalid_picture_input_does_not_mutate_the_presentation() {
+    let png = png_header(5, 4);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let before = presentation.to_bytes().unwrap();
+
+    assert!(matches!(
+        presentation.add_picture(1, &png, "image.png", Emu(0), Emu(0), None, None),
+        Err(Error::UnknownSlideIndex { index: 1, .. })
+    ));
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    assert!(matches!(
+        presentation.add_picture(0, b"not an image", "image.bin", Emu(0), Emu(0), None, None,),
+        Err(Error::UnsupportedPicture { .. })
+    ));
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    assert!(matches!(
+        presentation.add_picture(
+            0,
+            br#"<svg xmlns="http://www.w3.org/2000/svg"/>"#,
+            "image.svg",
+            Emu(0),
+            Emu(0),
+            None,
+            None,
+        ),
+        Err(Error::UnavailablePictureDimensions { .. })
+    ));
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    assert!(matches!(
+        presentation.add_picture(
+            0,
+            &png_header(1, u32::MAX),
+            "too-tall.png",
+            Emu(0),
+            Emu(0),
+            Some(Emu(i64::MAX)),
+            None,
+        ),
+        Err(Error::PictureDimensionOutOfRange { axis: "height", .. })
+    ));
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+}
+
+#[test]
+#[ignore = "requires uv and pinned python-pptx 1.0.2"]
+fn picture_native_size_matches_python_pptx_1_0_2() {
+    let png = valid_one_pixel_png();
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    presentation
+        .add_picture(0, &png, "pixel.png", Emu(10), Emu(20), None, None)
+        .unwrap();
+    let output_path = std::env::temp_dir().join(format!(
+        "rpptx-f111-python-oracle-{}.pptx",
+        std::process::id()
+    ));
+    fs::write(&output_path, presentation.to_bytes().unwrap()).unwrap();
+    let image_hex = png
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let script = r#"
+import io
+import sys
+from pptx import Presentation
+
+ours = Presentation(sys.argv[1])
+ours_picture = ours.slides[0].shapes[-1]
+print(f"ours\t{ours_picture.shape_type.name}\t{ours_picture.width}\t{ours_picture.height}")
+
+oracle = Presentation()
+slide = oracle.slides.add_slide(oracle.slide_layouts[6])
+oracle_picture = slide.shapes.add_picture(io.BytesIO(bytes.fromhex(sys.argv[2])), 10, 20)
+print(f"oracle\t{oracle_picture.shape_type.name}\t{oracle_picture.width}\t{oracle_picture.height}")
+"#;
+    let output = Command::new("uv")
+        .args([
+            "run",
+            "--with",
+            "python-pptx==1.0.2",
+            "python",
+            "-c",
+            script,
+        ])
+        .arg(&output_path)
+        .arg(image_hex)
+        .output()
+        .expect("run pinned python-pptx picture oracle");
+    fs::remove_file(&output_path).unwrap();
+    assert!(
+        output.status.success(),
+        "python-pptx oracle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "ours\tPICTURE\t12700\t12700\noracle\tPICTURE\t12700\t12700\n"
+    );
+}
+
+#[test]
+#[ignore = "requires pinned Microsoft PowerPoint"]
+fn added_picture_validates_and_opens_without_repair() {
+    assert_powerpoint_build();
+    let png = valid_one_pixel_png();
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    presentation
+        .add_picture(
+            0,
+            &png,
+            "pixel.png",
+            Emu(914_400),
+            Emu(914_400),
+            Some(Emu(914_400)),
+            Some(Emu(914_400)),
+        )
+        .unwrap();
+    assert!(presentation.validate().is_empty());
+    let output =
+        std::env::temp_dir().join(format!("rpptx-f111-picture-{}.pptx", std::process::id()));
+    fs::write(&output, presentation.to_bytes().expect("serialize deck"))
+        .expect("write native acceptance deck");
+    let name = output.file_name().unwrap().to_string_lossy();
+    let path = output.to_string_lossy();
+    let script = format!(
+        "with timeout of 120 seconds\ntell application \"Microsoft PowerPoint\"\nset previousStartUpDialog to start up dialog\ntry\nif (Version as text) is not \"{POWERPOINT_VERSION}\" then error \"PowerPoint version mismatch\"\nif (build as text) is not \"{POWERPOINT_APP_BUILD}\" then error \"PowerPoint build mismatch\"\nset start up dialog to false\nset deckPath to \"{path}\"\nopen my POSIX file deckPath\nset checkedDeck to presentation \"{name}\"\nif (count of slides of checkedDeck) is not 1 then error \"slide count mismatch\"\nclose checkedDeck saving no\nset start up dialog to previousStartUpDialog\non error errorMessage number errorNumber\ntry\nclose checkedDeck saving no\nend try\nset start up dialog to previousStartUpDialog\nerror errorMessage number errorNumber\nend try\nend tell\nend timeout\n"
+    );
+    let result = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .expect("launch PowerPoint acceptance script");
+    fs::remove_file(&output).expect("remove native acceptance deck");
+    assert!(
+        result.status.success(),
+        "PowerPoint no-repair open failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
 const MODELLED_CONTENT_TYPES: [&str; 7] = [
     content_types::PRESENTATION,
     content_types::SLIDE,
@@ -67,6 +672,542 @@ backgrounds	distinct solid, gradient, picture, and texture visuals
 placeholder-layout-color	exact cyan on black, RGBA #00FFFF
 bug58144-headers-footers-2007	Slide footer once
 "#;
+
+#[test]
+fn four_appended_shapes_have_unique_ids_and_reopen() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let original_count = presentation.slide(0).unwrap().shapes().len();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    assert_eq!(
+        slide
+            .add_textbox(Emu(10), Emu(20), Emu(300), Emu(400))
+            .unwrap()
+            .kind(),
+        ShapeKind::Shape
+    );
+    assert_eq!(
+        slide
+            .add_shape("triangle", Emu(30), Emu(40), Emu(500), Emu(600))
+            .unwrap()
+            .kind(),
+        ShapeKind::Shape
+    );
+    assert_eq!(
+        slide
+            .add_connector(ConnectorType::Elbow, Emu(700), Emu(800), Emu(100), Emu(200),)
+            .unwrap()
+            .kind(),
+        ShapeKind::Connector
+    );
+    assert_eq!(slide.add_group_shape().unwrap().kind(), ShapeKind::Group);
+
+    let bytes = presentation
+        .to_bytes()
+        .expect("serialize constructed shapes");
+    let reopened = Presentation::from_bytes(&bytes).expect("reopen constructed shapes");
+    assert!(reopened.validate().is_empty());
+    let reopened_slide = reopened.slide(0).unwrap();
+    let shapes = reopened_slide.shapes().collect::<Vec<_>>();
+    assert_eq!(shapes.len(), original_count + 4);
+    assert_eq!(shapes[original_count].kind(), ShapeKind::Shape);
+    assert_eq!(shapes[original_count + 1].kind(), ShapeKind::Shape);
+    assert_eq!(shapes[original_count + 2].kind(), ShapeKind::Connector);
+    assert_eq!(shapes[original_count + 3].kind(), ShapeKind::Group);
+
+    let package = open_opc(&bytes, "F-110 constructor reopen");
+    let slide = CT_Slide::from_xml(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+    let appended = &slide.common_slide_data.shape_tree.children[original_count..];
+    let ids = appended
+        .iter()
+        .map(|child| child.non_visual_id().unwrap())
+        .collect::<HashSet<_>>();
+    assert_eq!(ids.len(), 4);
+
+    let ShapeTreeChild::Shape(textbox) = &appended[0] else {
+        panic!("expected textbox shape");
+    };
+    let transform = textbox.shape_properties.transform.as_ref().unwrap();
+    assert_eq!(transform.offset.unwrap().x, Emu(10));
+    assert_eq!(transform.offset.unwrap().y, Emu(20));
+    assert_eq!(transform.extent.unwrap().cx, Emu(300));
+    assert_eq!(transform.extent.unwrap().cy, Emu(400));
+    assert_eq!(
+        textbox
+            .shape_properties
+            .preset_geometry
+            .as_ref()
+            .unwrap()
+            .preset,
+        "rect"
+    );
+    assert!(textbox.shape_properties.fill.is_some());
+    let text_body = textbox.text_body.as_ref().unwrap();
+    assert!(text_body.has_list_style());
+    assert_eq!(text_body.paragraph_count(), 1);
+    assert!(text_body.paragraphs()[0].runs.is_empty());
+    let textbox_xml = String::from_utf8(textbox.to_xml().unwrap()).unwrap();
+    assert!(textbox_xml.contains("<p:cNvSpPr txBox=\"1\"/>"));
+    assert!(textbox_xml.contains("<a:noFill/>"));
+
+    let ShapeTreeChild::Shape(shape) = &appended[1] else {
+        panic!("expected ordinary shape");
+    };
+    let transform = shape.shape_properties.transform.as_ref().unwrap();
+    assert_eq!(transform.offset.unwrap().x, Emu(30));
+    assert_eq!(transform.offset.unwrap().y, Emu(40));
+    assert_eq!(transform.extent.unwrap().cx, Emu(500));
+    assert_eq!(transform.extent.unwrap().cy, Emu(600));
+    assert_eq!(
+        shape
+            .shape_properties
+            .preset_geometry
+            .as_ref()
+            .unwrap()
+            .preset,
+        "triangle"
+    );
+    assert!(shape.shape_properties.fill.is_none());
+    let text_body = shape.text_body.as_ref().unwrap();
+    assert!(text_body.has_list_style());
+    assert_eq!(text_body.paragraph_count(), 1);
+    assert!(text_body.paragraphs()[0].runs.is_empty());
+
+    let ShapeTreeChild::Connector(connector) = &appended[2] else {
+        panic!("expected connector");
+    };
+    let transform = connector.shape_properties.transform.as_ref().unwrap();
+    assert_eq!(transform.offset.unwrap().x, Emu(100));
+    assert_eq!(transform.offset.unwrap().y, Emu(200));
+    assert_eq!(transform.extent.unwrap().cx, Emu(600));
+    assert_eq!(transform.extent.unwrap().cy, Emu(600));
+    assert!(transform.flip_horizontal);
+    assert!(transform.flip_vertical);
+    assert_eq!(
+        connector
+            .shape_properties
+            .preset_geometry
+            .as_ref()
+            .unwrap()
+            .preset,
+        "bentConnector3"
+    );
+
+    let ShapeTreeChild::GroupShape(group) = &appended[3] else {
+        panic!("expected empty group");
+    };
+    assert!(group.children.is_empty());
+    assert!(group.group_transform().is_none());
+    let group_xml = String::from_utf8(group.to_xml().unwrap()).unwrap();
+    assert!(group_xml.contains("<p:cNvGrpSpPr/>"));
+    assert!(group_xml.contains("<p:nvPr/>"));
+    assert!(group_xml.contains("<p:grpSpPr/>"));
+}
+
+#[test]
+fn unknown_preset_does_not_mutate_the_slide() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let before = presentation.to_bytes().unwrap();
+
+    let error = match presentation.slide_mut(0).unwrap().add_shape(
+        "not-a-preset",
+        Emu(1),
+        Emu(2),
+        Emu(3),
+        Emu(4),
+    ) {
+        Ok(_) => panic!("unknown preset was accepted"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error,
+        Error::InvalidShapeMutation {
+            operation: "add shape",
+            ref message,
+        } if message.contains("unknown DrawingML preset geometry: not-a-preset")
+    ));
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn every_constructor_appends_before_preserved_shape_tree_extensions() {
+    const EXTENSION: &str = r#"<p:extLst><p:ext uri="{F110-APPEND-ORDER}"><x:marker xmlns:x="urn:f110" value="kept"/></p:ext></p:extLst>"#;
+
+    for constructor in 0..4 {
+        let mut presentation = Presentation::from_bytes(&append_boundary_fixture_bytes()).unwrap();
+        let original_count = presentation.slide(0).unwrap().shapes().len();
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let expected_tag = match constructor {
+            0 => {
+                slide.add_textbox(Emu(1), Emu(2), Emu(3), Emu(4)).unwrap();
+                "<p:sp>"
+            }
+            1 => {
+                slide
+                    .add_shape("triangle", Emu(1), Emu(2), Emu(3), Emu(4))
+                    .unwrap();
+                "<p:sp>"
+            }
+            2 => {
+                slide
+                    .add_connector(ConnectorType::Straight, Emu(1), Emu(2), Emu(3), Emu(4))
+                    .unwrap();
+                "<p:cxnSp>"
+            }
+            3 => {
+                slide.add_group_shape().unwrap();
+                "<p:grpSp>"
+            }
+            _ => unreachable!(),
+        };
+
+        let bytes = presentation.to_bytes().unwrap();
+        let package = open_opc(&bytes, "F-110 append boundary");
+        let xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+        assert!(xml.contains(EXTENSION));
+        assert!(xml.rfind(expected_tag).unwrap() < xml.find(EXTENSION).unwrap());
+        let reparsed = CT_Slide::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(
+            reparsed.common_slide_data.shape_tree.children.len(),
+            original_count + 1
+        );
+    }
+}
+
+#[test]
+fn constructor_names_are_deterministic_from_allocated_ids() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let original_count = presentation.slide(0).unwrap().shapes().len();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    slide.add_textbox(Emu(1), Emu(2), Emu(3), Emu(4)).unwrap();
+    slide
+        .add_shape("rect", Emu(5), Emu(6), Emu(7), Emu(8))
+        .unwrap();
+    slide
+        .add_connector(ConnectorType::Straight, Emu(9), Emu(10), Emu(11), Emu(12))
+        .unwrap();
+    slide.add_group_shape().unwrap();
+
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "F-110 deterministic names");
+    let xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    let slide = CT_Slide::from_xml(xml.as_bytes()).unwrap();
+    let appended = &slide.common_slide_data.shape_tree.children[original_count..];
+    for (child, prefix) in appended
+        .iter()
+        .zip(["TextBox", "Shape", "Connector", "Group"])
+    {
+        let id = child.non_visual_id().unwrap();
+        assert!(xml.contains(&format!("name=\"{prefix} {id}\"")));
+    }
+}
+
+#[test]
+fn shape_mutation_setters_survive_save_and_reload() {
+    let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut shape = slide.shape_mut(0).unwrap();
+    shape.set_position(Emu(101), Emu(202)).unwrap();
+    shape.set_size(Emu(303), Emu(404)).unwrap();
+    shape.set_rotation(Angle(5_400_000)).unwrap();
+    shape.set_name("A & B \"quoted\"").unwrap();
+    shape
+        .set_fill(
+            Fill::from_xml(
+                br#"<a:noFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    shape
+        .set_line(
+            CT_LineProperties::from_xml(br#"<a:ln xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" w="12700"/>"#).unwrap(),
+        )
+        .unwrap();
+    shape.set_adjust_value("adj", 25_000.0).unwrap();
+
+    let bytes = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        reopened.slide(0).unwrap().shape(0).unwrap().kind(),
+        ShapeKind::Shape
+    );
+    let package = open_opc(&bytes, "F-109 setter gate");
+    let slide = CT_Slide::from_xml(package.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let ShapeTreeChild::Shape(shape) = &slide.common_slide_data.shape_tree.children[0] else {
+        panic!("expected ordinary shape");
+    };
+    let transform = shape.shape_properties.transform.as_ref().unwrap();
+    assert_eq!(transform.offset.unwrap().x, Emu(101));
+    assert_eq!(transform.offset.unwrap().y, Emu(202));
+    assert_eq!(transform.extent.unwrap().cx, Emu(303));
+    assert_eq!(transform.extent.unwrap().cy, Emu(404));
+    assert_eq!(transform.rotation, Angle(5_400_000));
+    assert!(shape.shape_properties.fill.is_some());
+    assert_eq!(
+        shape.shape_properties.line.as_ref().unwrap().width,
+        Some(12_700)
+    );
+    let adjustments = shape
+        .shape_properties
+        .preset_geometry
+        .as_ref()
+        .unwrap()
+        .adjust_values();
+    assert_eq!(adjustments.len(), 1);
+    assert_eq!(adjustments[0].name, "adj");
+    assert_eq!(
+        adjustments[0].args[0],
+        oxml_drawing::geometry::GuideOperand::Literal(25_000.0)
+    );
+    let xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    assert!(xml.contains("name=\"A &amp; B &quot;quoted&quot;\""));
+}
+
+#[test]
+fn shape_mutation_preserves_unmodelled_xml_and_schema_order() {
+    let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut shape = slide.shape_mut(0).unwrap();
+    shape.set_position(Emu(1), Emu(2)).unwrap();
+    shape
+        .set_fill(
+            Fill::from_xml(
+                br#"<a:noFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    shape
+        .set_line(
+            CT_LineProperties::from_xml(
+                br#"<a:ln xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "F-109 preservation");
+    let xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    assert!(xml.contains("producer=\"kept\""));
+    assert!(xml.contains("<ext:nv xmlns:ext=\"urn:ext\">one &amp; two</ext:nv>"));
+    assert!(xml.contains("<ext:before xmlns:ext=\"urn:ext\"/>"));
+    assert!(xml.contains("<ext:after xmlns:ext=\"urn:ext\"/>"));
+    let transform = xml.find("<a:xfrm").unwrap();
+    let geometry = xml.find("<a:prstGeom").unwrap();
+    let fill = xml.find("<a:noFill").unwrap();
+    let line = xml.find("<a:ln").unwrap();
+    assert!(transform < geometry && geometry < fill && fill < line);
+    Presentation::from_bytes(&bytes).expect("schema-ordered output reparses");
+}
+
+#[test]
+fn shape_mutation_handles_nested_group_children() {
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut group = slide.shape_mut(3).unwrap();
+    assert_eq!(group.kind(), ShapeKind::Group);
+    assert!(group.child_mut(2).is_none());
+    let mut nested = group.child_mut(0).unwrap();
+    nested.set_position(Emu(41), Emu(42)).unwrap();
+    nested.set_name("nested changed").unwrap();
+
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "F-109 nested group");
+    let slide = CT_Slide::from_xml(package.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let ShapeTreeChild::GroupShape(group) = &slide.common_slide_data.shape_tree.children[3] else {
+        panic!("expected group");
+    };
+    assert_eq!(group.children.len(), 2);
+    assert_eq!(
+        group
+            .children
+            .iter()
+            .map(ShapeTreeChild::non_visual_id)
+            .collect::<Vec<_>>(),
+        vec![Some(7), Some(8)]
+    );
+    let ShapeTreeChild::Shape(nested) = &group.children[0] else {
+        panic!("expected nested shape");
+    };
+    assert_eq!(
+        nested
+            .shape_properties
+            .transform
+            .as_ref()
+            .unwrap()
+            .offset
+            .unwrap()
+            .x,
+        Emu(41)
+    );
+    let ShapeTreeChild::Shape(sibling) = &group.children[1] else {
+        panic!("expected sibling shape");
+    };
+    assert_eq!(nested.text_body.as_ref().unwrap().plain_text(), "nested");
+    assert_eq!(sibling.text_body.as_ref().unwrap().plain_text(), "sibling");
+    assert!(sibling.shape_properties.transform.is_none());
+    let xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let changed = xml.find("id=\"7\" name=\"nested changed\"").unwrap();
+    let unchanged = xml.find("id=\"8\" name=\"nested sibling\"").unwrap();
+    assert!(changed < unchanged);
+    assert_eq!(slide.common_slide_data.shape_tree.children.len(), 6);
+}
+
+#[test]
+fn inserted_group_transform_precedes_preserved_group_properties() {
+    let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut group = slide.shape_mut(3).unwrap();
+    group.set_position(Emu(111), Emu(222)).unwrap();
+    group.set_size(Emu(333), Emu(444)).unwrap();
+    group.set_rotation(Angle(2_700_000)).unwrap();
+
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "F-109 group transform insertion");
+    let xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let group_start = xml.find("<p:grpSp>").unwrap();
+    let transform = xml[group_start..].find("<a:xfrm").unwrap() + group_start;
+    let preserved = xml[group_start..]
+        .find("<a:solidFill><a:srgbClr val=\"112233\"/></a:solidFill>")
+        .unwrap()
+        + group_start;
+    assert!(transform < preserved);
+
+    let slide = CT_Slide::from_xml(package.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let ShapeTreeChild::GroupShape(group) = &slide.common_slide_data.shape_tree.children[3] else {
+        panic!("expected group");
+    };
+    let transform = group.group_transform().unwrap();
+    assert_eq!(transform.offset.unwrap().x, Emu(111));
+    assert_eq!(transform.offset.unwrap().y, Emu(222));
+    assert_eq!(transform.extent.unwrap().cx, Emu(333));
+    assert_eq!(transform.extent.unwrap().cy, Emu(444));
+    assert_eq!(transform.rotation, Angle(2_700_000));
+    let group_xml = String::from_utf8(group.to_xml().unwrap()).unwrap();
+    assert!(group_xml.contains("<a:xfrm rot=\"2700000\">"));
+    assert!(group_xml.contains("<a:solidFill><a:srgbClr val=\"112233\"/></a:solidFill>"));
+}
+
+#[test]
+fn alternate_content_fallback_is_not_mutable() {
+    let original = fixture_bytes();
+    let original_package = open_opc(&original, "F-109 original AlternateContent");
+    let original_slide =
+        CT_Slide::from_xml(original_package.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let ShapeTreeChild::AlternateContent(original_alternate) =
+        &original_slide.common_slide_data.shape_tree.children[5]
+    else {
+        panic!("expected AlternateContent");
+    };
+
+    let mut presentation = Presentation::from_bytes(&original).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut alternate = slide.shape_mut(5).unwrap();
+    assert!(alternate.child_mut(0).is_none());
+    assert!(matches!(
+        alternate.set_position(Emu(1), Emu(2)),
+        Err(Error::UnsupportedShapeMutation {
+            shape_kind: ShapeKind::AlternateContent,
+            ..
+        })
+    ));
+
+    let bytes = presentation.to_bytes().unwrap();
+    let saved_package = open_opc(&bytes, "F-109 saved AlternateContent");
+    let saved_slide = CT_Slide::from_xml(saved_package.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let ShapeTreeChild::AlternateContent(saved_alternate) =
+        &saved_slide.common_slide_data.shape_tree.children[5]
+    else {
+        panic!("expected AlternateContent");
+    };
+    assert_eq!(saved_alternate.raw_xml(), original_alternate.raw_xml());
+}
+
+#[test]
+fn shape_mutation_indices_and_kinds_are_total() {
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    assert!(presentation.slide_mut(2).is_none());
+    let mut slide = presentation.slide_mut(0).unwrap();
+    assert!(slide.shape_mut(6).is_none());
+    for index in 0..5 {
+        slide
+            .shape_mut(index)
+            .unwrap()
+            .set_position(Emu(index as i64), Emu(index as i64 + 10))
+            .unwrap();
+    }
+    let mut picture = slide.shape_mut(1).unwrap();
+    assert!(picture.child_mut(0).is_none());
+    picture
+        .set_fill(
+            Fill::from_xml(
+                br#"<a:noFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    picture
+        .set_line(
+            CT_LineProperties::from_xml(
+                br#"<a:ln xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let mut frame = slide.shape_mut(2).unwrap();
+    assert!(matches!(
+        frame.set_fill(
+            Fill::from_xml(
+                br#"<a:noFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>"#
+            )
+            .unwrap()
+        ),
+        Err(Error::UnsupportedShapeMutation {
+            shape_kind: ShapeKind::GraphicFrame,
+            ..
+        })
+    ));
+    let mut shape = slide.shape_mut(0).unwrap();
+    assert!(matches!(
+        shape.set_adjust_value("adj", f64::NAN),
+        Err(Error::NonFiniteAdjustmentValue { .. })
+    ));
+    assert!(matches!(
+        shape.set_adjust_value("adj", 1.0),
+        Err(Error::UnsupportedShapeMutation {
+            operation: "set adjustment",
+            ..
+        })
+    ));
+    Presentation::from_bytes(&presentation.to_bytes().unwrap())
+        .expect("all supported transform variants reparse");
+}
+
+#[test]
+fn shape_name_mutation_escapes_xml_and_preserves_children() {
+    let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    for index in 0..5 {
+        slide
+            .shape_mut(index)
+            .unwrap()
+            .set_name(&format!("A & B \"quoted\" {index}"))
+            .unwrap();
+    }
+
+    let package = open_opc(&presentation.to_bytes().unwrap(), "F-109 name mutation");
+    let xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    for index in 0..5 {
+        assert!(xml.contains(&format!("name=\"A &amp; B &quot;quoted&quot; {index}\"")));
+    }
+    assert!(xml.contains("<ext:nv xmlns:ext=\"urn:ext\">one &amp; two</ext:nv>"));
+}
 
 #[test]
 fn all_corpus_modelled_parts_reparse_structurally() {
@@ -163,6 +1304,72 @@ fn three_added_slides_open_in_powerpoint_without_repair() {
     let path = output.to_string_lossy();
     let script = format!(
         "with timeout of 120 seconds\ntell application \"Microsoft PowerPoint\"\nset previousStartUpDialog to start up dialog\ntry\nif (Version as text) is not \"{POWERPOINT_VERSION}\" then error \"PowerPoint version mismatch\"\nif (build as text) is not \"{POWERPOINT_APP_BUILD}\" then error \"PowerPoint build mismatch\"\nset start up dialog to false\nset deckPath to \"{path}\"\nopen my POSIX file deckPath\nset checkedDeck to presentation \"{name}\"\nif (count of slides of checkedDeck) is not 3 then error \"slide count mismatch\"\nclose checkedDeck saving no\nset start up dialog to previousStartUpDialog\non error errorMessage number errorNumber\ntry\nclose checkedDeck saving no\nend try\nset start up dialog to previousStartUpDialog\nerror errorMessage number errorNumber\nend try\nend tell\nend timeout\n"
+    );
+    let result = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .expect("launch PowerPoint acceptance script");
+    fs::remove_file(&output).expect("remove native acceptance deck");
+    assert!(
+        result.status.success(),
+        "PowerPoint no-repair open failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
+#[ignore = "requires pinned Microsoft PowerPoint"]
+fn all_shape_constructors_open_in_powerpoint_without_repair() {
+    assert_powerpoint_build();
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let mut package = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "F-110 native append boundary",
+    );
+    let original =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    let with_extension = original.replacen(
+        "</p:spTree>",
+        r#"<p:extLst><p:ext uri="{F110-NATIVE-APPEND-ORDER}"><x:marker xmlns:x="urn:f110" value="kept"/></p:ext></p:extLst></p:spTree>"#,
+        1,
+    );
+    assert_ne!(with_extension, original);
+    package.set_part("/ppt/slides/slide1.xml", with_extension.into_bytes());
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    slide
+        .add_textbox(Emu(914_400), Emu(914_400), Emu(2_000_000), Emu(900_000))
+        .unwrap();
+    slide
+        .add_shape(
+            "triangle",
+            Emu(3_000_000),
+            Emu(914_400),
+            Emu(2_000_000),
+            Emu(2_000_000),
+        )
+        .unwrap();
+    slide
+        .add_connector(
+            ConnectorType::Curve,
+            Emu(1_000_000),
+            Emu(4_000_000),
+            Emu(5_000_000),
+            Emu(3_000_000),
+        )
+        .unwrap();
+    slide.add_group_shape().unwrap();
+    let output = std::env::temp_dir().join(format!(
+        "rpptx-f110-shape-constructors-{}.pptx",
+        std::process::id()
+    ));
+    fs::write(&output, presentation.to_bytes().expect("serialize deck"))
+        .expect("write native acceptance deck");
+    let name = output.file_name().unwrap().to_string_lossy();
+    let path = output.to_string_lossy();
+    let script = format!(
+        "with timeout of 120 seconds\ntell application \"Microsoft PowerPoint\"\nset previousStartUpDialog to start up dialog\ntry\nif (Version as text) is not \"{POWERPOINT_VERSION}\" then error \"PowerPoint version mismatch\"\nif (build as text) is not \"{POWERPOINT_APP_BUILD}\" then error \"PowerPoint build mismatch\"\nset start up dialog to false\nset deckPath to \"{path}\"\nopen my POSIX file deckPath\nset checkedDeck to presentation \"{name}\"\nif (count of slides of checkedDeck) is not 1 then error \"slide count mismatch\"\nclose checkedDeck saving no\nset start up dialog to previousStartUpDialog\non error errorMessage number errorNumber\ntry\nclose checkedDeck saving no\nend try\nset start up dialog to previousStartUpDialog\nerror errorMessage number errorNumber\nend try\nend tell\nend timeout\n"
     );
     let result = Command::new("osascript")
         .args(["-e", &script])
@@ -385,7 +1592,10 @@ fn presentation_resolves_ordered_slides_and_notes() {
     let slides = presentation.slides().collect::<Vec<_>>();
     assert_eq!(slides[0].id(), 900);
     assert_eq!(slides[0].name(), Some("Second in storage, first in order"));
-    assert_eq!(slides[0].text(), "plain\nA\tB\nC\tD\nnested\nfallback");
+    assert_eq!(
+        slides[0].text(),
+        "plain\nA\tB\nC\tD\nnested\nsibling\nfallback"
+    );
     assert_eq!(slides[0].notes_text().as_deref(), Some("speaker\nnote"));
     assert_eq!(slides[1].id(), 256);
     assert_eq!(slides[1].name(), Some("First in storage, second in order"));
@@ -424,8 +1634,8 @@ fn indexed_read_access_is_total() {
     assert!(picture.child(0).is_none());
     assert_eq!(picture.children().len(), 0);
     let group = slide.shape(3).unwrap();
-    assert_eq!(group.child_count(), 1);
-    assert!(group.child(1).is_none());
+    assert_eq!(group.child_count(), 2);
+    assert!(group.child(2).is_none());
     let alternate = slide.shape(5).unwrap();
     assert_eq!(alternate.child_count(), 1);
     assert!(alternate.child(1).is_none());
@@ -458,6 +1668,10 @@ fn shape_refs_cover_the_typed_shape_tree() {
     assert_eq!(
         shapes[3].children().next().unwrap().text().as_deref(),
         Some("nested")
+    );
+    assert_eq!(
+        shapes[3].children().nth(1).unwrap().text().as_deref(),
+        Some("sibling")
     );
     assert_eq!(
         shapes[5].children().next().unwrap().text().as_deref(),
@@ -1222,6 +2436,62 @@ fn open_opc(bytes: &[u8], deck: &str) -> OpcPackage {
         .unwrap_or_else(|error| panic!("{deck}: open OPC package: {error}"))
 }
 
+fn deterministic_render(bytes: &[u8]) -> Vec<u8> {
+    let package = open_opc(bytes, "F-112 deterministic render");
+    let presentation_part = package.main_document_part().unwrap();
+    let presentation =
+        CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let size = presentation
+        .slide_size
+        .as_ref()
+        .map_or((720.0, 540.0), |size| {
+            (size.cx.0 as f64 / 12_700.0, size.cy.0 as f64 / 12_700.0)
+        });
+    let relationship = package
+        .get_part_rels(&presentation_part)
+        .unwrap()
+        .get_by_id(&presentation.slide_ids[0].relationship_id)
+        .unwrap();
+    let slide_part = OpcPackage::resolve_rel_target(&presentation_part, &relationship.target);
+    let layout_part = related_visual_part(
+        &package,
+        &slide_part,
+        rel_types::SLIDE_LAYOUT,
+        Path::new("F-112"),
+    );
+    let master_part = related_visual_part(
+        &package,
+        &layout_part,
+        rel_types::SLIDE_MASTER,
+        Path::new("F-112"),
+    );
+    let theme_part =
+        related_visual_part(&package, &master_part, rel_types::THEME, Path::new("F-112"));
+    let slide = CT_Slide::from_xml(package.get_part(&slide_part).unwrap()).unwrap();
+    let layout = CT_SlideLayout::from_xml(package.get_part(&layout_part).unwrap()).unwrap();
+    let master = CT_SlideMaster::from_xml(package.get_part(&master_part).unwrap()).unwrap();
+    let theme = CT_OfficeStyleSheet::from_xml(package.get_part(&theme_part).unwrap()).unwrap();
+    let color_map = effective_visual_color_map(&master, &layout, &slide);
+    let resolved = ResolveCtx::new(
+        &theme,
+        color_map,
+        &master,
+        &layout,
+        &slide,
+        &presentation.default_text_style.unwrap_or_default(),
+    )
+    .resolve_slide(size)
+    .unwrap();
+    let render_input = RenderInput {
+        slides: vec![resolved],
+        media: HashMap::new(),
+        fonts: Vec::new(),
+        metadata: None,
+    };
+    let layout = layout_presentation_deterministic(&render_input).unwrap();
+    oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap()
+}
+
 fn modelled_part_bytes(
     package: &OpcPackage,
     deck: &str,
@@ -1478,6 +2748,62 @@ fn fixture_bytes() -> Vec<u8> {
     package_bytes(fixture_package())
 }
 
+fn mutation_fixture_bytes() -> Vec<u8> {
+    let mut package = fixture_package();
+    let original = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let with_non_visual = original.replacen(
+        "<p:cNvPr/>",
+        r#"<p:cNvPr id="2" name="old"><ext:nv xmlns:ext="urn:ext">one &amp; two</ext:nv></p:cNvPr>"#,
+        1,
+    );
+    let with_shape_properties = with_non_visual.replacen(
+        "<p:spPr/>",
+        r#"<p:spPr producer="kept"><ext:before xmlns:ext="urn:ext"/><a:prstGeom prst="roundRect"><a:avLst/></a:prstGeom><ext:after xmlns:ext="urn:ext"/></p:spPr>"#,
+        1,
+    );
+    let with_picture_name = with_shape_properties.replacen(
+        "<p:pic><p:nvPicPr><p:cNvPr/>",
+        "<p:pic><p:nvPicPr><p:cNvPr id=\"3\" name=\"picture\"/>",
+        1,
+    );
+    let with_frame_name = with_picture_name.replacen(
+        "<p:graphicFrame><p:nvGraphicFramePr/>",
+        "<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id=\"4\" name=\"frame\"/></p:nvGraphicFramePr>",
+        1,
+    );
+    let with_group_name = with_frame_name.replacen(
+        "<p:grpSp><p:nvGrpSpPr/>",
+        "<p:grpSp><p:nvGrpSpPr><p:cNvPr id=\"5\" name=\"group\"/></p:nvGrpSpPr>",
+        1,
+    );
+    let with_group_property = with_group_name.replacen(
+        "</p:nvGrpSpPr><p:grpSpPr/>",
+        "</p:nvGrpSpPr><p:grpSpPr><a:solidFill><a:srgbClr val=\"112233\"/></a:solidFill></p:grpSpPr>",
+        1,
+    );
+    let complete = with_group_property.replacen(
+        "<p:cxnSp><p:nvCxnSpPr><p:cNvPr/>",
+        "<p:cxnSp><p:nvCxnSpPr><p:cNvPr id=\"6\" name=\"connector\"/>",
+        1,
+    );
+    assert_ne!(complete, original);
+    package.set_part(SLIDE_TWO_PART, complete.into_bytes());
+    package_bytes(package)
+}
+
+fn append_boundary_fixture_bytes() -> Vec<u8> {
+    let mut package = fixture_package();
+    let original = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let with_extension = original.replacen(
+        "</p:spTree>",
+        r#"<p:extLst><p:ext uri="{F110-APPEND-ORDER}"><x:marker xmlns:x="urn:f110" value="kept"/></p:ext></p:extLst></p:spTree>"#,
+        1,
+    );
+    assert_ne!(with_extension, original);
+    package.set_part(SLIDE_TWO_PART, with_extension.into_bytes());
+    package_bytes(package)
+}
+
 fn package_bytes(package: OpcPackage) -> Vec<u8> {
     let mut output = Cursor::new(Vec::new());
     package.write_to(&mut output).unwrap();
@@ -1574,11 +2900,17 @@ fn rich_slide_xml() -> Vec<u8> {
             r#"<p:sp><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp>"#
         )
     };
+    let identified_text_shape = |id: u32, name: &str, text: &str| {
+        format!(
+            r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="{name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp>"#
+        )
+    };
     let picture = r#"<p:pic><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill/><p:spPr/></p:pic>"#;
     let table = r#"<p:graphicFrame><p:nvGraphicFramePr/><p:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblGrid><a:gridCol w="100"/><a:gridCol w="100"/></a:tblGrid><a:tr h="100"><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>A</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>B</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc></a:tr><a:tr h="100"><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>C</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>D</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#;
     let group = format!(
-        "<p:grpSp><p:nvGrpSpPr/><p:grpSpPr/>{}</p:grpSp>",
-        text_shape("nested")
+        "<p:grpSp><p:nvGrpSpPr/><p:grpSpPr/>{}{}</p:grpSp>",
+        identified_text_shape(7, "nested original", "nested"),
+        identified_text_shape(8, "nested sibling", "sibling")
     );
     let connector = r#"<p:cxnSp><p:nvCxnSpPr><p:cNvPr/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp>"#;
     let alternate = format!(
