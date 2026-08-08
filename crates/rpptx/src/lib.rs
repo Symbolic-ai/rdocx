@@ -16,13 +16,14 @@ pub use oxml_drawing::line::CT_LineProperties;
 use oxml_drawing::shape_props::CT_ShapeProperties;
 use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
 use oxml_layout::MediaId;
-use oxml_media::{MediaNamer, resolve};
+use oxml_media::{ImageFormat, MediaNamer, probe, resolve};
 use oxml_opc::content_types;
 use oxml_opc::relationship::{Relationship, rel_types};
 use oxml_opc::{OpcError, OpcPackage, Relationships};
 use rpptx_oxml::connector::CT_ConnectionShape;
 use rpptx_oxml::graphic_frame::GraphicDataPayload;
 use rpptx_oxml::notes_parts::CT_NotesSlide;
+use rpptx_oxml::picture::CT_Picture;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
 use rpptx_oxml::presentation::{CT_Presentation, CT_SlideId, custom_show_relationship_ids};
 use rpptx_oxml::relmap::relationship_ids;
@@ -78,6 +79,21 @@ pub enum Error {
 
     #[error("layout index {index} is out of range for {layout_count} layouts")]
     UnknownLayoutIndex { index: usize, layout_count: usize },
+
+    #[error("slide index {index} is out of range for {slide_count} slides")]
+    UnknownSlideIndex { index: usize, slide_count: usize },
+
+    #[error("picture {filename} has unsupported image bytes")]
+    UnsupportedPicture { filename: String },
+
+    #[error("picture {filename} has no usable native dimensions")]
+    UnavailablePictureDimensions { filename: String },
+
+    #[error("picture {filename} has an inferred {axis} outside the EMU range")]
+    PictureDimensionOutOfRange {
+        filename: String,
+        axis: &'static str,
+    },
 
     #[error("PowerPoint slide ids are exhausted")]
     SlideIdExhausted,
@@ -231,7 +247,6 @@ impl MediaStore {
         Self { by_id, namer }
     }
 
-    #[allow(dead_code)]
     fn insert(&mut self, package: &mut OpcPackage, bytes: &[u8], filename: &str) -> String {
         self.insert_with_id(package, MediaId::from_bytes(bytes), bytes, filename)
     }
@@ -778,6 +793,130 @@ impl Presentation {
                 message: "new slide record was not retained".to_owned(),
             })
     }
+
+    /// Appends a relationship-backed picture at the top of one slide's z-order.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_picture(
+        &mut self,
+        slide_index: usize,
+        image_data: &[u8],
+        image_filename: &str,
+        left: Emu,
+        top: Emu,
+        width: Option<Emu>,
+        height: Option<Emu>,
+    ) -> Result<ShapeRef<'_>> {
+        let slide = self
+            .slides
+            .get(slide_index)
+            .ok_or(Error::UnknownSlideIndex {
+                index: slide_index,
+                slide_count: self.slides.len(),
+            })?;
+        let slide_part = slide.part_name.clone();
+        let (width, height) = picture_dimensions(image_data, image_filename, width, height)?;
+        let id = ShapeIdAllocator::scan(&slide.slide.common_slide_data.shape_tree).allocate();
+
+        let mut package = self.package.clone();
+        let mut media_store = self.media_store.clone();
+        let media_part = media_store.insert(&mut package, image_data, image_filename);
+        let mut relationships = package
+            .get_part_rels(&slide_part)
+            .cloned()
+            .unwrap_or_default();
+        let relationship_id = relationships
+            .items
+            .iter()
+            .find(|relationship| {
+                relationship.rel_type == rel_types::IMAGE
+                    && !relationship_is_external(relationship)
+                    && OpcPackage::resolve_rel_target(&slide_part, &relationship.target)
+                        == media_part
+            })
+            .map(|relationship| relationship.id.clone())
+            .unwrap_or_else(|| {
+                relationships.add(
+                    rel_types::IMAGE,
+                    &relative_part_target(&slide_part, &media_part),
+                )
+            });
+        let picture = CT_Picture::new(
+            id,
+            &format!("Picture {id}"),
+            &relationship_id,
+            positioned_transform(left, top, width, height),
+        )
+        .map_err(|error| invalid_shape_construction("add picture", error))?;
+
+        package.part_rels.insert(slide_part, relationships);
+        self.package = package;
+        self.media_store = media_store;
+        let tree = &mut self.slides[slide_index].slide.common_slide_data.shape_tree;
+        Ok(shape_ref(
+            tree.append_child(ShapeTreeChild::Picture(picture)),
+        ))
+    }
+}
+
+fn picture_dimensions(
+    image_data: &[u8],
+    image_filename: &str,
+    width: Option<Emu>,
+    height: Option<Emu>,
+) -> Result<(Emu, Emu)> {
+    if let (Some(width), Some(height)) = (width, height) {
+        return Ok((width, height));
+    }
+    if ImageFormat::sniff(image_data).is_none() {
+        return Err(Error::UnsupportedPicture {
+            filename: image_filename.to_owned(),
+        });
+    }
+    let info = probe(image_data).ok_or_else(|| Error::UnavailablePictureDimensions {
+        filename: image_filename.to_owned(),
+    })?;
+    match (width, height) {
+        (None, None) => info
+            .native_size(72.0)
+            .map(|size| (Emu(size.width_emu), Emu(size.height_emu)))
+            .ok_or_else(|| Error::UnavailablePictureDimensions {
+                filename: image_filename.to_owned(),
+            }),
+        (Some(width), None) => infer_picture_dimension(
+            width,
+            info.height_px,
+            info.width_px,
+            image_filename,
+            "height",
+        )
+        .map(|height| (width, height)),
+        (None, Some(height)) => infer_picture_dimension(
+            height,
+            info.width_px,
+            info.height_px,
+            image_filename,
+            "width",
+        )
+        .map(|width| (width, height)),
+        (Some(_), Some(_)) => unreachable!(),
+    }
+}
+
+fn infer_picture_dimension(
+    provided: Emu,
+    inferred_pixels: u32,
+    provided_pixels: u32,
+    image_filename: &str,
+    axis: &'static str,
+) -> Result<Emu> {
+    let inferred =
+        i128::from(provided.0) * i128::from(inferred_pixels) / i128::from(provided_pixels);
+    i64::try_from(inferred)
+        .map(Emu)
+        .map_err(|_| Error::PictureDimensionOutOfRange {
+            filename: image_filename.to_owned(),
+            axis,
+        })
 }
 
 fn resolve_layouts(

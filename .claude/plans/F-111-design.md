@@ -1,6 +1,6 @@
 # F-111, add_picture
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S27
 **Size**: M
 **Depends on**: F-106, F-026
@@ -119,16 +119,16 @@ PresentationML packages and does not alter Word rendering output.
 
 ## Implementation checklist
 
-- [ ] Add the owning-facade `add_picture` operation and contextual errors.
-- [ ] Probe native size at 72 DPI and infer one missing dimension with pinned
+- [x] Add the owning-facade `add_picture` operation and contextual errors.
+- [x] Probe native size at 72 DPI and infer one missing dimension with pinned
   truncation.
-- [ ] Reuse `MediaStore`, create slide-scoped relationships, and allocate a
+- [x] Reuse `MediaStore`, create slide-scoped relationships, and allocate a
   tree-wide shape id.
-- [ ] Add the narrow picture constructor in the existing OOXML file.
-- [ ] Add native-size, aspect, deduplication, MIME, no-mutation, and reopen
+- [x] Add the narrow picture constructor in the existing OOXML file.
+- [x] Add native-size, aspect, deduplication, MIME, no-mutation, and reopen
   tests.
-- [ ] Run and record pinned python-pptx and PowerPoint comparisons.
-- [ ] Update exactly the three listed HLD files.
+- [x] Run and record pinned python-pptx and PowerPoint comparisons.
+- [x] Update exactly the three listed HLD files.
 
 ## Open questions
 

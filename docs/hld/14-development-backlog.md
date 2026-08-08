@@ -873,6 +873,10 @@ Position, size, rotation, name, fill, line, adjust values.
 **Test gate**: each produces a shape PowerPoint opens without repair.
 
 ### F-111, add_picture (M)
+Owning-facade picture insertion uses 72-DPI native sizing, truncating one-axis
+aspect inference, package-wide media deduplication, and slide-scoped image
+relationships. Every fallible operation completes before package or shape-tree
+state is committed.
 **Depends on**: F-106, F-026.
 **Test gate**: a picture added with no explicit size uses its native dimensions.
 

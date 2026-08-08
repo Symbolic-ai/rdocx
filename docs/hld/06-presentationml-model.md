@@ -95,6 +95,36 @@ pub fn add_connector(
 pub fn add_group_shape(&mut self) -> Result<ShapeMut<'_>>;
 ```
 
+The owning facade adds pictures because media parts and relationships belong to
+the presentation package rather than to a borrowed slide handle:
+
+```rust
+pub fn add_picture(
+    &mut self,
+    slide_index: usize,
+    image_data: &[u8],
+    image_filename: &str,
+    left: Emu,
+    top: Emu,
+    width: Option<Emu>,
+    height: Option<Emu>,
+) -> Result<ShapeRef<'_>>;
+```
+
+With neither extent supplied, `add_picture` probes the image and uses its
+native size with a 72-DPI fallback. With exactly one extent supplied, it infers
+the other from the pixel aspect ratio and truncates toward zero. With both
+supplied, it does not require intrinsic metadata. Unsupported bytes, missing
+intrinsic dimensions, out-of-range inference, and an invalid slide index
+return contextual errors without changing the presentation.
+
+Picture insertion reuses equal media bytes package-wide and creates or reuses
+an internal image relationship in the target slide's own scope. Package,
+media-store, and relationship changes remain staged until picture construction
+succeeds. The picture receives a tree-wide allocated id and deterministic name,
+then its canonical `p:nvPicPr`, relationship-backed `p:blipFill`, and typed
+`p:spPr` shell append at top z-order.
+
 An ordinary shape has canonical non-visual properties, a typed transform,
 preset geometry, and a minimal text body. `add_shape` keeps the string API but
 accepts only names in the generated table of all 187 ECMA preset shapes. An
@@ -110,18 +140,24 @@ spans, and its horizontal and vertical flips retain endpoint direction. A
 horizontal or vertical connector may have one zero extent. A span that cannot
 fit in the signed EMU representation returns a contextual error.
 
-Every constructor rescans the tree immediately before allocation, derives a
-deterministic producer name from the allocated id, and appends at top z-order.
-The append operation shifts raw-child boundaries at the old trailing position
-before adding the typed member. Preserved schema-final content such as
-`p:extLst` therefore remains after the new member, while all raw subtrees retain
-their bytes and relative positions.
+Every shape constructor, including the owning picture operation, rescans the
+tree immediately before allocation, derives a deterministic producer name from
+the allocated id, and appends at top z-order. The append operation shifts
+raw-child boundaries at the old trailing position before adding the typed
+member. Preserved schema-final content such as `p:extLst` therefore remains
+after the new member, while all raw subtrees retain their bytes and relative
+positions.
 
 The ignored integration gate
 `all_shape_constructors_open_in_powerpoint_without_repair` builds all four
 forms in a tree with preserved schema-final extension content. The generated
 deck opens without repair in pinned Microsoft PowerPoint 16.104, bundle
 16.104.25121423.
+
+The picture native-size comparison uses pinned python-pptx 1.0.2. The ignored
+integration gate `added_picture_validates_and_opens_without_repair` confirms
+that a generated picture deck validates and opens without repair in the same
+pinned PowerPoint bundle.
 
 `to_bytes()` clones the source package, serialises the owned presentation,
 slide, and notes roots back to their relationship-resolved part names, and uses

@@ -36,6 +36,353 @@ const LAYOUT_PART: &str = "/custom/layouts/validation.xml";
 const POWERPOINT_VERSION: &str = "16.104";
 const POWERPOINT_BUILD: &str = "16.104.25121423";
 const POWERPOINT_APP_BUILD: &str = "1214";
+
+fn png_header(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    bytes.extend_from_slice(&width.to_be_bytes());
+    bytes.extend_from_slice(&height.to_be_bytes());
+    bytes.extend_from_slice(&[8, 6, 0, 0, 0]);
+    bytes.extend_from_slice(&[0; 4]);
+    bytes
+}
+
+fn valid_one_pixel_png() -> Vec<u8> {
+    vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8,
+        0xcf, 0xc0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc, 0x33, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ]
+}
+
+#[test]
+fn picture_without_explicit_size_uses_native_dimensions() {
+    let png = png_header(32, 16);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let original_count = presentation.slide(0).unwrap().shapes().len();
+
+    let picture = presentation
+        .add_picture(0, &png, "image.png", Emu(10), Emu(20), None, None)
+        .expect("add native-size picture");
+    assert_eq!(picture.kind(), ShapeKind::Picture);
+
+    let bytes = presentation.to_bytes().expect("serialize picture");
+    let reopened = Presentation::from_bytes(&bytes).expect("reopen picture");
+    assert!(reopened.validate().is_empty());
+    let package = open_opc(&bytes, "F-111 native picture");
+    let slide = CT_Slide::from_xml(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+    let ShapeTreeChild::Picture(picture) =
+        &slide.common_slide_data.shape_tree.children[original_count]
+    else {
+        panic!("expected appended picture");
+    };
+    let transform = picture.shape_properties.transform.as_ref().unwrap();
+    assert_eq!(transform.offset.unwrap().x, Emu(10));
+    assert_eq!(transform.offset.unwrap().y, Emu(20));
+    assert_eq!(transform.extent.unwrap().cx, Emu(406_400));
+    assert_eq!(transform.extent.unwrap().cy, Emu(203_200));
+}
+
+#[test]
+fn picture_one_dimension_preserves_aspect_ratio_with_truncation() {
+    let png = png_header(3, 2);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let original_count = presentation.slide(0).unwrap().shapes().len();
+    presentation
+        .add_picture(0, &png, "ratio.png", Emu(0), Emu(0), Some(Emu(10)), None)
+        .unwrap();
+    presentation
+        .add_picture(0, &png, "ratio.png", Emu(0), Emu(0), None, Some(Emu(10)))
+        .unwrap();
+
+    let package = open_opc(&presentation.to_bytes().unwrap(), "F-111 aspect ratio");
+    assert_eq!(
+        package
+            .get_part_rels("/ppt/slides/slide1.xml")
+            .unwrap()
+            .get_all_by_type(rel_types::IMAGE)
+            .len(),
+        1,
+        "equal bytes on one slide reuse the slide-scoped relationship"
+    );
+    let slide = CT_Slide::from_xml(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+    let pictures = &slide.common_slide_data.shape_tree.children[original_count..];
+    let ShapeTreeChild::Picture(width_only) = &pictures[0] else {
+        panic!("expected width-only picture");
+    };
+    let ShapeTreeChild::Picture(height_only) = &pictures[1] else {
+        panic!("expected height-only picture");
+    };
+    let width_only = width_only.shape_properties.transform.as_ref().unwrap();
+    let height_only = height_only.shape_properties.transform.as_ref().unwrap();
+    assert_eq!(width_only.extent.unwrap().cx, Emu(10));
+    assert_eq!(width_only.extent.unwrap().cy, Emu(6));
+    assert_eq!(height_only.extent.unwrap().cx, Emu(15));
+    assert_eq!(height_only.extent.unwrap().cy, Emu(10));
+}
+
+#[test]
+fn duplicate_picture_bytes_share_one_media_part_across_slides() {
+    let png = png_header(4, 3);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add first slide");
+    presentation.add_slide(0).expect("add second slide");
+    for slide_index in 0..2 {
+        presentation
+            .add_picture(slide_index, &png, "shared.png", Emu(0), Emu(0), None, None)
+            .unwrap();
+    }
+
+    let bytes = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert!(reopened.validate().is_empty());
+    let package = open_opc(&bytes, "F-111 deduplicated media");
+    let media = package
+        .parts
+        .iter()
+        .filter(|(part_name, bytes)| part_name.starts_with("/ppt/media/") && *bytes == &png)
+        .map(|(part_name, _)| part_name.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(media.len(), 1);
+    for slide_part in ["/ppt/slides/slide1.xml", "/ppt/slides/slide2.xml"] {
+        let relationships = package.get_part_rels(slide_part).unwrap();
+        let images = relationships.get_all_by_type(rel_types::IMAGE);
+        assert_eq!(images.len(), 1);
+        assert_eq!(
+            OpcPackage::resolve_rel_target(slide_part, &images[0].target),
+            media[0]
+        );
+    }
+}
+
+#[test]
+fn picture_sniffs_bytes_when_extension_is_misleading() {
+    let png = png_header(5, 4);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    presentation
+        .add_picture(0, &png, "misleading.jpeg", Emu(0), Emu(0), None, None)
+        .unwrap();
+
+    let package = open_opc(&presentation.to_bytes().unwrap(), "F-111 sniffed media");
+    let part = package
+        .parts
+        .iter()
+        .find(|(part_name, bytes)| part_name.starts_with("/ppt/media/") && *bytes == &png)
+        .map(|(part_name, _)| part_name)
+        .unwrap();
+    assert!(part.ends_with(".png"));
+    assert_eq!(
+        package.content_types.content_type_for(part),
+        Some("image/png")
+    );
+}
+
+#[test]
+fn picture_with_both_dimensions_does_not_require_native_metadata() {
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"/>"#;
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let original_count = presentation.slide(0).unwrap().shapes().len();
+    presentation
+        .add_picture(
+            0,
+            svg,
+            "vector.svg",
+            Emu(1),
+            Emu(2),
+            Some(Emu(300)),
+            Some(Emu(400)),
+        )
+        .unwrap();
+
+    let package = open_opc(&presentation.to_bytes().unwrap(), "F-111 explicit size");
+    let slide = CT_Slide::from_xml(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+    let ShapeTreeChild::Picture(picture) =
+        &slide.common_slide_data.shape_tree.children[original_count]
+    else {
+        panic!("expected explicit-size picture");
+    };
+    let extent = picture
+        .shape_properties
+        .transform
+        .as_ref()
+        .unwrap()
+        .extent
+        .unwrap();
+    assert_eq!(extent.cx, Emu(300));
+    assert_eq!(extent.cy, Emu(400));
+    assert!(package.parts.keys().any(|part| part.ends_with(".svg")));
+}
+
+#[test]
+fn picture_append_preserves_schema_final_content_and_raw_reserved_ids() {
+    const EXTENSION: &str = r#"<p:extLst><p:ext uri="{F110-APPEND-ORDER}"><x:marker xmlns:x="urn:f110" value="kept"/></p:ext></p:extLst>"#;
+    let png = png_header(2, 1);
+    let mut presentation = Presentation::from_bytes(&append_boundary_fixture_bytes()).unwrap();
+    presentation
+        .add_picture(0, &png, "ordered.png", Emu(1), Emu(2), None, None)
+        .unwrap();
+
+    let package = open_opc(&presentation.to_bytes().unwrap(), "F-111 append boundary");
+    let xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    assert!(xml.contains(EXTENSION));
+    assert!(xml.rfind("<p:pic>").unwrap() < xml.find(EXTENSION).unwrap());
+    let slide = CT_Slide::from_xml(xml.as_bytes()).unwrap();
+    let appended = slide.common_slide_data.shape_tree.children.last().unwrap();
+    assert_eq!(appended.non_visual_id(), Some(2));
+    let ShapeTreeChild::Picture(_) = appended else {
+        panic!("expected appended picture");
+    };
+}
+
+#[test]
+fn invalid_picture_input_does_not_mutate_the_presentation() {
+    let png = png_header(5, 4);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let before = presentation.to_bytes().unwrap();
+
+    assert!(matches!(
+        presentation.add_picture(1, &png, "image.png", Emu(0), Emu(0), None, None),
+        Err(Error::UnknownSlideIndex { index: 1, .. })
+    ));
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    assert!(matches!(
+        presentation.add_picture(0, b"not an image", "image.bin", Emu(0), Emu(0), None, None,),
+        Err(Error::UnsupportedPicture { .. })
+    ));
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    assert!(matches!(
+        presentation.add_picture(
+            0,
+            br#"<svg xmlns="http://www.w3.org/2000/svg"/>"#,
+            "image.svg",
+            Emu(0),
+            Emu(0),
+            None,
+            None,
+        ),
+        Err(Error::UnavailablePictureDimensions { .. })
+    ));
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    assert!(matches!(
+        presentation.add_picture(
+            0,
+            &png_header(1, u32::MAX),
+            "too-tall.png",
+            Emu(0),
+            Emu(0),
+            Some(Emu(i64::MAX)),
+            None,
+        ),
+        Err(Error::PictureDimensionOutOfRange { axis: "height", .. })
+    ));
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+}
+
+#[test]
+#[ignore = "requires uv and pinned python-pptx 1.0.2"]
+fn picture_native_size_matches_python_pptx_1_0_2() {
+    let png = valid_one_pixel_png();
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    presentation
+        .add_picture(0, &png, "pixel.png", Emu(10), Emu(20), None, None)
+        .unwrap();
+    let output_path = std::env::temp_dir().join(format!(
+        "rpptx-f111-python-oracle-{}.pptx",
+        std::process::id()
+    ));
+    fs::write(&output_path, presentation.to_bytes().unwrap()).unwrap();
+    let image_hex = png
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let script = r#"
+import io
+import sys
+from pptx import Presentation
+
+ours = Presentation(sys.argv[1])
+ours_picture = ours.slides[0].shapes[-1]
+print(f"ours\t{ours_picture.shape_type.name}\t{ours_picture.width}\t{ours_picture.height}")
+
+oracle = Presentation()
+slide = oracle.slides.add_slide(oracle.slide_layouts[6])
+oracle_picture = slide.shapes.add_picture(io.BytesIO(bytes.fromhex(sys.argv[2])), 10, 20)
+print(f"oracle\t{oracle_picture.shape_type.name}\t{oracle_picture.width}\t{oracle_picture.height}")
+"#;
+    let output = Command::new("uv")
+        .args([
+            "run",
+            "--with",
+            "python-pptx==1.0.2",
+            "python",
+            "-c",
+            script,
+        ])
+        .arg(&output_path)
+        .arg(image_hex)
+        .output()
+        .expect("run pinned python-pptx picture oracle");
+    fs::remove_file(&output_path).unwrap();
+    assert!(
+        output.status.success(),
+        "python-pptx oracle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "ours\tPICTURE\t12700\t12700\noracle\tPICTURE\t12700\t12700\n"
+    );
+}
+
+#[test]
+#[ignore = "requires pinned Microsoft PowerPoint"]
+fn added_picture_validates_and_opens_without_repair() {
+    assert_powerpoint_build();
+    let png = valid_one_pixel_png();
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    presentation
+        .add_picture(
+            0,
+            &png,
+            "pixel.png",
+            Emu(914_400),
+            Emu(914_400),
+            Some(Emu(914_400)),
+            Some(Emu(914_400)),
+        )
+        .unwrap();
+    assert!(presentation.validate().is_empty());
+    let output =
+        std::env::temp_dir().join(format!("rpptx-f111-picture-{}.pptx", std::process::id()));
+    fs::write(&output, presentation.to_bytes().expect("serialize deck"))
+        .expect("write native acceptance deck");
+    let name = output.file_name().unwrap().to_string_lossy();
+    let path = output.to_string_lossy();
+    let script = format!(
+        "with timeout of 120 seconds\ntell application \"Microsoft PowerPoint\"\nset previousStartUpDialog to start up dialog\ntry\nif (Version as text) is not \"{POWERPOINT_VERSION}\" then error \"PowerPoint version mismatch\"\nif (build as text) is not \"{POWERPOINT_APP_BUILD}\" then error \"PowerPoint build mismatch\"\nset start up dialog to false\nset deckPath to \"{path}\"\nopen my POSIX file deckPath\nset checkedDeck to presentation \"{name}\"\nif (count of slides of checkedDeck) is not 1 then error \"slide count mismatch\"\nclose checkedDeck saving no\nset start up dialog to previousStartUpDialog\non error errorMessage number errorNumber\ntry\nclose checkedDeck saving no\nend try\nset start up dialog to previousStartUpDialog\nerror errorMessage number errorNumber\nend try\nend tell\nend timeout\n"
+    );
+    let result = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .expect("launch PowerPoint acceptance script");
+    fs::remove_file(&output).expect("remove native acceptance deck");
+    assert!(
+        result.status.success(),
+        "PowerPoint no-repair open failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
 const MODELLED_CONTENT_TYPES: [&str; 7] = [
     content_types::PRESENTATION,
     content_types::SLIDE,
