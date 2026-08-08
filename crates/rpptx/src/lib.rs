@@ -9,6 +9,11 @@ use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::path::Path;
 
+pub use oxml_core::units::{Angle, Emu};
+pub use oxml_drawing::fill::Fill;
+pub use oxml_drawing::line::CT_LineProperties;
+use oxml_drawing::shape_props::CT_ShapeProperties;
+use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
 use oxml_layout::MediaId;
 use oxml_media::{MediaNamer, resolve};
 use oxml_opc::content_types;
@@ -72,6 +77,21 @@ pub enum Error {
 
     #[error("PowerPoint slide ids are exhausted")]
     SlideIdExhausted,
+
+    #[error("{operation} is not supported for {shape_kind:?}")]
+    UnsupportedShapeMutation {
+        operation: &'static str,
+        shape_kind: ShapeKind,
+    },
+
+    #[error("{operation} failed: {message}")]
+    InvalidShapeMutation {
+        operation: &'static str,
+        message: String,
+    },
+
+    #[error("adjustment {name} requires a finite value")]
+    NonFiniteAdjustmentValue { name: String },
 }
 
 /// A package or presentation invariant that would make a saved deck unsafe.
@@ -627,6 +647,11 @@ impl Presentation {
         self.slides.get(index).map(slide_ref)
     }
 
+    /// Returns one slide for in-place mutation by zero-based index.
+    pub fn slide_mut(&mut self, index: usize) -> Option<SlideMut<'_>> {
+        self.slides.get_mut(index).map(slide_mut)
+    }
+
     /// Iterates slides in `p:sldIdLst` order.
     pub fn slides(&self) -> impl ExactSizeIterator<Item = SlideRef<'_>> {
         self.slides.iter().map(slide_ref)
@@ -1046,6 +1071,39 @@ fn slide_ref(record: &SlideRecord) -> SlideRef<'_> {
     SlideRef { record }
 }
 
+/// A mutably borrowed slide in presentation order.
+pub struct SlideMut<'a> {
+    record: &'a mut SlideRecord,
+}
+
+fn slide_mut(record: &mut SlideRecord) -> SlideMut<'_> {
+    SlideMut { record }
+}
+
+impl SlideMut<'_> {
+    /// Returns one immediate z-order child as a read-only handle.
+    pub fn shape(&self, index: usize) -> Option<ShapeRef<'_>> {
+        self.record
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .get(index)
+            .map(shape_ref)
+    }
+
+    /// Returns one immediate z-order child for in-place mutation.
+    pub fn shape_mut(&mut self, index: usize) -> Option<ShapeMut<'_>> {
+        self.record
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .get_mut(index)
+            .map(shape_mut)
+    }
+}
+
 impl SlideRef<'_> {
     /// Returns the producer-assigned slide id.
     pub fn id(&self) -> u32 {
@@ -1119,17 +1177,159 @@ fn shape_ref(child: &ShapeTreeChild) -> ShapeRef<'_> {
     ShapeRef { child }
 }
 
+/// A mutably borrowed shape-tree child.
+pub struct ShapeMut<'a> {
+    child: &'a mut ShapeTreeChild,
+}
+
+fn shape_mut(child: &mut ShapeTreeChild) -> ShapeMut<'_> {
+    ShapeMut { child }
+}
+
+impl ShapeMut<'_> {
+    /// Returns the child's normalized structural kind.
+    pub fn kind(&self) -> ShapeKind {
+        shape_kind(self.child)
+    }
+
+    /// Returns one immediate group child for in-place mutation.
+    ///
+    /// `mc:AlternateContent` fallback children remain a read-only projection.
+    pub fn child_mut(&mut self, index: usize) -> Option<ShapeMut<'_>> {
+        match self.child {
+            ShapeTreeChild::GroupShape(group) => group.children.get_mut(index).map(shape_mut),
+            _ => None,
+        }
+    }
+
+    /// Changes the shape offset in EMU.
+    pub fn set_position(&mut self, left: Emu, top: Emu) -> Result<()> {
+        self.transform_mut("set position")?.offset = Some(CT_Point2D { x: left, y: top });
+        Ok(())
+    }
+
+    /// Changes the shape extent in EMU.
+    pub fn set_size(&mut self, width: Emu, height: Emu) -> Result<()> {
+        self.transform_mut("set size")?.extent = Some(CT_PositiveSize2D {
+            cx: width,
+            cy: height,
+        });
+        Ok(())
+    }
+
+    /// Changes the clockwise DrawingML rotation.
+    pub fn set_rotation(&mut self, rotation: Angle) -> Result<()> {
+        self.transform_mut("set rotation")?.rotation = rotation;
+        Ok(())
+    }
+
+    /// Changes the producer-facing non-visual name.
+    pub fn set_name(&mut self, name: &str) -> Result<()> {
+        let result = match self.child {
+            ShapeTreeChild::Shape(shape) => shape.set_name(name),
+            ShapeTreeChild::Picture(picture) => picture.set_name(name),
+            ShapeTreeChild::GraphicFrame(frame) => frame.set_name(name),
+            ShapeTreeChild::GroupShape(group) => group.set_name(name),
+            ShapeTreeChild::Connector(connector) => connector.set_name(name),
+            ShapeTreeChild::AlternateContent(_) => {
+                return Err(self.unsupported("set name"));
+            }
+        };
+        result.map_err(|error| Error::InvalidShapeMutation {
+            operation: "set name",
+            message: error.to_string(),
+        })
+    }
+
+    /// Replaces the direct fill on a shape with typed shape properties.
+    pub fn set_fill(&mut self, fill: Fill) -> Result<()> {
+        self.shape_properties_mut("set fill")?.fill = Some(fill);
+        Ok(())
+    }
+
+    /// Replaces the direct line on a shape with typed shape properties.
+    pub fn set_line(&mut self, line: CT_LineProperties) -> Result<()> {
+        self.shape_properties_mut("set line")?.line = Some(line);
+        Ok(())
+    }
+
+    /// Inserts or replaces one finite preset-geometry adjustment.
+    pub fn set_adjust_value(&mut self, name: &str, value: f64) -> Result<()> {
+        if !value.is_finite() {
+            return Err(Error::NonFiniteAdjustmentValue {
+                name: name.to_owned(),
+            });
+        }
+        let shape_kind = shape_kind(self.child);
+        let properties = self.shape_properties_mut("set adjustment")?;
+        let geometry =
+            properties
+                .preset_geometry
+                .as_mut()
+                .ok_or(Error::UnsupportedShapeMutation {
+                    operation: "set adjustment",
+                    shape_kind,
+                })?;
+        geometry
+            .set_adjust_value(name, value)
+            .map_err(|error| Error::InvalidShapeMutation {
+                operation: "set adjustment",
+                message: error.to_string(),
+            })
+    }
+
+    fn transform_mut(&mut self, operation: &'static str) -> Result<&mut CT_Transform2D> {
+        match self.child {
+            ShapeTreeChild::Shape(shape) => Ok(shape
+                .shape_properties
+                .transform
+                .get_or_insert_with(CT_Transform2D::default)),
+            ShapeTreeChild::Picture(picture) => Ok(picture
+                .shape_properties
+                .transform
+                .get_or_insert_with(CT_Transform2D::default)),
+            ShapeTreeChild::GraphicFrame(frame) => Ok(&mut frame.transform),
+            ShapeTreeChild::GroupShape(group) => Ok(group.group_transform_mut()),
+            ShapeTreeChild::Connector(connector) => Ok(connector
+                .shape_properties
+                .transform
+                .get_or_insert_with(CT_Transform2D::default)),
+            ShapeTreeChild::AlternateContent(_) => Err(self.unsupported(operation)),
+        }
+    }
+
+    fn shape_properties_mut(&mut self, operation: &'static str) -> Result<&mut CT_ShapeProperties> {
+        match self.child {
+            ShapeTreeChild::Shape(shape) => Ok(&mut shape.shape_properties),
+            ShapeTreeChild::Picture(picture) => Ok(&mut picture.shape_properties),
+            ShapeTreeChild::Connector(connector) => Ok(&mut connector.shape_properties),
+            _ => Err(self.unsupported(operation)),
+        }
+    }
+
+    fn unsupported(&self, operation: &'static str) -> Error {
+        Error::UnsupportedShapeMutation {
+            operation,
+            shape_kind: shape_kind(self.child),
+        }
+    }
+}
+
+fn shape_kind(child: &ShapeTreeChild) -> ShapeKind {
+    match child {
+        ShapeTreeChild::Shape(_) => ShapeKind::Shape,
+        ShapeTreeChild::Picture(_) => ShapeKind::Picture,
+        ShapeTreeChild::GraphicFrame(_) => ShapeKind::GraphicFrame,
+        ShapeTreeChild::GroupShape(_) => ShapeKind::Group,
+        ShapeTreeChild::Connector(_) => ShapeKind::Connector,
+        ShapeTreeChild::AlternateContent(_) => ShapeKind::AlternateContent,
+    }
+}
+
 impl<'a> ShapeRef<'a> {
     /// Returns the child's normalized structural kind.
     pub fn kind(&self) -> ShapeKind {
-        match self.child {
-            ShapeTreeChild::Shape(_) => ShapeKind::Shape,
-            ShapeTreeChild::Picture(_) => ShapeKind::Picture,
-            ShapeTreeChild::GraphicFrame(_) => ShapeKind::GraphicFrame,
-            ShapeTreeChild::GroupShape(_) => ShapeKind::Group,
-            ShapeTreeChild::Connector(_) => ShapeKind::Connector,
-            ShapeTreeChild::AlternateContent(_) => ShapeKind::AlternateContent,
-        }
+        shape_kind(self.child)
     }
 
     /// Returns ordinary shape text or row-major table text when modelled.

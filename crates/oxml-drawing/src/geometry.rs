@@ -756,6 +756,32 @@ impl CT_PresetGeometry2D {
             .map_or(&[], |list| list.guides.as_slice())
     }
 
+    /// Inserts or replaces one named `val` adjustment guide.
+    pub fn set_adjust_value(&mut self, name: &str, value: f64) -> Result<(), GeometryError> {
+        if !value.is_finite() {
+            return Err(GeometryError::NonFiniteValue(name.to_owned()));
+        }
+        let guide = Guide {
+            name: name.to_owned(),
+            op: GuideOp::Val,
+            args: vec![GuideOperand::Literal(value)],
+        };
+        let list = self.adjust_values.get_or_insert_with(|| GuideList {
+            guides: Vec::new(),
+            guide_raw_children: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+        });
+        if let Some(index) = list.guides.iter().position(|guide| guide.name == name) {
+            list.guides[index] = guide;
+        } else {
+            let trailing_boundary = list.guides.len();
+            list.raw_children.shift_boundaries_from(trailing_boundary);
+            list.guides.push(guide);
+            list.guide_raw_children.push(OrderedRawChildren::default());
+        }
+        Ok(())
+    }
+
     /// Writes with the canonical `a:` prefix and DrawingML schema order.
     pub fn to_xml(&self) -> Result<Vec<u8>, GeometryError> {
         let mut writer = Writer::new(Vec::new());
@@ -1869,6 +1895,29 @@ fn flatten_arc(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preset_adjustment_setter_inserts_and_replaces_named_values() {
+        let mut geometry = CT_PresetGeometry2D::from_xml(
+            br#"<x:prstGeom xmlns:x="urn:a" prst="roundRect"><x:avLst><x:gd name="adj" fmla="val 12000"><ext:raw xmlns:ext="urn:ext"/></x:gd><ext:tail xmlns:ext="urn:ext"/></x:avLst><ext:after xmlns:ext="urn:ext"/></x:prstGeom>"#,
+        )
+        .unwrap();
+
+        geometry.set_adjust_value("adj", 25_000.0).unwrap();
+        geometry.set_adjust_value("adj2", 7_500.5).unwrap();
+        let xml = String::from_utf8(geometry.to_xml().unwrap()).unwrap();
+
+        assert_eq!(geometry.adjust_values().len(), 2);
+        assert_eq!(geometry.adjust_values()[0].name, "adj");
+        assert_eq!(geometry.adjust_values()[0].args, vec![literal(25_000.0)]);
+        assert_eq!(geometry.adjust_values()[1].name, "adj2");
+        assert_eq!(geometry.adjust_values()[1].args, vec![literal(7_500.5)]);
+        assert_eq!(xml.matches("name=\"adj\"").count(), 1);
+        assert_eq!(xml.matches("name=\"adj2\"").count(), 1);
+        assert!(xml.contains("<ext:raw xmlns:ext=\"urn:ext\"/>"));
+        assert!(xml.contains("<a:gd name=\"adj2\" fmla=\"val 7500.5\"/><ext:tail"));
+        assert!(geometry.set_adjust_value("bad", f64::INFINITY).is_err());
+    }
 
     fn literal(value: f64) -> GuideOperand {
         GuideOperand::Literal(value)

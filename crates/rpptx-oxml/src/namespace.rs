@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use oxml_core::OxmlError;
 use oxml_drawing::namespace::A_NS;
 use quick_xml::events::{BytesStart, Event};
-use quick_xml::{Reader, XmlVersion};
+use quick_xml::{Reader, Writer, XmlVersion};
 
 /// PresentationML main namespace URI.
 pub const P_NS: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
@@ -125,6 +125,51 @@ pub(crate) fn non_visual_drawing_id(xml: &[u8]) -> Option<u32> {
     }
 }
 
+pub(crate) fn set_non_visual_drawing_name(xml: &mut Vec<u8>, name: &str) -> Result<(), OxmlError> {
+    let mut reader = Reader::from_reader(xml.as_slice());
+    let mut buffer = Vec::new();
+    loop {
+        let event = reader.read_event_into(&mut buffer)?;
+        let is_empty = matches!(&event, Event::Empty(_));
+        match event {
+            Event::Start(start) | Event::Empty(start) => {
+                let end = reader.buffer_position() as usize;
+                let qualified_name = std::str::from_utf8(start.name().as_ref())?.to_owned();
+                let mut replacement = BytesStart::new(qualified_name);
+                let mut replaced = false;
+                for attribute in start.attributes().with_checks(false) {
+                    let attribute = attribute?;
+                    if attribute.key.as_ref() == b"name" {
+                        replacement.push_attribute(("name", name));
+                        replaced = true;
+                    } else {
+                        replacement.push_attribute(attribute);
+                    }
+                }
+                if !replaced {
+                    replacement.push_attribute(("name", name));
+                }
+                let mut writer = Writer::new(Vec::new());
+                if is_empty {
+                    writer.write_event(Event::Empty(replacement))?;
+                } else {
+                    writer.write_event(Event::Start(replacement))?;
+                    writer.get_mut().extend_from_slice(&xml[end..]);
+                }
+                *xml = writer.into_inner();
+                return Ok(());
+            }
+            Event::Eof => {
+                return Err(OxmlError::MissingElement(
+                    "non-visual drawing properties".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
 pub(crate) fn root_attributes(
     start: &BytesStart<'_>,
     fixed_prefixes: &[&str],
@@ -183,7 +228,7 @@ fn sort_namespace_entries(entries: &mut [(String, String)]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{non_visual_drawing_id, sort_namespace_entries};
+    use super::{non_visual_drawing_id, set_non_visual_drawing_name, sort_namespace_entries};
 
     #[test]
     fn namespace_entries_have_deterministic_prefix_order() {
@@ -219,6 +264,18 @@ mod tests {
                 br#"<q:cNvPr xmlns:q="urn:p"><x:cNvPr xmlns:x="urn:extension" id="99"/></q:cNvPr>"#
             ),
             None
+        );
+    }
+
+    #[test]
+    fn non_visual_name_rewrite_escapes_the_value_and_preserves_children() {
+        let mut xml = br#"<q:cNvPr xmlns:q="urn:p" id="42" name="old" producer="one&#x20;two"><x:raw xmlns:x="urn:x">one &amp; two</x:raw><!--note--></q:cNvPr>"#.to_vec();
+
+        set_non_visual_drawing_name(&mut xml, "A & B \"quoted\"").unwrap();
+
+        assert_eq!(
+            xml,
+            br#"<q:cNvPr xmlns:q="urn:p" id="42" name="A &amp; B &quot;quoted&quot;" producer="one&#x20;two"><x:raw xmlns:x="urn:x">one &amp; two</x:raw><!--note--></q:cNvPr>"#
         );
     }
 }

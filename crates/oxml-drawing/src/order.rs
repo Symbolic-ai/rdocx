@@ -32,6 +32,16 @@ impl OrderedRawChildren {
         self.children.is_empty()
     }
 
+    /// Moves raw children at and after one boundary to make room for a new
+    /// modelled child without changing their relative order.
+    pub fn shift_boundaries_from(&mut self, boundary: usize) {
+        for child in &mut self.children {
+            if child.boundary >= boundary {
+                child.boundary += 1;
+            }
+        }
+    }
+
     /// Returns raw children at their effective boundary after edits to a
     /// public collection. Each original boundary is anchored to the next
     /// surviving original item, or to the trailing boundary when none remains.

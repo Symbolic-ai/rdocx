@@ -80,6 +80,20 @@ impl CT_ConnectionShape {
             .and_then(|(_, value)| value.parse().ok())
     }
 
+    /// Changes the producer-facing non-visual connector name.
+    pub fn set_name(&mut self, name: &str) -> Result<()> {
+        let attributes = &mut self.raw.non_visual.drawing_properties.raw_attributes;
+        if let Some((_, value)) = attributes
+            .iter_mut()
+            .find(|(attribute, _)| attribute == "name")
+        {
+            *value = name.to_owned();
+        } else {
+            attributes.push(("name".to_owned(), name.to_owned()));
+        }
+        Ok(())
+    }
+
     /// Parses a complete `p:cxnSp` with any prefix bound to PresentationML.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         Self::from_fragment(xml, &[])

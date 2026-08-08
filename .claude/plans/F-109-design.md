@@ -1,6 +1,6 @@
 # F-109, Shape mutation facade
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S27
 **Size**: L
 **Depends on**: F-079
@@ -130,13 +130,13 @@ PresentationML crates and does not alter Word rendering output.
 
 ## Implementation checklist
 
-- [ ] Add `slide_mut`, `SlideMut`, and recursive `ShapeMut` access.
-- [ ] Re-export the shared unit, fill, and line types used by the facade.
-- [ ] Implement transform and name setters across supported concrete kinds.
-- [ ] Implement fill, line, and finite preset-adjustment setters.
-- [ ] Preserve raw XML and reject mutable `AlternateContent` projection.
-- [ ] Add the setter gate, negative cases, and schema-order round trips.
-- [ ] Update the listed HLD file to the current mutable facade contract.
+- [x] Add `slide_mut`, `SlideMut`, and recursive `ShapeMut` access.
+- [x] Re-export the shared unit, fill, and line types used by the facade.
+- [x] Implement transform and name setters across supported concrete kinds.
+- [x] Implement fill, line, and finite preset-adjustment setters.
+- [x] Preserve raw XML and reject mutable `AlternateContent` projection.
+- [x] Add the setter gate, negative cases, and schema-order round trips.
+- [x] Update the listed HLD file to the current mutable facade contract.
 
 ## Open questions
 

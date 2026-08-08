@@ -12,7 +12,7 @@ use quick_xml::{Reader, Writer};
 
 use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, NamespaceBindings, P_NS, all_attributes, non_visual_drawing_id,
-    root_attributes, self_contained_attributes,
+    root_attributes, self_contained_attributes, set_non_visual_drawing_name,
 };
 use crate::picture::CT_Picture;
 
@@ -78,6 +78,7 @@ pub struct CT_GraphicFrame {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RawElementShell {
     non_visual_id: Option<u32>,
+    drawing_properties_index: Option<usize>,
     attributes: RawAttributes,
     children: Vec<Vec<u8>>,
 }
@@ -91,6 +92,20 @@ struct ParsedGraphic {
 impl CT_GraphicFrame {
     pub(crate) fn non_visual_id(&self) -> Option<u32> {
         self.non_visual_properties.non_visual_id
+    }
+
+    /// Changes the producer-facing non-visual frame name.
+    pub fn set_name(&mut self, name: &str) -> Result<()> {
+        let drawing_properties = self
+            .non_visual_properties
+            .children
+            .get_mut(
+                self.non_visual_properties
+                    .drawing_properties_index
+                    .ok_or_else(|| OxmlError::MissingElement("p:cNvPr".to_owned()))?,
+            )
+            .ok_or_else(|| OxmlError::MissingElement("p:cNvPr".to_owned()))?;
+        set_non_visual_drawing_name(drawing_properties, name)
     }
 
     /// Parses a complete `p:graphicFrame` with any PresentationML prefix.
@@ -569,6 +584,7 @@ impl RawElementShell {
                     let attributes = root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?;
                     let mut children = Vec::new();
                     let mut non_visual_id = None;
+                    let mut drawing_properties_index = None;
                     loop {
                         buffer.clear();
                         match reader.read_event_into(&mut buffer)? {
@@ -581,6 +597,7 @@ impl RawElementShell {
                                 let raw = capture_element(&mut reader, &child)?;
                                 if is_drawing_properties {
                                     non_visual_id = non_visual_drawing_id(&raw);
+                                    drawing_properties_index = Some(children.len());
                                 }
                                 children.push(raw);
                             }
@@ -593,6 +610,7 @@ impl RawElementShell {
                                 let raw = capture_empty_element(&child)?;
                                 if is_drawing_properties {
                                     non_visual_id = non_visual_drawing_id(&raw);
+                                    drawing_properties_index = Some(children.len());
                                 }
                                 children.push(raw);
                             }
@@ -601,6 +619,7 @@ impl RawElementShell {
                             {
                                 return Ok(Self {
                                     non_visual_id,
+                                    drawing_properties_index,
                                     attributes,
                                     children,
                                 });
@@ -621,6 +640,7 @@ impl RawElementShell {
                 Event::Empty(start) => {
                     return Ok(Self {
                         non_visual_id: None,
+                        drawing_properties_index: None,
                         attributes: root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?,
                         children: Vec::new(),
                     });

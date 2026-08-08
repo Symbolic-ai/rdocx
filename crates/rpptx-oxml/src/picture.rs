@@ -11,7 +11,7 @@ use quick_xml::{Reader, Writer};
 
 use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, non_visual_drawing_id,
-    root_attributes, self_contained_attributes,
+    root_attributes, self_contained_attributes, set_non_visual_drawing_name,
 };
 use crate::placeholder::{ApplicationProperties, CT_Placeholder, parse_application_properties};
 
@@ -53,6 +53,11 @@ struct ParsedNonVisualPicture {
 impl CT_Picture {
     pub(crate) fn non_visual_id(&self) -> Option<u32> {
         non_visual_drawing_id(&self.raw.non_visual_drawing_properties)
+    }
+
+    /// Changes the producer-facing non-visual picture name.
+    pub fn set_name(&mut self, name: &str) -> Result<()> {
+        set_non_visual_drawing_name(&mut self.raw.non_visual_drawing_properties, name)
     }
 
     /// Parses a complete `p:pic` with any prefix bound to PresentationML.

@@ -37,7 +37,7 @@ write at their fixed root locations. The modelled `p:hf` writes with the fixed
 attributes, and header-footer children retain their original payload and
 relative positions.
 
-## Public read facade
+## Public facade
 
 `rpptx::Presentation` opens a path or byte slice and owns the OPC package, the
 typed presentation root, and the ordered slides resolved from `p:sldIdLst`.
@@ -64,10 +64,23 @@ iteration. Ordinary shapes return their text-body text. Table frames return
 row-major cell text with tabs between cells and newlines between rows. Other
 shape kinds have no direct text.
 
+`slide_mut(index)` exposes a borrowed `SlideMut` handle. Its `shape(index)`
+method retains read access, while `shape_mut(index)` returns a `ShapeMut` for an
+immediate z-order child. `ShapeMut::child_mut(index)` recurses through group
+children only. The selected `mc:Fallback` view remains read-only.
+
+Position, size, rotation, and name setters support ordinary shapes, pictures,
+graphic frames, groups, and connectors. Fill and line setters support ordinary
+shapes, pictures, and connectors because those kinds own typed shape
+properties. Adjustment mutation supports finite values on preset geometry.
+Unsupported shape kinds and unsupported geometry return concrete facade
+errors. Indexed access remains total and returns `Option`.
+
 `to_bytes()` clones the source package, serialises the owned presentation,
 slide, and notes roots back to their relationship-resolved part names, and uses
-the deterministic OPC writer. The read facade has no mutation surface. Parts
-outside those owned roots remain the exact source bytes.
+the deterministic OPC writer. Typed edits retain unmodelled attributes and
+children in their raw slots and preserve schema child order. Parts outside
+those owned roots remain the exact source bytes.
 
 ## `presentation.xml`
 

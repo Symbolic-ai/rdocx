@@ -16,7 +16,7 @@ use crate::connector::CT_ConnectionShape;
 use crate::graphic_frame::CT_GraphicFrame;
 use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, non_visual_drawing_id,
-    root_attributes, self_contained_attributes,
+    root_attributes, self_contained_attributes, set_non_visual_drawing_name,
 };
 use crate::picture::CT_Picture;
 use crate::placeholder::{ApplicationProperties, CT_Placeholder, parse_application_properties};
@@ -457,6 +457,7 @@ struct GroupProperties {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NonVisualGroupProperties {
     non_visual_id: Option<u32>,
+    drawing_properties_index: Option<usize>,
     raw_attributes: RawAttributes,
     raw_children: Vec<Vec<u8>>,
 }
@@ -521,6 +522,11 @@ impl CT_Shape {
 
     pub(crate) fn non_visual_id(&self) -> Option<u32> {
         non_visual_drawing_id(&self.raw.non_visual_drawing_properties)
+    }
+
+    /// Changes the producer-facing non-visual shape name.
+    pub fn set_name(&mut self, name: &str) -> Result<()> {
+        set_non_visual_drawing_name(&mut self.raw.non_visual_drawing_properties, name)
     }
 
     /// Parses a complete `p:sp` with any prefix bound to PresentationML.
@@ -935,6 +941,7 @@ impl CT_ShapeTree {
         Self {
             non_visual_group_properties: NonVisualGroupProperties {
                 non_visual_id: Some(1),
+                drawing_properties_index: Some(0),
                 raw_attributes: Vec::new(),
                 raw_children: vec![
                     b"<p:cNvPr id=\"1\" name=\"\"/>".to_vec(),
@@ -1038,6 +1045,30 @@ impl CT_GroupShape {
     /// Returns the typed DrawingML group transform when `p:grpSpPr` has one.
     pub fn group_transform(&self) -> Option<&CT_Transform2D> {
         self.group_properties.transform.as_ref()
+    }
+
+    /// Returns the group transform, creating an empty one when absent.
+    pub fn group_transform_mut(&mut self) -> &mut CT_Transform2D {
+        if self.group_properties.transform.is_none() {
+            self.group_properties.raw_children.shift_boundaries_from(0);
+        }
+        self.group_properties
+            .transform
+            .get_or_insert_with(CT_Transform2D::default)
+    }
+
+    /// Changes the producer-facing non-visual group name.
+    pub fn set_name(&mut self, name: &str) -> Result<()> {
+        let drawing_properties = self
+            .non_visual_group_properties
+            .raw_children
+            .get_mut(
+                self.non_visual_group_properties
+                    .drawing_properties_index
+                    .ok_or_else(|| OxmlError::MissingElement("p:cNvPr".to_owned()))?,
+            )
+            .ok_or_else(|| OxmlError::MissingElement("p:cNvPr".to_owned()))?;
+        set_non_visual_drawing_name(drawing_properties, name)
     }
 
     /// Serialises a self-contained group-shape fragment with fixed prefixes.
@@ -1358,6 +1389,7 @@ impl NonVisualGroupProperties {
                     let raw_attributes = root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?;
                     let mut raw_children = Vec::new();
                     let mut non_visual_id = None;
+                    let mut drawing_properties_index = None;
                     loop {
                         buffer.clear();
                         match reader.read_event_into(&mut buffer)? {
@@ -1370,6 +1402,7 @@ impl NonVisualGroupProperties {
                                 let raw = capture_element(&mut reader, &child)?;
                                 if is_drawing_properties {
                                     non_visual_id = non_visual_drawing_id(&raw);
+                                    drawing_properties_index = Some(raw_children.len());
                                 }
                                 raw_children.push(raw);
                             }
@@ -1382,12 +1415,14 @@ impl NonVisualGroupProperties {
                                 let raw = capture_empty_element(&child)?;
                                 if is_drawing_properties {
                                     non_visual_id = non_visual_drawing_id(&raw);
+                                    drawing_properties_index = Some(raw_children.len());
                                 }
                                 raw_children.push(raw);
                             }
                             Event::End(end) if local_name(end.name().as_ref()) == b"nvGrpSpPr" => {
                                 return Ok(Self {
                                     non_visual_id,
+                                    drawing_properties_index,
                                     raw_attributes,
                                     raw_children,
                                 });
@@ -1404,6 +1439,7 @@ impl NonVisualGroupProperties {
                 Event::Empty(start) => {
                     return Ok(Self {
                         non_visual_id: None,
+                        drawing_properties_index: None,
                         raw_attributes: root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?,
                         raw_children: Vec::new(),
                     });
@@ -1596,7 +1632,7 @@ fn unexpected(element: &BytesStart<'_>) -> OxmlError {
 mod style_tests {
     use oxml_drawing::style_ref::FontCollectionIndex;
 
-    use super::{CT_Shape, CT_ShapeTree, ShapeIdAllocator};
+    use super::{CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator};
 
     const ALLOCATOR_TREE: &[u8] = br#"<p:spTree xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><p:nvGrpSpPr><p:cNvPr id="1" name="Root"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="Root shape"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:grpSp><p:nvGrpSpPr><p:cNvPr id="4" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:pic><p:nvPicPr><p:cNvPr id="6" name="Nested picture"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill/><p:spPr/></p:pic></p:grpSp><mc:AlternateContent><mc:Fallback><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="8" name="Fallback connector"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp></mc:Fallback></mc:AlternateContent></p:spTree>"#;
 
@@ -1642,6 +1678,20 @@ mod style_tests {
         assert!(text.find("<q:cNvPr").unwrap() < text.find("<q:cNvSpPr").unwrap());
         assert!(text.find("<q:cNvSpPr").unwrap() < text.find("<p:nvPr").unwrap());
         assert_eq!(CT_Shape::from_xml(&written).unwrap(), shape);
+    }
+
+    #[test]
+    fn group_name_mutation_uses_the_namespace_resolved_drawing_properties() {
+        let xml = br#"<q:grpSp xmlns:q="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:x="urn:test"><q:nvGrpSpPr><x:cNvPr id="99" name="extension"/><q:cNvPr id="4" name="Group"><x:raw/></q:cNvPr><q:cNvGrpSpPr/><q:nvPr/></q:nvGrpSpPr><q:grpSpPr/></q:grpSp>"#;
+        let mut group = CT_GroupShape::from_xml(xml).unwrap();
+
+        group.set_name("Changed & safe").unwrap();
+        let written = String::from_utf8(group.to_xml().unwrap()).unwrap();
+
+        assert!(written.contains("<x:cNvPr id=\"99\" name=\"extension\"/>"));
+        assert!(
+            written.contains("<q:cNvPr id=\"4\" name=\"Changed &amp; safe\"><x:raw/></q:cNvPr>")
+        );
     }
 
     #[test]
