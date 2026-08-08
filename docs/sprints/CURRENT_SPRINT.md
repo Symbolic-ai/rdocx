@@ -39,7 +39,7 @@ edited placeholder text, and open in PowerPoint without repair.
 | F-109 | Shape mutation facade | L | in-progress | codex |
 | F-110 | add_textbox, add_shape, add_connector, group | M | in-progress | codex |
 | F-111 | add_picture | M | in-progress | codex |
-| F-112 | Text frame mutation | L | pending | - |
+| F-112 | Text frame mutation | L | in-progress | codex |
 
 ## Sequencing note
 

@@ -26,11 +26,11 @@ regenerated, never hand-edited.
 | M8, PresentationML                          | 14 | 14 | 0 | 0  |
 | M9, Inheritance resolver                    | 8  | 8 | 0 | 0  |
 | M10, Renderer                               | 20 | 20 | 0 | 0  |
-| M11, Write API                              | 12 | 4 | 3 | 5  |
+| M11, Write API                              | 12 | 4 | 4 | 4  |
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **158** | **105** | **3** | **50** |
+| **Total** | **158** | **105** | **4** | **49** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -229,7 +229,7 @@ regenerated, never hand-edited.
 | F-109 | Shape mutation facade                        | S27 | L | in-progress |
 | F-110 | add_textbox, add_shape, add_connector, group | S27 | M | in-progress |
 | F-111 | add_picture                                  | S27 | M | in-progress |
-| F-112 | Text frame mutation                          | S27 | L | pending |
+| F-112 | Text frame mutation                          | S27 | L | in-progress |
 | F-113 | Table facade                                 | S28 | L | pending |
 | F-114 | remove_slide, move_slide, duplicate_slide    | S28 | M | pending |
 | F-115 | Slide and presentation properties            | S28 | S | pending |
