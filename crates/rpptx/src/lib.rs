@@ -1,16 +1,30 @@
-//! Public read facade for PresentationML packages.
+//! Public facade for PresentationML packages.
+//!
+//! The `default-template` feature embeds a 16:9 zero-slide template derived
+//! from the MIT-licensed python-pptx 1.0.2 default template. The slide size was
+//! changed to 12,192,000 by 6,858,000 EMU, the size kind was changed to
+//! `screen16x9`, and python-pptx generated the notes-master infrastructure.
 
+use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::path::Path;
 
+use oxml_layout::MediaId;
+use oxml_media::{MediaNamer, resolve};
+use oxml_opc::content_types;
 use oxml_opc::relationship::{Relationship, rel_types};
-use oxml_opc::{OpcError, OpcPackage};
+use oxml_opc::{OpcError, OpcPackage, Relationships};
 use rpptx_oxml::graphic_frame::GraphicDataPayload;
 use rpptx_oxml::notes_parts::CT_NotesSlide;
-use rpptx_oxml::presentation::CT_Presentation;
-use rpptx_oxml::shape_tree::ShapeTreeChild;
-use rpptx_oxml::slide_parts::CT_Slide;
+use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
+use rpptx_oxml::presentation::{CT_Presentation, CT_SlideId, custom_show_relationship_ids};
+use rpptx_oxml::relmap::relationship_ids;
+use rpptx_oxml::shape_tree::{CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild};
+use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout};
 use thiserror::Error;
+
+#[cfg(feature = "default-template")]
+const DEFAULT_TEMPLATE: &[u8] = include_bytes!("../assets/default.pptx");
 
 /// A result returned by the `rpptx` read facade.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -52,15 +66,77 @@ pub enum Error {
 
     #[error("malformed PresentationML part {part_name}: {message}")]
     MalformedPart { part_name: String, message: String },
+
+    #[error("layout index {index} is out of range for {layout_count} layouts")]
+    UnknownLayoutIndex { index: usize, layout_count: usize },
+
+    #[error("PowerPoint slide ids are exhausted")]
+    SlideIdExhausted,
+}
+
+/// A package or presentation invariant that would make a saved deck unsafe.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ValidationIssue {
+    DuplicateShapeId {
+        slide: usize,
+        id: u32,
+    },
+    SlideIdOutOfRange {
+        slide: usize,
+        id: u32,
+    },
+    DuplicateSlideId {
+        id: u32,
+    },
+    MissingContentTypeOverride {
+        part: String,
+    },
+    DanglingRelationship {
+        part: String,
+        r_id: String,
+        target: String,
+    },
+    UnreachableRelationshipTarget {
+        part: String,
+        target: String,
+    },
+    EmptyTextBody {
+        slide: usize,
+        shape: usize,
+    },
+    DuplicatePlaceholderIdx {
+        slide: usize,
+        idx: u32,
+    },
+    OrphanMedia {
+        part: String,
+    },
+    CustomShowReference {
+        slide_id: u32,
+    },
+    MissingLayoutRel {
+        slide: usize,
+    },
+    MissingThemeRel {
+        master: usize,
+    },
 }
 
 /// An opened PresentationML package and its ordered slide read model.
 #[derive(Clone, Debug)]
 pub struct Presentation {
     package: OpcPackage,
+    media_store: MediaStore,
     presentation_part: String,
     presentation: CT_Presentation,
+    layouts: Vec<LayoutRecord>,
     slides: Vec<SlideRecord>,
+}
+
+#[derive(Clone, Debug)]
+struct LayoutRecord {
+    part_name: String,
+    layout: CT_SlideLayout,
 }
 
 #[derive(Clone, Debug)]
@@ -77,7 +153,132 @@ struct NotesRecord {
     notes: CT_NotesSlide,
 }
 
+#[derive(Clone, Debug)]
+struct MediaEntry {
+    part_name: String,
+    bytes: Vec<u8>,
+    extension: String,
+    content_type: String,
+    newly_inserted: bool,
+}
+
+#[derive(Clone, Debug)]
+struct MediaStore {
+    by_id: HashMap<MediaId, Vec<MediaEntry>>,
+    namer: MediaNamer,
+}
+
+impl MediaStore {
+    fn scan(package: &OpcPackage) -> Self {
+        let namer = MediaNamer::scan(
+            "/ppt/media",
+            "image",
+            package.parts.keys().map(String::as_str),
+        );
+        let mut by_id: HashMap<MediaId, Vec<MediaEntry>> = HashMap::new();
+        let mut parts = package
+            .parts
+            .iter()
+            .filter(|(part_name, _)| part_name.starts_with("/ppt/media/"))
+            .collect::<Vec<_>>();
+        parts.sort_unstable_by_key(|(part_name, _)| part_name.as_str());
+        for (part_name, bytes) in parts {
+            let format = resolve(bytes, part_name);
+            let extension = part_name
+                .rsplit_once('.')
+                .map_or_else(|| format.extension(), |(_, extension)| extension)
+                .to_owned();
+            let content_type = package
+                .content_types
+                .content_type_for(part_name)
+                .unwrap_or_else(|| format.content_type())
+                .to_owned();
+            by_id
+                .entry(MediaId::from_bytes(bytes))
+                .or_default()
+                .push(MediaEntry {
+                    part_name: part_name.clone(),
+                    bytes: bytes.clone(),
+                    extension,
+                    content_type,
+                    newly_inserted: false,
+                });
+        }
+        Self { by_id, namer }
+    }
+
+    #[allow(dead_code)]
+    fn insert(&mut self, package: &mut OpcPackage, bytes: &[u8], filename: &str) -> String {
+        self.insert_with_id(package, MediaId::from_bytes(bytes), bytes, filename)
+    }
+
+    #[allow(dead_code)]
+    fn insert_with_id(
+        &mut self,
+        package: &mut OpcPackage,
+        media_id: MediaId,
+        bytes: &[u8],
+        filename: &str,
+    ) -> String {
+        if let Some(existing) = self
+            .by_id
+            .get(&media_id)
+            .and_then(|bucket| bucket.iter().find(|entry| entry.bytes == bytes))
+        {
+            return existing.part_name.clone();
+        }
+
+        let format = resolve(bytes, filename);
+        let extension = format.extension();
+        let content_type = format.content_type();
+        let part_name = self.namer.next_part_name(extension);
+        package.set_part(&part_name, bytes.to_vec());
+        register_content_type(package, &part_name, extension, content_type);
+        self.by_id.entry(media_id).or_default().push(MediaEntry {
+            part_name: part_name.clone(),
+            bytes: bytes.to_vec(),
+            extension: extension.to_owned(),
+            content_type: content_type.to_owned(),
+            newly_inserted: true,
+        });
+        part_name
+    }
+
+    fn write_new_parts(&self, package: &mut OpcPackage) {
+        for entry in self.by_id.values().flatten() {
+            if entry.newly_inserted {
+                package.set_part(&entry.part_name, entry.bytes.clone());
+                register_content_type(
+                    package,
+                    &entry.part_name,
+                    &entry.extension,
+                    &entry.content_type,
+                );
+            }
+        }
+    }
+}
+
+fn register_content_type(
+    package: &mut OpcPackage,
+    part_name: &str,
+    extension: &str,
+    content_type: &str,
+) {
+    match package.content_types.content_type_for(part_name) {
+        Some(existing) if existing == content_type => {}
+        Some(_) => package.content_types.add_override(part_name, content_type),
+        None => package.content_types.add_default(extension, content_type),
+    }
+}
+
 impl Presentation {
+    /// Creates an empty 16:9 presentation from the bundled standard template.
+    #[cfg(feature = "default-template")]
+    pub fn new() -> Result<Self> {
+        Self::from_bytes(DEFAULT_TEMPLATE)
+    }
+
     /// Opens a presentation from a `.pptx` path.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         Self::from_package(OpcPackage::open(path)?)
@@ -89,6 +290,7 @@ impl Presentation {
     }
 
     fn from_package(package: OpcPackage) -> Result<Self> {
+        let media_store = MediaStore::scan(&package);
         let main_relationship = package
             .package_rels
             .get_by_type(rel_types::DOCUMENT)
@@ -101,6 +303,7 @@ impl Presentation {
                 part_name: presentation_part.clone(),
                 message: error.to_string(),
             })?;
+        let layouts = resolve_layouts(&package, &presentation_part, &presentation)?;
 
         let presentation_relationships = package.get_part_rels(&presentation_part);
         let mut slides = Vec::with_capacity(presentation.slide_ids.len());
@@ -131,15 +334,23 @@ impl Presentation {
 
         Ok(Self {
             package,
+            media_store,
             presentation_part,
             presentation,
+            layouts,
             slides,
         })
     }
 
     /// Serialises the package through the deterministic OPC writer.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        debug_assert!(
+            self.validate().is_empty(),
+            "invalid presentation at byte save boundary: {:?}",
+            self.validate()
+        );
         let mut package = self.package.clone();
+        self.media_store.write_new_parts(&mut package);
         package.set_part(
             &self.presentation_part,
             self.presentation
@@ -175,6 +386,232 @@ impl Presentation {
         Ok(output.into_inner())
     }
 
+    /// Saves the deterministic package bytes to a `.pptx` path.
+    pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        debug_assert!(
+            self.validate().is_empty(),
+            "invalid presentation at path save boundary: {:?}",
+            self.validate()
+        );
+        std::fs::write(path, self.to_bytes()?).map_err(OpcError::from)?;
+        Ok(())
+    }
+
+    /// Returns every detected package and PresentationML invariant violation.
+    pub fn validate(&self) -> Vec<ValidationIssue> {
+        let mut duplicate_shape_ids = Vec::new();
+        let mut out_of_range_slide_ids = Vec::new();
+        let mut duplicate_slide_ids = Vec::new();
+        let mut missing_content_types = Vec::new();
+        let mut dangling_relationships = Vec::new();
+        let mut unreachable_targets = Vec::new();
+        let mut empty_text_bodies = Vec::new();
+        let mut duplicate_placeholder_indices = Vec::new();
+        let mut orphan_media = Vec::new();
+        let mut custom_show_references = Vec::new();
+        let mut missing_layout_relationships = Vec::new();
+        let mut missing_theme_relationships = Vec::new();
+
+        for (slide_index, record) in self.slides.iter().enumerate() {
+            let mut shape_ids = record
+                .slide
+                .common_slide_data
+                .shape_tree
+                .non_visual_id()
+                .into_iter()
+                .collect();
+            let mut placeholder_indices = HashSet::new();
+            let mut shape_index = 0usize;
+            validate_shape_children(
+                slide_index,
+                &record.slide.common_slide_data.shape_tree.children,
+                &mut shape_index,
+                &mut shape_ids,
+                &mut placeholder_indices,
+                &mut duplicate_shape_ids,
+                &mut empty_text_bodies,
+                &mut duplicate_placeholder_indices,
+            );
+        }
+
+        let mut slide_ids = HashSet::new();
+        for (slide_index, slide) in self.presentation.slide_ids.iter().enumerate() {
+            if !(256..=2_147_483_647).contains(&slide.id) {
+                out_of_range_slide_ids.push(ValidationIssue::SlideIdOutOfRange {
+                    slide: slide_index,
+                    id: slide.id,
+                });
+            }
+            if !slide_ids.insert(slide.id) {
+                duplicate_slide_ids.push(ValidationIssue::DuplicateSlideId { id: slide.id });
+            }
+        }
+
+        let mut part_names = self.package.parts.keys().collect::<Vec<_>>();
+        part_names.sort_unstable();
+        for part_name in part_names {
+            if !part_has_content_type(&self.package, part_name) {
+                missing_content_types.push(ValidationIssue::MissingContentTypeOverride {
+                    part: part_name.clone(),
+                });
+            }
+        }
+
+        let mut incoming_targets = HashSet::new();
+        validate_relationship_scope(
+            &self.package,
+            "/",
+            None,
+            &self.package.package_rels,
+            &mut incoming_targets,
+            &mut dangling_relationships,
+            &mut unreachable_targets,
+        );
+        let mut relationship_sources = self
+            .package
+            .parts
+            .keys()
+            .chain(self.package.part_rels.keys())
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        relationship_sources.sort_unstable();
+        relationship_sources.dedup();
+        let empty_relationships = Relationships::new();
+        for source_part in relationship_sources {
+            let relationships = self
+                .package
+                .get_part_rels(source_part)
+                .unwrap_or(&empty_relationships);
+            let source_xml = self.current_part_xml(source_part);
+            validate_relationship_scope(
+                &self.package,
+                source_part,
+                source_xml.as_deref(),
+                relationships,
+                &mut incoming_targets,
+                &mut dangling_relationships,
+                &mut unreachable_targets,
+            );
+        }
+
+        let mut media_parts = self
+            .package
+            .parts
+            .keys()
+            .filter(|part| part.starts_with("/ppt/media/"))
+            .collect::<Vec<_>>();
+        media_parts.sort_unstable();
+        for part in media_parts {
+            if !incoming_targets.contains(part.as_str()) {
+                orphan_media.push(ValidationIssue::OrphanMedia { part: part.clone() });
+            }
+        }
+
+        let presentation_relationships = self.package.get_part_rels(&self.presentation_part);
+        let slide_relationship_ids = self
+            .presentation
+            .slide_ids
+            .iter()
+            .map(|slide| slide.relationship_id.as_str())
+            .collect::<HashSet<_>>();
+        if let Some(xml) = self.current_part_xml(&self.presentation_part)
+            && let Ok(references) = custom_show_relationship_ids(&xml)
+        {
+            for relationship_id in references {
+                if !slide_relationship_ids.contains(relationship_id.as_str()) {
+                    custom_show_references.push(ValidationIssue::CustomShowReference {
+                        slide_id: numeric_relationship_id(&relationship_id),
+                    });
+                }
+            }
+        }
+
+        for (slide_index, slide) in self.slides.iter().enumerate() {
+            let count = self
+                .package
+                .get_part_rels(&slide.part_name)
+                .map(|relationships| {
+                    relationships
+                        .items
+                        .iter()
+                        .filter(|relationship| {
+                            relationship.rel_type == rel_types::SLIDE_LAYOUT
+                                && !relationship_is_external(relationship)
+                        })
+                        .count()
+                })
+                .unwrap_or_default();
+            if count != 1 {
+                missing_layout_relationships
+                    .push(ValidationIssue::MissingLayoutRel { slide: slide_index });
+            }
+        }
+
+        for (master_index, master) in self.presentation.slide_master_ids.iter().enumerate() {
+            let Some(relationship) = presentation_relationships
+                .and_then(|relationships| relationships.get_by_id(&master.relationship_id))
+            else {
+                missing_theme_relationships.push(ValidationIssue::MissingThemeRel {
+                    master: master_index,
+                });
+                continue;
+            };
+            let master_part =
+                OpcPackage::resolve_rel_target(&self.presentation_part, &relationship.target);
+            let has_theme = self
+                .package
+                .get_part_rels(&master_part)
+                .is_some_and(|relationships| {
+                    relationships.items.iter().any(|relationship| {
+                        relationship.rel_type == rel_types::THEME
+                            && !relationship_is_external(relationship)
+                    })
+                });
+            if !has_theme {
+                missing_theme_relationships.push(ValidationIssue::MissingThemeRel {
+                    master: master_index,
+                });
+            }
+        }
+
+        duplicate_shape_ids
+            .into_iter()
+            .chain(out_of_range_slide_ids)
+            .chain(duplicate_slide_ids)
+            .chain(missing_content_types)
+            .chain(dangling_relationships)
+            .chain(unreachable_targets)
+            .chain(empty_text_bodies)
+            .chain(duplicate_placeholder_indices)
+            .chain(orphan_media)
+            .chain(custom_show_references)
+            .chain(missing_layout_relationships)
+            .chain(missing_theme_relationships)
+            .collect()
+    }
+
+    fn current_part_xml(&self, part_name: &str) -> Option<Vec<u8>> {
+        if part_name == self.presentation_part {
+            return self.presentation.to_xml().ok();
+        }
+        if let Some(slide) = self
+            .slides
+            .iter()
+            .find(|slide| slide.part_name == part_name)
+        {
+            return slide.slide.to_xml().ok();
+        }
+        if let Some(notes) = self
+            .slides
+            .iter()
+            .filter_map(|slide| slide.notes.as_ref())
+            .find(|notes| notes.part_name == part_name)
+        {
+            return notes.notes.to_xml().ok();
+        }
+        self.package.get_part(part_name).map(<[u8]>::to_vec)
+    }
+
     /// Returns the number of slides in presentation order.
     pub fn len(&self) -> usize {
         self.slides.len()
@@ -194,6 +631,347 @@ impl Presentation {
     pub fn slides(&self) -> impl ExactSizeIterator<Item = SlideRef<'_>> {
         self.slides.iter().map(slide_ref)
     }
+
+    /// Returns the number of layouts reachable through presentation masters.
+    pub fn layout_count(&self) -> usize {
+        self.layouts.len()
+    }
+
+    /// Returns a layout's optional `p:cSld` name by zero-based index.
+    pub fn layout_name(&self, index: usize) -> Option<&str> {
+        self.layouts
+            .get(index)
+            .and_then(|record| record.layout.common_slide_data.name.as_deref())
+    }
+
+    /// Synthesizes a new slide from one layout selected by zero-based index.
+    pub fn add_slide(&mut self, layout_index: usize) -> Result<SlideRef<'_>> {
+        let layout = self
+            .layouts
+            .get(layout_index)
+            .ok_or(Error::UnknownLayoutIndex {
+                index: layout_index,
+                layout_count: self.layouts.len(),
+            })?;
+        let layout_part = layout.part_name.clone();
+        let placeholders = layout
+            .layout
+            .common_slide_data
+            .shape_tree
+            .children
+            .iter()
+            .filter_map(|child| match child {
+                ShapeTreeChild::Shape(shape) => shape.placeholder.as_ref(),
+                _ => None,
+            })
+            .filter(|placeholder| !is_latent_placeholder(placeholder))
+            .map(|placeholder| (placeholder.ph_type.clone(), placeholder.idx))
+            .collect::<Vec<_>>();
+
+        let mut shape_tree = CT_ShapeTree::new();
+        let mut shape_ids = ShapeIdAllocator::scan(&shape_tree);
+        for (ph_type, idx) in placeholders {
+            let shape =
+                CT_Shape::new_placeholder(shape_ids.allocate(), CT_Placeholder::new(ph_type, idx))
+                    .map_err(|error| Error::MalformedPart {
+                        part_name: "new slide".to_owned(),
+                        message: error.to_string(),
+                    })?;
+            shape_tree.children.push(ShapeTreeChild::Shape(shape));
+        }
+
+        let slide_part = MediaNamer::scan(
+            "/ppt/slides",
+            "slide",
+            self.package.parts.keys().map(String::as_str),
+        )
+        .next_part_name("xml");
+        let slide = CT_Slide::new(shape_tree);
+        let slide_xml = slide.to_xml().map_err(|error| Error::MalformedPart {
+            part_name: slide_part.clone(),
+            message: error.to_string(),
+        })?;
+
+        let id = self
+            .presentation
+            .slide_ids
+            .iter()
+            .map(|slide| slide.id)
+            .max()
+            .unwrap_or(255)
+            .max(255)
+            .checked_add(1)
+            .ok_or(Error::SlideIdExhausted)?;
+
+        let mut slide_relationships = Relationships::new();
+        slide_relationships.add(
+            rel_types::SLIDE_LAYOUT,
+            &relative_part_target(&slide_part, &layout_part),
+        );
+        let mut presentation_relationships = self
+            .package
+            .get_part_rels(&self.presentation_part)
+            .cloned()
+            .unwrap_or_default();
+        let presentation_relationship_id = presentation_relationships.add(
+            rel_types::SLIDE,
+            &relative_part_target(&self.presentation_part, &slide_part),
+        );
+        let slide_id = CT_SlideId::new(id, presentation_relationship_id).map_err(|error| {
+            Error::MalformedPart {
+                part_name: self.presentation_part.clone(),
+                message: error.to_string(),
+            }
+        })?;
+
+        self.package.set_part(&slide_part, slide_xml);
+        self.package
+            .part_rels
+            .insert(slide_part.clone(), slide_relationships);
+        self.package
+            .part_rels
+            .insert(self.presentation_part.clone(), presentation_relationships);
+        self.package
+            .content_types
+            .add_override(&slide_part, content_types::SLIDE);
+        self.presentation.slide_ids.push(slide_id);
+        self.slides.push(SlideRecord {
+            id,
+            part_name: slide_part,
+            slide,
+            notes: None,
+        });
+        self.slides
+            .last()
+            .map(slide_ref)
+            .ok_or(Error::MalformedPart {
+                part_name: self.presentation_part.clone(),
+                message: "new slide record was not retained".to_owned(),
+            })
+    }
+}
+
+fn resolve_layouts(
+    package: &OpcPackage,
+    presentation_part: &str,
+    presentation: &CT_Presentation,
+) -> Result<Vec<LayoutRecord>> {
+    let presentation_relationships = package.get_part_rels(presentation_part);
+    let mut layouts = Vec::new();
+    let mut seen = HashSet::new();
+    for master in &presentation.slide_master_ids {
+        let relationship = presentation_relationships
+            .and_then(|relationships| relationships.get_by_id(&master.relationship_id))
+            .ok_or_else(|| Error::MissingRelationship {
+                source_part: presentation_part.to_owned(),
+                relationship_id: master.relationship_id.clone(),
+            })?;
+        require_relationship_type(presentation_part, relationship, rel_types::SLIDE_MASTER)?;
+        reject_external(presentation_part, relationship)?;
+        let master_part = OpcPackage::resolve_rel_target(presentation_part, &relationship.target);
+        required_part(package, &master_part)?;
+        let Some(master_relationships) = package.get_part_rels(&master_part) else {
+            continue;
+        };
+        for relationship in master_relationships
+            .items
+            .iter()
+            .filter(|relationship| relationship.rel_type == rel_types::SLIDE_LAYOUT)
+        {
+            reject_external(&master_part, relationship)?;
+            let part_name = OpcPackage::resolve_rel_target(&master_part, &relationship.target);
+            if !seen.insert(part_name.clone()) {
+                continue;
+            }
+            let xml = required_part(package, &part_name)?;
+            let layout = CT_SlideLayout::from_xml(xml).map_err(|error| Error::MalformedPart {
+                part_name: part_name.clone(),
+                message: error.to_string(),
+            })?;
+            layouts.push(LayoutRecord { part_name, layout });
+        }
+    }
+    Ok(layouts)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_shape_children(
+    slide_index: usize,
+    children: &[ShapeTreeChild],
+    shape_index: &mut usize,
+    shape_ids: &mut HashSet<u32>,
+    placeholder_indices: &mut HashSet<u32>,
+    duplicate_shape_ids: &mut Vec<ValidationIssue>,
+    empty_text_bodies: &mut Vec<ValidationIssue>,
+    duplicate_placeholder_indices: &mut Vec<ValidationIssue>,
+) {
+    let mut pending = children.iter().rev().collect::<Vec<_>>();
+    while let Some(child) = pending.pop() {
+        let current_shape_index = *shape_index;
+        *shape_index += 1;
+        if let Some(id) = child.non_visual_id()
+            && !shape_ids.insert(id)
+        {
+            duplicate_shape_ids.push(ValidationIssue::DuplicateShapeId {
+                slide: slide_index,
+                id,
+            });
+        }
+        let placeholder = match child {
+            ShapeTreeChild::Shape(shape) => {
+                if shape
+                    .text_body
+                    .as_ref()
+                    .is_some_and(|body| body.paragraph_count() == 0)
+                {
+                    empty_text_bodies.push(ValidationIssue::EmptyTextBody {
+                        slide: slide_index,
+                        shape: current_shape_index,
+                    });
+                }
+                shape.placeholder.as_ref()
+            }
+            ShapeTreeChild::Picture(picture) => picture.placeholder.as_ref(),
+            _ => None,
+        };
+        if let Some(idx) = placeholder
+            .and_then(|placeholder| placeholder.idx)
+            .filter(|idx| *idx != u32::MAX)
+            && !placeholder_indices.insert(idx)
+        {
+            duplicate_placeholder_indices.push(ValidationIssue::DuplicatePlaceholderIdx {
+                slide: slide_index,
+                idx,
+            });
+        }
+        match child {
+            ShapeTreeChild::GroupShape(group) => {
+                pending.extend(group.children.iter().rev());
+            }
+            ShapeTreeChild::AlternateContent(alternate) => {
+                if let Some(fallback) = alternate.selected_fallback() {
+                    pending.extend(fallback.iter().rev());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn validate_relationship_scope(
+    package: &OpcPackage,
+    source_part: &str,
+    source_xml: Option<&[u8]>,
+    relationships: &Relationships,
+    incoming_targets: &mut HashSet<String>,
+    dangling_relationships: &mut Vec<ValidationIssue>,
+    unreachable_targets: &mut Vec<ValidationIssue>,
+) {
+    let referenced = source_xml.and_then(|xml| relationship_ids(xml).ok());
+    let has_relationship_namespace = source_xml.is_some_and(|xml| {
+        xml.windows(rpptx_oxml::namespace::R_NS.len())
+            .any(|window| window == rpptx_oxml::namespace::R_NS.as_bytes())
+    });
+    if let Some(referenced) = &referenced {
+        let mut reported = HashSet::new();
+        for relationship_id in referenced {
+            if relationships.get_by_id(relationship_id).is_none()
+                && reported.insert(relationship_id)
+            {
+                dangling_relationships.push(ValidationIssue::DanglingRelationship {
+                    part: source_part.to_owned(),
+                    r_id: relationship_id.clone(),
+                    target: relationship_id.clone(),
+                });
+            }
+        }
+    }
+    for relationship in &relationships.items {
+        if let Some(referenced) = &referenced
+            && has_relationship_namespace
+            && relationship_requires_xml_reference(&relationship.rel_type)
+            && !referenced.iter().any(|id| id == &relationship.id)
+        {
+            dangling_relationships.push(ValidationIssue::DanglingRelationship {
+                part: source_part.to_owned(),
+                r_id: relationship.id.clone(),
+                target: relationship.target.clone(),
+            });
+        }
+        if relationship_is_external(relationship) {
+            continue;
+        }
+        let target = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+        incoming_targets.insert(target.clone());
+        if !package.parts.contains_key(&target) {
+            unreachable_targets.push(ValidationIssue::UnreachableRelationshipTarget {
+                part: source_part.to_owned(),
+                target,
+            });
+        }
+    }
+}
+
+fn relationship_requires_xml_reference(relationship_type: &str) -> bool {
+    matches!(
+        relationship_type,
+        rel_types::IMAGE | rel_types::HYPERLINK | rel_types::CHART
+    ) || relationship_type.ends_with("/audio")
+        || relationship_type.ends_with("/video")
+        || relationship_type.ends_with("/oleObject")
+        || relationship_type.ends_with("/diagramData")
+}
+
+fn part_has_content_type(package: &OpcPackage, part_name: &str) -> bool {
+    package.content_types.content_type_for(part_name).is_some()
+        || part_name.rsplit_once('.').is_some_and(|(_, extension)| {
+            package
+                .content_types
+                .defaults
+                .contains_key(&extension.to_ascii_lowercase())
+        })
+}
+
+fn relationship_is_external(relationship: &Relationship) -> bool {
+    relationship
+        .target_mode
+        .as_deref()
+        .is_some_and(|mode| mode.eq_ignore_ascii_case("external"))
+}
+
+fn numeric_relationship_id(relationship_id: &str) -> u32 {
+    relationship_id
+        .strip_prefix("rId")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_default()
+}
+
+fn is_latent_placeholder(placeholder: &CT_Placeholder) -> bool {
+    matches!(
+        placeholder.ph_type.as_ref(),
+        Some(PhType::DateTime | PhType::Footer | PhType::SlideNumber)
+    )
+}
+
+fn relative_part_target(source_part: &str, target_part: &str) -> String {
+    let mut source = source_part
+        .trim_start_matches('/')
+        .split('/')
+        .collect::<Vec<_>>();
+    source.pop();
+    let target = target_part
+        .trim_start_matches('/')
+        .split('/')
+        .collect::<Vec<_>>();
+    let common = source
+        .iter()
+        .zip(&target)
+        .take_while(|(left, right)| left == right)
+        .count();
+    std::iter::repeat_n("..", source.len() - common)
+        .chain(target[common..].iter().copied())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn required_part<'a>(package: &'a OpcPackage, part_name: &str) -> Result<&'a [u8]> {
@@ -418,5 +1196,543 @@ fn collect_text(children: &[ShapeTreeChild], output: &mut Vec<String>) {
             output.push(text);
         }
         collect_text(shape.child_slice(), output);
+    }
+}
+
+#[cfg(test)]
+mod write_tests {
+    use std::collections::HashSet;
+
+    use rpptx_oxml::placeholder::PhType;
+
+    use super::*;
+
+    #[test]
+    fn every_validation_issue_variant_detects_its_corrupted_deck() {
+        let mut duplicate_shape_package = package_after_save(presentation_with_slide());
+        let slide_part = "/ppt/slides/slide1.xml";
+        let slide_xml = String::from_utf8(
+            duplicate_shape_package
+                .get_part(slide_part)
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        let duplicate_shape_xml = slide_xml.replacen(r#"id="1""#, r#"id="2""#, 1);
+        assert_ne!(duplicate_shape_xml, slide_xml);
+        duplicate_shape_package.set_part(slide_part, duplicate_shape_xml.into_bytes());
+        let duplicate_shape = presentation_from_package(duplicate_shape_package);
+        assert_has_issue(&duplicate_shape, |issue| {
+            matches!(issue, ValidationIssue::DuplicateShapeId { slide: 0, id: 2 })
+        });
+
+        let mut out_of_range = presentation_with_slide();
+        out_of_range.presentation.slide_ids[0].id = 1;
+        assert_has_issue(&out_of_range, |issue| {
+            matches!(
+                issue,
+                ValidationIssue::SlideIdOutOfRange { slide: 0, id: 1 }
+            )
+        });
+
+        let mut duplicate_slide = presentation_with_slide();
+        duplicate_slide.add_slide(0).unwrap();
+        let duplicate_id = duplicate_slide.presentation.slide_ids[0].id;
+        duplicate_slide.presentation.slide_ids[1].id = duplicate_id;
+        assert_has_issue(
+            &duplicate_slide,
+            |issue| matches!(issue, ValidationIssue::DuplicateSlideId { id } if *id == duplicate_id),
+        );
+
+        let mut missing_content_type = Presentation::new().unwrap();
+        missing_content_type
+            .package
+            .set_part("/ppt/untyped/payload.unknown", vec![1]);
+        assert_has_issue(&missing_content_type, |issue| {
+            matches!(
+                issue,
+                ValidationIssue::MissingContentTypeOverride { part }
+                    if part == "/ppt/untyped/payload.unknown"
+            )
+        });
+
+        let mut dangling_relationship_package = package_after_save(presentation_with_slide());
+        let slide_part = "/ppt/slides/slide1.xml";
+        let slide_xml = String::from_utf8(
+            dangling_relationship_package
+                .get_part(slide_part)
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        let dangling_relationship_xml = slide_xml.replacen(
+            "</p:sld>",
+            r#"<x:probe xmlns:x="urn:validation" r:embed="rId999"/></p:sld>"#,
+            1,
+        );
+        assert_ne!(dangling_relationship_xml, slide_xml);
+        dangling_relationship_package.set_part(slide_part, dangling_relationship_xml.into_bytes());
+        dangling_relationship_package.part_rels.remove(slide_part);
+        let dangling_relationship = presentation_from_package(dangling_relationship_package);
+        assert_has_issue(&dangling_relationship, |issue| {
+            matches!(
+                issue,
+                ValidationIssue::DanglingRelationship { r_id, .. } if r_id == "rId999"
+            )
+        });
+
+        let mut unreachable = presentation_with_slide();
+        let slide_part = unreachable.slides[0].part_name.clone();
+        unreachable
+            .package
+            .get_or_create_part_rels(&slide_part)
+            .add(rel_types::IMAGE, "../media/missing.png");
+        assert_has_issue(&unreachable, |issue| {
+            matches!(
+                issue,
+                ValidationIssue::UnreachableRelationshipTarget { target, .. }
+                    if target == "/ppt/media/missing.png"
+            )
+        });
+
+        let mut empty_text_package = package_after_save(presentation_with_slide());
+        let slide_part = "/ppt/slides/slide1.xml";
+        let slide_xml =
+            String::from_utf8(empty_text_package.get_part(slide_part).unwrap().to_vec()).unwrap();
+        let empty_text_xml = slide_xml.replacen("<a:p/>", "", 1);
+        assert_ne!(empty_text_xml, slide_xml);
+        empty_text_package.set_part(slide_part, empty_text_xml.into_bytes());
+        let empty_text = presentation_from_package(empty_text_package);
+        assert_has_issue(&empty_text, |issue| {
+            matches!(issue, ValidationIssue::EmptyTextBody { slide: 0, shape: 0 })
+        });
+
+        let mut duplicate_placeholder = presentation_with_slide();
+        duplicate_placeholder.slides[0]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .push(ShapeTreeChild::Shape(
+                CT_Shape::new_placeholder(100, CT_Placeholder::new(Some(PhType::Body), Some(999)))
+                    .unwrap(),
+            ));
+        duplicate_placeholder.slides[0]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .push(ShapeTreeChild::Shape(
+                CT_Shape::new_placeholder(
+                    101,
+                    CT_Placeholder::new(Some(PhType::Object), Some(999)),
+                )
+                .unwrap(),
+            ));
+        assert_has_issue(&duplicate_placeholder, |issue| {
+            matches!(
+                issue,
+                ValidationIssue::DuplicatePlaceholderIdx { slide: 0, idx: 999 }
+            )
+        });
+
+        let mut orphan_media = Presentation::new().unwrap();
+        orphan_media
+            .package
+            .set_part("/ppt/media/orphan.png", b"orphan".to_vec());
+        orphan_media
+            .package
+            .content_types
+            .add_default("png", "image/png");
+        assert_has_issue(&orphan_media, |issue| {
+            matches!(
+                issue,
+                ValidationIssue::OrphanMedia { part } if part == "/ppt/media/orphan.png"
+            )
+        });
+
+        let custom_show = presentation_with_custom_show("rId999");
+        assert_has_issue(&custom_show, |issue| {
+            matches!(
+                issue,
+                ValidationIssue::CustomShowReference { slide_id: 999 }
+            )
+        });
+
+        let mut missing_layout = presentation_with_slide();
+        let slide_part = missing_layout.slides[0].part_name.clone();
+        missing_layout.package.part_rels.remove(&slide_part);
+        assert_has_issue(&missing_layout, |issue| {
+            matches!(issue, ValidationIssue::MissingLayoutRel { slide: 0 })
+        });
+
+        let mut missing_theme = Presentation::new().unwrap();
+        let presentation_relationships = missing_theme
+            .package
+            .get_part_rels(&missing_theme.presentation_part)
+            .unwrap();
+        let master_relationship = presentation_relationships
+            .get_by_id(&missing_theme.presentation.slide_master_ids[0].relationship_id)
+            .unwrap();
+        let master_part = OpcPackage::resolve_rel_target(
+            &missing_theme.presentation_part,
+            &master_relationship.target,
+        );
+        missing_theme
+            .package
+            .get_or_create_part_rels(&master_part)
+            .items
+            .retain(|relationship| relationship.rel_type != rel_types::THEME);
+        assert_has_issue(&missing_theme, |issue| {
+            matches!(issue, ValidationIssue::MissingThemeRel { master: 0 })
+        });
+    }
+
+    #[test]
+    fn validate_collects_all_issues_in_deterministic_order() {
+        let mut presentation = presentation_with_slide();
+        presentation.presentation.slide_ids[0].id = 1;
+        presentation
+            .package
+            .set_part("/ppt/media/orphan.png", b"orphan".to_vec());
+        presentation
+            .package
+            .content_types
+            .add_default("png", "image/png");
+        let first = presentation.validate();
+        let second = presentation.validate();
+
+        assert_eq!(first, second);
+        assert!(matches!(
+            first.first(),
+            Some(ValidationIssue::SlideIdOutOfRange { .. })
+        ));
+        assert!(matches!(
+            first.last(),
+            Some(ValidationIssue::OrphanMedia { .. })
+        ));
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn debug_save_boundaries_assert_on_invalid_presentations() {
+        let mut presentation = presentation_with_slide();
+        presentation.presentation.slide_ids[0].id = 1;
+        let output = std::env::temp_dir().join(format!(
+            "rpptx-f108-invalid-save-{}.pptx",
+            std::process::id()
+        ));
+
+        assert!(std::panic::catch_unwind(|| presentation.to_bytes()).is_err());
+        assert!(std::panic::catch_unwind(|| presentation.save(&output)).is_err());
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn validation_xml_scan_is_prefix_tolerant_and_non_mutating() {
+        let presentation = presentation_with_slide();
+        let relationship_id = presentation.presentation.slide_ids[0]
+            .relationship_id
+            .clone();
+        let presentation = presentation_with_custom_show(&relationship_id);
+        let before = presentation
+            .package
+            .get_part(&presentation.presentation_part)
+            .unwrap()
+            .to_vec();
+
+        assert!(presentation.validate().is_empty());
+        assert_eq!(
+            presentation
+                .package
+                .get_part(&presentation.presentation_part)
+                .unwrap(),
+            before
+        );
+    }
+
+    fn presentation_with_slide() -> Presentation {
+        let mut presentation = Presentation::new().unwrap();
+        presentation.add_slide(0).unwrap();
+        presentation
+    }
+
+    fn package_after_save(presentation: Presentation) -> OpcPackage {
+        OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap()
+    }
+
+    fn presentation_from_package(package: OpcPackage) -> Presentation {
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Presentation::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    fn presentation_with_custom_show(relationship_id: &str) -> Presentation {
+        let mut package = package_after_save(presentation_with_slide());
+        let presentation_part = "/ppt/presentation.xml";
+        let xml = String::from_utf8(package.get_part(presentation_part).unwrap().to_vec()).unwrap();
+        let custom_show = format!(
+            r#"<q:custShowLst xmlns:q="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:rel="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><q:custShow name="validation"><q:sldLst><q:sld rel:id="{relationship_id}"/></q:sldLst></q:custShow></q:custShowLst>"#
+        );
+        package.set_part(
+            presentation_part,
+            xml.replacen(
+                "</p:presentation>",
+                &format!("{custom_show}</p:presentation>"),
+                1,
+            )
+            .into_bytes(),
+        );
+        presentation_from_package(package)
+    }
+
+    fn assert_has_issue(presentation: &Presentation, predicate: impl Fn(&ValidationIssue) -> bool) {
+        let issues = presentation.validate();
+        assert!(issues.iter().any(predicate), "issues: {issues:?}");
+    }
+
+    fn layout_index(presentation: &Presentation, name: &str) -> usize {
+        (0..presentation.layout_count())
+            .find(|index| presentation.layout_name(*index) == Some(name))
+            .unwrap_or_else(|| panic!("missing layout {name}"))
+    }
+
+    #[test]
+    fn three_added_slides_have_unique_ids_and_reopen() {
+        let mut presentation = Presentation::new().unwrap();
+        for _ in 0..3 {
+            presentation.add_slide(0).unwrap();
+        }
+
+        let ids = presentation
+            .slides()
+            .map(|slide| slide.id())
+            .collect::<HashSet<_>>();
+        assert_eq!(ids.len(), 3);
+        assert!(ids.iter().all(|id| *id >= 256));
+        assert_eq!(
+            Presentation::from_bytes(&presentation.to_bytes().unwrap())
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn add_slide_allocates_after_the_highest_existing_part_suffix() {
+        let mut presentation = Presentation::new().unwrap();
+        let sentinel = b"existing sparse slide".to_vec();
+        presentation
+            .package
+            .set_part("/ppt/slides/slide7.xml", sentinel.clone());
+
+        presentation.add_slide(0).unwrap();
+
+        assert_eq!(
+            presentation.slides.last().unwrap().part_name,
+            "/ppt/slides/slide8.xml"
+        );
+        assert_eq!(
+            presentation.package.get_part("/ppt/slides/slide7.xml"),
+            Some(sentinel.as_slice())
+        );
+    }
+
+    #[test]
+    fn add_slide_synthesizes_only_non_latent_layout_placeholders() {
+        let mut presentation = Presentation::new().unwrap();
+        let layout_index = layout_index(&presentation, "Title and Content");
+        let expected = presentation.layouts[layout_index]
+            .layout
+            .common_slide_data
+            .shape_tree
+            .children
+            .iter()
+            .filter_map(|child| match child {
+                ShapeTreeChild::Shape(shape) => shape.placeholder.as_ref(),
+                _ => None,
+            })
+            .filter(|placeholder| {
+                !matches!(
+                    placeholder.ph_type,
+                    Some(PhType::DateTime | PhType::Footer | PhType::SlideNumber)
+                )
+            })
+            .map(|placeholder| (placeholder.ph_type.clone(), placeholder.idx))
+            .collect::<Vec<_>>();
+
+        presentation.add_slide(layout_index).unwrap();
+
+        let actual = presentation.slides[0]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .iter()
+            .filter_map(|child| match child {
+                ShapeTreeChild::Shape(shape) => shape.placeholder.as_ref(),
+                _ => None,
+            })
+            .map(|placeholder| (placeholder.ph_type.clone(), placeholder.idx))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn synthesized_slide_uses_schema_order_and_one_relative_layout_relationship() {
+        let mut presentation = Presentation::new().unwrap();
+        let relocated_layout = "/custom/layouts/relocated.xml";
+        let original_layout = presentation.layouts[0].part_name.clone();
+        let layout_xml = presentation
+            .package
+            .get_part(&original_layout)
+            .unwrap()
+            .to_vec();
+        presentation.package.set_part(relocated_layout, layout_xml);
+        presentation.layouts[0].part_name = relocated_layout.to_owned();
+        presentation.add_slide(0).unwrap();
+        let record = &presentation.slides[0];
+        let xml = String::from_utf8(record.slide.to_xml().unwrap()).unwrap();
+        let relationships = presentation
+            .package
+            .get_part_rels(&record.part_name)
+            .unwrap();
+
+        assert!(xml.find("<p:cSld").unwrap() < xml.find("<p:clrMapOvr").unwrap());
+        assert_eq!(relationships.items.len(), 1);
+        assert_eq!(relationships.items[0].rel_type, rel_types::SLIDE_LAYOUT);
+        assert!(!relationships.items[0].target.starts_with('/'));
+        assert_eq!(
+            OpcPackage::resolve_rel_target(&record.part_name, &relationships.items[0].target),
+            relocated_layout
+        );
+        assert_eq!(CT_Slide::from_xml(xml.as_bytes()).unwrap(), record.slide);
+    }
+
+    #[test]
+    fn synthesized_text_bodies_always_contain_a_paragraph() {
+        let mut presentation = Presentation::new().unwrap();
+        let layout_index = layout_index(&presentation, "Title and Content");
+        presentation.add_slide(layout_index).unwrap();
+
+        for child in &presentation.slides[0]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+        {
+            if let ShapeTreeChild::Shape(shape) = child
+                && shape.text_body.is_some()
+            {
+                assert!(
+                    String::from_utf8(shape.to_xml().unwrap())
+                        .unwrap()
+                        .contains("<a:p")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn add_slide_rejects_an_unknown_layout_index_without_mutation() {
+        let mut presentation = Presentation::new().unwrap();
+        let before = presentation.to_bytes().unwrap();
+
+        let error = presentation
+            .add_slide(presentation.layout_count())
+            .err()
+            .expect("unknown layout must fail");
+
+        assert!(matches!(error, Error::UnknownLayoutIndex { .. }));
+        assert_eq!(presentation.to_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn equal_media_bytes_inserted_twice_reuse_one_part() {
+        let mut package = OpcPackage::new();
+        let mut media = MediaStore::scan(&package);
+        let png = b"\x89PNG\r\n\x1a\nfixture";
+
+        let first = media.insert(&mut package, png, "first.png");
+        let second = media.insert(&mut package, png, "second.png");
+
+        assert_eq!(first, second);
+        assert_eq!(
+            package
+                .parts
+                .keys()
+                .filter(|part| part.starts_with("/ppt/media/"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn media_store_compares_bytes_inside_a_hash_bucket() {
+        let mut package = OpcPackage::new();
+        let mut media = MediaStore::scan(&package);
+        let first = b"\x89PNG\r\n\x1a\nfirst";
+        let second = b"\x89PNG\r\n\x1a\nsecond";
+
+        let first_part = media.insert_with_id(&mut package, MediaId(7), first, "first.png");
+        let second_part = media.insert_with_id(&mut package, MediaId(7), second, "second.png");
+
+        assert_ne!(first_part, second_part);
+        assert_eq!(package.get_part(&first_part), Some(first.as_slice()));
+        assert_eq!(package.get_part(&second_part), Some(second.as_slice()));
+    }
+
+    #[test]
+    fn media_store_allocates_after_the_highest_existing_suffix() {
+        let mut package = OpcPackage::new();
+        package.set_part("/ppt/media/image1.png", b"\x89PNG\r\n\x1a\none".to_vec());
+        package.set_part("/ppt/media/image3.png", b"\x89PNG\r\n\x1a\nthree".to_vec());
+        package.content_types.add_default("png", "image/png");
+        let mut media = MediaStore::scan(&package);
+
+        let part = media.insert(&mut package, b"\x89PNG\r\n\x1a\nfour", "misleading.jpeg");
+
+        assert_eq!(part, "/ppt/media/image4.png");
+        assert_eq!(
+            package.content_types.content_type_for(&part),
+            Some("image/png")
+        );
+    }
+
+    #[test]
+    fn media_store_overrides_a_conflicting_existing_default() {
+        let mut package = OpcPackage::new();
+        package
+            .content_types
+            .add_default("png", "application/octet-stream");
+        let mut media = MediaStore::scan(&package);
+
+        let part = media.insert(&mut package, b"\x89PNG\r\n\x1a\nnew", "new.png");
+
+        assert_eq!(
+            package.content_types.content_type_for(&part),
+            Some("image/png")
+        );
+        assert_eq!(
+            package
+                .content_types
+                .defaults
+                .get("png")
+                .map(String::as_str),
+            Some("application/octet-stream")
+        );
+    }
+
+    #[test]
+    fn media_store_reuses_the_first_sorted_duplicate_part() {
+        let mut package = OpcPackage::new();
+        let png = b"\x89PNG\r\n\x1a\nduplicate";
+        package.set_part("/ppt/media/image2.png", png.to_vec());
+        package.set_part("/ppt/media/image1.png", png.to_vec());
+        let mut media = MediaStore::scan(&package);
+
+        let part = media.insert(&mut package, png, "duplicate.png");
+
+        assert_eq!(part, "/ppt/media/image1.png");
     }
 }

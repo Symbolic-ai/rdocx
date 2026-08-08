@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Cursor;
@@ -30,6 +30,10 @@ const PRESENTATION_PART: &str = "/custom/presentation-main.xml";
 const SLIDE_ONE_PART: &str = "/custom/slides/first.xml";
 const SLIDE_TWO_PART: &str = "/custom/slides/second.xml";
 const NOTES_PART: &str = "/custom/notes/speaker.xml";
+const LAYOUT_PART: &str = "/custom/layouts/validation.xml";
+const POWERPOINT_VERSION: &str = "16.104";
+const POWERPOINT_BUILD: &str = "16.104.25121423";
+const POWERPOINT_APP_BUILD: &str = "1214";
 const MODELLED_CONTENT_TYPES: [&str; 7] = [
     content_types::PRESENTATION,
     content_types::SLIDE,
@@ -84,6 +88,92 @@ fn all_corpus_modelled_parts_reparse_structurally() {
             "corpus has no modelled part with content type {content_type}"
         );
     }
+}
+
+#[test]
+fn three_added_slides_have_unique_ids_and_reopen() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    assert!(presentation.layout_count() > 0);
+    assert!(presentation.layout_name(0).is_some());
+    for _ in 0..3 {
+        presentation.add_slide(0).expect("add slide");
+    }
+
+    let ids = presentation
+        .slides()
+        .map(|slide| slide.id())
+        .collect::<HashSet<_>>();
+    assert_eq!(ids.len(), 3);
+    assert!(ids.iter().all(|id| *id >= 256));
+    let bytes = presentation.to_bytes().expect("serialize three-slide deck");
+    assert_eq!(
+        Presentation::from_bytes(&bytes)
+            .expect("reopen three-slide deck")
+            .len(),
+        3
+    );
+
+    if let Some(path) = std::env::var_os("RPPTX_ACCEPTANCE_OUTPUT") {
+        fs::write(path, bytes).expect("write native acceptance deck");
+    }
+}
+
+#[test]
+fn all_pinned_corpus_decks_validate_cleanly() {
+    let Some(paths) = corpus_paths() else {
+        return;
+    };
+    for path in paths {
+        let deck = deck_name(&path);
+        let bytes = fs::read(&path).unwrap_or_else(|error| panic!("{deck}: {error}"));
+        let presentation = Presentation::from_bytes(&bytes)
+            .unwrap_or_else(|error| panic!("{deck}: open presentation: {error}"));
+        let issues = presentation.validate();
+        assert!(issues.is_empty(), "{deck}: {issues:?}");
+    }
+}
+
+#[test]
+fn save_writes_the_same_bytes_as_to_bytes() {
+    let presentation = Presentation::new().expect("open bundled template");
+    let output = std::env::temp_dir().join(format!("rpptx-f108-save-{}.pptx", std::process::id()));
+    presentation.save(&output).expect("save presentation");
+    assert_eq!(
+        fs::read(&output).expect("read saved deck"),
+        presentation.to_bytes().unwrap()
+    );
+    fs::remove_file(output).expect("remove saved deck");
+}
+
+#[test]
+#[ignore = "requires pinned Microsoft PowerPoint"]
+fn three_added_slides_open_in_powerpoint_without_repair() {
+    assert_powerpoint_build();
+    let mut presentation = Presentation::new().expect("open bundled template");
+    for _ in 0..3 {
+        presentation.add_slide(0).expect("add slide");
+    }
+    let output = std::env::temp_dir().join(format!(
+        "rpptx-f107-three-slides-{}.pptx",
+        std::process::id()
+    ));
+    fs::write(&output, presentation.to_bytes().expect("serialize deck"))
+        .expect("write native acceptance deck");
+    let name = output.file_name().unwrap().to_string_lossy();
+    let path = output.to_string_lossy();
+    let script = format!(
+        "with timeout of 120 seconds\ntell application \"Microsoft PowerPoint\"\nset previousStartUpDialog to start up dialog\ntry\nif (Version as text) is not \"{POWERPOINT_VERSION}\" then error \"PowerPoint version mismatch\"\nif (build as text) is not \"{POWERPOINT_APP_BUILD}\" then error \"PowerPoint build mismatch\"\nset start up dialog to false\nset deckPath to \"{path}\"\nopen my POSIX file deckPath\nset checkedDeck to presentation \"{name}\"\nif (count of slides of checkedDeck) is not 3 then error \"slide count mismatch\"\nclose checkedDeck saving no\nset start up dialog to previousStartUpDialog\non error errorMessage number errorNumber\ntry\nclose checkedDeck saving no\nend try\nset start up dialog to previousStartUpDialog\nerror errorMessage number errorNumber\nend try\nend tell\nend timeout\n"
+    );
+    let result = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .expect("launch PowerPoint acceptance script");
+    fs::remove_file(&output).expect("remove native acceptance deck");
+    assert!(
+        result.status.success(),
+        "PowerPoint no-repair open failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
 }
 
 #[test]
@@ -183,6 +273,108 @@ fn rpptx_is_an_unpublished_workspace_member() {
     assert!(manifest.contains("name = \"rpptx\""));
     assert!(manifest.contains("version = \"0.0.0\""));
     assert!(manifest.contains("publish = false"));
+    assert!(manifest.contains("default = [\"default-template\"]"));
+    assert!(manifest.contains("default-template = []"));
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn new_presentation_uses_the_bundled_zero_slide_template() {
+    let presentation = Presentation::new().expect("open bundled presentation template");
+    assert!(presentation.is_empty());
+
+    let bytes = presentation.to_bytes().expect("serialize new presentation");
+    if let Some(path) = std::env::var_os("RDOCX_F105_SAVE_PATH") {
+        fs::write(&path, &bytes)
+            .unwrap_or_else(|error| panic!("write {}: {error}", Path::new(&path).display()));
+    }
+    let reopened = Presentation::from_bytes(&bytes).expect("reopen new presentation");
+    assert!(reopened.is_empty());
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn bundled_template_has_the_documented_part_graph() {
+    let asset = workspace_root().join("crates/rpptx/assets/default.pptx");
+    let bytes = fs::read(&asset)
+        .unwrap_or_else(|error| panic!("read bundled template {}: {error}", asset.display()));
+    let package = open_opc(&bytes, "default.pptx");
+    let presentation_part = package
+        .main_document_part()
+        .expect("bundled template main presentation part");
+    let presentation = CT_Presentation::from_xml(
+        package
+            .get_part(&presentation_part)
+            .expect("bundled template presentation XML"),
+    )
+    .expect("parse bundled template presentation XML");
+
+    assert!(presentation.slide_ids.is_empty());
+    assert_eq!(presentation.slide_master_ids.len(), 1);
+    let slide_size = presentation
+        .slide_size
+        .expect("bundled template slide size");
+    assert_eq!((slide_size.cx.0, slide_size.cy.0), (12_192_000, 6_858_000));
+
+    let count = |content_type: &str| {
+        package
+            .content_types
+            .overrides
+            .values()
+            .filter(|actual| actual.as_str() == content_type)
+            .count()
+    };
+    assert_eq!(count(content_types::SLIDE_MASTER), 1);
+    assert_eq!(count(content_types::SLIDE_LAYOUT), 11);
+    assert!(count(content_types::THEME) >= 1);
+    assert_eq!(count(content_types::PRES_PROPS), 1);
+    assert_eq!(count(content_types::VIEW_PROPS), 1);
+    assert_eq!(count(content_types::TABLE_STYLES), 1);
+    assert_eq!(count(content_types::NOTES_MASTER), 1);
+    assert_eq!(count(content_types::SLIDE), 0);
+
+    for (part_name, content_type) in &package.content_types.overrides {
+        if content_type == content_types::THEME {
+            CT_OfficeStyleSheet::from_xml(
+                package
+                    .get_part(part_name)
+                    .unwrap_or_else(|| panic!("missing bundled theme {part_name}")),
+            )
+            .unwrap_or_else(|error| panic!("parse bundled theme {part_name}: {error}"));
+        }
+    }
+
+    let presentation_relationships = package
+        .get_part_rels(&presentation_part)
+        .expect("bundled template presentation relationships");
+    for relationship_type in [
+        rel_types::SLIDE_MASTER,
+        rel_types::PRES_PROPS,
+        rel_types::VIEW_PROPS,
+        rel_types::TABLE_STYLES,
+        rel_types::NOTES_MASTER,
+    ] {
+        assert!(
+            presentation_relationships
+                .get_by_type(relationship_type)
+                .is_some(),
+            "bundled template lacks relationship type {relationship_type}"
+        );
+    }
+
+    let table_styles = package
+        .parts
+        .iter()
+        .find(|(part_name, _)| {
+            package.content_types.content_type_for(part_name) == Some(content_types::TABLE_STYLES)
+        })
+        .map(|(_, bytes)| bytes)
+        .expect("bundled template table styles");
+    assert!(
+        table_styles
+            .windows(b"{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}".len())
+            .any(|window| window == b"{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}")
+    );
 }
 
 #[test]
@@ -1260,6 +1452,28 @@ fn open_package(package: OpcPackage) -> Result<Presentation, Error> {
     Presentation::from_bytes(&package_bytes(package))
 }
 
+fn assert_powerpoint_build() {
+    let app = "/Applications/Microsoft PowerPoint.app/Contents/Info.plist";
+    let version = Command::new("/usr/libexec/PlistBuddy")
+        .args(["-c", "Print :CFBundleShortVersionString", app])
+        .output()
+        .expect("read PowerPoint version");
+    let build = Command::new("/usr/libexec/PlistBuddy")
+        .args(["-c", "Print :CFBundleVersion", app])
+        .output()
+        .expect("read PowerPoint build");
+    assert!(version.status.success());
+    assert!(build.status.success());
+    assert_eq!(
+        String::from_utf8(version.stdout).unwrap().trim(),
+        POWERPOINT_VERSION
+    );
+    assert_eq!(
+        String::from_utf8(build.stdout).unwrap().trim(),
+        POWERPOINT_BUILD
+    );
+}
+
 fn fixture_bytes() -> Vec<u8> {
     package_bytes(fixture_package())
 }
@@ -1291,6 +1505,7 @@ fn fixture_package() -> OpcPackage {
     package.set_part(SLIDE_ONE_PART, simple_slide_xml());
     package.set_part(SLIDE_TWO_PART, rich_slide_xml());
     package.set_part(NOTES_PART, notes_xml());
+    package.set_part(LAYOUT_PART, simple_layout_xml());
     package.set_part("/custom/opaque/data.bin", vec![0, 1, 2, 255]);
     package.set_part(
         "/custom/opaque/raw.xml",
@@ -1305,6 +1520,12 @@ fn fixture_package() -> OpcPackage {
     package
         .content_types
         .add_override(NOTES_PART, content_types::NOTES_SLIDE);
+    package
+        .content_types
+        .add_override(LAYOUT_PART, content_types::SLIDE_LAYOUT);
+    package
+        .content_types
+        .add_default("bin", "application/octet-stream");
     let relationships = package.get_or_create_part_rels(PRESENTATION_PART);
     relationships.add_with_id("ordered-first", rel_types::SLIDE, "slides/second.xml");
     relationships.add_with_id("ordered-second", rel_types::SLIDE, "slides/first.xml");
@@ -1313,6 +1534,12 @@ fn fixture_package() -> OpcPackage {
         rel_types::NOTES_SLIDE,
         "../notes/speaker.xml",
     );
+    package
+        .get_or_create_part_rels(SLIDE_ONE_PART)
+        .add(rel_types::SLIDE_LAYOUT, "../layouts/validation.xml");
+    package
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .add(rel_types::SLIDE_LAYOUT, "../layouts/validation.xml");
     package
 }
 
@@ -1330,6 +1557,13 @@ fn presentation_xml(slides: &[(u32, &str)]) -> Vec<u8> {
 fn simple_slide_xml() -> Vec<u8> {
     format!(
         r#"<p:sld xmlns:p="{P_NS}" xmlns:a="{A_NS}"><p:cSld name="First in storage, second in order"><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld></p:sld>"#
+    )
+    .into_bytes()
+}
+
+fn simple_layout_xml() -> Vec<u8> {
+    format!(
+        r#"<p:sldLayout xmlns:p="{P_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld></p:sldLayout>"#
     )
     .into_bytes()
 }

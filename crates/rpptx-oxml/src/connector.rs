@@ -70,6 +70,16 @@ struct NonVisualConnectorProperties {
 }
 
 impl CT_ConnectionShape {
+    pub(crate) fn non_visual_id(&self) -> Option<u32> {
+        self.raw
+            .non_visual
+            .drawing_properties
+            .raw_attributes
+            .iter()
+            .find(|(name, _)| name == "id")
+            .and_then(|(_, value)| value.parse().ok())
+    }
+
     /// Parses a complete `p:cxnSp` with any prefix bound to PresentationML.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         Self::from_fragment(xml, &[])

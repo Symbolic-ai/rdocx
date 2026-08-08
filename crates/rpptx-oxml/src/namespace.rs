@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use oxml_core::OxmlError;
 use oxml_drawing::namespace::A_NS;
-use quick_xml::XmlVersion;
-use quick_xml::events::BytesStart;
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::{Reader, XmlVersion};
 
 /// PresentationML main namespace URI.
 pub const P_NS: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
@@ -106,6 +106,25 @@ pub(crate) fn all_attributes(start: &BytesStart<'_>) -> Result<Vec<(String, Stri
     Ok(attributes)
 }
 
+pub(crate) fn non_visual_drawing_id(xml: &[u8]) -> Option<u32> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer).ok()? {
+            Event::Start(start) | Event::Empty(start) => {
+                return all_attributes(&start)
+                    .ok()?
+                    .into_iter()
+                    .find(|(name, _)| name == "id")
+                    .and_then(|(_, value)| value.parse().ok());
+            }
+            Event::Eof => return None,
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
 pub(crate) fn root_attributes(
     start: &BytesStart<'_>,
     fixed_prefixes: &[&str],
@@ -164,7 +183,7 @@ fn sort_namespace_entries(entries: &mut [(String, String)]) {
 
 #[cfg(test)]
 mod tests {
-    use super::sort_namespace_entries;
+    use super::{non_visual_drawing_id, sort_namespace_entries};
 
     #[test]
     fn namespace_entries_have_deterministic_prefix_order() {
@@ -182,6 +201,24 @@ mod tests {
                 ("m".to_owned(), "urn:m".to_owned()),
                 ("z".to_owned(), "urn:z".to_owned()),
             ]
+        );
+    }
+
+    #[test]
+    fn non_visual_id_accepts_any_prefix_and_only_an_unqualified_id() {
+        assert_eq!(
+            non_visual_drawing_id(br#"<q:cNvPr xmlns:q="urn:p" id="42" q:id="7"/>"#),
+            Some(42)
+        );
+        assert_eq!(
+            non_visual_drawing_id(br#"<q:cNvPr xmlns:q="urn:p" q:id="7"/>"#),
+            None
+        );
+        assert_eq!(
+            non_visual_drawing_id(
+                br#"<q:cNvPr xmlns:q="urn:p"><x:cNvPr xmlns:x="urn:extension" id="99"/></q:cNvPr>"#
+            ),
+            None
         );
     }
 }

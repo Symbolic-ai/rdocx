@@ -38,6 +38,7 @@ defended.
 | S23 | M10 | 5 | 5 | 0 | 10 | 5 | Completed shapes, transforms, arrowheads, cropped and tiled pictures, and backgrounds in the unpublished renderer with all 28 hashes unchanged and no publication |
 | S24 | M10 | 8 | 8 | 0 | 14 | 8 | Completed shape text layout, bullets, autofit, and vertical text in the unpublished renderer with all 28 hashes unchanged and no publication |
 | S25 | M10 | 3 | 3 | 0 | 10 | 3 | Completed M10 with table rendering, hyperlinks, fields, diagnostics, and the pinned fidelity harness. All 421 slides rendered, the SSIM trend and native PowerPoint evidence were retained, all 28 hashes remained unchanged, and no crate was published |
+| S26 | M11 | 4 | 4 | 0 | 10 | 4 | Established slide creation with the bundled template, collision-safe identifiers and media, layout-based slide synthesis, and deterministic validation. Native PowerPoint accepted the generated decks, all 50 pinned decks validated cleanly, all 28 hashes remained unchanged, and no crate was published |
 
 ## Completed features
 
@@ -144,6 +145,10 @@ defended.
 | F-102 | S25 | L | 4 | 1 | 2026-08-08 | Styled table resolution and merged-cell rendering with unique borders |
 | F-103 | S25 | M | 2 | 1 | 2026-08-08 | Source-scoped hyperlinks, slide-number fields, and visible diagnostics |
 | F-104 | S25 | L | 4 | 1 | 2026-08-08 | Complete corpus rendering with retained SSIM trend and native evidence |
+| F-105 | S26 | M | 2 | 1 | 2026-08-08 | Bundled zero-slide PowerPoint template and concrete constructor |
+| F-106 | S26 | M | 2 | 1 | 2026-08-08 | Recursive shape-id allocation and content-addressed media deduplication |
+| F-107 | S26 | L | 4 | 1 | 2026-08-08 | Layout-based slide synthesis with unique package and slide identifiers |
+| F-108 | S26 | M | 2 | 1 | 2026-08-08 | Deterministic presentation validation and guarded save boundaries |
 
 ## Velocity
 
@@ -182,6 +187,7 @@ five working days.
 | S23 | 5 | 5 | 5.00 |
 | S24 | 8 | 8 | 5.00 |
 | S25 | 3 | 3 | 5.00 |
+| S26 | 4 | 4 | 5.00 |
 
 ## Escalation record
 
@@ -211,3 +217,4 @@ was done about it. Empty is the expected state.
 | 2026-08-03 | Sprint estimate variance exceeded 30 percent | S23 | Record 5 actual days against 10 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
 | 2026-08-05 | Sprint estimate variance exceeded 30 percent | S24 | Record 8 actual days against 14 estimated and retain the about 25 active week reforecast with dependency-defined sprint boundaries |
 | 2026-08-08 | Sprint estimate variance exceeded 30 percent | S25 | Record 3 actual days against 10 estimated and reforecast 57 pending stories at the observed five stories per active week to about 12 active weeks, retaining dependency-defined sprint boundaries |
+| 2026-08-08 | Sprint estimate variance exceeded 30 percent | S26 | Record 4 actual days against 10 estimated and reforecast 53 pending stories at the observed five stories per active week to about 11 active weeks, retaining dependency-defined sprint boundaries |

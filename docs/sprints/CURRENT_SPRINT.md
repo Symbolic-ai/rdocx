@@ -1,61 +1,68 @@
-# Current Sprint, S25
+# Current Sprint, S26
 
-**Milestone**: M10 Renderer.
+**Milestone**: M11 Write API.
 
-**Goal**: Complete the renderer milestone with tables, hyperlinks,
-slide-number fields, and a visible diagnostic surface. Establish the
-deterministic SSIM fidelity harness across the pinned corpus, meet the M10
-quality target, and keep every PowerPoint development crate unpublished.
+**Goal**: Establish the slide-creation foundation with a bundled zero-slide
+template, collision-safe shape and media allocation, synthesised slide creation,
+and a complete validation surface. End with a three-slide generated deck that
+opens without repair and a validator that accepts the pinned corpus while
+identifying every deliberately corrupted package.
 
 ## Spec references
 
-- `docs/hld/02-scope-and-non-goals.md`, for table, hyperlink, field, and
-  diagnostic coverage plus the measurable 150 dpi fidelity bar.
-- `docs/hld/03-architecture.md`, for the frozen `rpptx-layout` to
-  `rpptx-render` seam and the publication-disabled PowerPoint crate boundary.
-- `docs/hld/05-drawingml-model.md`, for typed table grids, rows, cells, spans,
-  merge continuations, banding flags, and cell text bodies.
-- `docs/hld/07-inheritance-and-resolution.md`, for source-neutral resolved
-  tables and diagnostics at the renderer boundary.
-- `docs/hld/08-rendering-spec.md`, for page-frame diagnostics, link
-  annotations, recursive grouped-content handling, and renderer fallbacks.
-- `docs/hld/12-testing-strategy.md`, for the pinned corpus, LibreOffice oracle,
-  SSIM thresholds, deterministic 150 dpi rendering, and PowerPoint spot-check.
-- `docs/hld/14-development-backlog.md`, for F-102 through F-104 dependencies,
-  focused test gates, and the M10 end-of-milestone gate.
-- `docs/hld/15-build-and-toolchain.md`, for deterministic font isolation used
-  by the SSIM harness and the unpublished version 0.0.0 policy.
+- `docs/hld/01-glossary.md`, for placeholder `idx` as the inheritance join key
+  that new slides must preserve.
+- `docs/hld/02-scope-and-non-goals.md`, for the bundled `Presentation::new()`,
+  synthesised `add_slide`, slide collection, and content-hash media deduplication
+  contract.
+- `docs/hld/03-architecture.md`, for the `rpptx` facade and its crate-local
+  `assets/default.pptx` ownership.
+- `docs/hld/04-opc-and-packaging.md`, for cheap non-panicking package integrity
+  validation before debug saves.
+- `docs/hld/06-presentationml-model.md`, for slide and shape identifier rules,
+  recursive shape-tree allocation, the nine-step slide synthesis sequence,
+  every `ValidationIssue`, and the bundled template contents.
+- `docs/hld/12-testing-strategy.md`, for pinned corpus validation and the
+  milestone requirement to open saved decks without repair.
+- `docs/hld/13-risks-and-open-questions.md`, for synthesising placeholders
+  instead of deep-copying raw XML with hidden relationship identifiers.
+- `docs/hld/14-development-backlog.md`, for F-105 through F-108 dependencies,
+  sizes, and focused test gates.
+- `docs/hld/15-build-and-toolchain.md`, for the default-template feature,
+  crate-local asset packaging, and unpublished PresentationML crates.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-102 | Table rendering | L | done | - |
-| F-103 | Hyperlinks, fields and diagnostics | M | done | - |
-| F-104 | SSIM fidelity harness | L | done | - |
+| F-105 | Bundled default.pptx | M | done | - |
+| F-106 | ShapeIdAllocator and MediaStore | M | done | - |
+| F-107 | add_slide | L | done | - |
+| F-108 | validate() | M | done | - |
 
 ## Sequencing note
 
-F-102 and F-103 can start independently because their prerequisites closed in
-earlier sprints. F-104 follows F-102 so the fidelity corpus measures complete
-table rendering rather than recording a baseline with a known missing content
-class. The final milestone gate runs once over their integrated result.
+F-105 and F-106 have completed prerequisites and can begin independently.
+F-107 follows both because slide synthesis needs the bundled template plus safe
+shape and media allocation. F-108 follows F-107 so validation covers the new
+creation path and protects every later M11 mutation story.
 
 ## Definition of done for this sprint
 
-- A banded table with merged cells renders concrete fills, borders, margins,
-  and cell text without duplicated continuation-cell borders.
-- Cell text reuses the fixed-box text layout completed in S24 while preserving
-  the documented no-table-cell-autofit fallback.
-- Slide-number fields render the correct page number, hyperlinks emit link
-  annotations, and supported fallbacks remain visible with diagnostics.
-- The deterministic harness renders the pinned corpus to 150 dpi PNGs and
-  compares them with the LibreOffice oracle without relying on system fonts.
-- Every corpus slide renders without panic, missing output, dimension mismatch,
-  or a dropped bounded shape.
-- CI records 0.95 SSIM on at least 80 percent of slides as a trend reference.
-  Representative fidelity output is accepted against native PowerPoint once
-  for M10, with the observation recorded as milestone evidence.
-- Every PowerPoint development crate remains version 0.0.0 with publication
-  disabled, no crate is published, and the full workspace gate passes with all
-  28 deterministic hashes unchanged.
+- `Presentation::new()` loads a crate-local 16:9 template containing one
+  master, eleven standard layouts, a full theme, notes infrastructure, table
+  styles, and zero slides, and PowerPoint opens it without repair.
+- `ShapeIdAllocator` scans nested groups and `mc:AlternateContent` fallbacks,
+  while `MediaStore` deduplicates equal image bytes by content hash.
+- `add_slide` synthesises minimal non-latent placeholders, preserves their
+  `type` and `idx`, creates the layout and presentation relationships, registers
+  the content type, and allocates unique slide ids at or above 256.
+- A generated three-slide deck opens in PowerPoint without repair and preserves
+  the selected layouts and placeholder inheritance.
+- `Presentation::validate()` reports every documented `ValidationIssue` without
+  panicking, runs under debug assertions before save, detects one deliberate
+  corruption per variant, and accepts all 50 pinned corpus decks.
+- The default template is included in the `rpptx` package through the existing
+  default-on feature. Every PowerPoint development crate remains version 0.0.0
+  with publication disabled, no crate is published, the full workspace gate
+  passes, and all 28 deterministic hashes remain unchanged.

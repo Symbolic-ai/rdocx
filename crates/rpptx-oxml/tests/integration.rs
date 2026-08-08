@@ -21,7 +21,7 @@ use rpptx_oxml::picture::CT_Picture;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType, PlaceholderKey};
 use rpptx_oxml::presentation::CT_Presentation;
 use rpptx_oxml::relmap::rewrite_rel_ids;
-use rpptx_oxml::shape_tree::{CT_Shape, CT_ShapeTree, ShapeTreeChild};
+use rpptx_oxml::shape_tree::{CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild};
 use rpptx_oxml::slide_parts::{
     BackgroundRendering, CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind,
 };
@@ -610,7 +610,7 @@ fn presentation_reads_any_prefix_and_writes_fixed_prefixes_in_schema_order() {
 }
 
 #[test]
-fn slide_ids_preserve_order_and_enforce_powerpoint_bounds() {
+fn slide_ids_preserve_order_and_defer_semantic_validation() {
     let valid = format!(
         r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:sldIdLst><p:sldId id="2147483647" r:id="last"/><p:sldId id="256" r:id="first"/></p:sldIdLst><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
     );
@@ -624,24 +624,25 @@ fn slide_ids_preserve_order_and_enforce_powerpoint_bounds() {
         vec![2_147_483_647, 256]
     );
 
-    for invalid in [
+    for accepted_for_facade_validation in [
         r#"<p:sldId id="255" r:id="rId1"/>"#,
         r#"<p:sldId id="2147483648" r:id="rId1"/>"#,
-        r#"<p:sldId id="not-an-integer" r:id="rId1"/>"#,
     ] {
         let xml = format!(
-            r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:sldIdLst>{invalid}</p:sldIdLst><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
+            r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:sldIdLst>{accepted_for_facade_validation}</p:sldIdLst><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
         );
-        assert!(
-            CT_Presentation::from_xml(xml.as_bytes()).is_err(),
-            "{invalid}"
-        );
+        assert!(CT_Presentation::from_xml(xml.as_bytes()).is_ok());
     }
+
+    let invalid = format!(
+        r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:sldIdLst><p:sldId id="not-an-integer" r:id="rId1"/></p:sldIdLst><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
+    );
+    assert!(CT_Presentation::from_xml(invalid.as_bytes()).is_err());
 
     let duplicate = format!(
         r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:sldIdLst><p:sldId id="256" r:id="rId1"/><p:sldId id="256" r:id="rId2"/></p:sldIdLst><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
     );
-    assert!(CT_Presentation::from_xml(duplicate.as_bytes()).is_err());
+    assert!(CT_Presentation::from_xml(duplicate.as_bytes()).is_ok());
 
     for invalid_size in [
         r#"<p:notesSz cy="9144000"/>"#,
@@ -2265,6 +2266,22 @@ fn graphic_data_uri_dispatch_recognises_table_chart_smartart_and_ole() {
             CT_GraphicFrame::from_xml(&frame.to_xml().unwrap()).unwrap()
         );
     }
+}
+
+#[test]
+fn shape_ids_ignore_foreign_non_visual_elements() {
+    let xml = br#"<p:spTree xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:extension"><p:nvGrpSpPr><p:cNvPr id="1"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:grpSp><p:nvGrpSpPr><x:cNvPr id="99"/><p:cNvPr id="4"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:graphicFrame><p:nvGraphicFramePr><x:cNvPr id="98"/><p:cNvPr id="6"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="1" y="2"/><a:ext cx="3" cy="4"/></p:xfrm><a:graphic><a:graphicData uri="urn:producer"><x:payload/></a:graphicData></a:graphic></p:graphicFrame></p:grpSp></p:spTree>"#;
+    let tree = CT_ShapeTree::from_xml(xml).unwrap();
+    let ShapeTreeChild::GroupShape(group) = &tree.children[0] else {
+        panic!("expected group shape");
+    };
+
+    assert_eq!(tree.children[0].non_visual_id(), Some(4));
+    assert_eq!(group.children[0].non_visual_id(), Some(6));
+    let mut allocator = ShapeIdAllocator::scan(&tree);
+    assert_eq!(allocator.allocate(), 2);
+    assert_eq!(allocator.allocate(), 3);
+    assert_eq!(allocator.allocate(), 5);
 }
 
 #[test]

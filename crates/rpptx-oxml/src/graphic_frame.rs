@@ -11,8 +11,8 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::namespace::{
-    FIXED_SHAPE_TREE_PREFIXES, NamespaceBindings, P_NS, all_attributes, root_attributes,
-    self_contained_attributes,
+    FIXED_SHAPE_TREE_PREFIXES, NamespaceBindings, P_NS, all_attributes, non_visual_drawing_id,
+    root_attributes, self_contained_attributes,
 };
 use crate::picture::CT_Picture;
 
@@ -77,6 +77,7 @@ pub struct CT_GraphicFrame {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RawElementShell {
+    non_visual_id: Option<u32>,
     attributes: RawAttributes,
     children: Vec<Vec<u8>>,
 }
@@ -88,6 +89,10 @@ struct ParsedGraphic {
 }
 
 impl CT_GraphicFrame {
+    pub(crate) fn non_visual_id(&self) -> Option<u32> {
+        self.non_visual_properties.non_visual_id
+    }
+
     /// Parses a complete `p:graphicFrame` with any PresentationML prefix.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         Self::from_fragment(xml, &[])
@@ -279,7 +284,7 @@ fn capture_frame_child(
                     "p:nvGraphicFramePr must be the first modelled graphic-frame child",
                 ));
             }
-            *non_visual = Some(RawElementShell::from_fragment(&raw)?);
+            *non_visual = Some(RawElementShell::from_fragment(&raw, namespaces)?);
             *boundary = 1;
         }
         (Some(P_NS), b"xfrm") => {
@@ -554,25 +559,48 @@ fn parse_ole_preview(raw: &[u8], inherited: &[(String, String)]) -> Result<Optio
 }
 
 impl RawElementShell {
-    fn from_fragment(xml: &[u8]) -> Result<Self> {
+    fn from_fragment(xml: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
         let mut reader = Reader::from_reader(xml);
         let mut buffer = Vec::new();
         loop {
             match reader.read_event_into(&mut buffer)? {
                 Event::Start(start) => {
+                    let namespaces = inherited.with_start(&start)?;
                     let attributes = root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?;
                     let mut children = Vec::new();
+                    let mut non_visual_id = None;
                     loop {
                         buffer.clear();
                         match reader.read_event_into(&mut buffer)? {
                             Event::Start(child) => {
-                                children.push(capture_element(&mut reader, &child)?);
+                                let child_namespaces = namespaces.with_start(&child)?;
+                                let is_drawing_properties = child_namespaces
+                                    .element_uri(child.name().as_ref())
+                                    == Some(P_NS)
+                                    && local_name(child.name().as_ref()) == b"cNvPr";
+                                let raw = capture_element(&mut reader, &child)?;
+                                if is_drawing_properties {
+                                    non_visual_id = non_visual_drawing_id(&raw);
+                                }
+                                children.push(raw);
                             }
-                            Event::Empty(child) => children.push(capture_empty_element(&child)?),
+                            Event::Empty(child) => {
+                                let child_namespaces = namespaces.with_start(&child)?;
+                                let is_drawing_properties = child_namespaces
+                                    .element_uri(child.name().as_ref())
+                                    == Some(P_NS)
+                                    && local_name(child.name().as_ref()) == b"cNvPr";
+                                let raw = capture_empty_element(&child)?;
+                                if is_drawing_properties {
+                                    non_visual_id = non_visual_drawing_id(&raw);
+                                }
+                                children.push(raw);
+                            }
                             Event::End(end)
                                 if local_name(end.name().as_ref()) == b"nvGraphicFramePr" =>
                             {
                                 return Ok(Self {
+                                    non_visual_id,
                                     attributes,
                                     children,
                                 });
@@ -592,6 +620,7 @@ impl RawElementShell {
                 }
                 Event::Empty(start) => {
                     return Ok(Self {
+                        non_visual_id: None,
                         attributes: root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?,
                         children: Vec::new(),
                     });

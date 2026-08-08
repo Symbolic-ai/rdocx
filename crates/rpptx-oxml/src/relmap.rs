@@ -99,7 +99,8 @@ pub fn rewrite_rel_ids(raw: &[u8], map: &HashMap<String, String>) -> Result<Vec<
             }
             Event::Text(text) => {
                 declaration_allowed = false;
-                if !text.as_ref().iter().all(|byte| byte.is_ascii_whitespace()) && depth == 0 {
+                let bytes: &[u8] = text.as_ref();
+                if !bytes.iter().all(|byte| byte.is_ascii_whitespace()) && depth == 0 {
                     return Err(invalid_xml("text is not allowed outside the root"));
                 }
             }
@@ -133,6 +134,66 @@ pub fn rewrite_rel_ids(raw: &[u8], map: &HashMap<String, String>) -> Result<Vec<
     }
 
     splice_replacements(raw, replacements)
+}
+
+/// Collects every attribute value in the office relationship namespace.
+pub fn relationship_ids(raw: &[u8]) -> Result<Vec<String>> {
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    let mut scopes = vec![NamespaceBindings::default()];
+    let mut ids = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let parent = scopes
+                    .last()
+                    .ok_or_else(|| invalid_xml("missing namespace scope"))?;
+                let scope = parent.with_start(&element)?;
+                collect_relationship_ids(&element, &scope, &mut ids)?;
+                scopes.push(scope);
+            }
+            Event::Empty(element) => {
+                let parent = scopes
+                    .last()
+                    .ok_or_else(|| invalid_xml("missing namespace scope"))?;
+                let scope = parent.with_start(&element)?;
+                collect_relationship_ids(&element, &scope, &mut ids)?;
+            }
+            Event::End(_) => {
+                if scopes.len() == 1 {
+                    return Err(invalid_xml("XML payload has an unmatched closing tag"));
+                }
+                scopes.pop();
+            }
+            Event::Eof => {
+                if scopes.len() != 1 {
+                    return Err(invalid_xml("XML payload ended before its root closed"));
+                }
+                return Ok(ids);
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn collect_relationship_ids(
+    element: &BytesStart<'_>,
+    scope: &NamespaceBindings,
+    ids: &mut Vec<String>,
+) -> Result<()> {
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        if scope.attribute_uri(attribute.key.as_ref()) == Some(R_NS) {
+            let value = attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
+                .into_owned();
+            if !value.is_empty() {
+                ids.push(value);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn collect_replacements(

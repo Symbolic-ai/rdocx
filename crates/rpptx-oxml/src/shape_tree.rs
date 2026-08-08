@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::Write;
 
 use oxml_core::OxmlError;
@@ -14,8 +15,8 @@ use quick_xml::{Reader, Writer};
 use crate::connector::CT_ConnectionShape;
 use crate::graphic_frame::CT_GraphicFrame;
 use crate::namespace::{
-    FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, root_attributes,
-    self_contained_attributes,
+    FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, non_visual_drawing_id,
+    root_attributes, self_contained_attributes,
 };
 use crate::picture::CT_Picture;
 use crate::placeholder::{ApplicationProperties, CT_Placeholder, parse_application_properties};
@@ -37,6 +38,18 @@ pub enum ShapeTreeChild {
 }
 
 impl ShapeTreeChild {
+    /// Returns the child's `p:cNvPr/@id`, when the child owns one.
+    pub fn non_visual_id(&self) -> Option<u32> {
+        match self {
+            Self::Shape(shape) => shape.non_visual_id(),
+            Self::Picture(picture) => picture.non_visual_id(),
+            Self::GraphicFrame(frame) => frame.non_visual_id(),
+            Self::GroupShape(group) => group.non_visual_id(),
+            Self::Connector(connector) => connector.non_visual_id(),
+            Self::AlternateContent(_) => None,
+        }
+    }
+
     fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         match self {
             Self::Shape(shape) => shape.write_xml_internal(writer, false)?,
@@ -47,6 +60,52 @@ impl ShapeTreeChild {
             Self::GroupShape(group) => group.write_xml_internal(writer, false)?,
         }
         Ok(())
+    }
+}
+
+/// Allocates shape ids that are unused across a complete shape tree.
+#[derive(Clone, Debug)]
+pub struct ShapeIdAllocator {
+    occupied: HashSet<u32>,
+    next: u32,
+}
+
+impl ShapeIdAllocator {
+    /// Scans direct children, nested groups, and selected fallback children.
+    pub fn scan(tree: &CT_ShapeTree) -> Self {
+        let mut occupied = HashSet::new();
+        collect_non_visual_ids(&tree.children, &mut occupied);
+        Self { occupied, next: 2 }
+    }
+
+    /// Returns and reserves the next free id, starting at 2.
+    pub fn allocate(&mut self) -> u32 {
+        loop {
+            let candidate = self.next;
+            self.next = self.next.checked_add(1).unwrap_or(2);
+            if self.occupied.insert(candidate) {
+                return candidate;
+            }
+        }
+    }
+}
+
+fn collect_non_visual_ids(children: &[ShapeTreeChild], occupied: &mut HashSet<u32>) {
+    for child in children {
+        if let Some(id) = child.non_visual_id() {
+            occupied.insert(id);
+        }
+        match child {
+            ShapeTreeChild::GroupShape(group) => {
+                collect_non_visual_ids(&group.children, occupied);
+            }
+            ShapeTreeChild::AlternateContent(alternate) => {
+                if let Some(fallback) = alternate.selected_fallback() {
+                    collect_non_visual_ids(fallback, occupied);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -397,6 +456,7 @@ struct GroupProperties {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NonVisualGroupProperties {
+    non_visual_id: Option<u32>,
     raw_attributes: RawAttributes,
     raw_children: Vec<Vec<u8>>,
 }
@@ -432,6 +492,37 @@ struct ParsedGroup {
 }
 
 impl CT_Shape {
+    /// Creates a minimal placeholder shape whose position inherits from layout.
+    pub fn new_placeholder(id: u32, placeholder: CT_Placeholder) -> Result<Self> {
+        let text_body = CT_TextBody::from_xml(
+            br#"<a:txBody xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:bodyPr/><a:lstStyle/><a:p/></a:txBody>"#,
+        )
+        .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+        Ok(Self {
+            placeholder: Some(placeholder),
+            shape_properties: Box::new(CT_ShapeProperties::default()),
+            text_body: Some(text_body),
+            raw: Box::new(ShapeRaw {
+                raw_attributes: Vec::new(),
+                non_visual_attributes: Vec::new(),
+                non_visual_children: OrderedRawChildren::default(),
+                non_visual_drawing_properties: format!(
+                    r#"<p:cNvPr id="{id}" name="Placeholder {id}"/>"#
+                )
+                .into_bytes(),
+                non_visual_shape_properties: b"<p:cNvSpPr/>".to_vec(),
+                application_properties_attributes: Vec::new(),
+                application_properties_raw_children: OrderedRawChildren::default(),
+                style: None,
+                raw_children: OrderedRawChildren::default(),
+            }),
+        })
+    }
+
+    pub(crate) fn non_visual_id(&self) -> Option<u32> {
+        non_visual_drawing_id(&self.raw.non_visual_drawing_properties)
+    }
+
     /// Parses a complete `p:sp` with any prefix bound to PresentationML.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         Self::from_fragment(xml, &[])
@@ -839,6 +930,34 @@ fn capture_non_visual_shape_child(
 }
 
 impl CT_ShapeTree {
+    /// Creates the required empty slide shape tree with root id 1.
+    pub fn new() -> Self {
+        Self {
+            non_visual_group_properties: NonVisualGroupProperties {
+                non_visual_id: Some(1),
+                raw_attributes: Vec::new(),
+                raw_children: vec![
+                    b"<p:cNvPr id=\"1\" name=\"\"/>".to_vec(),
+                    b"<p:cNvGrpSpPr/>".to_vec(),
+                    b"<p:nvPr/>".to_vec(),
+                ],
+            },
+            group_properties: GroupProperties {
+                transform: None,
+                raw_attributes: Vec::new(),
+                raw_children: OrderedRawChildren::default(),
+            },
+            children: Vec::new(),
+            raw_attributes: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+        }
+    }
+
+    /// Returns the shape tree's own `p:cNvPr/@id`, when present.
+    pub fn non_visual_id(&self) -> Option<u32> {
+        self.non_visual_group_properties.non_visual_id
+    }
+
     /// Parses a complete `p:spTree` with any prefix bound to PresentationML.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         Self::from_fragment(xml, &[])
@@ -881,7 +1000,17 @@ impl CT_ShapeTree {
     }
 }
 
+impl Default for CT_ShapeTree {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CT_GroupShape {
+    pub(crate) fn non_visual_id(&self) -> Option<u32> {
+        self.non_visual_group_properties.non_visual_id
+    }
+
     /// Parses a complete recursive `p:grpSp` element.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         let parsed = parse_group(xml, &[], GroupKind::GroupShape)?;
@@ -1053,7 +1182,7 @@ fn capture_group_child(
     }
     if *state == 0 {
         if uri == Some(P_NS) && name == b"nvGrpSpPr" {
-            *non_visual = Some(NonVisualGroupProperties::from_fragment(&raw)?);
+            *non_visual = Some(NonVisualGroupProperties::from_fragment(&raw, namespaces)?);
             *state = 1;
             return Ok(());
         }
@@ -1219,25 +1348,46 @@ fn write_group<W: Write>(
 }
 
 impl NonVisualGroupProperties {
-    fn from_fragment(xml: &[u8]) -> Result<Self> {
+    fn from_fragment(xml: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
         let mut reader = Reader::from_reader(xml);
         let mut buffer = Vec::new();
         loop {
             match reader.read_event_into(&mut buffer)? {
                 Event::Start(start) => {
+                    let namespaces = inherited.with_start(&start)?;
                     let raw_attributes = root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?;
                     let mut raw_children = Vec::new();
+                    let mut non_visual_id = None;
                     loop {
                         buffer.clear();
                         match reader.read_event_into(&mut buffer)? {
                             Event::Start(child) => {
-                                raw_children.push(capture_element(&mut reader, &child)?);
+                                let child_namespaces = namespaces.with_start(&child)?;
+                                let is_drawing_properties = child_namespaces
+                                    .element_uri(child.name().as_ref())
+                                    == Some(P_NS)
+                                    && local_name(child.name().as_ref()) == b"cNvPr";
+                                let raw = capture_element(&mut reader, &child)?;
+                                if is_drawing_properties {
+                                    non_visual_id = non_visual_drawing_id(&raw);
+                                }
+                                raw_children.push(raw);
                             }
                             Event::Empty(child) => {
-                                raw_children.push(capture_empty_element(&child)?);
+                                let child_namespaces = namespaces.with_start(&child)?;
+                                let is_drawing_properties = child_namespaces
+                                    .element_uri(child.name().as_ref())
+                                    == Some(P_NS)
+                                    && local_name(child.name().as_ref()) == b"cNvPr";
+                                let raw = capture_empty_element(&child)?;
+                                if is_drawing_properties {
+                                    non_visual_id = non_visual_drawing_id(&raw);
+                                }
+                                raw_children.push(raw);
                             }
                             Event::End(end) if local_name(end.name().as_ref()) == b"nvGrpSpPr" => {
                                 return Ok(Self {
+                                    non_visual_id,
                                     raw_attributes,
                                     raw_children,
                                 });
@@ -1253,6 +1403,7 @@ impl NonVisualGroupProperties {
                 }
                 Event::Empty(start) => {
                     return Ok(Self {
+                        non_visual_id: None,
                         raw_attributes: root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?,
                         raw_children: Vec::new(),
                     });
@@ -1445,7 +1596,53 @@ fn unexpected(element: &BytesStart<'_>) -> OxmlError {
 mod style_tests {
     use oxml_drawing::style_ref::FontCollectionIndex;
 
-    use super::CT_Shape;
+    use super::{CT_Shape, CT_ShapeTree, ShapeIdAllocator};
+
+    const ALLOCATOR_TREE: &[u8] = br#"<p:spTree xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><p:nvGrpSpPr><p:cNvPr id="1" name="Root"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="Root shape"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:grpSp><p:nvGrpSpPr><p:cNvPr id="4" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:pic><p:nvPicPr><p:cNvPr id="6" name="Nested picture"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill/><p:spPr/></p:pic></p:grpSp><mc:AlternateContent><mc:Fallback><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="8" name="Fallback connector"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp></mc:Fallback></mc:AlternateContent></p:spTree>"#;
+
+    #[test]
+    fn shape_id_allocator_scans_nested_groups_and_alternate_content() {
+        let tree = CT_ShapeTree::from_xml(ALLOCATOR_TREE).unwrap();
+        let ids = tree
+            .children
+            .iter()
+            .filter_map(|child| child.non_visual_id())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, [2, 4]);
+
+        let mut allocator = ShapeIdAllocator::scan(&tree);
+        assert_eq!(allocator.allocate(), 3);
+        assert_eq!(allocator.allocate(), 5);
+        assert_eq!(allocator.allocate(), 7);
+        assert_eq!(allocator.allocate(), 9);
+    }
+
+    #[test]
+    fn shape_id_allocator_starts_at_two_and_skips_sparse_ids() {
+        let xml = br#"<p:spTree xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:nvGrpSpPr><p:cNvPr id="1" name="Root"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="3" name="First"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="Duplicate"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp></p:spTree>"#;
+        let tree = CT_ShapeTree::from_xml(xml).unwrap();
+        let mut allocator = ShapeIdAllocator::scan(&tree);
+
+        assert_eq!(allocator.allocate(), 2);
+        assert_eq!(allocator.allocate(), 4);
+        assert_eq!(allocator.allocate(), 5);
+    }
+
+    #[test]
+    fn typed_non_visual_ids_preserve_original_shape_xml() {
+        let xml = br#"<q:sp xmlns:q="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:x="urn:test"><q:nvSpPr><q:cNvPr id="7" name="Shape"><x:producer-data x:value="kept"/></q:cNvPr><q:cNvSpPr/><q:nvPr/></q:nvSpPr><q:spPr/></q:sp>"#;
+        let shape = CT_Shape::from_xml(xml).unwrap();
+
+        assert_eq!(shape.non_visual_id(), Some(7));
+        let written = shape.to_xml().unwrap();
+        let text = String::from_utf8(written.clone()).unwrap();
+        assert!(text.starts_with("<p:sp "));
+        assert!(text.contains("<q:cNvPr id=\"7\" name=\"Shape\">"));
+        assert!(text.contains("<x:producer-data x:value=\"kept\"/>"));
+        assert!(text.find("<q:cNvPr").unwrap() < text.find("<q:cNvSpPr").unwrap());
+        assert!(text.find("<q:cNvSpPr").unwrap() < text.find("<p:nvPr").unwrap());
+        assert_eq!(CT_Shape::from_xml(&written).unwrap(), shape);
+    }
 
     #[test]
     fn ordinary_shape_style_round_trips_in_schema_order() {

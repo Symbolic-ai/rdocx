@@ -115,6 +115,16 @@ pub struct CT_Placeholder {
 }
 
 impl CT_Placeholder {
+    /// Creates a minimal placeholder with its inheritance identity.
+    pub fn new(ph_type: Option<PhType>, idx: Option<u32>) -> Self {
+        Self {
+            ph_type,
+            idx,
+            raw_attributes: Vec::new(),
+            raw_children: Vec::new(),
+        }
+    }
+
     /// Parses a complete placeholder with any prefix bound to PresentationML.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         Self::from_fragment(xml, &[])
