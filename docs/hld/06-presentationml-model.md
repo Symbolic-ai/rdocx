@@ -76,6 +76,53 @@ properties. Adjustment mutation supports finite values on preset geometry.
 Unsupported shape kinds and unsupported geometry return concrete facade
 errors. Indexed access remains total and returns `Option`.
 
+`SlideMut` also exposes the direct shape construction surface:
+
+```rust
+pub enum ConnectorType { Straight, Elbow, Curve }
+
+pub fn add_textbox(
+    &mut self, left: Emu, top: Emu, width: Emu, height: Emu,
+) -> Result<ShapeMut<'_>>;
+pub fn add_shape(
+    &mut self, preset: &str,
+    left: Emu, top: Emu, width: Emu, height: Emu,
+) -> Result<ShapeMut<'_>>;
+pub fn add_connector(
+    &mut self, connector: ConnectorType,
+    begin_x: Emu, begin_y: Emu, end_x: Emu, end_y: Emu,
+) -> Result<ShapeMut<'_>>;
+pub fn add_group_shape(&mut self) -> Result<ShapeMut<'_>>;
+```
+
+An ordinary shape has canonical non-visual properties, a typed transform,
+preset geometry, and a minimal text body. `add_shape` keeps the string API but
+accepts only names in the generated table of all 187 ECMA preset shapes. An
+unknown name returns a contextual error without changing the slide. A textbox
+uses `rect`, sets `txBox="1"`, has `a:noFill`, and contains `a:bodyPr`,
+`a:lstStyle`, and one required paragraph. An empty group contains the required
+`p:nvGrpSpPr` and `p:grpSpPr` shells, with no invented transform or members.
+
+A constructed connector is free-standing and uses `line`, `bentConnector3`,
+or `curvedConnector3` for `Straight`, `Elbow`, or `Curve`. Its transform offset
+is the componentwise minimum endpoint, its extents are the absolute endpoint
+spans, and its horizontal and vertical flips retain endpoint direction. A
+horizontal or vertical connector may have one zero extent. A span that cannot
+fit in the signed EMU representation returns a contextual error.
+
+Every constructor rescans the tree immediately before allocation, derives a
+deterministic producer name from the allocated id, and appends at top z-order.
+The append operation shifts raw-child boundaries at the old trailing position
+before adding the typed member. Preserved schema-final content such as
+`p:extLst` therefore remains after the new member, while all raw subtrees retain
+their bytes and relative positions.
+
+The ignored integration gate
+`all_shape_constructors_open_in_powerpoint_without_repair` builds all four
+forms in a tree with preserved schema-final extension content. The generated
+deck opens without repair in pinned Microsoft PowerPoint 16.104, bundle
+16.104.25121423.
+
 `to_bytes()` clones the source package, serialises the owned presentation,
 slide, and notes roots back to their relationship-resolved part names, and uses
 the deterministic OPC writer. Typed edits retain unmodelled attributes and
@@ -211,9 +258,13 @@ and children remain in their ordered schema slots and round-trip without being
 interpreted.
 
 **`p:cNvPr/@id` must be unique within one `spTree`**, including inside nested
-groups and inside `mc:AlternateContent` fallbacks. A `ShapeIdAllocator` scans
-the whole tree and hands out ids from 2, because the tree's own `p:nvGrpSpPr`
-takes 1.
+groups, preserved raw members, and every branch of `mc:AlternateContent`. A
+`ShapeIdAllocator` retains typed recursive scanning and also performs a
+namespace-resolved scan of the complete preserved tree. PresentationML aliases
+are accepted, foreign `cNvPr` elements are ignored, and non-selected
+compatibility choices still reserve their ids. Allocation starts at 2 because
+the tree's own `p:nvGrpSpPr` takes 1, fills unused gaps, and reserves each
+result.
 
 ## Placeholders
 

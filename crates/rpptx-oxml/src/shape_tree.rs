@@ -3,6 +3,8 @@ use std::io::Write;
 
 use oxml_core::OxmlError;
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
+use oxml_drawing::fill::Fill;
+use oxml_drawing::geometry::CT_PresetGeometry2D;
 use oxml_drawing::namespace::A_NS;
 use oxml_drawing::order::OrderedRawChildren;
 use oxml_drawing::shape_props::CT_ShapeProperties;
@@ -10,13 +12,15 @@ use oxml_drawing::style_ref::{FontReference, StyleMatrixReference, StyleReferenc
 use oxml_drawing::text::CT_TextBody;
 use oxml_drawing::xfrm::CT_Transform2D;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
+use quick_xml::name::{Namespace, ResolveResult};
+use quick_xml::reader::NsReader;
 use quick_xml::{Reader, Writer};
 
 use crate::connector::CT_ConnectionShape;
 use crate::graphic_frame::CT_GraphicFrame;
 use crate::namespace::{
-    FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, non_visual_drawing_id,
-    root_attributes, self_contained_attributes, set_non_visual_drawing_name,
+    FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, all_attributes,
+    non_visual_drawing_id, root_attributes, self_contained_attributes, set_non_visual_drawing_name,
 };
 use crate::picture::CT_Picture;
 use crate::placeholder::{ApplicationProperties, CT_Placeholder, parse_application_properties};
@@ -71,10 +75,13 @@ pub struct ShapeIdAllocator {
 }
 
 impl ShapeIdAllocator {
-    /// Scans direct children, nested groups, and selected fallback children.
+    /// Scans typed and preserved shape-tree content for occupied ids.
     pub fn scan(tree: &CT_ShapeTree) -> Self {
         let mut occupied = HashSet::new();
         collect_non_visual_ids(&tree.children, &mut occupied);
+        if let Ok(xml) = tree.to_xml() {
+            collect_preserved_non_visual_ids(&xml, &mut occupied);
+        }
         Self { occupied, next: 2 }
     }
 
@@ -87,6 +94,38 @@ impl ShapeIdAllocator {
                 return candidate;
             }
         }
+    }
+}
+
+fn collect_preserved_non_visual_ids(xml: &[u8], occupied: &mut HashSet<u32>) {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_resolved_event_into(&mut buffer) {
+            Ok((namespace, Event::Start(element) | Event::Empty(element)))
+                if is_presentationml_namespace(&namespace)
+                    && local_name(element.name().as_ref()) == b"cNvPr" =>
+            {
+                if let Some(id) = all_attributes(&element)
+                    .ok()
+                    .and_then(|attributes| attributes.into_iter().find(|(name, _)| name == "id"))
+                    .and_then(|(_, value)| value.parse().ok())
+                {
+                    occupied.insert(id);
+                }
+            }
+            Ok((_, Event::Eof)) | Err(_) => return,
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn is_presentationml_namespace(namespace: &ResolveResult<'_>) -> bool {
+    match namespace {
+        ResolveResult::Bound(Namespace(uri)) => *uri == P_NS.as_bytes(),
+        ResolveResult::Unknown(prefix) => prefix == b"p",
+        ResolveResult::Unbound => false,
     }
 }
 
@@ -493,6 +532,67 @@ struct ParsedGroup {
 }
 
 impl CT_Shape {
+    /// Creates an ordinary preset shape with a transform and minimal text body.
+    pub fn new_preset(
+        id: u32,
+        name: &str,
+        preset: &str,
+        transform: CT_Transform2D,
+    ) -> Result<Self> {
+        Self::new_with_shell(id, name, preset, transform, false)
+    }
+
+    /// Creates a textbox with a rectangular no-fill shell and required paragraph.
+    pub fn new_textbox(id: u32, name: &str, transform: CT_Transform2D) -> Result<Self> {
+        Self::new_with_shell(id, name, "rect", transform, true)
+    }
+
+    fn new_with_shell(
+        id: u32,
+        name: &str,
+        preset: &str,
+        transform: CT_Transform2D,
+        textbox: bool,
+    ) -> Result<Self> {
+        let text_body = CT_TextBody::from_xml(
+            br#"<a:txBody xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:bodyPr/><a:lstStyle/><a:p/></a:txBody>"#,
+        )
+        .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+        let fill = textbox
+            .then(|| Fill::from_xml(br#"<a:noFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>"#))
+            .transpose()
+            .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+        let mut shape_properties = CT_ShapeProperties::default();
+        shape_properties.transform = Some(transform);
+        shape_properties.preset_geometry = Some(
+            CT_PresetGeometry2D::new(preset)
+                .map_err(|error| OxmlError::InvalidValue(error.to_string()))?,
+        );
+        shape_properties.fill = fill;
+        let mut shape = Self {
+            placeholder: None,
+            shape_properties: Box::new(shape_properties),
+            text_body: Some(text_body),
+            raw: Box::new(ShapeRaw {
+                raw_attributes: Vec::new(),
+                non_visual_attributes: Vec::new(),
+                non_visual_children: OrderedRawChildren::default(),
+                non_visual_drawing_properties: format!(r#"<p:cNvPr id="{id}"/>"#).into_bytes(),
+                non_visual_shape_properties: if textbox {
+                    br#"<p:cNvSpPr txBox="1"/>"#.to_vec()
+                } else {
+                    b"<p:cNvSpPr/>".to_vec()
+                },
+                application_properties_attributes: Vec::new(),
+                application_properties_raw_children: OrderedRawChildren::default(),
+                style: None,
+                raw_children: OrderedRawChildren::default(),
+            }),
+        };
+        shape.set_name(name)?;
+        Ok(shape)
+    }
+
     /// Creates a minimal placeholder shape whose position inherits from layout.
     pub fn new_placeholder(id: u32, placeholder: CT_Placeholder) -> Result<Self> {
         let text_body = CT_TextBody::from_xml(
@@ -965,6 +1065,15 @@ impl CT_ShapeTree {
         self.non_visual_group_properties.non_visual_id
     }
 
+    /// Appends one member before preserved schema-final shape-tree content.
+    pub fn append_child(&mut self, child: ShapeTreeChild) -> &mut ShapeTreeChild {
+        self.raw_children.shift_boundaries_from(self.children.len());
+        self.children.push(child);
+        self.children
+            .last_mut()
+            .expect("shape-tree child was appended")
+    }
+
     /// Parses a complete `p:spTree` with any prefix bound to PresentationML.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         Self::from_fragment(xml, &[])
@@ -1014,6 +1123,34 @@ impl Default for CT_ShapeTree {
 }
 
 impl CT_GroupShape {
+    /// Creates an empty group with the required non-visual and property shells.
+    pub fn new_empty(id: u32, name: &str) -> Self {
+        let mut group = Self {
+            children: Vec::new(),
+            non_visual_group_properties: NonVisualGroupProperties {
+                non_visual_id: Some(id),
+                drawing_properties_index: Some(0),
+                raw_attributes: Vec::new(),
+                raw_children: vec![
+                    format!(r#"<p:cNvPr id="{id}"/>"#).into_bytes(),
+                    b"<p:cNvGrpSpPr/>".to_vec(),
+                    b"<p:nvPr/>".to_vec(),
+                ],
+            },
+            group_properties: GroupProperties {
+                transform: None,
+                raw_attributes: Vec::new(),
+                raw_children: OrderedRawChildren::default(),
+            },
+            raw_attributes: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+        };
+        group
+            .set_name(name)
+            .expect("new group always contains p:cNvPr");
+        group
+    }
+
     pub(crate) fn non_visual_id(&self) -> Option<u32> {
         self.non_visual_group_properties.non_visual_id
     }
@@ -1630,11 +1767,55 @@ fn unexpected(element: &BytesStart<'_>) -> OxmlError {
 
 #[cfg(test)]
 mod style_tests {
+    use oxml_core::units::Emu;
     use oxml_drawing::style_ref::FontCollectionIndex;
+    use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
 
     use super::{CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator};
 
     const ALLOCATOR_TREE: &[u8] = br#"<p:spTree xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><p:nvGrpSpPr><p:cNvPr id="1" name="Root"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="Root shape"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:grpSp><p:nvGrpSpPr><p:cNvPr id="4" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:pic><p:nvPicPr><p:cNvPr id="6" name="Nested picture"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill/><p:spPr/></p:pic></p:grpSp><mc:AlternateContent><mc:Fallback><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="8" name="Fallback connector"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp></mc:Fallback></mc:AlternateContent></p:spTree>"#;
+
+    #[test]
+    fn ordinary_shape_and_textbox_constructors_emit_canonical_shells() {
+        let mut transform = CT_Transform2D::default();
+        transform.offset = Some(CT_Point2D {
+            x: Emu(10),
+            y: Emu(20),
+        });
+        transform.extent = Some(CT_PositiveSize2D {
+            cx: Emu(30),
+            cy: Emu(40),
+        });
+        let shape = CT_Shape::new_preset(2, "Shape & 2", "triangle", transform.clone()).unwrap();
+        let textbox = CT_Shape::new_textbox(3, "TextBox 3", transform).unwrap();
+
+        let shape_xml = String::from_utf8(shape.to_xml().unwrap()).unwrap();
+        assert!(shape_xml.contains("<p:cNvPr id=\"2\" name=\"Shape &amp; 2\"/>"));
+        assert!(shape_xml.contains("<p:cNvSpPr/>"));
+        assert!(shape_xml.contains("<a:prstGeom prst=\"triangle\"><a:avLst/></a:prstGeom>"));
+        assert!(shape_xml.contains("<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>"));
+        assert!(shape_xml.find("<p:nvSpPr").unwrap() < shape_xml.find("<p:spPr").unwrap());
+        assert!(shape_xml.find("<p:spPr").unwrap() < shape_xml.find("<p:txBody").unwrap());
+
+        let textbox_xml = String::from_utf8(textbox.to_xml().unwrap()).unwrap();
+        assert!(textbox_xml.contains("<p:cNvSpPr txBox=\"1\"/>"));
+        assert!(textbox_xml.contains("<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>"));
+        assert!(textbox_xml.contains("<a:noFill/>"));
+        assert!(textbox_xml.contains("<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>"));
+        assert_eq!(CT_Shape::from_xml(textbox_xml.as_bytes()).unwrap(), textbox);
+    }
+
+    #[test]
+    fn empty_group_constructor_has_required_children() {
+        let group = CT_GroupShape::new_empty(9, "Group 9");
+        let xml = String::from_utf8(group.to_xml().unwrap()).unwrap();
+        assert!(xml.contains("<p:nvGrpSpPr><p:cNvPr id=\"9\" name=\"Group 9\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>"));
+        assert!(xml.contains("<p:grpSpPr/>"));
+        assert!(xml.find("<p:nvGrpSpPr").unwrap() < xml.find("<p:grpSpPr").unwrap());
+        assert!(group.children.is_empty());
+        assert!(group.group_transform().is_none());
+        assert_eq!(CT_GroupShape::from_xml(xml.as_bytes()).unwrap(), group);
+    }
 
     #[test]
     fn shape_id_allocator_scans_nested_groups_and_alternate_content() {
@@ -1660,6 +1841,16 @@ mod style_tests {
         let mut allocator = ShapeIdAllocator::scan(&tree);
 
         assert_eq!(allocator.allocate(), 2);
+        assert_eq!(allocator.allocate(), 4);
+        assert_eq!(allocator.allocate(), 5);
+    }
+
+    #[test]
+    fn shape_id_allocator_scans_raw_members_and_non_selected_choices() {
+        let xml = br#"<p:spTree xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><p:nvGrpSpPr><p:cNvPr id="1"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><x:producer xmlns:x="urn:producer" xmlns:q="http://schemas.openxmlformats.org/presentationml/2006/main"><q:cNvPr id="2"/></x:producer><mc:AlternateContent><mc:Choice Requires="p14"><r:sp xmlns:r="http://schemas.openxmlformats.org/presentationml/2006/main"><r:nvSpPr><r:cNvPr id="3"/><r:cNvSpPr/><r:nvPr/></r:nvSpPr><r:spPr/></r:sp></mc:Choice><mc:Fallback/></mc:AlternateContent></p:spTree>"#;
+        let tree = CT_ShapeTree::from_xml(xml).unwrap();
+        let mut allocator = ShapeIdAllocator::scan(&tree);
+
         assert_eq!(allocator.allocate(), 4);
         assert_eq!(allocator.allocate(), 5);
     }

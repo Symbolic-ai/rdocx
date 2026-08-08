@@ -1,6 +1,6 @@
 # F-110, Shape constructors
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S27
 **Size**: M
 **Depends on**: F-109
@@ -126,16 +126,17 @@ PresentationML crates and assets.
 
 ## Implementation checklist
 
-- [ ] Add the concrete connector enum and four `SlideMut` methods.
-- [ ] Add narrow ordinary-shape, textbox, connector, and group constructors in
+- [x] Add the concrete connector enum and four `SlideMut` methods.
+- [x] Add narrow ordinary-shape, textbox, connector, and group constructors in
   existing OOXML files.
-- [ ] Allocate a tree-wide id immediately before each top z-order append.
-- [ ] Normalize connector transforms without rejecting a zero extent.
-- [ ] Add structural, direction, allocation, validation, and reopen tests.
-- [ ] Run and record the pinned native PowerPoint acceptance gate.
-- [ ] Update the listed HLD file to the current constructor contract.
+- [x] Allocate a tree-wide id immediately before each top z-order append.
+- [x] Normalize connector transforms without rejecting a zero extent.
+- [x] Add structural, direction, allocation, validation, and reopen tests.
+- [x] Run and record the pinned native PowerPoint acceptance gate.
+- [x] Update the listed HLD file to the current constructor contract.
 
 ## Open questions
 
-None. The approved scope creates an empty group, free-standing connectors,
-raw preset names, and deterministic names derived from allocated ids.
+None. The completed scope creates an empty group, free-standing connectors,
+validated string preset names, and deterministic names derived from allocated
+ids.

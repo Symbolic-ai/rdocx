@@ -9,7 +9,9 @@ use oxml_drawing::color::ColorMap;
 use oxml_drawing::theme::CT_OfficeStyleSheet;
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
-use rpptx::{Angle, CT_LineProperties, Emu, Error, Fill, Presentation, ShapeKind, ShapeRef};
+use rpptx::{
+    Angle, CT_LineProperties, ConnectorType, Emu, Error, Fill, Presentation, ShapeKind, ShapeRef,
+};
 use rpptx_layout::{
     FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,
 };
@@ -67,6 +69,239 @@ backgrounds	distinct solid, gradient, picture, and texture visuals
 placeholder-layout-color	exact cyan on black, RGBA #00FFFF
 bug58144-headers-footers-2007	Slide footer once
 "#;
+
+#[test]
+fn four_appended_shapes_have_unique_ids_and_reopen() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let original_count = presentation.slide(0).unwrap().shapes().len();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    assert_eq!(
+        slide
+            .add_textbox(Emu(10), Emu(20), Emu(300), Emu(400))
+            .unwrap()
+            .kind(),
+        ShapeKind::Shape
+    );
+    assert_eq!(
+        slide
+            .add_shape("triangle", Emu(30), Emu(40), Emu(500), Emu(600))
+            .unwrap()
+            .kind(),
+        ShapeKind::Shape
+    );
+    assert_eq!(
+        slide
+            .add_connector(ConnectorType::Elbow, Emu(700), Emu(800), Emu(100), Emu(200),)
+            .unwrap()
+            .kind(),
+        ShapeKind::Connector
+    );
+    assert_eq!(slide.add_group_shape().unwrap().kind(), ShapeKind::Group);
+
+    let bytes = presentation
+        .to_bytes()
+        .expect("serialize constructed shapes");
+    let reopened = Presentation::from_bytes(&bytes).expect("reopen constructed shapes");
+    assert!(reopened.validate().is_empty());
+    let reopened_slide = reopened.slide(0).unwrap();
+    let shapes = reopened_slide.shapes().collect::<Vec<_>>();
+    assert_eq!(shapes.len(), original_count + 4);
+    assert_eq!(shapes[original_count].kind(), ShapeKind::Shape);
+    assert_eq!(shapes[original_count + 1].kind(), ShapeKind::Shape);
+    assert_eq!(shapes[original_count + 2].kind(), ShapeKind::Connector);
+    assert_eq!(shapes[original_count + 3].kind(), ShapeKind::Group);
+
+    let package = open_opc(&bytes, "F-110 constructor reopen");
+    let slide = CT_Slide::from_xml(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+    let appended = &slide.common_slide_data.shape_tree.children[original_count..];
+    let ids = appended
+        .iter()
+        .map(|child| child.non_visual_id().unwrap())
+        .collect::<HashSet<_>>();
+    assert_eq!(ids.len(), 4);
+
+    let ShapeTreeChild::Shape(textbox) = &appended[0] else {
+        panic!("expected textbox shape");
+    };
+    let transform = textbox.shape_properties.transform.as_ref().unwrap();
+    assert_eq!(transform.offset.unwrap().x, Emu(10));
+    assert_eq!(transform.offset.unwrap().y, Emu(20));
+    assert_eq!(transform.extent.unwrap().cx, Emu(300));
+    assert_eq!(transform.extent.unwrap().cy, Emu(400));
+    assert_eq!(
+        textbox
+            .shape_properties
+            .preset_geometry
+            .as_ref()
+            .unwrap()
+            .preset,
+        "rect"
+    );
+    assert!(textbox.shape_properties.fill.is_some());
+    let text_body = textbox.text_body.as_ref().unwrap();
+    assert!(text_body.has_list_style());
+    assert_eq!(text_body.paragraph_count(), 1);
+    assert!(text_body.paragraphs()[0].runs.is_empty());
+    let textbox_xml = String::from_utf8(textbox.to_xml().unwrap()).unwrap();
+    assert!(textbox_xml.contains("<p:cNvSpPr txBox=\"1\"/>"));
+    assert!(textbox_xml.contains("<a:noFill/>"));
+
+    let ShapeTreeChild::Shape(shape) = &appended[1] else {
+        panic!("expected ordinary shape");
+    };
+    let transform = shape.shape_properties.transform.as_ref().unwrap();
+    assert_eq!(transform.offset.unwrap().x, Emu(30));
+    assert_eq!(transform.offset.unwrap().y, Emu(40));
+    assert_eq!(transform.extent.unwrap().cx, Emu(500));
+    assert_eq!(transform.extent.unwrap().cy, Emu(600));
+    assert_eq!(
+        shape
+            .shape_properties
+            .preset_geometry
+            .as_ref()
+            .unwrap()
+            .preset,
+        "triangle"
+    );
+    assert!(shape.shape_properties.fill.is_none());
+    let text_body = shape.text_body.as_ref().unwrap();
+    assert!(text_body.has_list_style());
+    assert_eq!(text_body.paragraph_count(), 1);
+    assert!(text_body.paragraphs()[0].runs.is_empty());
+
+    let ShapeTreeChild::Connector(connector) = &appended[2] else {
+        panic!("expected connector");
+    };
+    let transform = connector.shape_properties.transform.as_ref().unwrap();
+    assert_eq!(transform.offset.unwrap().x, Emu(100));
+    assert_eq!(transform.offset.unwrap().y, Emu(200));
+    assert_eq!(transform.extent.unwrap().cx, Emu(600));
+    assert_eq!(transform.extent.unwrap().cy, Emu(600));
+    assert!(transform.flip_horizontal);
+    assert!(transform.flip_vertical);
+    assert_eq!(
+        connector
+            .shape_properties
+            .preset_geometry
+            .as_ref()
+            .unwrap()
+            .preset,
+        "bentConnector3"
+    );
+
+    let ShapeTreeChild::GroupShape(group) = &appended[3] else {
+        panic!("expected empty group");
+    };
+    assert!(group.children.is_empty());
+    assert!(group.group_transform().is_none());
+    let group_xml = String::from_utf8(group.to_xml().unwrap()).unwrap();
+    assert!(group_xml.contains("<p:cNvGrpSpPr/>"));
+    assert!(group_xml.contains("<p:nvPr/>"));
+    assert!(group_xml.contains("<p:grpSpPr/>"));
+}
+
+#[test]
+fn unknown_preset_does_not_mutate_the_slide() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let before = presentation.to_bytes().unwrap();
+
+    let error = match presentation.slide_mut(0).unwrap().add_shape(
+        "not-a-preset",
+        Emu(1),
+        Emu(2),
+        Emu(3),
+        Emu(4),
+    ) {
+        Ok(_) => panic!("unknown preset was accepted"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error,
+        Error::InvalidShapeMutation {
+            operation: "add shape",
+            ref message,
+        } if message.contains("unknown DrawingML preset geometry: not-a-preset")
+    ));
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn every_constructor_appends_before_preserved_shape_tree_extensions() {
+    const EXTENSION: &str = r#"<p:extLst><p:ext uri="{F110-APPEND-ORDER}"><x:marker xmlns:x="urn:f110" value="kept"/></p:ext></p:extLst>"#;
+
+    for constructor in 0..4 {
+        let mut presentation = Presentation::from_bytes(&append_boundary_fixture_bytes()).unwrap();
+        let original_count = presentation.slide(0).unwrap().shapes().len();
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let expected_tag = match constructor {
+            0 => {
+                slide.add_textbox(Emu(1), Emu(2), Emu(3), Emu(4)).unwrap();
+                "<p:sp>"
+            }
+            1 => {
+                slide
+                    .add_shape("triangle", Emu(1), Emu(2), Emu(3), Emu(4))
+                    .unwrap();
+                "<p:sp>"
+            }
+            2 => {
+                slide
+                    .add_connector(ConnectorType::Straight, Emu(1), Emu(2), Emu(3), Emu(4))
+                    .unwrap();
+                "<p:cxnSp>"
+            }
+            3 => {
+                slide.add_group_shape().unwrap();
+                "<p:grpSp>"
+            }
+            _ => unreachable!(),
+        };
+
+        let bytes = presentation.to_bytes().unwrap();
+        let package = open_opc(&bytes, "F-110 append boundary");
+        let xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+        assert!(xml.contains(EXTENSION));
+        assert!(xml.rfind(expected_tag).unwrap() < xml.find(EXTENSION).unwrap());
+        let reparsed = CT_Slide::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(
+            reparsed.common_slide_data.shape_tree.children.len(),
+            original_count + 1
+        );
+    }
+}
+
+#[test]
+fn constructor_names_are_deterministic_from_allocated_ids() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let original_count = presentation.slide(0).unwrap().shapes().len();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    slide.add_textbox(Emu(1), Emu(2), Emu(3), Emu(4)).unwrap();
+    slide
+        .add_shape("rect", Emu(5), Emu(6), Emu(7), Emu(8))
+        .unwrap();
+    slide
+        .add_connector(ConnectorType::Straight, Emu(9), Emu(10), Emu(11), Emu(12))
+        .unwrap();
+    slide.add_group_shape().unwrap();
+
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "F-110 deterministic names");
+    let xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    let slide = CT_Slide::from_xml(xml.as_bytes()).unwrap();
+    let appended = &slide.common_slide_data.shape_tree.children[original_count..];
+    for (child, prefix) in appended
+        .iter()
+        .zip(["TextBox", "Shape", "Connector", "Group"])
+    {
+        let id = child.non_visual_id().unwrap();
+        assert!(xml.contains(&format!("name=\"{prefix} {id}\"")));
+    }
+}
 
 #[test]
 fn shape_mutation_setters_survive_save_and_reload() {
@@ -466,6 +701,72 @@ fn three_added_slides_open_in_powerpoint_without_repair() {
     let path = output.to_string_lossy();
     let script = format!(
         "with timeout of 120 seconds\ntell application \"Microsoft PowerPoint\"\nset previousStartUpDialog to start up dialog\ntry\nif (Version as text) is not \"{POWERPOINT_VERSION}\" then error \"PowerPoint version mismatch\"\nif (build as text) is not \"{POWERPOINT_APP_BUILD}\" then error \"PowerPoint build mismatch\"\nset start up dialog to false\nset deckPath to \"{path}\"\nopen my POSIX file deckPath\nset checkedDeck to presentation \"{name}\"\nif (count of slides of checkedDeck) is not 3 then error \"slide count mismatch\"\nclose checkedDeck saving no\nset start up dialog to previousStartUpDialog\non error errorMessage number errorNumber\ntry\nclose checkedDeck saving no\nend try\nset start up dialog to previousStartUpDialog\nerror errorMessage number errorNumber\nend try\nend tell\nend timeout\n"
+    );
+    let result = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .expect("launch PowerPoint acceptance script");
+    fs::remove_file(&output).expect("remove native acceptance deck");
+    assert!(
+        result.status.success(),
+        "PowerPoint no-repair open failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
+#[ignore = "requires pinned Microsoft PowerPoint"]
+fn all_shape_constructors_open_in_powerpoint_without_repair() {
+    assert_powerpoint_build();
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let mut package = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "F-110 native append boundary",
+    );
+    let original =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    let with_extension = original.replacen(
+        "</p:spTree>",
+        r#"<p:extLst><p:ext uri="{F110-NATIVE-APPEND-ORDER}"><x:marker xmlns:x="urn:f110" value="kept"/></p:ext></p:extLst></p:spTree>"#,
+        1,
+    );
+    assert_ne!(with_extension, original);
+    package.set_part("/ppt/slides/slide1.xml", with_extension.into_bytes());
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    slide
+        .add_textbox(Emu(914_400), Emu(914_400), Emu(2_000_000), Emu(900_000))
+        .unwrap();
+    slide
+        .add_shape(
+            "triangle",
+            Emu(3_000_000),
+            Emu(914_400),
+            Emu(2_000_000),
+            Emu(2_000_000),
+        )
+        .unwrap();
+    slide
+        .add_connector(
+            ConnectorType::Curve,
+            Emu(1_000_000),
+            Emu(4_000_000),
+            Emu(5_000_000),
+            Emu(3_000_000),
+        )
+        .unwrap();
+    slide.add_group_shape().unwrap();
+    let output = std::env::temp_dir().join(format!(
+        "rpptx-f110-shape-constructors-{}.pptx",
+        std::process::id()
+    ));
+    fs::write(&output, presentation.to_bytes().expect("serialize deck"))
+        .expect("write native acceptance deck");
+    let name = output.file_name().unwrap().to_string_lossy();
+    let path = output.to_string_lossy();
+    let script = format!(
+        "with timeout of 120 seconds\ntell application \"Microsoft PowerPoint\"\nset previousStartUpDialog to start up dialog\ntry\nif (Version as text) is not \"{POWERPOINT_VERSION}\" then error \"PowerPoint version mismatch\"\nif (build as text) is not \"{POWERPOINT_APP_BUILD}\" then error \"PowerPoint build mismatch\"\nset start up dialog to false\nset deckPath to \"{path}\"\nopen my POSIX file deckPath\nset checkedDeck to presentation \"{name}\"\nif (count of slides of checkedDeck) is not 1 then error \"slide count mismatch\"\nclose checkedDeck saving no\nset start up dialog to previousStartUpDialog\non error errorMessage number errorNumber\ntry\nclose checkedDeck saving no\nend try\nset start up dialog to previousStartUpDialog\nerror errorMessage number errorNumber\nend try\nend tell\nend timeout\n"
     );
     let result = Command::new("osascript")
         .args(["-e", &script])
@@ -1828,6 +2129,19 @@ fn mutation_fixture_bytes() -> Vec<u8> {
     );
     assert_ne!(complete, original);
     package.set_part(SLIDE_TWO_PART, complete.into_bytes());
+    package_bytes(package)
+}
+
+fn append_boundary_fixture_bytes() -> Vec<u8> {
+    let mut package = fixture_package();
+    let original = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let with_extension = original.replacen(
+        "</p:spTree>",
+        r#"<p:extLst><p:ext uri="{F110-APPEND-ORDER}"><x:marker xmlns:x="urn:f110" value="kept"/></p:ext></p:extLst></p:spTree>"#,
+        1,
+    );
+    assert_ne!(with_extension, original);
+    package.set_part(SLIDE_TWO_PART, with_extension.into_bytes());
     package_bytes(package)
 }
 

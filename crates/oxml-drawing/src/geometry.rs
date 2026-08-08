@@ -237,6 +237,7 @@ pub enum GeometryError {
     MissingPathDimensions,
     EmptyGuideFormula,
     EmptyGuideOperand,
+    UnknownPreset(String),
     UnknownGuideOperation(String),
     WrongArgumentCount {
         operation: String,
@@ -277,6 +278,9 @@ impl fmt::Display for GeometryError {
             }
             Self::EmptyGuideFormula => formatter.write_str("empty guide formula"),
             Self::EmptyGuideOperand => formatter.write_str("empty guide operand"),
+            Self::UnknownPreset(preset) => {
+                write!(formatter, "unknown DrawingML preset geometry: {preset}")
+            }
             Self::UnknownGuideOperation(operation) => {
                 write!(formatter, "unknown guide operation: {operation}")
             }
@@ -660,6 +664,22 @@ impl CT_CustomGeometry2D {
 }
 
 impl CT_PresetGeometry2D {
+    /// Creates preset geometry with a canonical empty adjustment list.
+    pub fn new(preset: &str) -> Result<Self, GeometryError> {
+        if preset_shape_definition(preset).is_none() {
+            return Err(GeometryError::UnknownPreset(preset.to_owned()));
+        }
+        Ok(Self {
+            preset: preset.to_owned(),
+            adjust_values: Some(GuideList {
+                guides: Vec::new(),
+                guide_raw_children: Vec::new(),
+                raw_children: OrderedRawChildren::default(),
+            }),
+            raw_children: OrderedRawChildren::default(),
+        })
+    }
+
     /// Parses one complete `a:prstGeom` element with any namespace prefix.
     pub fn from_xml(xml: &[u8]) -> Result<Self, GeometryError> {
         let mut reader = Reader::from_reader(xml);
@@ -1895,6 +1915,18 @@ fn flatten_arc(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preset_constructor_accepts_generated_names_and_rejects_unknown_names() {
+        assert_eq!(
+            CT_PresetGeometry2D::new("triangle").unwrap().preset,
+            "triangle"
+        );
+        assert_eq!(
+            CT_PresetGeometry2D::new("not-a-preset").unwrap_err(),
+            GeometryError::UnknownPreset("not-a-preset".to_owned())
+        );
+    }
 
     #[test]
     fn preset_adjustment_setter_inserts_and_replaces_named_values() {

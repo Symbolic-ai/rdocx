@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::path::Path;
 
+use oxml_core::OxmlError;
 pub use oxml_core::units::{Angle, Emu};
 pub use oxml_drawing::fill::Fill;
 pub use oxml_drawing::line::CT_LineProperties;
@@ -19,12 +20,15 @@ use oxml_media::{MediaNamer, resolve};
 use oxml_opc::content_types;
 use oxml_opc::relationship::{Relationship, rel_types};
 use oxml_opc::{OpcError, OpcPackage, Relationships};
+use rpptx_oxml::connector::CT_ConnectionShape;
 use rpptx_oxml::graphic_frame::GraphicDataPayload;
 use rpptx_oxml::notes_parts::CT_NotesSlide;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
 use rpptx_oxml::presentation::{CT_Presentation, CT_SlideId, custom_show_relationship_ids};
 use rpptx_oxml::relmap::relationship_ids;
-use rpptx_oxml::shape_tree::{CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild};
+use rpptx_oxml::shape_tree::{
+    CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild,
+};
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout};
 use thiserror::Error;
 
@@ -1081,6 +1085,80 @@ fn slide_mut(record: &mut SlideRecord) -> SlideMut<'_> {
 }
 
 impl SlideMut<'_> {
+    /// Appends a no-fill textbox at the top of the slide's z-order.
+    pub fn add_textbox(
+        &mut self,
+        left: Emu,
+        top: Emu,
+        width: Emu,
+        height: Emu,
+    ) -> Result<ShapeMut<'_>> {
+        let tree = &mut self.record.slide.common_slide_data.shape_tree;
+        let id = ShapeIdAllocator::scan(tree).allocate();
+        let shape = CT_Shape::new_textbox(
+            id,
+            &format!("TextBox {id}"),
+            positioned_transform(left, top, width, height),
+        )
+        .map_err(|error| invalid_shape_construction("add textbox", error))?;
+        Ok(shape_mut(tree.append_child(ShapeTreeChild::Shape(shape))))
+    }
+
+    /// Appends an ordinary preset shape at the top of the slide's z-order.
+    pub fn add_shape(
+        &mut self,
+        preset: &str,
+        left: Emu,
+        top: Emu,
+        width: Emu,
+        height: Emu,
+    ) -> Result<ShapeMut<'_>> {
+        let tree = &mut self.record.slide.common_slide_data.shape_tree;
+        let id = ShapeIdAllocator::scan(tree).allocate();
+        let shape = CT_Shape::new_preset(
+            id,
+            &format!("Shape {id}"),
+            preset,
+            positioned_transform(left, top, width, height),
+        )
+        .map_err(|error| invalid_shape_construction("add shape", error))?;
+        Ok(shape_mut(tree.append_child(ShapeTreeChild::Shape(shape))))
+    }
+
+    /// Appends a free-standing connector at the top of the slide's z-order.
+    pub fn add_connector(
+        &mut self,
+        connector: ConnectorType,
+        begin_x: Emu,
+        begin_y: Emu,
+        end_x: Emu,
+        end_y: Emu,
+    ) -> Result<ShapeMut<'_>> {
+        let transform = connector_transform(begin_x, begin_y, end_x, end_y)?;
+        let tree = &mut self.record.slide.common_slide_data.shape_tree;
+        let id = ShapeIdAllocator::scan(tree).allocate();
+        let connector = CT_ConnectionShape::new_free_standing(
+            id,
+            &format!("Connector {id}"),
+            connector.preset_name(),
+            transform,
+        )
+        .map_err(|error| invalid_shape_construction("add connector", error))?;
+        Ok(shape_mut(
+            tree.append_child(ShapeTreeChild::Connector(connector)),
+        ))
+    }
+
+    /// Appends an empty group at the top of the slide's z-order.
+    pub fn add_group_shape(&mut self) -> Result<ShapeMut<'_>> {
+        let tree = &mut self.record.slide.common_slide_data.shape_tree;
+        let id = ShapeIdAllocator::scan(tree).allocate();
+        let group = CT_GroupShape::new_empty(id, &format!("Group {id}"));
+        Ok(shape_mut(
+            tree.append_child(ShapeTreeChild::GroupShape(Box::new(group))),
+        ))
+    }
+
     /// Returns one immediate z-order child as a read-only handle.
     pub fn shape(&self, index: usize) -> Option<ShapeRef<'_>> {
         self.record
@@ -1101,6 +1179,71 @@ impl SlideMut<'_> {
             .children
             .get_mut(index)
             .map(shape_mut)
+    }
+}
+
+/// The geometry family of a free-standing connector.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConnectorType {
+    Straight,
+    Elbow,
+    Curve,
+}
+
+impl ConnectorType {
+    const fn preset_name(self) -> &'static str {
+        match self {
+            Self::Straight => "line",
+            Self::Elbow => "bentConnector3",
+            Self::Curve => "curvedConnector3",
+        }
+    }
+}
+
+fn positioned_transform(left: Emu, top: Emu, width: Emu, height: Emu) -> CT_Transform2D {
+    let mut transform = CT_Transform2D::default();
+    transform.offset = Some(CT_Point2D { x: left, y: top });
+    transform.extent = Some(CT_PositiveSize2D {
+        cx: width,
+        cy: height,
+    });
+    transform
+}
+
+fn connector_transform(
+    begin_x: Emu,
+    begin_y: Emu,
+    end_x: Emu,
+    end_y: Emu,
+) -> Result<CT_Transform2D> {
+    let width =
+        i64::try_from(begin_x.0.abs_diff(end_x.0)).map_err(|_| Error::InvalidShapeMutation {
+            operation: "add connector",
+            message: "horizontal endpoint span exceeds the EMU range".to_owned(),
+        })?;
+    let height =
+        i64::try_from(begin_y.0.abs_diff(end_y.0)).map_err(|_| Error::InvalidShapeMutation {
+            operation: "add connector",
+            message: "vertical endpoint span exceeds the EMU range".to_owned(),
+        })?;
+    let mut transform = CT_Transform2D::default();
+    transform.offset = Some(CT_Point2D {
+        x: Emu(begin_x.0.min(end_x.0)),
+        y: Emu(begin_y.0.min(end_y.0)),
+    });
+    transform.extent = Some(CT_PositiveSize2D {
+        cx: Emu(width),
+        cy: Emu(height),
+    });
+    transform.flip_horizontal = begin_x.0 > end_x.0;
+    transform.flip_vertical = begin_y.0 > end_y.0;
+    Ok(transform)
+}
+
+fn invalid_shape_construction(operation: &'static str, error: OxmlError) -> Error {
+    Error::InvalidShapeMutation {
+        operation,
+        message: error.to_string(),
     }
 }
 
@@ -1406,6 +1549,40 @@ mod write_tests {
     use rpptx_oxml::placeholder::PhType;
 
     use super::*;
+
+    #[test]
+    fn connector_constructor_normalizes_every_direction() {
+        assert_eq!(ConnectorType::Straight.preset_name(), "line");
+        assert_eq!(ConnectorType::Elbow.preset_name(), "bentConnector3");
+        assert_eq!(ConnectorType::Curve.preset_name(), "curvedConnector3");
+        let cases = [
+            ((10, 20), (30, 40), (10, 20, 20, 20, false, false)),
+            ((30, 20), (10, 40), (10, 20, 20, 20, true, false)),
+            ((10, 40), (30, 20), (10, 20, 20, 20, false, true)),
+            ((30, 40), (10, 20), (10, 20, 20, 20, true, true)),
+            ((10, 20), (10, 40), (10, 20, 0, 20, false, false)),
+            ((30, 20), (10, 20), (10, 20, 20, 0, true, false)),
+        ];
+        for (begin, end, expected) in cases {
+            let transform =
+                connector_transform(Emu(begin.0), Emu(begin.1), Emu(end.0), Emu(end.1)).unwrap();
+            let offset = transform.offset.unwrap();
+            let extent = transform.extent.unwrap();
+            assert_eq!(
+                (
+                    offset.x.0,
+                    offset.y.0,
+                    extent.cx.0,
+                    extent.cy.0,
+                    transform.flip_horizontal,
+                    transform.flip_vertical,
+                ),
+                expected
+            );
+        }
+
+        assert!(connector_transform(Emu(i64::MIN), Emu(0), Emu(i64::MAX), Emu(0)).is_err());
+    }
 
     #[test]
     fn every_validation_issue_variant_detects_its_corrupted_deck() {
