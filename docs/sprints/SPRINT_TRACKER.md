@@ -140,6 +140,9 @@ defended.
 | F-099 | S24 | M | 2 | 1 | 2026-08-05 | Character and automatic bullet markers with deterministic numbering |
 | F-100 | S24 | M | 2 | 1 | 2026-08-05 | Stored and computed autofit with visible overflow policies |
 | F-101 | S24 | S | 1 | 1 | 2026-08-05 | Rotated vertical text with visible diagnosed fallbacks |
+| F-102 | S25 | L | 4 | 1 | 2026-08-08 | Styled table resolution and merged-cell rendering with unique borders |
+| F-103 | S25 | M | 2 | 1 | 2026-08-08 | Source-scoped hyperlinks, slide-number fields, and visible diagnostics |
+| F-104 | S25 | L | 4 | 1 | 2026-08-08 | Complete corpus rendering with retained SSIM trend and native evidence |
 
 ## Velocity
 

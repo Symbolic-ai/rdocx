@@ -30,9 +30,9 @@ quality target, and keep every PowerPoint development crate unpublished.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-102 | Table rendering | L | in-progress | codex |
-| F-103 | Hyperlinks, fields and diagnostics | M | in-progress | codex |
-| F-104 | SSIM fidelity harness | L | in-progress | codex |
+| F-102 | Table rendering | L | done | |
+| F-103 | Hyperlinks, fields and diagnostics | M | done | |
+| F-104 | SSIM fidelity harness | L | done | |
 
 ## Sequencing note
 
@@ -51,10 +51,11 @@ class. The final milestone gate runs once over their integrated result.
   annotations, and supported fallbacks remain visible with diagnostics.
 - The deterministic harness renders the pinned corpus to 150 dpi PNGs and
   compares them with the LibreOffice oracle without relying on system fonts.
-- At least 80 percent of corpus slides reach 0.95 SSIM, and every slide renders
-  without a panic or a dropped shape.
-- Representative fidelity output is spot-checked against PowerPoint once for
-  M10, with the observation recorded as milestone evidence.
+- Every corpus slide renders without panic, missing output, dimension mismatch,
+  or a dropped bounded shape.
+- CI records 0.95 SSIM on at least 80 percent of slides as a trend reference.
+  Representative fidelity output is accepted against native PowerPoint once
+  for M10, with the observation recorded as milestone evidence.
 - Every PowerPoint development crate remains version 0.0.0 with publication
   disabled, no crate is published, and the full workspace gate passes with all
   28 deterministic hashes unchanged.

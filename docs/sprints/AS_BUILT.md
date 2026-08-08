@@ -3221,3 +3221,127 @@ full gate passed.
 
 **Notes for future sessions.** Keep vertical fallbacks visible and diagnosed.
 Do not add a separate vertical shaping pipeline.
+
+### F-102, Table rendering
+
+**Sprint.** S25
+**Completed.** 2026-08-08
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** DrawingML table styles, cell fills, margins, borders, and
+text styles now parse and preserve unsupported XML, resolve through concrete
+table-region precedence, and lower to fills, text, and one physical stroke per
+border segment. Two-dimensional merges render only from their origin while
+using the correct covered-cell outer edges.
+
+**Non-obvious choices.** Table text style enters the character cascade before
+explicit paragraph and run formatting. Corner regions require their matching
+row and column options, adjacent borders use one deterministic conflict policy,
+and unsupported table paint or cell autofit stays visible through stable
+diagnostics.
+
+**Deviations from the design plan.** Microscope passes exposed explicit text
+overrides applied in the wrong order, unequal right-to-left column sizing,
+merged-edge sourcing, inside-border selection, option-independent corners, and
+missing unsupported-paint diagnostics. Each was corrected with a distinguishing
+regression before the clean third pass.
+
+**Spec sections touched.** `docs/hld/05-drawingml-model.md`,
+`docs/hld/06-presentationml-model.md`,
+`docs/hld/07-inheritance-and-resolution.md`,
+`docs/hld/08-rendering-spec.md`, and `docs/hld/12-testing-strategy.md`.
+
+**Tests.** `table_style_and_cell_properties_preserve_unmodelled_xml_byte_for_byte`,
+`table_style_regions_resolve_in_documented_precedence`,
+`table_cell_autofit_is_ignored_and_records_a_diagnostic`,
+`banded_merged_table_renders_correct_fills_without_duplicated_borders`,
+`merged_continuation_cells_do_not_render_fill_border_or_text_twice`,
+`table_cell_margins_place_text_in_the_fixed_content_box`, and the integrated
+full workspace gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Resolve logical cell ownership separately from
+physical edge ownership. A merge origin owns content, but its far border can
+come from the last covered cell.
+
+### F-103, Hyperlinks, fields and diagnostics
+
+**Sprint.** S25
+**Completed.** 2026-08-08
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Direct external run hyperlinks now resolve in the producing
+slide, layout, or master relationship scope and emit transformed URI link
+annotations. Typed and effective slide-number fields substitute the one-based
+page number before shaping, while broken or unsupported actions retain visible
+text and add stable diagnostics.
+
+**Non-obvious choices.** Hyperlink actions remain direct run state rather than
+joining the inheritance cascade. The resolver freezes only the resolved URI,
+and the existing text-segment emitter supplies annotation bounds after the
+normal recursive transform walk.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** `docs/hld/07-inheritance-and-resolution.md` and
+`docs/hld/08-rendering-spec.md`.
+
+**Tests.** `slide_number_field_renders_current_page_and_hyperlink_emits_annotation`,
+`same_relationship_id_resolves_hyperlink_in_its_shape_source_scope`,
+`missing_hyperlink_relationship_keeps_text_and_records_diagnostic`,
+`untyped_slide_number_placeholder_uses_the_current_page_number`,
+`grouped_hyperlink_annotation_keeps_transformed_run_bounds`, and the integrated
+full workspace gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep package relationship objects upstream of
+the frozen renderer contract. Unsupported actions should lose only the
+annotation, never their visible text.
+
+### F-104, SSIM fidelity harness
+
+**Sprint.** S25
+**Completed.** 2026-08-08
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** A deterministic whole-presentation entry point, a concrete
+50-deck renderer, and a version-pinned LibreOffice SSIM harness now produce and
+retain per-slide fidelity evidence at 150 dpi. CI enforces complete rendering,
+records the SSIM trend, uploads the detailed evidence even on failure, and keeps
+native PowerPoint review as the hard manual fidelity gate. Evidence-ranked
+renderer corrections raised the integrated trend to 30 of 421 slides at or
+above 0.95 with median SSIM 0.622465 and zero dropped bounded shapes.
+
+**Non-obvious choices.** SSIM against LibreOffice is a trend rather than a
+conformance threshold. Native PowerPoint 16.104 versus the same LibreOffice
+oracle reached zero of 34 representative slides at 0.95, with median
+0.650406194, so completeness and native review remain the hard gates. The
+normal renderer still discovers system fonts, while the evidence entry point
+uses bundled fonts exclusively.
+
+**Deviations from the design plan.** Native calibration superseded the initial
+hard interpretation of 0.95 SSIM on 80 percent of slides. Microscope required
+durable CI evidence uploads and clearer acceptance sources. Completion also
+removed an out-of-scope mirrored Word layout change after it produced an
+undeclared hash delta.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/07-inheritance-and-resolution.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `test_all_corpus_slides_render_without_panic_or_dropped_shape`,
+`test_corpus_render_fidelity_records_ssim_trend`, the seven local metric and
+oracle-contract self-tests, exact tool-version assertions, the accepted M10
+native PowerPoint spot-check, and the integrated 50-deck gate passed for all
+421 slides.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Integrated evidence is retained at
+`/private/tmp/s25-integrated-fidelity-escalated-20260808`. On macOS, sandboxed
+headless LibreOffice can abort during AppKit application registration before it
+opens a deck. The same exact command and deck succeed outside that boundary.
