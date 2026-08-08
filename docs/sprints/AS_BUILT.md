@@ -3497,3 +3497,160 @@ full gate passed.
 **Notes for future sessions.** Keep validation observational and preserve
 corrupt input long enough to report every issue. Relationship scans must cover
 parts even when their entire `.rels` collection is absent.
+
+### F-109, Shape mutation facade
+
+**Sprint.** S27
+**Completed.** 2026-08-08
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The presentation facade now exposes borrowed mutable slide
+and recursive shape handles. Supported shapes can update position, size,
+rotation, name, fill, line, and preset adjustments, and every change survives
+save and reload without replacing the owning shape tree.
+
+**Non-obvious choices.** Mutable access follows the typed shape-tree projection
+and deliberately leaves selected `AlternateContent` fallback children
+read-only. Setters update the narrow typed field while preserving unmodelled
+attributes, children, sibling order, and non-visual ids.
+
+**Deviations from the design plan.** Microscope pass 1 found that creating an
+absent group transform could place it after preserved group properties. The
+repair shifted the raw boundary and strengthened nested-group coverage to prove
+two sibling ids and their order remain unchanged. Pass 2 was clean.
+
+**Spec sections touched.** `docs/hld/06-presentationml-model.md`.
+
+**Tests.** `shape_mutation_setters_survive_save_and_reload`,
+`shape_mutation_preserves_unmodelled_xml_and_schema_order`,
+`shape_mutation_handles_nested_group_children`,
+`alternate_content_fallback_is_not_mutable`,
+`shape_mutation_indices_and_kinds_are_total`,
+`preset_adjustment_setter_inserts_and_replaces_named_values`,
+`shape_name_mutation_escapes_xml_and_preserves_children`, and the integrated
+full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep behavior-bearing raw-boundary repair beside
+the typed mutation that creates an absent schema child. Do not expose mutable
+handles into compatibility branches that remain serialized from preserved XML.
+
+### F-110, Shape constructors
+
+**Sprint.** S27
+**Completed.** 2026-08-08
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Mutable slides can now append text boxes, preset shapes,
+connectors, and empty groups at the top of z-order. Each constructor allocates
+a tree-wide unique id, emits a canonical schema-ordered shell, and returns a
+borrowed handle to the exact appended shape.
+
+**Non-obvious choices.** The id allocator scans typed members, preserved raw
+members, and every markup-compatibility branch using namespace-resolved
+`cNvPr` matching. Connector bounds normalize every endpoint direction into
+nonnegative extents and flips, and preset names are checked against all 187
+pinned ECMA definitions before mutation.
+
+**Deviations from the design plan.** Microscope pass 1 found append ordering
+after a trailing extension, opaque-id collisions, unvalidated preset strings,
+and incomplete reopen assertions. The repairs added a preservation-aware append
+path, a complete raw scan, preset validation, and full geometry assertions.
+Pass 2 was clean.
+
+**Spec sections touched.** `docs/hld/06-presentationml-model.md`.
+
+**Tests.** `all_shape_constructors_open_in_powerpoint_without_repair`,
+`ordinary_shape_and_textbox_constructors_emit_canonical_shells`,
+`connector_constructor_normalizes_every_direction`,
+`empty_group_constructor_has_required_children`,
+`four_appended_shapes_have_unique_ids_and_reopen`,
+`constructor_names_are_deterministic_from_allocated_ids`, pinned PowerPoint
+16.104 build 16.104.25121423 acceptance, and the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Append through `CT_ShapeTree::append_child` so
+schema-final preserved content remains final. Keep the allocator scan aligned
+with every typed and opaque shape-tree container.
+
+### F-111, add_picture
+
+**Sprint.** S27
+**Completed.** 2026-08-08
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `Presentation::add_picture` now inserts a picture into a
+chosen slide, using exact 72-DPI native dimensions when both axes are omitted
+and truncating aspect-ratio inference when one axis is supplied. Equal image
+bytes share one media part while each slide retains its own relationship scope.
+
+**Non-obvious choices.** Image bytes determine the stored extension and MIME
+type even when the supplied filename is misleading. Package, media, and
+relationship changes are staged in clones so every fallible operation finishes
+before the live presentation commits an atomic mutation.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean. The
+pinned python-pptx 1.0.2 comparison produced the same picture kind and 12,700 by
+12,700 EMU bounds, and PowerPoint 16.104 build 16.104.25121423 opened the deck
+without repair.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/06-presentationml-model.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `picture_without_explicit_size_uses_native_dimensions`,
+`picture_constructor_round_trips_in_schema_order`,
+`picture_one_dimension_preserves_aspect_ratio_with_truncation`,
+`duplicate_picture_bytes_share_one_media_part_across_slides`,
+`picture_sniffs_bytes_when_extension_is_misleading`,
+`invalid_picture_input_does_not_mutate_the_presentation`,
+`picture_native_size_matches_python_pptx_1_0_2`,
+`added_picture_validates_and_opens_without_repair`, and the integrated full gate
+passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep media deduplication package-wide and image
+relationship reuse slide-scoped. Preserve the staged commit boundary whenever
+new fallible picture options are added.
+
+### F-112, Text frame mutation
+
+**Sprint.** S27
+**Completed.** 2026-08-08
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Ordinary shapes now expose borrowed text-frame, paragraph,
+and run handles. Callers can replace or clear text, append paragraphs and runs,
+and set typed paragraph, character, Latin font, and bullet properties while
+retaining the required nonempty paragraph invariant.
+
+**Non-obvious choices.** Replacing placeholder text preserves placeholder type
+and `idx`, body properties, list style, and paragraph-level state. The mutation
+surface keeps fields, breaks, raw compatibility content, whitespace intent, and
+schema order unless the caller replaces the owning typed value.
+
+**Deviations from the design plan.** Microscope pass 1 found that creating an
+absent paragraph property node could leave preserved boundary-0 content before
+it. The repair moved that raw boundary behind the new property and added a
+complete markup-compatibility run substitution regression. Pass 2 was clean.
+
+**Spec sections touched.** `docs/hld/05-drawingml-model.md` and
+`docs/hld/06-presentationml-model.md`.
+
+**Tests.** `setting_text_on_placeholder_round_trips_and_renders`,
+`clearing_text_preserves_required_paragraph`,
+`paragraph_run_font_and_bullet_properties_round_trip`,
+`text_mutation_preserves_placeholder_identity`,
+`text_mutation_preserves_unmodelled_xml_and_schema_order`,
+`text_mutation_indices_and_shape_kinds_are_total`,
+`text_frame_handles_append_paragraphs_and_runs_in_order`, and the integrated
+full gate passed with deterministic fonts.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep the minimum one-paragraph invariant in the
+DrawingML model and keep raw-boundary shifts local to the property insertion
+that changes schema order.
