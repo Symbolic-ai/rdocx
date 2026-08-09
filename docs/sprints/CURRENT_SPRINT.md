@@ -38,7 +38,7 @@ PowerPoint, Keynote, Google Slides, and LibreOffice.
 | F-113 | Table facade | L | in-progress | codex |
 | F-114 | remove_slide, move_slide, duplicate_slide | M | in-progress | codex |
 | F-115 | Slide and presentation properties | S | in-progress | codex |
-| F-116 | Cross-viewer acceptance | M | pending | - |
+| F-116 | Cross-viewer acceptance | M | in-progress | codex |
 
 ## Sequencing note
 
