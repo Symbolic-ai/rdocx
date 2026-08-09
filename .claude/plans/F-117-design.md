@@ -1,6 +1,6 @@
 # F-117, oxml-sml workbook writer
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S29
 **Size**: L
 **Depends on**: none
@@ -145,14 +145,14 @@ Word sample generation or rendering. All 28 hashes must match.
 
 ## Implementation checklist
 
-- [ ] Register the minimal unpublished `oxml-sml` crate and dependencies.
-- [ ] Add validated workbook and column values without a builder.
-- [ ] Generate deterministic workbook, worksheet, shared-string, and optional
+- [x] Register the minimal unpublished `oxml-sml` crate and dependencies.
+- [x] Add validated workbook and column values without a builder.
+- [x] Generate deterministic workbook, worksheet, shared-string, and optional
       style XML.
-- [ ] Assemble and reopen the complete nested OPC package.
-- [ ] Add formula-range, negative, package-graph, determinism, and viewer tests.
-- [ ] Update exactly HLD 09 and HLD 15.
-- [ ] Run focused checks, dependency and package riders, the viewer gate,
+- [x] Assemble and reopen the complete nested OPC package.
+- [x] Add formula-range, negative, package-graph, determinism, and viewer tests.
+- [x] Update exactly HLD 09 and HLD 15.
+- [x] Run focused checks, dependency and package riders, the viewer gate,
       microscope, and worker preparation.
 
 ## Open questions
