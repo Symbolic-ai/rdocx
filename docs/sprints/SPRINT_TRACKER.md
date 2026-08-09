@@ -154,6 +154,10 @@ defended.
 | F-110 | S27 | M | 2 | 1 | 2026-08-08 | Schema-ordered textbox, shape, connector, and group construction |
 | F-111 | S27 | M | 2 | 1 | 2026-08-08 | Atomic picture insertion with native sizing and media deduplication |
 | F-112 | S27 | L | 4 | 1 | 2026-08-08 | Borrowed text-frame editing with typed paragraph and run formatting |
+| F-113 | S28 | L | 4 | 1 | 2026-08-09 | Mutable table construction, formatting, merge, split, and preservation |
+| F-114 | S28 | M | 2 | 1 | 2026-08-09 | Validated slide removal, movement, duplication, and graph repair |
+| F-115 | S28 | S | 1 | 1 | 2026-08-09 | Slide and presentation properties with valid slideshow output |
+| F-116 | S28 | M | 2 | 1 | 2026-08-09 | One SHA-bound ten-slide acceptance deck across four viewers |
 
 ## Velocity
 

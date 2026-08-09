@@ -3654,3 +3654,156 @@ full gate passed with deterministic fonts.
 **Notes for future sessions.** Keep the minimum one-paragraph invariant in the
 DrawingML model and keep raw-boundary shifts local to the property insertion
 that changes schema order.
+
+### F-113, Table facade
+
+**Sprint.** S28
+**Completed.** 2026-08-09
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Mutable slides can now append tables and expose borrowed
+table and cell handles. Callers can edit cell text, fill, margins, banding,
+column widths, and rectangular merges, then split a merged origin back into
+the original grid while retaining valid table structure.
+
+**Non-obvious choices.** Merge moves source-cell content into the origin in
+row-major order, matching pinned python-pptx 1.0.2 semantics. Width updates use
+checked EMU arithmetic and keep the table grid synchronized with the graphic
+frame extent. Unsupported XML remains at its original schema boundary.
+
+**Deviations from the design plan.** Microscope pass 1 found missing required
+paragraphs after content migration, missing constructor validation, and a
+preservation test that did not prove byte identity. All three were repaired,
+and pass 2 was clean.
+
+**Spec sections touched.** `docs/hld/05-drawingml-model.md` and
+`docs/hld/06-presentationml-model.md`.
+
+**Tests.** `merge_then_split_restores_the_original_grid`,
+`add_table_round_trips_cells_formatting_banding_and_widths`,
+`table_mutation_rejects_invalid_ranges_without_partial_changes`,
+`table_mutation_preserves_unmodelled_xml_and_schema_order`,
+`table_graphic_frame_constructor_writes_the_canonical_shell`, the pinned
+python-pptx 1.0.2 differential gate, and the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep cell-grid mutation transactional. A merged
+source must retain a schema-valid text body even after its content moves to the
+origin.
+
+### F-114, remove_slide, move_slide, duplicate_slide
+
+**Sprint.** S28
+**Completed.** 2026-08-09
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `Presentation` can remove, move, and duplicate slides while
+keeping the slide-id list, relationships, parts, content types, notes, custom
+shows, media, shape ids, and connector endpoints consistent. Duplicated images
+resolve through the new slide's own relationship scope.
+
+**Non-obvious choices.** Duplication remaps typed and preserved relationship
+ids, creates fresh notes and back relationships, and allocates fresh shape ids
+through compatibility content. Removal prunes only candidate media that is no
+longer reachable from any package relationship.
+
+**Deviations from the design plan.** Microscope pass 1 found package-root media
+reachability, notes normalization, and compatibility shape-id gaps. Pass 2
+found a remaining nonnumeric preserved notes reference. All four defects were
+repaired, and pass 3 was clean.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md` and
+`docs/hld/06-presentationml-model.md`.
+
+**Tests.** `duplicated_slides_images_resolve_to_the_new_slides_own_relationships`,
+`remove_slide_removes_its_part_relationship_notes_and_custom_show_entries`,
+`move_slide_reorders_the_slide_id_list_without_rewriting_relationships`,
+`duplicate_slide_rewrites_typed_and_preserved_relationship_ids_without_other_byte_changes`,
+`slide_id_list_raw_children_follow_surviving_ids_after_collection_edits`,
+`every_corpus_preserved_payload_is_identity_with_an_empty_map`, and the
+integrated full gate passed against all 50 pinned decks.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Treat slide collection edits as package-graph
+transactions. Relationship ids are scoped by producer part, and media pruning
+must include package-root reachability.
+
+### F-115, Slide and presentation properties
+
+**Sprint.** S28
+**Completed.** 2026-08-09
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The facade now reads and writes slide size, hidden state,
+direct slide backgrounds, and core properties. It can also save presentation
+bytes as a slideshow package while preserving a valid part graph and changing
+only the main content type.
+
+**Non-obvious choices.** Hidden state follows inverse `p:sld/@show` semantics.
+Direct background edits preserve theme references and raw producer XML. Core
+properties are created only when the package owns or lacks the conventional
+part, avoiding unrelated-part replacement.
+
+**Deviations from the design plan.** Microscope pass 1 found direct-background
+replacement losing preserved XML, unsafe reuse of an unowned conventional core
+part, and incomplete value and preservation assertions. All three were
+repaired, and pass 2 was clean.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md` and
+`docs/hld/06-presentationml-model.md`.
+
+**Tests.** `slide_and_presentation_properties_round_trip`,
+`slide_size_mutation_preserves_kind_and_unmodelled_xml`,
+`hidden_flag_uses_inverse_show_semantics`,
+`background_set_and_clear_preserve_theme_references_and_raw_xml`,
+`core_properties_are_loaded_lazily_and_written_with_valid_graph`,
+`save_as_show_changes_only_the_main_content_type`, and the integrated full gate
+passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep slideshow conversion output-only and keep
+core-property creation guarded by relationship ownership rather than a
+conventional path alone.
+
+### F-116, Cross-viewer acceptance
+
+**Sprint.** S28
+**Completed.** 2026-08-09
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** One deterministic ten-slide deck exercises every F-107
+through F-115 write feature, validates cleanly, reopens as `.pptx` and `.ppsx`,
+and binds four-viewer evidence to SHA-256
+`d36da6e8849eabd4487d2572baea19c3716ee7d0fe03aaa4714a28ce3c41de4f`.
+
+**Non-obvious choices.** The ignored gate reruns automatable PowerPoint and
+LibreOffice checks, then validates all four tracked evidence rows. Keynote is
+user-confirmed human-action evidence because its UI import is not reliably
+scriptable. Google Slides is identified by acceptance date and Chrome build,
+without retaining the private imported-document URL.
+
+**Deviations from the design plan.** Review hardened the evidence schema
+against unobserved counts, pending or blank clean records, vacuous pending
+coverage, and shared temporary paths. It also aligned the gate and plan with
+the supported Keynote human-action path. The test-only one-pixel PNG was
+replaced with a valid precomputed fixture after LibreOffice rejected its IDAT
+stream. Microscope pass 8 was clean.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`.
+
+**Tests.** `ten_slide_write_api_deck_validates_and_reopens`,
+`ten_slide_write_api_deck_saves_as_presentation_and_show`,
+`cross_viewer_acceptance_evidence_is_complete_and_bound_to_one_artifact`,
+`generated_ten_slide_write_api_deck_opens_clean_in_all_four_viewers`, pinned
+PowerPoint 16.104, Keynote 14.4, Google Slides on 2026-08-09 through Chrome
+151.0.7922.76, LibreOffice 26.2.5.2 acceptance, and the integrated full gate
+passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep every viewer row bound to the same frozen
+artifact SHA. Never promote a pending row without a positive observed open or
+import, exact slide count, clean conversion result, and close or export result.
