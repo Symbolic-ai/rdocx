@@ -27,10 +27,10 @@ regenerated, never hand-edited.
 | M9, Inheritance resolver                    | 8  | 8 | 0 | 0  |
 | M10, Renderer                               | 20 | 20 | 0 | 0  |
 | M11, Write API                              | 12 | 12 | 0 | 0  |
-| M12, Charts                                 | 12 | 0 | 2 | 10 |
+| M12, Charts                                 | 12 | 0 | 3 | 9  |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **158** | **113** | **2** | **43** |
+| **Total** | **158** | **113** | **3** | **42** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -243,7 +243,7 @@ regenerated, never hand-edited.
 |------|-------|--------|------|--------|
 | F-117 | oxml-sml workbook writer                     | S29 | L | in-progress |
 | F-118 | ChartML core types                           | S29 | L | in-progress |
-| F-119 | Series and data references                   | S29 | L | pending |
+| F-119 | Series and data references                   | S29 | L | in-progress |
 | F-120 | Axes                                         | S30 | L | pending |
 | F-121 | Bar and line plots                           | S30 | M | pending |
 | F-122 | Pie, doughnut, area, scatter and radar plots | S30 | L | pending |

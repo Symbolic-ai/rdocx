@@ -37,7 +37,7 @@ later chart authoring and rendering stories can use without expanding
 |------|-------|------|--------|-------|
 | F-117 | oxml-sml workbook writer | L | in-progress | codex |
 | F-118 | ChartML core types | L | in-progress | codex |
-| F-119 | Series and data references | L | pending | - |
+| F-119 | Series and data references | L | in-progress | codex |
 
 ## Sequencing note
 
