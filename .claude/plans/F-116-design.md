@@ -1,6 +1,6 @@
 # F-116, Cross-viewer acceptance
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S28
 **Size**: M
 **Depends on**: F-107 through F-115
@@ -38,14 +38,15 @@ deck, reopen it through `Presentation`, verify the final order and representativ
 relationships, and record its SHA-256. The test artifact stays temporary after
 the accepted SHA and evidence are committed.
 
-Automate the locally scriptable viewers:
+Run acceptance in all four viewers. Automate the locally scriptable checks and
+record human-action evidence where UI automation is unsupported:
 
 - Microsoft PowerPoint must match version 16.104, Info.plist build
   16.104.25121423, and AppleScript build 1214. Open the deck, assert ten slides,
   observe no repair flow, then close without saving.
 - Keynote must match the installed version and bundle build recorded by the
-  acceptance run. Open the deck, assert ten slides, observe no import warning,
-  then close without saving.
+  acceptance run. Record a user-confirmed open, ten-slide inspection, absence
+  of an import warning, and closure against the exact candidate SHA.
 - LibreOffice Impress must match version 26.2.5.2 and build
   `cd7284b4cbbfeb507e630c1aac019f4157393acb`. Run a headless import and PDF
   export, assert success, and assert the output has ten pages.
@@ -108,8 +109,9 @@ Google Slides acceptance date and browser build, and the clean results.
   asset and does not alter or replace it.
 
 The story adds no production dependency, public API, source module, test
-binary, feature, or baseline. The Google Slides browser step is a required
-human-action acceptance operation, not a skipped automatic gate.
+binary, feature, or baseline. The Keynote and Google Slides steps are required
+human-action acceptance operations, not skipped automatic gates. The ignored
+gate reruns PowerPoint and LibreOffice and validates all four SHA-bound rows.
 
 ## Hash harness
 
@@ -118,14 +120,14 @@ deterministic hashes must match.
 
 ## Implementation checklist
 
-- [ ] Build one exact ten-slide deck using every F-107 through F-115 feature.
-- [ ] Validate, save, reopen, and bind evidence to the artifact SHA-256.
-- [ ] Add the ignored four-viewer gate to the existing integration binary.
-- [ ] Run PowerPoint, Keynote, and LibreOffice checks at pinned versions.
-- [ ] Import and inspect the same artifact in Google Slides through the browser.
-- [ ] Record the four-viewer evidence beside the test.
-- [ ] Update exactly HLD 12.
-- [ ] Run focused checks, risk riders, normal worker `/verify`, and the hash
+- [x] Build one exact ten-slide deck using every F-107 through F-115 feature.
+- [x] Validate, save, reopen, and bind evidence to the artifact SHA-256.
+- [x] Add the ignored four-viewer gate to the existing integration binary.
+- [x] Run PowerPoint, Keynote, and LibreOffice checks at pinned versions.
+- [x] Import and inspect the same artifact in Google Slides through the browser.
+- [x] Record the four-viewer evidence beside the test.
+- [x] Update exactly HLD 12.
+- [x] Run focused checks, risk riders, normal worker `/verify`, and the hash
   harness. The integrated sprint runs `/verify --full` once.
 
 ## Open questions

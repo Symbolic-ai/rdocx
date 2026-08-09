@@ -4,6 +4,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oxml_drawing::color::ColorMap;
 use oxml_drawing::theme::CT_OfficeStyleSheet;
@@ -42,6 +43,331 @@ const LAYOUT_PART: &str = "/custom/layouts/validation.xml";
 const POWERPOINT_VERSION: &str = "16.104";
 const POWERPOINT_BUILD: &str = "16.104.25121423";
 const POWERPOINT_APP_BUILD: &str = "1214";
+const KEYNOTE_VERSION: &str = "14.4";
+const KEYNOTE_BUILD: &str = "7043.0.93";
+const LIBREOFFICE_VERSION: &str = "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
+const F116_CANDIDATE_PATH: &str = "/private/tmp/rdocx-f116-m11-write-api.pptx";
+const F116_ARTIFACT_SHA256: &str =
+    "d36da6e8849eabd4487d2572baea19c3716ee7d0fe03aaa4714a28ce3c41de4f";
+const F116_FINAL_TITLES: [&str; 10] = [
+    "F-116 slide 10",
+    "F-116 slide 02",
+    "F-116 slide 03",
+    "F-116 slide 04",
+    "F-116 slide 05",
+    "F-116 slide 06",
+    "F-116 slide 07",
+    "F-116 slide 08",
+    "F-116 slide 08",
+    "F-116 slide 09",
+];
+static F116_TEMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CrossViewerObservation {
+    Clean {
+        opened_or_imported: bool,
+        observed_slide_count: usize,
+        no_repair_or_conversion_error: bool,
+        export_or_close_result: &'static str,
+    },
+    Pending {
+        reason: &'static str,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CrossViewerEvidence {
+    application: &'static str,
+    version_or_date: Option<&'static str>,
+    build: Option<&'static str>,
+    input_sha256: &'static str,
+    observation: CrossViewerObservation,
+}
+
+const CROSS_VIEWER_ACCEPTANCE: [CrossViewerEvidence; 4] = [
+    CrossViewerEvidence {
+        application: "Microsoft PowerPoint",
+        version_or_date: Some(POWERPOINT_VERSION),
+        build: Some("Info.plist 16.104.25121423, AppleScript 1214"),
+        input_sha256: F116_ARTIFACT_SHA256,
+        observation: CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "closed without saving",
+        },
+    },
+    CrossViewerEvidence {
+        application: "Apple Keynote",
+        version_or_date: Some(KEYNOTE_VERSION),
+        build: Some(KEYNOTE_BUILD),
+        input_sha256: F116_ARTIFACT_SHA256,
+        observation: CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "user confirmed clean open and closed the presentation",
+        },
+    },
+    CrossViewerEvidence {
+        application: "Google Slides",
+        version_or_date: Some("accepted 2026-08-09"),
+        build: Some("Google Chrome 151.0.7922.76, build 7922.76"),
+        input_sha256: F116_ARTIFACT_SHA256,
+        observation: CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "Microsoft PowerPoint download started once",
+        },
+    },
+    CrossViewerEvidence {
+        application: "LibreOffice Impress",
+        version_or_date: Some("26.2.5.2"),
+        build: Some("cd7284b4cbbfeb507e630c1aac019f4157393acb"),
+        input_sha256: F116_ARTIFACT_SHA256,
+        observation: CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "hidden-slide PDF export succeeded with ten pages",
+        },
+    },
+];
+
+#[test]
+fn ten_slide_write_api_deck_validates_and_reopens() {
+    let presentation = build_f116_ten_slide_deck();
+    assert_f116_deck_structure(&presentation);
+    let bytes = presentation.to_bytes().expect("serialize F-116 deck");
+    let candidate_path = f116_temp_path("validation", "pptx");
+    fs::write(&candidate_path, &bytes).expect("write temporary F-116 candidate");
+    let candidate_sha = sha256(&candidate_path);
+    fs::remove_file(&candidate_path).expect("remove temporary F-116 candidate");
+    eprintln!("F-116 candidate SHA-256: {candidate_sha}");
+    assert_eq!(candidate_sha, F116_ARTIFACT_SHA256);
+
+    let reopened = Presentation::from_bytes(&bytes).expect("reopen F-116 deck");
+    assert_eq!(reopened.len(), 10);
+    assert_f116_deck_structure(&reopened);
+
+    let package = open_opc(&bytes, "F-116 ten-slide candidate");
+    let presentation_part = package.main_document_part().unwrap();
+    let slide_relationships = package
+        .get_part_rels(&presentation_part)
+        .unwrap()
+        .get_all_by_type(rel_types::SLIDE);
+    assert_eq!(slide_relationships.len(), 10);
+    let image_scopes = package
+        .part_rels
+        .values()
+        .filter(|relationships| {
+            relationships
+                .items
+                .iter()
+                .any(|relationship| relationship.rel_type == rel_types::IMAGE)
+        })
+        .count();
+    assert_eq!(image_scopes, 3);
+    assert_eq!(
+        package
+            .parts
+            .keys()
+            .filter(|part| part.starts_with("/ppt/media/"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn ten_slide_write_api_deck_saves_as_presentation_and_show() {
+    let presentation = build_f116_ten_slide_deck();
+    assert!(presentation.validate().is_empty());
+    let ordinary_path = f116_temp_path("ordinary-save", "pptx");
+    presentation
+        .save(&ordinary_path)
+        .expect("save F-116 presentation");
+    let ordinary_bytes = fs::read(&ordinary_path).expect("read F-116 presentation");
+    fs::remove_file(&ordinary_path).expect("remove temporary F-116 presentation");
+    let ordinary = open_opc(&ordinary_bytes, "F-116 presentation package");
+    let ordinary_main = ordinary.main_document_part().unwrap();
+    assert_eq!(
+        ordinary.content_types.content_type_for(&ordinary_main),
+        Some(content_types::PRESENTATION)
+    );
+
+    let show_path = f116_temp_path("slideshow-save", "ppsx");
+    presentation
+        .save_as_show(&show_path)
+        .expect("save F-116 slideshow");
+    let show_bytes = fs::read(&show_path).expect("read F-116 slideshow");
+    fs::remove_file(&show_path).expect("remove temporary F-116 slideshow");
+    let show = open_opc(&show_bytes, "F-116 slideshow package");
+    let show_main = show.main_document_part().unwrap();
+    assert_eq!(
+        show.content_types.content_type_for(&show_main),
+        Some(content_types::SLIDESHOW)
+    );
+    let reopened = Presentation::from_bytes(&show_bytes).expect("reopen F-116 slideshow");
+    assert_f116_deck_structure(&reopened);
+}
+
+#[test]
+#[ignore = "requires pinned PowerPoint, Keynote, Google Slides, and LibreOffice"]
+fn generated_ten_slide_write_api_deck_opens_clean_in_all_four_viewers() {
+    let path = write_f116_candidate();
+    assert_eq!(sha256(&path), F116_ARTIFACT_SHA256);
+    assert_f116_powerpoint_acceptance(&path);
+    assert_f116_libreoffice_acceptance(&path);
+    for row in CROSS_VIEWER_ACCEPTANCE {
+        assert_clean_cross_viewer_evidence(row).unwrap_or_else(|error| panic!("{error}"));
+    }
+}
+
+#[test]
+fn cross_viewer_acceptance_evidence_is_complete_and_bound_to_one_artifact() {
+    assert_eq!(CROSS_VIEWER_ACCEPTANCE.len(), 4);
+    assert_eq!(
+        CROSS_VIEWER_ACCEPTANCE
+            .iter()
+            .map(|row| row.application)
+            .collect::<HashSet<_>>(),
+        HashSet::from([
+            "Microsoft PowerPoint",
+            "Apple Keynote",
+            "Google Slides",
+            "LibreOffice Impress",
+        ])
+    );
+    let candidate = write_f116_temporary_candidate("evidence");
+    let actual_sha = sha256(&candidate);
+    fs::remove_file(&candidate).expect("remove temporary F-116 evidence candidate");
+    assert_eq!(actual_sha, F116_ARTIFACT_SHA256);
+    for row in CROSS_VIEWER_ACCEPTANCE {
+        assert_eq!(row.input_sha256, F116_ARTIFACT_SHA256);
+        if matches!(row.observation, CrossViewerObservation::Clean { .. }) {
+            assert_clean_cross_viewer_evidence(row).unwrap();
+        }
+    }
+    let pending = CROSS_VIEWER_ACCEPTANCE
+        .iter()
+        .filter_map(|row| match row.observation {
+            CrossViewerObservation::Pending { reason } => {
+                assert!(!reason.is_empty());
+                Some(row.application)
+            }
+            CrossViewerObservation::Clean { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(pending.is_empty(), "pending viewer evidence: {pending:?}");
+}
+
+#[test]
+fn pending_cross_viewer_evidence_cannot_pass_as_clean() {
+    let pending = CrossViewerEvidence {
+        application: "pending regression fixture",
+        version_or_date: Some("observed"),
+        build: Some("observed"),
+        input_sha256: F116_ARTIFACT_SHA256,
+        observation: CrossViewerObservation::Pending {
+            reason: "acceptance operation remains incomplete",
+        },
+    };
+    assert!(
+        assert_clean_cross_viewer_evidence(pending).is_err(),
+        "pending evidence passed as clean"
+    );
+}
+
+#[test]
+fn clean_cross_viewer_evidence_requires_each_positive_operation() {
+    let clean = CrossViewerEvidence {
+        application: "regression fixture",
+        version_or_date: Some("observed"),
+        build: Some("observed"),
+        input_sha256: F116_ARTIFACT_SHA256,
+        observation: CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "closed or exported successfully",
+        },
+    };
+    assert!(assert_clean_cross_viewer_evidence(clean).is_ok());
+
+    for incomplete in [
+        CrossViewerObservation::Clean {
+            opened_or_imported: false,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "closed or exported successfully",
+        },
+        CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 0,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "closed or exported successfully",
+        },
+        CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: false,
+            export_or_close_result: "closed or exported successfully",
+        },
+        CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "",
+        },
+        CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: " \t\n",
+        },
+    ] {
+        assert!(
+            assert_clean_cross_viewer_evidence(CrossViewerEvidence {
+                observation: incomplete,
+                ..clean
+            })
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn clean_cross_viewer_evidence_rejects_missing_or_blank_metadata() {
+    let clean = CrossViewerEvidence {
+        application: "regression fixture",
+        version_or_date: Some("observed"),
+        build: Some("observed"),
+        input_sha256: F116_ARTIFACT_SHA256,
+        observation: CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "closed or exported successfully",
+        },
+    };
+
+    for version_or_date in [None, Some(""), Some(" \t\n")] {
+        assert!(
+            assert_clean_cross_viewer_evidence(CrossViewerEvidence {
+                version_or_date,
+                ..clean
+            })
+            .is_err()
+        );
+    }
+    for build in [None, Some(""), Some(" \t\n")] {
+        assert!(
+            assert_clean_cross_viewer_evidence(CrossViewerEvidence { build, ..clean }).is_err()
+        );
+    }
+}
 
 #[test]
 fn slide_and_presentation_properties_round_trip() {
@@ -1213,8 +1539,8 @@ fn valid_one_pixel_png() -> Vec<u8> {
     vec![
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
         0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
-        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8,
-        0xcf, 0xc0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc, 0x33, 0x00, 0x00, 0x00,
+        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xf8,
+        0xcf, 0xc0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xf7, 0x03, 0x41, 0x43, 0x00, 0x00, 0x00,
         0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
     ]
 }
@@ -3855,6 +4181,453 @@ fn append_shape_surface(output: &mut String, shape: ShapeRef<'_>, path: &str) {
     .unwrap();
     for (child_index, child) in shape.children().enumerate() {
         append_shape_surface(output, child, &format!("{path}.{child_index}"));
+    }
+}
+
+fn build_f116_ten_slide_deck() -> Presentation {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation
+        .set_slide_size(Emu(12_800_000), Emu(7_200_000))
+        .expect("set F-116 slide size");
+    let core = presentation.core_properties_mut();
+    core.title = Some("rdocx M11 cross-viewer acceptance".to_owned());
+    core.creator = Some("rdocx deterministic acceptance generator".to_owned());
+    core.subject = Some("F-107 through F-115".to_owned());
+
+    for number in 1..=10 {
+        presentation.add_slide(0).expect("add F-116 slide");
+        let mut slide = presentation.slide_mut(number - 1).unwrap();
+        slide
+            .add_textbox(Emu(450_000), Emu(220_000), Emu(5_600_000), Emu(650_000))
+            .expect("add slide label")
+            .set_text(&format!("F-116 slide {number:02}"))
+            .expect("set slide label");
+    }
+
+    let blue_fill = Fill::from_xml(
+        br#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:srgbClr val="2F5597"/></a:solidFill>"#,
+    )
+    .unwrap();
+    let green_fill = Fill::from_xml(
+        br#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:srgbClr val="70AD47"/></a:solidFill>"#,
+    )
+    .unwrap();
+    let line = CT_LineProperties::from_xml(
+        br#"<a:ln xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" w="25400"><a:solidFill><a:srgbClr val="203864"/></a:solidFill></a:ln>"#,
+    )
+    .unwrap();
+
+    {
+        let mut slide = presentation.slide_mut(1).unwrap();
+        let mut shape = slide
+            .add_shape(
+                "roundRect",
+                Emu(900_000),
+                Emu(1_250_000),
+                Emu(3_200_000),
+                Emu(1_650_000),
+            )
+            .expect("add mutable shape");
+        shape.set_position(Emu(1_000_000), Emu(1_350_000)).unwrap();
+        shape.set_size(Emu(3_400_000), Emu(1_800_000)).unwrap();
+        shape.set_rotation(Angle(600_000)).unwrap();
+        shape.set_name("M11 mutable shape").unwrap();
+        shape.set_fill(blue_fill.clone()).unwrap();
+        shape.set_line(line).unwrap();
+        shape.set_adjust_value("adj", 30_000.0).unwrap();
+        shape
+            .set_text("Position, size, rotation, fill, line, and adjustment")
+            .unwrap();
+    }
+
+    {
+        let mut slide = presentation.slide_mut(2).unwrap();
+        slide
+            .add_textbox(Emu(700_000), Emu(1_200_000), Emu(2_900_000), Emu(800_000))
+            .unwrap()
+            .set_text("Textbox constructor")
+            .unwrap();
+        slide
+            .add_shape(
+                "triangle",
+                Emu(4_000_000),
+                Emu(1_200_000),
+                Emu(1_800_000),
+                Emu(1_800_000),
+            )
+            .unwrap();
+        slide
+            .add_connector(
+                ConnectorType::Straight,
+                Emu(900_000),
+                Emu(3_600_000),
+                Emu(3_000_000),
+                Emu(4_300_000),
+            )
+            .unwrap();
+        slide
+            .add_connector(
+                ConnectorType::Elbow,
+                Emu(3_300_000),
+                Emu(3_600_000),
+                Emu(5_400_000),
+                Emu(4_300_000),
+            )
+            .unwrap();
+        slide
+            .add_connector(
+                ConnectorType::Curve,
+                Emu(5_700_000),
+                Emu(3_600_000),
+                Emu(7_800_000),
+                Emu(4_300_000),
+            )
+            .unwrap();
+        slide.add_group_shape().unwrap();
+    }
+
+    let png = valid_one_pixel_png();
+    presentation
+        .add_picture(
+            3,
+            &png,
+            "f116-pixel.png",
+            Emu(1_000_000),
+            Emu(1_300_000),
+            Some(Emu(2_000_000)),
+            Some(Emu(2_000_000)),
+        )
+        .expect("add F-116 picture");
+
+    {
+        let mut slide = presentation.slide_mut(4).unwrap();
+        let mut shape = slide
+            .add_textbox(Emu(800_000), Emu(1_250_000), Emu(7_000_000), Emu(2_600_000))
+            .unwrap();
+        shape.set_text("Formatted paragraph").unwrap();
+        let mut frame = shape.text_frame().unwrap();
+        let mut paragraph = frame.paragraph_mut(0).unwrap();
+        let mut paragraph_properties = CT_TextParagraphProperties::default();
+        paragraph_properties.level = Some(1);
+        paragraph.set_properties(paragraph_properties);
+        paragraph.set_bullet(Some(TextBullet {
+            choice: Some(TextBulletChoice::Character(
+                TextBulletCharacter::new("•").unwrap(),
+            )),
+            ..TextBullet::default()
+        }));
+        let mut run = paragraph.add_run(" with a bold Carlito run");
+        let mut run_properties = CT_TextCharacterProperties::default();
+        run_properties.font_size = Some(2_000);
+        run_properties.bold = Some(true);
+        run.set_properties(run_properties);
+        run.set_font(Some(TextFont::new("Carlito").unwrap()));
+        frame
+            .add_paragraph()
+            .set_text("Second paragraph exercises structural append");
+    }
+
+    {
+        let mut slide = presentation.slide_mut(5).unwrap();
+        let mut shape = slide
+            .add_table(
+                3,
+                3,
+                Emu(750_000),
+                Emu(1_250_000),
+                Emu(7_500_000),
+                Emu(3_600_000),
+            )
+            .expect("add F-116 table");
+        let mut table = shape.table_mut().unwrap();
+        table.set_first_row(true);
+        table.set_last_column(true);
+        table.set_horizontal_banding(true);
+        table.set_vertical_banding(true);
+        table.set_column_width(2, Emu(2_700_000)).unwrap();
+        for row in 0..3 {
+            for column in 0..3 {
+                table.cell_mut(row, column).unwrap().set_text(&format!(
+                    "R{}C{}",
+                    row + 1,
+                    column + 1
+                ));
+            }
+        }
+        let mut first = table.cell_mut(0, 0).unwrap();
+        first.set_fill(Some(green_fill.clone()));
+        first.set_margins(
+            Some(Emu(72_000)),
+            Some(Emu(72_000)),
+            Some(Emu(36_000)),
+            Some(Emu(36_000)),
+        );
+        first.merge_to(1, 1).unwrap();
+        table.cell_mut(2, 1).unwrap().merge_to(2, 2).unwrap();
+        table.cell_mut(2, 1).unwrap().split().unwrap();
+    }
+
+    {
+        let mut slide = presentation.slide_mut(6).unwrap();
+        slide.set_hidden(true);
+        slide
+            .set_background(green_fill.clone())
+            .expect("set F-116 background");
+    }
+
+    presentation
+        .add_picture(
+            7,
+            &png,
+            "f116-reused-pixel.png",
+            Emu(1_000_000),
+            Emu(1_300_000),
+            Some(Emu(1_500_000)),
+            Some(Emu(1_500_000)),
+        )
+        .expect("add duplicated-slide picture");
+
+    {
+        let mut slide = presentation.slide_mut(8).unwrap();
+        slide.set_background(blue_fill).unwrap();
+        slide.clear_background();
+    }
+
+    presentation
+        .duplicate_slide(7)
+        .expect("duplicate relationship-bearing slide");
+    presentation
+        .remove_slide(0)
+        .expect("remove collection slide");
+    presentation
+        .move_slide(9, 0)
+        .expect("move final slide first");
+    presentation
+}
+
+fn assert_f116_deck_structure(presentation: &Presentation) {
+    assert_eq!(presentation.len(), 10);
+    assert!(
+        presentation.validate().is_empty(),
+        "F-116 validation issues: {:?}",
+        presentation.validate()
+    );
+    assert_eq!(
+        presentation.slide_size(),
+        Some((Emu(12_800_000), Emu(7_200_000)))
+    );
+    assert_eq!(
+        presentation
+            .core_properties()
+            .and_then(|properties| properties.title.as_deref()),
+        Some("rdocx M11 cross-viewer acceptance")
+    );
+    for (slide, expected_title) in presentation.slides().zip(F116_FINAL_TITLES) {
+        assert!(
+            slide.text().contains(expected_title),
+            "slide {} lacks {expected_title:?}",
+            slide.id()
+        );
+    }
+    assert_eq!(
+        presentation
+            .slides()
+            .map(|slide| slide.id())
+            .collect::<HashSet<_>>()
+            .len(),
+        10
+    );
+    assert!(presentation.slide(6).unwrap().hidden());
+    assert!(presentation.slide(6).unwrap().has_explicit_background());
+    let constructor_kinds = presentation
+        .slide(2)
+        .unwrap()
+        .shapes()
+        .map(|shape| shape.kind())
+        .collect::<Vec<_>>();
+    for kind in [ShapeKind::Shape, ShapeKind::Connector, ShapeKind::Group] {
+        assert!(constructor_kinds.contains(&kind));
+    }
+    assert!(
+        presentation
+            .slide(5)
+            .unwrap()
+            .shapes()
+            .any(|shape| shape.table().is_some())
+    );
+    assert_eq!(
+        presentation
+            .slides()
+            .map(|slide| {
+                slide
+                    .shapes()
+                    .filter(|shape| shape.kind() == ShapeKind::Picture)
+                    .count()
+            })
+            .sum::<usize>(),
+        3
+    );
+}
+
+fn write_f116_candidate() -> PathBuf {
+    let presentation = build_f116_ten_slide_deck();
+    assert_f116_deck_structure(&presentation);
+    let path = PathBuf::from(F116_CANDIDATE_PATH);
+    presentation
+        .save(&path)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    path
+}
+
+fn write_f116_temporary_candidate(label: &str) -> PathBuf {
+    let presentation = build_f116_ten_slide_deck();
+    assert_f116_deck_structure(&presentation);
+    let path = f116_temp_path(label, "pptx");
+    presentation
+        .save(&path)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    path
+}
+
+fn f116_temp_path(label: &str, extension: &str) -> PathBuf {
+    let ordinal = F116_TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "rdocx-f116-{label}-{}-{ordinal}.{extension}",
+        std::process::id()
+    ))
+}
+
+fn assert_clean_cross_viewer_evidence(row: CrossViewerEvidence) -> Result<(), String> {
+    let CrossViewerObservation::Clean {
+        opened_or_imported,
+        observed_slide_count,
+        no_repair_or_conversion_error,
+        export_or_close_result,
+    } = row.observation
+    else {
+        return Err(format!("{} evidence is pending", row.application));
+    };
+    if row
+        .version_or_date
+        .is_none_or(|value| value.trim().is_empty())
+    {
+        return Err(format!(
+            "{} lacks a nonblank version or acceptance date",
+            row.application
+        ));
+    }
+    if row.build.is_none_or(|value| value.trim().is_empty()) {
+        return Err(format!("{} lacks a nonblank build", row.application));
+    }
+    if !opened_or_imported {
+        return Err(format!(
+            "{} lacks a positive open or import",
+            row.application
+        ));
+    }
+    if observed_slide_count != 10 {
+        return Err(format!(
+            "{} observed {observed_slide_count} slides instead of 10",
+            row.application
+        ));
+    }
+    if !no_repair_or_conversion_error {
+        return Err(format!(
+            "{} observed a repair or conversion error",
+            row.application
+        ));
+    }
+    if export_or_close_result.trim().is_empty() {
+        return Err(format!(
+            "{} lacks an export or close result",
+            row.application
+        ));
+    }
+    Ok(())
+}
+
+fn assert_f116_powerpoint_acceptance(path: &Path) {
+    assert_powerpoint_build();
+    let name = path.file_name().unwrap().to_string_lossy();
+    let path = path.to_string_lossy();
+    let script = format!(
+        "with timeout of 120 seconds\ntell application \"Microsoft PowerPoint\"\nset previousStartUpDialog to start up dialog\ntry\nif (Version as text) is not \"{POWERPOINT_VERSION}\" then error \"PowerPoint version mismatch\"\nif (build as text) is not \"{POWERPOINT_APP_BUILD}\" then error \"PowerPoint build mismatch\"\nset start up dialog to false\nset deckPath to \"{path}\"\nopen my POSIX file deckPath\nset checkedDeck to presentation \"{name}\"\nif (count of slides of checkedDeck) is not 10 then error \"slide count mismatch\"\nclose checkedDeck saving no\nset start up dialog to previousStartUpDialog\non error errorMessage number errorNumber\ntry\nclose checkedDeck saving no\nend try\nset start up dialog to previousStartUpDialog\nerror errorMessage number errorNumber\nend try\nend tell\nend timeout\n"
+    );
+    let result = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .expect("launch PowerPoint F-116 acceptance script");
+    assert!(
+        result.status.success(),
+        "PowerPoint F-116 acceptance failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+fn assert_f116_libreoffice_acceptance(path: &Path) {
+    let version = Command::new("soffice")
+        .arg("--version")
+        .output()
+        .expect("read LibreOffice version");
+    assert!(version.status.success());
+    assert_eq!(
+        String::from_utf8(version.stdout).unwrap().trim(),
+        LIBREOFFICE_VERSION
+    );
+
+    let output_dir = PathBuf::from(format!(
+        "/private/tmp/rdocx-f116-libreoffice-{}",
+        std::process::id()
+    ));
+    let profile_dir = PathBuf::from(format!(
+        "/private/tmp/rdocx-f116-libreoffice-profile-{}",
+        std::process::id()
+    ));
+    if output_dir.exists() {
+        fs::remove_dir_all(&output_dir).expect("remove stale F-116 LibreOffice output");
+    }
+    if profile_dir.exists() {
+        fs::remove_dir_all(&profile_dir).expect("remove stale F-116 LibreOffice profile");
+    }
+    fs::create_dir_all(&output_dir).expect("create F-116 LibreOffice output");
+    let profile = format!("-env:UserInstallation=file://{}", profile_dir.display());
+    let filter =
+        r#"pdf:impress_pdf_Export:{"ExportHiddenSlides":{"type":"boolean","value":"true"}}"#;
+    let result = Command::new("soffice")
+        .args(["--headless", &profile, "--convert-to", filter, "--outdir"])
+        .arg(&output_dir)
+        .arg(path)
+        .output()
+        .expect("run LibreOffice F-116 acceptance");
+    assert!(
+        result.status.success(),
+        "LibreOffice F-116 import or export failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let pdf = output_dir.join("rdocx-f116-m11-write-api.pdf");
+    assert!(
+        pdf.is_file(),
+        "LibreOffice did not create {}",
+        pdf.display()
+    );
+    let info = Command::new("pdfinfo")
+        .arg(&pdf)
+        .output()
+        .expect("inspect LibreOffice F-116 PDF");
+    assert!(
+        info.status.success(),
+        "pdfinfo failed: {}",
+        String::from_utf8_lossy(&info.stderr)
+    );
+    let info = String::from_utf8(info.stdout).unwrap();
+    let pages = info
+        .lines()
+        .find_map(|line| line.strip_prefix("Pages:").map(str::trim))
+        .and_then(|value| value.parse::<usize>().ok());
+    assert_eq!(pages, Some(10));
+    fs::remove_dir_all(&output_dir).expect("remove F-116 LibreOffice output");
+    if profile_dir.exists() {
+        fs::remove_dir_all(&profile_dir).expect("remove F-116 LibreOffice profile");
     }
 }
 
