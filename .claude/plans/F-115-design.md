@@ -1,6 +1,6 @@
 # F-115, Slide and presentation properties
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S28
 **Size**: S
 **Depends on**: F-017
@@ -135,15 +135,15 @@ facade behavior. All 28 deterministic hashes must match.
 
 ## Implementation checklist
 
-- [ ] Add slide-size facade access and raw-preserving mutation.
-- [ ] Add hidden state through typed `p:sld/@show`.
-- [ ] Add direct background set and clear while preserving `p:bgRef`.
-- [ ] Resolve, expose, create, and save shared core properties.
-- [ ] Add output-only `save_as_show` content-type conversion.
-- [ ] Add property, negative, schema-order, and package-graph tests to existing
+- [x] Add slide-size facade access and raw-preserving mutation.
+- [x] Add hidden state through typed `p:sld/@show`.
+- [x] Add direct background set and clear while preserving `p:bgRef`.
+- [x] Resolve, expose, create, and save shared core properties.
+- [x] Add output-only `save_as_show` content-type conversion.
+- [x] Add property, negative, schema-order, and package-graph tests to existing
   binaries.
-- [ ] Update exactly HLD 04 and HLD 06.
-- [ ] Run focused checks, risk riders, normal worker `/verify`, and the hash
+- [x] Update exactly HLD 04 and HLD 06.
+- [x] Run focused checks, risk riders, normal worker `/verify`, and the hash
   harness. The integrated sprint runs `/verify --full` once.
 
 ## Open questions

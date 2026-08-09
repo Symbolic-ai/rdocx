@@ -254,6 +254,19 @@ impl CT_Presentation {
         }
     }
 
+    /// Replaces only the slide dimensions, preserving size kind and raw data.
+    pub fn set_slide_size(&mut self, cx: Emu, cy: Emu) -> Result<()> {
+        validate_dimension("sldSz", "cx", cx)?;
+        validate_dimension("sldSz", "cy", cy)?;
+        if let Some(size) = &mut self.slide_size {
+            size.cx = cx;
+            size.cy = cy;
+        } else {
+            self.slide_size = Some(CT_SlideSize::new(cx, cy)?);
+        }
+        Ok(())
+    }
+
     /// Parses a complete PresentationML presentation root with any prefix.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         let mut reader = Reader::from_reader(xml);

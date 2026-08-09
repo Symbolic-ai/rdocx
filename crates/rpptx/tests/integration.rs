@@ -22,7 +22,9 @@ use rpptx_oxml::notes_parts::{CT_NotesMaster, CT_NotesSlide};
 use rpptx_oxml::placeholder::PhType;
 use rpptx_oxml::presentation::CT_Presentation;
 use rpptx_oxml::shape_tree::ShapeTreeChild;
-use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind};
+use rpptx_oxml::slide_parts::{
+    BackgroundRendering, CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind,
+};
 use rpptx_render::{RenderInput, layout_presentation_deterministic};
 
 #[path = "../examples/dump_deck.rs"]
@@ -40,6 +42,223 @@ const LAYOUT_PART: &str = "/custom/layouts/validation.xml";
 const POWERPOINT_VERSION: &str = "16.104";
 const POWERPOINT_BUILD: &str = "16.104.25121423";
 const POWERPOINT_APP_BUILD: &str = "1214";
+
+#[test]
+fn slide_and_presentation_properties_round_trip() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    presentation
+        .set_slide_size(Emu(10_000_001), Emu(5_000_003))
+        .expect("set slide size");
+    let fill = Fill::from_xml(br#"<a:solidFill><a:srgbClr val="345678"/></a:solidFill>"#).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    slide.set_hidden(true);
+    slide.set_background(fill).expect("set direct background");
+    presentation.core_properties_mut().title = Some("F-115 properties".to_owned());
+
+    let bytes = presentation.to_bytes().expect("serialize properties");
+    let package = open_opc(&bytes, "property round trip");
+    let slide_part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part_name, content_type)| {
+            (content_type == content_types::SLIDE).then_some(part_name)
+        })
+        .unwrap();
+    let slide = CT_Slide::from_xml(package.get_part(slide_part).unwrap()).unwrap();
+    let BackgroundRendering::Properties(Some(background_fill)) = slide
+        .common_slide_data
+        .background
+        .as_ref()
+        .unwrap()
+        .rendering()
+    else {
+        panic!("expected a direct slide background fill");
+    };
+    assert_eq!(
+        background_fill.to_xml().unwrap(),
+        br#"<a:solidFill><a:srgbClr val="345678"/></a:solidFill>"#
+    );
+    let reopened = Presentation::from_bytes(&bytes).expect("reopen properties");
+
+    assert_eq!(
+        reopened.slide_size(),
+        Some((Emu(10_000_001), Emu(5_000_003)))
+    );
+    assert!(reopened.slide(0).unwrap().hidden());
+    assert!(reopened.slide(0).unwrap().has_explicit_background());
+    assert_eq!(
+        reopened
+            .core_properties()
+            .and_then(|props| props.title.as_deref()),
+        Some("F-115 properties")
+    );
+}
+
+#[test]
+fn core_properties_are_loaded_lazily_and_written_with_valid_graph() {
+    const CORE_PART: &str = "/metadata/nonstandard-core.xml";
+    let core_xml = br#"<?xml version="1.0"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title> Original &amp; exact </dc:title><!--producer--></cp:coreProperties>"#;
+    let mut package = fixture_package();
+    package.set_part(CORE_PART, core_xml.to_vec());
+    package
+        .content_types
+        .add_override(CORE_PART, content_types::CORE_PROPERTIES);
+    package.package_rels.add_with_id(
+        "core-link",
+        rel_types::CORE_PROPERTIES,
+        "metadata/nonstandard-core.xml",
+    );
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+
+    assert_eq!(
+        presentation
+            .core_properties()
+            .and_then(|props| props.title.as_deref()),
+        Some(" Original & exact ")
+    );
+    let immutable = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "immutable core properties",
+    );
+    assert_eq!(immutable.get_part(CORE_PART).unwrap(), core_xml);
+
+    presentation.core_properties_mut().creator = Some("F-115".to_owned());
+    let mutated = open_opc(&presentation.to_bytes().unwrap(), "mutated core properties");
+    assert_eq!(
+        mutated.content_types.content_type_for(CORE_PART),
+        Some(content_types::CORE_PROPERTIES)
+    );
+    let relationship = mutated
+        .package_rels
+        .get_by_type(rel_types::CORE_PROPERTIES)
+        .unwrap();
+    assert_eq!(
+        OpcPackage::resolve_rel_target("/", &relationship.target),
+        CORE_PART
+    );
+    assert_eq!(
+        oxml_core::core_properties::CoreProperties::from_xml(mutated.get_part(CORE_PART).unwrap())
+            .unwrap()
+            .creator
+            .as_deref(),
+        Some("F-115")
+    );
+
+    let mut absent = Presentation::from_bytes(&package_bytes(fixture_package())).unwrap();
+    assert!(absent.core_properties().is_none());
+    absent.core_properties_mut().subject = Some("created".to_owned());
+    let created = open_opc(&absent.to_bytes().unwrap(), "created core properties");
+    let relationship = created
+        .package_rels
+        .get_by_type(rel_types::CORE_PROPERTIES)
+        .unwrap();
+    let part = OpcPackage::resolve_rel_target("/", &relationship.target);
+    assert_eq!(part, "/docProps/core.xml");
+    assert_eq!(
+        created.content_types.content_type_for(&part),
+        Some(content_types::CORE_PROPERTIES)
+    );
+    let created_xml = created.get_part(&part).expect("created core part");
+    assert_eq!(
+        oxml_core::core_properties::CoreProperties::from_xml(created_xml)
+            .unwrap()
+            .subject
+            .as_deref(),
+        Some("created")
+    );
+}
+
+#[test]
+fn occupied_conventional_core_part_is_not_overwritten_without_relationship() {
+    const OCCUPIED_CORE_PART: &str = "/docProps/core.xml";
+    let occupied = b"producer-owned bytes outside the core relationship graph";
+    let mut package = fixture_package();
+    package.set_part(OCCUPIED_CORE_PART, occupied.to_vec());
+    let source_bytes = package_bytes(package);
+    let mut presentation = Presentation::from_bytes(&source_bytes).unwrap();
+    presentation.core_properties_mut().subject = Some("must not overwrite".to_owned());
+
+    let error = presentation.to_bytes().unwrap_err();
+    assert!(matches!(
+        error,
+        Error::CorePropertiesPartCollision { ref part_name }
+            if part_name == OCCUPIED_CORE_PART
+    ));
+
+    let output = std::env::temp_dir().join(format!(
+        "rpptx-f115-core-collision-{}.pptx",
+        std::process::id()
+    ));
+    fs::write(&output, b"existing output").unwrap();
+    assert!(presentation.save(&output).is_err());
+    assert_eq!(fs::read(&output).unwrap(), b"existing output");
+    fs::remove_file(&output).unwrap();
+
+    let source = open_opc(&source_bytes, "occupied core source");
+    assert_eq!(source.get_part(OCCUPIED_CORE_PART).unwrap(), occupied);
+    assert!(
+        source
+            .package_rels
+            .get_by_type(rel_types::CORE_PROPERTIES)
+            .is_none()
+    );
+}
+
+#[test]
+fn save_as_show_changes_only_the_main_content_type() {
+    let presentation = Presentation::from_bytes(&package_bytes(fixture_package())).unwrap();
+    let ordinary_bytes = presentation.to_bytes().unwrap();
+    let output = std::env::temp_dir().join(format!("rpptx-f115-show-{}.ppsx", std::process::id()));
+    presentation.save_as_show(&output).expect("save slideshow");
+    let show_bytes = fs::read(&output).expect("read slideshow");
+    fs::remove_file(&output).expect("remove slideshow");
+
+    let ordinary = open_opc(&ordinary_bytes, "ordinary presentation");
+    let show = open_opc(&show_bytes, "slideshow presentation");
+    assert_eq!(
+        show.content_types.content_type_for(PRESENTATION_PART),
+        Some(content_types::SLIDESHOW)
+    );
+    assert_eq!(ordinary.parts, show.parts);
+    assert_eq!(ordinary.package_rels.items, show.package_rels.items);
+    assert_eq!(ordinary.part_rels.len(), show.part_rels.len());
+    for (part_name, relationships) in &ordinary.part_rels {
+        assert_eq!(
+            relationships.items,
+            show.part_rels.get(part_name).unwrap().items,
+            "{part_name}: relationship scope"
+        );
+    }
+    let mut ordinary_overrides = ordinary.content_types.overrides;
+    ordinary_overrides.insert(
+        PRESENTATION_PART.to_owned(),
+        content_types::SLIDESHOW.to_owned(),
+    );
+    assert_eq!(ordinary_overrides, show.content_types.overrides);
+    assert_eq!(ordinary.content_types.defaults, show.content_types.defaults);
+    assert_eq!(presentation.to_bytes().unwrap(), ordinary_bytes);
+    assert_eq!(
+        Presentation::from_bytes(&show_bytes).unwrap().len(),
+        presentation.len()
+    );
+}
+
+#[test]
+fn invalid_slide_size_does_not_mutate_the_presentation() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    let before = presentation.to_bytes().unwrap();
+
+    assert!(presentation.set_slide_size(Emu(0), Emu(5_000_000)).is_err());
+    assert!(
+        presentation
+            .set_slide_size(Emu(10_000_000), Emu(-1))
+            .is_err()
+    );
+
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+}
 
 #[test]
 fn invalid_slide_collection_indices_do_not_mutate_the_presentation() {

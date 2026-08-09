@@ -84,11 +84,15 @@ PRES_PROPS, VIEW_PROPS, TABLE_STYLES, HANDOUT_MASTER
 A `content_types` constants module is added alongside, so neither format crate
 hand-types the long MIME strings.
 
-rdocx resolves core properties through the package-level `CORE_PROPERTIES`
-relationship and retains its normalized target. Metadata is written back to
-that part with its content-type override. A document that creates metadata
-without an existing relationship uses `/docProps/core.xml` and adds the missing
-package relationship.
+Both facades resolve core properties through the package-level
+`CORE_PROPERTIES` relationship and retain its normalized target. Immutable
+property access leaves the source part bytes untouched. Mutable access marks
+the typed `CoreProperties` model for serialization to that target with its
+content-type override. A package that creates metadata without an existing
+relationship uses `/docProps/core.xml` and adds the missing package
+relationship. If that conventional part name is already occupied without the
+core-properties relationship, serialization returns an error before changing
+the package.
 
 ## Part naming
 

@@ -37,6 +37,11 @@ write at their fixed root locations. The modelled `p:hf` writes with the fixed
 attributes, and header-footer children retain their original payload and
 relative positions.
 
+`CT_Slide` also models the presence-sensitive root `show` attribute. Missing
+`show` means visible, while the facade exposes its inverse as `hidden`. Boolean
+input accepts both XML spellings and output uses fixed `1` or `0` values.
+Unrelated root attributes and children remain preserved.
+
 ## Public facade
 
 `rpptx::Presentation` opens a path or byte slice and owns the OPC package, the
@@ -46,6 +51,26 @@ are joined through their OPC relationships, including normalized relative
 targets. Missing parts, missing or wrong relationship ids, external slide
 targets, duplicate notes-slide links, and malformed typed roots return a
 concrete facade error.
+
+The presentation and slide property surface is concrete and borrowed:
+
+```rust
+Presentation::slide_size(&self) -> Option<(Emu, Emu)>;
+Presentation::set_slide_size(&mut self, width: Emu, height: Emu) -> Result<()>;
+Presentation::core_properties(&self) -> Option<&CoreProperties>;
+Presentation::core_properties_mut(&mut self) -> &mut CoreProperties;
+Presentation::save_as_show(&self, path: impl AsRef<Path>) -> Result<()>;
+SlideRef::hidden(&self) -> bool;
+SlideRef::has_explicit_background(&self) -> bool;
+SlideMut::set_hidden(&mut self, hidden: bool);
+SlideMut::set_background(&mut self, fill: Fill) -> Result<()>;
+SlideMut::clear_background(&mut self);
+```
+
+Core properties use the package-level relationship described in
+`04-opc-and-packaging.md`. Read access does not dirty the source part. Mutable
+access materializes a default model when absent and writes its relationship,
+content type, and part on save.
 
 `slides()` and `slide(index)` expose borrowed `SlideRef` handles in producer
 slide order. A slide exposes its producer id, optional `p:cSld` name, immediate
@@ -271,6 +296,11 @@ Carries `p:sldSz` (deck dimensions in EMU), `p:notesSz`, `p:sldIdLst`,
 `p:sldMasterIdLst`, and `p:defaultTextStyle` which is the base of the text
 inheritance chain.
 
+Slide-size mutation rejects non-positive dimensions before changing the model.
+It replaces only `p:sldSz/@cx` and `@cy`, preserving the producer size kind,
+unmodelled attributes, unmodelled children, and schema position. An absent
+`p:sldSz` is materialized with only the validated dimensions.
+
 **`p:sldIdLst` order is slide order.** There is no separate ordering mechanism.
 `CT_Presentation` records the original relationship-id order and reconciles raw
 list boundaries against surviving relationship ids during serialization.
@@ -283,7 +313,9 @@ defect in naive `add_slide` implementations.
 
 The `.pptx` versus `.ppsx` distinction lives entirely in this part's content
 type: `presentationml.presentation.main+xml` against
-`presentationml.slideshow.main+xml`. `Presentation::save_as_show()` exposes it.
+`presentationml.slideshow.main+xml`. `Presentation::save_as_show()` changes
+only the staged output package's main content type. It does not store slideshow
+mode on the facade or affect later ordinary saves.
 
 ## Notes parts
 
@@ -345,6 +377,13 @@ parsing uses the namespace bindings inherited from `p:cSld`, so aliased
 prefixes remain valid even when their declarations live on the part root.
 Attributes, effects, unsupported siblings, and the original child order remain
 inside the retained raw subtree and round-trip byte-identically.
+
+Slide background authoring accepts a direct DrawingML `Fill` and writes it as
+canonical `p:bg/p:bgPr` before `p:spTree`. Replacing an existing direct fill
+preserves the captured `p:bg` and `p:bgPr` attributes and all raw siblings while
+changing only the fill subtree. Replacing a `p:bgRef` or unsupported background
+choice is rejected. Clearing removes only a direct `p:bgPr` background, so theme
+references and opaque producer payloads remain untouched.
 
 An ordinary `CT_Shape` owns its required `p:spPr` as a public boxed
 `CT_ShapeProperties`. The allocation keeps recursive group parsing within the

@@ -10,6 +10,7 @@ use std::io::Cursor;
 use std::path::Path;
 
 use oxml_core::OxmlError;
+pub use oxml_core::core_properties::CoreProperties;
 pub use oxml_core::units::{Angle, Emu};
 pub use oxml_drawing::fill::Fill;
 pub use oxml_drawing::line::CT_LineProperties;
@@ -41,6 +42,7 @@ use thiserror::Error;
 
 #[cfg(feature = "default-template")]
 const DEFAULT_TEMPLATE: &[u8] = include_bytes!("../assets/default.pptx");
+const DEFAULT_CORE_PROPERTIES_PART: &str = "/docProps/core.xml";
 
 /// A result returned by the `rpptx` read facade.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -76,6 +78,9 @@ pub enum Error {
 
     #[error("package part is missing: {part_name}")]
     MissingPart { part_name: String },
+
+    #[error("cannot create core properties at occupied package part {part_name}")]
+    CorePropertiesPartCollision { part_name: String },
 
     #[error("{source_part}: found {count} notes-slide relationships, expected at most one")]
     DuplicateNotesSlides { source_part: String, count: usize },
@@ -118,6 +123,18 @@ pub enum Error {
 
     #[error("{operation} failed: {message}")]
     InvalidTableMutation {
+        operation: &'static str,
+        message: String,
+    },
+
+    #[error("{operation} failed: {message}")]
+    InvalidPresentationMutation {
+        operation: &'static str,
+        message: String,
+    },
+
+    #[error("{operation} failed: {message}")]
+    InvalidSlideMutation {
         operation: &'static str,
         message: String,
     },
@@ -181,6 +198,9 @@ pub struct Presentation {
     media_store: MediaStore,
     presentation_part: String,
     presentation: CT_Presentation,
+    core_properties: Option<CoreProperties>,
+    core_properties_part_name: String,
+    core_properties_dirty: bool,
     layouts: Vec<LayoutRecord>,
     slides: Vec<SlideRecord>,
 }
@@ -354,6 +374,24 @@ impl Presentation {
                 part_name: presentation_part.clone(),
                 message: error.to_string(),
             })?;
+        let core_properties_relationship =
+            package.package_rels.get_by_type(rel_types::CORE_PROPERTIES);
+        if let Some(relationship) = core_properties_relationship {
+            reject_external("/", relationship)?;
+        }
+        let core_properties_part_name = core_properties_relationship
+            .map(|relationship| OpcPackage::resolve_rel_target("/", &relationship.target));
+        let core_properties = if let Some(part_name) = &core_properties_part_name {
+            let xml = required_part(&package, part_name)?;
+            Some(
+                CoreProperties::from_xml(xml).map_err(|error| Error::MalformedPart {
+                    part_name: part_name.clone(),
+                    message: error.to_string(),
+                })?,
+            )
+        } else {
+            None
+        };
         let layouts = resolve_layouts(&package, &presentation_part, &presentation)?;
 
         let presentation_relationships = package.get_part_rels(&presentation_part);
@@ -388,6 +426,10 @@ impl Presentation {
             media_store,
             presentation_part,
             presentation,
+            core_properties,
+            core_properties_part_name: core_properties_part_name
+                .unwrap_or_else(|| DEFAULT_CORE_PROPERTIES_PART.to_owned()),
+            core_properties_dirty: false,
             layouts,
             slides,
         })
@@ -400,8 +442,56 @@ impl Presentation {
             "invalid presentation at byte save boundary: {:?}",
             self.validate()
         );
+        let package = self.staged_package()?;
+        let mut output = Cursor::new(Vec::new());
+        package.write_to(&mut output)?;
+        Ok(output.into_inner())
+    }
+
+    fn staged_package(&self) -> Result<OpcPackage> {
+        if self.core_properties_dirty
+            && self
+                .package
+                .package_rels
+                .get_by_type(rel_types::CORE_PROPERTIES)
+                .is_none()
+            && self
+                .package
+                .parts
+                .contains_key(&self.core_properties_part_name)
+        {
+            return Err(Error::CorePropertiesPartCollision {
+                part_name: self.core_properties_part_name.clone(),
+            });
+        }
         let mut package = self.package.clone();
         self.media_store.write_new_parts(&mut package);
+        if let Some(properties) = self
+            .core_properties
+            .as_ref()
+            .filter(|_| self.core_properties_dirty)
+        {
+            let xml = properties.to_xml().map_err(|error| Error::MalformedPart {
+                part_name: self.core_properties_part_name.clone(),
+                message: error.to_string(),
+            })?;
+            package.set_part(&self.core_properties_part_name, xml);
+            package.content_types.add_override(
+                &self.core_properties_part_name,
+                content_types::CORE_PROPERTIES,
+            );
+            if package
+                .package_rels
+                .get_by_type(rel_types::CORE_PROPERTIES)
+                .is_none()
+            {
+                let target = self
+                    .core_properties_part_name
+                    .strip_prefix('/')
+                    .unwrap_or(&self.core_properties_part_name);
+                package.package_rels.add(rel_types::CORE_PROPERTIES, target);
+            }
+        }
         package.set_part(
             &self.presentation_part,
             self.presentation
@@ -432,9 +522,7 @@ impl Presentation {
                 );
             }
         }
-        let mut output = Cursor::new(Vec::new());
-        package.write_to(&mut output)?;
-        Ok(output.into_inner())
+        Ok(package)
     }
 
     /// Saves the deterministic package bytes to a `.pptx` path.
@@ -445,6 +533,21 @@ impl Presentation {
             self.validate()
         );
         std::fs::write(path, self.to_bytes()?).map_err(OpcError::from)?;
+        Ok(())
+    }
+
+    /// Saves a slideshow package without changing later ordinary saves.
+    pub fn save_as_show<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        debug_assert!(
+            self.validate().is_empty(),
+            "invalid presentation at slideshow save boundary: {:?}",
+            self.validate()
+        );
+        let mut package = self.staged_package()?;
+        package
+            .content_types
+            .add_override(&self.presentation_part, content_types::SLIDESHOW);
+        package.save(path)?;
         Ok(())
     }
 
@@ -686,6 +789,36 @@ impl Presentation {
     /// Iterates slides in `p:sldIdLst` order.
     pub fn slides(&self) -> impl ExactSizeIterator<Item = SlideRef<'_>> {
         self.slides.iter().map(slide_ref)
+    }
+
+    /// Returns the optional slide dimensions in EMUs.
+    pub fn slide_size(&self) -> Option<(Emu, Emu)> {
+        self.presentation
+            .slide_size
+            .as_ref()
+            .map(|size| (size.cx, size.cy))
+    }
+
+    /// Replaces only the slide dimensions after validating both values.
+    pub fn set_slide_size(&mut self, width: Emu, height: Emu) -> Result<()> {
+        self.presentation
+            .set_slide_size(width, height)
+            .map_err(|error| Error::InvalidPresentationMutation {
+                operation: "set slide size",
+                message: error.to_string(),
+            })
+    }
+
+    /// Returns shared package core properties without dirtying their source part.
+    pub fn core_properties(&self) -> Option<&CoreProperties> {
+        self.core_properties.as_ref()
+    }
+
+    /// Returns mutable shared core properties, materializing the package model.
+    pub fn core_properties_mut(&mut self) -> &mut CoreProperties {
+        self.core_properties_dirty = true;
+        self.core_properties
+            .get_or_insert_with(CoreProperties::default)
     }
 
     /// Returns the number of layouts reachable through presentation masters.
@@ -1599,6 +1732,27 @@ fn slide_mut(record: &mut SlideRecord) -> SlideMut<'_> {
 }
 
 impl SlideMut<'_> {
+    /// Sets whether the slide is hidden from the slideshow.
+    pub fn set_hidden(&mut self, hidden: bool) {
+        self.record.slide.set_hidden(hidden);
+    }
+
+    /// Sets a direct DrawingML fill without replacing a theme reference.
+    pub fn set_background(&mut self, fill: Fill) -> Result<()> {
+        self.record
+            .slide
+            .set_background(fill)
+            .map_err(|error| Error::InvalidSlideMutation {
+                operation: "set slide background",
+                message: error.to_string(),
+            })
+    }
+
+    /// Removes only a direct-fill background.
+    pub fn clear_background(&mut self) {
+        self.record.slide.clear_background();
+    }
+
     /// Appends a rectangular table at the top of the slide's z-order.
     pub fn add_table(
         &mut self,
@@ -1800,6 +1954,16 @@ impl SlideRef<'_> {
     /// Returns the optional `p:cSld` name.
     pub fn name(&self) -> Option<&str> {
         self.record.slide.common_slide_data.name.as_deref()
+    }
+
+    /// Returns whether the slide is hidden from the slideshow.
+    pub fn hidden(&self) -> bool {
+        self.record.slide.hidden()
+    }
+
+    /// Returns whether the slide carries an explicit `p:bg` element.
+    pub fn has_explicit_background(&self) -> bool {
+        self.record.slide.has_explicit_background()
     }
 
     /// Returns one immediate z-order child by zero-based index.

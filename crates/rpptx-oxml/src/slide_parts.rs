@@ -62,9 +62,44 @@ pub enum BackgroundRendering {
 pub struct CT_Background {
     raw_xml: Vec<u8>,
     rendering: BackgroundRendering,
+    fill_range: Option<(usize, usize)>,
 }
 
 impl CT_Background {
+    /// Builds a canonical direct-fill slide background.
+    pub fn from_fill(fill: Fill) -> Result<Self> {
+        let mut writer = Writer::new(Vec::new());
+        writer.write_event(Event::Start(BytesStart::new("p:bg")))?;
+        writer.write_event(Event::Start(BytesStart::new("p:bgPr")))?;
+        let fill_start = writer.get_ref().len();
+        fill.write_xml(&mut writer)
+            .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+        let fill_end = writer.get_ref().len();
+        writer.write_event(Event::End(BytesEnd::new("p:bgPr")))?;
+        writer.write_event(Event::End(BytesEnd::new("p:bg")))?;
+        Ok(Self {
+            raw_xml: writer.into_inner(),
+            rendering: BackgroundRendering::Properties(Some(Box::new(fill))),
+            fill_range: Some((fill_start, fill_end)),
+        })
+    }
+
+    /// Replaces only an existing direct fill inside the preserved background.
+    fn replace_fill(&mut self, fill: Fill) -> Result<()> {
+        let Some((start, end)) = self.fill_range else {
+            return Err(OxmlError::InvalidValue(
+                "cannot replace a background that has no safe direct fill range".to_owned(),
+            ));
+        };
+        let replacement = fill
+            .to_xml()
+            .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+        self.raw_xml.splice(start..end, replacement.iter().copied());
+        self.fill_range = Some((start, start + replacement.len()));
+        self.rendering = BackgroundRendering::Properties(Some(Box::new(fill)));
+        Ok(())
+    }
+
     /// Returns the original subtree used as the sole serialisation source.
     pub fn raw_xml(&self) -> &[u8] {
         &self.raw_xml
@@ -88,9 +123,16 @@ impl CT_Background {
                         return Err(unexpected(&start));
                     }
                     let rendering = parse_background_rendering(&mut reader, &namespaces)?;
+                    let fill_range =
+                        if matches!(rendering, BackgroundRendering::Properties(Some(_))) {
+                            direct_background_fill_range(xml, inherited)?
+                        } else {
+                            None
+                        };
                     return Ok(Self {
                         raw_xml: xml.to_vec(),
                         rendering,
+                        fill_range,
                     });
                 }
                 Event::Empty(start) => {
@@ -148,6 +190,7 @@ impl CT_HeaderFooter {
 pub struct CT_Slide {
     pub common_slide_data: CT_CommonSlideData,
     pub color_map_override: Option<CT_ColorMapOverride>,
+    pub show: Option<bool>,
     pub show_master_shapes: Option<bool>,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
@@ -238,6 +281,7 @@ struct ParsedRoot {
     color_map: Option<ParsedColorMap>,
     text_styles: Option<CT_MasterTextStyles>,
     header_footer: Option<CT_HeaderFooter>,
+    show: Option<bool>,
     show_master_shapes: Option<bool>,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
@@ -269,6 +313,7 @@ impl CT_Slide {
                 mapping_children: OrderedRawChildren::default(),
                 raw_children: OrderedRawChildren::default(),
             }),
+            show: None,
             show_master_shapes: None,
             raw_attributes: Vec::new(),
             raw_children: OrderedRawChildren::default(),
@@ -280,6 +325,7 @@ impl CT_Slide {
         Ok(Self {
             common_slide_data: required(parsed.common_slide_data, "p:cSld")?,
             color_map_override: parsed.color_map_override,
+            show: parsed.show,
             show_master_shapes: parsed.show_master_shapes,
             raw_attributes: parsed.raw_attributes,
             raw_children: parsed.raw_children,
@@ -291,11 +337,115 @@ impl CT_Slide {
             RootKind::Slide,
             &self.common_slide_data,
             self.color_map_override.as_ref(),
+            self.show,
             self.show_master_shapes,
             None,
             &self.raw_attributes,
             &self.raw_children,
         )
+    }
+
+    /// Returns whether this slide is hidden from the slideshow.
+    pub fn hidden(&self) -> bool {
+        !self.show.unwrap_or(true)
+    }
+
+    /// Sets hidden state through the inverse `p:sld/@show` flag.
+    pub fn set_hidden(&mut self, hidden: bool) {
+        self.show = Some(!hidden);
+    }
+
+    /// Returns whether the slide carries any explicit `p:bg` element.
+    pub fn has_explicit_background(&self) -> bool {
+        self.common_slide_data.background.is_some()
+    }
+
+    /// Replaces an absent or direct-fill background without authoring `p:bgRef`.
+    pub fn set_background(&mut self, fill: Fill) -> Result<()> {
+        if let Some(background) = &mut self.common_slide_data.background {
+            return background.replace_fill(fill);
+        }
+        self.common_slide_data.background = Some(CT_Background::from_fill(fill)?);
+        Ok(())
+    }
+
+    /// Removes only a direct-fill background and preserves all other choices.
+    pub fn clear_background(&mut self) {
+        if self
+            .common_slide_data
+            .background
+            .as_ref()
+            .is_some_and(|background| {
+                matches!(background.rendering(), BackgroundRendering::Properties(_))
+            })
+        {
+            self.common_slide_data.background = None;
+        }
+    }
+}
+
+fn direct_background_fill_range(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+) -> Result<Option<(usize, usize)>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut scopes = vec![inherited.clone()];
+    let mut depth = 0usize;
+    let mut properties_depth = None;
+    loop {
+        let event_start = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let parent = scopes.last().ok_or_else(|| {
+                    OxmlError::InvalidValue("missing background namespace scope".to_owned())
+                })?;
+                let scope = parent.with_start(&element)?;
+                if properties_depth == Some(depth)
+                    && scope.element_uri(element.name().as_ref()) == Some(A_NS)
+                    && is_fill_name(local_name(element.name().as_ref()))
+                {
+                    reader.read_to_end(element.name())?;
+                    return Ok(Some((event_start, reader.buffer_position() as usize)));
+                }
+                depth += 1;
+                if depth == 2
+                    && scope.element_uri(element.name().as_ref()) == Some(P_NS)
+                    && local_name(element.name().as_ref()) == b"bgPr"
+                {
+                    properties_depth = Some(depth);
+                }
+                scopes.push(scope);
+            }
+            Event::Empty(element) => {
+                let parent = scopes.last().ok_or_else(|| {
+                    OxmlError::InvalidValue("missing background namespace scope".to_owned())
+                })?;
+                let scope = parent.with_start(&element)?;
+                if properties_depth == Some(depth)
+                    && scope.element_uri(element.name().as_ref()) == Some(A_NS)
+                    && is_fill_name(local_name(element.name().as_ref()))
+                {
+                    return Ok(Some((event_start, reader.buffer_position() as usize)));
+                }
+            }
+            Event::End(element) => {
+                if properties_depth == Some(depth) && local_name(element.name().as_ref()) == b"bgPr"
+                {
+                    properties_depth = None;
+                }
+                if depth == 0 || scopes.len() == 1 {
+                    return Err(OxmlError::InvalidValue(
+                        "background XML has an unmatched closing tag".to_owned(),
+                    ));
+                }
+                depth -= 1;
+                scopes.pop();
+            }
+            Event::Eof => return Ok(None),
+            _ => {}
+        }
+        buffer.clear();
     }
 }
 
@@ -317,6 +467,7 @@ impl CT_SlideLayout {
             RootKind::Layout,
             &self.common_slide_data,
             self.color_map_override.as_ref(),
+            None,
             self.show_master_shapes,
             self.header_footer.as_ref(),
             &self.raw_attributes,
@@ -343,7 +494,13 @@ impl CT_SlideMaster {
 
     pub fn to_xml(&self) -> Result<Vec<u8>> {
         let mut writer = Writer::new(Vec::new());
-        write_root_start(&mut writer, RootKind::Master, None, &self.raw_attributes)?;
+        write_root_start(
+            &mut writer,
+            RootKind::Master,
+            None,
+            None,
+            &self.raw_attributes,
+        )?;
         emit_raw(&mut writer, self.raw_children.at(0))?;
         self.common_slide_data.write_xml(&mut writer)?;
         emit_raw(&mut writer, self.raw_children.at(1))?;
@@ -420,6 +577,10 @@ fn parse_root_children(
         parsed
             .raw_attributes
             .retain(|(name, _)| name != "showMasterSp");
+    }
+    if matches!(kind, RootKind::Slide) {
+        parsed.show = parse_optional_bool_attribute(start, "show")?;
+        parsed.raw_attributes.retain(|(name, _)| name != "show");
     }
     let mut buffer = Vec::new();
     loop {
@@ -517,17 +678,19 @@ impl ParsedRoot {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_slide_like(
     kind: RootKind,
     common: &CT_CommonSlideData,
     color_override: Option<&CT_ColorMapOverride>,
+    show: Option<bool>,
     show_master_shapes: Option<bool>,
     header_footer: Option<&CT_HeaderFooter>,
     attributes: &RawAttributes,
     raw: &OrderedRawChildren,
 ) -> Result<Vec<u8>> {
     let mut writer = Writer::new(Vec::new());
-    write_root_start(&mut writer, kind, show_master_shapes, attributes)?;
+    write_root_start(&mut writer, kind, show, show_master_shapes, attributes)?;
     emit_raw(&mut writer, raw.at(0))?;
     common.write_xml(&mut writer)?;
     emit_raw(&mut writer, raw.at(1))?;
@@ -558,6 +721,7 @@ fn write_slide_like(
 fn write_root_start<W: Write>(
     writer: &mut Writer<W>,
     kind: RootKind,
+    show: Option<bool>,
     show_master_shapes: Option<bool>,
     attributes: &RawAttributes,
 ) -> Result<()> {
@@ -565,6 +729,7 @@ fn write_root_start<W: Write>(
     root.push_attribute(("xmlns:p", P_NS));
     root.push_attribute(("xmlns:a", A_NS));
     root.push_attribute(("xmlns:r", R_NS));
+    push_optional_bool_attribute(&mut root, "show", show);
     if let Some(show_master_shapes) = show_master_shapes {
         root.push_attribute(("showMasterSp", if show_master_shapes { "1" } else { "0" }));
     }

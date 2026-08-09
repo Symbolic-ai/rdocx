@@ -35,6 +35,115 @@ const EXPECTED_DECKS: usize = 50;
 type DrawingElements = (Vec<Vec<u8>>, Vec<Vec<u8>>);
 
 #[test]
+fn slide_size_mutation_preserves_kind_and_unmodelled_xml() {
+    let xml = format!(
+        r#"<q:presentation xmlns:q="{P_NS}" xmlns:x="urn:f115"><x:before/><q:sldSz cy="6858000" type="screen16x9" x:keep="yes" cx="12192000"><x:size> A &amp; B </x:size></q:sldSz><x:between/><q:notesSz cx="6858000" cy="9144000"/></q:presentation>"#
+    );
+    let mut presentation = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+
+    presentation
+        .set_slide_size(Emu(10_000_001), Emu(5_000_003))
+        .unwrap();
+
+    let written = presentation.to_xml().unwrap();
+    let text = String::from_utf8(written.clone()).unwrap();
+    assert!(
+        text.contains(r#"<p:sldSz cx="10000001" cy="5000003" type="screen16x9" x:keep="yes">"#)
+    );
+    assert!(text.contains("<x:size> A &amp; B </x:size>"));
+    assert_order(
+        &written,
+        &["<x:before", "<p:sldSz", "<x:between", "<p:notesSz"],
+    );
+    let reparsed = CT_Presentation::from_xml(&written).unwrap();
+    let size = reparsed.slide_size.unwrap();
+    assert_eq!((size.cx, size.cy), (Emu(10_000_001), Emu(5_000_003)));
+    assert_eq!(size.kind.as_deref(), Some("screen16x9"));
+}
+
+#[test]
+fn hidden_flag_uses_inverse_show_semantics() {
+    let slide_xml = |show: &str| {
+        format!(
+            r#"<q:sld xmlns:q="{P_NS}" xmlns:x="urn:f115"{show} x:keep="root"><q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld><x:tail/></q:sld>"#
+        )
+    };
+
+    let missing = CT_Slide::from_xml(slide_xml("").as_bytes()).unwrap();
+    let shown = CT_Slide::from_xml(slide_xml(r#" show="true""#).as_bytes()).unwrap();
+    let hidden = CT_Slide::from_xml(slide_xml(r#" show="false""#).as_bytes()).unwrap();
+    assert!(!missing.hidden());
+    assert!(!shown.hidden());
+    assert!(hidden.hidden());
+
+    let mut slide = missing;
+    slide.set_hidden(true);
+    let hidden_xml = String::from_utf8(slide.to_xml().unwrap()).unwrap();
+    assert!(hidden_xml.contains(r#" show="0""#));
+    assert!(hidden_xml.contains(r#"x:keep="root""#));
+    assert!(hidden_xml.contains("<x:tail/>"));
+    slide.set_hidden(false);
+    let shown_xml = String::from_utf8(slide.to_xml().unwrap()).unwrap();
+    assert!(shown_xml.contains(r#" show="1""#));
+}
+
+#[test]
+fn background_set_and_clear_preserve_theme_references_and_raw_xml() {
+    let reference_xml = format!(
+        r#"<q:sld xmlns:q="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:f115"><q:cSld><q:bg x:keep="theme"><q:bgRef idx="1001"><a:schemeClr val="bg1"/></q:bgRef><x:bgTail/></q:bg><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld></q:sld>"#
+    );
+    let mut reference = CT_Slide::from_xml(reference_xml.as_bytes()).unwrap();
+    let reference_before = reference
+        .common_slide_data
+        .background
+        .as_ref()
+        .unwrap()
+        .raw_xml()
+        .to_vec();
+    let fill = oxml_drawing::fill::Fill::from_xml(
+        br#"<z:solidFill xmlns:z="http://schemas.openxmlformats.org/drawingml/2006/main"><z:srgbClr val="102030"/></z:solidFill>"#,
+    )
+    .unwrap();
+    assert!(reference.set_background(fill.clone()).is_err());
+    reference.clear_background();
+    assert_eq!(
+        reference.common_slide_data.background.unwrap().raw_xml(),
+        reference_before
+    );
+
+    let direct_xml = format!(
+        r#"<q:sld xmlns:q="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:f115"><q:cSld><x:before/><q:bg x:keep="container"><!--before-properties--><q:bgPr shadeToTitle="1" x:keep="properties"><x:before-fill/><!--before-fill--><a:solidFill><a:srgbClr val="ABCDEF"/></a:solidFill><!--after-fill--><a:effectLst><a:outerShdw blurRad="40000"><a:srgbClr val="010203"/></a:outerShdw></a:effectLst><x:after-fill/></q:bgPr><!--after-properties--><x:bg-extension/></q:bg><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree><x:after/></q:cSld></q:sld>"#
+    );
+    let mut direct = CT_Slide::from_xml(direct_xml.as_bytes()).unwrap();
+    direct.set_background(fill).unwrap();
+    let expected_background = br#"<q:bg x:keep="container"><!--before-properties--><q:bgPr shadeToTitle="1" x:keep="properties"><x:before-fill/><!--before-fill--><a:solidFill><a:srgbClr val="102030"/></a:solidFill><!--after-fill--><a:effectLst><a:outerShdw blurRad="40000"><a:srgbClr val="010203"/></a:outerShdw></a:effectLst><x:after-fill/></q:bgPr><!--after-properties--><x:bg-extension/></q:bg>"#;
+    assert_eq!(
+        direct
+            .common_slide_data
+            .background
+            .as_ref()
+            .unwrap()
+            .raw_xml(),
+        expected_background
+    );
+    let written = direct.to_xml().unwrap();
+    assert!(
+        written
+            .windows(expected_background.len())
+            .any(|window| window == expected_background)
+    );
+    assert_order(
+        &written,
+        &["<x:before/>", "<q:bg", "<p:spTree", "<x:after/>"],
+    );
+    direct.clear_background();
+    let cleared = String::from_utf8(direct.to_xml().unwrap()).unwrap();
+    assert!(!cleared.contains("<p:bg"));
+    assert!(cleared.contains("<x:before/>"));
+    assert!(cleared.contains("<x:after/>"));
+}
+
+#[test]
 fn fresh_shape_ids_preserve_other_bytes_and_rewrite_connector_endpoints() {
     let xml = format!(
         r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="{MC_NS}"><p:cSld producer="kept"><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name="root"/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="one"><x:raw xmlns:x="urn:f114"> A &amp; B </x:raw></p:cNvPr></p:nvSpPr><p:spPr/></p:sp><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="7" name="link"/><p:cNvCxnSpPr><a:stCxn id="2" idx="0"/><a:endCxn id="9" idx="1"/></p:cNvCxnSpPr></p:nvCxnSpPr><p:spPr/></p:cxnSp><p:sp><p:nvSpPr><p:cNvPr id="9" name="two"/></p:nvSpPr><p:spPr/></p:sp><mc:AlternateContent><mc:Choice Requires="p14"><p:sp><p:nvSpPr><p:cNvPr id="20" name="choice"/></p:nvSpPr></p:sp><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="21" name="choice link"/><p:cNvCxnSpPr><a:stCxn id="20" idx="0"/><a:endCxn id="20" idx="1"/></p:cNvCxnSpPr></p:nvCxnSpPr></p:cxnSp></mc:Choice><mc:Fallback><p:sp><p:nvSpPr><p:cNvPr id="22" name="fallback"/></p:nvSpPr></p:sp><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="23" name="fallback link"/><p:cNvCxnSpPr><a:stCxn id="22" idx="0"/><a:endCxn id="22" idx="1"/></p:cNvCxnSpPr></p:nvCxnSpPr></p:cxnSp></mc:Fallback></mc:AlternateContent></p:spTree></p:cSld></p:sld>"#
