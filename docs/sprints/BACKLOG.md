@@ -26,11 +26,11 @@ regenerated, never hand-edited.
 | M8, PresentationML                          | 14 | 14 | 0 | 0  |
 | M9, Inheritance resolver                    | 8  | 8 | 0 | 0  |
 | M10, Renderer                               | 20 | 20 | 0 | 0  |
-| M11, Write API                              | 12 | 8 | 2 | 2  |
+| M11, Write API                              | 12 | 8 | 3 | 1  |
 | M12, Charts                                 | 12 | 0 | 0 | 12 |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **158** | **109** | **2** | **47** |
+| **Total** | **158** | **109** | **3** | **46** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -232,7 +232,7 @@ regenerated, never hand-edited.
 | F-112 | Text frame mutation                          | S27 | L | done |
 | F-113 | Table facade                                 | S28 | L | in-progress |
 | F-114 | remove_slide, move_slide, duplicate_slide    | S28 | M | in-progress |
-| F-115 | Slide and presentation properties            | S28 | S | pending |
+| F-115 | Slide and presentation properties            | S28 | S | in-progress |
 | F-116 | Cross-viewer acceptance                      | S28 | M | pending |
 <!-- AUTOGEN:backlog-M11 END -->
 
