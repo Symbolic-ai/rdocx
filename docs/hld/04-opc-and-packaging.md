@@ -182,6 +182,13 @@ extension and content type are registered with the package. Each source slide
 creates or reuses its own internal image relationship to that shared part, with
 a relative target resolved from the slide part name.
 
+Slide removal considers only `/ppt/media/` targets reached from the removed
+slide and its removed notes relationship scopes. A candidate part is deleted
+only when no remaining internal package relationship reaches it. Pre-existing
+orphan media outside that candidate set is left untouched. The facade rebuilds
+its content-hash media index after the graph change, so a later insertion sees
+the surviving package state.
+
 Header parsing is lifted from the PDF crate, where `jpeg_dimensions` and the
 PNG IHDR reader are currently private. The JPEG walk classifies SOI, TEM and
 RST0 through RST7 as standalone markers with no length field, and EOI terminates

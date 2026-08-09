@@ -1,6 +1,6 @@
 # F-114, remove_slide, move_slide, duplicate_slide
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S28
 **Size**: M
 **Depends on**: F-078, F-107
@@ -134,17 +134,17 @@ mutation. All 28 deterministic hashes must match.
 
 ## Implementation checklist
 
-- [ ] Add the three atomic facade methods.
-- [ ] Reconcile raw slide-list children against original relationship ids.
-- [ ] Synchronize facade records and slide ids.
-- [ ] Remove slide, notes, relationship, content-type, custom-show, and newly
+- [x] Add the three atomic facade methods.
+- [x] Reconcile raw slide-list children against original relationship ids.
+- [x] Synchronize facade records and slide ids.
+- [x] Remove slide, notes, relationship, content-type, custom-show, and newly
   orphaned media graph members.
-- [ ] Deep-copy slides and notes with fresh ids and remapped relationships.
-- [ ] Freshen shape ids and connector endpoints.
-- [ ] Add the exact gate and all negative, preservation, and graph tests to
+- [x] Deep-copy slides and notes with fresh ids and remapped relationships.
+- [x] Freshen shape ids and connector endpoints.
+- [x] Add the exact gate and all negative, preservation, and graph tests to
   existing binaries.
-- [ ] Update exactly HLD 04 and HLD 06.
-- [ ] Run focused checks, risk riders, normal worker `/verify`, and the hash
+- [x] Update exactly HLD 04 and HLD 06.
+- [x] Run focused checks, risk riders, normal worker `/verify`, and the hash
   harness. The integrated sprint runs `/verify --full` once.
 
 ## Open questions

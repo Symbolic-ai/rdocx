@@ -32,9 +32,9 @@ use rpptx_oxml::notes_parts::CT_NotesSlide;
 use rpptx_oxml::picture::CT_Picture;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
 use rpptx_oxml::presentation::{CT_Presentation, CT_SlideId, custom_show_relationship_ids};
-use rpptx_oxml::relmap::relationship_ids;
+use rpptx_oxml::relmap::{relationship_ids, rewrite_exact_rel_ids, rewrite_rel_ids};
 use rpptx_oxml::shape_tree::{
-    CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild,
+    CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild, rewrite_shape_ids,
 };
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout};
 use thiserror::Error;
@@ -700,6 +700,280 @@ impl Presentation {
             .and_then(|record| record.layout.common_slide_data.name.as_deref())
     }
 
+    /// Removes one slide and its owned package graph by zero-based index.
+    pub fn remove_slide(&mut self, index: usize) -> Result<()> {
+        if index >= self.slides.len() {
+            return Err(Error::UnknownSlideIndex {
+                index,
+                slide_count: self.slides.len(),
+            });
+        }
+        let mut staged = self.clone();
+        staged.remove_slide_in_place(index)?;
+        *self = staged;
+        Ok(())
+    }
+
+    /// Moves one slide to an existing final zero-based index.
+    pub fn move_slide(&mut self, from_index: usize, to_index: usize) -> Result<()> {
+        let slide_count = self.slides.len();
+        if from_index >= slide_count {
+            return Err(Error::UnknownSlideIndex {
+                index: from_index,
+                slide_count,
+            });
+        }
+        if to_index >= slide_count {
+            return Err(Error::UnknownSlideIndex {
+                index: to_index,
+                slide_count,
+            });
+        }
+        if from_index == to_index {
+            return Ok(());
+        }
+        let slide = self.slides.remove(from_index);
+        self.slides.insert(to_index, slide);
+        let slide_id = self.presentation.slide_ids.remove(from_index);
+        self.presentation.slide_ids.insert(to_index, slide_id);
+        Ok(())
+    }
+
+    /// Duplicates one slide immediately after its source.
+    pub fn duplicate_slide(&mut self, index: usize) -> Result<SlideRef<'_>> {
+        if index >= self.slides.len() {
+            return Err(Error::UnknownSlideIndex {
+                index,
+                slide_count: self.slides.len(),
+            });
+        }
+        let mut staged = self.clone();
+        let inserted = staged.duplicate_slide_in_place(index)?;
+        *self = staged;
+        self.slides
+            .get(inserted)
+            .map(slide_ref)
+            .ok_or(Error::UnknownSlideIndex {
+                index: inserted,
+                slide_count: self.slides.len(),
+            })
+    }
+
+    fn remove_slide_in_place(&mut self, index: usize) -> Result<()> {
+        let record = self.slides[index].clone();
+        let presentation_relationship_id =
+            self.presentation.slide_ids[index].relationship_id.clone();
+        self.presentation
+            .remove_custom_show_slide(&presentation_relationship_id)
+            .map_err(|error| Error::MalformedPart {
+                part_name: self.presentation_part.clone(),
+                message: error.to_string(),
+            })?;
+
+        let mut media_candidates = HashSet::new();
+        collect_media_targets(&self.package, &record.part_name, &mut media_candidates);
+        if let Some(notes) = &record.notes {
+            collect_media_targets(&self.package, &notes.part_name, &mut media_candidates);
+            self.package.parts.remove(&notes.part_name);
+            self.package.part_rels.remove(&notes.part_name);
+            self.package
+                .content_types
+                .overrides
+                .remove(&notes.part_name);
+        }
+        self.package.parts.remove(&record.part_name);
+        self.package.part_rels.remove(&record.part_name);
+        self.package
+            .content_types
+            .overrides
+            .remove(&record.part_name);
+        if let Some(relationships) = self.package.part_rels.get_mut(&self.presentation_part) {
+            relationships
+                .items
+                .retain(|relationship| relationship.id != presentation_relationship_id);
+        }
+        self.presentation.slide_ids.remove(index);
+        self.slides.remove(index);
+        prune_unreachable_media(&mut self.package, &media_candidates);
+        self.media_store = MediaStore::scan(&self.package);
+        Ok(())
+    }
+
+    fn duplicate_slide_in_place(&mut self, index: usize) -> Result<usize> {
+        let source = self.slides[index].clone();
+        let slide_part = MediaNamer::scan(
+            "/ppt/slides",
+            "slide",
+            self.package.parts.keys().map(String::as_str),
+        )
+        .next_part_name("xml");
+        let id = self
+            .presentation
+            .slide_ids
+            .iter()
+            .map(|slide| slide.id)
+            .max()
+            .unwrap_or(255)
+            .max(255)
+            .checked_add(1)
+            .ok_or(Error::SlideIdExhausted)?;
+
+        let notes_part = source.notes.as_ref().map(|_| {
+            MediaNamer::scan(
+                "/ppt/notesSlides",
+                "notesSlide",
+                self.package.parts.keys().map(String::as_str),
+            )
+            .next_part_name("xml")
+        });
+        let notes = if let (Some(source_notes), Some(notes_part)) = (&source.notes, &notes_part) {
+            let source_relationships = self
+                .package
+                .get_part_rels(&source_notes.part_name)
+                .cloned()
+                .unwrap_or_default();
+            let (mut relationships, mut relationship_map) = duplicate_relationship_scope(
+                &mut self.package,
+                &mut self.media_store,
+                &source_notes.part_name,
+                notes_part,
+                &source_relationships,
+                Some(&slide_part),
+                None,
+            )?;
+            relationships
+                .items
+                .retain(|relationship| relationship.rel_type != rel_types::SLIDE);
+            let back_relationship_id = relationships.add(
+                rel_types::SLIDE,
+                &relative_part_target(notes_part, &slide_part),
+            );
+            let mut back_relationship_map = HashMap::new();
+            for relationship in source_relationships
+                .items
+                .iter()
+                .filter(|relationship| relationship.rel_type == rel_types::SLIDE)
+            {
+                relationship_map.insert(relationship.id.clone(), back_relationship_id.clone());
+                back_relationship_map.insert(relationship.id.clone(), back_relationship_id.clone());
+            }
+            let xml = source_notes
+                .notes
+                .to_xml()
+                .map_err(|error| Error::MalformedPart {
+                    part_name: source_notes.part_name.clone(),
+                    message: error.to_string(),
+                })?;
+            let xml =
+                rewrite_rel_ids(&xml, &relationship_map).map_err(|error| Error::MalformedPart {
+                    part_name: source_notes.part_name.clone(),
+                    message: error.to_string(),
+                })?;
+            let xml = rewrite_exact_rel_ids(&xml, &back_relationship_map).map_err(|error| {
+                Error::MalformedPart {
+                    part_name: source_notes.part_name.clone(),
+                    message: error.to_string(),
+                }
+            })?;
+            let xml = rewrite_shape_ids(&xml).map_err(|error| Error::MalformedPart {
+                part_name: source_notes.part_name.clone(),
+                message: error.to_string(),
+            })?;
+            let notes = CT_NotesSlide::from_xml(&xml).map_err(|error| Error::MalformedPart {
+                part_name: notes_part.clone(),
+                message: error.to_string(),
+            })?;
+            self.package.set_part(notes_part, xml);
+            self.package
+                .part_rels
+                .insert(notes_part.clone(), relationships);
+            self.package
+                .content_types
+                .add_override(notes_part, content_types::NOTES_SLIDE);
+            Some(NotesRecord {
+                part_name: notes_part.clone(),
+                notes,
+            })
+        } else {
+            None
+        };
+
+        let source_relationships = self
+            .package
+            .get_part_rels(&source.part_name)
+            .cloned()
+            .unwrap_or_default();
+        let (slide_relationships, relationship_map) = duplicate_relationship_scope(
+            &mut self.package,
+            &mut self.media_store,
+            &source.part_name,
+            &slide_part,
+            &source_relationships,
+            None,
+            notes_part.as_deref(),
+        )?;
+        let slide_xml = source
+            .slide
+            .to_xml()
+            .map_err(|error| Error::MalformedPart {
+                part_name: source.part_name.clone(),
+                message: error.to_string(),
+            })?;
+        let slide_xml = rewrite_rel_ids(&slide_xml, &relationship_map).map_err(|error| {
+            Error::MalformedPart {
+                part_name: source.part_name.clone(),
+                message: error.to_string(),
+            }
+        })?;
+        let slide_xml = rewrite_shape_ids(&slide_xml).map_err(|error| Error::MalformedPart {
+            part_name: source.part_name.clone(),
+            message: error.to_string(),
+        })?;
+        let slide = CT_Slide::from_xml(&slide_xml).map_err(|error| Error::MalformedPart {
+            part_name: slide_part.clone(),
+            message: error.to_string(),
+        })?;
+
+        let mut presentation_relationships = self
+            .package
+            .get_part_rels(&self.presentation_part)
+            .cloned()
+            .unwrap_or_default();
+        let presentation_relationship_id = presentation_relationships.add(
+            rel_types::SLIDE,
+            &relative_part_target(&self.presentation_part, &slide_part),
+        );
+        let slide_id = CT_SlideId::new(id, presentation_relationship_id).map_err(|error| {
+            Error::MalformedPart {
+                part_name: self.presentation_part.clone(),
+                message: error.to_string(),
+            }
+        })?;
+        self.package.set_part(&slide_part, slide_xml);
+        self.package
+            .part_rels
+            .insert(slide_part.clone(), slide_relationships);
+        self.package
+            .part_rels
+            .insert(self.presentation_part.clone(), presentation_relationships);
+        self.package
+            .content_types
+            .add_override(&slide_part, content_types::SLIDE);
+
+        let inserted = index + 1;
+        self.presentation.slide_ids.insert(inserted, slide_id);
+        self.slides.insert(
+            inserted,
+            SlideRecord {
+                id,
+                part_name: slide_part,
+                slide,
+                notes,
+            },
+        );
+        Ok(inserted)
+    }
+
     /// Synthesizes a new slide from one layout selected by zero-based index.
     pub fn add_slide(&mut self, layout_index: usize) -> Result<SlideRef<'_>> {
         let layout = self
@@ -867,6 +1141,95 @@ impl Presentation {
         Ok(shape_ref(
             tree.append_child(ShapeTreeChild::Picture(picture)),
         ))
+    }
+}
+
+fn duplicate_relationship_scope(
+    package: &mut OpcPackage,
+    media_store: &mut MediaStore,
+    source_part: &str,
+    destination_part: &str,
+    source_relationships: &Relationships,
+    slide_target: Option<&str>,
+    notes_target: Option<&str>,
+) -> Result<(Relationships, HashMap<String, String>)> {
+    let mut destination = Relationships::new();
+    let mut relationship_map = HashMap::new();
+    for relationship in &source_relationships.items {
+        let target = if relationship_is_external(relationship) {
+            relationship.target.clone()
+        } else {
+            let resolved = match relationship.rel_type.as_str() {
+                rel_types::SLIDE => slide_target.map(str::to_owned).unwrap_or_else(|| {
+                    OpcPackage::resolve_rel_target(source_part, &relationship.target)
+                }),
+                rel_types::NOTES_SLIDE => notes_target.map(str::to_owned).unwrap_or_else(|| {
+                    OpcPackage::resolve_rel_target(source_part, &relationship.target)
+                }),
+                _ => OpcPackage::resolve_rel_target(source_part, &relationship.target),
+            };
+            let resolved = if relationship.rel_type == rel_types::IMAGE {
+                let bytes = required_part(package, &resolved)?.to_vec();
+                media_store.insert(package, &bytes, &resolved)
+            } else {
+                resolved
+            };
+            relative_part_target(destination_part, &resolved)
+        };
+        let new_id = if relationship
+            .id
+            .strip_prefix("rId")
+            .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+        {
+            destination.add(&relationship.rel_type, &target)
+        } else {
+            destination.add_with_id(&relationship.id, &relationship.rel_type, &target);
+            relationship.id.clone()
+        };
+        if let Some(inserted) = destination.items.last_mut() {
+            inserted.target_mode = relationship.target_mode.clone();
+        }
+        relationship_map.insert(relationship.id.clone(), new_id);
+    }
+    Ok((destination, relationship_map))
+}
+
+fn collect_media_targets(package: &OpcPackage, source_part: &str, targets: &mut HashSet<String>) {
+    let Some(relationships) = package.get_part_rels(source_part) else {
+        return;
+    };
+    for relationship in &relationships.items {
+        if relationship_is_external(relationship) {
+            continue;
+        }
+        let target = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+        if target.starts_with("/ppt/media/") {
+            targets.insert(target);
+        }
+    }
+}
+
+fn prune_unreachable_media(package: &mut OpcPackage, candidates: &HashSet<String>) {
+    for candidate in candidates {
+        let reachable_from_root = package.package_rels.items.iter().any(|relationship| {
+            !relationship_is_external(relationship)
+                && OpcPackage::resolve_rel_target("/", &relationship.target) == *candidate
+        });
+        let reachable_from_part = package
+            .part_rels
+            .iter()
+            .any(|(source_part, relationships)| {
+                relationships.items.iter().any(|relationship| {
+                    !relationship_is_external(relationship)
+                        && OpcPackage::resolve_rel_target(source_part, &relationship.target)
+                            == *candidate
+                })
+            });
+        if !reachable_from_root && !reachable_from_part {
+            package.parts.remove(candidate);
+            package.part_rels.remove(candidate);
+            package.content_types.overrides.remove(candidate);
+        }
     }
 }
 

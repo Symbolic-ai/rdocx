@@ -21,9 +21,11 @@ use rpptx_oxml::namespace::{MC_NS, P_NS, P_PREFIX, R_NS, R_PREFIX};
 use rpptx_oxml::notes_parts::{CT_NotesMaster, CT_NotesSlide};
 use rpptx_oxml::picture::CT_Picture;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType, PlaceholderKey};
-use rpptx_oxml::presentation::CT_Presentation;
-use rpptx_oxml::relmap::rewrite_rel_ids;
-use rpptx_oxml::shape_tree::{CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild};
+use rpptx_oxml::presentation::{CT_Presentation, CT_SlideId};
+use rpptx_oxml::relmap::{rewrite_exact_rel_ids, rewrite_rel_ids};
+use rpptx_oxml::shape_tree::{
+    CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild, rewrite_shape_ids,
+};
 use rpptx_oxml::slide_parts::{
     BackgroundRendering, CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind,
 };
@@ -31,6 +33,72 @@ use rpptx_oxml::slide_parts::{
 const MANIFEST: &str = include_str!("../../../scripts/pptx-corpus-manifest.tsv");
 const EXPECTED_DECKS: usize = 50;
 type DrawingElements = (Vec<Vec<u8>>, Vec<Vec<u8>>);
+
+#[test]
+fn fresh_shape_ids_preserve_other_bytes_and_rewrite_connector_endpoints() {
+    let xml = format!(
+        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="{MC_NS}"><p:cSld producer="kept"><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name="root"/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="one"><x:raw xmlns:x="urn:f114"> A &amp; B </x:raw></p:cNvPr></p:nvSpPr><p:spPr/></p:sp><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="7" name="link"/><p:cNvCxnSpPr><a:stCxn id="2" idx="0"/><a:endCxn id="9" idx="1"/></p:cNvCxnSpPr></p:nvCxnSpPr><p:spPr/></p:cxnSp><p:sp><p:nvSpPr><p:cNvPr id="9" name="two"/></p:nvSpPr><p:spPr/></p:sp><mc:AlternateContent><mc:Choice Requires="p14"><p:sp><p:nvSpPr><p:cNvPr id="20" name="choice"/></p:nvSpPr></p:sp><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="21" name="choice link"/><p:cNvCxnSpPr><a:stCxn id="20" idx="0"/><a:endCxn id="20" idx="1"/></p:cNvCxnSpPr></p:nvCxnSpPr></p:cxnSp></mc:Choice><mc:Fallback><p:sp><p:nvSpPr><p:cNvPr id="22" name="fallback"/></p:nvSpPr></p:sp><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="23" name="fallback link"/><p:cNvCxnSpPr><a:stCxn id="22" idx="0"/><a:endCxn id="22" idx="1"/></p:cNvCxnSpPr></p:nvCxnSpPr></p:cxnSp></mc:Fallback></mc:AlternateContent></p:spTree></p:cSld></p:sld>"#
+    );
+
+    let rewritten = String::from_utf8(rewrite_shape_ids(xml.as_bytes()).unwrap()).unwrap();
+
+    assert!(rewritten.contains(r#"<p:cNvPr id="1" name="root"/>"#));
+    assert!(rewritten.contains(
+        r#"<p:cNvPr id="3" name="one"><x:raw xmlns:x="urn:f114"> A &amp; B </x:raw></p:cNvPr>"#
+    ));
+    assert!(rewritten.contains(r#"<p:cNvPr id="4" name="link"/>"#));
+    assert!(rewritten.contains(r#"<p:cNvPr id="5" name="two"/>"#));
+    assert!(rewritten.contains(r#"<a:stCxn id="3" idx="0"/><a:endCxn id="5" idx="1"/>"#));
+    assert!(rewritten.contains(r#"<p:cNvPr id="6" name="choice"/>"#));
+    assert!(rewritten.contains(r#"<p:cNvPr id="8" name="choice link"/>"#));
+    assert!(rewritten.contains(r#"<a:stCxn id="6" idx="0"/><a:endCxn id="6" idx="1"/>"#));
+    assert!(rewritten.contains(r#"<p:cNvPr id="10" name="fallback"/>"#));
+    assert!(rewritten.contains(r#"<p:cNvPr id="11" name="fallback link"/>"#));
+    assert!(rewritten.contains(r#"<a:stCxn id="10" idx="0"/><a:endCxn id="10" idx="1"/>"#));
+    assert!(rewritten.contains(r#"<p:cSld producer="kept">"#));
+}
+
+#[test]
+fn slide_id_list_raw_children_follow_surviving_ids_after_collection_edits() {
+    let xml = format!(
+        r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}" xmlns:x="urn:f114"><p:sldIdLst><x:before/><p:sldId id="256" r:id="rId1"/><x:between-one-two/><p:sldId id="257" r:id="rId2"/><x:between-two-three/><p:sldId id="258" r:id="rId3"/><x:after/></p:sldIdLst><p:notesSz cx="1" cy="1"/></p:presentation>"#
+    );
+    let mut presentation = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+    let third = presentation.slide_ids.remove(2);
+    presentation.slide_ids.insert(0, third);
+    presentation.slide_ids.remove(1);
+    presentation
+        .slide_ids
+        .insert(1, CT_SlideId::new(300, "rId4").unwrap());
+
+    let written = String::from_utf8(presentation.to_xml().unwrap()).unwrap();
+
+    let third = written.find(r#"r:id="rId3""#).unwrap();
+    let inserted = written.find(r#"r:id="rId4""#).unwrap();
+    let between = written.find("<x:between-one-two/>").unwrap();
+    let second = written.find(r#"r:id="rId2""#).unwrap();
+    assert!(third < inserted && inserted < between && between < second);
+    assert!(written.contains("<x:before/>"));
+    assert!(written.contains("<x:between-two-three/>"));
+    assert!(written.contains("<x:after/>"));
+    assert!(!written.contains(r#"r:id="rId1""#));
+}
+
+#[test]
+fn custom_show_removal_preserves_unrelated_presentation_xml() {
+    let xml = format!(
+        r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}" xmlns:q="urn:f114" q:producer="kept"><p:sldIdLst><p:sldId id="256" r:id="gone"/><p:sldId id="257" r:id="kept"/></p:sldIdLst><p:custShowLst q:raw=" A &amp; B "><p:custShow name="one" id="1"><p:sldLst><p:sld r:id="gone"/><q:marker/><p:sld r:id="kept"/></p:sldLst></p:custShow><p:custShow name="two" id="2"><p:sldLst><p:sld r:id="gone"></p:sld></p:sldLst></p:custShow></p:custShowLst><p:notesSz cx="1" cy="1"/></p:presentation>"#
+    );
+    let mut presentation = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+
+    presentation.remove_custom_show_slide("gone").unwrap();
+    let written = String::from_utf8(presentation.to_xml().unwrap()).unwrap();
+
+    assert_eq!(written.matches(r#"r:id="gone""#).count(), 1);
+    assert_eq!(written.matches(r#"r:id="kept""#).count(), 2);
+    assert!(written.contains(r#"<p:custShowLst q:raw=" A &amp; B ">"#));
+    assert!(written.contains("<q:marker/>"));
+}
 
 #[derive(Debug)]
 struct ManifestEntry<'a> {
@@ -2878,6 +2946,24 @@ fn unmapped_and_non_numeric_relationship_values_are_unchanged() {
     assert_eq!(
         rewrite_rel_ids(raw.as_bytes(), &map).unwrap(),
         raw.as_bytes()
+    );
+}
+
+#[test]
+fn exact_relationship_rewrite_changes_only_named_nonnumeric_ids() {
+    let raw = format!(
+        r#"<x:payload xmlns:x="urn:producer" xmlns:r="{R_NS}" r:id="slide-link" syntax=" A &amp; B "><x:other r:id='other-link'/><x:foreign x:id="slide-link"/></x:payload>"#
+    );
+    let map = HashMap::from([("slide-link".to_owned(), "rId9".to_owned())]);
+
+    let rewritten = rewrite_exact_rel_ids(raw.as_bytes(), &map).unwrap();
+
+    assert_eq!(
+        rewritten,
+        format!(
+            r#"<x:payload xmlns:x="urn:producer" xmlns:r="{R_NS}" r:id="rId9" syntax=" A &amp; B "><x:other r:id='other-link'/><x:foreign x:id="slide-link"/></x:payload>"#
+        )
+        .into_bytes()
     );
 }
 

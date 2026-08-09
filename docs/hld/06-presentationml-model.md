@@ -52,6 +52,36 @@ slide order. A slide exposes its producer id, optional `p:cSld` name, immediate
 z-order shapes, recursive visible text, and optional speaker-note text. Indexed
 access returns `Option` and does not panic.
 
+The owning facade edits the ordered slide collection through three atomic
+methods:
+
+```rust
+pub fn remove_slide(&mut self, index: usize) -> Result<()>;
+pub fn move_slide(&mut self, from_index: usize, to_index: usize) -> Result<()>;
+pub fn duplicate_slide(&mut self, index: usize) -> Result<SlideRef<'_>>;
+```
+
+Every index is zero-based and must identify an existing slide. `to_index` is
+the final index, and moving a slide to its current index changes nothing. A
+duplicate is inserted immediately after its source. Collection changes keep
+the facade records and `p:sldIdLst` synchronized.
+
+Removal stages the complete change before replacing the live presentation. It
+removes the selected slide id, presentation relationship, slide part,
+relationship scope, and content-type override. An attached notes part and its
+scope are removed with the slide. Matching `p:sld` entries are spliced out of
+preserved `p:custShowLst` XML without changing its containers or unrelated
+bytes.
+
+Duplication also stages a complete graph. It allocates a new slide part,
+producer slide id, presentation relationship, and destination relationship
+scope. Internal targets are recomputed relative to the new part, external
+target mode is retained, and numeric relationship ids are rewritten in typed
+and preserved XML. Equal image bytes reuse the package-wide media part through
+the normal `MediaStore`. Notes are copied to a new part whose slide
+relationship points back to the duplicate. Custom-show membership is not
+copied.
+
 The table style part is typed for layout resolution. A caller may pass its
 `CT_TableStyleList` to `ResolveCtx`, which uses either the table's explicit
 style id or the part's default id. An absent part or unmatched id leaves direct
@@ -242,6 +272,10 @@ Carries `p:sldSz` (deck dimensions in EMU), `p:notesSz`, `p:sldIdLst`,
 inheritance chain.
 
 **`p:sldIdLst` order is slide order.** There is no separate ordering mechanism.
+`CT_Presentation` records the original relationship-id order and reconciles raw
+list boundaries against surviving relationship ids during serialization.
+Comments and unmodelled children therefore remain anchored when slides move,
+are removed, or are inserted.
 
 **`p:sldId/@id` must be at least 256 and at most 2147483647, and unique.** A
 value below 256 is a guaranteed repair prompt, and it is the single most common
@@ -465,7 +499,9 @@ The sequence:
 
 Deep copy exists only for `duplicate_slide` and cross-deck copy, where it uses
 `rewrite_rel_ids`, transfers media with content-hash deduplication, and assigns
-fresh `p:cNvPr` ids.
+fresh `p:cNvPr` ids across ordinary, grouped, and compatibility content. The
+same map rewrites `a:stCxn` and `a:endCxn` endpoints so copied connectors target
+the copied shapes. Slides and notes both use this narrow shape-tree behavior.
 
 ## Validation
 

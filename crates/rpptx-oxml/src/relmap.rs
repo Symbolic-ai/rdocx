@@ -20,6 +20,23 @@ struct Replacement {
 /// original bytes are copied around the replaced attribute values so all
 /// other syntax remains exact.
 pub fn rewrite_rel_ids(raw: &[u8], map: &HashMap<String, String>) -> Result<Vec<u8>> {
+    rewrite_rel_ids_inner(raw, map, true)
+}
+
+/// Rewrites only relationship-namespace values present as exact keys in `map`.
+///
+/// This retains the same byte-splicing preservation contract as
+/// [`rewrite_rel_ids`] while allowing a caller to normalize a known
+/// nonnumeric relationship id without touching any other nonnumeric value.
+pub fn rewrite_exact_rel_ids(raw: &[u8], map: &HashMap<String, String>) -> Result<Vec<u8>> {
+    rewrite_rel_ids_inner(raw, map, false)
+}
+
+fn rewrite_rel_ids_inner(
+    raw: &[u8],
+    map: &HashMap<String, String>,
+    numeric_only: bool,
+) -> Result<Vec<u8>> {
     let mut reader = Reader::from_reader(raw);
     reader.config_mut().check_comments = true;
     let mut buffer = Vec::new();
@@ -55,15 +72,15 @@ pub fn rewrite_rel_ids(raw: &[u8], map: &HashMap<String, String>) -> Result<Vec<
                     .last()
                     .expect("the document namespace frame always exists")
                     .with_start(&element)?;
-                collect_replacements(
+                replacements.extend(collect_replacements(
                     raw,
                     event_start,
                     &element,
                     &scope,
                     version,
                     map,
-                    &mut replacements,
-                )?;
+                    numeric_only,
+                )?);
                 scopes.push(scope);
                 depth += 1;
             }
@@ -79,15 +96,15 @@ pub fn rewrite_rel_ids(raw: &[u8], map: &HashMap<String, String>) -> Result<Vec<
                     .last()
                     .expect("the document namespace frame always exists")
                     .with_start(&element)?;
-                collect_replacements(
+                replacements.extend(collect_replacements(
                     raw,
                     event_start,
                     &element,
                     &scope,
                     version,
                     map,
-                    &mut replacements,
-                )?;
+                    numeric_only,
+                )?);
             }
             Event::End(_) => {
                 declaration_allowed = false;
@@ -203,18 +220,19 @@ fn collect_replacements(
     scope: &NamespaceBindings,
     version: XmlVersion,
     map: &HashMap<String, String>,
-    replacements: &mut Vec<Replacement>,
-) -> Result<()> {
+    numeric_only: bool,
+) -> Result<Vec<Replacement>> {
     if raw.get(event_start) != Some(&b'<') {
         return Err(invalid_xml("XML event position does not begin at markup"));
     }
+    let mut replacements = Vec::new();
     for attribute in element.attributes() {
         let attribute = attribute?;
         if scope.attribute_uri(attribute.key.as_ref()) != Some(R_NS) {
             continue;
         }
         let decoded = attribute.decoded_and_normalized_value(version, element.decoder())?;
-        if !is_numeric_relationship_id(&decoded) {
+        if numeric_only && !is_numeric_relationship_id(&decoded) {
             continue;
         }
         let Some(target) = map.get(decoded.as_ref()) else {
@@ -246,7 +264,7 @@ fn collect_replacements(
             escaped_value: quick_xml::escape::escape(target).into_owned(),
         });
     }
-    Ok(())
+    Ok(replacements)
 }
 
 fn splice_replacements(raw: &[u8], replacements: Vec<Replacement>) -> Result<Vec<u8>> {

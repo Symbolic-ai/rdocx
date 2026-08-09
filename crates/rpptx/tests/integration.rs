@@ -42,6 +42,590 @@ const POWERPOINT_BUILD: &str = "16.104.25121423";
 const POWERPOINT_APP_BUILD: &str = "1214";
 
 #[test]
+fn invalid_slide_collection_indices_do_not_mutate_the_presentation() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let before = presentation.to_bytes().expect("serialize baseline");
+
+    assert!(presentation.remove_slide(1).is_err());
+    assert!(presentation.move_slide(1, 0).is_err());
+    assert!(presentation.move_slide(0, 1).is_err());
+    assert!(presentation.duplicate_slide(1).is_err());
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn move_slide_reorders_the_slide_id_list_without_rewriting_relationships() {
+    let mut package = fixture_package();
+    let marked = String::from_utf8(package.get_part(PRESENTATION_PART).unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#,
+            r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:x="urn:f114""#,
+            1,
+        )
+        .replacen(
+            r#"r:id="ordered-first"/>"#,
+            r#"r:id="ordered-first"/><x:between producer="kept"/>"#,
+            1,
+        );
+    package.set_part(PRESENTATION_PART, marked.into_bytes());
+    let before_relationships = package
+        .get_part_rels(PRESENTATION_PART)
+        .unwrap()
+        .items
+        .clone();
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let before = presentation
+        .slides()
+        .map(|slide| slide.id())
+        .collect::<Vec<_>>();
+
+    presentation.move_slide(0, 1).expect("move first slide");
+
+    let after = presentation
+        .slides()
+        .map(|slide| slide.id())
+        .collect::<Vec<_>>();
+    assert_eq!(after, vec![before[1], before[0]]);
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "moved slide package");
+    assert_eq!(
+        package.get_part_rels(PRESENTATION_PART).unwrap().items,
+        before_relationships
+    );
+    let presentation_xml =
+        String::from_utf8(package.get_part(PRESENTATION_PART).unwrap().to_vec()).unwrap();
+    assert!(
+        presentation_xml
+            .find("<x:between producer=\"kept\"/>")
+            .unwrap()
+            < presentation_xml.find(r#"r:id="ordered-second""#).unwrap()
+    );
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        reopened
+            .slides()
+            .map(|slide| slide.id())
+            .collect::<Vec<_>>(),
+        after
+    );
+}
+
+#[test]
+fn remove_slide_removes_its_part_relationship_notes_and_custom_show_entries() {
+    let mut package = fixture_package();
+    let with_custom_show = String::from_utf8(package.get_part(PRESENTATION_PART).unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "<p:notesSz",
+            r#"<p:custShowLst xmlns:x="urn:f114" x:producer="kept"><p:custShow name="review" id="1"><p:sldLst><p:sld r:id="ordered-first"/><x:marker/><p:sld r:id="ordered-second"/></p:sldLst></p:custShow></p:custShowLst><p:notesSz"#,
+            1,
+        );
+    package.set_part(PRESENTATION_PART, with_custom_show.into_bytes());
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    assert!(presentation.slide(0).unwrap().notes_text().is_some());
+
+    presentation
+        .remove_slide(0)
+        .expect("remove slide with notes");
+
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "removed slide package");
+    assert!(!package.parts.contains_key(SLIDE_TWO_PART));
+    assert!(!package.parts.contains_key(NOTES_PART));
+    assert!(!package.part_rels.contains_key(SLIDE_TWO_PART));
+    assert!(!package.part_rels.contains_key(NOTES_PART));
+    assert!(!package.content_types.overrides.contains_key(SLIDE_TWO_PART));
+    assert!(!package.content_types.overrides.contains_key(NOTES_PART));
+    assert!(
+        package
+            .get_part_rels(PRESENTATION_PART)
+            .unwrap()
+            .get_by_id("ordered-first")
+            .is_none()
+    );
+    let presentation_xml =
+        String::from_utf8(package.get_part(PRESENTATION_PART).unwrap().to_vec()).unwrap();
+    assert_eq!(
+        presentation_xml.matches(r#"r:id="ordered-first""#).count(),
+        0
+    );
+    assert!(presentation_xml.contains("<x:marker/>"));
+    assert!(presentation_xml.contains(r#"r:id="ordered-second""#));
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert_eq!(reopened.len(), 1);
+    assert!(reopened.validate().is_empty());
+}
+
+#[test]
+fn removing_shared_and_last_image_users_prunes_only_new_orphans() {
+    let png = png_header(4, 3);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    for _ in 0..2 {
+        presentation.add_slide(0).expect("add slide");
+    }
+    for index in 0..2 {
+        presentation
+            .add_picture(index, &png, "shared.png", Emu(0), Emu(0), None, None)
+            .unwrap();
+    }
+
+    presentation.remove_slide(0).expect("remove one image user");
+    let shared = open_opc(&presentation.to_bytes().unwrap(), "shared image remains");
+    assert_eq!(
+        shared
+            .parts
+            .iter()
+            .filter(|(part, bytes)| part.starts_with("/ppt/media/") && *bytes == &png)
+            .count(),
+        1
+    );
+
+    presentation
+        .remove_slide(0)
+        .expect("remove last image user");
+    let pruned = open_opc(&presentation.to_bytes().unwrap(), "last image pruned");
+    assert_eq!(
+        pruned
+            .parts
+            .iter()
+            .filter(|(part, bytes)| part.starts_with("/ppt/media/") && *bytes == &png)
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn removing_last_slide_image_preserves_a_package_root_relationship_target() {
+    let png = png_header(4, 3);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    presentation
+        .add_picture(0, &png, "root-shared.png", Emu(0), Emu(0), None, None)
+        .unwrap();
+    let mut package = open_opc(&presentation.to_bytes().unwrap(), "root media fixture");
+    let media_part = package
+        .parts
+        .keys()
+        .find(|part| part.starts_with("/ppt/media/"))
+        .unwrap()
+        .clone();
+    package
+        .package_rels
+        .add(rel_types::THUMBNAIL, media_part.trim_start_matches('/'));
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+
+    presentation.remove_slide(0).expect("remove final slide");
+
+    let package = open_opc(&presentation.to_bytes().unwrap(), "root media result");
+    let relationship = package
+        .package_rels
+        .get_all_by_type(rel_types::THUMBNAIL)
+        .into_iter()
+        .find(|relationship| {
+            OpcPackage::resolve_rel_target("/", &relationship.target) == media_part
+        })
+        .unwrap();
+    assert_eq!(
+        OpcPackage::resolve_rel_target("/", &relationship.target),
+        media_part
+    );
+    assert_eq!(package.get_part(&media_part).unwrap(), png);
+    assert!(presentation.validate().is_empty());
+}
+
+#[test]
+fn duplicated_slides_images_resolve_to_the_new_slides_own_relationships() {
+    let png = png_header(4, 3);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add source slide");
+    presentation
+        .add_picture(0, &png, "source.png", Emu(0), Emu(0), None, None)
+        .unwrap();
+
+    presentation.duplicate_slide(0).expect("duplicate slide");
+
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "duplicated image scopes");
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let mut image_relationship_ids = Vec::new();
+    let mut image_targets = Vec::new();
+    for slide_id in &model.slide_ids {
+        let slide_relationship = package
+            .get_part_rels(&presentation_part)
+            .unwrap()
+            .get_by_id(&slide_id.relationship_id)
+            .unwrap();
+        let slide_part =
+            OpcPackage::resolve_rel_target(&presentation_part, &slide_relationship.target);
+        let slide = CT_Slide::from_xml(package.get_part(&slide_part).unwrap()).unwrap();
+        let embed = slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .iter()
+            .find_map(|child| match child {
+                ShapeTreeChild::Picture(picture) => picture
+                    .blip_fill
+                    .as_ref()
+                    .and_then(|fill| fill.blip.as_ref())
+                    .and_then(|blip| blip.embed.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let image_relationship = package
+            .get_part_rels(&slide_part)
+            .unwrap()
+            .get_by_id(&embed)
+            .unwrap();
+        assert_eq!(image_relationship.rel_type, rel_types::IMAGE);
+        image_relationship_ids.push(embed);
+        image_targets.push(OpcPackage::resolve_rel_target(
+            &slide_part,
+            &image_relationship.target,
+        ));
+    }
+    assert_eq!(image_relationship_ids.len(), 2);
+    assert_eq!(image_targets[0], image_targets[1]);
+    assert_eq!(package.get_part(&image_targets[0]).unwrap(), png);
+    assert_eq!(
+        package
+            .parts
+            .keys()
+            .filter(|part| part.starts_with("/ppt/media/"))
+            .count(),
+        1
+    );
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert_eq!(reopened.len(), 2);
+    assert!(reopened.validate().is_empty());
+}
+
+#[test]
+fn duplicate_slide_rewrites_typed_and_preserved_relationship_ids_without_other_byte_changes() {
+    let mut package = open_opc(&mutation_fixture_bytes(), "relationship rewrite fixture");
+    let image_part = "/custom/media/preserved.png";
+    let image = png_header(3, 2);
+    package.set_part(image_part, image.clone());
+    package.content_types.add_default("png", "image/png");
+    package.get_or_create_part_rels(SLIDE_TWO_PART).add_with_id(
+        "rId7",
+        rel_types::IMAGE,
+        "../media/preserved.png",
+    );
+    let marked = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "<p:blipFill/>",
+            &format!(
+                r#"<p:blipFill><a:blip xmlns:r="{R_NS}" r:embed="rId7"><x:effect xmlns:x="urn:f114"> A &amp; B </x:effect></a:blip></p:blipFill>"#
+            ),
+            1,
+        )
+        .replacen(
+            "</p:cSld>",
+            &format!(
+                r#"<x:preserved xmlns:x="urn:f114" xmlns:r="{R_NS}" r:id="rId7" syntax=" A &amp; B "/></p:cSld>"#
+            ),
+            1,
+        );
+    package.set_part(SLIDE_TWO_PART, marked.into_bytes());
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let source_text = presentation.slide(0).unwrap().text();
+
+    presentation
+        .duplicate_slide(0)
+        .expect("duplicate marked slide");
+
+    assert_eq!(presentation.slide(1).unwrap().text(), source_text);
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "relationship rewrite result");
+    let model = CT_Presentation::from_xml(package.get_part(PRESENTATION_PART).unwrap()).unwrap();
+    let duplicate_relationship = package
+        .get_part_rels(PRESENTATION_PART)
+        .unwrap()
+        .get_by_id(&model.slide_ids[1].relationship_id)
+        .unwrap();
+    let duplicate_part =
+        OpcPackage::resolve_rel_target(PRESENTATION_PART, &duplicate_relationship.target);
+    let duplicate_xml =
+        String::from_utf8(package.get_part(&duplicate_part).unwrap().to_vec()).unwrap();
+    assert!(duplicate_xml.contains(r#"r:embed="rId2""#));
+    assert!(duplicate_xml.contains(r#"r:id="rId2" syntax=" A &amp; B "/>"#));
+    assert!(duplicate_xml.contains(r#"<x:effect xmlns:x="urn:f114"> A &amp; B </x:effect>"#));
+    assert!(!duplicate_xml.contains("rId7"));
+    let image_relationship = package
+        .get_part_rels(&duplicate_part)
+        .unwrap()
+        .get_by_id("rId2")
+        .unwrap();
+    let duplicate_image =
+        OpcPackage::resolve_rel_target(&duplicate_part, &image_relationship.target);
+    assert_eq!(package.get_part(&duplicate_image).unwrap(), image);
+    assert!(Presentation::from_bytes(&bytes).is_ok());
+}
+
+#[test]
+fn duplicate_slide_assigns_fresh_shape_ids_and_rewrites_connector_endpoints() {
+    let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
+
+    presentation
+        .duplicate_slide(0)
+        .expect("duplicate connected shapes");
+
+    let package = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "duplicated connector ids",
+    );
+    let model = CT_Presentation::from_xml(package.get_part(PRESENTATION_PART).unwrap()).unwrap();
+    let slide_parts = model
+        .slide_ids
+        .iter()
+        .map(|slide_id| {
+            let relationship = package
+                .get_part_rels(PRESENTATION_PART)
+                .unwrap()
+                .get_by_id(&slide_id.relationship_id)
+                .unwrap();
+            OpcPackage::resolve_rel_target(PRESENTATION_PART, &relationship.target)
+        })
+        .collect::<Vec<_>>();
+    let source = String::from_utf8(package.get_part(&slide_parts[0]).unwrap().to_vec()).unwrap();
+    let duplicate = String::from_utf8(package.get_part(&slide_parts[1]).unwrap().to_vec()).unwrap();
+    assert!(source.contains(r#"<a:stCxn id="2" idx="0"/><a:endCxn id="3" idx="1"/>"#));
+    assert!(duplicate.contains(r#"<a:stCxn id="9" idx="0"/><a:endCxn id="10" idx="1"/>"#));
+    assert!(source.contains(r#"<p:cNvPr id="20" name="choice shape"/>"#));
+    assert!(source.contains(r#"<a:stCxn id="20" idx="0"/><a:endCxn id="20" idx="1"/>"#));
+    assert!(source.contains(r#"<p:cNvPr id="22" name="fallback shape"/>"#));
+    assert!(source.contains(r#"<a:stCxn id="22" idx="0"/><a:endCxn id="22" idx="1"/>"#));
+    assert!(duplicate.contains(r#"<p:cNvPr id="16" name="choice shape"/>"#));
+    assert!(duplicate.contains(r#"<p:cNvPr id="17" name="choice connector"/>"#));
+    assert!(duplicate.contains(r#"<a:stCxn id="16" idx="0"/><a:endCxn id="16" idx="1"/>"#));
+    assert!(duplicate.contains(r#"<p:cNvPr id="18" name="fallback shape"/>"#));
+    assert!(duplicate.contains(r#"<p:cNvPr id="19" name="fallback connector"/>"#));
+    assert!(duplicate.contains(r#"<a:stCxn id="18" idx="0"/><a:endCxn id="18" idx="1"/>"#));
+    for stale_id in [20, 21, 22, 23] {
+        assert!(!duplicate.contains(&format!(r#"id="{stale_id}""#)));
+    }
+    let duplicate_slide = CT_Slide::from_xml(duplicate.as_bytes()).unwrap();
+    let connector = duplicate_slide
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .find_map(|child| match child {
+            ShapeTreeChild::Connector(connector) => Some(connector),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(connector.start_connection.as_ref().unwrap().id, 9);
+    assert_eq!(connector.end_connection.as_ref().unwrap().id, 10);
+    assert_eq!(
+        duplicate_slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .iter()
+            .find_map(|child| matches!(child, ShapeTreeChild::Connector(_))
+                .then(|| child.non_visual_id()))
+            .flatten(),
+        Some(15)
+    );
+    assert!(!duplicate.contains(r#"<p:cNvPr id="2""#));
+    assert!(presentation.validate().is_empty());
+}
+
+#[test]
+fn duplicate_slide_copies_notes_with_a_fresh_back_relationship() {
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    let notes = presentation.slide(0).unwrap().notes_text();
+
+    presentation
+        .duplicate_slide(0)
+        .expect("duplicate slide with notes");
+
+    assert_eq!(presentation.slide(1).unwrap().notes_text(), notes);
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "duplicated notes scope");
+    let model = CT_Presentation::from_xml(package.get_part(PRESENTATION_PART).unwrap()).unwrap();
+    let mut notes_parts = Vec::new();
+    for slide_id in model.slide_ids.iter().take(2) {
+        let slide_relationship = package
+            .get_part_rels(PRESENTATION_PART)
+            .unwrap()
+            .get_by_id(&slide_id.relationship_id)
+            .unwrap();
+        let slide_part =
+            OpcPackage::resolve_rel_target(PRESENTATION_PART, &slide_relationship.target);
+        let notes_relationship = package
+            .get_part_rels(&slide_part)
+            .unwrap()
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == rel_types::NOTES_SLIDE)
+            .unwrap();
+        let notes_part = OpcPackage::resolve_rel_target(&slide_part, &notes_relationship.target);
+        let back_relationship = package
+            .get_part_rels(&notes_part)
+            .unwrap()
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == rel_types::SLIDE)
+            .unwrap();
+        assert_eq!(
+            OpcPackage::resolve_rel_target(&notes_part, &back_relationship.target),
+            slide_part
+        );
+        notes_parts.push(notes_part);
+    }
+    assert_ne!(notes_parts[0], notes_parts[1]);
+    assert!(Presentation::from_bytes(&bytes).is_ok());
+}
+
+#[test]
+fn duplicate_slide_adds_a_missing_notes_back_relationship() {
+    let mut package = fixture_package();
+    package
+        .get_or_create_part_rels(NOTES_PART)
+        .items
+        .retain(|relationship| relationship.rel_type != rel_types::SLIDE);
+
+    assert_notes_back_relationship_is_normalized(package, &HashSet::new());
+}
+
+#[test]
+fn duplicate_slide_collapses_multiple_notes_back_relationships() {
+    let mut package = fixture_package();
+    package.get_or_create_part_rels(NOTES_PART).add_with_id(
+        "second-slide-link",
+        rel_types::SLIDE,
+        "../slides/first.xml",
+    );
+    let source_ids = package
+        .get_part_rels(NOTES_PART)
+        .unwrap()
+        .items
+        .iter()
+        .filter(|relationship| relationship.rel_type == rel_types::SLIDE)
+        .map(|relationship| relationship.id.clone())
+        .collect();
+
+    assert_notes_back_relationship_is_normalized(package, &source_ids);
+}
+
+#[test]
+fn duplicate_slide_replaces_an_external_notes_back_relationship() {
+    let mut package = fixture_package();
+    let relationship = package
+        .get_or_create_part_rels(NOTES_PART)
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.rel_type == rel_types::SLIDE)
+        .unwrap();
+    relationship.target = "https://example.com/source-slide".to_owned();
+    relationship.target_mode = Some("External".to_owned());
+    let source_ids = HashSet::from([relationship.id.clone()]);
+
+    assert_notes_back_relationship_is_normalized(package, &source_ids);
+}
+
+#[test]
+fn duplicate_slide_rewrites_preserved_nonnumeric_notes_back_references() {
+    let mut package = fixture_package();
+    let marked_notes = String::from_utf8(package.get_part(NOTES_PART).unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "</p:cSld>",
+            &format!(
+                r#"<x:back xmlns:x="urn:f114" xmlns:r="{R_NS}" r:id="slide-link" syntax=" A &amp; B "/><x:other xmlns:x="urn:f114" xmlns:r="{R_NS}" r:id="other-link" syntax=" untouched "/></p:cSld>"#
+            ),
+            1,
+        );
+    package.set_part(NOTES_PART, marked_notes.into_bytes());
+    package.get_or_create_part_rels(NOTES_PART).add_with_id(
+        "other-link",
+        "urn:f114:unrelated",
+        "../opaque/data.bin",
+    );
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+
+    presentation.duplicate_slide(0).expect("duplicate slide");
+    let saved = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    let resaved = reopened.to_bytes().unwrap();
+    let package = open_opc(&resaved, "nonnumeric notes back reference result");
+    let model = CT_Presentation::from_xml(package.get_part(PRESENTATION_PART).unwrap()).unwrap();
+    let duplicate_relationship = package
+        .get_part_rels(PRESENTATION_PART)
+        .unwrap()
+        .get_by_id(&model.slide_ids[1].relationship_id)
+        .unwrap();
+    let duplicate_slide =
+        OpcPackage::resolve_rel_target(PRESENTATION_PART, &duplicate_relationship.target);
+    let notes_relationship = package
+        .get_part_rels(&duplicate_slide)
+        .unwrap()
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == rel_types::NOTES_SLIDE)
+        .unwrap();
+    let duplicate_notes =
+        OpcPackage::resolve_rel_target(&duplicate_slide, &notes_relationship.target);
+    let notes_relationships = package.get_part_rels(&duplicate_notes).unwrap();
+    let back_relationships = notes_relationships
+        .items
+        .iter()
+        .filter(|relationship| relationship.rel_type == rel_types::SLIDE)
+        .collect::<Vec<_>>();
+    assert_eq!(back_relationships.len(), 1);
+    let back_relationship = back_relationships[0];
+    assert_ne!(back_relationship.id, "slide-link");
+    assert_eq!(back_relationship.target_mode, None);
+    assert_eq!(
+        OpcPackage::resolve_rel_target(&duplicate_notes, &back_relationship.target),
+        duplicate_slide
+    );
+    let duplicate_xml =
+        String::from_utf8(package.get_part(&duplicate_notes).unwrap().to_vec()).unwrap();
+    assert!(duplicate_xml.contains(&format!(
+        r#"r:id="{}" syntax=" A &amp; B "/>"#,
+        back_relationship.id
+    )));
+    assert!(duplicate_xml.contains(
+        r#"<x:other xmlns:x="urn:f114" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="other-link" syntax=" untouched "/>"#
+    ));
+    assert!(!duplicate_xml.contains(r#"r:id="slide-link""#));
+    let unrelated = notes_relationships.get_by_id("other-link").unwrap();
+    assert_eq!(unrelated.rel_type, "urn:f114:unrelated");
+    assert_eq!(unrelated.target_mode, None);
+    assert_eq!(
+        OpcPackage::resolve_rel_target(&duplicate_notes, &unrelated.target),
+        "/custom/opaque/data.bin"
+    );
+    assert!(reopened.validate().is_empty());
+}
+
+#[test]
+fn remove_move_and_duplicate_round_trip_with_clean_validation() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    for _ in 0..3 {
+        presentation.add_slide(0).expect("add slide");
+    }
+
+    presentation
+        .duplicate_slide(1)
+        .expect("duplicate middle slide");
+    presentation.move_slide(3, 0).expect("move duplicate first");
+    presentation.remove_slide(2).expect("remove one slide");
+
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.len(), 3);
+    assert!(reopened.validate().is_empty());
+}
+
+#[test]
 fn merge_then_split_restores_the_original_grid() {
     let mut presentation = Presentation::new().expect("open bundled template");
     presentation.add_slide(0).expect("add slide");
@@ -3143,6 +3727,22 @@ fn mutation_fixture_bytes() -> Vec<u8> {
         "<p:cxnSp><p:nvCxnSpPr><p:cNvPr id=\"6\" name=\"connector\"/>",
         1,
     );
+    let complete = complete.replacen(
+        "<p:cNvCxnSpPr/>",
+        r#"<p:cNvCxnSpPr><a:stCxn id="2" idx="0"/><a:endCxn id="3" idx="1"/></p:cNvCxnSpPr>"#,
+        1,
+    );
+    let complete = complete
+        .replacen(
+            r#"<mc:Choice Requires="p14"><p:sp/></mc:Choice>"#,
+            r#"<mc:Choice Requires="p14"><p:sp><p:nvSpPr><p:cNvPr id="20" name="choice shape"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="21" name="choice connector"/><p:cNvCxnSpPr><a:stCxn id="20" idx="0"/><a:endCxn id="20" idx="1"/></p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp></mc:Choice>"#,
+            1,
+        )
+        .replacen(
+            "<mc:Fallback>",
+            r#"<mc:Fallback><p:sp><p:nvSpPr><p:cNvPr id="22" name="fallback shape"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="23" name="fallback connector"/><p:cNvCxnSpPr><a:stCxn id="22" idx="0"/><a:endCxn id="22" idx="1"/></p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp>"#,
+            1,
+        );
     assert_ne!(complete, original);
     package.set_part(SLIDE_TWO_PART, complete.into_bytes());
     package_bytes(package)
@@ -3196,6 +3796,64 @@ fn package_bytes(package: OpcPackage) -> Vec<u8> {
     let mut output = Cursor::new(Vec::new());
     package.write_to(&mut output).unwrap();
     output.into_inner()
+}
+
+fn assert_notes_back_relationship_is_normalized(
+    mut package: OpcPackage,
+    source_back_relationship_ids: &HashSet<String>,
+) {
+    let unrelated_type = "urn:f114:unrelated";
+    package
+        .get_or_create_part_rels(NOTES_PART)
+        .add_external(unrelated_type, "https://example.com/preserved");
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    presentation.duplicate_slide(0).expect("duplicate slide");
+
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "normalized notes relationships");
+    let model = CT_Presentation::from_xml(package.get_part(PRESENTATION_PART).unwrap()).unwrap();
+    let duplicate_relationship = package
+        .get_part_rels(PRESENTATION_PART)
+        .unwrap()
+        .get_by_id(&model.slide_ids[1].relationship_id)
+        .unwrap();
+    let duplicate_slide =
+        OpcPackage::resolve_rel_target(PRESENTATION_PART, &duplicate_relationship.target);
+    let notes_relationship = package
+        .get_part_rels(&duplicate_slide)
+        .unwrap()
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == rel_types::NOTES_SLIDE)
+        .unwrap();
+    let duplicate_notes =
+        OpcPackage::resolve_rel_target(&duplicate_slide, &notes_relationship.target);
+    let notes_relationships = package.get_part_rels(&duplicate_notes).unwrap();
+    let back_relationships = notes_relationships
+        .items
+        .iter()
+        .filter(|relationship| relationship.rel_type == rel_types::SLIDE)
+        .collect::<Vec<_>>();
+    assert_eq!(back_relationships.len(), 1);
+    assert_eq!(back_relationships[0].target_mode, None);
+    assert_eq!(
+        OpcPackage::resolve_rel_target(&duplicate_notes, &back_relationships[0].target),
+        duplicate_slide
+    );
+    assert!(!source_back_relationship_ids.contains(&back_relationships[0].id));
+    let preserved = notes_relationships
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == unrelated_type)
+        .unwrap();
+    assert_eq!(preserved.target, "https://example.com/preserved");
+    assert_eq!(preserved.target_mode.as_deref(), Some("External"));
+    assert!(
+        Presentation::from_bytes(&bytes)
+            .unwrap()
+            .validate()
+            .is_empty()
+    );
 }
 
 fn capture_exact_subtree(xml: &[u8], opening: &[u8], closing: &[u8]) -> Vec<u8> {
@@ -3260,6 +3918,11 @@ fn fixture_package() -> OpcPackage {
         "notes-link",
         rel_types::NOTES_SLIDE,
         "../notes/speaker.xml",
+    );
+    package.get_or_create_part_rels(NOTES_PART).add_with_id(
+        "slide-link",
+        rel_types::SLIDE,
+        "../slides/second.xml",
     );
     package
         .get_or_create_part_rels(SLIDE_ONE_PART)
