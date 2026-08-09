@@ -35,7 +35,7 @@ PowerPoint, Keynote, Google Slides, and LibreOffice.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-113 | Table facade | L | pending | - |
+| F-113 | Table facade | L | in-progress | codex |
 | F-114 | remove_slide, move_slide, duplicate_slide | M | pending | - |
 | F-115 | Slide and presentation properties | S | pending | - |
 | F-116 | Cross-viewer acceptance | M | pending | - |
