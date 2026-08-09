@@ -1,6 +1,6 @@
 # F-118, ChartML core types
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S29
 **Size**: L
 **Depends on**: F-063
@@ -142,16 +142,16 @@ sample generation or rendering. All 28 hashes must match.
 
 ## Implementation checklist
 
-- [ ] Register the minimal unpublished `rpptx-chart` crate.
-- [ ] Add ChartML namespaces, errors, enums, and core root types in one source
+- [x] Register the minimal unpublished `rpptx-chart` crate.
+- [x] Add ChartML namespaces, errors, enums, and core root types in one source
       file.
-- [ ] Add the caller-selected `c:txPr` root path to the existing DrawingML text
+- [x] Add the caller-selected `c:txPr` root path to the existing DrawingML text
       body implementation.
-- [ ] Preserve unmodeled plot, title, legend, extension, and root XML in schema
+- [x] Preserve unmodeled plot, title, legend, extension, and root XML in schema
       slots.
-- [ ] Add inline negative and prefix fixtures plus the corpus-wide gate.
-- [ ] Update exactly HLD 09 and HLD 15.
-- [ ] Run focused checks, dependency and package riders, microscope, and worker
+- [x] Add inline negative and prefix fixtures plus the corpus-wide gate.
+- [x] Update exactly HLD 09 and HLD 15.
+- [x] Run focused checks, dependency and package riders, microscope, and worker
       preparation.
 
 ## Open questions

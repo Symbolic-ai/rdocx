@@ -703,6 +703,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rpptx-chart"
+version = "0.0.0"
+dependencies = [
+ "oxml-core",
+ "oxml-drawing",
+ "oxml-opc",
+ "quick-xml",
+]
+
+[[package]]
 name = "rpptx-layout"
 version = "0.0.0"
 dependencies = [

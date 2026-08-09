@@ -78,12 +78,18 @@ workbook without a conversion error, preserving that worksheet and cell range.
 
 ## The ChartML model
 
+The implemented core owns `c:chartSpace`, `c:chart`, `c:plotArea`, title,
+legend, chart flags, and DrawingML shape and text properties. Readers accept a
+bound ChartML prefix. Writers use fixed `c:`, `a:`, and `r:` prefixes and emit
+modelled children in schema order. Missing required chart and plot-area roots,
+duplicate modelled children, malformed booleans, and unknown blank-display
+values are errors.
+
 ```rust
 pub struct CT_ChartSpace {
     pub chart: CT_Chart,
     pub sp_pr: Option<ShapeProperties>,
     pub tx_pr: Option<TextBody>,
-    pub ext_lst: Option<Vec<u8>>,
     pub raw_children: OrderedRawChildren,
 }
 
@@ -95,6 +101,25 @@ pub struct CT_Chart {
     pub plot_vis_only: bool,
     pub disp_blanks_as: DispBlanksAs,
 }
+```
+
+`c:spPr` reuses `CT_ShapeProperties`. `c:txPr` uses the same concrete
+`CT_TextBody` parser as `a:txBody`, with a caller-selected root local name and
+the existing caller-selected writer tag. Title, plot area, and legend are
+behavior-bearing shells. Their attributes and complete current children stay
+in ordered raw slots. Plot variants, series, axes, extensions, and unsupported
+root children remain byte-preserved at their schema boundaries until the story
+that types each surface.
+
+The pinned 50-deck corpus contains 26 chart parts across 9 decks. Every part
+parses, serialises, reparses, and compares as the same core model. The inline
+fixture keeps prefix, ordering, malformed-value, and raw-preservation coverage
+available without the external corpus.
+
+The later typed plot and series surface expands the preserved plot-area slots
+to the following model:
+
+```rust
 
 pub enum Plot {
     Bar { direction: BarDirection, grouping: BarGrouping, gap_width: u16,

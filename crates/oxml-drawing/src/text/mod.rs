@@ -59,6 +59,11 @@ impl CT_TextBody {
 
     /// Parses a complete `a:txBody` while retaining later text stages.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
+        Self::from_xml_as(xml, b"txBody")
+    }
+
+    /// Parses a complete text body under a caller-selected root local name.
+    pub fn from_xml_as(xml: &[u8], root_local_name: &[u8]) -> Result<Self> {
         let mut reader = Reader::from_reader(xml);
         let mut buffer = Vec::new();
         loop {
@@ -66,10 +71,14 @@ impl CT_TextBody {
                 .read_event_into(&mut buffer)
                 .map_err(OxmlError::from)?
             {
-                Event::Start(element) if matches_local_name(element.name().as_ref(), b"txBody") => {
-                    return Self::from_element(&mut reader);
+                Event::Start(element)
+                    if matches_local_name(element.name().as_ref(), root_local_name) =>
+                {
+                    return Self::from_element(&mut reader, root_local_name);
                 }
-                Event::Empty(element) if matches_local_name(element.name().as_ref(), b"txBody") => {
+                Event::Empty(element)
+                    if matches_local_name(element.name().as_ref(), root_local_name) =>
+                {
                     return Err(TextError::MissingBodyProperties);
                 }
                 Event::Start(element) | Event::Empty(element) => {
@@ -86,7 +95,7 @@ impl CT_TextBody {
         }
     }
 
-    fn from_element(reader: &mut Reader<&[u8]>) -> Result<Self> {
+    fn from_element(reader: &mut Reader<&[u8]>, root_local_name: &[u8]) -> Result<Self> {
         let mut body_properties = None;
         let mut list_style = None;
         let mut paragraphs = Vec::new();
@@ -149,10 +158,14 @@ impl CT_TextBody {
                 Event::Empty(element) => {
                     raw_children.push(boundary, capture_empty_element(&element)?)
                 }
-                Event::End(element) if matches_local_name(element.name().as_ref(), b"txBody") => {
+                Event::End(element)
+                    if matches_local_name(element.name().as_ref(), root_local_name) =>
+                {
                     break;
                 }
-                Event::Eof => return Err(missing_end("txBody")),
+                Event::Eof => {
+                    return Err(missing_end(&String::from_utf8_lossy(root_local_name)));
+                }
                 _ => {}
             }
             buffer.clear();
