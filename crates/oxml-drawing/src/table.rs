@@ -290,6 +290,99 @@ impl PartialEq for CT_TableCell {
 impl Eq for CT_TableCell {}
 
 impl CT_Table {
+    /// Creates a rectangular table using truncating quotients and assigns each
+    /// remainder to the final column or row.
+    pub fn new(rows: usize, columns: usize, width: Emu, height: Emu) -> Result<Self> {
+        let row_count = u32::try_from(rows).map_err(|_| {
+            OxmlError::InvalidValue("table row count exceeds the DrawingML span range".to_owned())
+        })?;
+        let column_count = u32::try_from(columns).map_err(|_| {
+            OxmlError::InvalidValue(
+                "table column count exceeds the DrawingML span range".to_owned(),
+            )
+        })?;
+        if row_count == 0 || column_count == 0 {
+            return Err(OxmlError::InvalidValue(
+                "table requires at least one row and one column".to_owned(),
+            ));
+        }
+        if width.0 <= 0 || height.0 <= 0 {
+            return Err(OxmlError::InvalidValue(
+                "table width and height must be positive".to_owned(),
+            ));
+        }
+
+        let column_width = Emu(width.0 / i64::from(column_count));
+        let row_height = Emu(height.0 / i64::from(row_count));
+        if column_width.0 <= 0 || row_height.0 <= 0 {
+            return Err(OxmlError::InvalidValue(
+                "table extent is too small for its row or column count".to_owned(),
+            ));
+        }
+
+        let mut column_widths = vec![column_width; columns];
+        let column_remainder = width.0 - column_width.0 * i64::from(column_count);
+        column_widths[columns - 1].0 += column_remainder;
+        let column_raw = column_widths
+            .iter()
+            .copied()
+            .map(|width| GridColumnRaw {
+                width,
+                ..GridColumnRaw::default()
+            })
+            .collect();
+        let grid = CT_TableGrid {
+            columns: column_widths,
+            column_raw,
+            raw_attributes: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+        };
+        let row_remainder = height.0 - row_height.0 * i64::from(row_count);
+        let mut table_rows = Vec::with_capacity(rows);
+        for row_index in 0..rows {
+            let mut cells = Vec::with_capacity(columns);
+            for column_index in 0..columns {
+                cells.push(CT_TableCell {
+                    text_body: Some(CT_TextBody::new()),
+                    row_span: 1,
+                    grid_span: 1,
+                    horizontal_merge: false,
+                    vertical_merge: false,
+                    properties: Some(CT_TableCellProperties::default()),
+                    raw_attributes: Vec::new(),
+                    raw_children: OrderedRawChildren::default(),
+                    origin_index: column_index,
+                });
+            }
+            table_rows.push(CT_TableRow {
+                height: Emu(row_height.0
+                    + if row_index + 1 == rows {
+                        row_remainder
+                    } else {
+                        0
+                    }),
+                original_cells: cells.clone(),
+                cells,
+                raw_attributes: Vec::new(),
+                raw_children: OrderedRawChildren::default(),
+                origin_index: row_index,
+            });
+        }
+
+        Ok(Self {
+            properties: Some(CT_TableProperties {
+                first_row: true,
+                band_rows: true,
+                ..CT_TableProperties::default()
+            }),
+            grid,
+            original_rows: table_rows.clone(),
+            rows: table_rows,
+            raw_attributes: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+        })
+    }
+
     /// Parses a complete `a:tbl` with any namespace prefix.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         let mut reader = Reader::from_reader(xml);
@@ -2477,6 +2570,37 @@ mod tests {
     use oxml_opc::OpcPackage;
 
     use super::{A_NS, CT_Table, CT_TableStyleList, Emu, OxmlError};
+
+    #[test]
+    fn new_table_uses_truncating_dimensions_and_valid_cell_shells() {
+        let table = CT_Table::new(2, 3, Emu(302), Emu(201)).unwrap();
+        assert_eq!(table.grid.columns, vec![Emu(100), Emu(100), Emu(102)]);
+        assert_eq!(
+            table.rows.iter().map(|row| row.height).collect::<Vec<_>>(),
+            vec![Emu(100), Emu(101)]
+        );
+        assert!(table.properties.as_ref().unwrap().first_row);
+        assert!(table.properties.as_ref().unwrap().band_rows);
+        assert!(table.rows.iter().all(|row| row.cells.len() == 3));
+        assert!(table.rows.iter().flat_map(|row| &row.cells).all(|cell| {
+            cell.text_body.as_ref().unwrap().paragraph_count() == 1 && cell.properties.is_some()
+        }));
+        assert_eq!(CT_Table::from_xml(&table.to_xml().unwrap()).unwrap(), table);
+    }
+
+    #[test]
+    fn new_table_rejects_invalid_dimensions_before_allocation() {
+        for result in [
+            CT_Table::new(0, 1, Emu(1), Emu(1)),
+            CT_Table::new(1, 0, Emu(1), Emu(1)),
+            CT_Table::new(1, 1, Emu(0), Emu(1)),
+            CT_Table::new(1, 1, Emu(1), Emu(-1)),
+            CT_Table::new(2, 1, Emu(1), Emu(1)),
+            CT_Table::new(1, 2, Emu(1), Emu(1)),
+        ] {
+            assert!(result.is_err());
+        }
+    }
 
     #[test]
     fn table_style_and_cell_properties_preserve_unmodelled_xml_byte_for_byte() {

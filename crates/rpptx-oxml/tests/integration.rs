@@ -4,10 +4,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
+use oxml_core::units::Emu;
 use oxml_drawing::color::{ColorMapSlot, ThemeColorSlot};
 use oxml_drawing::shape_props::CT_ShapeProperties;
 use oxml_drawing::table::CT_Table;
 use oxml_drawing::text::CT_TextBody;
+use oxml_drawing::xfrm::CT_Transform2D;
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
 use quick_xml::events::{BytesEnd, BytesStart, Event};
@@ -2381,6 +2383,36 @@ fn graphic_frame_requires_children_in_schema_order_and_writes_fixed_prefixes() {
             "{invalid}"
         );
     }
+}
+
+#[test]
+fn table_graphic_frame_constructor_writes_the_canonical_shell() {
+    let table = CT_Table::new(2, 3, Emu(302), Emu(201)).unwrap();
+    let frame =
+        CT_GraphicFrame::new_table(7, "Table & 7", CT_Transform2D::default(), table).unwrap();
+    let written = frame.to_xml().unwrap();
+    let xml = String::from_utf8(written.clone()).unwrap();
+    assert!(xml.contains(r#"<p:cNvPr id="7" name="Table &amp; 7"/>"#));
+    assert!(xml.contains("<p:cNvGraphicFramePr/>"));
+    assert!(xml.contains("<p:nvPr/>"));
+    assert!(xml.contains(
+        r#"<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">"#
+    ));
+    assert!(xml.find("<p:nvGraphicFramePr>").unwrap() < xml.find("<p:xfrm").unwrap());
+    assert!(xml.find("<p:xfrm").unwrap() < xml.find("<a:graphic>").unwrap());
+    let reparsed = CT_GraphicFrame::from_xml(&written).unwrap();
+    assert_eq!(reparsed, frame);
+    assert!(matches!(
+        reparsed.graphic_data.payload,
+        GraphicDataPayload::Table(_)
+    ));
+
+    let mut invalid_table = CT_Table::new(1, 1, Emu(100), Emu(100)).unwrap();
+    invalid_table.rows.clear();
+    let error =
+        CT_GraphicFrame::new_table(8, "Invalid table", CT_Transform2D::default(), invalid_table)
+            .unwrap_err();
+    assert!(error.to_string().contains("at least one a:tr"));
 }
 
 #[test]

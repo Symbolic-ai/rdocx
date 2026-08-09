@@ -1,6 +1,6 @@
 # F-113, Table facade
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S28
 **Size**: L
 **Depends on**: F-074, F-109
@@ -136,15 +136,16 @@ mutation paths only. All 28 deterministic hashes must match.
 
 ## Implementation checklist
 
-- [ ] Add validated table and graphic-frame constructors in existing modules.
-- [ ] Add narrow typed-paragraph transfer behavior.
-- [ ] Add `add_table` and borrowed table and cell handles.
-- [ ] Add text-frame, fill, margins, flags, and width mutation.
-- [ ] Implement checked merge and merge-origin-only split.
-- [ ] Add the gate, negative, preservation, round-trip, and differential tests
+- [x] Add validated table and graphic-frame constructors in existing modules.
+- [x] Add narrow typed-paragraph transfer behavior.
+- [x] Add `add_table` and borrowed table and cell handles.
+- [x] Add text-frame, fill, margins, flags, and width mutation.
+- [x] Implement checked merge and merge-origin-only split.
+- [x] Add the gate, negative, preservation, round-trip, and differential tests
   to existing test binaries.
-- [ ] Update exactly HLD 05 and HLD 06.
-- [ ] Run focused checks, risk riders, `/verify --full`, and the hash harness.
+- [x] Update exactly HLD 05 and HLD 06.
+- [x] Run focused checks, risk riders, worker `/verify`, and the hash harness.
+  Integrated sprint verification runs `/verify --full`.
 
 ## Open questions
 

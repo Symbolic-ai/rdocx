@@ -104,6 +104,24 @@ boundaries and bytes remain unchanged. Unsupported shape kinds return the
 normal contextual mutation error, and a shape without a text body returns no
 text-frame handle.
 
+Table graphic frames expose concrete borrowed `TableRef` and `TableMut`
+handles through `ShapeRef::table` and `ShapeMut::table_mut`. Their cell access
+is total and returns `Option`. Table handles expose row and column counts,
+column widths, and the first-row, last-row, first-column, last-column,
+horizontal-banding, and vertical-banding flags. Cell handles expose plain text,
+typed text-frame mutation, direct fill, four optional margins, merge-origin and
+continuation state, and span height and width.
+
+Changing a column width uses a checked sum and synchronizes the graphic-frame
+width. Merge accepts opposite rectangle corners in either order. It validates
+the complete rectangle before changing state, rejects overlap with an existing
+merge, migrates typed paragraphs in row-major order, and writes the DrawingML
+origin and continuation pattern described in `05-drawingml-model.md`. Split is
+valid only on a checked merge origin. It restores span one and clears
+continuation flags without redistributing content. Fallible width, merge, and
+split operations stage and serialize a table clone before committing it, so an
+error leaves the table unchanged.
+
 `SlideMut` also exposes the direct shape construction surface:
 
 ```rust
@@ -121,6 +139,15 @@ pub fn add_connector(
     begin_x: Emu, begin_y: Emu, end_x: Emu, end_y: Emu,
 ) -> Result<ShapeMut<'_>>;
 pub fn add_group_shape(&mut self) -> Result<ShapeMut<'_>>;
+pub fn add_table(
+    &mut self,
+    rows: usize,
+    columns: usize,
+    left: Emu,
+    top: Emu,
+    width: Emu,
+    height: Emu,
+) -> Result<ShapeMut<'_>>;
 ```
 
 The owning facade adds pictures because media parts and relationships belong to
@@ -167,6 +194,13 @@ is the componentwise minimum endpoint, its extents are the absolute endpoint
 spans, and its horizontal and vertical flips retain endpoint direction. A
 horizontal or vertical connector may have one zero extent. A span that cannot
 fit in the signed EMU representation returns a contextual error.
+
+A constructed table uses a canonical `p:graphicFrame` with deterministic name
+`Table {id}`, a typed transform, the DrawingML table URI, and a rectangular
+`a:tbl` payload. The constructor rejects invalid counts and extents before tree
+mutation. It appends at top z-order like the other borrowed slide constructors.
+The table model owns truncating dimension distribution and assigns each
+remainder to the final row or column so the grid matches the frame extent.
 
 Every shape constructor, including the owning picture operation, rescans the
 tree immediately before allocation, derives a deterministic producer name from

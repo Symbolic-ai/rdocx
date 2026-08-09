@@ -14,6 +14,7 @@ pub use oxml_core::units::{Angle, Emu};
 pub use oxml_drawing::fill::Fill;
 pub use oxml_drawing::line::CT_LineProperties;
 use oxml_drawing::shape_props::CT_ShapeProperties;
+use oxml_drawing::table::{CT_Table, CT_TableCell, CT_TableCellProperties, CT_TableProperties};
 use oxml_drawing::text::{CT_RegularTextRun, CT_TextBody, CT_TextParagraph};
 pub use oxml_drawing::text::{
     CT_TextCharacterProperties, CT_TextParagraphProperties, TextBullet, TextBulletCharacter,
@@ -26,7 +27,7 @@ use oxml_opc::content_types;
 use oxml_opc::relationship::{Relationship, rel_types};
 use oxml_opc::{OpcError, OpcPackage, Relationships};
 use rpptx_oxml::connector::CT_ConnectionShape;
-use rpptx_oxml::graphic_frame::GraphicDataPayload;
+use rpptx_oxml::graphic_frame::{CT_GraphicFrame, GraphicDataPayload};
 use rpptx_oxml::notes_parts::CT_NotesSlide;
 use rpptx_oxml::picture::CT_Picture;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
@@ -111,6 +112,12 @@ pub enum Error {
 
     #[error("{operation} failed: {message}")]
     InvalidShapeMutation {
+        operation: &'static str,
+        message: String,
+    },
+
+    #[error("{operation} failed: {message}")]
+    InvalidTableMutation {
         operation: &'static str,
         message: String,
     },
@@ -1229,6 +1236,32 @@ fn slide_mut(record: &mut SlideRecord) -> SlideMut<'_> {
 }
 
 impl SlideMut<'_> {
+    /// Appends a rectangular table at the top of the slide's z-order.
+    pub fn add_table(
+        &mut self,
+        rows: usize,
+        columns: usize,
+        left: Emu,
+        top: Emu,
+        width: Emu,
+        height: Emu,
+    ) -> Result<ShapeMut<'_>> {
+        let table = CT_Table::new(rows, columns, width, height)
+            .map_err(|error| invalid_table_mutation("add table", error.to_string()))?;
+        let tree = &mut self.record.slide.common_slide_data.shape_tree;
+        let id = ShapeIdAllocator::scan(tree).allocate();
+        let frame = CT_GraphicFrame::new_table(
+            id,
+            &format!("Table {id}"),
+            positioned_transform(left, top, width, height),
+            table,
+        )
+        .map_err(|error| invalid_table_mutation("add table", error.to_string()))?;
+        Ok(shape_mut(tree.append_child(ShapeTreeChild::GraphicFrame(
+            Box::new(frame),
+        ))))
+    }
+
     /// Appends a no-fill textbox at the top of the slide's z-order.
     pub fn add_textbox(
         &mut self,
@@ -1389,6 +1422,10 @@ fn invalid_shape_construction(operation: &'static str, error: OxmlError) -> Erro
         operation,
         message: error.to_string(),
     }
+}
+
+fn invalid_table_mutation(operation: &'static str, message: String) -> Error {
+    Error::InvalidTableMutation { operation, message }
 }
 
 impl SlideRef<'_> {
@@ -1589,6 +1626,20 @@ impl ShapeMut<'_> {
         }
     }
 
+    /// Returns a behavior-bearing mutable handle for a table graphic frame.
+    pub fn table_mut(&mut self) -> Option<TableMut<'_>> {
+        let ShapeTreeChild::GraphicFrame(frame) = self.child else {
+            return None;
+        };
+        let GraphicDataPayload::Table(table) = &mut frame.graphic_data.payload else {
+            return None;
+        };
+        Some(TableMut {
+            table,
+            transform: &mut frame.transform,
+        })
+    }
+
     fn transform_mut(&mut self, operation: &'static str) -> Result<&mut CT_Transform2D> {
         match self.child {
             ShapeTreeChild::Shape(shape) => Ok(shape
@@ -1629,6 +1680,597 @@ impl ShapeMut<'_> {
 /// A mutably borrowed ordinary-shape text body.
 pub struct TextFrame<'a> {
     body: &'a mut CT_TextBody,
+}
+
+/// A borrowed DrawingML table.
+#[derive(Clone, Copy)]
+pub struct TableRef<'a> {
+    table: &'a CT_Table,
+}
+
+impl TableRef<'_> {
+    /// Returns the number of explicit table rows.
+    pub fn row_count(&self) -> usize {
+        self.table.rows.len()
+    }
+
+    /// Returns the number of grid columns.
+    pub fn column_count(&self) -> usize {
+        self.table.grid.columns.len()
+    }
+
+    /// Returns one explicit grid cell by zero-based row and column.
+    pub fn cell(&self, row: usize, column: usize) -> Option<TableCellRef<'_>> {
+        table_cell(self.table, row, column).map(|cell| TableCellRef { cell })
+    }
+
+    /// Returns one grid-column width in EMU.
+    pub fn column_width(&self, column: usize) -> Option<Emu> {
+        self.table.grid.columns.get(column).copied()
+    }
+
+    /// Returns whether first-row table styling is enabled.
+    pub fn first_row(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.first_row)
+    }
+
+    /// Returns whether last-row table styling is enabled.
+    pub fn last_row(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.last_row)
+    }
+
+    /// Returns whether first-column table styling is enabled.
+    pub fn first_column(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.first_column)
+    }
+
+    /// Returns whether last-column table styling is enabled.
+    pub fn last_column(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.last_column)
+    }
+
+    /// Returns whether horizontal row banding is enabled.
+    pub fn horizontal_banding(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.band_rows)
+    }
+
+    /// Returns whether vertical column banding is enabled.
+    pub fn vertical_banding(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.band_columns)
+    }
+}
+
+/// A behavior-bearing mutable DrawingML table and its containing frame extent.
+pub struct TableMut<'a> {
+    table: &'a mut CT_Table,
+    transform: &'a mut CT_Transform2D,
+}
+
+impl TableMut<'_> {
+    /// Returns the number of explicit table rows.
+    pub fn row_count(&self) -> usize {
+        self.table.rows.len()
+    }
+
+    /// Returns the number of grid columns.
+    pub fn column_count(&self) -> usize {
+        self.table.grid.columns.len()
+    }
+
+    /// Returns one explicit grid cell by zero-based row and column.
+    pub fn cell(&self, row: usize, column: usize) -> Option<TableCellRef<'_>> {
+        table_cell(self.table, row, column).map(|cell| TableCellRef { cell })
+    }
+
+    /// Returns one explicit grid cell for in-place mutation.
+    pub fn cell_mut(&mut self, row: usize, column: usize) -> Option<TableCellMut<'_>> {
+        table_cell(self.table, row, column)?;
+        Some(TableCellMut {
+            table: self.table,
+            row,
+            column,
+        })
+    }
+
+    /// Returns one grid-column width in EMU.
+    pub fn column_width(&self, column: usize) -> Option<Emu> {
+        self.table.grid.columns.get(column).copied()
+    }
+
+    /// Changes one grid width and synchronizes the containing frame width.
+    pub fn set_column_width(&mut self, column: usize, width: Emu) -> Result<()> {
+        if width.0 <= 0 {
+            return Err(invalid_table_mutation(
+                "set column width",
+                "column width must be positive".to_owned(),
+            ));
+        }
+        if column >= self.table.grid.columns.len() {
+            return Err(invalid_table_mutation(
+                "set column width",
+                format!("column index {column} is out of range"),
+            ));
+        }
+        let total_width = self
+            .table
+            .grid
+            .columns
+            .iter()
+            .enumerate()
+            .try_fold(0i64, |total, (index, current)| {
+                total.checked_add(if index == column { width.0 } else { current.0 })
+            })
+            .ok_or_else(|| {
+                invalid_table_mutation(
+                    "set column width",
+                    "table width exceeds the EMU range".to_owned(),
+                )
+            })?;
+        let total_height = self
+            .table
+            .rows
+            .iter()
+            .try_fold(0i64, |total, row| total.checked_add(row.height.0))
+            .ok_or_else(|| {
+                invalid_table_mutation(
+                    "set column width",
+                    "table height exceeds the EMU range".to_owned(),
+                )
+            })?;
+        if total_width <= 0 || total_height <= 0 {
+            return Err(invalid_table_mutation(
+                "set column width",
+                "table width and height must remain positive".to_owned(),
+            ));
+        }
+
+        let mut staged = self.table.clone();
+        staged.grid.columns[column] = width;
+        staged
+            .to_xml()
+            .map_err(|error| invalid_table_mutation("set column width", error.to_string()))?;
+        self.table.grid.columns[column] = width;
+        let height = self
+            .transform
+            .extent
+            .map_or(Emu(total_height), |extent| extent.cy);
+        self.transform.extent = Some(CT_PositiveSize2D {
+            cx: Emu(total_width),
+            cy: height,
+        });
+        Ok(())
+    }
+
+    /// Returns whether first-row table styling is enabled.
+    pub fn first_row(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.first_row)
+    }
+
+    /// Enables or disables first-row table styling.
+    pub fn set_first_row(&mut self, value: bool) {
+        table_properties_mut(self.table).first_row = value;
+    }
+
+    /// Returns whether last-row table styling is enabled.
+    pub fn last_row(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.last_row)
+    }
+
+    /// Enables or disables last-row table styling.
+    pub fn set_last_row(&mut self, value: bool) {
+        table_properties_mut(self.table).last_row = value;
+    }
+
+    /// Returns whether first-column table styling is enabled.
+    pub fn first_column(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.first_column)
+    }
+
+    /// Enables or disables first-column table styling.
+    pub fn set_first_column(&mut self, value: bool) {
+        table_properties_mut(self.table).first_column = value;
+    }
+
+    /// Returns whether last-column table styling is enabled.
+    pub fn last_column(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.last_column)
+    }
+
+    /// Enables or disables last-column table styling.
+    pub fn set_last_column(&mut self, value: bool) {
+        table_properties_mut(self.table).last_column = value;
+    }
+
+    /// Returns whether horizontal row banding is enabled.
+    pub fn horizontal_banding(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.band_rows)
+    }
+
+    /// Enables or disables horizontal row banding.
+    pub fn set_horizontal_banding(&mut self, value: bool) {
+        table_properties_mut(self.table).band_rows = value;
+    }
+
+    /// Returns whether vertical column banding is enabled.
+    pub fn vertical_banding(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.band_columns)
+    }
+
+    /// Enables or disables vertical column banding.
+    pub fn set_vertical_banding(&mut self, value: bool) {
+        table_properties_mut(self.table).band_columns = value;
+    }
+}
+
+/// A borrowed explicit table-grid cell.
+#[derive(Clone, Copy)]
+pub struct TableCellRef<'a> {
+    cell: &'a CT_TableCell,
+}
+
+impl TableCellRef<'_> {
+    /// Returns the cell's visible plain text.
+    pub fn text(&self) -> String {
+        self.cell
+            .text_body
+            .as_ref()
+            .map_or_else(String::new, CT_TextBody::plain_text)
+    }
+
+    /// Returns whether this cell is the top-left origin of a merge.
+    pub fn is_merge_origin(&self) -> bool {
+        !self.is_spanned() && (self.cell.row_span > 1 || self.cell.grid_span > 1)
+    }
+
+    /// Returns whether this cell continues a merge from another grid cell.
+    pub fn is_spanned(&self) -> bool {
+        self.cell.horizontal_merge || self.cell.vertical_merge
+    }
+
+    /// Returns the origin's vertical span, or one for an unmerged cell.
+    pub fn span_height(&self) -> u32 {
+        self.cell.row_span
+    }
+
+    /// Returns the origin's horizontal span, or one for an unmerged cell.
+    pub fn span_width(&self) -> u32 {
+        self.cell.grid_span
+    }
+
+    /// Returns the direct cell fill, when present.
+    pub fn fill(&self) -> Option<&Fill> {
+        self.cell
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.fill.as_ref())
+    }
+
+    /// Returns the optional left, right, top, and bottom cell margins.
+    pub fn margins(&self) -> (Option<Emu>, Option<Emu>, Option<Emu>, Option<Emu>) {
+        self.cell
+            .properties
+            .as_ref()
+            .map_or((None, None, None, None), |properties| {
+                (
+                    properties.margin_left,
+                    properties.margin_right,
+                    properties.margin_top,
+                    properties.margin_bottom,
+                )
+            })
+    }
+}
+
+/// A behavior-bearing mutable table-grid cell addressed within its table.
+pub struct TableCellMut<'a> {
+    table: &'a mut CT_Table,
+    row: usize,
+    column: usize,
+}
+
+impl TableCellMut<'_> {
+    /// Returns the cell's visible plain text.
+    pub fn text(&self) -> String {
+        self.cell_ref().text()
+    }
+
+    /// Replaces the cell text with one paragraph and one regular run.
+    pub fn set_text(&mut self, text: &str) {
+        self.cell_mut()
+            .text_body
+            .get_or_insert_with(CT_TextBody::new)
+            .set_text(text);
+    }
+
+    /// Returns the cell text body for in-place mutation.
+    pub fn text_frame(&mut self) -> TextFrame<'_> {
+        let body = self
+            .cell_mut()
+            .text_body
+            .get_or_insert_with(CT_TextBody::new);
+        TextFrame { body }
+    }
+
+    /// Replaces or clears the direct cell fill.
+    pub fn set_fill(&mut self, fill: Option<Fill>) {
+        self.properties_mut().fill = fill;
+    }
+
+    /// Returns the direct cell fill, when present.
+    pub fn fill(&self) -> Option<&Fill> {
+        self.cell_ref().cell.properties.as_ref()?.fill.as_ref()
+    }
+
+    /// Replaces all four optional cell margins.
+    pub fn set_margins(
+        &mut self,
+        left: Option<Emu>,
+        right: Option<Emu>,
+        top: Option<Emu>,
+        bottom: Option<Emu>,
+    ) {
+        let properties = self.properties_mut();
+        properties.margin_left = left;
+        properties.margin_right = right;
+        properties.margin_top = top;
+        properties.margin_bottom = bottom;
+    }
+
+    /// Returns the optional left, right, top, and bottom cell margins.
+    pub fn margins(&self) -> (Option<Emu>, Option<Emu>, Option<Emu>, Option<Emu>) {
+        let Some(properties) = self.cell_ref().cell.properties.as_ref() else {
+            return (None, None, None, None);
+        };
+        (
+            properties.margin_left,
+            properties.margin_right,
+            properties.margin_top,
+            properties.margin_bottom,
+        )
+    }
+
+    /// Returns whether this cell is the top-left origin of a merge.
+    pub fn is_merge_origin(&self) -> bool {
+        self.cell_ref().is_merge_origin()
+    }
+
+    /// Returns whether this cell continues a merge from another grid cell.
+    pub fn is_spanned(&self) -> bool {
+        self.cell_ref().is_spanned()
+    }
+
+    /// Returns the origin's vertical span, or one for an unmerged cell.
+    pub fn span_height(&self) -> u32 {
+        self.cell_ref().span_height()
+    }
+
+    /// Returns the origin's horizontal span, or one for an unmerged cell.
+    pub fn span_width(&self) -> u32 {
+        self.cell_ref().span_width()
+    }
+
+    /// Merges the rectangle between this cell and the other grid coordinate.
+    pub fn merge_to(&mut self, row: usize, column: usize) -> Result<()> {
+        let mut staged = self.table.clone();
+        merge_cells(&mut staged, self.row, self.column, row, column)
+            .map_err(|message| invalid_table_mutation("merge cells", message))?;
+        staged
+            .to_xml()
+            .map_err(|error| invalid_table_mutation("merge cells", error.to_string()))?;
+        *self.table = staged;
+        Ok(())
+    }
+
+    /// Splits this merge origin back into its explicit grid cells.
+    pub fn split(&mut self) -> Result<()> {
+        let mut staged = self.table.clone();
+        split_cell(&mut staged, self.row, self.column)
+            .map_err(|message| invalid_table_mutation("split cell", message))?;
+        staged
+            .to_xml()
+            .map_err(|error| invalid_table_mutation("split cell", error.to_string()))?;
+        *self.table = staged;
+        Ok(())
+    }
+
+    fn cell_ref(&self) -> TableCellRef<'_> {
+        TableCellRef {
+            cell: table_cell(self.table, self.row, self.column)
+                .expect("TableCellMut coordinates were validated at construction"),
+        }
+    }
+
+    fn cell_mut(&mut self) -> &mut CT_TableCell {
+        &mut self.table.rows[self.row].cells[self.column]
+    }
+
+    fn properties_mut(&mut self) -> &mut CT_TableCellProperties {
+        self.cell_mut()
+            .properties
+            .get_or_insert_with(CT_TableCellProperties::default)
+    }
+}
+
+fn table_cell(table: &CT_Table, row: usize, column: usize) -> Option<&CT_TableCell> {
+    table.rows.get(row)?.cells.get(column)
+}
+
+fn table_properties_mut(table: &mut CT_Table) -> &mut CT_TableProperties {
+    table
+        .properties
+        .get_or_insert_with(CT_TableProperties::default)
+}
+
+fn rectangular_dimensions(table: &CT_Table) -> std::result::Result<(usize, usize), String> {
+    let rows = table.rows.len();
+    let columns = table.grid.columns.len();
+    if rows == 0 || columns == 0 || table.rows.iter().any(|row| row.cells.len() != columns) {
+        return Err("table does not have a rectangular explicit cell grid".to_owned());
+    }
+    Ok((rows, columns))
+}
+
+fn merge_cells(
+    table: &mut CT_Table,
+    first_row: usize,
+    first_column: usize,
+    second_row: usize,
+    second_column: usize,
+) -> std::result::Result<(), String> {
+    let (rows, columns) = rectangular_dimensions(table)?;
+    if first_row >= rows
+        || second_row >= rows
+        || first_column >= columns
+        || second_column >= columns
+    {
+        return Err("merge coordinate is out of range".to_owned());
+    }
+    let top = first_row.min(second_row);
+    let bottom = first_row.max(second_row);
+    let left = first_column.min(second_column);
+    let right = first_column.max(second_column);
+    if top == bottom && left == right {
+        return Err("merge requires at least two cells".to_owned());
+    }
+    if table.rows[top..=bottom].iter().any(|row| {
+        row.cells[left..=right].iter().any(|cell| {
+            cell.row_span != 1
+                || cell.grid_span != 1
+                || cell.horizontal_merge
+                || cell.vertical_merge
+        })
+    }) {
+        return Err("merge range contains one or more merged cells".to_owned());
+    }
+    let row_span = u32::try_from(bottom - top + 1)
+        .map_err(|_| "merge row span exceeds the DrawingML range".to_owned())?;
+    let grid_span = u32::try_from(right - left + 1)
+        .map_err(|_| "merge column span exceeds the DrawingML range".to_owned())?;
+
+    let mut moved_bodies = Vec::new();
+    for row in top..=bottom {
+        for column in left..=right {
+            if row == top && column == left {
+                continue;
+            }
+            let body = table.rows[row].cells[column]
+                .text_body
+                .take()
+                .unwrap_or_default();
+            moved_bodies.push((row, column, body));
+        }
+    }
+    for (row, column, mut body) in moved_bodies {
+        let origin_body = table.rows[top].cells[left]
+            .text_body
+            .get_or_insert_with(CT_TextBody::new);
+        body.move_content_to(origin_body);
+        table.rows[row].cells[column].text_body = Some(body);
+    }
+
+    for row in top..=bottom {
+        for column in left..=right {
+            let cell = &mut table.rows[row].cells[column];
+            cell.row_span = if row == top { row_span } else { 1 };
+            cell.grid_span = if column == left { grid_span } else { 1 };
+            cell.horizontal_merge = column != left;
+            cell.vertical_merge = row != top;
+        }
+    }
+    Ok(())
+}
+
+fn split_cell(table: &mut CT_Table, row: usize, column: usize) -> std::result::Result<(), String> {
+    let (rows, columns) = rectangular_dimensions(table)?;
+    let origin = table_cell(table, row, column)
+        .ok_or_else(|| "split coordinate is out of range".to_owned())?;
+    if origin.horizontal_merge
+        || origin.vertical_merge
+        || (origin.row_span == 1 && origin.grid_span == 1)
+    {
+        return Err("only a merge-origin cell can be split".to_owned());
+    }
+    let bottom = row
+        .checked_add(origin.row_span as usize - 1)
+        .ok_or_else(|| "merge row span exceeds the table grid".to_owned())?;
+    let right = column
+        .checked_add(origin.grid_span as usize - 1)
+        .ok_or_else(|| "merge column span exceeds the table grid".to_owned())?;
+    if bottom >= rows || right >= columns {
+        return Err("merge origin span exceeds the table grid".to_owned());
+    }
+    let row_span = origin.row_span;
+    let grid_span = origin.grid_span;
+    for current_row in row..=bottom {
+        for current_column in column..=right {
+            let cell = &table.rows[current_row].cells[current_column];
+            let expected = (
+                if current_row == row { row_span } else { 1 },
+                if current_column == column {
+                    grid_span
+                } else {
+                    1
+                },
+                current_column != column,
+                current_row != row,
+            );
+            if (
+                cell.row_span,
+                cell.grid_span,
+                cell.horizontal_merge,
+                cell.vertical_merge,
+            ) != expected
+            {
+                return Err("merge origin does not have a valid continuation rectangle".to_owned());
+            }
+        }
+    }
+    for current_row in row..=bottom {
+        for current_column in column..=right {
+            let cell = &mut table.rows[current_row].cells[current_column];
+            cell.row_span = 1;
+            cell.grid_span = 1;
+            cell.horizontal_merge = false;
+            cell.vertical_merge = false;
+        }
+    }
+    Ok(())
 }
 
 impl TextFrame<'_> {
@@ -1769,6 +2411,17 @@ impl<'a> ShapeRef<'a> {
         }
     }
 
+    /// Returns the typed table carried by this graphic frame, when present.
+    pub fn table(&self) -> Option<TableRef<'a>> {
+        let ShapeTreeChild::GraphicFrame(frame) = self.child else {
+            return None;
+        };
+        let GraphicDataPayload::Table(table) = &frame.graphic_data.payload else {
+            return None;
+        };
+        Some(TableRef { table })
+    }
+
     /// Returns the number of immediate group or selected fallback children.
     pub fn child_count(&self) -> usize {
         self.child_slice().len()
@@ -1814,6 +2467,125 @@ mod write_tests {
     use rpptx_oxml::placeholder::PhType;
 
     use super::*;
+
+    #[test]
+    fn two_dimensional_merge_encodes_origins_and_continuations() {
+        let mut presentation = Presentation::new().expect("open bundled template");
+        presentation.add_slide(0).expect("add slide");
+        let mut slide = presentation.slide_mut(0).expect("borrow slide");
+        let mut shape = slide
+            .add_table(3, 3, Emu(0), Emu(0), Emu(300), Emu(300))
+            .expect("add table");
+        let mut table = shape.table_mut().expect("table handle");
+        table
+            .cell_mut(0, 0)
+            .expect("merge origin")
+            .merge_to(2, 1)
+            .expect("merge cells");
+
+        let expected = [
+            [(3, 2, false, false), (3, 1, true, false)],
+            [(1, 2, false, true), (1, 1, true, true)],
+            [(1, 2, false, true), (1, 1, true, true)],
+        ];
+        for (row_index, row) in expected.into_iter().enumerate() {
+            for (column_index, expected_cell) in row.into_iter().enumerate() {
+                let cell = &table.table.rows[row_index].cells[column_index];
+                assert_eq!(
+                    (
+                        cell.row_span,
+                        cell.grid_span,
+                        cell.horizontal_merge,
+                        cell.vertical_merge,
+                    ),
+                    expected_cell,
+                    "cell {row_index},{column_index}"
+                );
+            }
+        }
+        for row in 0..3 {
+            let cell = &table.table.rows[row].cells[2];
+            assert_eq!(
+                (
+                    cell.row_span,
+                    cell.grid_span,
+                    cell.horizontal_merge,
+                    cell.vertical_merge,
+                ),
+                (1, 1, false, false),
+                "outside cell {row},2"
+            );
+        }
+    }
+
+    #[test]
+    fn merge_moves_formatted_content_to_origin_in_row_major_order() {
+        let mut presentation = Presentation::new().expect("open bundled template");
+        presentation.add_slide(0).expect("add slide");
+        let mut slide = presentation.slide_mut(0).expect("borrow slide");
+        let mut shape = slide
+            .add_table(2, 2, Emu(0), Emu(0), Emu(200), Emu(200))
+            .expect("add table");
+        let mut table = shape.table_mut().expect("table handle");
+        for (index, text) in ["one", "two", "three", "four"].into_iter().enumerate() {
+            table.cell_mut(index / 2, index % 2).unwrap().set_text(text);
+        }
+        {
+            let mut source = table.cell_mut(0, 1).unwrap();
+            let mut frame = source.text_frame();
+            let mut paragraph = frame.paragraph_mut(0).unwrap();
+            let mut properties = CT_TextParagraphProperties::default();
+            properties.level = Some(2);
+            paragraph.set_properties(properties);
+            let mut run = paragraph.add_run(" formatted");
+            let mut properties = CT_TextCharacterProperties::default();
+            properties.bold = Some(true);
+            run.set_properties(properties);
+        }
+        table.cell_mut(1, 1).unwrap().merge_to(0, 0).unwrap();
+        assert_eq!(
+            table.cell(0, 0).unwrap().text(),
+            "one\ntwo formatted\nthree\nfour"
+        );
+        let origin = &table.table.rows[0].cells[0];
+        let paragraphs = origin.text_body.as_ref().unwrap().paragraphs();
+        assert_eq!(paragraphs[1].properties.as_ref().unwrap().level, Some(2));
+        let oxml_drawing::text::TextRun::Run(run) = &paragraphs[1].runs[1] else {
+            panic!("expected regular run");
+        };
+        assert_eq!(run.properties.as_ref().unwrap().bold, Some(true));
+        table.cell_mut(0, 0).unwrap().split().unwrap();
+        assert_eq!(
+            table.cell(0, 0).unwrap().text(),
+            "one\ntwo formatted\nthree\nfour"
+        );
+        assert_eq!(table.cell(0, 1).unwrap().text(), "");
+    }
+
+    #[test]
+    fn merge_materializes_minimal_text_bodies_for_absent_sources() {
+        let mut presentation = Presentation::new().expect("open bundled template");
+        presentation.add_slide(0).expect("add slide");
+        let mut slide = presentation.slide_mut(0).expect("borrow slide");
+        let mut shape = slide
+            .add_table(2, 2, Emu(0), Emu(0), Emu(200), Emu(200))
+            .expect("add table");
+        let mut table = shape.table_mut().expect("table handle");
+        for (row, column) in [(0, 1), (1, 0), (1, 1)] {
+            table.table.rows[row].cells[column].text_body = None;
+        }
+
+        table.cell_mut(0, 0).unwrap().merge_to(1, 1).unwrap();
+
+        for (row, column) in [(0, 1), (1, 0), (1, 1)] {
+            let body = table.table.rows[row].cells[column]
+                .text_body
+                .as_ref()
+                .expect("merge source receives a text body");
+            assert_eq!(body.paragraph_count(), 1);
+            assert_eq!(body.plain_text(), "");
+        }
+    }
 
     #[test]
     fn connector_constructor_normalizes_every_direction() {

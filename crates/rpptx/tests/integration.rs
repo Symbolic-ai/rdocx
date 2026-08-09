@@ -17,6 +17,7 @@ use rpptx::{
 use rpptx_layout::{
     FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,
 };
+use rpptx_oxml::graphic_frame::GraphicDataPayload;
 use rpptx_oxml::notes_parts::{CT_NotesMaster, CT_NotesSlide};
 use rpptx_oxml::placeholder::PhType;
 use rpptx_oxml::presentation::CT_Presentation;
@@ -39,6 +40,362 @@ const LAYOUT_PART: &str = "/custom/layouts/validation.xml";
 const POWERPOINT_VERSION: &str = "16.104";
 const POWERPOINT_BUILD: &str = "16.104.25121423";
 const POWERPOINT_APP_BUILD: &str = "1214";
+
+#[test]
+fn merge_then_split_restores_the_original_grid() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    {
+        let mut slide = presentation.slide_mut(0).expect("borrow slide");
+        let mut shape = slide
+            .add_table(2, 3, Emu(10), Emu(20), Emu(302), Emu(201))
+            .expect("add table");
+        let mut table = shape.table_mut().expect("table handle");
+        let widths = (0..3)
+            .map(|column| table.column_width(column).unwrap())
+            .collect::<Vec<_>>();
+        table.cell_mut(0, 0).unwrap().merge_to(1, 2).unwrap();
+        table.cell_mut(0, 0).unwrap().split().unwrap();
+        assert_eq!(
+            (0..3)
+                .map(|column| table.column_width(column).unwrap())
+                .collect::<Vec<_>>(),
+            widths
+        );
+    }
+
+    let saved = presentation.to_bytes().expect("save presentation");
+    let reopened = Presentation::from_bytes(&saved).expect("reopen presentation");
+    let slide = reopened.slide(0).unwrap();
+    let table = slide.shapes().last().unwrap().table().unwrap();
+    assert_eq!(table.row_count(), 2);
+    assert_eq!(table.column_count(), 3);
+    assert!((0..2).all(|row| (0..3).all(|column| {
+        let cell = table.cell(row, column).unwrap();
+        !cell.is_merge_origin()
+            && !cell.is_spanned()
+            && cell.span_height() == 1
+            && cell.span_width() == 1
+    })));
+    assert_eq!(
+        (0..3)
+            .map(|column| table.column_width(column).unwrap())
+            .collect::<Vec<_>>(),
+        vec![Emu(100), Emu(100), Emu(102)]
+    );
+
+    let package = open_opc(&saved, "F-113 merge then split");
+    let slide = CT_Slide::from_xml(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+    let ShapeTreeChild::GraphicFrame(frame) =
+        slide.common_slide_data.shape_tree.children.last().unwrap()
+    else {
+        panic!("expected table graphic frame");
+    };
+    let GraphicDataPayload::Table(table) = &frame.graphic_data.payload else {
+        panic!("expected table payload");
+    };
+    assert_eq!(
+        table.rows.iter().map(|row| row.height).collect::<Vec<_>>(),
+        vec![Emu(100), Emu(101)]
+    );
+    assert!(table.rows.iter().all(|row| row.cells.len() == 3));
+}
+
+#[test]
+fn add_table_round_trips_cells_formatting_banding_and_widths() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let fill = Fill::from_xml(br#"<a:solidFill><a:srgbClr val="112233"/></a:solidFill>"#).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_table(2, 2, Emu(10), Emu(20), Emu(201), Emu(101))
+            .expect("add table");
+        let mut table = shape.table_mut().unwrap();
+        table.set_first_row(true);
+        table.set_last_row(true);
+        table.set_first_column(true);
+        table.set_last_column(true);
+        table.set_horizontal_banding(true);
+        table.set_vertical_banding(true);
+        table.set_column_width(1, Emu(150)).unwrap();
+        let mut cell = table.cell_mut(0, 0).unwrap();
+        cell.set_text("formatted");
+        cell.text_frame()
+            .add_paragraph()
+            .set_text("second paragraph");
+        cell.set_fill(Some(fill.clone()));
+        cell.set_margins(Some(Emu(10)), Some(Emu(20)), Some(Emu(30)), Some(Emu(40)));
+    }
+
+    let saved = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    let slide = reopened.slide(0).unwrap();
+    let table = slide.shapes().last().unwrap().table().unwrap();
+    assert_eq!(table.row_count(), 2);
+    assert_eq!(table.column_count(), 2);
+    assert_eq!(table.column_width(0), Some(Emu(100)));
+    assert_eq!(table.column_width(1), Some(Emu(150)));
+    assert!(table.first_row());
+    assert!(table.last_row());
+    assert!(table.first_column());
+    assert!(table.last_column());
+    assert!(table.horizontal_banding());
+    assert!(table.vertical_banding());
+    let cell = table.cell(0, 0).unwrap();
+    assert_eq!(cell.text(), "formatted\nsecond paragraph");
+    assert_eq!(cell.fill(), Some(&fill));
+    assert_eq!(
+        cell.margins(),
+        (Some(Emu(10)), Some(Emu(20)), Some(Emu(30)), Some(Emu(40)),)
+    );
+
+    let package = open_opc(&saved, "F-113 table formatting");
+    let slide = CT_Slide::from_xml(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+    let ShapeTreeChild::GraphicFrame(frame) =
+        slide.common_slide_data.shape_tree.children.last().unwrap()
+    else {
+        panic!("expected table graphic frame");
+    };
+    assert_eq!(frame.transform.extent.unwrap().cx, Emu(250));
+    assert_eq!(frame.transform.extent.unwrap().cy, Emu(101));
+}
+
+#[test]
+fn table_mutation_rejects_invalid_ranges_without_partial_changes() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let before = presentation.to_bytes().unwrap();
+    let rejected = {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        matches!(
+            slide.add_table(0, 2, Emu(0), Emu(0), Emu(200), Emu(200)),
+            Err(Error::InvalidTableMutation { .. })
+        )
+    };
+    assert!(rejected);
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    let rejected = {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        matches!(
+            slide.add_table(2, 2, Emu(0), Emu(0), Emu(-1), Emu(200)),
+            Err(Error::InvalidTableMutation { .. })
+        )
+    };
+    assert!(rejected);
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_table(2, 3, Emu(0), Emu(0), Emu(300), Emu(200))
+        .unwrap();
+    let table_index = presentation.slide(0).unwrap().shapes().len() - 1;
+    let before_invalid_cell = presentation.to_bytes().unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(table_index).unwrap();
+        let mut table = shape.table_mut().unwrap();
+        assert!(table.cell_mut(2, 0).is_none());
+        assert!(table.cell_mut(0, 3).is_none());
+        assert!(table.cell_mut(0, 0).unwrap().merge_to(2, 0).is_err());
+        assert!(table.cell_mut(0, 0).unwrap().merge_to(0, 0).is_err());
+    }
+    assert_eq!(presentation.to_bytes().unwrap(), before_invalid_cell);
+
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(table_index).unwrap();
+        let mut table = shape.table_mut().unwrap();
+        assert!(table.cell_mut(0, 0).unwrap().split().is_err());
+        assert!(table.set_column_width(0, Emu(0)).is_err());
+        assert!(table.set_column_width(0, Emu(i64::MAX)).is_err());
+    }
+    assert_eq!(presentation.to_bytes().unwrap(), before_invalid_cell);
+
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(table_index).unwrap();
+        shape
+            .table_mut()
+            .unwrap()
+            .cell_mut(0, 0)
+            .unwrap()
+            .merge_to(1, 1)
+            .unwrap();
+    }
+    let before_overlap = presentation.to_bytes().unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(table_index).unwrap();
+        let result = shape
+            .table_mut()
+            .unwrap()
+            .cell_mut(0, 1)
+            .unwrap()
+            .merge_to(1, 2);
+        assert!(matches!(result, Err(Error::InvalidTableMutation { .. })));
+    }
+    assert_eq!(presentation.to_bytes().unwrap(), before_overlap);
+}
+
+#[test]
+fn table_mutation_preserves_unmodelled_xml_and_schema_order() {
+    let fixture = table_mutation_fixture_bytes();
+    let original_package = open_opc(&fixture, "F-113 original table preservation");
+    let original_xml = original_package.get_part(SLIDE_TWO_PART).unwrap();
+    let original_raw = capture_exact_subtree(original_xml, b"<x:raw-payload", b"</x:raw-payload>");
+    let mut presentation = Presentation::from_bytes(&fixture).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut table_shape = slide.shape_mut(2).unwrap();
+        let mut table = table_shape.table_mut().unwrap();
+        table.set_column_width(0, Emu(125)).unwrap();
+    }
+    let saved = presentation.to_bytes().unwrap();
+    let package = open_opc(&saved, "F-113 table preservation");
+    let saved_xml = package.get_part(SLIDE_TWO_PART).unwrap();
+    let saved_raw = capture_exact_subtree(saved_xml, b"<x:raw-payload", b"</x:raw-payload>");
+    assert_eq!(saved_raw, original_raw, "unsupported table XML bytes");
+    let xml = String::from_utf8(saved_xml.to_vec()).unwrap();
+    for marker in [
+        r#"producer="kept""#,
+        r#"<x:before-table/>"#,
+        r#"x:grid="kept""#,
+        r#"<x:before-column/>"#,
+        r#"x:column="kept""#,
+        r#"<x:column-child/>"#,
+        r#"<x:after-grid/>"#,
+        r#"x:row="kept""#,
+        r#"<x:before-cell/>"#,
+        r#"x:cell="kept""#,
+        r#"<x:before-text/>"#,
+        r#"x:cell-properties="kept""#,
+        r#"<x:cell-properties-child/>"#,
+    ] {
+        assert!(xml.contains(marker), "missing preserved marker {marker}");
+    }
+    assert!(xml.contains(r#"<a:gridCol w="125" x:column="kept">"#));
+    let table_start = xml.find("<a:tbl ").unwrap();
+    let grid_start = xml[table_start..].find("<a:tblGrid").unwrap() + table_start;
+    let row_start = xml[grid_start..].find("<a:tr ").unwrap() + grid_start;
+    assert!(table_start < grid_start && grid_start < row_start);
+    let cell_start = xml[row_start..].find("<a:tc ").unwrap() + row_start;
+    let text_start = xml[cell_start..].find("<a:txBody>").unwrap() + cell_start;
+    let properties_start = xml[cell_start..].find("<a:tcPr ").unwrap() + cell_start;
+    assert!(cell_start < text_start && text_start < properties_start);
+}
+
+#[test]
+#[ignore = "requires uv and pinned python-pptx 1.0.2"]
+fn add_table_matches_pinned_python_pptx_table_semantics() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    for (index, split) in [false, true].into_iter().enumerate() {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_table(
+                2,
+                3,
+                Emu(10),
+                Emu(20 + i64::try_from(index).unwrap() * 300),
+                Emu(302),
+                Emu(201),
+            )
+            .expect("add table");
+        let mut table = shape.table_mut().unwrap();
+        for (cell_index, text) in ["A", "B", "C", "D", "E", "F"].into_iter().enumerate() {
+            table
+                .cell_mut(cell_index / 3, cell_index % 3)
+                .unwrap()
+                .set_text(text);
+        }
+        table.cell_mut(1, 1).unwrap().merge_to(0, 0).unwrap();
+        if split {
+            table.cell_mut(0, 0).unwrap().split().unwrap();
+        }
+    }
+
+    let output_path = std::env::temp_dir().join(format!(
+        "rpptx-f113-python-oracle-{}.pptx",
+        std::process::id()
+    ));
+    fs::write(&output_path, presentation.to_bytes().unwrap()).unwrap();
+    let script = r#"
+import json
+import sys
+import pptx
+from pptx import Presentation
+
+assert pptx.__version__ == "1.0.2", pptx.__version__
+
+def normalize(shape):
+    table = shape.table
+    return {
+        "frame": [shape.left, shape.top, shape.width, shape.height],
+        "columns": [column.width for column in table.columns],
+        "rows": [row.height for row in table.rows],
+        "flags": [
+            table.first_row,
+            table.last_row,
+            table.first_col,
+            table.last_col,
+            table.horz_banding,
+            table.vert_banding,
+        ],
+        "cells": [[
+            cell.text,
+            cell.is_merge_origin,
+            cell.is_spanned,
+            cell.span_height,
+            cell.span_width,
+        ] for row in table.rows for cell in row.cells],
+    }
+
+ours = Presentation(sys.argv[1])
+ours_records = [normalize(shape) for shape in list(ours.slides[0].shapes)[-2:]]
+
+oracle = Presentation()
+slide = oracle.slides.add_slide(oracle.slide_layouts[6])
+for index, split in enumerate((False, True)):
+    shape = slide.shapes.add_table(2, 3, 10, 20 + index * 300, 302, 201)
+    table = shape.table
+    for cell, text in zip((cell for row in table.rows for cell in row.cells), "ABCDEF"):
+        cell.text = text
+    table.cell(0, 0).merge(table.cell(1, 1))
+    if split:
+        table.cell(0, 0).split()
+oracle_records = [normalize(shape) for shape in list(slide.shapes)[-2:]]
+
+print(json.dumps(ours_records, sort_keys=True))
+print(json.dumps(oracle_records, sort_keys=True))
+"#;
+    let output = Command::new("uv")
+        .args([
+            "run",
+            "--with",
+            "python-pptx==1.0.2",
+            "python",
+            "-c",
+            script,
+        ])
+        .arg(&output_path)
+        .output()
+        .expect("run pinned python-pptx table oracle");
+    fs::remove_file(&output_path).unwrap();
+    assert!(
+        output.status.success(),
+        "python-pptx oracle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = String::from_utf8(output.stdout).unwrap();
+    let mut lines = records.lines();
+    let ours = lines.next().unwrap();
+    let oracle = lines.next().unwrap();
+    assert_eq!(ours, oracle, "normalized table semantics");
+    assert!(lines.next().is_none());
+}
 
 fn png_header(width: u32, height: u32) -> Vec<u8> {
     let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
@@ -2791,6 +3148,37 @@ fn mutation_fixture_bytes() -> Vec<u8> {
     package_bytes(package)
 }
 
+fn table_mutation_fixture_bytes() -> Vec<u8> {
+    let mut package = fixture_package();
+    let original = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let marked = original
+        .replacen(
+            "<a:tbl>",
+            r#"<a:tbl xmlns:x="urn:f113" producer="kept"><x:before-table/><x:raw-payload xmlns:z="urn:f113:attributes" z:second="2" first="1">
+  one &amp; two<!-- preserve spacing --><?f113 raw?><x:nested z:value=" A &amp; B "/>
+</x:raw-payload>"#,
+            1,
+        )
+        .replacen(
+            r#"<a:tblGrid><a:gridCol w="100"/><a:gridCol w="100"/></a:tblGrid>"#,
+            r#"<a:tblGrid x:grid="kept"><x:before-column/><a:gridCol w="100" x:column="kept"><x:column-child/></a:gridCol><a:gridCol w="101"/></a:tblGrid><x:after-grid/>"#,
+            1,
+        )
+        .replacen(
+            r#"<a:tr h="100"><a:tc><a:txBody>"#,
+            r#"<a:tr h="100" x:row="kept"><x:before-cell/><a:tc x:cell="kept"><x:before-text/><a:txBody>"#,
+            1,
+        )
+        .replacen(
+            "<a:tcPr/>",
+            r#"<a:tcPr x:cell-properties="kept"><x:cell-properties-child/></a:tcPr>"#,
+            1,
+        );
+    assert_ne!(marked, original);
+    package.set_part(SLIDE_TWO_PART, marked.into_bytes());
+    package_bytes(package)
+}
+
 fn append_boundary_fixture_bytes() -> Vec<u8> {
     let mut package = fixture_package();
     let original = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
@@ -2808,6 +3196,19 @@ fn package_bytes(package: OpcPackage) -> Vec<u8> {
     let mut output = Cursor::new(Vec::new());
     package.write_to(&mut output).unwrap();
     output.into_inner()
+}
+
+fn capture_exact_subtree(xml: &[u8], opening: &[u8], closing: &[u8]) -> Vec<u8> {
+    let start = xml
+        .windows(opening.len())
+        .position(|window| window == opening)
+        .expect("opening marker exists");
+    let relative_end = xml[start..]
+        .windows(closing.len())
+        .position(|window| window == closing)
+        .expect("closing marker exists");
+    let end = start + relative_end + closing.len();
+    xml[start..end].to_vec()
 }
 
 fn empty_package() -> OpcPackage {
