@@ -1,5 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
+use std::ops::Range;
 
 use oxml_core::OxmlError;
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
@@ -14,7 +15,7 @@ use oxml_drawing::xfrm::CT_Transform2D;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
-use quick_xml::{Reader, Writer};
+use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::connector::CT_ConnectionShape;
 use crate::graphic_frame::CT_GraphicFrame;
@@ -95,6 +96,166 @@ impl ShapeIdAllocator {
             }
         }
     }
+}
+
+#[derive(Debug)]
+struct ShapeIdOccurrence {
+    range: Range<usize>,
+    id: u32,
+    defines_shape: bool,
+}
+
+/// Assigns fresh non-visual shape ids and rewrites connector endpoints.
+pub fn rewrite_shape_ids(raw: &[u8]) -> Result<Vec<u8>> {
+    let occurrences = shape_id_occurrences(raw)?;
+    let occupied = occurrences
+        .iter()
+        .filter(|occurrence| occurrence.defines_shape)
+        .map(|occurrence| occurrence.id)
+        .collect::<HashSet<_>>();
+    let mut next = 2u32;
+    let mut map = HashMap::new();
+    for occurrence in occurrences
+        .iter()
+        .filter(|occurrence| occurrence.defines_shape)
+    {
+        if occurrence.id == 1 || map.contains_key(&occurrence.id) {
+            continue;
+        }
+        while occupied.contains(&next) {
+            next = next.checked_add(1).ok_or_else(shape_ids_exhausted)?;
+        }
+        map.insert(occurrence.id, next);
+        next = next.checked_add(1).ok_or_else(shape_ids_exhausted)?;
+    }
+    if map.is_empty() {
+        return Ok(raw.to_vec());
+    }
+
+    let mut rewritten = Vec::with_capacity(raw.len());
+    let mut copied_through = 0usize;
+    for occurrence in occurrences {
+        let Some(target) = map.get(&occurrence.id) else {
+            continue;
+        };
+        if occurrence.range.start < copied_through || occurrence.range.end > raw.len() {
+            return Err(OxmlError::InvalidValue(
+                "shape-id replacement ranges overlap".to_owned(),
+            ));
+        }
+        rewritten.extend_from_slice(&raw[copied_through..occurrence.range.start]);
+        rewritten.extend_from_slice(target.to_string().as_bytes());
+        copied_through = occurrence.range.end;
+    }
+    rewritten.extend_from_slice(&raw[copied_through..]);
+    Ok(rewritten)
+}
+
+fn shape_id_occurrences(raw: &[u8]) -> Result<Vec<ShapeIdOccurrence>> {
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    let mut scopes = vec![NamespaceBindings::default()];
+    let mut occurrences = Vec::new();
+    loop {
+        let event_start = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let scope = scopes
+                    .last()
+                    .ok_or_else(|| OxmlError::InvalidValue("missing namespace scope".to_owned()))?
+                    .with_start(&element)?;
+                collect_shape_id_occurrence(raw, event_start, &element, &scope, &mut occurrences)?;
+                scopes.push(scope);
+            }
+            Event::Empty(element) => {
+                let scope = scopes
+                    .last()
+                    .ok_or_else(|| OxmlError::InvalidValue("missing namespace scope".to_owned()))?
+                    .with_start(&element)?;
+                collect_shape_id_occurrence(raw, event_start, &element, &scope, &mut occurrences)?;
+            }
+            Event::End(_) => {
+                if scopes.len() == 1 {
+                    return Err(OxmlError::InvalidValue(
+                        "shape XML has an unmatched closing tag".to_owned(),
+                    ));
+                }
+                scopes.pop();
+            }
+            Event::Eof => {
+                if scopes.len() != 1 {
+                    return Err(OxmlError::InvalidValue(
+                        "shape XML ended before its root closed".to_owned(),
+                    ));
+                }
+                return Ok(occurrences);
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn collect_shape_id_occurrence(
+    raw: &[u8],
+    event_start: usize,
+    element: &BytesStart<'_>,
+    scope: &NamespaceBindings,
+    occurrences: &mut Vec<ShapeIdOccurrence>,
+) -> Result<()> {
+    let element_name = element.name();
+    let name = local_name(element_name.as_ref());
+    let uri = scope.element_uri(element_name.as_ref());
+    let defines_shape = uri == Some(P_NS) && name == b"cNvPr";
+    let connector_endpoint = uri == Some(A_NS) && matches!(name, b"stCxn" | b"endCxn");
+    if !defines_shape && !connector_endpoint {
+        return Ok(());
+    }
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        if attribute.key.as_ref() != b"id" {
+            continue;
+        }
+        let Ok(id) = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
+            .parse()
+        else {
+            continue;
+        };
+        let value = attribute.value.as_ref();
+        let relative_start = (value.as_ptr() as usize)
+            .checked_sub(element.as_ptr() as usize)
+            .filter(|start| {
+                start
+                    .checked_add(value.len())
+                    .is_some_and(|end| end <= element.len())
+            })
+            .ok_or_else(|| {
+                OxmlError::InvalidValue("shape-id attribute is outside its start tag".to_owned())
+            })?;
+        let start = event_start
+            .checked_add(1)
+            .and_then(|start| start.checked_add(relative_start))
+            .ok_or_else(|| OxmlError::InvalidValue("shape-id byte range overflowed".to_owned()))?;
+        let end = start
+            .checked_add(value.len())
+            .ok_or_else(|| OxmlError::InvalidValue("shape-id byte range overflowed".to_owned()))?;
+        if raw.get(start..end) != Some(value) {
+            return Err(OxmlError::InvalidValue(
+                "shape-id byte range did not match the source".to_owned(),
+            ));
+        }
+        occurrences.push(ShapeIdOccurrence {
+            range: start..end,
+            id,
+            defines_shape,
+        });
+    }
+    Ok(())
+}
+
+fn shape_ids_exhausted() -> OxmlError {
+    OxmlError::InvalidValue("PowerPoint shape ids are exhausted".to_owned())
 }
 
 fn collect_preserved_non_visual_ids(xml: &[u8], occupied: &mut HashSet<u32>) {

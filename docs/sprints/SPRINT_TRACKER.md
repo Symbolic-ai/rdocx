@@ -40,6 +40,7 @@ defended.
 | S25 | M10 | 3 | 3 | 0 | 10 | 3 | Completed M10 with table rendering, hyperlinks, fields, diagnostics, and the pinned fidelity harness. All 421 slides rendered, the SSIM trend and native PowerPoint evidence were retained, all 28 hashes remained unchanged, and no crate was published |
 | S26 | M11 | 4 | 4 | 0 | 10 | 4 | Established slide creation with the bundled template, collision-safe identifiers and media, layout-based slide synthesis, and deterministic validation. Native PowerPoint accepted the generated decks, all 50 pinned decks validated cleanly, all 28 hashes remained unchanged, and no crate was published |
 | S27 | M11 | 4 | 4 | 0 | 12 | 4 | Added mutable shape and text handles, schema-ordered shape constructors, atomic picture insertion, native image sizing, and typed text formatting. Pinned PowerPoint accepted the generated decks without repair, python-pptx 1.0.2 sizing parity passed, all 28 hashes remained unchanged, and no crate was published |
+| S28 | M11 | 4 | 4 | 0 | 9 | 4 | Completed M11 with mutable tables, slide collection operations, presentation properties, and one SHA-bound ten-slide acceptance deck. PowerPoint, Keynote, Google Slides, and LibreOffice accepted the deck without repair or conversion error, all 28 hashes remained unchanged, and no crate was published |
 
 ## Completed features
 
@@ -154,6 +155,10 @@ defended.
 | F-110 | S27 | M | 2 | 1 | 2026-08-08 | Schema-ordered textbox, shape, connector, and group construction |
 | F-111 | S27 | M | 2 | 1 | 2026-08-08 | Atomic picture insertion with native sizing and media deduplication |
 | F-112 | S27 | L | 4 | 1 | 2026-08-08 | Borrowed text-frame editing with typed paragraph and run formatting |
+| F-113 | S28 | L | 4 | 1 | 2026-08-09 | Mutable table construction, formatting, merge, split, and preservation |
+| F-114 | S28 | M | 2 | 1 | 2026-08-09 | Validated slide removal, movement, duplication, and graph repair |
+| F-115 | S28 | S | 1 | 1 | 2026-08-09 | Slide and presentation properties with valid slideshow output |
+| F-116 | S28 | M | 2 | 1 | 2026-08-09 | One SHA-bound ten-slide acceptance deck across four viewers |
 
 ## Velocity
 
@@ -194,6 +199,7 @@ five working days.
 | S25 | 3 | 3 | 5.00 |
 | S26 | 4 | 4 | 5.00 |
 | S27 | 4 | 4 | 5.00 |
+| S28 | 4 | 4 | 5.00 |
 
 ## Escalation record
 
@@ -225,3 +231,4 @@ was done about it. Empty is the expected state.
 | 2026-08-08 | Sprint estimate variance exceeded 30 percent | S25 | Record 3 actual days against 10 estimated and reforecast 57 pending stories at the observed five stories per active week to about 12 active weeks, retaining dependency-defined sprint boundaries |
 | 2026-08-08 | Sprint estimate variance exceeded 30 percent | S26 | Record 4 actual days against 10 estimated and reforecast 53 pending stories at the observed five stories per active week to about 11 active weeks, retaining dependency-defined sprint boundaries |
 | 2026-08-08 | Sprint estimate variance exceeded 30 percent | S27 | Record 4 actual days against 12 estimated and reforecast 49 pending stories at the observed five stories per active week to about 10 active weeks, retaining dependency-defined sprint boundaries |
+| 2026-08-09 | Sprint estimate variance exceeded 30 percent | S28 | Record 4 actual days against 9 estimated and reforecast 45 pending stories at the observed five stories per active week to about 9 active weeks, retaining dependency-defined sprint boundaries |

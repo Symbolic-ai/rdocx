@@ -4,6 +4,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oxml_drawing::color::ColorMap;
 use oxml_drawing::theme::CT_OfficeStyleSheet;
@@ -17,11 +18,14 @@ use rpptx::{
 use rpptx_layout::{
     FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,
 };
+use rpptx_oxml::graphic_frame::GraphicDataPayload;
 use rpptx_oxml::notes_parts::{CT_NotesMaster, CT_NotesSlide};
 use rpptx_oxml::placeholder::PhType;
 use rpptx_oxml::presentation::CT_Presentation;
 use rpptx_oxml::shape_tree::ShapeTreeChild;
-use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind};
+use rpptx_oxml::slide_parts::{
+    BackgroundRendering, CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind,
+};
 use rpptx_render::{RenderInput, layout_presentation_deterministic};
 
 #[path = "../examples/dump_deck.rs"]
@@ -39,6 +43,1488 @@ const LAYOUT_PART: &str = "/custom/layouts/validation.xml";
 const POWERPOINT_VERSION: &str = "16.104";
 const POWERPOINT_BUILD: &str = "16.104.25121423";
 const POWERPOINT_APP_BUILD: &str = "1214";
+const KEYNOTE_VERSION: &str = "14.4";
+const KEYNOTE_BUILD: &str = "7043.0.93";
+const LIBREOFFICE_VERSION: &str = "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
+const F116_CANDIDATE_PATH: &str = "/private/tmp/rdocx-f116-m11-write-api.pptx";
+const F116_ARTIFACT_SHA256: &str =
+    "d36da6e8849eabd4487d2572baea19c3716ee7d0fe03aaa4714a28ce3c41de4f";
+const F116_FINAL_TITLES: [&str; 10] = [
+    "F-116 slide 10",
+    "F-116 slide 02",
+    "F-116 slide 03",
+    "F-116 slide 04",
+    "F-116 slide 05",
+    "F-116 slide 06",
+    "F-116 slide 07",
+    "F-116 slide 08",
+    "F-116 slide 08",
+    "F-116 slide 09",
+];
+static F116_TEMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CrossViewerObservation {
+    Clean {
+        opened_or_imported: bool,
+        observed_slide_count: usize,
+        no_repair_or_conversion_error: bool,
+        export_or_close_result: &'static str,
+    },
+    Pending {
+        reason: &'static str,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CrossViewerEvidence {
+    application: &'static str,
+    version_or_date: Option<&'static str>,
+    build: Option<&'static str>,
+    input_sha256: &'static str,
+    observation: CrossViewerObservation,
+}
+
+const CROSS_VIEWER_ACCEPTANCE: [CrossViewerEvidence; 4] = [
+    CrossViewerEvidence {
+        application: "Microsoft PowerPoint",
+        version_or_date: Some(POWERPOINT_VERSION),
+        build: Some("Info.plist 16.104.25121423, AppleScript 1214"),
+        input_sha256: F116_ARTIFACT_SHA256,
+        observation: CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "closed without saving",
+        },
+    },
+    CrossViewerEvidence {
+        application: "Apple Keynote",
+        version_or_date: Some(KEYNOTE_VERSION),
+        build: Some(KEYNOTE_BUILD),
+        input_sha256: F116_ARTIFACT_SHA256,
+        observation: CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "user confirmed clean open and closed the presentation",
+        },
+    },
+    CrossViewerEvidence {
+        application: "Google Slides",
+        version_or_date: Some("accepted 2026-08-09"),
+        build: Some("Google Chrome 151.0.7922.76, build 7922.76"),
+        input_sha256: F116_ARTIFACT_SHA256,
+        observation: CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "Microsoft PowerPoint download started once",
+        },
+    },
+    CrossViewerEvidence {
+        application: "LibreOffice Impress",
+        version_or_date: Some("26.2.5.2"),
+        build: Some("cd7284b4cbbfeb507e630c1aac019f4157393acb"),
+        input_sha256: F116_ARTIFACT_SHA256,
+        observation: CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "hidden-slide PDF export succeeded with ten pages",
+        },
+    },
+];
+
+#[test]
+fn ten_slide_write_api_deck_validates_and_reopens() {
+    let presentation = build_f116_ten_slide_deck();
+    assert_f116_deck_structure(&presentation);
+    let bytes = presentation.to_bytes().expect("serialize F-116 deck");
+    let candidate_path = f116_temp_path("validation", "pptx");
+    fs::write(&candidate_path, &bytes).expect("write temporary F-116 candidate");
+    let candidate_sha = sha256(&candidate_path);
+    fs::remove_file(&candidate_path).expect("remove temporary F-116 candidate");
+    eprintln!("F-116 candidate SHA-256: {candidate_sha}");
+    assert_eq!(candidate_sha, F116_ARTIFACT_SHA256);
+
+    let reopened = Presentation::from_bytes(&bytes).expect("reopen F-116 deck");
+    assert_eq!(reopened.len(), 10);
+    assert_f116_deck_structure(&reopened);
+
+    let package = open_opc(&bytes, "F-116 ten-slide candidate");
+    let presentation_part = package.main_document_part().unwrap();
+    let slide_relationships = package
+        .get_part_rels(&presentation_part)
+        .unwrap()
+        .get_all_by_type(rel_types::SLIDE);
+    assert_eq!(slide_relationships.len(), 10);
+    let image_scopes = package
+        .part_rels
+        .values()
+        .filter(|relationships| {
+            relationships
+                .items
+                .iter()
+                .any(|relationship| relationship.rel_type == rel_types::IMAGE)
+        })
+        .count();
+    assert_eq!(image_scopes, 3);
+    assert_eq!(
+        package
+            .parts
+            .keys()
+            .filter(|part| part.starts_with("/ppt/media/"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn ten_slide_write_api_deck_saves_as_presentation_and_show() {
+    let presentation = build_f116_ten_slide_deck();
+    assert!(presentation.validate().is_empty());
+    let ordinary_path = f116_temp_path("ordinary-save", "pptx");
+    presentation
+        .save(&ordinary_path)
+        .expect("save F-116 presentation");
+    let ordinary_bytes = fs::read(&ordinary_path).expect("read F-116 presentation");
+    fs::remove_file(&ordinary_path).expect("remove temporary F-116 presentation");
+    let ordinary = open_opc(&ordinary_bytes, "F-116 presentation package");
+    let ordinary_main = ordinary.main_document_part().unwrap();
+    assert_eq!(
+        ordinary.content_types.content_type_for(&ordinary_main),
+        Some(content_types::PRESENTATION)
+    );
+
+    let show_path = f116_temp_path("slideshow-save", "ppsx");
+    presentation
+        .save_as_show(&show_path)
+        .expect("save F-116 slideshow");
+    let show_bytes = fs::read(&show_path).expect("read F-116 slideshow");
+    fs::remove_file(&show_path).expect("remove temporary F-116 slideshow");
+    let show = open_opc(&show_bytes, "F-116 slideshow package");
+    let show_main = show.main_document_part().unwrap();
+    assert_eq!(
+        show.content_types.content_type_for(&show_main),
+        Some(content_types::SLIDESHOW)
+    );
+    let reopened = Presentation::from_bytes(&show_bytes).expect("reopen F-116 slideshow");
+    assert_f116_deck_structure(&reopened);
+}
+
+#[test]
+#[ignore = "requires pinned PowerPoint, Keynote, Google Slides, and LibreOffice"]
+fn generated_ten_slide_write_api_deck_opens_clean_in_all_four_viewers() {
+    let path = write_f116_candidate();
+    assert_eq!(sha256(&path), F116_ARTIFACT_SHA256);
+    assert_f116_powerpoint_acceptance(&path);
+    assert_f116_libreoffice_acceptance(&path);
+    for row in CROSS_VIEWER_ACCEPTANCE {
+        assert_clean_cross_viewer_evidence(row).unwrap_or_else(|error| panic!("{error}"));
+    }
+}
+
+#[test]
+fn cross_viewer_acceptance_evidence_is_complete_and_bound_to_one_artifact() {
+    assert_eq!(CROSS_VIEWER_ACCEPTANCE.len(), 4);
+    assert_eq!(
+        CROSS_VIEWER_ACCEPTANCE
+            .iter()
+            .map(|row| row.application)
+            .collect::<HashSet<_>>(),
+        HashSet::from([
+            "Microsoft PowerPoint",
+            "Apple Keynote",
+            "Google Slides",
+            "LibreOffice Impress",
+        ])
+    );
+    let candidate = write_f116_temporary_candidate("evidence");
+    let actual_sha = sha256(&candidate);
+    fs::remove_file(&candidate).expect("remove temporary F-116 evidence candidate");
+    assert_eq!(actual_sha, F116_ARTIFACT_SHA256);
+    for row in CROSS_VIEWER_ACCEPTANCE {
+        assert_eq!(row.input_sha256, F116_ARTIFACT_SHA256);
+        if matches!(row.observation, CrossViewerObservation::Clean { .. }) {
+            assert_clean_cross_viewer_evidence(row).unwrap();
+        }
+    }
+    let pending = CROSS_VIEWER_ACCEPTANCE
+        .iter()
+        .filter_map(|row| match row.observation {
+            CrossViewerObservation::Pending { reason } => {
+                assert!(!reason.is_empty());
+                Some(row.application)
+            }
+            CrossViewerObservation::Clean { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(pending.is_empty(), "pending viewer evidence: {pending:?}");
+}
+
+#[test]
+fn pending_cross_viewer_evidence_cannot_pass_as_clean() {
+    let pending = CrossViewerEvidence {
+        application: "pending regression fixture",
+        version_or_date: Some("observed"),
+        build: Some("observed"),
+        input_sha256: F116_ARTIFACT_SHA256,
+        observation: CrossViewerObservation::Pending {
+            reason: "acceptance operation remains incomplete",
+        },
+    };
+    assert!(
+        assert_clean_cross_viewer_evidence(pending).is_err(),
+        "pending evidence passed as clean"
+    );
+}
+
+#[test]
+fn clean_cross_viewer_evidence_requires_each_positive_operation() {
+    let clean = CrossViewerEvidence {
+        application: "regression fixture",
+        version_or_date: Some("observed"),
+        build: Some("observed"),
+        input_sha256: F116_ARTIFACT_SHA256,
+        observation: CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "closed or exported successfully",
+        },
+    };
+    assert!(assert_clean_cross_viewer_evidence(clean).is_ok());
+
+    for incomplete in [
+        CrossViewerObservation::Clean {
+            opened_or_imported: false,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "closed or exported successfully",
+        },
+        CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 0,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "closed or exported successfully",
+        },
+        CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: false,
+            export_or_close_result: "closed or exported successfully",
+        },
+        CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "",
+        },
+        CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: " \t\n",
+        },
+    ] {
+        assert!(
+            assert_clean_cross_viewer_evidence(CrossViewerEvidence {
+                observation: incomplete,
+                ..clean
+            })
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn clean_cross_viewer_evidence_rejects_missing_or_blank_metadata() {
+    let clean = CrossViewerEvidence {
+        application: "regression fixture",
+        version_or_date: Some("observed"),
+        build: Some("observed"),
+        input_sha256: F116_ARTIFACT_SHA256,
+        observation: CrossViewerObservation::Clean {
+            opened_or_imported: true,
+            observed_slide_count: 10,
+            no_repair_or_conversion_error: true,
+            export_or_close_result: "closed or exported successfully",
+        },
+    };
+
+    for version_or_date in [None, Some(""), Some(" \t\n")] {
+        assert!(
+            assert_clean_cross_viewer_evidence(CrossViewerEvidence {
+                version_or_date,
+                ..clean
+            })
+            .is_err()
+        );
+    }
+    for build in [None, Some(""), Some(" \t\n")] {
+        assert!(
+            assert_clean_cross_viewer_evidence(CrossViewerEvidence { build, ..clean }).is_err()
+        );
+    }
+}
+
+#[test]
+fn slide_and_presentation_properties_round_trip() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    presentation
+        .set_slide_size(Emu(10_000_001), Emu(5_000_003))
+        .expect("set slide size");
+    let fill = Fill::from_xml(br#"<a:solidFill><a:srgbClr val="345678"/></a:solidFill>"#).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    slide.set_hidden(true);
+    slide.set_background(fill).expect("set direct background");
+    presentation.core_properties_mut().title = Some("F-115 properties".to_owned());
+
+    let bytes = presentation.to_bytes().expect("serialize properties");
+    let package = open_opc(&bytes, "property round trip");
+    let slide_part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part_name, content_type)| {
+            (content_type == content_types::SLIDE).then_some(part_name)
+        })
+        .unwrap();
+    let slide = CT_Slide::from_xml(package.get_part(slide_part).unwrap()).unwrap();
+    let BackgroundRendering::Properties(Some(background_fill)) = slide
+        .common_slide_data
+        .background
+        .as_ref()
+        .unwrap()
+        .rendering()
+    else {
+        panic!("expected a direct slide background fill");
+    };
+    assert_eq!(
+        background_fill.to_xml().unwrap(),
+        br#"<a:solidFill><a:srgbClr val="345678"/></a:solidFill>"#
+    );
+    let reopened = Presentation::from_bytes(&bytes).expect("reopen properties");
+
+    assert_eq!(
+        reopened.slide_size(),
+        Some((Emu(10_000_001), Emu(5_000_003)))
+    );
+    assert!(reopened.slide(0).unwrap().hidden());
+    assert!(reopened.slide(0).unwrap().has_explicit_background());
+    assert_eq!(
+        reopened
+            .core_properties()
+            .and_then(|props| props.title.as_deref()),
+        Some("F-115 properties")
+    );
+}
+
+#[test]
+fn core_properties_are_loaded_lazily_and_written_with_valid_graph() {
+    const CORE_PART: &str = "/metadata/nonstandard-core.xml";
+    let core_xml = br#"<?xml version="1.0"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title> Original &amp; exact </dc:title><!--producer--></cp:coreProperties>"#;
+    let mut package = fixture_package();
+    package.set_part(CORE_PART, core_xml.to_vec());
+    package
+        .content_types
+        .add_override(CORE_PART, content_types::CORE_PROPERTIES);
+    package.package_rels.add_with_id(
+        "core-link",
+        rel_types::CORE_PROPERTIES,
+        "metadata/nonstandard-core.xml",
+    );
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+
+    assert_eq!(
+        presentation
+            .core_properties()
+            .and_then(|props| props.title.as_deref()),
+        Some(" Original & exact ")
+    );
+    let immutable = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "immutable core properties",
+    );
+    assert_eq!(immutable.get_part(CORE_PART).unwrap(), core_xml);
+
+    presentation.core_properties_mut().creator = Some("F-115".to_owned());
+    let mutated = open_opc(&presentation.to_bytes().unwrap(), "mutated core properties");
+    assert_eq!(
+        mutated.content_types.content_type_for(CORE_PART),
+        Some(content_types::CORE_PROPERTIES)
+    );
+    let relationship = mutated
+        .package_rels
+        .get_by_type(rel_types::CORE_PROPERTIES)
+        .unwrap();
+    assert_eq!(
+        OpcPackage::resolve_rel_target("/", &relationship.target),
+        CORE_PART
+    );
+    assert_eq!(
+        oxml_core::core_properties::CoreProperties::from_xml(mutated.get_part(CORE_PART).unwrap())
+            .unwrap()
+            .creator
+            .as_deref(),
+        Some("F-115")
+    );
+
+    let mut absent = Presentation::from_bytes(&package_bytes(fixture_package())).unwrap();
+    assert!(absent.core_properties().is_none());
+    absent.core_properties_mut().subject = Some("created".to_owned());
+    let created = open_opc(&absent.to_bytes().unwrap(), "created core properties");
+    let relationship = created
+        .package_rels
+        .get_by_type(rel_types::CORE_PROPERTIES)
+        .unwrap();
+    let part = OpcPackage::resolve_rel_target("/", &relationship.target);
+    assert_eq!(part, "/docProps/core.xml");
+    assert_eq!(
+        created.content_types.content_type_for(&part),
+        Some(content_types::CORE_PROPERTIES)
+    );
+    let created_xml = created.get_part(&part).expect("created core part");
+    assert_eq!(
+        oxml_core::core_properties::CoreProperties::from_xml(created_xml)
+            .unwrap()
+            .subject
+            .as_deref(),
+        Some("created")
+    );
+}
+
+#[test]
+fn occupied_conventional_core_part_is_not_overwritten_without_relationship() {
+    const OCCUPIED_CORE_PART: &str = "/docProps/core.xml";
+    let occupied = b"producer-owned bytes outside the core relationship graph";
+    let mut package = fixture_package();
+    package.set_part(OCCUPIED_CORE_PART, occupied.to_vec());
+    let source_bytes = package_bytes(package);
+    let mut presentation = Presentation::from_bytes(&source_bytes).unwrap();
+    presentation.core_properties_mut().subject = Some("must not overwrite".to_owned());
+
+    let error = presentation.to_bytes().unwrap_err();
+    assert!(matches!(
+        error,
+        Error::CorePropertiesPartCollision { ref part_name }
+            if part_name == OCCUPIED_CORE_PART
+    ));
+
+    let output = std::env::temp_dir().join(format!(
+        "rpptx-f115-core-collision-{}.pptx",
+        std::process::id()
+    ));
+    fs::write(&output, b"existing output").unwrap();
+    assert!(presentation.save(&output).is_err());
+    assert_eq!(fs::read(&output).unwrap(), b"existing output");
+    fs::remove_file(&output).unwrap();
+
+    let source = open_opc(&source_bytes, "occupied core source");
+    assert_eq!(source.get_part(OCCUPIED_CORE_PART).unwrap(), occupied);
+    assert!(
+        source
+            .package_rels
+            .get_by_type(rel_types::CORE_PROPERTIES)
+            .is_none()
+    );
+}
+
+#[test]
+fn save_as_show_changes_only_the_main_content_type() {
+    let presentation = Presentation::from_bytes(&package_bytes(fixture_package())).unwrap();
+    let ordinary_bytes = presentation.to_bytes().unwrap();
+    let output = std::env::temp_dir().join(format!("rpptx-f115-show-{}.ppsx", std::process::id()));
+    presentation.save_as_show(&output).expect("save slideshow");
+    let show_bytes = fs::read(&output).expect("read slideshow");
+    fs::remove_file(&output).expect("remove slideshow");
+
+    let ordinary = open_opc(&ordinary_bytes, "ordinary presentation");
+    let show = open_opc(&show_bytes, "slideshow presentation");
+    assert_eq!(
+        show.content_types.content_type_for(PRESENTATION_PART),
+        Some(content_types::SLIDESHOW)
+    );
+    assert_eq!(ordinary.parts, show.parts);
+    assert_eq!(ordinary.package_rels.items, show.package_rels.items);
+    assert_eq!(ordinary.part_rels.len(), show.part_rels.len());
+    for (part_name, relationships) in &ordinary.part_rels {
+        assert_eq!(
+            relationships.items,
+            show.part_rels.get(part_name).unwrap().items,
+            "{part_name}: relationship scope"
+        );
+    }
+    let mut ordinary_overrides = ordinary.content_types.overrides;
+    ordinary_overrides.insert(
+        PRESENTATION_PART.to_owned(),
+        content_types::SLIDESHOW.to_owned(),
+    );
+    assert_eq!(ordinary_overrides, show.content_types.overrides);
+    assert_eq!(ordinary.content_types.defaults, show.content_types.defaults);
+    assert_eq!(presentation.to_bytes().unwrap(), ordinary_bytes);
+    assert_eq!(
+        Presentation::from_bytes(&show_bytes).unwrap().len(),
+        presentation.len()
+    );
+}
+
+#[test]
+fn invalid_slide_size_does_not_mutate_the_presentation() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    let before = presentation.to_bytes().unwrap();
+
+    assert!(presentation.set_slide_size(Emu(0), Emu(5_000_000)).is_err());
+    assert!(
+        presentation
+            .set_slide_size(Emu(10_000_000), Emu(-1))
+            .is_err()
+    );
+
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn invalid_slide_collection_indices_do_not_mutate_the_presentation() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let before = presentation.to_bytes().expect("serialize baseline");
+
+    assert!(presentation.remove_slide(1).is_err());
+    assert!(presentation.move_slide(1, 0).is_err());
+    assert!(presentation.move_slide(0, 1).is_err());
+    assert!(presentation.duplicate_slide(1).is_err());
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn move_slide_reorders_the_slide_id_list_without_rewriting_relationships() {
+    let mut package = fixture_package();
+    let marked = String::from_utf8(package.get_part(PRESENTATION_PART).unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#,
+            r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:x="urn:f114""#,
+            1,
+        )
+        .replacen(
+            r#"r:id="ordered-first"/>"#,
+            r#"r:id="ordered-first"/><x:between producer="kept"/>"#,
+            1,
+        );
+    package.set_part(PRESENTATION_PART, marked.into_bytes());
+    let before_relationships = package
+        .get_part_rels(PRESENTATION_PART)
+        .unwrap()
+        .items
+        .clone();
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let before = presentation
+        .slides()
+        .map(|slide| slide.id())
+        .collect::<Vec<_>>();
+
+    presentation.move_slide(0, 1).expect("move first slide");
+
+    let after = presentation
+        .slides()
+        .map(|slide| slide.id())
+        .collect::<Vec<_>>();
+    assert_eq!(after, vec![before[1], before[0]]);
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "moved slide package");
+    assert_eq!(
+        package.get_part_rels(PRESENTATION_PART).unwrap().items,
+        before_relationships
+    );
+    let presentation_xml =
+        String::from_utf8(package.get_part(PRESENTATION_PART).unwrap().to_vec()).unwrap();
+    assert!(
+        presentation_xml
+            .find("<x:between producer=\"kept\"/>")
+            .unwrap()
+            < presentation_xml.find(r#"r:id="ordered-second""#).unwrap()
+    );
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        reopened
+            .slides()
+            .map(|slide| slide.id())
+            .collect::<Vec<_>>(),
+        after
+    );
+}
+
+#[test]
+fn remove_slide_removes_its_part_relationship_notes_and_custom_show_entries() {
+    let mut package = fixture_package();
+    let with_custom_show = String::from_utf8(package.get_part(PRESENTATION_PART).unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "<p:notesSz",
+            r#"<p:custShowLst xmlns:x="urn:f114" x:producer="kept"><p:custShow name="review" id="1"><p:sldLst><p:sld r:id="ordered-first"/><x:marker/><p:sld r:id="ordered-second"/></p:sldLst></p:custShow></p:custShowLst><p:notesSz"#,
+            1,
+        );
+    package.set_part(PRESENTATION_PART, with_custom_show.into_bytes());
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    assert!(presentation.slide(0).unwrap().notes_text().is_some());
+
+    presentation
+        .remove_slide(0)
+        .expect("remove slide with notes");
+
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "removed slide package");
+    assert!(!package.parts.contains_key(SLIDE_TWO_PART));
+    assert!(!package.parts.contains_key(NOTES_PART));
+    assert!(!package.part_rels.contains_key(SLIDE_TWO_PART));
+    assert!(!package.part_rels.contains_key(NOTES_PART));
+    assert!(!package.content_types.overrides.contains_key(SLIDE_TWO_PART));
+    assert!(!package.content_types.overrides.contains_key(NOTES_PART));
+    assert!(
+        package
+            .get_part_rels(PRESENTATION_PART)
+            .unwrap()
+            .get_by_id("ordered-first")
+            .is_none()
+    );
+    let presentation_xml =
+        String::from_utf8(package.get_part(PRESENTATION_PART).unwrap().to_vec()).unwrap();
+    assert_eq!(
+        presentation_xml.matches(r#"r:id="ordered-first""#).count(),
+        0
+    );
+    assert!(presentation_xml.contains("<x:marker/>"));
+    assert!(presentation_xml.contains(r#"r:id="ordered-second""#));
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert_eq!(reopened.len(), 1);
+    assert!(reopened.validate().is_empty());
+}
+
+#[test]
+fn removing_shared_and_last_image_users_prunes_only_new_orphans() {
+    let png = png_header(4, 3);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    for _ in 0..2 {
+        presentation.add_slide(0).expect("add slide");
+    }
+    for index in 0..2 {
+        presentation
+            .add_picture(index, &png, "shared.png", Emu(0), Emu(0), None, None)
+            .unwrap();
+    }
+
+    presentation.remove_slide(0).expect("remove one image user");
+    let shared = open_opc(&presentation.to_bytes().unwrap(), "shared image remains");
+    assert_eq!(
+        shared
+            .parts
+            .iter()
+            .filter(|(part, bytes)| part.starts_with("/ppt/media/") && *bytes == &png)
+            .count(),
+        1
+    );
+
+    presentation
+        .remove_slide(0)
+        .expect("remove last image user");
+    let pruned = open_opc(&presentation.to_bytes().unwrap(), "last image pruned");
+    assert_eq!(
+        pruned
+            .parts
+            .iter()
+            .filter(|(part, bytes)| part.starts_with("/ppt/media/") && *bytes == &png)
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn removing_last_slide_image_preserves_a_package_root_relationship_target() {
+    let png = png_header(4, 3);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    presentation
+        .add_picture(0, &png, "root-shared.png", Emu(0), Emu(0), None, None)
+        .unwrap();
+    let mut package = open_opc(&presentation.to_bytes().unwrap(), "root media fixture");
+    let media_part = package
+        .parts
+        .keys()
+        .find(|part| part.starts_with("/ppt/media/"))
+        .unwrap()
+        .clone();
+    package
+        .package_rels
+        .add(rel_types::THUMBNAIL, media_part.trim_start_matches('/'));
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+
+    presentation.remove_slide(0).expect("remove final slide");
+
+    let package = open_opc(&presentation.to_bytes().unwrap(), "root media result");
+    let relationship = package
+        .package_rels
+        .get_all_by_type(rel_types::THUMBNAIL)
+        .into_iter()
+        .find(|relationship| {
+            OpcPackage::resolve_rel_target("/", &relationship.target) == media_part
+        })
+        .unwrap();
+    assert_eq!(
+        OpcPackage::resolve_rel_target("/", &relationship.target),
+        media_part
+    );
+    assert_eq!(package.get_part(&media_part).unwrap(), png);
+    assert!(presentation.validate().is_empty());
+}
+
+#[test]
+fn duplicated_slides_images_resolve_to_the_new_slides_own_relationships() {
+    let png = png_header(4, 3);
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add source slide");
+    presentation
+        .add_picture(0, &png, "source.png", Emu(0), Emu(0), None, None)
+        .unwrap();
+
+    presentation.duplicate_slide(0).expect("duplicate slide");
+
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "duplicated image scopes");
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let mut image_relationship_ids = Vec::new();
+    let mut image_targets = Vec::new();
+    for slide_id in &model.slide_ids {
+        let slide_relationship = package
+            .get_part_rels(&presentation_part)
+            .unwrap()
+            .get_by_id(&slide_id.relationship_id)
+            .unwrap();
+        let slide_part =
+            OpcPackage::resolve_rel_target(&presentation_part, &slide_relationship.target);
+        let slide = CT_Slide::from_xml(package.get_part(&slide_part).unwrap()).unwrap();
+        let embed = slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .iter()
+            .find_map(|child| match child {
+                ShapeTreeChild::Picture(picture) => picture
+                    .blip_fill
+                    .as_ref()
+                    .and_then(|fill| fill.blip.as_ref())
+                    .and_then(|blip| blip.embed.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let image_relationship = package
+            .get_part_rels(&slide_part)
+            .unwrap()
+            .get_by_id(&embed)
+            .unwrap();
+        assert_eq!(image_relationship.rel_type, rel_types::IMAGE);
+        image_relationship_ids.push(embed);
+        image_targets.push(OpcPackage::resolve_rel_target(
+            &slide_part,
+            &image_relationship.target,
+        ));
+    }
+    assert_eq!(image_relationship_ids.len(), 2);
+    assert_eq!(image_targets[0], image_targets[1]);
+    assert_eq!(package.get_part(&image_targets[0]).unwrap(), png);
+    assert_eq!(
+        package
+            .parts
+            .keys()
+            .filter(|part| part.starts_with("/ppt/media/"))
+            .count(),
+        1
+    );
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert_eq!(reopened.len(), 2);
+    assert!(reopened.validate().is_empty());
+}
+
+#[test]
+fn duplicate_slide_rewrites_typed_and_preserved_relationship_ids_without_other_byte_changes() {
+    let mut package = open_opc(&mutation_fixture_bytes(), "relationship rewrite fixture");
+    let image_part = "/custom/media/preserved.png";
+    let image = png_header(3, 2);
+    package.set_part(image_part, image.clone());
+    package.content_types.add_default("png", "image/png");
+    package.get_or_create_part_rels(SLIDE_TWO_PART).add_with_id(
+        "rId7",
+        rel_types::IMAGE,
+        "../media/preserved.png",
+    );
+    let marked = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "<p:blipFill/>",
+            &format!(
+                r#"<p:blipFill><a:blip xmlns:r="{R_NS}" r:embed="rId7"><x:effect xmlns:x="urn:f114"> A &amp; B </x:effect></a:blip></p:blipFill>"#
+            ),
+            1,
+        )
+        .replacen(
+            "</p:cSld>",
+            &format!(
+                r#"<x:preserved xmlns:x="urn:f114" xmlns:r="{R_NS}" r:id="rId7" syntax=" A &amp; B "/></p:cSld>"#
+            ),
+            1,
+        );
+    package.set_part(SLIDE_TWO_PART, marked.into_bytes());
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let source_text = presentation.slide(0).unwrap().text();
+
+    presentation
+        .duplicate_slide(0)
+        .expect("duplicate marked slide");
+
+    assert_eq!(presentation.slide(1).unwrap().text(), source_text);
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "relationship rewrite result");
+    let model = CT_Presentation::from_xml(package.get_part(PRESENTATION_PART).unwrap()).unwrap();
+    let duplicate_relationship = package
+        .get_part_rels(PRESENTATION_PART)
+        .unwrap()
+        .get_by_id(&model.slide_ids[1].relationship_id)
+        .unwrap();
+    let duplicate_part =
+        OpcPackage::resolve_rel_target(PRESENTATION_PART, &duplicate_relationship.target);
+    let duplicate_xml =
+        String::from_utf8(package.get_part(&duplicate_part).unwrap().to_vec()).unwrap();
+    assert!(duplicate_xml.contains(r#"r:embed="rId2""#));
+    assert!(duplicate_xml.contains(r#"r:id="rId2" syntax=" A &amp; B "/>"#));
+    assert!(duplicate_xml.contains(r#"<x:effect xmlns:x="urn:f114"> A &amp; B </x:effect>"#));
+    assert!(!duplicate_xml.contains("rId7"));
+    let image_relationship = package
+        .get_part_rels(&duplicate_part)
+        .unwrap()
+        .get_by_id("rId2")
+        .unwrap();
+    let duplicate_image =
+        OpcPackage::resolve_rel_target(&duplicate_part, &image_relationship.target);
+    assert_eq!(package.get_part(&duplicate_image).unwrap(), image);
+    assert!(Presentation::from_bytes(&bytes).is_ok());
+}
+
+#[test]
+fn duplicate_slide_assigns_fresh_shape_ids_and_rewrites_connector_endpoints() {
+    let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
+
+    presentation
+        .duplicate_slide(0)
+        .expect("duplicate connected shapes");
+
+    let package = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "duplicated connector ids",
+    );
+    let model = CT_Presentation::from_xml(package.get_part(PRESENTATION_PART).unwrap()).unwrap();
+    let slide_parts = model
+        .slide_ids
+        .iter()
+        .map(|slide_id| {
+            let relationship = package
+                .get_part_rels(PRESENTATION_PART)
+                .unwrap()
+                .get_by_id(&slide_id.relationship_id)
+                .unwrap();
+            OpcPackage::resolve_rel_target(PRESENTATION_PART, &relationship.target)
+        })
+        .collect::<Vec<_>>();
+    let source = String::from_utf8(package.get_part(&slide_parts[0]).unwrap().to_vec()).unwrap();
+    let duplicate = String::from_utf8(package.get_part(&slide_parts[1]).unwrap().to_vec()).unwrap();
+    assert!(source.contains(r#"<a:stCxn id="2" idx="0"/><a:endCxn id="3" idx="1"/>"#));
+    assert!(duplicate.contains(r#"<a:stCxn id="9" idx="0"/><a:endCxn id="10" idx="1"/>"#));
+    assert!(source.contains(r#"<p:cNvPr id="20" name="choice shape"/>"#));
+    assert!(source.contains(r#"<a:stCxn id="20" idx="0"/><a:endCxn id="20" idx="1"/>"#));
+    assert!(source.contains(r#"<p:cNvPr id="22" name="fallback shape"/>"#));
+    assert!(source.contains(r#"<a:stCxn id="22" idx="0"/><a:endCxn id="22" idx="1"/>"#));
+    assert!(duplicate.contains(r#"<p:cNvPr id="16" name="choice shape"/>"#));
+    assert!(duplicate.contains(r#"<p:cNvPr id="17" name="choice connector"/>"#));
+    assert!(duplicate.contains(r#"<a:stCxn id="16" idx="0"/><a:endCxn id="16" idx="1"/>"#));
+    assert!(duplicate.contains(r#"<p:cNvPr id="18" name="fallback shape"/>"#));
+    assert!(duplicate.contains(r#"<p:cNvPr id="19" name="fallback connector"/>"#));
+    assert!(duplicate.contains(r#"<a:stCxn id="18" idx="0"/><a:endCxn id="18" idx="1"/>"#));
+    for stale_id in [20, 21, 22, 23] {
+        assert!(!duplicate.contains(&format!(r#"id="{stale_id}""#)));
+    }
+    let duplicate_slide = CT_Slide::from_xml(duplicate.as_bytes()).unwrap();
+    let connector = duplicate_slide
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .find_map(|child| match child {
+            ShapeTreeChild::Connector(connector) => Some(connector),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(connector.start_connection.as_ref().unwrap().id, 9);
+    assert_eq!(connector.end_connection.as_ref().unwrap().id, 10);
+    assert_eq!(
+        duplicate_slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .iter()
+            .find_map(|child| matches!(child, ShapeTreeChild::Connector(_))
+                .then(|| child.non_visual_id()))
+            .flatten(),
+        Some(15)
+    );
+    assert!(!duplicate.contains(r#"<p:cNvPr id="2""#));
+    assert!(presentation.validate().is_empty());
+}
+
+#[test]
+fn duplicate_slide_copies_notes_with_a_fresh_back_relationship() {
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    let notes = presentation.slide(0).unwrap().notes_text();
+
+    presentation
+        .duplicate_slide(0)
+        .expect("duplicate slide with notes");
+
+    assert_eq!(presentation.slide(1).unwrap().notes_text(), notes);
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "duplicated notes scope");
+    let model = CT_Presentation::from_xml(package.get_part(PRESENTATION_PART).unwrap()).unwrap();
+    let mut notes_parts = Vec::new();
+    for slide_id in model.slide_ids.iter().take(2) {
+        let slide_relationship = package
+            .get_part_rels(PRESENTATION_PART)
+            .unwrap()
+            .get_by_id(&slide_id.relationship_id)
+            .unwrap();
+        let slide_part =
+            OpcPackage::resolve_rel_target(PRESENTATION_PART, &slide_relationship.target);
+        let notes_relationship = package
+            .get_part_rels(&slide_part)
+            .unwrap()
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == rel_types::NOTES_SLIDE)
+            .unwrap();
+        let notes_part = OpcPackage::resolve_rel_target(&slide_part, &notes_relationship.target);
+        let back_relationship = package
+            .get_part_rels(&notes_part)
+            .unwrap()
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == rel_types::SLIDE)
+            .unwrap();
+        assert_eq!(
+            OpcPackage::resolve_rel_target(&notes_part, &back_relationship.target),
+            slide_part
+        );
+        notes_parts.push(notes_part);
+    }
+    assert_ne!(notes_parts[0], notes_parts[1]);
+    assert!(Presentation::from_bytes(&bytes).is_ok());
+}
+
+#[test]
+fn duplicate_slide_adds_a_missing_notes_back_relationship() {
+    let mut package = fixture_package();
+    package
+        .get_or_create_part_rels(NOTES_PART)
+        .items
+        .retain(|relationship| relationship.rel_type != rel_types::SLIDE);
+
+    assert_notes_back_relationship_is_normalized(package, &HashSet::new());
+}
+
+#[test]
+fn duplicate_slide_collapses_multiple_notes_back_relationships() {
+    let mut package = fixture_package();
+    package.get_or_create_part_rels(NOTES_PART).add_with_id(
+        "second-slide-link",
+        rel_types::SLIDE,
+        "../slides/first.xml",
+    );
+    let source_ids = package
+        .get_part_rels(NOTES_PART)
+        .unwrap()
+        .items
+        .iter()
+        .filter(|relationship| relationship.rel_type == rel_types::SLIDE)
+        .map(|relationship| relationship.id.clone())
+        .collect();
+
+    assert_notes_back_relationship_is_normalized(package, &source_ids);
+}
+
+#[test]
+fn duplicate_slide_replaces_an_external_notes_back_relationship() {
+    let mut package = fixture_package();
+    let relationship = package
+        .get_or_create_part_rels(NOTES_PART)
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.rel_type == rel_types::SLIDE)
+        .unwrap();
+    relationship.target = "https://example.com/source-slide".to_owned();
+    relationship.target_mode = Some("External".to_owned());
+    let source_ids = HashSet::from([relationship.id.clone()]);
+
+    assert_notes_back_relationship_is_normalized(package, &source_ids);
+}
+
+#[test]
+fn duplicate_slide_rewrites_preserved_nonnumeric_notes_back_references() {
+    let mut package = fixture_package();
+    let marked_notes = String::from_utf8(package.get_part(NOTES_PART).unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "</p:cSld>",
+            &format!(
+                r#"<x:back xmlns:x="urn:f114" xmlns:r="{R_NS}" r:id="slide-link" syntax=" A &amp; B "/><x:other xmlns:x="urn:f114" xmlns:r="{R_NS}" r:id="other-link" syntax=" untouched "/></p:cSld>"#
+            ),
+            1,
+        );
+    package.set_part(NOTES_PART, marked_notes.into_bytes());
+    package.get_or_create_part_rels(NOTES_PART).add_with_id(
+        "other-link",
+        "urn:f114:unrelated",
+        "../opaque/data.bin",
+    );
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+
+    presentation.duplicate_slide(0).expect("duplicate slide");
+    let saved = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    let resaved = reopened.to_bytes().unwrap();
+    let package = open_opc(&resaved, "nonnumeric notes back reference result");
+    let model = CT_Presentation::from_xml(package.get_part(PRESENTATION_PART).unwrap()).unwrap();
+    let duplicate_relationship = package
+        .get_part_rels(PRESENTATION_PART)
+        .unwrap()
+        .get_by_id(&model.slide_ids[1].relationship_id)
+        .unwrap();
+    let duplicate_slide =
+        OpcPackage::resolve_rel_target(PRESENTATION_PART, &duplicate_relationship.target);
+    let notes_relationship = package
+        .get_part_rels(&duplicate_slide)
+        .unwrap()
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == rel_types::NOTES_SLIDE)
+        .unwrap();
+    let duplicate_notes =
+        OpcPackage::resolve_rel_target(&duplicate_slide, &notes_relationship.target);
+    let notes_relationships = package.get_part_rels(&duplicate_notes).unwrap();
+    let back_relationships = notes_relationships
+        .items
+        .iter()
+        .filter(|relationship| relationship.rel_type == rel_types::SLIDE)
+        .collect::<Vec<_>>();
+    assert_eq!(back_relationships.len(), 1);
+    let back_relationship = back_relationships[0];
+    assert_ne!(back_relationship.id, "slide-link");
+    assert_eq!(back_relationship.target_mode, None);
+    assert_eq!(
+        OpcPackage::resolve_rel_target(&duplicate_notes, &back_relationship.target),
+        duplicate_slide
+    );
+    let duplicate_xml =
+        String::from_utf8(package.get_part(&duplicate_notes).unwrap().to_vec()).unwrap();
+    assert!(duplicate_xml.contains(&format!(
+        r#"r:id="{}" syntax=" A &amp; B "/>"#,
+        back_relationship.id
+    )));
+    assert!(duplicate_xml.contains(
+        r#"<x:other xmlns:x="urn:f114" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="other-link" syntax=" untouched "/>"#
+    ));
+    assert!(!duplicate_xml.contains(r#"r:id="slide-link""#));
+    let unrelated = notes_relationships.get_by_id("other-link").unwrap();
+    assert_eq!(unrelated.rel_type, "urn:f114:unrelated");
+    assert_eq!(unrelated.target_mode, None);
+    assert_eq!(
+        OpcPackage::resolve_rel_target(&duplicate_notes, &unrelated.target),
+        "/custom/opaque/data.bin"
+    );
+    assert!(reopened.validate().is_empty());
+}
+
+#[test]
+fn remove_move_and_duplicate_round_trip_with_clean_validation() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    for _ in 0..3 {
+        presentation.add_slide(0).expect("add slide");
+    }
+
+    presentation
+        .duplicate_slide(1)
+        .expect("duplicate middle slide");
+    presentation.move_slide(3, 0).expect("move duplicate first");
+    presentation.remove_slide(2).expect("remove one slide");
+
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.len(), 3);
+    assert!(reopened.validate().is_empty());
+}
+
+#[test]
+fn merge_then_split_restores_the_original_grid() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    {
+        let mut slide = presentation.slide_mut(0).expect("borrow slide");
+        let mut shape = slide
+            .add_table(2, 3, Emu(10), Emu(20), Emu(302), Emu(201))
+            .expect("add table");
+        let mut table = shape.table_mut().expect("table handle");
+        let widths = (0..3)
+            .map(|column| table.column_width(column).unwrap())
+            .collect::<Vec<_>>();
+        table.cell_mut(0, 0).unwrap().merge_to(1, 2).unwrap();
+        table.cell_mut(0, 0).unwrap().split().unwrap();
+        assert_eq!(
+            (0..3)
+                .map(|column| table.column_width(column).unwrap())
+                .collect::<Vec<_>>(),
+            widths
+        );
+    }
+
+    let saved = presentation.to_bytes().expect("save presentation");
+    let reopened = Presentation::from_bytes(&saved).expect("reopen presentation");
+    let slide = reopened.slide(0).unwrap();
+    let table = slide.shapes().last().unwrap().table().unwrap();
+    assert_eq!(table.row_count(), 2);
+    assert_eq!(table.column_count(), 3);
+    assert!((0..2).all(|row| (0..3).all(|column| {
+        let cell = table.cell(row, column).unwrap();
+        !cell.is_merge_origin()
+            && !cell.is_spanned()
+            && cell.span_height() == 1
+            && cell.span_width() == 1
+    })));
+    assert_eq!(
+        (0..3)
+            .map(|column| table.column_width(column).unwrap())
+            .collect::<Vec<_>>(),
+        vec![Emu(100), Emu(100), Emu(102)]
+    );
+
+    let package = open_opc(&saved, "F-113 merge then split");
+    let slide = CT_Slide::from_xml(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+    let ShapeTreeChild::GraphicFrame(frame) =
+        slide.common_slide_data.shape_tree.children.last().unwrap()
+    else {
+        panic!("expected table graphic frame");
+    };
+    let GraphicDataPayload::Table(table) = &frame.graphic_data.payload else {
+        panic!("expected table payload");
+    };
+    assert_eq!(
+        table.rows.iter().map(|row| row.height).collect::<Vec<_>>(),
+        vec![Emu(100), Emu(101)]
+    );
+    assert!(table.rows.iter().all(|row| row.cells.len() == 3));
+}
+
+#[test]
+fn add_table_round_trips_cells_formatting_banding_and_widths() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let fill = Fill::from_xml(br#"<a:solidFill><a:srgbClr val="112233"/></a:solidFill>"#).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_table(2, 2, Emu(10), Emu(20), Emu(201), Emu(101))
+            .expect("add table");
+        let mut table = shape.table_mut().unwrap();
+        table.set_first_row(true);
+        table.set_last_row(true);
+        table.set_first_column(true);
+        table.set_last_column(true);
+        table.set_horizontal_banding(true);
+        table.set_vertical_banding(true);
+        table.set_column_width(1, Emu(150)).unwrap();
+        let mut cell = table.cell_mut(0, 0).unwrap();
+        cell.set_text("formatted");
+        cell.text_frame()
+            .add_paragraph()
+            .set_text("second paragraph");
+        cell.set_fill(Some(fill.clone()));
+        cell.set_margins(Some(Emu(10)), Some(Emu(20)), Some(Emu(30)), Some(Emu(40)));
+    }
+
+    let saved = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    let slide = reopened.slide(0).unwrap();
+    let table = slide.shapes().last().unwrap().table().unwrap();
+    assert_eq!(table.row_count(), 2);
+    assert_eq!(table.column_count(), 2);
+    assert_eq!(table.column_width(0), Some(Emu(100)));
+    assert_eq!(table.column_width(1), Some(Emu(150)));
+    assert!(table.first_row());
+    assert!(table.last_row());
+    assert!(table.first_column());
+    assert!(table.last_column());
+    assert!(table.horizontal_banding());
+    assert!(table.vertical_banding());
+    let cell = table.cell(0, 0).unwrap();
+    assert_eq!(cell.text(), "formatted\nsecond paragraph");
+    assert_eq!(cell.fill(), Some(&fill));
+    assert_eq!(
+        cell.margins(),
+        (Some(Emu(10)), Some(Emu(20)), Some(Emu(30)), Some(Emu(40)),)
+    );
+
+    let package = open_opc(&saved, "F-113 table formatting");
+    let slide = CT_Slide::from_xml(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+    let ShapeTreeChild::GraphicFrame(frame) =
+        slide.common_slide_data.shape_tree.children.last().unwrap()
+    else {
+        panic!("expected table graphic frame");
+    };
+    assert_eq!(frame.transform.extent.unwrap().cx, Emu(250));
+    assert_eq!(frame.transform.extent.unwrap().cy, Emu(101));
+}
+
+#[test]
+fn table_mutation_rejects_invalid_ranges_without_partial_changes() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    let before = presentation.to_bytes().unwrap();
+    let rejected = {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        matches!(
+            slide.add_table(0, 2, Emu(0), Emu(0), Emu(200), Emu(200)),
+            Err(Error::InvalidTableMutation { .. })
+        )
+    };
+    assert!(rejected);
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    let rejected = {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        matches!(
+            slide.add_table(2, 2, Emu(0), Emu(0), Emu(-1), Emu(200)),
+            Err(Error::InvalidTableMutation { .. })
+        )
+    };
+    assert!(rejected);
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_table(2, 3, Emu(0), Emu(0), Emu(300), Emu(200))
+        .unwrap();
+    let table_index = presentation.slide(0).unwrap().shapes().len() - 1;
+    let before_invalid_cell = presentation.to_bytes().unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(table_index).unwrap();
+        let mut table = shape.table_mut().unwrap();
+        assert!(table.cell_mut(2, 0).is_none());
+        assert!(table.cell_mut(0, 3).is_none());
+        assert!(table.cell_mut(0, 0).unwrap().merge_to(2, 0).is_err());
+        assert!(table.cell_mut(0, 0).unwrap().merge_to(0, 0).is_err());
+    }
+    assert_eq!(presentation.to_bytes().unwrap(), before_invalid_cell);
+
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(table_index).unwrap();
+        let mut table = shape.table_mut().unwrap();
+        assert!(table.cell_mut(0, 0).unwrap().split().is_err());
+        assert!(table.set_column_width(0, Emu(0)).is_err());
+        assert!(table.set_column_width(0, Emu(i64::MAX)).is_err());
+    }
+    assert_eq!(presentation.to_bytes().unwrap(), before_invalid_cell);
+
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(table_index).unwrap();
+        shape
+            .table_mut()
+            .unwrap()
+            .cell_mut(0, 0)
+            .unwrap()
+            .merge_to(1, 1)
+            .unwrap();
+    }
+    let before_overlap = presentation.to_bytes().unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(table_index).unwrap();
+        let result = shape
+            .table_mut()
+            .unwrap()
+            .cell_mut(0, 1)
+            .unwrap()
+            .merge_to(1, 2);
+        assert!(matches!(result, Err(Error::InvalidTableMutation { .. })));
+    }
+    assert_eq!(presentation.to_bytes().unwrap(), before_overlap);
+}
+
+#[test]
+fn table_mutation_preserves_unmodelled_xml_and_schema_order() {
+    let fixture = table_mutation_fixture_bytes();
+    let original_package = open_opc(&fixture, "F-113 original table preservation");
+    let original_xml = original_package.get_part(SLIDE_TWO_PART).unwrap();
+    let original_raw = capture_exact_subtree(original_xml, b"<x:raw-payload", b"</x:raw-payload>");
+    let mut presentation = Presentation::from_bytes(&fixture).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut table_shape = slide.shape_mut(2).unwrap();
+        let mut table = table_shape.table_mut().unwrap();
+        table.set_column_width(0, Emu(125)).unwrap();
+    }
+    let saved = presentation.to_bytes().unwrap();
+    let package = open_opc(&saved, "F-113 table preservation");
+    let saved_xml = package.get_part(SLIDE_TWO_PART).unwrap();
+    let saved_raw = capture_exact_subtree(saved_xml, b"<x:raw-payload", b"</x:raw-payload>");
+    assert_eq!(saved_raw, original_raw, "unsupported table XML bytes");
+    let xml = String::from_utf8(saved_xml.to_vec()).unwrap();
+    for marker in [
+        r#"producer="kept""#,
+        r#"<x:before-table/>"#,
+        r#"x:grid="kept""#,
+        r#"<x:before-column/>"#,
+        r#"x:column="kept""#,
+        r#"<x:column-child/>"#,
+        r#"<x:after-grid/>"#,
+        r#"x:row="kept""#,
+        r#"<x:before-cell/>"#,
+        r#"x:cell="kept""#,
+        r#"<x:before-text/>"#,
+        r#"x:cell-properties="kept""#,
+        r#"<x:cell-properties-child/>"#,
+    ] {
+        assert!(xml.contains(marker), "missing preserved marker {marker}");
+    }
+    assert!(xml.contains(r#"<a:gridCol w="125" x:column="kept">"#));
+    let table_start = xml.find("<a:tbl ").unwrap();
+    let grid_start = xml[table_start..].find("<a:tblGrid").unwrap() + table_start;
+    let row_start = xml[grid_start..].find("<a:tr ").unwrap() + grid_start;
+    assert!(table_start < grid_start && grid_start < row_start);
+    let cell_start = xml[row_start..].find("<a:tc ").unwrap() + row_start;
+    let text_start = xml[cell_start..].find("<a:txBody>").unwrap() + cell_start;
+    let properties_start = xml[cell_start..].find("<a:tcPr ").unwrap() + cell_start;
+    assert!(cell_start < text_start && text_start < properties_start);
+}
+
+#[test]
+#[ignore = "requires uv and pinned python-pptx 1.0.2"]
+fn add_table_matches_pinned_python_pptx_table_semantics() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add slide");
+    for (index, split) in [false, true].into_iter().enumerate() {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_table(
+                2,
+                3,
+                Emu(10),
+                Emu(20 + i64::try_from(index).unwrap() * 300),
+                Emu(302),
+                Emu(201),
+            )
+            .expect("add table");
+        let mut table = shape.table_mut().unwrap();
+        for (cell_index, text) in ["A", "B", "C", "D", "E", "F"].into_iter().enumerate() {
+            table
+                .cell_mut(cell_index / 3, cell_index % 3)
+                .unwrap()
+                .set_text(text);
+        }
+        table.cell_mut(1, 1).unwrap().merge_to(0, 0).unwrap();
+        if split {
+            table.cell_mut(0, 0).unwrap().split().unwrap();
+        }
+    }
+
+    let output_path = std::env::temp_dir().join(format!(
+        "rpptx-f113-python-oracle-{}.pptx",
+        std::process::id()
+    ));
+    fs::write(&output_path, presentation.to_bytes().unwrap()).unwrap();
+    let script = r#"
+import json
+import sys
+import pptx
+from pptx import Presentation
+
+assert pptx.__version__ == "1.0.2", pptx.__version__
+
+def normalize(shape):
+    table = shape.table
+    return {
+        "frame": [shape.left, shape.top, shape.width, shape.height],
+        "columns": [column.width for column in table.columns],
+        "rows": [row.height for row in table.rows],
+        "flags": [
+            table.first_row,
+            table.last_row,
+            table.first_col,
+            table.last_col,
+            table.horz_banding,
+            table.vert_banding,
+        ],
+        "cells": [[
+            cell.text,
+            cell.is_merge_origin,
+            cell.is_spanned,
+            cell.span_height,
+            cell.span_width,
+        ] for row in table.rows for cell in row.cells],
+    }
+
+ours = Presentation(sys.argv[1])
+ours_records = [normalize(shape) for shape in list(ours.slides[0].shapes)[-2:]]
+
+oracle = Presentation()
+slide = oracle.slides.add_slide(oracle.slide_layouts[6])
+for index, split in enumerate((False, True)):
+    shape = slide.shapes.add_table(2, 3, 10, 20 + index * 300, 302, 201)
+    table = shape.table
+    for cell, text in zip((cell for row in table.rows for cell in row.cells), "ABCDEF"):
+        cell.text = text
+    table.cell(0, 0).merge(table.cell(1, 1))
+    if split:
+        table.cell(0, 0).split()
+oracle_records = [normalize(shape) for shape in list(slide.shapes)[-2:]]
+
+print(json.dumps(ours_records, sort_keys=True))
+print(json.dumps(oracle_records, sort_keys=True))
+"#;
+    let output = Command::new("uv")
+        .args([
+            "run",
+            "--with",
+            "python-pptx==1.0.2",
+            "python",
+            "-c",
+            script,
+        ])
+        .arg(&output_path)
+        .output()
+        .expect("run pinned python-pptx table oracle");
+    fs::remove_file(&output_path).unwrap();
+    assert!(
+        output.status.success(),
+        "python-pptx oracle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = String::from_utf8(output.stdout).unwrap();
+    let mut lines = records.lines();
+    let ours = lines.next().unwrap();
+    let oracle = lines.next().unwrap();
+    assert_eq!(ours, oracle, "normalized table semantics");
+    assert!(lines.next().is_none());
+}
 
 fn png_header(width: u32, height: u32) -> Vec<u8> {
     let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
@@ -53,8 +1539,8 @@ fn valid_one_pixel_png() -> Vec<u8> {
     vec![
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
         0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
-        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8,
-        0xcf, 0xc0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc, 0x33, 0x00, 0x00, 0x00,
+        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xf8,
+        0xcf, 0xc0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xf7, 0x03, 0x41, 0x43, 0x00, 0x00, 0x00,
         0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
     ]
 }
@@ -2698,6 +4184,453 @@ fn append_shape_surface(output: &mut String, shape: ShapeRef<'_>, path: &str) {
     }
 }
 
+fn build_f116_ten_slide_deck() -> Presentation {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation
+        .set_slide_size(Emu(12_800_000), Emu(7_200_000))
+        .expect("set F-116 slide size");
+    let core = presentation.core_properties_mut();
+    core.title = Some("rdocx M11 cross-viewer acceptance".to_owned());
+    core.creator = Some("rdocx deterministic acceptance generator".to_owned());
+    core.subject = Some("F-107 through F-115".to_owned());
+
+    for number in 1..=10 {
+        presentation.add_slide(0).expect("add F-116 slide");
+        let mut slide = presentation.slide_mut(number - 1).unwrap();
+        slide
+            .add_textbox(Emu(450_000), Emu(220_000), Emu(5_600_000), Emu(650_000))
+            .expect("add slide label")
+            .set_text(&format!("F-116 slide {number:02}"))
+            .expect("set slide label");
+    }
+
+    let blue_fill = Fill::from_xml(
+        br#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:srgbClr val="2F5597"/></a:solidFill>"#,
+    )
+    .unwrap();
+    let green_fill = Fill::from_xml(
+        br#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:srgbClr val="70AD47"/></a:solidFill>"#,
+    )
+    .unwrap();
+    let line = CT_LineProperties::from_xml(
+        br#"<a:ln xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" w="25400"><a:solidFill><a:srgbClr val="203864"/></a:solidFill></a:ln>"#,
+    )
+    .unwrap();
+
+    {
+        let mut slide = presentation.slide_mut(1).unwrap();
+        let mut shape = slide
+            .add_shape(
+                "roundRect",
+                Emu(900_000),
+                Emu(1_250_000),
+                Emu(3_200_000),
+                Emu(1_650_000),
+            )
+            .expect("add mutable shape");
+        shape.set_position(Emu(1_000_000), Emu(1_350_000)).unwrap();
+        shape.set_size(Emu(3_400_000), Emu(1_800_000)).unwrap();
+        shape.set_rotation(Angle(600_000)).unwrap();
+        shape.set_name("M11 mutable shape").unwrap();
+        shape.set_fill(blue_fill.clone()).unwrap();
+        shape.set_line(line).unwrap();
+        shape.set_adjust_value("adj", 30_000.0).unwrap();
+        shape
+            .set_text("Position, size, rotation, fill, line, and adjustment")
+            .unwrap();
+    }
+
+    {
+        let mut slide = presentation.slide_mut(2).unwrap();
+        slide
+            .add_textbox(Emu(700_000), Emu(1_200_000), Emu(2_900_000), Emu(800_000))
+            .unwrap()
+            .set_text("Textbox constructor")
+            .unwrap();
+        slide
+            .add_shape(
+                "triangle",
+                Emu(4_000_000),
+                Emu(1_200_000),
+                Emu(1_800_000),
+                Emu(1_800_000),
+            )
+            .unwrap();
+        slide
+            .add_connector(
+                ConnectorType::Straight,
+                Emu(900_000),
+                Emu(3_600_000),
+                Emu(3_000_000),
+                Emu(4_300_000),
+            )
+            .unwrap();
+        slide
+            .add_connector(
+                ConnectorType::Elbow,
+                Emu(3_300_000),
+                Emu(3_600_000),
+                Emu(5_400_000),
+                Emu(4_300_000),
+            )
+            .unwrap();
+        slide
+            .add_connector(
+                ConnectorType::Curve,
+                Emu(5_700_000),
+                Emu(3_600_000),
+                Emu(7_800_000),
+                Emu(4_300_000),
+            )
+            .unwrap();
+        slide.add_group_shape().unwrap();
+    }
+
+    let png = valid_one_pixel_png();
+    presentation
+        .add_picture(
+            3,
+            &png,
+            "f116-pixel.png",
+            Emu(1_000_000),
+            Emu(1_300_000),
+            Some(Emu(2_000_000)),
+            Some(Emu(2_000_000)),
+        )
+        .expect("add F-116 picture");
+
+    {
+        let mut slide = presentation.slide_mut(4).unwrap();
+        let mut shape = slide
+            .add_textbox(Emu(800_000), Emu(1_250_000), Emu(7_000_000), Emu(2_600_000))
+            .unwrap();
+        shape.set_text("Formatted paragraph").unwrap();
+        let mut frame = shape.text_frame().unwrap();
+        let mut paragraph = frame.paragraph_mut(0).unwrap();
+        let mut paragraph_properties = CT_TextParagraphProperties::default();
+        paragraph_properties.level = Some(1);
+        paragraph.set_properties(paragraph_properties);
+        paragraph.set_bullet(Some(TextBullet {
+            choice: Some(TextBulletChoice::Character(
+                TextBulletCharacter::new("•").unwrap(),
+            )),
+            ..TextBullet::default()
+        }));
+        let mut run = paragraph.add_run(" with a bold Carlito run");
+        let mut run_properties = CT_TextCharacterProperties::default();
+        run_properties.font_size = Some(2_000);
+        run_properties.bold = Some(true);
+        run.set_properties(run_properties);
+        run.set_font(Some(TextFont::new("Carlito").unwrap()));
+        frame
+            .add_paragraph()
+            .set_text("Second paragraph exercises structural append");
+    }
+
+    {
+        let mut slide = presentation.slide_mut(5).unwrap();
+        let mut shape = slide
+            .add_table(
+                3,
+                3,
+                Emu(750_000),
+                Emu(1_250_000),
+                Emu(7_500_000),
+                Emu(3_600_000),
+            )
+            .expect("add F-116 table");
+        let mut table = shape.table_mut().unwrap();
+        table.set_first_row(true);
+        table.set_last_column(true);
+        table.set_horizontal_banding(true);
+        table.set_vertical_banding(true);
+        table.set_column_width(2, Emu(2_700_000)).unwrap();
+        for row in 0..3 {
+            for column in 0..3 {
+                table.cell_mut(row, column).unwrap().set_text(&format!(
+                    "R{}C{}",
+                    row + 1,
+                    column + 1
+                ));
+            }
+        }
+        let mut first = table.cell_mut(0, 0).unwrap();
+        first.set_fill(Some(green_fill.clone()));
+        first.set_margins(
+            Some(Emu(72_000)),
+            Some(Emu(72_000)),
+            Some(Emu(36_000)),
+            Some(Emu(36_000)),
+        );
+        first.merge_to(1, 1).unwrap();
+        table.cell_mut(2, 1).unwrap().merge_to(2, 2).unwrap();
+        table.cell_mut(2, 1).unwrap().split().unwrap();
+    }
+
+    {
+        let mut slide = presentation.slide_mut(6).unwrap();
+        slide.set_hidden(true);
+        slide
+            .set_background(green_fill.clone())
+            .expect("set F-116 background");
+    }
+
+    presentation
+        .add_picture(
+            7,
+            &png,
+            "f116-reused-pixel.png",
+            Emu(1_000_000),
+            Emu(1_300_000),
+            Some(Emu(1_500_000)),
+            Some(Emu(1_500_000)),
+        )
+        .expect("add duplicated-slide picture");
+
+    {
+        let mut slide = presentation.slide_mut(8).unwrap();
+        slide.set_background(blue_fill).unwrap();
+        slide.clear_background();
+    }
+
+    presentation
+        .duplicate_slide(7)
+        .expect("duplicate relationship-bearing slide");
+    presentation
+        .remove_slide(0)
+        .expect("remove collection slide");
+    presentation
+        .move_slide(9, 0)
+        .expect("move final slide first");
+    presentation
+}
+
+fn assert_f116_deck_structure(presentation: &Presentation) {
+    assert_eq!(presentation.len(), 10);
+    assert!(
+        presentation.validate().is_empty(),
+        "F-116 validation issues: {:?}",
+        presentation.validate()
+    );
+    assert_eq!(
+        presentation.slide_size(),
+        Some((Emu(12_800_000), Emu(7_200_000)))
+    );
+    assert_eq!(
+        presentation
+            .core_properties()
+            .and_then(|properties| properties.title.as_deref()),
+        Some("rdocx M11 cross-viewer acceptance")
+    );
+    for (slide, expected_title) in presentation.slides().zip(F116_FINAL_TITLES) {
+        assert!(
+            slide.text().contains(expected_title),
+            "slide {} lacks {expected_title:?}",
+            slide.id()
+        );
+    }
+    assert_eq!(
+        presentation
+            .slides()
+            .map(|slide| slide.id())
+            .collect::<HashSet<_>>()
+            .len(),
+        10
+    );
+    assert!(presentation.slide(6).unwrap().hidden());
+    assert!(presentation.slide(6).unwrap().has_explicit_background());
+    let constructor_kinds = presentation
+        .slide(2)
+        .unwrap()
+        .shapes()
+        .map(|shape| shape.kind())
+        .collect::<Vec<_>>();
+    for kind in [ShapeKind::Shape, ShapeKind::Connector, ShapeKind::Group] {
+        assert!(constructor_kinds.contains(&kind));
+    }
+    assert!(
+        presentation
+            .slide(5)
+            .unwrap()
+            .shapes()
+            .any(|shape| shape.table().is_some())
+    );
+    assert_eq!(
+        presentation
+            .slides()
+            .map(|slide| {
+                slide
+                    .shapes()
+                    .filter(|shape| shape.kind() == ShapeKind::Picture)
+                    .count()
+            })
+            .sum::<usize>(),
+        3
+    );
+}
+
+fn write_f116_candidate() -> PathBuf {
+    let presentation = build_f116_ten_slide_deck();
+    assert_f116_deck_structure(&presentation);
+    let path = PathBuf::from(F116_CANDIDATE_PATH);
+    presentation
+        .save(&path)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    path
+}
+
+fn write_f116_temporary_candidate(label: &str) -> PathBuf {
+    let presentation = build_f116_ten_slide_deck();
+    assert_f116_deck_structure(&presentation);
+    let path = f116_temp_path(label, "pptx");
+    presentation
+        .save(&path)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    path
+}
+
+fn f116_temp_path(label: &str, extension: &str) -> PathBuf {
+    let ordinal = F116_TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "rdocx-f116-{label}-{}-{ordinal}.{extension}",
+        std::process::id()
+    ))
+}
+
+fn assert_clean_cross_viewer_evidence(row: CrossViewerEvidence) -> Result<(), String> {
+    let CrossViewerObservation::Clean {
+        opened_or_imported,
+        observed_slide_count,
+        no_repair_or_conversion_error,
+        export_or_close_result,
+    } = row.observation
+    else {
+        return Err(format!("{} evidence is pending", row.application));
+    };
+    if row
+        .version_or_date
+        .is_none_or(|value| value.trim().is_empty())
+    {
+        return Err(format!(
+            "{} lacks a nonblank version or acceptance date",
+            row.application
+        ));
+    }
+    if row.build.is_none_or(|value| value.trim().is_empty()) {
+        return Err(format!("{} lacks a nonblank build", row.application));
+    }
+    if !opened_or_imported {
+        return Err(format!(
+            "{} lacks a positive open or import",
+            row.application
+        ));
+    }
+    if observed_slide_count != 10 {
+        return Err(format!(
+            "{} observed {observed_slide_count} slides instead of 10",
+            row.application
+        ));
+    }
+    if !no_repair_or_conversion_error {
+        return Err(format!(
+            "{} observed a repair or conversion error",
+            row.application
+        ));
+    }
+    if export_or_close_result.trim().is_empty() {
+        return Err(format!(
+            "{} lacks an export or close result",
+            row.application
+        ));
+    }
+    Ok(())
+}
+
+fn assert_f116_powerpoint_acceptance(path: &Path) {
+    assert_powerpoint_build();
+    let name = path.file_name().unwrap().to_string_lossy();
+    let path = path.to_string_lossy();
+    let script = format!(
+        "with timeout of 120 seconds\ntell application \"Microsoft PowerPoint\"\nset previousStartUpDialog to start up dialog\ntry\nif (Version as text) is not \"{POWERPOINT_VERSION}\" then error \"PowerPoint version mismatch\"\nif (build as text) is not \"{POWERPOINT_APP_BUILD}\" then error \"PowerPoint build mismatch\"\nset start up dialog to false\nset deckPath to \"{path}\"\nopen my POSIX file deckPath\nset checkedDeck to presentation \"{name}\"\nif (count of slides of checkedDeck) is not 10 then error \"slide count mismatch\"\nclose checkedDeck saving no\nset start up dialog to previousStartUpDialog\non error errorMessage number errorNumber\ntry\nclose checkedDeck saving no\nend try\nset start up dialog to previousStartUpDialog\nerror errorMessage number errorNumber\nend try\nend tell\nend timeout\n"
+    );
+    let result = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .expect("launch PowerPoint F-116 acceptance script");
+    assert!(
+        result.status.success(),
+        "PowerPoint F-116 acceptance failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+fn assert_f116_libreoffice_acceptance(path: &Path) {
+    let version = Command::new("soffice")
+        .arg("--version")
+        .output()
+        .expect("read LibreOffice version");
+    assert!(version.status.success());
+    assert_eq!(
+        String::from_utf8(version.stdout).unwrap().trim(),
+        LIBREOFFICE_VERSION
+    );
+
+    let output_dir = PathBuf::from(format!(
+        "/private/tmp/rdocx-f116-libreoffice-{}",
+        std::process::id()
+    ));
+    let profile_dir = PathBuf::from(format!(
+        "/private/tmp/rdocx-f116-libreoffice-profile-{}",
+        std::process::id()
+    ));
+    if output_dir.exists() {
+        fs::remove_dir_all(&output_dir).expect("remove stale F-116 LibreOffice output");
+    }
+    if profile_dir.exists() {
+        fs::remove_dir_all(&profile_dir).expect("remove stale F-116 LibreOffice profile");
+    }
+    fs::create_dir_all(&output_dir).expect("create F-116 LibreOffice output");
+    let profile = format!("-env:UserInstallation=file://{}", profile_dir.display());
+    let filter =
+        r#"pdf:impress_pdf_Export:{"ExportHiddenSlides":{"type":"boolean","value":"true"}}"#;
+    let result = Command::new("soffice")
+        .args(["--headless", &profile, "--convert-to", filter, "--outdir"])
+        .arg(&output_dir)
+        .arg(path)
+        .output()
+        .expect("run LibreOffice F-116 acceptance");
+    assert!(
+        result.status.success(),
+        "LibreOffice F-116 import or export failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let pdf = output_dir.join("rdocx-f116-m11-write-api.pdf");
+    assert!(
+        pdf.is_file(),
+        "LibreOffice did not create {}",
+        pdf.display()
+    );
+    let info = Command::new("pdfinfo")
+        .arg(&pdf)
+        .output()
+        .expect("inspect LibreOffice F-116 PDF");
+    assert!(
+        info.status.success(),
+        "pdfinfo failed: {}",
+        String::from_utf8_lossy(&info.stderr)
+    );
+    let info = String::from_utf8(info.stdout).unwrap();
+    let pages = info
+        .lines()
+        .find_map(|line| line.strip_prefix("Pages:").map(str::trim))
+        .and_then(|value| value.parse::<usize>().ok());
+    assert_eq!(pages, Some(10));
+    fs::remove_dir_all(&output_dir).expect("remove F-116 LibreOffice output");
+    if profile_dir.exists() {
+        fs::remove_dir_all(&profile_dir).expect("remove F-116 LibreOffice profile");
+    }
+}
+
 fn sha256(path: &Path) -> String {
     let output = Command::new("shasum")
         .args(["-a", "256"])
@@ -2786,8 +4719,55 @@ fn mutation_fixture_bytes() -> Vec<u8> {
         "<p:cxnSp><p:nvCxnSpPr><p:cNvPr id=\"6\" name=\"connector\"/>",
         1,
     );
+    let complete = complete.replacen(
+        "<p:cNvCxnSpPr/>",
+        r#"<p:cNvCxnSpPr><a:stCxn id="2" idx="0"/><a:endCxn id="3" idx="1"/></p:cNvCxnSpPr>"#,
+        1,
+    );
+    let complete = complete
+        .replacen(
+            r#"<mc:Choice Requires="p14"><p:sp/></mc:Choice>"#,
+            r#"<mc:Choice Requires="p14"><p:sp><p:nvSpPr><p:cNvPr id="20" name="choice shape"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="21" name="choice connector"/><p:cNvCxnSpPr><a:stCxn id="20" idx="0"/><a:endCxn id="20" idx="1"/></p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp></mc:Choice>"#,
+            1,
+        )
+        .replacen(
+            "<mc:Fallback>",
+            r#"<mc:Fallback><p:sp><p:nvSpPr><p:cNvPr id="22" name="fallback shape"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="23" name="fallback connector"/><p:cNvCxnSpPr><a:stCxn id="22" idx="0"/><a:endCxn id="22" idx="1"/></p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp>"#,
+            1,
+        );
     assert_ne!(complete, original);
     package.set_part(SLIDE_TWO_PART, complete.into_bytes());
+    package_bytes(package)
+}
+
+fn table_mutation_fixture_bytes() -> Vec<u8> {
+    let mut package = fixture_package();
+    let original = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let marked = original
+        .replacen(
+            "<a:tbl>",
+            r#"<a:tbl xmlns:x="urn:f113" producer="kept"><x:before-table/><x:raw-payload xmlns:z="urn:f113:attributes" z:second="2" first="1">
+  one &amp; two<!-- preserve spacing --><?f113 raw?><x:nested z:value=" A &amp; B "/>
+</x:raw-payload>"#,
+            1,
+        )
+        .replacen(
+            r#"<a:tblGrid><a:gridCol w="100"/><a:gridCol w="100"/></a:tblGrid>"#,
+            r#"<a:tblGrid x:grid="kept"><x:before-column/><a:gridCol w="100" x:column="kept"><x:column-child/></a:gridCol><a:gridCol w="101"/></a:tblGrid><x:after-grid/>"#,
+            1,
+        )
+        .replacen(
+            r#"<a:tr h="100"><a:tc><a:txBody>"#,
+            r#"<a:tr h="100" x:row="kept"><x:before-cell/><a:tc x:cell="kept"><x:before-text/><a:txBody>"#,
+            1,
+        )
+        .replacen(
+            "<a:tcPr/>",
+            r#"<a:tcPr x:cell-properties="kept"><x:cell-properties-child/></a:tcPr>"#,
+            1,
+        );
+    assert_ne!(marked, original);
+    package.set_part(SLIDE_TWO_PART, marked.into_bytes());
     package_bytes(package)
 }
 
@@ -2808,6 +4788,77 @@ fn package_bytes(package: OpcPackage) -> Vec<u8> {
     let mut output = Cursor::new(Vec::new());
     package.write_to(&mut output).unwrap();
     output.into_inner()
+}
+
+fn assert_notes_back_relationship_is_normalized(
+    mut package: OpcPackage,
+    source_back_relationship_ids: &HashSet<String>,
+) {
+    let unrelated_type = "urn:f114:unrelated";
+    package
+        .get_or_create_part_rels(NOTES_PART)
+        .add_external(unrelated_type, "https://example.com/preserved");
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    presentation.duplicate_slide(0).expect("duplicate slide");
+
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "normalized notes relationships");
+    let model = CT_Presentation::from_xml(package.get_part(PRESENTATION_PART).unwrap()).unwrap();
+    let duplicate_relationship = package
+        .get_part_rels(PRESENTATION_PART)
+        .unwrap()
+        .get_by_id(&model.slide_ids[1].relationship_id)
+        .unwrap();
+    let duplicate_slide =
+        OpcPackage::resolve_rel_target(PRESENTATION_PART, &duplicate_relationship.target);
+    let notes_relationship = package
+        .get_part_rels(&duplicate_slide)
+        .unwrap()
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == rel_types::NOTES_SLIDE)
+        .unwrap();
+    let duplicate_notes =
+        OpcPackage::resolve_rel_target(&duplicate_slide, &notes_relationship.target);
+    let notes_relationships = package.get_part_rels(&duplicate_notes).unwrap();
+    let back_relationships = notes_relationships
+        .items
+        .iter()
+        .filter(|relationship| relationship.rel_type == rel_types::SLIDE)
+        .collect::<Vec<_>>();
+    assert_eq!(back_relationships.len(), 1);
+    assert_eq!(back_relationships[0].target_mode, None);
+    assert_eq!(
+        OpcPackage::resolve_rel_target(&duplicate_notes, &back_relationships[0].target),
+        duplicate_slide
+    );
+    assert!(!source_back_relationship_ids.contains(&back_relationships[0].id));
+    let preserved = notes_relationships
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == unrelated_type)
+        .unwrap();
+    assert_eq!(preserved.target, "https://example.com/preserved");
+    assert_eq!(preserved.target_mode.as_deref(), Some("External"));
+    assert!(
+        Presentation::from_bytes(&bytes)
+            .unwrap()
+            .validate()
+            .is_empty()
+    );
+}
+
+fn capture_exact_subtree(xml: &[u8], opening: &[u8], closing: &[u8]) -> Vec<u8> {
+    let start = xml
+        .windows(opening.len())
+        .position(|window| window == opening)
+        .expect("opening marker exists");
+    let relative_end = xml[start..]
+        .windows(closing.len())
+        .position(|window| window == closing)
+        .expect("closing marker exists");
+    let end = start + relative_end + closing.len();
+    xml[start..end].to_vec()
 }
 
 fn empty_package() -> OpcPackage {
@@ -2859,6 +4910,11 @@ fn fixture_package() -> OpcPackage {
         "notes-link",
         rel_types::NOTES_SLIDE,
         "../notes/speaker.xml",
+    );
+    package.get_or_create_part_rels(NOTES_PART).add_with_id(
+        "slide-link",
+        rel_types::SLIDE,
+        "../slides/second.xml",
     );
     package
         .get_or_create_part_rels(SLIDE_ONE_PART)

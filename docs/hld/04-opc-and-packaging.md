@@ -84,11 +84,15 @@ PRES_PROPS, VIEW_PROPS, TABLE_STYLES, HANDOUT_MASTER
 A `content_types` constants module is added alongside, so neither format crate
 hand-types the long MIME strings.
 
-rdocx resolves core properties through the package-level `CORE_PROPERTIES`
-relationship and retains its normalized target. Metadata is written back to
-that part with its content-type override. A document that creates metadata
-without an existing relationship uses `/docProps/core.xml` and adds the missing
-package relationship.
+Both facades resolve core properties through the package-level
+`CORE_PROPERTIES` relationship and retain its normalized target. Immutable
+property access leaves the source part bytes untouched. Mutable access marks
+the typed `CoreProperties` model for serialization to that target with its
+content-type override. A package that creates metadata without an existing
+relationship uses `/docProps/core.xml` and adds the missing package
+relationship. If that conventional part name is already occupied without the
+core-properties relationship, serialization returns an error before changing
+the package.
 
 ## Part naming
 
@@ -181,6 +185,13 @@ numbered part after the greatest occupied suffix. The sniffed canonical
 extension and content type are registered with the package. Each source slide
 creates or reuses its own internal image relationship to that shared part, with
 a relative target resolved from the slide part name.
+
+Slide removal considers only `/ppt/media/` targets reached from the removed
+slide and its removed notes relationship scopes. A candidate part is deleted
+only when no remaining internal package relationship reaches it. Pre-existing
+orphan media outside that candidate set is left untouched. The facade rebuilds
+its content-hash media index after the graph change, so a later insertion sees
+the surviving package state.
 
 Header parsing is lifted from the PDF crate, where `jpeg_dimensions` and the
 PNG IHDR reader are currently private. The JPEG walk classifies SOI, TEM and

@@ -10,10 +10,12 @@ use std::io::Cursor;
 use std::path::Path;
 
 use oxml_core::OxmlError;
+pub use oxml_core::core_properties::CoreProperties;
 pub use oxml_core::units::{Angle, Emu};
 pub use oxml_drawing::fill::Fill;
 pub use oxml_drawing::line::CT_LineProperties;
 use oxml_drawing::shape_props::CT_ShapeProperties;
+use oxml_drawing::table::{CT_Table, CT_TableCell, CT_TableCellProperties, CT_TableProperties};
 use oxml_drawing::text::{CT_RegularTextRun, CT_TextBody, CT_TextParagraph};
 pub use oxml_drawing::text::{
     CT_TextCharacterProperties, CT_TextParagraphProperties, TextBullet, TextBulletCharacter,
@@ -26,20 +28,21 @@ use oxml_opc::content_types;
 use oxml_opc::relationship::{Relationship, rel_types};
 use oxml_opc::{OpcError, OpcPackage, Relationships};
 use rpptx_oxml::connector::CT_ConnectionShape;
-use rpptx_oxml::graphic_frame::GraphicDataPayload;
+use rpptx_oxml::graphic_frame::{CT_GraphicFrame, GraphicDataPayload};
 use rpptx_oxml::notes_parts::CT_NotesSlide;
 use rpptx_oxml::picture::CT_Picture;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
 use rpptx_oxml::presentation::{CT_Presentation, CT_SlideId, custom_show_relationship_ids};
-use rpptx_oxml::relmap::relationship_ids;
+use rpptx_oxml::relmap::{relationship_ids, rewrite_exact_rel_ids, rewrite_rel_ids};
 use rpptx_oxml::shape_tree::{
-    CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild,
+    CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild, rewrite_shape_ids,
 };
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout};
 use thiserror::Error;
 
 #[cfg(feature = "default-template")]
 const DEFAULT_TEMPLATE: &[u8] = include_bytes!("../assets/default.pptx");
+const DEFAULT_CORE_PROPERTIES_PART: &str = "/docProps/core.xml";
 
 /// A result returned by the `rpptx` read facade.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -76,6 +79,9 @@ pub enum Error {
     #[error("package part is missing: {part_name}")]
     MissingPart { part_name: String },
 
+    #[error("cannot create core properties at occupied package part {part_name}")]
+    CorePropertiesPartCollision { part_name: String },
+
     #[error("{source_part}: found {count} notes-slide relationships, expected at most one")]
     DuplicateNotesSlides { source_part: String, count: usize },
 
@@ -111,6 +117,24 @@ pub enum Error {
 
     #[error("{operation} failed: {message}")]
     InvalidShapeMutation {
+        operation: &'static str,
+        message: String,
+    },
+
+    #[error("{operation} failed: {message}")]
+    InvalidTableMutation {
+        operation: &'static str,
+        message: String,
+    },
+
+    #[error("{operation} failed: {message}")]
+    InvalidPresentationMutation {
+        operation: &'static str,
+        message: String,
+    },
+
+    #[error("{operation} failed: {message}")]
+    InvalidSlideMutation {
         operation: &'static str,
         message: String,
     },
@@ -174,6 +198,9 @@ pub struct Presentation {
     media_store: MediaStore,
     presentation_part: String,
     presentation: CT_Presentation,
+    core_properties: Option<CoreProperties>,
+    core_properties_part_name: String,
+    core_properties_dirty: bool,
     layouts: Vec<LayoutRecord>,
     slides: Vec<SlideRecord>,
 }
@@ -347,6 +374,24 @@ impl Presentation {
                 part_name: presentation_part.clone(),
                 message: error.to_string(),
             })?;
+        let core_properties_relationship =
+            package.package_rels.get_by_type(rel_types::CORE_PROPERTIES);
+        if let Some(relationship) = core_properties_relationship {
+            reject_external("/", relationship)?;
+        }
+        let core_properties_part_name = core_properties_relationship
+            .map(|relationship| OpcPackage::resolve_rel_target("/", &relationship.target));
+        let core_properties = if let Some(part_name) = &core_properties_part_name {
+            let xml = required_part(&package, part_name)?;
+            Some(
+                CoreProperties::from_xml(xml).map_err(|error| Error::MalformedPart {
+                    part_name: part_name.clone(),
+                    message: error.to_string(),
+                })?,
+            )
+        } else {
+            None
+        };
         let layouts = resolve_layouts(&package, &presentation_part, &presentation)?;
 
         let presentation_relationships = package.get_part_rels(&presentation_part);
@@ -381,6 +426,10 @@ impl Presentation {
             media_store,
             presentation_part,
             presentation,
+            core_properties,
+            core_properties_part_name: core_properties_part_name
+                .unwrap_or_else(|| DEFAULT_CORE_PROPERTIES_PART.to_owned()),
+            core_properties_dirty: false,
             layouts,
             slides,
         })
@@ -393,8 +442,56 @@ impl Presentation {
             "invalid presentation at byte save boundary: {:?}",
             self.validate()
         );
+        let package = self.staged_package()?;
+        let mut output = Cursor::new(Vec::new());
+        package.write_to(&mut output)?;
+        Ok(output.into_inner())
+    }
+
+    fn staged_package(&self) -> Result<OpcPackage> {
+        if self.core_properties_dirty
+            && self
+                .package
+                .package_rels
+                .get_by_type(rel_types::CORE_PROPERTIES)
+                .is_none()
+            && self
+                .package
+                .parts
+                .contains_key(&self.core_properties_part_name)
+        {
+            return Err(Error::CorePropertiesPartCollision {
+                part_name: self.core_properties_part_name.clone(),
+            });
+        }
         let mut package = self.package.clone();
         self.media_store.write_new_parts(&mut package);
+        if let Some(properties) = self
+            .core_properties
+            .as_ref()
+            .filter(|_| self.core_properties_dirty)
+        {
+            let xml = properties.to_xml().map_err(|error| Error::MalformedPart {
+                part_name: self.core_properties_part_name.clone(),
+                message: error.to_string(),
+            })?;
+            package.set_part(&self.core_properties_part_name, xml);
+            package.content_types.add_override(
+                &self.core_properties_part_name,
+                content_types::CORE_PROPERTIES,
+            );
+            if package
+                .package_rels
+                .get_by_type(rel_types::CORE_PROPERTIES)
+                .is_none()
+            {
+                let target = self
+                    .core_properties_part_name
+                    .strip_prefix('/')
+                    .unwrap_or(&self.core_properties_part_name);
+                package.package_rels.add(rel_types::CORE_PROPERTIES, target);
+            }
+        }
         package.set_part(
             &self.presentation_part,
             self.presentation
@@ -425,9 +522,7 @@ impl Presentation {
                 );
             }
         }
-        let mut output = Cursor::new(Vec::new());
-        package.write_to(&mut output)?;
-        Ok(output.into_inner())
+        Ok(package)
     }
 
     /// Saves the deterministic package bytes to a `.pptx` path.
@@ -438,6 +533,21 @@ impl Presentation {
             self.validate()
         );
         std::fs::write(path, self.to_bytes()?).map_err(OpcError::from)?;
+        Ok(())
+    }
+
+    /// Saves a slideshow package without changing later ordinary saves.
+    pub fn save_as_show<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        debug_assert!(
+            self.validate().is_empty(),
+            "invalid presentation at slideshow save boundary: {:?}",
+            self.validate()
+        );
+        let mut package = self.staged_package()?;
+        package
+            .content_types
+            .add_override(&self.presentation_part, content_types::SLIDESHOW);
+        package.save(path)?;
         Ok(())
     }
 
@@ -681,6 +791,36 @@ impl Presentation {
         self.slides.iter().map(slide_ref)
     }
 
+    /// Returns the optional slide dimensions in EMUs.
+    pub fn slide_size(&self) -> Option<(Emu, Emu)> {
+        self.presentation
+            .slide_size
+            .as_ref()
+            .map(|size| (size.cx, size.cy))
+    }
+
+    /// Replaces only the slide dimensions after validating both values.
+    pub fn set_slide_size(&mut self, width: Emu, height: Emu) -> Result<()> {
+        self.presentation
+            .set_slide_size(width, height)
+            .map_err(|error| Error::InvalidPresentationMutation {
+                operation: "set slide size",
+                message: error.to_string(),
+            })
+    }
+
+    /// Returns shared package core properties without dirtying their source part.
+    pub fn core_properties(&self) -> Option<&CoreProperties> {
+        self.core_properties.as_ref()
+    }
+
+    /// Returns mutable shared core properties, materializing the package model.
+    pub fn core_properties_mut(&mut self) -> &mut CoreProperties {
+        self.core_properties_dirty = true;
+        self.core_properties
+            .get_or_insert_with(CoreProperties::default)
+    }
+
     /// Returns the number of layouts reachable through presentation masters.
     pub fn layout_count(&self) -> usize {
         self.layouts.len()
@@ -691,6 +831,280 @@ impl Presentation {
         self.layouts
             .get(index)
             .and_then(|record| record.layout.common_slide_data.name.as_deref())
+    }
+
+    /// Removes one slide and its owned package graph by zero-based index.
+    pub fn remove_slide(&mut self, index: usize) -> Result<()> {
+        if index >= self.slides.len() {
+            return Err(Error::UnknownSlideIndex {
+                index,
+                slide_count: self.slides.len(),
+            });
+        }
+        let mut staged = self.clone();
+        staged.remove_slide_in_place(index)?;
+        *self = staged;
+        Ok(())
+    }
+
+    /// Moves one slide to an existing final zero-based index.
+    pub fn move_slide(&mut self, from_index: usize, to_index: usize) -> Result<()> {
+        let slide_count = self.slides.len();
+        if from_index >= slide_count {
+            return Err(Error::UnknownSlideIndex {
+                index: from_index,
+                slide_count,
+            });
+        }
+        if to_index >= slide_count {
+            return Err(Error::UnknownSlideIndex {
+                index: to_index,
+                slide_count,
+            });
+        }
+        if from_index == to_index {
+            return Ok(());
+        }
+        let slide = self.slides.remove(from_index);
+        self.slides.insert(to_index, slide);
+        let slide_id = self.presentation.slide_ids.remove(from_index);
+        self.presentation.slide_ids.insert(to_index, slide_id);
+        Ok(())
+    }
+
+    /// Duplicates one slide immediately after its source.
+    pub fn duplicate_slide(&mut self, index: usize) -> Result<SlideRef<'_>> {
+        if index >= self.slides.len() {
+            return Err(Error::UnknownSlideIndex {
+                index,
+                slide_count: self.slides.len(),
+            });
+        }
+        let mut staged = self.clone();
+        let inserted = staged.duplicate_slide_in_place(index)?;
+        *self = staged;
+        self.slides
+            .get(inserted)
+            .map(slide_ref)
+            .ok_or(Error::UnknownSlideIndex {
+                index: inserted,
+                slide_count: self.slides.len(),
+            })
+    }
+
+    fn remove_slide_in_place(&mut self, index: usize) -> Result<()> {
+        let record = self.slides[index].clone();
+        let presentation_relationship_id =
+            self.presentation.slide_ids[index].relationship_id.clone();
+        self.presentation
+            .remove_custom_show_slide(&presentation_relationship_id)
+            .map_err(|error| Error::MalformedPart {
+                part_name: self.presentation_part.clone(),
+                message: error.to_string(),
+            })?;
+
+        let mut media_candidates = HashSet::new();
+        collect_media_targets(&self.package, &record.part_name, &mut media_candidates);
+        if let Some(notes) = &record.notes {
+            collect_media_targets(&self.package, &notes.part_name, &mut media_candidates);
+            self.package.parts.remove(&notes.part_name);
+            self.package.part_rels.remove(&notes.part_name);
+            self.package
+                .content_types
+                .overrides
+                .remove(&notes.part_name);
+        }
+        self.package.parts.remove(&record.part_name);
+        self.package.part_rels.remove(&record.part_name);
+        self.package
+            .content_types
+            .overrides
+            .remove(&record.part_name);
+        if let Some(relationships) = self.package.part_rels.get_mut(&self.presentation_part) {
+            relationships
+                .items
+                .retain(|relationship| relationship.id != presentation_relationship_id);
+        }
+        self.presentation.slide_ids.remove(index);
+        self.slides.remove(index);
+        prune_unreachable_media(&mut self.package, &media_candidates);
+        self.media_store = MediaStore::scan(&self.package);
+        Ok(())
+    }
+
+    fn duplicate_slide_in_place(&mut self, index: usize) -> Result<usize> {
+        let source = self.slides[index].clone();
+        let slide_part = MediaNamer::scan(
+            "/ppt/slides",
+            "slide",
+            self.package.parts.keys().map(String::as_str),
+        )
+        .next_part_name("xml");
+        let id = self
+            .presentation
+            .slide_ids
+            .iter()
+            .map(|slide| slide.id)
+            .max()
+            .unwrap_or(255)
+            .max(255)
+            .checked_add(1)
+            .ok_or(Error::SlideIdExhausted)?;
+
+        let notes_part = source.notes.as_ref().map(|_| {
+            MediaNamer::scan(
+                "/ppt/notesSlides",
+                "notesSlide",
+                self.package.parts.keys().map(String::as_str),
+            )
+            .next_part_name("xml")
+        });
+        let notes = if let (Some(source_notes), Some(notes_part)) = (&source.notes, &notes_part) {
+            let source_relationships = self
+                .package
+                .get_part_rels(&source_notes.part_name)
+                .cloned()
+                .unwrap_or_default();
+            let (mut relationships, mut relationship_map) = duplicate_relationship_scope(
+                &mut self.package,
+                &mut self.media_store,
+                &source_notes.part_name,
+                notes_part,
+                &source_relationships,
+                Some(&slide_part),
+                None,
+            )?;
+            relationships
+                .items
+                .retain(|relationship| relationship.rel_type != rel_types::SLIDE);
+            let back_relationship_id = relationships.add(
+                rel_types::SLIDE,
+                &relative_part_target(notes_part, &slide_part),
+            );
+            let mut back_relationship_map = HashMap::new();
+            for relationship in source_relationships
+                .items
+                .iter()
+                .filter(|relationship| relationship.rel_type == rel_types::SLIDE)
+            {
+                relationship_map.insert(relationship.id.clone(), back_relationship_id.clone());
+                back_relationship_map.insert(relationship.id.clone(), back_relationship_id.clone());
+            }
+            let xml = source_notes
+                .notes
+                .to_xml()
+                .map_err(|error| Error::MalformedPart {
+                    part_name: source_notes.part_name.clone(),
+                    message: error.to_string(),
+                })?;
+            let xml =
+                rewrite_rel_ids(&xml, &relationship_map).map_err(|error| Error::MalformedPart {
+                    part_name: source_notes.part_name.clone(),
+                    message: error.to_string(),
+                })?;
+            let xml = rewrite_exact_rel_ids(&xml, &back_relationship_map).map_err(|error| {
+                Error::MalformedPart {
+                    part_name: source_notes.part_name.clone(),
+                    message: error.to_string(),
+                }
+            })?;
+            let xml = rewrite_shape_ids(&xml).map_err(|error| Error::MalformedPart {
+                part_name: source_notes.part_name.clone(),
+                message: error.to_string(),
+            })?;
+            let notes = CT_NotesSlide::from_xml(&xml).map_err(|error| Error::MalformedPart {
+                part_name: notes_part.clone(),
+                message: error.to_string(),
+            })?;
+            self.package.set_part(notes_part, xml);
+            self.package
+                .part_rels
+                .insert(notes_part.clone(), relationships);
+            self.package
+                .content_types
+                .add_override(notes_part, content_types::NOTES_SLIDE);
+            Some(NotesRecord {
+                part_name: notes_part.clone(),
+                notes,
+            })
+        } else {
+            None
+        };
+
+        let source_relationships = self
+            .package
+            .get_part_rels(&source.part_name)
+            .cloned()
+            .unwrap_or_default();
+        let (slide_relationships, relationship_map) = duplicate_relationship_scope(
+            &mut self.package,
+            &mut self.media_store,
+            &source.part_name,
+            &slide_part,
+            &source_relationships,
+            None,
+            notes_part.as_deref(),
+        )?;
+        let slide_xml = source
+            .slide
+            .to_xml()
+            .map_err(|error| Error::MalformedPart {
+                part_name: source.part_name.clone(),
+                message: error.to_string(),
+            })?;
+        let slide_xml = rewrite_rel_ids(&slide_xml, &relationship_map).map_err(|error| {
+            Error::MalformedPart {
+                part_name: source.part_name.clone(),
+                message: error.to_string(),
+            }
+        })?;
+        let slide_xml = rewrite_shape_ids(&slide_xml).map_err(|error| Error::MalformedPart {
+            part_name: source.part_name.clone(),
+            message: error.to_string(),
+        })?;
+        let slide = CT_Slide::from_xml(&slide_xml).map_err(|error| Error::MalformedPart {
+            part_name: slide_part.clone(),
+            message: error.to_string(),
+        })?;
+
+        let mut presentation_relationships = self
+            .package
+            .get_part_rels(&self.presentation_part)
+            .cloned()
+            .unwrap_or_default();
+        let presentation_relationship_id = presentation_relationships.add(
+            rel_types::SLIDE,
+            &relative_part_target(&self.presentation_part, &slide_part),
+        );
+        let slide_id = CT_SlideId::new(id, presentation_relationship_id).map_err(|error| {
+            Error::MalformedPart {
+                part_name: self.presentation_part.clone(),
+                message: error.to_string(),
+            }
+        })?;
+        self.package.set_part(&slide_part, slide_xml);
+        self.package
+            .part_rels
+            .insert(slide_part.clone(), slide_relationships);
+        self.package
+            .part_rels
+            .insert(self.presentation_part.clone(), presentation_relationships);
+        self.package
+            .content_types
+            .add_override(&slide_part, content_types::SLIDE);
+
+        let inserted = index + 1;
+        self.presentation.slide_ids.insert(inserted, slide_id);
+        self.slides.insert(
+            inserted,
+            SlideRecord {
+                id,
+                part_name: slide_part,
+                slide,
+                notes,
+            },
+        );
+        Ok(inserted)
     }
 
     /// Synthesizes a new slide from one layout selected by zero-based index.
@@ -860,6 +1274,95 @@ impl Presentation {
         Ok(shape_ref(
             tree.append_child(ShapeTreeChild::Picture(picture)),
         ))
+    }
+}
+
+fn duplicate_relationship_scope(
+    package: &mut OpcPackage,
+    media_store: &mut MediaStore,
+    source_part: &str,
+    destination_part: &str,
+    source_relationships: &Relationships,
+    slide_target: Option<&str>,
+    notes_target: Option<&str>,
+) -> Result<(Relationships, HashMap<String, String>)> {
+    let mut destination = Relationships::new();
+    let mut relationship_map = HashMap::new();
+    for relationship in &source_relationships.items {
+        let target = if relationship_is_external(relationship) {
+            relationship.target.clone()
+        } else {
+            let resolved = match relationship.rel_type.as_str() {
+                rel_types::SLIDE => slide_target.map(str::to_owned).unwrap_or_else(|| {
+                    OpcPackage::resolve_rel_target(source_part, &relationship.target)
+                }),
+                rel_types::NOTES_SLIDE => notes_target.map(str::to_owned).unwrap_or_else(|| {
+                    OpcPackage::resolve_rel_target(source_part, &relationship.target)
+                }),
+                _ => OpcPackage::resolve_rel_target(source_part, &relationship.target),
+            };
+            let resolved = if relationship.rel_type == rel_types::IMAGE {
+                let bytes = required_part(package, &resolved)?.to_vec();
+                media_store.insert(package, &bytes, &resolved)
+            } else {
+                resolved
+            };
+            relative_part_target(destination_part, &resolved)
+        };
+        let new_id = if relationship
+            .id
+            .strip_prefix("rId")
+            .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+        {
+            destination.add(&relationship.rel_type, &target)
+        } else {
+            destination.add_with_id(&relationship.id, &relationship.rel_type, &target);
+            relationship.id.clone()
+        };
+        if let Some(inserted) = destination.items.last_mut() {
+            inserted.target_mode = relationship.target_mode.clone();
+        }
+        relationship_map.insert(relationship.id.clone(), new_id);
+    }
+    Ok((destination, relationship_map))
+}
+
+fn collect_media_targets(package: &OpcPackage, source_part: &str, targets: &mut HashSet<String>) {
+    let Some(relationships) = package.get_part_rels(source_part) else {
+        return;
+    };
+    for relationship in &relationships.items {
+        if relationship_is_external(relationship) {
+            continue;
+        }
+        let target = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+        if target.starts_with("/ppt/media/") {
+            targets.insert(target);
+        }
+    }
+}
+
+fn prune_unreachable_media(package: &mut OpcPackage, candidates: &HashSet<String>) {
+    for candidate in candidates {
+        let reachable_from_root = package.package_rels.items.iter().any(|relationship| {
+            !relationship_is_external(relationship)
+                && OpcPackage::resolve_rel_target("/", &relationship.target) == *candidate
+        });
+        let reachable_from_part = package
+            .part_rels
+            .iter()
+            .any(|(source_part, relationships)| {
+                relationships.items.iter().any(|relationship| {
+                    !relationship_is_external(relationship)
+                        && OpcPackage::resolve_rel_target(source_part, &relationship.target)
+                            == *candidate
+                })
+            });
+        if !reachable_from_root && !reachable_from_part {
+            package.parts.remove(candidate);
+            package.part_rels.remove(candidate);
+            package.content_types.overrides.remove(candidate);
+        }
     }
 }
 
@@ -1229,6 +1732,53 @@ fn slide_mut(record: &mut SlideRecord) -> SlideMut<'_> {
 }
 
 impl SlideMut<'_> {
+    /// Sets whether the slide is hidden from the slideshow.
+    pub fn set_hidden(&mut self, hidden: bool) {
+        self.record.slide.set_hidden(hidden);
+    }
+
+    /// Sets a direct DrawingML fill without replacing a theme reference.
+    pub fn set_background(&mut self, fill: Fill) -> Result<()> {
+        self.record
+            .slide
+            .set_background(fill)
+            .map_err(|error| Error::InvalidSlideMutation {
+                operation: "set slide background",
+                message: error.to_string(),
+            })
+    }
+
+    /// Removes only a direct-fill background.
+    pub fn clear_background(&mut self) {
+        self.record.slide.clear_background();
+    }
+
+    /// Appends a rectangular table at the top of the slide's z-order.
+    pub fn add_table(
+        &mut self,
+        rows: usize,
+        columns: usize,
+        left: Emu,
+        top: Emu,
+        width: Emu,
+        height: Emu,
+    ) -> Result<ShapeMut<'_>> {
+        let table = CT_Table::new(rows, columns, width, height)
+            .map_err(|error| invalid_table_mutation("add table", error.to_string()))?;
+        let tree = &mut self.record.slide.common_slide_data.shape_tree;
+        let id = ShapeIdAllocator::scan(tree).allocate();
+        let frame = CT_GraphicFrame::new_table(
+            id,
+            &format!("Table {id}"),
+            positioned_transform(left, top, width, height),
+            table,
+        )
+        .map_err(|error| invalid_table_mutation("add table", error.to_string()))?;
+        Ok(shape_mut(tree.append_child(ShapeTreeChild::GraphicFrame(
+            Box::new(frame),
+        ))))
+    }
+
     /// Appends a no-fill textbox at the top of the slide's z-order.
     pub fn add_textbox(
         &mut self,
@@ -1391,6 +1941,10 @@ fn invalid_shape_construction(operation: &'static str, error: OxmlError) -> Erro
     }
 }
 
+fn invalid_table_mutation(operation: &'static str, message: String) -> Error {
+    Error::InvalidTableMutation { operation, message }
+}
+
 impl SlideRef<'_> {
     /// Returns the producer-assigned slide id.
     pub fn id(&self) -> u32 {
@@ -1400,6 +1954,16 @@ impl SlideRef<'_> {
     /// Returns the optional `p:cSld` name.
     pub fn name(&self) -> Option<&str> {
         self.record.slide.common_slide_data.name.as_deref()
+    }
+
+    /// Returns whether the slide is hidden from the slideshow.
+    pub fn hidden(&self) -> bool {
+        self.record.slide.hidden()
+    }
+
+    /// Returns whether the slide carries an explicit `p:bg` element.
+    pub fn has_explicit_background(&self) -> bool {
+        self.record.slide.has_explicit_background()
     }
 
     /// Returns one immediate z-order child by zero-based index.
@@ -1589,6 +2153,20 @@ impl ShapeMut<'_> {
         }
     }
 
+    /// Returns a behavior-bearing mutable handle for a table graphic frame.
+    pub fn table_mut(&mut self) -> Option<TableMut<'_>> {
+        let ShapeTreeChild::GraphicFrame(frame) = self.child else {
+            return None;
+        };
+        let GraphicDataPayload::Table(table) = &mut frame.graphic_data.payload else {
+            return None;
+        };
+        Some(TableMut {
+            table,
+            transform: &mut frame.transform,
+        })
+    }
+
     fn transform_mut(&mut self, operation: &'static str) -> Result<&mut CT_Transform2D> {
         match self.child {
             ShapeTreeChild::Shape(shape) => Ok(shape
@@ -1629,6 +2207,597 @@ impl ShapeMut<'_> {
 /// A mutably borrowed ordinary-shape text body.
 pub struct TextFrame<'a> {
     body: &'a mut CT_TextBody,
+}
+
+/// A borrowed DrawingML table.
+#[derive(Clone, Copy)]
+pub struct TableRef<'a> {
+    table: &'a CT_Table,
+}
+
+impl TableRef<'_> {
+    /// Returns the number of explicit table rows.
+    pub fn row_count(&self) -> usize {
+        self.table.rows.len()
+    }
+
+    /// Returns the number of grid columns.
+    pub fn column_count(&self) -> usize {
+        self.table.grid.columns.len()
+    }
+
+    /// Returns one explicit grid cell by zero-based row and column.
+    pub fn cell(&self, row: usize, column: usize) -> Option<TableCellRef<'_>> {
+        table_cell(self.table, row, column).map(|cell| TableCellRef { cell })
+    }
+
+    /// Returns one grid-column width in EMU.
+    pub fn column_width(&self, column: usize) -> Option<Emu> {
+        self.table.grid.columns.get(column).copied()
+    }
+
+    /// Returns whether first-row table styling is enabled.
+    pub fn first_row(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.first_row)
+    }
+
+    /// Returns whether last-row table styling is enabled.
+    pub fn last_row(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.last_row)
+    }
+
+    /// Returns whether first-column table styling is enabled.
+    pub fn first_column(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.first_column)
+    }
+
+    /// Returns whether last-column table styling is enabled.
+    pub fn last_column(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.last_column)
+    }
+
+    /// Returns whether horizontal row banding is enabled.
+    pub fn horizontal_banding(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.band_rows)
+    }
+
+    /// Returns whether vertical column banding is enabled.
+    pub fn vertical_banding(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.band_columns)
+    }
+}
+
+/// A behavior-bearing mutable DrawingML table and its containing frame extent.
+pub struct TableMut<'a> {
+    table: &'a mut CT_Table,
+    transform: &'a mut CT_Transform2D,
+}
+
+impl TableMut<'_> {
+    /// Returns the number of explicit table rows.
+    pub fn row_count(&self) -> usize {
+        self.table.rows.len()
+    }
+
+    /// Returns the number of grid columns.
+    pub fn column_count(&self) -> usize {
+        self.table.grid.columns.len()
+    }
+
+    /// Returns one explicit grid cell by zero-based row and column.
+    pub fn cell(&self, row: usize, column: usize) -> Option<TableCellRef<'_>> {
+        table_cell(self.table, row, column).map(|cell| TableCellRef { cell })
+    }
+
+    /// Returns one explicit grid cell for in-place mutation.
+    pub fn cell_mut(&mut self, row: usize, column: usize) -> Option<TableCellMut<'_>> {
+        table_cell(self.table, row, column)?;
+        Some(TableCellMut {
+            table: self.table,
+            row,
+            column,
+        })
+    }
+
+    /// Returns one grid-column width in EMU.
+    pub fn column_width(&self, column: usize) -> Option<Emu> {
+        self.table.grid.columns.get(column).copied()
+    }
+
+    /// Changes one grid width and synchronizes the containing frame width.
+    pub fn set_column_width(&mut self, column: usize, width: Emu) -> Result<()> {
+        if width.0 <= 0 {
+            return Err(invalid_table_mutation(
+                "set column width",
+                "column width must be positive".to_owned(),
+            ));
+        }
+        if column >= self.table.grid.columns.len() {
+            return Err(invalid_table_mutation(
+                "set column width",
+                format!("column index {column} is out of range"),
+            ));
+        }
+        let total_width = self
+            .table
+            .grid
+            .columns
+            .iter()
+            .enumerate()
+            .try_fold(0i64, |total, (index, current)| {
+                total.checked_add(if index == column { width.0 } else { current.0 })
+            })
+            .ok_or_else(|| {
+                invalid_table_mutation(
+                    "set column width",
+                    "table width exceeds the EMU range".to_owned(),
+                )
+            })?;
+        let total_height = self
+            .table
+            .rows
+            .iter()
+            .try_fold(0i64, |total, row| total.checked_add(row.height.0))
+            .ok_or_else(|| {
+                invalid_table_mutation(
+                    "set column width",
+                    "table height exceeds the EMU range".to_owned(),
+                )
+            })?;
+        if total_width <= 0 || total_height <= 0 {
+            return Err(invalid_table_mutation(
+                "set column width",
+                "table width and height must remain positive".to_owned(),
+            ));
+        }
+
+        let mut staged = self.table.clone();
+        staged.grid.columns[column] = width;
+        staged
+            .to_xml()
+            .map_err(|error| invalid_table_mutation("set column width", error.to_string()))?;
+        self.table.grid.columns[column] = width;
+        let height = self
+            .transform
+            .extent
+            .map_or(Emu(total_height), |extent| extent.cy);
+        self.transform.extent = Some(CT_PositiveSize2D {
+            cx: Emu(total_width),
+            cy: height,
+        });
+        Ok(())
+    }
+
+    /// Returns whether first-row table styling is enabled.
+    pub fn first_row(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.first_row)
+    }
+
+    /// Enables or disables first-row table styling.
+    pub fn set_first_row(&mut self, value: bool) {
+        table_properties_mut(self.table).first_row = value;
+    }
+
+    /// Returns whether last-row table styling is enabled.
+    pub fn last_row(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.last_row)
+    }
+
+    /// Enables or disables last-row table styling.
+    pub fn set_last_row(&mut self, value: bool) {
+        table_properties_mut(self.table).last_row = value;
+    }
+
+    /// Returns whether first-column table styling is enabled.
+    pub fn first_column(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.first_column)
+    }
+
+    /// Enables or disables first-column table styling.
+    pub fn set_first_column(&mut self, value: bool) {
+        table_properties_mut(self.table).first_column = value;
+    }
+
+    /// Returns whether last-column table styling is enabled.
+    pub fn last_column(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.last_column)
+    }
+
+    /// Enables or disables last-column table styling.
+    pub fn set_last_column(&mut self, value: bool) {
+        table_properties_mut(self.table).last_column = value;
+    }
+
+    /// Returns whether horizontal row banding is enabled.
+    pub fn horizontal_banding(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.band_rows)
+    }
+
+    /// Enables or disables horizontal row banding.
+    pub fn set_horizontal_banding(&mut self, value: bool) {
+        table_properties_mut(self.table).band_rows = value;
+    }
+
+    /// Returns whether vertical column banding is enabled.
+    pub fn vertical_banding(&self) -> bool {
+        self.table
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.band_columns)
+    }
+
+    /// Enables or disables vertical column banding.
+    pub fn set_vertical_banding(&mut self, value: bool) {
+        table_properties_mut(self.table).band_columns = value;
+    }
+}
+
+/// A borrowed explicit table-grid cell.
+#[derive(Clone, Copy)]
+pub struct TableCellRef<'a> {
+    cell: &'a CT_TableCell,
+}
+
+impl TableCellRef<'_> {
+    /// Returns the cell's visible plain text.
+    pub fn text(&self) -> String {
+        self.cell
+            .text_body
+            .as_ref()
+            .map_or_else(String::new, CT_TextBody::plain_text)
+    }
+
+    /// Returns whether this cell is the top-left origin of a merge.
+    pub fn is_merge_origin(&self) -> bool {
+        !self.is_spanned() && (self.cell.row_span > 1 || self.cell.grid_span > 1)
+    }
+
+    /// Returns whether this cell continues a merge from another grid cell.
+    pub fn is_spanned(&self) -> bool {
+        self.cell.horizontal_merge || self.cell.vertical_merge
+    }
+
+    /// Returns the origin's vertical span, or one for an unmerged cell.
+    pub fn span_height(&self) -> u32 {
+        self.cell.row_span
+    }
+
+    /// Returns the origin's horizontal span, or one for an unmerged cell.
+    pub fn span_width(&self) -> u32 {
+        self.cell.grid_span
+    }
+
+    /// Returns the direct cell fill, when present.
+    pub fn fill(&self) -> Option<&Fill> {
+        self.cell
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.fill.as_ref())
+    }
+
+    /// Returns the optional left, right, top, and bottom cell margins.
+    pub fn margins(&self) -> (Option<Emu>, Option<Emu>, Option<Emu>, Option<Emu>) {
+        self.cell
+            .properties
+            .as_ref()
+            .map_or((None, None, None, None), |properties| {
+                (
+                    properties.margin_left,
+                    properties.margin_right,
+                    properties.margin_top,
+                    properties.margin_bottom,
+                )
+            })
+    }
+}
+
+/// A behavior-bearing mutable table-grid cell addressed within its table.
+pub struct TableCellMut<'a> {
+    table: &'a mut CT_Table,
+    row: usize,
+    column: usize,
+}
+
+impl TableCellMut<'_> {
+    /// Returns the cell's visible plain text.
+    pub fn text(&self) -> String {
+        self.cell_ref().text()
+    }
+
+    /// Replaces the cell text with one paragraph and one regular run.
+    pub fn set_text(&mut self, text: &str) {
+        self.cell_mut()
+            .text_body
+            .get_or_insert_with(CT_TextBody::new)
+            .set_text(text);
+    }
+
+    /// Returns the cell text body for in-place mutation.
+    pub fn text_frame(&mut self) -> TextFrame<'_> {
+        let body = self
+            .cell_mut()
+            .text_body
+            .get_or_insert_with(CT_TextBody::new);
+        TextFrame { body }
+    }
+
+    /// Replaces or clears the direct cell fill.
+    pub fn set_fill(&mut self, fill: Option<Fill>) {
+        self.properties_mut().fill = fill;
+    }
+
+    /// Returns the direct cell fill, when present.
+    pub fn fill(&self) -> Option<&Fill> {
+        self.cell_ref().cell.properties.as_ref()?.fill.as_ref()
+    }
+
+    /// Replaces all four optional cell margins.
+    pub fn set_margins(
+        &mut self,
+        left: Option<Emu>,
+        right: Option<Emu>,
+        top: Option<Emu>,
+        bottom: Option<Emu>,
+    ) {
+        let properties = self.properties_mut();
+        properties.margin_left = left;
+        properties.margin_right = right;
+        properties.margin_top = top;
+        properties.margin_bottom = bottom;
+    }
+
+    /// Returns the optional left, right, top, and bottom cell margins.
+    pub fn margins(&self) -> (Option<Emu>, Option<Emu>, Option<Emu>, Option<Emu>) {
+        let Some(properties) = self.cell_ref().cell.properties.as_ref() else {
+            return (None, None, None, None);
+        };
+        (
+            properties.margin_left,
+            properties.margin_right,
+            properties.margin_top,
+            properties.margin_bottom,
+        )
+    }
+
+    /// Returns whether this cell is the top-left origin of a merge.
+    pub fn is_merge_origin(&self) -> bool {
+        self.cell_ref().is_merge_origin()
+    }
+
+    /// Returns whether this cell continues a merge from another grid cell.
+    pub fn is_spanned(&self) -> bool {
+        self.cell_ref().is_spanned()
+    }
+
+    /// Returns the origin's vertical span, or one for an unmerged cell.
+    pub fn span_height(&self) -> u32 {
+        self.cell_ref().span_height()
+    }
+
+    /// Returns the origin's horizontal span, or one for an unmerged cell.
+    pub fn span_width(&self) -> u32 {
+        self.cell_ref().span_width()
+    }
+
+    /// Merges the rectangle between this cell and the other grid coordinate.
+    pub fn merge_to(&mut self, row: usize, column: usize) -> Result<()> {
+        let mut staged = self.table.clone();
+        merge_cells(&mut staged, self.row, self.column, row, column)
+            .map_err(|message| invalid_table_mutation("merge cells", message))?;
+        staged
+            .to_xml()
+            .map_err(|error| invalid_table_mutation("merge cells", error.to_string()))?;
+        *self.table = staged;
+        Ok(())
+    }
+
+    /// Splits this merge origin back into its explicit grid cells.
+    pub fn split(&mut self) -> Result<()> {
+        let mut staged = self.table.clone();
+        split_cell(&mut staged, self.row, self.column)
+            .map_err(|message| invalid_table_mutation("split cell", message))?;
+        staged
+            .to_xml()
+            .map_err(|error| invalid_table_mutation("split cell", error.to_string()))?;
+        *self.table = staged;
+        Ok(())
+    }
+
+    fn cell_ref(&self) -> TableCellRef<'_> {
+        TableCellRef {
+            cell: table_cell(self.table, self.row, self.column)
+                .expect("TableCellMut coordinates were validated at construction"),
+        }
+    }
+
+    fn cell_mut(&mut self) -> &mut CT_TableCell {
+        &mut self.table.rows[self.row].cells[self.column]
+    }
+
+    fn properties_mut(&mut self) -> &mut CT_TableCellProperties {
+        self.cell_mut()
+            .properties
+            .get_or_insert_with(CT_TableCellProperties::default)
+    }
+}
+
+fn table_cell(table: &CT_Table, row: usize, column: usize) -> Option<&CT_TableCell> {
+    table.rows.get(row)?.cells.get(column)
+}
+
+fn table_properties_mut(table: &mut CT_Table) -> &mut CT_TableProperties {
+    table
+        .properties
+        .get_or_insert_with(CT_TableProperties::default)
+}
+
+fn rectangular_dimensions(table: &CT_Table) -> std::result::Result<(usize, usize), String> {
+    let rows = table.rows.len();
+    let columns = table.grid.columns.len();
+    if rows == 0 || columns == 0 || table.rows.iter().any(|row| row.cells.len() != columns) {
+        return Err("table does not have a rectangular explicit cell grid".to_owned());
+    }
+    Ok((rows, columns))
+}
+
+fn merge_cells(
+    table: &mut CT_Table,
+    first_row: usize,
+    first_column: usize,
+    second_row: usize,
+    second_column: usize,
+) -> std::result::Result<(), String> {
+    let (rows, columns) = rectangular_dimensions(table)?;
+    if first_row >= rows
+        || second_row >= rows
+        || first_column >= columns
+        || second_column >= columns
+    {
+        return Err("merge coordinate is out of range".to_owned());
+    }
+    let top = first_row.min(second_row);
+    let bottom = first_row.max(second_row);
+    let left = first_column.min(second_column);
+    let right = first_column.max(second_column);
+    if top == bottom && left == right {
+        return Err("merge requires at least two cells".to_owned());
+    }
+    if table.rows[top..=bottom].iter().any(|row| {
+        row.cells[left..=right].iter().any(|cell| {
+            cell.row_span != 1
+                || cell.grid_span != 1
+                || cell.horizontal_merge
+                || cell.vertical_merge
+        })
+    }) {
+        return Err("merge range contains one or more merged cells".to_owned());
+    }
+    let row_span = u32::try_from(bottom - top + 1)
+        .map_err(|_| "merge row span exceeds the DrawingML range".to_owned())?;
+    let grid_span = u32::try_from(right - left + 1)
+        .map_err(|_| "merge column span exceeds the DrawingML range".to_owned())?;
+
+    let mut moved_bodies = Vec::new();
+    for row in top..=bottom {
+        for column in left..=right {
+            if row == top && column == left {
+                continue;
+            }
+            let body = table.rows[row].cells[column]
+                .text_body
+                .take()
+                .unwrap_or_default();
+            moved_bodies.push((row, column, body));
+        }
+    }
+    for (row, column, mut body) in moved_bodies {
+        let origin_body = table.rows[top].cells[left]
+            .text_body
+            .get_or_insert_with(CT_TextBody::new);
+        body.move_content_to(origin_body);
+        table.rows[row].cells[column].text_body = Some(body);
+    }
+
+    for row in top..=bottom {
+        for column in left..=right {
+            let cell = &mut table.rows[row].cells[column];
+            cell.row_span = if row == top { row_span } else { 1 };
+            cell.grid_span = if column == left { grid_span } else { 1 };
+            cell.horizontal_merge = column != left;
+            cell.vertical_merge = row != top;
+        }
+    }
+    Ok(())
+}
+
+fn split_cell(table: &mut CT_Table, row: usize, column: usize) -> std::result::Result<(), String> {
+    let (rows, columns) = rectangular_dimensions(table)?;
+    let origin = table_cell(table, row, column)
+        .ok_or_else(|| "split coordinate is out of range".to_owned())?;
+    if origin.horizontal_merge
+        || origin.vertical_merge
+        || (origin.row_span == 1 && origin.grid_span == 1)
+    {
+        return Err("only a merge-origin cell can be split".to_owned());
+    }
+    let bottom = row
+        .checked_add(origin.row_span as usize - 1)
+        .ok_or_else(|| "merge row span exceeds the table grid".to_owned())?;
+    let right = column
+        .checked_add(origin.grid_span as usize - 1)
+        .ok_or_else(|| "merge column span exceeds the table grid".to_owned())?;
+    if bottom >= rows || right >= columns {
+        return Err("merge origin span exceeds the table grid".to_owned());
+    }
+    let row_span = origin.row_span;
+    let grid_span = origin.grid_span;
+    for current_row in row..=bottom {
+        for current_column in column..=right {
+            let cell = &table.rows[current_row].cells[current_column];
+            let expected = (
+                if current_row == row { row_span } else { 1 },
+                if current_column == column {
+                    grid_span
+                } else {
+                    1
+                },
+                current_column != column,
+                current_row != row,
+            );
+            if (
+                cell.row_span,
+                cell.grid_span,
+                cell.horizontal_merge,
+                cell.vertical_merge,
+            ) != expected
+            {
+                return Err("merge origin does not have a valid continuation rectangle".to_owned());
+            }
+        }
+    }
+    for current_row in row..=bottom {
+        for current_column in column..=right {
+            let cell = &mut table.rows[current_row].cells[current_column];
+            cell.row_span = 1;
+            cell.grid_span = 1;
+            cell.horizontal_merge = false;
+            cell.vertical_merge = false;
+        }
+    }
+    Ok(())
 }
 
 impl TextFrame<'_> {
@@ -1769,6 +2938,17 @@ impl<'a> ShapeRef<'a> {
         }
     }
 
+    /// Returns the typed table carried by this graphic frame, when present.
+    pub fn table(&self) -> Option<TableRef<'a>> {
+        let ShapeTreeChild::GraphicFrame(frame) = self.child else {
+            return None;
+        };
+        let GraphicDataPayload::Table(table) = &frame.graphic_data.payload else {
+            return None;
+        };
+        Some(TableRef { table })
+    }
+
     /// Returns the number of immediate group or selected fallback children.
     pub fn child_count(&self) -> usize {
         self.child_slice().len()
@@ -1814,6 +2994,125 @@ mod write_tests {
     use rpptx_oxml::placeholder::PhType;
 
     use super::*;
+
+    #[test]
+    fn two_dimensional_merge_encodes_origins_and_continuations() {
+        let mut presentation = Presentation::new().expect("open bundled template");
+        presentation.add_slide(0).expect("add slide");
+        let mut slide = presentation.slide_mut(0).expect("borrow slide");
+        let mut shape = slide
+            .add_table(3, 3, Emu(0), Emu(0), Emu(300), Emu(300))
+            .expect("add table");
+        let mut table = shape.table_mut().expect("table handle");
+        table
+            .cell_mut(0, 0)
+            .expect("merge origin")
+            .merge_to(2, 1)
+            .expect("merge cells");
+
+        let expected = [
+            [(3, 2, false, false), (3, 1, true, false)],
+            [(1, 2, false, true), (1, 1, true, true)],
+            [(1, 2, false, true), (1, 1, true, true)],
+        ];
+        for (row_index, row) in expected.into_iter().enumerate() {
+            for (column_index, expected_cell) in row.into_iter().enumerate() {
+                let cell = &table.table.rows[row_index].cells[column_index];
+                assert_eq!(
+                    (
+                        cell.row_span,
+                        cell.grid_span,
+                        cell.horizontal_merge,
+                        cell.vertical_merge,
+                    ),
+                    expected_cell,
+                    "cell {row_index},{column_index}"
+                );
+            }
+        }
+        for row in 0..3 {
+            let cell = &table.table.rows[row].cells[2];
+            assert_eq!(
+                (
+                    cell.row_span,
+                    cell.grid_span,
+                    cell.horizontal_merge,
+                    cell.vertical_merge,
+                ),
+                (1, 1, false, false),
+                "outside cell {row},2"
+            );
+        }
+    }
+
+    #[test]
+    fn merge_moves_formatted_content_to_origin_in_row_major_order() {
+        let mut presentation = Presentation::new().expect("open bundled template");
+        presentation.add_slide(0).expect("add slide");
+        let mut slide = presentation.slide_mut(0).expect("borrow slide");
+        let mut shape = slide
+            .add_table(2, 2, Emu(0), Emu(0), Emu(200), Emu(200))
+            .expect("add table");
+        let mut table = shape.table_mut().expect("table handle");
+        for (index, text) in ["one", "two", "three", "four"].into_iter().enumerate() {
+            table.cell_mut(index / 2, index % 2).unwrap().set_text(text);
+        }
+        {
+            let mut source = table.cell_mut(0, 1).unwrap();
+            let mut frame = source.text_frame();
+            let mut paragraph = frame.paragraph_mut(0).unwrap();
+            let mut properties = CT_TextParagraphProperties::default();
+            properties.level = Some(2);
+            paragraph.set_properties(properties);
+            let mut run = paragraph.add_run(" formatted");
+            let mut properties = CT_TextCharacterProperties::default();
+            properties.bold = Some(true);
+            run.set_properties(properties);
+        }
+        table.cell_mut(1, 1).unwrap().merge_to(0, 0).unwrap();
+        assert_eq!(
+            table.cell(0, 0).unwrap().text(),
+            "one\ntwo formatted\nthree\nfour"
+        );
+        let origin = &table.table.rows[0].cells[0];
+        let paragraphs = origin.text_body.as_ref().unwrap().paragraphs();
+        assert_eq!(paragraphs[1].properties.as_ref().unwrap().level, Some(2));
+        let oxml_drawing::text::TextRun::Run(run) = &paragraphs[1].runs[1] else {
+            panic!("expected regular run");
+        };
+        assert_eq!(run.properties.as_ref().unwrap().bold, Some(true));
+        table.cell_mut(0, 0).unwrap().split().unwrap();
+        assert_eq!(
+            table.cell(0, 0).unwrap().text(),
+            "one\ntwo formatted\nthree\nfour"
+        );
+        assert_eq!(table.cell(0, 1).unwrap().text(), "");
+    }
+
+    #[test]
+    fn merge_materializes_minimal_text_bodies_for_absent_sources() {
+        let mut presentation = Presentation::new().expect("open bundled template");
+        presentation.add_slide(0).expect("add slide");
+        let mut slide = presentation.slide_mut(0).expect("borrow slide");
+        let mut shape = slide
+            .add_table(2, 2, Emu(0), Emu(0), Emu(200), Emu(200))
+            .expect("add table");
+        let mut table = shape.table_mut().expect("table handle");
+        for (row, column) in [(0, 1), (1, 0), (1, 1)] {
+            table.table.rows[row].cells[column].text_body = None;
+        }
+
+        table.cell_mut(0, 0).unwrap().merge_to(1, 1).unwrap();
+
+        for (row, column) in [(0, 1), (1, 0), (1, 1)] {
+            let body = table.table.rows[row].cells[column]
+                .text_body
+                .as_ref()
+                .expect("merge source receives a text body");
+            assert_eq!(body.paragraph_count(), 1);
+            assert_eq!(body.plain_text(), "");
+        }
+    }
 
     #[test]
     fn connector_constructor_normalizes_every_direction() {

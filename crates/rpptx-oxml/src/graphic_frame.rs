@@ -90,6 +90,41 @@ struct ParsedGraphic {
 }
 
 impl CT_GraphicFrame {
+    /// Creates a table-bearing graphic frame with canonical non-visual shells.
+    pub fn new_table(
+        id: u32,
+        name: &str,
+        transform: CT_Transform2D,
+        table: CT_Table,
+    ) -> Result<Self> {
+        table.to_xml()?;
+        let name = quick_xml::escape::escape(name);
+        Ok(Self {
+            transform,
+            graphic_data: CT_GraphicData {
+                uri: TABLE_URI.to_owned(),
+                payload: GraphicDataPayload::Table(Box::new(table)),
+                raw_attributes: Vec::new(),
+                raw_children: OrderedRawChildren::default(),
+            },
+            non_visual_properties: RawElementShell {
+                non_visual_id: Some(id),
+                drawing_properties_index: Some(0),
+                attributes: Vec::new(),
+                children: vec![
+                    format!(r#"<p:cNvPr id="{id}" name="{name}"/>"#).into_bytes(),
+                    b"<p:cNvGraphicFramePr/>".to_vec(),
+                    b"<p:nvPr/>".to_vec(),
+                ],
+            },
+            graphic_attributes: Vec::new(),
+            graphic_raw_children: OrderedRawChildren::default(),
+            extension_xml: None,
+            raw_attributes: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+        })
+    }
+
     pub(crate) fn non_visual_id(&self) -> Option<u32> {
         self.non_visual_properties.non_visual_id
     }

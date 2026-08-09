@@ -37,6 +37,11 @@ write at their fixed root locations. The modelled `p:hf` writes with the fixed
 attributes, and header-footer children retain their original payload and
 relative positions.
 
+`CT_Slide` also models the presence-sensitive root `show` attribute. Missing
+`show` means visible, while the facade exposes its inverse as `hidden`. Boolean
+input accepts both XML spellings and output uses fixed `1` or `0` values.
+Unrelated root attributes and children remain preserved.
+
 ## Public facade
 
 `rpptx::Presentation` opens a path or byte slice and owns the OPC package, the
@@ -47,10 +52,60 @@ targets. Missing parts, missing or wrong relationship ids, external slide
 targets, duplicate notes-slide links, and malformed typed roots return a
 concrete facade error.
 
+The presentation and slide property surface is concrete and borrowed:
+
+```rust
+Presentation::slide_size(&self) -> Option<(Emu, Emu)>;
+Presentation::set_slide_size(&mut self, width: Emu, height: Emu) -> Result<()>;
+Presentation::core_properties(&self) -> Option<&CoreProperties>;
+Presentation::core_properties_mut(&mut self) -> &mut CoreProperties;
+Presentation::save_as_show(&self, path: impl AsRef<Path>) -> Result<()>;
+SlideRef::hidden(&self) -> bool;
+SlideRef::has_explicit_background(&self) -> bool;
+SlideMut::set_hidden(&mut self, hidden: bool);
+SlideMut::set_background(&mut self, fill: Fill) -> Result<()>;
+SlideMut::clear_background(&mut self);
+```
+
+Core properties use the package-level relationship described in
+`04-opc-and-packaging.md`. Read access does not dirty the source part. Mutable
+access materializes a default model when absent and writes its relationship,
+content type, and part on save.
+
 `slides()` and `slide(index)` expose borrowed `SlideRef` handles in producer
 slide order. A slide exposes its producer id, optional `p:cSld` name, immediate
 z-order shapes, recursive visible text, and optional speaker-note text. Indexed
 access returns `Option` and does not panic.
+
+The owning facade edits the ordered slide collection through three atomic
+methods:
+
+```rust
+pub fn remove_slide(&mut self, index: usize) -> Result<()>;
+pub fn move_slide(&mut self, from_index: usize, to_index: usize) -> Result<()>;
+pub fn duplicate_slide(&mut self, index: usize) -> Result<SlideRef<'_>>;
+```
+
+Every index is zero-based and must identify an existing slide. `to_index` is
+the final index, and moving a slide to its current index changes nothing. A
+duplicate is inserted immediately after its source. Collection changes keep
+the facade records and `p:sldIdLst` synchronized.
+
+Removal stages the complete change before replacing the live presentation. It
+removes the selected slide id, presentation relationship, slide part,
+relationship scope, and content-type override. An attached notes part and its
+scope are removed with the slide. Matching `p:sld` entries are spliced out of
+preserved `p:custShowLst` XML without changing its containers or unrelated
+bytes.
+
+Duplication also stages a complete graph. It allocates a new slide part,
+producer slide id, presentation relationship, and destination relationship
+scope. Internal targets are recomputed relative to the new part, external
+target mode is retained, and numeric relationship ids are rewritten in typed
+and preserved XML. Equal image bytes reuse the package-wide media part through
+the normal `MediaStore`. Notes are copied to a new part whose slide
+relationship points back to the duplicate. Custom-show membership is not
+copied.
 
 The table style part is typed for layout resolution. A caller may pass its
 `CT_TableStyleList` to `ResolveCtx`, which uses either the table's explicit
@@ -104,6 +159,24 @@ boundaries and bytes remain unchanged. Unsupported shape kinds return the
 normal contextual mutation error, and a shape without a text body returns no
 text-frame handle.
 
+Table graphic frames expose concrete borrowed `TableRef` and `TableMut`
+handles through `ShapeRef::table` and `ShapeMut::table_mut`. Their cell access
+is total and returns `Option`. Table handles expose row and column counts,
+column widths, and the first-row, last-row, first-column, last-column,
+horizontal-banding, and vertical-banding flags. Cell handles expose plain text,
+typed text-frame mutation, direct fill, four optional margins, merge-origin and
+continuation state, and span height and width.
+
+Changing a column width uses a checked sum and synchronizes the graphic-frame
+width. Merge accepts opposite rectangle corners in either order. It validates
+the complete rectangle before changing state, rejects overlap with an existing
+merge, migrates typed paragraphs in row-major order, and writes the DrawingML
+origin and continuation pattern described in `05-drawingml-model.md`. Split is
+valid only on a checked merge origin. It restores span one and clears
+continuation flags without redistributing content. Fallible width, merge, and
+split operations stage and serialize a table clone before committing it, so an
+error leaves the table unchanged.
+
 `SlideMut` also exposes the direct shape construction surface:
 
 ```rust
@@ -121,6 +194,15 @@ pub fn add_connector(
     begin_x: Emu, begin_y: Emu, end_x: Emu, end_y: Emu,
 ) -> Result<ShapeMut<'_>>;
 pub fn add_group_shape(&mut self) -> Result<ShapeMut<'_>>;
+pub fn add_table(
+    &mut self,
+    rows: usize,
+    columns: usize,
+    left: Emu,
+    top: Emu,
+    width: Emu,
+    height: Emu,
+) -> Result<ShapeMut<'_>>;
 ```
 
 The owning facade adds pictures because media parts and relationships belong to
@@ -168,6 +250,13 @@ spans, and its horizontal and vertical flips retain endpoint direction. A
 horizontal or vertical connector may have one zero extent. A span that cannot
 fit in the signed EMU representation returns a contextual error.
 
+A constructed table uses a canonical `p:graphicFrame` with deterministic name
+`Table {id}`, a typed transform, the DrawingML table URI, and a rectangular
+`a:tbl` payload. The constructor rejects invalid counts and extents before tree
+mutation. It appends at top z-order like the other borrowed slide constructors.
+The table model owns truncating dimension distribution and assigns each
+remainder to the final row or column so the grid matches the frame extent.
+
 Every shape constructor, including the owning picture operation, rescans the
 tree immediately before allocation, derives a deterministic producer name from
 the allocated id, and appends at top z-order. The append operation shifts
@@ -207,7 +296,16 @@ Carries `p:sldSz` (deck dimensions in EMU), `p:notesSz`, `p:sldIdLst`,
 `p:sldMasterIdLst`, and `p:defaultTextStyle` which is the base of the text
 inheritance chain.
 
+Slide-size mutation rejects non-positive dimensions before changing the model.
+It replaces only `p:sldSz/@cx` and `@cy`, preserving the producer size kind,
+unmodelled attributes, unmodelled children, and schema position. An absent
+`p:sldSz` is materialized with only the validated dimensions.
+
 **`p:sldIdLst` order is slide order.** There is no separate ordering mechanism.
+`CT_Presentation` records the original relationship-id order and reconciles raw
+list boundaries against surviving relationship ids during serialization.
+Comments and unmodelled children therefore remain anchored when slides move,
+are removed, or are inserted.
 
 **`p:sldId/@id` must be at least 256 and at most 2147483647, and unique.** A
 value below 256 is a guaranteed repair prompt, and it is the single most common
@@ -215,7 +313,9 @@ defect in naive `add_slide` implementations.
 
 The `.pptx` versus `.ppsx` distinction lives entirely in this part's content
 type: `presentationml.presentation.main+xml` against
-`presentationml.slideshow.main+xml`. `Presentation::save_as_show()` exposes it.
+`presentationml.slideshow.main+xml`. `Presentation::save_as_show()` changes
+only the staged output package's main content type. It does not store slideshow
+mode on the facade or affect later ordinary saves.
 
 ## Notes parts
 
@@ -277,6 +377,13 @@ parsing uses the namespace bindings inherited from `p:cSld`, so aliased
 prefixes remain valid even when their declarations live on the part root.
 Attributes, effects, unsupported siblings, and the original child order remain
 inside the retained raw subtree and round-trip byte-identically.
+
+Slide background authoring accepts a direct DrawingML `Fill` and writes it as
+canonical `p:bg/p:bgPr` before `p:spTree`. Replacing an existing direct fill
+preserves the captured `p:bg` and `p:bgPr` attributes and all raw siblings while
+changing only the fill subtree. Replacing a `p:bgRef` or unsupported background
+choice is rejected. Clearing removes only a direct `p:bgPr` background, so theme
+references and opaque producer payloads remain untouched.
 
 An ordinary `CT_Shape` owns its required `p:spPr` as a public boxed
 `CT_ShapeProperties`. The allocation keeps recursive group parsing within the
@@ -431,7 +538,9 @@ The sequence:
 
 Deep copy exists only for `duplicate_slide` and cross-deck copy, where it uses
 `rewrite_rel_ids`, transfers media with content-hash deduplication, and assigns
-fresh `p:cNvPr` ids.
+fresh `p:cNvPr` ids across ordinary, grouped, and compatibility content. The
+same map rewrites `a:stCxn` and `a:endCxn` endpoints so copied connectors target
+the copied shapes. Slides and notes both use this narrow shape-tree behavior.
 
 ## Validation
 

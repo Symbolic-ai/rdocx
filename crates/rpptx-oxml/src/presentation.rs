@@ -107,6 +107,7 @@ pub struct CT_Presentation {
     slide_id_list_present: bool,
     slide_id_list_attributes: Vec<(String, String)>,
     slide_id_list_raw_children: OrderedRawChildren,
+    original_slide_relationship_ids: Vec<String>,
     raw_children: OrderedRawChildren,
 }
 
@@ -202,6 +203,16 @@ impl PresentationParseState {
         let notes_size = self
             .notes_size
             .ok_or_else(|| OxmlError::MissingElement("p:notesSz".to_owned()))?;
+        let original_slide_relationship_ids = self
+            .slide_ids
+            .as_ref()
+            .map(|slides| {
+                slides
+                    .iter()
+                    .map(|slide| slide.relationship_id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
         let presentation = CT_Presentation {
             slide_master_list_present: self.slide_master_ids.is_some(),
             slide_master_ids: self.slide_master_ids.unwrap_or_default(),
@@ -215,6 +226,7 @@ impl PresentationParseState {
             slide_master_list_raw_children: self.slide_master_list_raw_children,
             slide_id_list_attributes: self.slide_id_list_attributes,
             slide_id_list_raw_children: self.slide_id_list_raw_children,
+            original_slide_relationship_ids,
             raw_children: self.raw_children,
         };
         presentation.validate()?;
@@ -237,8 +249,22 @@ impl CT_Presentation {
             slide_id_list_present: false,
             slide_id_list_attributes: Vec::new(),
             slide_id_list_raw_children: OrderedRawChildren::default(),
+            original_slide_relationship_ids: Vec::new(),
             raw_children: OrderedRawChildren::default(),
         }
+    }
+
+    /// Replaces only the slide dimensions, preserving size kind and raw data.
+    pub fn set_slide_size(&mut self, cx: Emu, cy: Emu) -> Result<()> {
+        validate_dimension("sldSz", "cx", cx)?;
+        validate_dimension("sldSz", "cy", cy)?;
+        if let Some(size) = &mut self.slide_size {
+            size.cx = cx;
+            size.cy = cy;
+        } else {
+            self.slide_size = Some(CT_SlideSize::new(cx, cy)?);
+        }
+        Ok(())
     }
 
     /// Parses a complete PresentationML presentation root with any prefix.
@@ -370,6 +396,14 @@ impl CT_Presentation {
         writer.write_event(Event::End(BytesEnd::new("p:presentation")))?;
         Ok(writer.into_inner())
     }
+
+    /// Removes references to one presentation relationship from custom shows.
+    pub fn remove_custom_show_slide(&mut self, relationship_id: &str) -> Result<()> {
+        let xml = self.to_xml()?;
+        let rewritten = remove_custom_show_slide_references(&xml, relationship_id)?;
+        *self = Self::from_xml(&rewritten)?;
+        Ok(())
+    }
 }
 
 /// Returns relationship ids referenced by slides inside preserved custom shows.
@@ -456,6 +490,102 @@ fn collect_custom_show_slide_id(
         }
     }
     Ok(())
+}
+
+fn remove_custom_show_slide_references(xml: &[u8], relationship_id: &str) -> Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut scopes = vec![NamespaceBindings::default()];
+    let mut depth = 0usize;
+    let mut custom_show_depth = None;
+    let mut removals = Vec::new();
+    loop {
+        let event_start = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let parent = scopes.last().ok_or_else(|| {
+                    invalid_value("missing custom-show namespace scope".to_owned())
+                })?;
+                let scope = parent.with_start(&element)?;
+                let is_custom_show = scope.element_uri(element.name().as_ref()) == Some(P_NS)
+                    && local_name(element.name().as_ref()) == b"custShowLst";
+                if custom_show_depth.is_some()
+                    && custom_show_slide_relationship_id(&element, &scope)?.as_deref()
+                        == Some(relationship_id)
+                {
+                    reader.read_to_end(element.name())?;
+                    removals.push(event_start..reader.buffer_position() as usize);
+                } else {
+                    scopes.push(scope);
+                    depth += 1;
+                    if is_custom_show {
+                        custom_show_depth = Some(depth);
+                    }
+                }
+            }
+            Event::Empty(element) => {
+                let parent = scopes.last().ok_or_else(|| {
+                    invalid_value("missing custom-show namespace scope".to_owned())
+                })?;
+                let scope = parent.with_start(&element)?;
+                if custom_show_depth.is_some()
+                    && custom_show_slide_relationship_id(&element, &scope)?.as_deref()
+                        == Some(relationship_id)
+                {
+                    removals.push(event_start..reader.buffer_position() as usize);
+                }
+            }
+            Event::End(_) => {
+                if custom_show_depth == Some(depth) {
+                    custom_show_depth = None;
+                }
+                if depth == 0 || scopes.len() == 1 {
+                    return Err(invalid_value(
+                        "custom-show XML has an unmatched closing tag".to_owned(),
+                    ));
+                }
+                depth -= 1;
+                scopes.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if depth != 0 || scopes.len() != 1 {
+        return Err(invalid_value(
+            "custom-show XML ended before its root closed".to_owned(),
+        ));
+    }
+    let mut rewritten = xml.to_vec();
+    for range in removals.into_iter().rev() {
+        rewritten.drain(range);
+    }
+    Ok(rewritten)
+}
+
+fn custom_show_slide_relationship_id(
+    element: &BytesStart<'_>,
+    scope: &NamespaceBindings,
+) -> Result<Option<String>> {
+    if scope.element_uri(element.name().as_ref()) != Some(P_NS)
+        || local_name(element.name().as_ref()) != b"sld"
+    {
+        return Ok(None);
+    }
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        if scope.attribute_uri(attribute.key.as_ref()) == Some(R_NS)
+            && local_name(attribute.key.as_ref()) == b"id"
+        {
+            return Ok(Some(
+                attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
+                    .into_owned(),
+            ));
+        }
+    }
+    Ok(None)
 }
 
 fn parse_slide_list(xml: &[u8], inherited: &NamespaceBindings) -> Result<ParsedSlideList> {
@@ -783,8 +913,26 @@ fn write_slide_list<W: Write>(
         return Ok(());
     }
     writer.write_event(Event::Start(list))?;
-    emit_raw(writer, presentation.slide_id_list_raw_children.at(0))?;
+    let original_to_current = presentation
+        .original_slide_relationship_ids
+        .iter()
+        .map(|relationship_id| {
+            presentation
+                .slide_ids
+                .iter()
+                .position(|slide| slide.relationship_id == *relationship_id)
+        })
+        .collect::<Vec<_>>();
     for (index, item) in presentation.slide_ids.iter().enumerate() {
+        emit_raw(
+            writer,
+            presentation.slide_id_list_raw_children.at_reconciled(
+                index,
+                0,
+                &original_to_current,
+                presentation.slide_ids.len(),
+            ),
+        )?;
         write_identifier(
             "p:sldId",
             Some(item.id),
@@ -793,11 +941,16 @@ fn write_slide_list<W: Write>(
             &item.raw_children,
             writer,
         )?;
-        emit_raw(
-            writer,
-            presentation.slide_id_list_raw_children.at(index + 1),
-        )?;
     }
+    emit_raw(
+        writer,
+        presentation.slide_id_list_raw_children.at_reconciled(
+            presentation.slide_ids.len(),
+            0,
+            &original_to_current,
+            presentation.slide_ids.len(),
+        ),
+    )?;
     writer.write_event(Event::End(BytesEnd::new("p:sldIdLst")))?;
     Ok(())
 }

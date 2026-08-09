@@ -190,6 +190,13 @@ body. Paragraph and run append operations preserve caller order. Fields and
 line breaks remain in place unless the caller explicitly replaces that
 paragraph's text.
 
+Typed content transfer moves a non-empty body's paragraphs into another text
+body without flattening runs, fields, bullets, or formatting. The source keeps
+its body properties and list style and is left with one empty paragraph. A
+destination that was empty adopts the moved paragraphs. Otherwise, they append
+in their existing order. Preserved body-level children remain at reconciled
+schema boundaries.
+
 Paragraph properties, character properties, Latin font, and bullet values use
 their existing typed models and schema-order writers. When paragraph properties
 are absent, inserting them moves preserved boundary-0 content to the slot after
@@ -211,6 +218,22 @@ retains `hMerge` and `vMerge` independently. A merge origin is the
 non-continuation cell whose row or grid span is greater than one. Continuation
 cells stay explicit, including cells that continue a two-dimensional merge in
 both directions.
+
+`CT_Table::new` rejects zero counts, counts outside the DrawingML span range,
+non-positive extents, and extents too small to give every row and column a
+positive size. It creates a rectangular explicit cell grid. Width and height
+division truncates toward zero, then assigns the remainder to the final column
+or row so the stored grid sums match the requested frame extent. Every cell has
+a minimal text body and default cell properties. Constructed tables enable
+first-row styling and horizontal row banding, matching python-pptx 1.0.2.
+
+A rectangular merge keeps every cell explicit. The top-left origin stores both
+spans. Other cells in the top row retain the row span and set `hMerge`. Other
+cells in the left column retain the grid span and set `vMerge`. Interior
+continuations set both flags. Non-empty typed paragraph content moves to the
+origin in row-major order, and each source keeps one empty paragraph. Splitting
+is valid only at an origin, clears this pattern across its checked rectangle,
+and does not redistribute the migrated content.
 
 Table properties expose right-to-left order, first and last row and column
 flags, row and column banding, and the optional table style id. Unsupported

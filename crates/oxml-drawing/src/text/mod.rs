@@ -270,6 +270,55 @@ impl CT_TextBody {
         self.paragraphs.last_mut().expect("paragraph was appended")
     }
 
+    /// Moves visible typed paragraphs to `destination`, retaining body-level
+    /// state and leaving one empty paragraph in this body.
+    pub fn move_content_to(&mut self, destination: &mut Self) {
+        if self.plain_text().is_empty() {
+            return;
+        }
+
+        let source_paragraph_count = self.paragraphs.len();
+        let moved = std::mem::take(&mut self.paragraphs);
+        self.paragraphs.push(CT_TextParagraph::default());
+        self.reconcile_paragraph_raw_children(source_paragraph_count, 1);
+
+        if destination.plain_text().is_empty() {
+            let destination_paragraph_count = destination.paragraphs.len();
+            destination.paragraphs = moved;
+            destination.reconcile_paragraph_raw_children(
+                destination_paragraph_count,
+                destination.paragraphs.len(),
+            );
+            return;
+        }
+
+        for paragraph in moved {
+            destination
+                .raw_children
+                .shift_boundaries_from(2 + destination.paragraphs.len());
+            destination.paragraphs.push(paragraph);
+        }
+    }
+
+    fn reconcile_paragraph_raw_children(
+        &mut self,
+        old_paragraph_count: usize,
+        new_paragraph_count: usize,
+    ) {
+        let mut raw_children = OrderedRawChildren::default();
+        for boundary in 0..=2 + old_paragraph_count {
+            let new_boundary = if boundary <= 2 {
+                boundary
+            } else {
+                2 + new_paragraph_count
+            };
+            for child in self.raw_children.at(boundary) {
+                raw_children.push(new_boundary, child.to_vec());
+            }
+        }
+        self.raw_children = raw_children;
+    }
+
     pub fn raw_children(&self) -> &OrderedRawChildren {
         &self.raw_children
     }
@@ -302,6 +351,33 @@ mod tests {
         assert!(body.has_list_style());
         assert_eq!(body.paragraph_count(), 1);
         assert_eq!(body.to_xml().unwrap(), br#"<a:txBody><x:before/><a:bodyPr anchor="ctr"><a:noAutofit/></a:bodyPr><x:afterBody/><a:lstStyle><x:listChild/></a:lstStyle><x:beforeParagraph/><a:p><x:run>kept</x:run></a:p><x:afterParagraph/></a:txBody>"#);
+    }
+
+    #[test]
+    fn moving_content_retains_typed_paragraphs_and_source_body_state() {
+        let mut destination = CT_TextBody::from_xml(
+            br#"<a:txBody><a:bodyPr/><a:p><a:r><a:rPr b="1"/><a:t>one</a:t></a:r></a:p></a:txBody>"#,
+        )
+        .unwrap();
+        let mut source = CT_TextBody::from_xml(
+            br#"<a:txBody><a:bodyPr lIns="10"/><a:p><a:r><a:rPr i="1"/><a:t>two</a:t></a:r></a:p><a:p><a:r><a:t>three</a:t></a:r></a:p></a:txBody>"#,
+        )
+        .unwrap();
+
+        source.move_content_to(&mut destination);
+
+        assert_eq!(destination.plain_text(), "one\ntwo\nthree");
+        assert_eq!(destination.paragraph_count(), 3);
+        assert_eq!(source.plain_text(), "");
+        assert_eq!(source.paragraph_count(), 1);
+        assert!(
+            String::from_utf8(source.to_xml().unwrap())
+                .unwrap()
+                .contains(r#"lIns="10""#)
+        );
+        let written = String::from_utf8(destination.to_xml().unwrap()).unwrap();
+        assert!(written.contains(r#"<a:rPr b="1"/>"#));
+        assert!(written.contains(r#"<a:rPr i="1"/>"#));
     }
 
     #[test]

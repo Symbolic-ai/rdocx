@@ -147,6 +147,57 @@ corpus gates. A missing configured corpus skips them when
 one-time native acceptance record does not require the external files to remain
 present after review.
 
+## The M11 cross-viewer acceptance gate
+
+The M11 gate uses one deterministic ten-slide deck built from the checked-in
+default template by `build_f116_ten_slide_deck` in the existing `rpptx`
+integration binary. No generated deck is checked in. The reviewed temporary
+candidate is `/private/tmp/rdocx-f116-m11-write-api.pptx`, with SHA-256
+`d36da6e8849eabd4487d2572baea19c3716ee7d0fe03aaa4714a28ce3c41de4f`.
+Its ordinary `.pptx` and slideshow `.ppsx` forms reopen through the facade,
+use the correct main content types, and return no validation issues.
+
+The one deck covers the complete M11 write surface:
+
+| Story | Candidate coverage |
+|---|---|
+| F-107 | ten slides synthesised from the bundled template |
+| F-108 | clean structural validation before and after reopen |
+| F-109 | position, size, rotation, name, fill, line, and adjustment mutation |
+| F-110 | textbox, preset shape, three connector forms, and group construction |
+| F-111 | package-deduplicated pictures with slide-scoped relationships |
+| F-112 | paragraphs, bullet, run properties, and direct Latin font |
+| F-113 | cells, fill, margins, banding, width, merge, and split |
+| F-114 | image-bearing duplication, removal, and final-index move |
+| F-115 | slide size, core properties, hidden state, background set and clear, and slideshow save |
+
+Every viewer receives that exact SHA. Microsoft PowerPoint checks its pinned
+version, Info.plist build, and AppleScript build before opening, counting ten
+slides, and closing without saving. Keynote records a user-confirmed open and
+ten-slide inspection against its installed version and bundle build.
+LibreOffice runs a headless import and `impress_pdf_Export` with hidden slides
+enabled, then `pdfinfo` must report ten pages. Google Slides imports through a
+signed-in browser, reports ten slides without a conversion error, and exports
+once. Its row records the acceptance date and browser build rather than an
+application version. The ignored gate reruns the automatable PowerPoint and
+LibreOffice checks and validates all four SHA-bound evidence rows. It does not
+replace the Keynote or Google human-action evidence with unsupported UI
+automation.
+
+The evidence bound to the reviewed SHA is:
+
+| Viewer | Version or date | Build | Result |
+|---|---|---|---|
+| Microsoft PowerPoint | 16.104 | Info.plist 16.104.25121423, AppleScript 1214 | clean, opened ten slides and closed without saving |
+| Apple Keynote | 14.4 | 7043.0.93 | clean, user-confirmed human-action open of ten slides without a conversion error, then closed |
+| Google Slides | accepted 2026-08-09 | Google Chrome 151.0.7922.76, build 7922.76 | clean, saved to Drive, showed slides 1 through 10 without a conversion error, and started one Microsoft PowerPoint download |
+| LibreOffice Impress | 26.2.5.2 | cd7284b4cbbfeb507e630c1aac019f4157393acb | clean, headless import and ten-page PDF export |
+
+All four rows record clean observations against the same artifact SHA. The
+Keynote row is user-confirmed human-action evidence. The Google Slides row is
+bound to the acceptance date and browser build without recording the private
+import URL.
+
 ## The render fidelity gate
 
 The 50-deck pinned corpus is rendered through bundled fonts at 150 dpi.
