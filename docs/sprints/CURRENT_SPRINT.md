@@ -1,64 +1,62 @@
-# Current Sprint, S27
+# Current Sprint, S28
 
 **Milestone**: M11 Write API.
 
-**Goal**: Add mutable shape and text APIs to the presentation facade, including
-direct geometry and styling setters, shape creation, picture insertion, and
-text-frame editing. End with saved decks that round-trip every mutation, render
-edited placeholder text, and open in PowerPoint without repair.
+**Goal**: Complete the M11 write API with mutable tables, slide collection
+operations, and slide and presentation properties. End with a generated
+10-slide deck that exercises the complete write surface and opens cleanly in
+PowerPoint, Keynote, Google Slides, and LibreOffice.
 
 ## Spec references
 
-- `docs/hld/01-glossary.md`, for placeholder identity and the `idx` join key
-  that text mutation must preserve.
-- `docs/hld/02-scope-and-non-goals.md`, for the complete v1 shape, picture, and
-  text mutation surface.
-- `docs/hld/03-architecture.md`, for facade ownership in `rpptx` and the
-  dependency direction through PresentationML and shared DrawingML crates.
-- `docs/hld/04-opc-and-packaging.md`, for image sniffing, intrinsic EMU sizing,
-  media naming, and package integrity after picture insertion.
-- `docs/hld/05-drawingml-model.md`, for transforms, geometry adjustments,
-  fills, lines, text bodies, whitespace, and schema-ordered writing.
-- `docs/hld/06-presentationml-model.md`, for recursive shape-tree handles,
-  collision-safe non-visual ids, presentation writing, and validation.
-- `docs/hld/07-inheritance-and-resolution.md`, for the direct properties that
-  mutation adds before the resolver collapses them to concrete render values.
-- `docs/hld/12-testing-strategy.md`, for round-trip, rendering, corpus, and
-  native PowerPoint acceptance evidence.
+- `docs/hld/02-scope-and-non-goals.md`, for the complete v1 table, slide
+  collection, presentation property, and cross-viewer surface.
+- `docs/hld/03-architecture.md`, for facade ownership in `rpptx` and dependency
+  direction through PresentationML, DrawingML, and package crates.
+- `docs/hld/04-opc-and-packaging.md`, for relationship rewriting, media
+  transfer, content types, and package integrity during slide duplication.
+- `docs/hld/05-drawingml-model.md`, for table grids, merge spans, continuation
+  cells, banding flags, widths, and schema-ordered writing.
+- `docs/hld/06-presentationml-model.md`, for slide ordering, deep copy,
+  relationship scopes, backgrounds, hidden slides, and slideshow content type.
+- `docs/hld/07-inheritance-and-resolution.md`, for resolved table styling,
+  merge ownership, slide backgrounds, and hidden-slide behavior.
+- `docs/hld/12-testing-strategy.md`, for round-trip, corpus, deterministic
+  rendering, and pinned PowerPoint, Keynote, Google Slides, and LibreOffice
+  acceptance evidence.
 - `docs/hld/13-risks-and-open-questions.md`, for schema child ordering and safe
-  mutation in the presence of preserved XML.
-- `docs/hld/14-development-backlog.md`, for F-109 through F-112 dependencies,
-  sizes, and focused test gates.
-- `docs/hld/15-build-and-toolchain.md`, for keeping every PowerPoint development
-  crate at version 0.0.0 with publication disabled.
+  edits in the presence of preserved XML.
+- `docs/hld/14-development-backlog.md`, for F-113 through F-116 dependencies,
+  sizes, focused test gates, and the M11 milestone gate.
+- `docs/hld/15-build-and-toolchain.md`, for the pinned native and LibreOffice
+  tools and the unpublished PowerPoint development crates.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-109 | Shape mutation facade | L | done | - |
-| F-110 | add_textbox, add_shape, add_connector, group | M | done | - |
-| F-111 | add_picture | M | done | - |
-| F-112 | Text frame mutation | L | done | - |
+| F-113 | Table facade | L | pending | - |
+| F-114 | remove_slide, move_slide, duplicate_slide | M | pending | - |
+| F-115 | Slide and presentation properties | S | pending | - |
+| F-116 | Cross-viewer acceptance | M | pending | - |
 
 ## Sequencing note
 
-F-109 establishes the mutable shape handle used by F-110 and F-112, which can
-then proceed independently. F-111 is independent of F-109 because its F-106
-media store and F-026 intrinsic-size prerequisites are already complete.
+F-113, F-114, and F-115 have independent completed prerequisites and may
+proceed before the acceptance story. F-116 depends on the complete F-107
+through F-115 write surface, so it runs last and closes M11.
 
 ## Definition of done for this sprint
 
-- Shape position, size, rotation, name, fill, line, and adjustment setters each
-  survive save and reload without disturbing unmodelled XML.
-- `add_textbox`, `add_shape`, `add_connector`, and `add_group_shape` allocate
-  collision-free ids, emit schema-ordered XML, validate cleanly, and produce
-  shapes that PowerPoint opens without repair.
-- `add_picture` deduplicates media through the existing content-addressed store
-  and uses native dimensions when no explicit size is supplied.
-- Text frames expose paragraphs, runs, font properties, and bullets for
-  mutation. Setting text on a placeholder round-trips and renders visibly.
-- The full workspace gate passes, native PowerPoint acceptance covers the new
-  shape constructors, all 28 deterministic hashes remain unchanged, every
-  PowerPoint development crate remains unpublished at version 0.0.0, and no
-  crate is published.
+- `add_table` exposes cells, text, formatting, banding, and column widths.
+  Merging and then splitting cells restores the original grid.
+- Removing, moving, and duplicating slides preserve valid presentation order,
+  ids, relationships, media, and custom-show references. Duplicated images
+  resolve through the new slide's own relationships.
+- Slide size, background, hidden state, core properties, and slideshow output
+  each survive save and reload with valid content types and package graphs.
+- A generated 10-slide deck exercising every M11 feature validates cleanly and
+  opens without repair in PowerPoint, Keynote, Google Slides, and LibreOffice.
+- The full workspace gate passes, all 28 deterministic hashes remain unchanged,
+  every PowerPoint development crate remains unpublished at version 0.0.0, and
+  no crate is published.
