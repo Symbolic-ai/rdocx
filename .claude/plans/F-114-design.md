@@ -144,7 +144,8 @@ mutation. All 28 deterministic hashes must match.
 - [ ] Add the exact gate and all negative, preservation, and graph tests to
   existing binaries.
 - [ ] Update exactly HLD 04 and HLD 06.
-- [ ] Run focused checks, risk riders, `/verify --full`, and the hash harness.
+- [ ] Run focused checks, risk riders, normal worker `/verify`, and the hash
+  harness. The integrated sprint runs `/verify --full` once.
 
 ## Open questions
 

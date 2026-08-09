@@ -125,7 +125,8 @@ deterministic hashes must match.
 - [ ] Import and inspect the same artifact in Google Slides through the browser.
 - [ ] Record the four-viewer evidence beside the test.
 - [ ] Update exactly HLD 12.
-- [ ] Run focused checks, risk riders, `/verify --full`, and the hash harness.
+- [ ] Run focused checks, risk riders, normal worker `/verify`, and the hash
+  harness. The integrated sprint runs `/verify --full` once.
 
 ## Open questions
 
