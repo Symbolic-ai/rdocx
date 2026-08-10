@@ -708,8 +708,11 @@ version = "0.0.0"
 dependencies = [
  "oxml-core",
  "oxml-drawing",
+ "oxml-layout",
  "oxml-opc",
+ "oxml-pdf",
  "quick-xml",
+ "tiny-skia",
 ]
 
 [[package]]

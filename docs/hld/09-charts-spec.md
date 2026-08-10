@@ -408,6 +408,50 @@ frame, so **no backend work is needed beyond what `08-rendering-spec.md`
 already requires**. Bars, lines, pie wedges, areas and markers are all paths.
 Gridlines and axis lines are strokes. Labels are glyph runs.
 
+The geometry entry point is `render_geometry(&CT_Chart, Rect) ->
+Result<ChartGeometry>`. Input and output coordinates are typographic points.
+It reserves 36 points on the left, 12 on the right and top, and 28 on the
+bottom, then returns one identity group whose children use chart-local point
+coordinates. Invalid or too-small bounds, opaque or combination plots, and
+empty cached data return contextual errors.
+
+Clustered bars derive their width from the category slot, `c:gapWidth`, series
+count, and `c:overlap`. Stacked bars accumulate positive and negative values
+separately, and percentage stacks normalise against the matching sign total.
+Lines and areas use category-slot centres. Areas close against zero or the
+previous stacked series. Scatter plots map numeric x and y caches directly.
+Pie and doughnut slices use closed cubic wedges, including the first-slice
+angle and doughnut hole size. Radar plots use closed radial polygons. Marker
+paths follow their owning series path, and output order is plot order followed
+by series order.
+
+Category slot counts come from the caches' declared `c:ptCount`, and geometry
+uses each preserved `c:pt/@idx` rather than collapsing sparse caches into dense
+positions. Scatter x and y values pair only when their logical indexes match.
+The private cache-layout accessor also gives newly authored dense caches their
+sequential indexes without exposing parser preservation state publicly.
+
+Sparse line, area, and scatter paths apply `c:dispBlanksAs`. `gap` creates
+separate contiguous path segments, `zero` inserts baseline control points, and
+`span` connects the present points. Zero control points are compressed at the
+boundaries of missing runs, which preserves the same straight baseline without
+allocating one point for every value of an untrusted declared count. Markers
+remain limited to points present in the cache.
+
+Geometry normalises domains after scaling by their largest finite magnitude,
+so opposite finite extremes do not overflow their range. Stacked values,
+percentage totals, pie totals, derived bounds, and every emitted path point
+must remain finite. An overflow or nonfinite mutable cache returns a contextual
+error before backend-neutral geometry is exposed.
+
+Geometry uses a deterministic placeholder solid palette indexed by series.
+F-126 adds axes, gridlines, labels, and legends without changing plot paths.
+F-127 replaces the placeholder palette with chart and theme colour resolution.
+F-128 resolves chart relationships into the render input, routes supported
+charts to native geometry, and owns preserved-chart fallback selection. Later
+binding work consumes the same concrete geometry contract without adding a
+backend-specific chart path.
+
 Scales are computed from the cached values: linear axes with a nice-number tick
 algorithm unless `c:scaling` pins a minimum or maximum. Series colours come from
 the chart's own `c:spPr` when present, otherwise from the theme's accent cycle

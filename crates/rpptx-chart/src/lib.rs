@@ -1,5 +1,6 @@
 #![allow(non_camel_case_types)]
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io::Write;
 
@@ -10,6 +11,10 @@ use oxml_core::xml_text::{decode_plain, resolve_entity};
 use oxml_drawing::order::OrderedRawChildren;
 use oxml_drawing::shape_props::{CT_ShapeProperties, ShapePropertiesError};
 use oxml_drawing::text::{CT_TextBody, TextError};
+use oxml_layout::{
+    Color, FillRule, GroupElement, Paint, Path, PathCommand, PathElement, Point, PositionedElement,
+    Rect, Stroke, Transform,
+};
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 
@@ -102,6 +107,1103 @@ impl From<TextError> for ChartError {
 }
 
 pub type Result<T> = std::result::Result<T, ChartError>;
+
+/// Backend-neutral plot geometry and the plot rectangle reserved inside a chart.
+#[derive(Clone, Debug)]
+pub struct ChartGeometry {
+    pub plot_bounds: Rect,
+    pub elements: Vec<PositionedElement>,
+}
+
+/// Converts one supported typed chart into chart-local backend-neutral paths.
+pub fn render_geometry(chart: &CT_Chart, bounds: Rect) -> Result<ChartGeometry> {
+    let plot_bounds = geometry_plot_bounds(bounds)?;
+    let plots = chart.plot_area.plots()?;
+    let plot = plots
+        .first()
+        .ok_or_else(|| ChartError::MissingElement("c:plot".to_owned()))?;
+    plot.validate()?;
+    let children = render_plot_geometry(plot, plot_bounds, chart.disp_blanks_as)?;
+    if children.is_empty() {
+        return Err(ChartError::InvalidValue {
+            element: "c:plotArea".to_owned(),
+            value: "plot has no renderable cached data".to_owned(),
+        });
+    }
+    validate_geometry_coordinates(&children)?;
+    Ok(ChartGeometry {
+        plot_bounds,
+        elements: vec![PositionedElement::Group(GroupElement {
+            transform: Transform::IDENTITY,
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children,
+        })],
+    })
+}
+
+fn geometry_plot_bounds(bounds: Rect) -> Result<Rect> {
+    const LEFT: f64 = 36.0;
+    const RIGHT: f64 = 12.0;
+    const TOP: f64 = 12.0;
+    const BOTTOM: f64 = 28.0;
+    if ![bounds.x, bounds.y, bounds.width, bounds.height]
+        .into_iter()
+        .all(f64::is_finite)
+        || bounds.width <= 0.0
+        || bounds.height <= 0.0
+        || !(bounds.x + bounds.width).is_finite()
+        || !(bounds.y + bounds.height).is_finite()
+    {
+        return Err(ChartError::InvalidValue {
+            element: "chart geometry bounds".to_owned(),
+            value: format!(
+                "x={}, y={}, width={}, height={}",
+                bounds.x, bounds.y, bounds.width, bounds.height
+            ),
+        });
+    }
+    let plot_bounds = Rect {
+        x: bounds.x + LEFT,
+        y: bounds.y + TOP,
+        width: bounds.width - LEFT - RIGHT,
+        height: bounds.height - TOP - BOTTOM,
+    };
+    if ![
+        plot_bounds.x,
+        plot_bounds.y,
+        plot_bounds.width,
+        plot_bounds.height,
+        plot_bounds.x + plot_bounds.width,
+        plot_bounds.y + plot_bounds.height,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+        || plot_bounds.width <= 0.0
+        || plot_bounds.height <= 0.0
+    {
+        return Err(ChartError::InvalidValue {
+            element: "chart geometry bounds".to_owned(),
+            value: "chart is too small for the fixed plot margins".to_owned(),
+        });
+    }
+    Ok(plot_bounds)
+}
+
+fn validate_geometry_coordinates(elements: &[PositionedElement]) -> Result<()> {
+    fn finite_point(point: Point) -> bool {
+        point.x.is_finite() && point.y.is_finite()
+    }
+
+    for element in elements {
+        match element {
+            PositionedElement::Path(path) => {
+                for command in &path.path.commands {
+                    let finite = match command {
+                        PathCommand::MoveTo(point) | PathCommand::LineTo(point) => {
+                            finite_point(*point)
+                        }
+                        PathCommand::CurveTo { c1, c2, to } => {
+                            finite_point(*c1) && finite_point(*c2) && finite_point(*to)
+                        }
+                        PathCommand::Close => true,
+                    };
+                    if !finite {
+                        return Err(ChartError::InvalidValue {
+                            element: "chart geometry coordinate".to_owned(),
+                            value: "generated path contains a nonfinite point".to_owned(),
+                        });
+                    }
+                }
+            }
+            PositionedElement::Group(group) => validate_geometry_coordinates(&group.children)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn render_plot_geometry(
+    plot: &Plot,
+    bounds: Rect,
+    blanks: DispBlanksAs,
+) -> Result<Vec<PositionedElement>> {
+    match plot {
+        Plot::Bar {
+            direction,
+            grouping,
+            gap_width,
+            overlap,
+            series,
+            ..
+        } => render_bar_geometry(*direction, *grouping, *gap_width, *overlap, series, bounds),
+        Plot::Line {
+            grouping,
+            marker,
+            series,
+            ..
+        } => render_line_geometry(*grouping, *marker, series, bounds, blanks),
+        Plot::Pie {
+            first_slice_angle,
+            series,
+            ..
+        } => render_pie_geometry(*first_slice_angle, None, series, bounds),
+        Plot::Doughnut {
+            first_slice_angle,
+            hole_size,
+            series,
+            ..
+        } => render_pie_geometry(*first_slice_angle, Some(*hole_size), series, bounds),
+        Plot::Area {
+            grouping, series, ..
+        } => render_area_geometry(*grouping, series, bounds, blanks),
+        Plot::Scatter { style, series, .. } => {
+            render_scatter_geometry(*style, series, bounds, blanks)
+        }
+        Plot::Radar { style, series, .. } => render_radar_geometry(*style, series, bounds),
+    }
+}
+
+fn render_bar_geometry(
+    direction: BarDirection,
+    grouping: BarGrouping,
+    gap_width: u16,
+    overlap: i8,
+    series: &[Series],
+    bounds: Rect,
+) -> Result<Vec<PositionedElement>> {
+    validate_series_values(series)?;
+    let logical_series = logical_series_values(series)?;
+    let category_count = series_category_count(series)?;
+    let stacked = matches!(grouping, BarGrouping::Stacked | BarGrouping::PercentStacked);
+    let percent = grouping == BarGrouping::PercentStacked;
+    let layers = stacked_series_bounds(&logical_series, stacked, percent)?;
+    let domain = domain_from_layers(&layers)?;
+    let category_extent = if direction == BarDirection::Column {
+        bounds.width
+    } else {
+        bounds.height
+    };
+    let slot = category_extent / category_count as f64;
+    let cluster_extent = slot * 100.0 / (100.0 + f64::from(gap_width));
+    let bars_per_cluster = if stacked { 1 } else { series.len() };
+    let overlap_fraction = if stacked {
+        0.0
+    } else {
+        f64::from(overlap) / 100.0
+    };
+    let divisor =
+        bars_per_cluster as f64 - (bars_per_cluster.saturating_sub(1)) as f64 * overlap_fraction;
+    let bar_extent = cluster_extent / divisor;
+    let advance = bar_extent * (1.0 - overlap_fraction);
+    let mut elements = Vec::new();
+    for (series_index, layer) in layers.iter().enumerate() {
+        for &(category, start, end) in layer {
+            let cluster_start = category as f64 / category_count as f64 * category_extent
+                + (slot - cluster_extent) / 2.0;
+            let category_start = if stacked {
+                cluster_start
+            } else {
+                cluster_start + series_index as f64 * advance
+            };
+            let rect = if direction == BarDirection::Column {
+                let y0 = map_y(start, domain, bounds)?;
+                let y1 = map_y(end, domain, bounds)?;
+                Rect {
+                    x: bounds.x + category_start,
+                    y: y0.min(y1),
+                    width: bar_extent,
+                    height: (y1 - y0).abs(),
+                }
+            } else {
+                let x0 = map_x(start, domain, bounds)?;
+                let x1 = map_x(end, domain, bounds)?;
+                Rect {
+                    x: x0.min(x1),
+                    y: bounds.y + category_start,
+                    width: (x1 - x0).abs(),
+                    height: bar_extent,
+                }
+            };
+            if rect.width > 0.0 && rect.height > 0.0 {
+                elements.push(filled_path(Path::rect(rect), series_color(series_index)));
+            }
+        }
+    }
+    Ok(elements)
+}
+
+fn render_line_geometry(
+    grouping: Grouping,
+    marker: bool,
+    series: &[Series],
+    bounds: Rect,
+    blanks: DispBlanksAs,
+) -> Result<Vec<PositionedElement>> {
+    validate_series_values(series)?;
+    let logical_series = logical_series_values(series)?;
+    let category_count = series_category_count(series)?;
+    let calculated_series = if blanks == DispBlanksAs::Zero {
+        zero_filled_series(&logical_series, category_count)
+    } else {
+        logical_series.clone()
+    };
+    let stacked = grouping != Grouping::Standard;
+    let percent = grouping == Grouping::PercentStacked;
+    let layers = stacked_series_bounds(&calculated_series, stacked, percent)?;
+    let domain = domain_from_layers(&layers)?;
+    let mut elements = Vec::new();
+    for (series_index, layer) in layers.iter().enumerate() {
+        let indexed: Vec<_> = layer
+            .iter()
+            .map(|(index, _, upper)| (*index, *upper))
+            .collect();
+        let indexes: Vec<_> = indexed.iter().map(|(index, _)| *index).collect();
+        for (start, end) in contiguous_ranges(&indexes, blanks) {
+            let points = category_points(&indexed[start..end], category_count, domain, bounds)?;
+            elements.push(stroked_path(
+                polyline_path(&points, false),
+                series_color(series_index),
+            ));
+        }
+        if marker {
+            let present: BTreeSet<_> = logical_series[series_index]
+                .1
+                .iter()
+                .map(|(index, _)| *index)
+                .collect();
+            let marker_values: Vec<_> = indexed
+                .iter()
+                .copied()
+                .filter(|(index, _)| present.contains(index))
+                .collect();
+            let marker_points = category_points(&marker_values, category_count, domain, bounds)?;
+            push_markers(&mut elements, &marker_points, series_index);
+        }
+    }
+    Ok(elements)
+}
+
+fn render_area_geometry(
+    grouping: Grouping,
+    series: &[Series],
+    bounds: Rect,
+    blanks: DispBlanksAs,
+) -> Result<Vec<PositionedElement>> {
+    validate_series_values(series)?;
+    let logical_series = logical_series_values(series)?;
+    let category_count = series_category_count(series)?;
+    let calculated_series = if blanks == DispBlanksAs::Zero {
+        zero_filled_series(&logical_series, category_count)
+    } else {
+        logical_series
+    };
+    let stacked = grouping != Grouping::Standard;
+    let percent = grouping == Grouping::PercentStacked;
+    let layers = stacked_series_bounds(&calculated_series, stacked, percent)?;
+    let domain = domain_from_layers(&layers)?;
+    let mut elements = Vec::new();
+    for (series_index, layer) in layers.iter().enumerate() {
+        let indexes: Vec<_> = layer.iter().map(|(index, _, _)| *index).collect();
+        for (start, end) in contiguous_ranges(&indexes, blanks) {
+            let segment = &layer[start..end];
+            let top_values: Vec<_> = segment
+                .iter()
+                .map(|(index, _, upper)| (*index, *upper))
+                .collect();
+            let lower_values: Vec<_> = segment
+                .iter()
+                .map(|(index, lower, _)| (*index, *lower))
+                .collect();
+            let top = category_points(&top_values, category_count, domain, bounds)?;
+            let mut bottom = category_points(&lower_values, category_count, domain, bounds)?;
+            bottom.reverse();
+            let mut commands = Vec::with_capacity(top.len() + bottom.len() + 2);
+            commands.push(PathCommand::MoveTo(top[0]));
+            commands.extend(top.iter().skip(1).copied().map(PathCommand::LineTo));
+            commands.extend(bottom.into_iter().map(PathCommand::LineTo));
+            commands.push(PathCommand::Close);
+            elements.push(filled_and_stroked_path(
+                Path {
+                    commands,
+                    fill_rule: FillRule::NonZero,
+                },
+                series_color(series_index),
+            ));
+        }
+    }
+    Ok(elements)
+}
+
+fn render_scatter_geometry(
+    style: ScatterStyle,
+    series: &[Series],
+    bounds: Rect,
+    blanks: DispBlanksAs,
+) -> Result<Vec<PositionedElement>> {
+    validate_series_values(series)?;
+    let mut paired_series = Vec::with_capacity(series.len());
+    let mut marker_series = Vec::with_capacity(series.len());
+    let mut all_x = Vec::new();
+    let mut all_y = Vec::new();
+    for item in series {
+        let Some(AxisData::Numeric(x_values)) = &item.categories else {
+            return Err(ChartError::InvalidValue {
+                element: "c:xVal".to_owned(),
+                value: "scatter series requires numeric cached x values".to_owned(),
+            });
+        };
+        validate_finite(&x_values.values, "c:xVal/c:numCache")?;
+        let (x_count, x_points) = logical_numeric_values(x_values)?;
+        let (y_count, y_points) = logical_numeric_values(&item.values)?;
+        let x_by_index: BTreeMap<_, _> = x_points.into_iter().collect();
+        let y_by_index: BTreeMap<_, _> = y_points.into_iter().collect();
+        let markers: Vec<_> = y_by_index
+            .iter()
+            .filter_map(|(index, y)| x_by_index.get(index).map(|x| (index, *x, y)))
+            .map(|(index, x, y)| (*index, x, *y))
+            .collect();
+        let paired = if blanks == DispBlanksAs::Zero {
+            let count = x_count.max(y_count);
+            let present = x_by_index
+                .keys()
+                .chain(y_by_index.keys())
+                .copied()
+                .collect();
+            zero_control_indexes(count, &present)
+                .into_iter()
+                .map(|index| {
+                    (
+                        index,
+                        x_by_index.get(&index).copied().unwrap_or(0.0),
+                        y_by_index.get(&index).copied().unwrap_or(0.0),
+                    )
+                })
+                .collect()
+        } else {
+            markers.clone()
+        };
+        all_x.extend(paired.iter().map(|(_, x, _)| *x));
+        all_y.extend(paired.iter().map(|(_, _, y)| *y));
+        paired_series.push(paired);
+        marker_series.push(markers);
+    }
+    let x_domain = data_domain(&all_x, false)?;
+    let y_domain = data_domain(&all_y, false)?;
+    let draw_line = matches!(
+        style,
+        ScatterStyle::Line
+            | ScatterStyle::LineMarker
+            | ScatterStyle::Smooth
+            | ScatterStyle::SmoothMarker
+    );
+    let draw_marker = matches!(
+        style,
+        ScatterStyle::Marker | ScatterStyle::LineMarker | ScatterStyle::SmoothMarker
+    );
+    let mut elements = Vec::new();
+    for (series_index, paired) in paired_series.iter().enumerate() {
+        if draw_line {
+            let indexes: Vec<_> = paired.iter().map(|(index, _, _)| *index).collect();
+            for (start, end) in contiguous_ranges(&indexes, blanks) {
+                let points = scatter_points(&paired[start..end], x_domain, y_domain, bounds)?;
+                elements.push(stroked_path(
+                    polyline_path(&points, false),
+                    series_color(series_index),
+                ));
+            }
+        }
+        if draw_marker {
+            let marker_points =
+                scatter_points(&marker_series[series_index], x_domain, y_domain, bounds)?;
+            push_markers(&mut elements, &marker_points, series_index);
+        }
+    }
+    Ok(elements)
+}
+
+fn scatter_points(
+    values: &[(usize, f64, f64)],
+    x_domain: Domain,
+    y_domain: Domain,
+    bounds: Rect,
+) -> Result<Vec<Point>> {
+    values
+        .iter()
+        .map(|(_, x, y)| {
+            Ok(Point {
+                x: map_x(*x, x_domain, bounds)?,
+                y: map_y(*y, y_domain, bounds)?,
+            })
+        })
+        .collect()
+}
+
+fn render_radar_geometry(
+    style: RadarStyle,
+    series: &[Series],
+    bounds: Rect,
+) -> Result<Vec<PositionedElement>> {
+    validate_series_values(series)?;
+    let logical_series = logical_series_values(series)?;
+    let category_count = series_category_count(series)?;
+    let maximum = logical_series
+        .iter()
+        .flat_map(|(_, points)| points.iter().map(|(_, value)| *value))
+        .fold(0.0_f64, f64::max);
+    if maximum <= 0.0 {
+        return Err(ChartError::InvalidValue {
+            element: "c:radarChart".to_owned(),
+            value: "radar caches have no positive renderable values".to_owned(),
+        });
+    }
+    let center = Point {
+        x: bounds.x + bounds.width / 2.0,
+        y: bounds.y + bounds.height / 2.0,
+    };
+    let radius = bounds.width.min(bounds.height) / 2.0;
+    let mut elements = Vec::new();
+    for (series_index, (_, logical)) in logical_series.iter().enumerate() {
+        let points: Vec<_> = logical
+            .iter()
+            .map(|(category, value)| {
+                radial_point(
+                    center,
+                    value.max(0.0) / maximum * radius,
+                    *category,
+                    category_count,
+                )
+            })
+            .collect();
+        let path = polyline_path(&points, true);
+        if style == RadarStyle::Filled {
+            elements.push(filled_and_stroked_path(path, series_color(series_index)));
+        } else {
+            elements.push(stroked_path(path, series_color(series_index)));
+        }
+        if style == RadarStyle::Marker {
+            push_markers(&mut elements, &points, series_index);
+        }
+    }
+    Ok(elements)
+}
+
+fn render_pie_geometry(
+    first_slice_angle: u16,
+    hole_size: Option<u8>,
+    series: &[Series],
+    bounds: Rect,
+) -> Result<Vec<PositionedElement>> {
+    validate_series_values(series)?;
+    let center = Point {
+        x: bounds.x + bounds.width / 2.0,
+        y: bounds.y + bounds.height / 2.0,
+    };
+    let radius = bounds.width.min(bounds.height) / 2.0;
+    let mut elements = Vec::new();
+    for (series_index, item) in series.iter().enumerate() {
+        let total = item
+            .values
+            .values
+            .iter()
+            .copied()
+            .filter(|value| *value > 0.0)
+            .try_fold(0.0, |total, value| {
+                checked_geometry_sum(total, value, "pie value total")
+            })?;
+        if total <= 0.0 {
+            continue;
+        }
+        let mut angle = f64::from(first_slice_angle).to_radians() - std::f64::consts::FRAC_PI_2;
+        for value in &item.values.values {
+            if *value <= 0.0 {
+                continue;
+            }
+            let next = angle + value / total * std::f64::consts::TAU;
+            let path = if let Some(hole_size) = hole_size {
+                doughnut_wedge(
+                    center,
+                    radius,
+                    radius * f64::from(hole_size) / 100.0,
+                    angle,
+                    next,
+                )
+            } else {
+                pie_wedge(center, radius, angle, next)
+            };
+            elements.push(filled_path(path, series_color(series_index)));
+            angle = next;
+        }
+    }
+    Ok(elements)
+}
+
+fn validate_series_values(series: &[Series]) -> Result<()> {
+    if series.is_empty() {
+        return Err(ChartError::MissingElement("c:ser".to_owned()));
+    }
+    for item in series {
+        validate_finite(&item.values.values, "c:val/c:numCache")?;
+    }
+    Ok(())
+}
+
+fn validate_finite(values: &[f64], element: &str) -> Result<()> {
+    if let Some(value) = values.iter().find(|value| !value.is_finite()) {
+        return Err(ChartError::InvalidValue {
+            element: element.to_owned(),
+            value: value.to_string(),
+        });
+    }
+    Ok(())
+}
+
+type IndexedValues = Vec<(usize, f64)>;
+type LogicalSeries = (usize, IndexedValues);
+type GeometryLayer = Vec<(usize, f64, f64)>;
+
+fn zero_control_indexes(count: usize, present: &BTreeSet<usize>) -> BTreeSet<usize> {
+    let mut controls = present.clone();
+    if count == 0 {
+        return controls;
+    }
+    controls.insert(0);
+    controls.insert(count - 1);
+    for index in present {
+        if *index > 0 {
+            controls.insert(*index - 1);
+        }
+        if index + 1 < count {
+            controls.insert(index + 1);
+        }
+    }
+    controls
+}
+
+fn zero_filled_series(series: &[LogicalSeries], count: usize) -> Vec<LogicalSeries> {
+    let present = series
+        .iter()
+        .flat_map(|(_, points)| points.iter().map(|(index, _)| *index))
+        .collect();
+    let controls = zero_control_indexes(count, &present);
+    series
+        .iter()
+        .map(|(declared, points)| {
+            let values: BTreeMap<_, _> = points.iter().copied().collect();
+            let filled = controls
+                .iter()
+                .map(|index| (*index, values.get(index).copied().unwrap_or(0.0)))
+                .collect();
+            (*declared, filled)
+        })
+        .collect()
+}
+
+fn contiguous_ranges(indexes: &[usize], blanks: DispBlanksAs) -> Vec<(usize, usize)> {
+    if indexes.is_empty() {
+        return Vec::new();
+    }
+    if blanks != DispBlanksAs::Gap {
+        return vec![(0, indexes.len())];
+    }
+    let mut ranges = Vec::new();
+    let mut start = 0usize;
+    for position in 1..indexes.len() {
+        if indexes[position - 1].checked_add(1) != Some(indexes[position]) {
+            ranges.push((start, position));
+            start = position;
+        }
+    }
+    ranges.push((start, indexes.len()));
+    ranges
+}
+
+fn logical_numeric_values(data: &NumericData) -> Result<LogicalSeries> {
+    validate_finite(&data.values, "c:numCache")?;
+    let (declared, indexes) = cache_layout(&data.markup, data.values.len())?;
+    let declared = usize::try_from(declared).map_err(|_| ChartError::InvalidValue {
+        element: "c:ptCount".to_owned(),
+        value: declared.to_string(),
+    })?;
+    let points = indexes
+        .into_iter()
+        .zip(data.values.iter().copied())
+        .map(|(index, value)| {
+            usize::try_from(index)
+                .map(|index| (index, value))
+                .map_err(|_| ChartError::InvalidValue {
+                    element: "c:pt/@idx".to_owned(),
+                    value: index.to_string(),
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((declared, points))
+}
+
+fn logical_series_values(series: &[Series]) -> Result<Vec<LogicalSeries>> {
+    series
+        .iter()
+        .map(|item| logical_numeric_values(&item.values))
+        .collect()
+}
+
+fn reference_logical_count(markup: &ReferenceMarkup, value_count: usize) -> Result<usize> {
+    let (declared, _) = cache_layout(markup, value_count)?;
+    usize::try_from(declared).map_err(|_| ChartError::InvalidValue {
+        element: "c:ptCount".to_owned(),
+        value: declared.to_string(),
+    })
+}
+
+fn series_category_count(series: &[Series]) -> Result<usize> {
+    let mut count = 0usize;
+    for item in series {
+        count = count.max(reference_logical_count(
+            &item.values.markup,
+            item.values.values.len(),
+        )?);
+        if let Some(categories) = &item.categories {
+            let category_count = match categories {
+                AxisData::String(data) => reference_logical_count(&data.markup, data.values.len())?,
+                AxisData::Numeric(data) => {
+                    reference_logical_count(&data.markup, data.values.len())?
+                }
+            };
+            count = count.max(category_count);
+        }
+    }
+    if count == 0 {
+        return Err(ChartError::InvalidValue {
+            element: "c:ser".to_owned(),
+            value: "cached series contain no points".to_owned(),
+        });
+    }
+    Ok(count)
+}
+
+fn stacked_series_bounds(
+    series: &[LogicalSeries],
+    stacked: bool,
+    percent: bool,
+) -> Result<Vec<GeometryLayer>> {
+    let mut positive_totals = BTreeMap::<usize, f64>::new();
+    let mut negative_totals = BTreeMap::<usize, f64>::new();
+    if percent {
+        for (_, points) in series {
+            for &(index, value) in points {
+                let totals = if value >= 0.0 {
+                    &mut positive_totals
+                } else {
+                    &mut negative_totals
+                };
+                let total = totals.entry(index).or_default();
+                *total = checked_geometry_sum(*total, value.abs(), "stacked percentage total")?;
+            }
+        }
+    }
+    let mut positive = BTreeMap::<usize, f64>::new();
+    let mut negative = BTreeMap::<usize, f64>::new();
+    let mut layers = Vec::with_capacity(series.len());
+    for (_, points) in series {
+        let mut layer = Vec::with_capacity(points.len());
+        for &(index, original) in points {
+            let total = if original >= 0.0 {
+                positive_totals.get(&index).copied().unwrap_or(0.0)
+            } else {
+                negative_totals.get(&index).copied().unwrap_or(0.0)
+            };
+            let value = if percent && total != 0.0 {
+                original / total
+            } else {
+                original
+            };
+            if stacked {
+                let accumulators = if value >= 0.0 {
+                    &mut positive
+                } else {
+                    &mut negative
+                };
+                let accumulator = accumulators.entry(index).or_default();
+                let lower = *accumulator;
+                *accumulator = checked_geometry_sum(*accumulator, value, "stacked value total")?;
+                layer.push((index, lower, *accumulator));
+            } else {
+                layer.push((index, 0.0, value));
+            }
+        }
+        layers.push(layer);
+    }
+    Ok(layers)
+}
+
+fn checked_geometry_sum(current: f64, value: f64, context: &str) -> Result<f64> {
+    let sum = current + value;
+    if sum.is_finite() {
+        Ok(sum)
+    } else {
+        Err(ChartError::InvalidValue {
+            element: "chart geometry aggregate".to_owned(),
+            value: format!("{context} is nonfinite"),
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Domain {
+    min: f64,
+    max: f64,
+}
+
+fn domain_from_layers(layers: &[GeometryLayer]) -> Result<Domain> {
+    let values = layers
+        .iter()
+        .flatten()
+        .flat_map(|(_, lower, upper)| [*lower, *upper]);
+    let mut min = 0.0_f64;
+    let mut max = 0.0_f64;
+    for value in values {
+        if !value.is_finite() {
+            return Err(ChartError::InvalidValue {
+                element: "chart geometry domain".to_owned(),
+                value: "aggregate produced a nonfinite value".to_owned(),
+            });
+        }
+        min = min.min(value);
+        max = max.max(value);
+    }
+    if min == max {
+        max = 1.0;
+    }
+    Ok(Domain { min, max })
+}
+
+fn data_domain(values: &[f64], include_zero: bool) -> Result<Domain> {
+    validate_finite(values, "chart geometry cache")?;
+    let Some(first) = values.first().copied() else {
+        return Err(ChartError::InvalidValue {
+            element: "c:numCache".to_owned(),
+            value: "cached series contain no points".to_owned(),
+        });
+    };
+    let mut min = first;
+    let mut max = first;
+    for value in values.iter().copied() {
+        min = min.min(value);
+        max = max.max(value);
+    }
+    if include_zero {
+        min = min.min(0.0);
+        max = max.max(0.0);
+    }
+    if min == max {
+        if min > 0.0 {
+            min = 0.0;
+        } else if max < 0.0 {
+            max = 0.0;
+        } else {
+            max = 1.0;
+        }
+    }
+    Ok(Domain { min, max })
+}
+
+fn normalized_value(value: f64, domain: Domain) -> Result<f64> {
+    let scale = value
+        .abs()
+        .max(domain.min.abs())
+        .max(domain.max.abs())
+        .max(1.0);
+    let value = value / scale;
+    let min = domain.min / scale;
+    let max = domain.max / scale;
+    let range = max - min;
+    let normalized = (value - min) / range;
+    if !range.is_finite() || range <= 0.0 || !normalized.is_finite() {
+        return Err(ChartError::InvalidValue {
+            element: "chart geometry domain".to_owned(),
+            value: format!("cannot map finite domain {} to {}", domain.min, domain.max),
+        });
+    }
+    Ok(normalized)
+}
+
+fn map_x(value: f64, domain: Domain, bounds: Rect) -> Result<f64> {
+    let coordinate = bounds.x + normalized_value(value, domain)? * bounds.width;
+    if coordinate.is_finite() {
+        Ok(coordinate)
+    } else {
+        Err(ChartError::InvalidValue {
+            element: "chart geometry coordinate".to_owned(),
+            value: "x coordinate is nonfinite".to_owned(),
+        })
+    }
+}
+
+fn map_y(value: f64, domain: Domain, bounds: Rect) -> Result<f64> {
+    let coordinate = bounds.y + bounds.height - normalized_value(value, domain)? * bounds.height;
+    if coordinate.is_finite() {
+        Ok(coordinate)
+    } else {
+        Err(ChartError::InvalidValue {
+            element: "chart geometry coordinate".to_owned(),
+            value: "y coordinate is nonfinite".to_owned(),
+        })
+    }
+}
+
+fn category_points(
+    values: &[(usize, f64)],
+    count: usize,
+    domain: Domain,
+    bounds: Rect,
+) -> Result<Vec<Point>> {
+    values
+        .iter()
+        .map(|(index, value)| {
+            let x = bounds.x + (*index as f64 + 0.5) / count as f64 * bounds.width;
+            let y = map_y(*value, domain, bounds)?;
+            if !x.is_finite() {
+                return Err(ChartError::InvalidValue {
+                    element: "chart geometry coordinate".to_owned(),
+                    value: "category x coordinate is nonfinite".to_owned(),
+                });
+            }
+            Ok(Point { x, y })
+        })
+        .collect()
+}
+
+fn polyline_path(points: &[Point], close: bool) -> Path {
+    let mut commands = Vec::with_capacity(points.len() + usize::from(close));
+    if let Some(first) = points.first() {
+        commands.push(PathCommand::MoveTo(*first));
+        commands.extend(points.iter().skip(1).copied().map(PathCommand::LineTo));
+        if close {
+            commands.push(PathCommand::Close);
+        }
+    }
+    Path {
+        commands,
+        fill_rule: FillRule::NonZero,
+    }
+}
+
+fn pie_wedge(center: Point, radius: f64, start: f64, end: f64) -> Path {
+    let first = circle_point(center, radius, start);
+    let mut commands = vec![PathCommand::MoveTo(center), PathCommand::LineTo(first)];
+    append_arc(&mut commands, center, radius, start, end);
+    commands.push(PathCommand::Close);
+    Path {
+        commands,
+        fill_rule: FillRule::NonZero,
+    }
+}
+
+fn doughnut_wedge(
+    center: Point,
+    outer_radius: f64,
+    inner_radius: f64,
+    start: f64,
+    end: f64,
+) -> Path {
+    let outer_start = circle_point(center, outer_radius, start);
+    let inner_end = circle_point(center, inner_radius, end);
+    let mut commands = vec![PathCommand::MoveTo(outer_start)];
+    append_arc(&mut commands, center, outer_radius, start, end);
+    commands.push(PathCommand::LineTo(inner_end));
+    append_arc(&mut commands, center, inner_radius, end, start);
+    commands.push(PathCommand::Close);
+    Path {
+        commands,
+        fill_rule: FillRule::NonZero,
+    }
+}
+
+fn append_arc(commands: &mut Vec<PathCommand>, center: Point, radius: f64, start: f64, end: f64) {
+    let segments = ((end - start).abs() / std::f64::consts::FRAC_PI_2)
+        .ceil()
+        .max(1.0) as usize;
+    let sweep = (end - start) / segments as f64;
+    for segment in 0..segments {
+        let angle = start + segment as f64 * sweep;
+        let next = angle + sweep;
+        let factor = 4.0 / 3.0 * (sweep / 4.0).tan();
+        let from = circle_point(center, radius, angle);
+        let to = circle_point(center, radius, next);
+        commands.push(PathCommand::CurveTo {
+            c1: Point {
+                x: from.x - factor * radius * angle.sin(),
+                y: from.y + factor * radius * angle.cos(),
+            },
+            c2: Point {
+                x: to.x + factor * radius * next.sin(),
+                y: to.y - factor * radius * next.cos(),
+            },
+            to,
+        });
+    }
+}
+
+fn circle_point(center: Point, radius: f64, angle: f64) -> Point {
+    Point {
+        x: center.x + radius * angle.cos(),
+        y: center.y + radius * angle.sin(),
+    }
+}
+
+fn radial_point(center: Point, radius: f64, index: usize, count: usize) -> Point {
+    circle_point(
+        center,
+        radius,
+        index as f64 * std::f64::consts::TAU / count as f64 - std::f64::consts::FRAC_PI_2,
+    )
+}
+
+fn marker_path(center: Point) -> Path {
+    const RADIUS: f64 = 2.5;
+    const KAPPA: f64 = 0.552_284_749_830_793_6;
+    let control = RADIUS * KAPPA;
+    Path {
+        commands: vec![
+            PathCommand::MoveTo(Point {
+                x: center.x + RADIUS,
+                y: center.y,
+            }),
+            PathCommand::CurveTo {
+                c1: Point {
+                    x: center.x + RADIUS,
+                    y: center.y + control,
+                },
+                c2: Point {
+                    x: center.x + control,
+                    y: center.y + RADIUS,
+                },
+                to: Point {
+                    x: center.x,
+                    y: center.y + RADIUS,
+                },
+            },
+            PathCommand::CurveTo {
+                c1: Point {
+                    x: center.x - control,
+                    y: center.y + RADIUS,
+                },
+                c2: Point {
+                    x: center.x - RADIUS,
+                    y: center.y + control,
+                },
+                to: Point {
+                    x: center.x - RADIUS,
+                    y: center.y,
+                },
+            },
+            PathCommand::CurveTo {
+                c1: Point {
+                    x: center.x - RADIUS,
+                    y: center.y - control,
+                },
+                c2: Point {
+                    x: center.x - control,
+                    y: center.y - RADIUS,
+                },
+                to: Point {
+                    x: center.x,
+                    y: center.y - RADIUS,
+                },
+            },
+            PathCommand::CurveTo {
+                c1: Point {
+                    x: center.x + control,
+                    y: center.y - RADIUS,
+                },
+                c2: Point {
+                    x: center.x + RADIUS,
+                    y: center.y - control,
+                },
+                to: Point {
+                    x: center.x + RADIUS,
+                    y: center.y,
+                },
+            },
+            PathCommand::Close,
+        ],
+        fill_rule: FillRule::NonZero,
+    }
+}
+
+fn push_markers(elements: &mut Vec<PositionedElement>, points: &[Point], series_index: usize) {
+    for point in points {
+        elements.push(filled_path(marker_path(*point), series_color(series_index)));
+    }
+}
+
+fn filled_path(path: Path, color: Color) -> PositionedElement {
+    PositionedElement::Path(PathElement {
+        path,
+        fill: Some(Paint::Solid(color)),
+        stroke: None,
+    })
+}
+
+fn stroked_path(path: Path, color: Color) -> PositionedElement {
+    PositionedElement::Path(PathElement {
+        path,
+        fill: None,
+        stroke: Some(Stroke::new(Paint::Solid(color), 1.5)),
+    })
+}
+
+fn filled_and_stroked_path(path: Path, color: Color) -> PositionedElement {
+    PositionedElement::Path(PathElement {
+        path,
+        fill: Some(Paint::Solid(Color { a: 0.55, ..color })),
+        stroke: Some(Stroke::new(Paint::Solid(color), 1.0)),
+    })
+}
+
+fn series_color(index: usize) -> Color {
+    const PALETTE: [Color; 6] = [
+        Color {
+            r: 0.278,
+            g: 0.478,
+            b: 0.718,
+            a: 1.0,
+        },
+        Color {
+            r: 0.929,
+            g: 0.490,
+            b: 0.192,
+            a: 1.0,
+        },
+        Color {
+            r: 0.651,
+            g: 0.651,
+            b: 0.651,
+            a: 1.0,
+        },
+        Color {
+            r: 1.0,
+            g: 0.753,
+            b: 0.0,
+            a: 1.0,
+        },
+        Color {
+            r: 0.369,
+            g: 0.608,
+            b: 0.710,
+            a: 1.0,
+        },
+        Color {
+            r: 0.439,
+            g: 0.678,
+            b: 0.278,
+            a: 1.0,
+        },
+    ];
+    PALETTE[index % PALETTE.len()]
+}
+
 type NamespaceBindings = Vec<(Vec<u8>, String)>;
 type XmlAttributes = Vec<(String, String)>;
 type RootAttributes = (XmlAttributes, XmlAttributes);
@@ -7167,15 +8269,17 @@ mod tests {
     use std::process::Command;
 
     use oxml_core::raw_xml::{capture_element, capture_empty_element};
+    use oxml_layout::{LayoutResult, PageFrame, PathCommand, Point, PositionedElement, Rect};
     use oxml_opc::OpcPackage;
     use quick_xml::Reader;
     use quick_xml::events::Event;
 
     use super::{
         A_NS, Axis, AxisData, AxisId, AxisKind, AxisPosition, BarDirection, BarGrouping, C_NS,
-        CT_ChartSpace, CT_DLbls, CT_ShapeProperties, CT_TextBody, DataLabelPosition, DispBlanksAs,
-        Grouping, NumberFormat, NumericData, Orientation, Plot, R_NS, Series, StringRef,
-        TickLabelPosition, TickMark, capture_event, local_name, matches_local_name,
+        CT_ChartSpace, CT_DLbls, CT_ShapeProperties, CT_TextBody, ChartGeometry, DataLabelPosition,
+        DispBlanksAs, Grouping, NumberFormat, NumericData, Orientation, Plot, R_NS, ScatterStyle,
+        Series, StringRef, TickLabelPosition, TickMark, capture_event, local_name,
+        matches_local_name, render_geometry,
     };
 
     const MANIFEST: &str = include_str!("../../../scripts/pptx-corpus-manifest.tsv");
@@ -7185,6 +8289,881 @@ mod tests {
     const PDFTOTEXT_VERSION: &str = "pdftotext version 26.01.0";
     const PDFTOPPM_VERSION: &str = "pdftoppm version 26.01.0";
     const PLOT_RENDER_NORMALIZED_MAE_THRESHOLD: f64 = 0.0;
+
+    #[test]
+    fn bar_chart_rasterises_at_computed_positions() {
+        let chart = CT_ChartSpace::from_xml(chart_with_plot(&bar_plot("")).as_bytes()).unwrap();
+        let geometry = render_geometry(
+            &chart.chart,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 140.0,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            geometry.plot_bounds,
+            Rect {
+                x: 36.0,
+                y: 12.0,
+                width: 152.0,
+                height: 100.0,
+            }
+        );
+        let bounds = path_bounds(&geometry);
+        assert_eq!(bounds.len(), 2);
+        assert_rect_near(
+            bounds[0],
+            Rect {
+                x: 58.8,
+                y: 62.0,
+                width: 30.4,
+                height: 50.0,
+            },
+        );
+        assert_rect_near(
+            bounds[1],
+            Rect {
+                x: 134.8,
+                y: 12.0,
+                width: 30.4,
+                height: 100.0,
+            },
+        );
+
+        let layout = LayoutResult::new(
+            vec![PageFrame::new(1, 200.0, 140.0, geometry.elements)],
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        let png = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+        for (x, y) in [(74, 87), (150, 37)] {
+            let pixel = pixmap.pixel(x, y).unwrap();
+            assert_ne!((pixel.red(), pixel.green(), pixel.blue()), (255, 255, 255));
+        }
+    }
+
+    #[test]
+    fn bar_geometry_handles_direction_grouping_gap_and_overlap() {
+        let mut chart = CT_ChartSpace::from_xml(chart_with_plot(&bar_plot("")).as_bytes()).unwrap();
+        let Plot::Bar {
+            overlap, series, ..
+        } = &mut chart.chart.plot_area.plots_mut().unwrap()[0]
+        else {
+            panic!("expected bar plot");
+        };
+        let mut second = series[0].clone();
+        second.index = 1;
+        second.order = 1;
+        second.values.values = vec![2.0, 1.0];
+        series.push(second);
+
+        *overlap = 25;
+        let clustered = render_geometry(&chart.chart, chart_bounds()).unwrap();
+        let clustered_bounds = path_bounds(&clustered);
+        let clustered_width = 30.4 / 1.75;
+        let clustered_advance = clustered_width * 0.75;
+        assert_rects_near(
+            &clustered_bounds,
+            &[
+                Rect {
+                    x: 58.8,
+                    y: 62.0,
+                    width: clustered_width,
+                    height: 50.0,
+                },
+                Rect {
+                    x: 134.8,
+                    y: 12.0,
+                    width: clustered_width,
+                    height: 100.0,
+                },
+                Rect {
+                    x: 58.8 + clustered_advance,
+                    y: 12.0,
+                    width: clustered_width,
+                    height: 100.0,
+                },
+                Rect {
+                    x: 134.8 + clustered_advance,
+                    y: 62.0,
+                    width: clustered_width,
+                    height: 50.0,
+                },
+            ],
+        );
+
+        let Plot::Bar { direction, .. } = &mut chart.chart.plot_area.plots_mut().unwrap()[0] else {
+            unreachable!()
+        };
+        *direction = BarDirection::Bar;
+        let horizontal = path_bounds(&render_geometry(&chart.chart, chart_bounds()).unwrap());
+        let horizontal_width = 20.0 / 1.75;
+        let horizontal_advance = horizontal_width * 0.75;
+        assert_rects_near(
+            &horizontal,
+            &[
+                Rect {
+                    x: 36.0,
+                    y: 27.0,
+                    width: 76.0,
+                    height: horizontal_width,
+                },
+                Rect {
+                    x: 36.0,
+                    y: 77.0,
+                    width: 152.0,
+                    height: horizontal_width,
+                },
+                Rect {
+                    x: 36.0,
+                    y: 27.0 + horizontal_advance,
+                    width: 152.0,
+                    height: horizontal_width,
+                },
+                Rect {
+                    x: 36.0,
+                    y: 77.0 + horizontal_advance,
+                    width: 76.0,
+                    height: horizontal_width,
+                },
+            ],
+        );
+
+        let Plot::Bar {
+            direction,
+            grouping,
+            ..
+        } = &mut chart.chart.plot_area.plots_mut().unwrap()[0]
+        else {
+            unreachable!()
+        };
+        *direction = BarDirection::Column;
+        *grouping = BarGrouping::Stacked;
+        let stacked = path_bounds(&render_geometry(&chart.chart, chart_bounds()).unwrap());
+        assert_rects_near(
+            &stacked,
+            &[
+                Rect {
+                    x: 58.8,
+                    y: 112.0 - 100.0 / 3.0,
+                    width: 30.4,
+                    height: 100.0 / 3.0,
+                },
+                Rect {
+                    x: 134.8,
+                    y: 112.0 - 200.0 / 3.0,
+                    width: 30.4,
+                    height: 200.0 / 3.0,
+                },
+                Rect {
+                    x: 58.8,
+                    y: 12.0,
+                    width: 30.4,
+                    height: 200.0 / 3.0,
+                },
+                Rect {
+                    x: 134.8,
+                    y: 12.0,
+                    width: 30.4,
+                    height: 100.0 / 3.0,
+                },
+            ],
+        );
+
+        let Plot::Bar {
+            grouping, series, ..
+        } = &mut chart.chart.plot_area.plots_mut().unwrap()[0]
+        else {
+            unreachable!()
+        };
+        *grouping = BarGrouping::PercentStacked;
+        series[1].values.values = vec![2.0, 2.0];
+        let percent = path_bounds(&render_geometry(&chart.chart, chart_bounds()).unwrap());
+        assert_rects_near(
+            &percent,
+            &[
+                Rect {
+                    x: 58.8,
+                    y: 112.0 - 100.0 / 3.0,
+                    width: 30.4,
+                    height: 100.0 / 3.0,
+                },
+                Rect {
+                    x: 134.8,
+                    y: 62.0,
+                    width: 30.4,
+                    height: 50.0,
+                },
+                Rect {
+                    x: 58.8,
+                    y: 12.0,
+                    width: 30.4,
+                    height: 200.0 / 3.0,
+                },
+                Rect {
+                    x: 134.8,
+                    y: 12.0,
+                    width: 30.4,
+                    height: 50.0,
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn line_scatter_and_radar_emit_paths_and_markers() {
+        let line = CT_ChartSpace::from_xml(chart_with_plot(&line_plot("")).as_bytes()).unwrap();
+        let line_geometry = render_geometry(&line.chart, chart_bounds()).unwrap();
+        assert_path_points(
+            path_commands(&line_geometry)[0],
+            &[Point { x: 74.0, y: 62.0 }, Point { x: 150.0, y: 12.0 }],
+            false,
+        );
+        assert_rects_near(
+            &path_bounds(&line_geometry)[1..],
+            &[
+                Rect {
+                    x: 71.5,
+                    y: 59.5,
+                    width: 5.0,
+                    height: 5.0,
+                },
+                Rect {
+                    x: 147.5,
+                    y: 9.5,
+                    width: 5.0,
+                    height: 5.0,
+                },
+            ],
+        );
+
+        let (scatter_plot, _) = remaining_plot_fixtures()
+            .into_iter()
+            .find(|(kind, _, _)| *kind == "scatterChart")
+            .map(|(_, plot, axes)| (plot, axes))
+            .unwrap();
+        let mut scatter =
+            CT_ChartSpace::from_xml(chart_with_optional_axes(&scatter_plot, true).as_bytes())
+                .unwrap();
+        let Plot::Scatter { style, .. } = &mut scatter.chart.plot_area.plots_mut().unwrap()[0]
+        else {
+            unreachable!()
+        };
+        *style = ScatterStyle::LineMarker;
+        let scatter_geometry = render_geometry(&scatter.chart, chart_bounds()).unwrap();
+        assert_path_points(
+            path_commands(&scatter_geometry)[0],
+            &[Point { x: 36.0, y: 112.0 }, Point { x: 188.0, y: 12.0 }],
+            false,
+        );
+        assert_rects_near(
+            &path_bounds(&scatter_geometry)[1..],
+            &[
+                Rect {
+                    x: 33.5,
+                    y: 109.5,
+                    width: 5.0,
+                    height: 5.0,
+                },
+                Rect {
+                    x: 185.5,
+                    y: 9.5,
+                    width: 5.0,
+                    height: 5.0,
+                },
+            ],
+        );
+
+        let (radar_plot, _) = remaining_plot_fixtures()
+            .into_iter()
+            .find(|(kind, _, _)| *kind == "radarChart")
+            .map(|(_, plot, axes)| (plot, axes))
+            .unwrap();
+        let radar = CT_ChartSpace::from_xml(chart_with_optional_axes(&radar_plot, true).as_bytes())
+            .unwrap();
+        let radar_geometry = render_geometry(&radar.chart, chart_bounds()).unwrap();
+        assert_path_points(
+            path_commands(&radar_geometry)[0],
+            &[Point { x: 112.0, y: 37.0 }, Point { x: 112.0, y: 112.0 }],
+            true,
+        );
+        assert_rects_near(
+            &path_bounds(&radar_geometry)[1..],
+            &[
+                Rect {
+                    x: 109.5,
+                    y: 34.5,
+                    width: 5.0,
+                    height: 5.0,
+                },
+                Rect {
+                    x: 109.5,
+                    y: 109.5,
+                    width: 5.0,
+                    height: 5.0,
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn pie_doughnut_and_area_emit_closed_paths() {
+        let fixtures = remaining_plot_fixtures();
+        let pie_plot = fixtures
+            .iter()
+            .find(|(kind, _, _)| *kind == "pieChart")
+            .unwrap();
+        let pie =
+            CT_ChartSpace::from_xml(chart_with_optional_axes(&pie_plot.1, pie_plot.2).as_bytes())
+                .unwrap();
+        let pie_geometry = render_geometry(&pie.chart, chart_bounds()).unwrap();
+        let pie_commands = path_commands(&pie_geometry);
+        assert_eq!(pie_commands.len(), 2);
+        let [
+            PathCommand::MoveTo(center),
+            PathCommand::LineTo(start),
+            ..,
+            PathCommand::CurveTo { to: end, .. },
+            PathCommand::Close,
+        ] = pie_commands[0]
+        else {
+            panic!("expected closed cubic pie wedge");
+        };
+        assert_point_near(*center, Point { x: 112.0, y: 62.0 });
+        assert_point_near(
+            *start,
+            Point {
+                x: 137.0,
+                y: 62.0 - 25.0 * 3.0_f64.sqrt(),
+            },
+        );
+        assert_point_near(
+            *end,
+            Point {
+                x: 137.0,
+                y: 62.0 + 25.0 * 3.0_f64.sqrt(),
+            },
+        );
+
+        let doughnut_plot = fixtures
+            .iter()
+            .find(|(kind, _, _)| *kind == "doughnutChart")
+            .unwrap();
+        let doughnut = CT_ChartSpace::from_xml(
+            chart_with_optional_axes(&doughnut_plot.1, doughnut_plot.2).as_bytes(),
+        )
+        .unwrap();
+        let doughnut_geometry = render_geometry(&doughnut.chart, chart_bounds()).unwrap();
+        let doughnut_commands = path_commands(&doughnut_geometry);
+        assert_eq!(doughnut_commands.len(), 2);
+        let commands = doughnut_commands[0];
+        assert_eq!(commands.len(), 7);
+        let PathCommand::MoveTo(outer_start) = commands[0] else {
+            panic!("expected doughnut outer start");
+        };
+        let PathCommand::LineTo(inner_end) = commands[3] else {
+            panic!("expected doughnut inner-radius join");
+        };
+        let PathCommand::CurveTo {
+            to: inner_start, ..
+        } = commands[5]
+        else {
+            panic!("expected reverse inner arc");
+        };
+        let diagonal = 25.0 * 2.0_f64.sqrt();
+        assert_point_near(
+            outer_start,
+            Point {
+                x: 112.0 + diagonal,
+                y: 62.0 - diagonal,
+            },
+        );
+        assert_point_near(
+            inner_end,
+            Point {
+                x: 112.0 + 30.0 * 75.0_f64.to_radians().cos(),
+                y: 62.0 + 30.0 * 75.0_f64.to_radians().sin(),
+            },
+        );
+        let inner_diagonal = 15.0 * 2.0_f64.sqrt();
+        assert_point_near(
+            inner_start,
+            Point {
+                x: 112.0 + inner_diagonal,
+                y: 62.0 - inner_diagonal,
+            },
+        );
+        assert_eq!(commands.last(), Some(&PathCommand::Close));
+
+        let area_plot = fixtures
+            .iter()
+            .find(|(kind, _, _)| *kind == "areaChart")
+            .unwrap();
+        let mut area =
+            CT_ChartSpace::from_xml(chart_with_optional_axes(&area_plot.1, area_plot.2).as_bytes())
+                .unwrap();
+        let area_geometry = render_geometry(&area.chart, chart_bounds()).unwrap();
+        assert_path_points(
+            path_commands(&area_geometry)[0],
+            &[
+                Point { x: 74.0, y: 62.0 },
+                Point { x: 150.0, y: 12.0 },
+                Point { x: 150.0, y: 112.0 },
+                Point { x: 74.0, y: 112.0 },
+            ],
+            true,
+        );
+
+        let Plot::Area {
+            grouping, series, ..
+        } = &mut area.chart.plot_area.plots_mut().unwrap()[0]
+        else {
+            unreachable!()
+        };
+        *grouping = Grouping::Stacked;
+        let mut second = series[0].clone();
+        second.index = 1;
+        second.order = 1;
+        second.values.values = vec![2.0, 1.0];
+        series.push(second);
+        let stacked_area = render_geometry(&area.chart, chart_bounds()).unwrap();
+        assert_path_points(
+            path_commands(&stacked_area)[1],
+            &[
+                Point { x: 74.0, y: 12.0 },
+                Point { x: 150.0, y: 12.0 },
+                Point {
+                    x: 150.0,
+                    y: 112.0 - 200.0 / 3.0,
+                },
+                Point {
+                    x: 74.0,
+                    y: 112.0 - 100.0 / 3.0,
+                },
+            ],
+            true,
+        );
+    }
+
+    #[test]
+    fn sparse_cache_indexes_preserve_slots_and_scatter_pairing() {
+        let series = sparse_category_series();
+        let bar = format!(
+            r#"<q:barChart><q:barDir val="col"/><q:grouping val="clustered"/>{series}<q:gapWidth val="150"/><q:overlap val="0"/><q:axId val="-1884094432"/><q:axId val="-1884097184"/></q:barChart>"#
+        );
+        let bar = CT_ChartSpace::from_xml(chart_with_plot(&bar).as_bytes()).unwrap();
+        assert_rects_near(
+            &path_bounds(&render_geometry(&bar.chart, chart_bounds()).unwrap()),
+            &[
+                Rect {
+                    x: 51.2,
+                    y: 62.0,
+                    width: 304.0 / 15.0,
+                    height: 50.0,
+                },
+                Rect {
+                    x: 36.0 + 304.0 / 3.0 + 15.2,
+                    y: 12.0,
+                    width: 304.0 / 15.0,
+                    height: 100.0,
+                },
+            ],
+        );
+
+        let line = format!(
+            r#"<q:lineChart><q:grouping val="standard"/>{series}<q:marker val="0"/><q:smooth val="0"/><q:axId val="-1884094432"/><q:axId val="-1884097184"/></q:lineChart>"#
+        );
+        let mut line = CT_ChartSpace::from_xml(chart_with_plot(&line).as_bytes()).unwrap();
+        let first = Point {
+            x: 36.0 + 76.0 / 3.0,
+            y: 62.0,
+        };
+        let missing = Point { x: 112.0, y: 112.0 };
+        let last = Point {
+            x: 36.0 + 380.0 / 3.0,
+            y: 12.0,
+        };
+        let gap = render_geometry(&line.chart, chart_bounds()).unwrap();
+        let gap_commands = path_commands(&gap);
+        assert_eq!(gap_commands.len(), 2);
+        assert_path_points(gap_commands[0], &[first], false);
+        assert_path_points(gap_commands[1], &[last], false);
+        line.chart.disp_blanks_as = DispBlanksAs::Zero;
+        assert_path_points(
+            path_commands(&render_geometry(&line.chart, chart_bounds()).unwrap())[0],
+            &[first, missing, last],
+            false,
+        );
+        line.chart.disp_blanks_as = DispBlanksAs::Span;
+        assert_path_points(
+            path_commands(&render_geometry(&line.chart, chart_bounds()).unwrap())[0],
+            &[first, last],
+            false,
+        );
+
+        let area = format!(
+            r#"<q:areaChart><q:grouping val="standard"/>{series}<q:axId val="-1884094432"/><q:axId val="-1884097184"/></q:areaChart>"#
+        );
+        let mut area = CT_ChartSpace::from_xml(chart_with_plot(&area).as_bytes()).unwrap();
+        let area_gap = render_geometry(&area.chart, chart_bounds()).unwrap();
+        let area_gap_commands = path_commands(&area_gap);
+        assert_eq!(area_gap_commands.len(), 2);
+        assert_path_points(
+            area_gap_commands[0],
+            &[
+                first,
+                Point {
+                    x: first.x,
+                    y: 112.0,
+                },
+            ],
+            true,
+        );
+        assert_path_points(
+            area_gap_commands[1],
+            &[
+                last,
+                Point {
+                    x: last.x,
+                    y: 112.0,
+                },
+            ],
+            true,
+        );
+        area.chart.disp_blanks_as = DispBlanksAs::Zero;
+        assert_path_points(
+            path_commands(&render_geometry(&area.chart, chart_bounds()).unwrap())[0],
+            &[
+                first,
+                missing,
+                last,
+                Point {
+                    x: last.x,
+                    y: 112.0,
+                },
+                missing,
+                Point {
+                    x: first.x,
+                    y: 112.0,
+                },
+            ],
+            true,
+        );
+        area.chart.disp_blanks_as = DispBlanksAs::Span;
+        assert_path_points(
+            path_commands(&render_geometry(&area.chart, chart_bounds()).unwrap())[0],
+            &[
+                first,
+                last,
+                Point {
+                    x: last.x,
+                    y: 112.0,
+                },
+                Point {
+                    x: first.x,
+                    y: 112.0,
+                },
+            ],
+            true,
+        );
+
+        let radar = format!(
+            r#"<q:radarChart><q:radarStyle val="standard"/>{series}<q:axId val="-1884094432"/><q:axId val="-1884097184"/></q:radarChart>"#
+        );
+        let radar = CT_ChartSpace::from_xml(chart_with_plot(&radar).as_bytes()).unwrap();
+        assert_path_points(
+            path_commands(&render_geometry(&radar.chart, chart_bounds()).unwrap())[0],
+            &[
+                Point { x: 112.0, y: 37.0 },
+                Point {
+                    x: 112.0 - 25.0 * 3.0_f64.sqrt(),
+                    y: 87.0,
+                },
+            ],
+            true,
+        );
+
+        let scatter = format!(
+            r#"<q:scatterChart><q:scatterStyle val="lineMarker"/>{}<q:axId val="-1884094432"/><q:axId val="-1884097184"/></q:scatterChart>"#,
+            sparse_scatter_series()
+        );
+        let mut scatter = CT_ChartSpace::from_xml(chart_with_plot(&scatter).as_bytes()).unwrap();
+        let scatter_geometry = render_geometry(&scatter.chart, chart_bounds()).unwrap();
+        assert_eq!(geometry_children(&scatter_geometry).len(), 4);
+        let gap_commands = path_commands(&scatter_geometry);
+        assert_path_points(gap_commands[0], &[Point { x: 36.0, y: 112.0 }], false);
+        assert_path_points(gap_commands[1], &[Point { x: 188.0, y: 12.0 }], false);
+
+        scatter.chart.disp_blanks_as = DispBlanksAs::Zero;
+        let zero = render_geometry(&scatter.chart, chart_bounds()).unwrap();
+        assert_path_points(
+            path_commands(&zero)[0],
+            &[
+                Point { x: 74.0, y: 87.0 },
+                Point { x: 36.0, y: 62.0 },
+                Point { x: 150.0, y: 112.0 },
+                Point { x: 188.0, y: 12.0 },
+            ],
+            false,
+        );
+
+        scatter.chart.disp_blanks_as = DispBlanksAs::Span;
+        assert_path_points(
+            path_commands(&render_geometry(&scatter.chart, chart_bounds()).unwrap())[0],
+            &[Point { x: 36.0, y: 112.0 }, Point { x: 188.0, y: 12.0 }],
+            false,
+        );
+    }
+
+    #[test]
+    fn geometry_rejects_invalid_bounds_and_opaque_plots() {
+        let mut chart = CT_ChartSpace::from_xml(chart_with_plot(&bar_plot("")).as_bytes()).unwrap();
+        for bounds in [
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: f64::NAN,
+                height: 100.0,
+            },
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 100.0,
+            },
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 40.0,
+                height: 30.0,
+            },
+        ] {
+            assert!(render_geometry(&chart.chart, bounds).is_err());
+        }
+
+        let Plot::Bar { series, .. } = &mut chart.chart.plot_area.plots_mut().unwrap()[0] else {
+            unreachable!()
+        };
+        series[0].values.values.clear();
+        assert!(render_geometry(&chart.chart, chart_bounds()).is_err());
+
+        let opaque = CT_ChartSpace::from_xml(
+            chart_with_plot(r#"<q:bar3DChart><q:barDir val="col"/></q:bar3DChart>"#).as_bytes(),
+        )
+        .unwrap();
+        let error = render_geometry(&opaque.chart, chart_bounds()).unwrap_err();
+        assert!(error.to_string().contains("unsupported or combination"));
+
+        let (scatter_plot, _) = remaining_plot_fixtures()
+            .into_iter()
+            .find(|(kind, _, _)| *kind == "scatterChart")
+            .map(|(_, plot, axes)| (plot, axes))
+            .unwrap();
+        let mut scatter =
+            CT_ChartSpace::from_xml(chart_with_optional_axes(&scatter_plot, true).as_bytes())
+                .unwrap();
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let Plot::Scatter { series, .. } = &mut scatter.chart.plot_area.plots_mut().unwrap()[0]
+            else {
+                unreachable!()
+            };
+            let Some(AxisData::Numeric(x_values)) = &mut series[0].categories else {
+                unreachable!()
+            };
+            x_values.values[0] = invalid;
+            let error = render_geometry(&scatter.chart, chart_bounds()).unwrap_err();
+            assert!(error.to_string().contains("xVal"));
+        }
+    }
+
+    #[test]
+    fn finite_extremes_never_produce_nonfinite_geometry() {
+        let mut line = CT_ChartSpace::from_xml(chart_with_plot(&line_plot("")).as_bytes()).unwrap();
+        let Plot::Line { series, .. } = &mut line.chart.plot_area.plots_mut().unwrap()[0] else {
+            unreachable!()
+        };
+        series[0].values.values = vec![-f64::MAX, f64::MAX];
+        let extreme_line = render_geometry(&line.chart, chart_bounds()).unwrap();
+        assert_path_points(
+            path_commands(&extreme_line)[0],
+            &[Point { x: 74.0, y: 112.0 }, Point { x: 150.0, y: 12.0 }],
+            false,
+        );
+
+        let mut stacked =
+            CT_ChartSpace::from_xml(chart_with_plot(&bar_plot("")).as_bytes()).unwrap();
+        let Plot::Bar {
+            grouping, series, ..
+        } = &mut stacked.chart.plot_area.plots_mut().unwrap()[0]
+        else {
+            unreachable!()
+        };
+        *grouping = BarGrouping::Stacked;
+        series[0].values.values = vec![f64::MAX, 1.0];
+        let mut second = series[0].clone();
+        second.index = 1;
+        second.order = 1;
+        series.push(second);
+        let error = render_geometry(&stacked.chart, chart_bounds()).unwrap_err();
+        assert!(error.to_string().contains("stacked value total"));
+
+        let Plot::Bar { grouping, .. } = &mut stacked.chart.plot_area.plots_mut().unwrap()[0]
+        else {
+            unreachable!()
+        };
+        *grouping = BarGrouping::PercentStacked;
+        let error = render_geometry(&stacked.chart, chart_bounds()).unwrap_err();
+        assert!(error.to_string().contains("stacked percentage total"));
+
+        let (pie_plot, _) = remaining_plot_fixtures()
+            .into_iter()
+            .find(|(kind, _, _)| *kind == "pieChart")
+            .map(|(_, plot, axes)| (plot, axes))
+            .unwrap();
+        let mut pie =
+            CT_ChartSpace::from_xml(chart_with_optional_axes(&pie_plot, false).as_bytes()).unwrap();
+        let Plot::Pie { series, .. } = &mut pie.chart.plot_area.plots_mut().unwrap()[0] else {
+            unreachable!()
+        };
+        series[0].values.values = vec![f64::MAX, f64::MAX];
+        let error = render_geometry(&pie.chart, chart_bounds()).unwrap_err();
+        assert!(error.to_string().contains("pie value total"));
+
+        let (scatter_plot, _) = remaining_plot_fixtures()
+            .into_iter()
+            .find(|(kind, _, _)| *kind == "scatterChart")
+            .map(|(_, plot, axes)| (plot, axes))
+            .unwrap();
+        let mut scatter =
+            CT_ChartSpace::from_xml(chart_with_optional_axes(&scatter_plot, true).as_bytes())
+                .unwrap();
+        let Plot::Scatter { style, series, .. } =
+            &mut scatter.chart.plot_area.plots_mut().unwrap()[0]
+        else {
+            unreachable!()
+        };
+        *style = ScatterStyle::Line;
+        let Some(AxisData::Numeric(x_values)) = &mut series[0].categories else {
+            unreachable!()
+        };
+        x_values.values = vec![-f64::MAX, f64::MAX];
+        series[0].values.values = vec![-f64::MAX, f64::MAX];
+        let extreme_scatter = render_geometry(&scatter.chart, chart_bounds()).unwrap();
+        assert_path_points(
+            path_commands(&extreme_scatter)[0],
+            &[Point { x: 36.0, y: 112.0 }, Point { x: 188.0, y: 12.0 }],
+            false,
+        );
+    }
+
+    #[test]
+    fn geometry_is_backend_neutral_and_deterministic() {
+        let chart = CT_ChartSpace::from_xml(chart_with_plot(&bar_plot("")).as_bytes()).unwrap();
+        let first = render_geometry(&chart.chart, chart_bounds()).unwrap();
+        let second = render_geometry(&chart.chart, chart_bounds()).unwrap();
+        assert_eq!(
+            format!("{:?}", first.elements),
+            format!("{:?}", second.elements)
+        );
+
+        let raster = |geometry: ChartGeometry| {
+            let layout = LayoutResult::new(
+                vec![PageFrame::new(1, 200.0, 140.0, geometry.elements)],
+                Vec::new(),
+                None,
+                Vec::new(),
+            );
+            oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap()
+        };
+        assert_eq!(raster(first), raster(second));
+    }
+
+    fn chart_bounds() -> Rect {
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 140.0,
+        }
+    }
+
+    fn geometry_children(geometry: &ChartGeometry) -> &[PositionedElement] {
+        let [PositionedElement::Group(group)] = geometry.elements.as_slice() else {
+            panic!("chart geometry must contain one group");
+        };
+        &group.children
+    }
+
+    fn path_commands(geometry: &ChartGeometry) -> Vec<&[PathCommand]> {
+        geometry_children(geometry)
+            .iter()
+            .map(|element| {
+                let PositionedElement::Path(path) = element else {
+                    panic!("chart geometry child must be a path");
+                };
+                path.path.commands.as_slice()
+            })
+            .collect()
+    }
+
+    fn path_bounds(geometry: &ChartGeometry) -> Vec<Rect> {
+        geometry_children(geometry)
+            .iter()
+            .map(|element| {
+                let PositionedElement::Path(path) = element else {
+                    panic!("chart geometry child must be a path");
+                };
+                path.path.bounds().expect("chart path has bounds")
+            })
+            .collect()
+    }
+
+    fn assert_rect_near(actual: Rect, expected: Rect) {
+        assert_near(actual.x, expected.x);
+        assert_near(actual.y, expected.y);
+        assert_near(actual.width, expected.width);
+        assert_near(actual.height, expected.height);
+    }
+
+    fn assert_rects_near(actual: &[Rect], expected: &[Rect]) {
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().copied().zip(expected.iter().copied()) {
+            assert_rect_near(actual, expected);
+        }
+    }
+
+    fn assert_path_points(commands: &[PathCommand], expected: &[Point], closed: bool) {
+        let points: Vec<_> = commands
+            .iter()
+            .filter_map(|command| match command {
+                PathCommand::MoveTo(point) | PathCommand::LineTo(point) => Some(*point),
+                PathCommand::Close => None,
+                PathCommand::CurveTo { .. } => panic!("expected polygonal path"),
+            })
+            .collect();
+        assert_eq!(points.len(), expected.len());
+        for (actual, expected) in points.into_iter().zip(expected.iter().copied()) {
+            assert_point_near(actual, expected);
+        }
+        assert_eq!(commands.last() == Some(&PathCommand::Close), closed);
+    }
+
+    fn assert_point_near(actual: Point, expected: Point) {
+        assert_near(actual.x, expected.x);
+        assert_near(actual.y, expected.y);
+    }
+
+    fn assert_near(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "expected {expected}, got {actual}"
+        );
+    }
 
     #[test]
     fn remaining_v1_plots_round_trip_and_render() {
@@ -9087,6 +11066,14 @@ mod tests {
         format!(
             r#"<q:ser><q:idx val="{index}"/><q:order val="{index}"/><q:cat><q:strRef><q:f>Sheet1!$A$2:$A$3</q:f><q:strCache><q:ptCount val="2"/><q:pt idx="0"><q:v>North</q:v></q:pt><q:pt idx="1"><q:v>South</q:v></q:pt></q:strCache></q:strRef></q:cat><q:val><q:numRef><q:f>Sheet1!$B$2:$B$3</q:f><q:numCache><q:formatCode>General</q:formatCode><q:ptCount val="2"/><q:pt idx="0"><q:v>1</q:v></q:pt><q:pt idx="1"><q:v>2</q:v></q:pt></q:numCache></q:numRef></q:val></q:ser>"#
         )
+    }
+
+    fn sparse_category_series() -> &'static str {
+        r#"<q:ser><q:idx val="0"/><q:order val="0"/><q:cat><q:strRef><q:f>Sheet1!$A$2:$A$4</q:f><q:strCache><q:ptCount val="3"/><q:pt idx="0"><q:v>North</q:v></q:pt><q:pt idx="2"><q:v>West</q:v></q:pt></q:strCache></q:strRef></q:cat><q:val><q:numRef><q:f>Sheet1!$B$2:$B$4</q:f><q:numCache><q:formatCode>General</q:formatCode><q:ptCount val="3"/><q:pt idx="0"><q:v>1</q:v></q:pt><q:pt idx="2"><q:v>2</q:v></q:pt></q:numCache></q:numRef></q:val></q:ser>"#
+    }
+
+    fn sparse_scatter_series() -> &'static str {
+        r#"<q:ser><q:idx val="0"/><q:order val="0"/><q:xVal><q:numRef><q:f>Sheet1!$A$2:$A$5</q:f><q:numCache><q:formatCode>General</q:formatCode><q:ptCount val="4"/><q:pt idx="0"><q:v>10</q:v></q:pt><q:pt idx="2"><q:v>30</q:v></q:pt><q:pt idx="3"><q:v>40</q:v></q:pt></q:numCache></q:numRef></q:xVal><q:yVal><q:numRef><q:f>Sheet1!$B$2:$B$5</q:f><q:numCache><q:formatCode>General</q:formatCode><q:ptCount val="4"/><q:pt idx="0"><q:v>100</q:v></q:pt><q:pt idx="1"><q:v>200</q:v></q:pt><q:pt idx="3"><q:v>400</q:v></q:pt></q:numCache></q:numRef></q:yVal></q:ser>"#
     }
 
     fn chart_with_plot(plot: &str) -> String {

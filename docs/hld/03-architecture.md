@@ -84,6 +84,11 @@ inherited property is already collapsed to a concrete value. The renderer
 consumes that and nothing else. Freezing this contract is what lets the resolver
 and the renderer be built and tested independently.
 
+**`rpptx-chart` depends on `oxml-layout` for backend-neutral geometry.** Its
+typed ChartML caches lower directly to `PathElement` and `Group` values. The
+edge points from the format-specific chart crate to format-neutral layout, and
+no PDF or raster backend becomes a chart dependency.
+
 ## What stays put
 
 `rdocx-oxml` remains a real crate holding roughly 8,700 lines of
