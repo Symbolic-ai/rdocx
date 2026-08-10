@@ -163,6 +163,10 @@ defended.
 | F-117 | S29 | L | 4 | 1 | 2026-08-10 | Minimal deterministic one-sheet SpreadsheetML workbook writer |
 | F-118 | S29 | L | 4 | 1 | 2026-08-10 | Schema-aware ChartML core with ordered opaque preservation |
 | F-119 | S29 | L | 4 | 1 | 2026-08-10 | Formula references and caches from one source of series data |
+| F-120 | S30 | L | 4 | 1 | 2026-08-10 | Four typed ChartML axis forms with reciprocal pairing and ordered preservation |
+| F-123 | S30 | M | 2 | 1 | 2026-08-10 | Typed data labels and deterministic number-format projection |
+| F-121 | S30 | M | 2 | 1 | 2026-08-10 | Typed bar and line plots with zero-delta viewer evidence |
+| F-122 | S30 | L | 4 | 1 | 2026-08-10 | Remaining five v1 plot families with SHA-bound viewer evidence |
 
 ## Velocity
 
