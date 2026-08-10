@@ -8,9 +8,15 @@ use oxml_core::OxmlError;
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
 use oxml_core::xml::{local_name, matches_local_name};
 use oxml_core::xml_text::{decode_plain, resolve_entity};
+use oxml_drawing::color::{
+    ColorChoice, ColorMap, ColorMapSlot, ResolvedColor, RgbColor, ThemeColorSlot,
+    apply_color_transforms, resolve_color,
+};
+use oxml_drawing::fill::Fill;
 use oxml_drawing::order::OrderedRawChildren;
 use oxml_drawing::shape_props::{CT_ShapeProperties, ShapePropertiesError};
 use oxml_drawing::text::{CT_TextBody, CT_TextCharacterProperties, TextError};
+use oxml_drawing::theme::CT_OfficeStyleSheet;
 use oxml_layout::{
     Color, FillRule, FontManager, GlyphRun, GroupElement, Paint, Path, PathCommand, PathElement,
     Point, PositionedElement, Rect, Stroke, Transform,
@@ -152,6 +158,8 @@ struct ChartAnnotations {
 pub fn render_chart(
     chart: &CT_Chart,
     bounds: Rect,
+    theme: &CT_OfficeStyleSheet,
+    color_map: &ColorMap,
     fonts: &mut FontManager,
 ) -> Result<GroupElement> {
     let plot_bounds = geometry_plot_bounds(bounds)?;
@@ -160,9 +168,16 @@ pub fn render_chart(
         .first()
         .ok_or_else(|| ChartError::MissingElement("c:plot".to_owned()))?;
     plot.validate()?;
+    let series_colours = resolve_series_colours(plot, theme, color_map)?;
     let axes = chart.plot_area.axes()?;
     let options = geometry_options(plot, &axes, chart.disp_blanks_as)?;
-    let plot_children = render_plot_geometry(plot, plot_bounds, chart.disp_blanks_as, options)?;
+    let plot_children = render_plot_geometry(
+        plot,
+        plot_bounds,
+        chart.disp_blanks_as,
+        options,
+        &series_colours,
+    )?;
     if plot_children.is_empty() && !plot_can_render_without_marks(plot) {
         return Err(ChartError::InvalidValue {
             element: "c:plotArea".to_owned(),
@@ -186,6 +201,7 @@ pub fn render_chart(
         plot,
         plot_bounds,
         fonts,
+        &series_colours,
         &mut annotations,
         &mut chart_annotations.labels,
     )?;
@@ -217,18 +233,25 @@ pub fn render_chart(
 }
 
 /// Converts one supported typed chart into chart-local backend-neutral paths.
-pub fn render_geometry(chart: &CT_Chart, bounds: Rect) -> Result<ChartGeometry> {
+pub fn render_geometry(
+    chart: &CT_Chart,
+    bounds: Rect,
+    theme: &CT_OfficeStyleSheet,
+    color_map: &ColorMap,
+) -> Result<ChartGeometry> {
     let plot_bounds = geometry_plot_bounds(bounds)?;
     let plots = chart.plot_area.plots()?;
     let plot = plots
         .first()
         .ok_or_else(|| ChartError::MissingElement("c:plot".to_owned()))?;
     plot.validate()?;
+    let series_colours = resolve_series_colours(plot, theme, color_map)?;
     let children = render_plot_geometry(
         plot,
         plot_bounds,
         chart.disp_blanks_as,
         geometry_options(plot, &[], chart.disp_blanks_as)?,
+        &series_colours,
     )?;
     if children.is_empty() && !plot_can_render_without_marks(plot) {
         return Err(ChartError::InvalidValue {
@@ -1819,11 +1842,192 @@ fn point_in_rect(point: Point, bounds: Rect) -> bool {
         && point.y <= bounds.y + bounds.height + EPSILON
 }
 
+fn resolve_series_colours(
+    plot: &Plot,
+    theme: &CT_OfficeStyleSheet,
+    color_map: &ColorMap,
+) -> Result<Vec<Color>> {
+    let lookup = theme_colour_lookup(theme);
+    plot_series(plot)
+        .iter()
+        .enumerate()
+        .map(|(index, series)| {
+            if let Some(properties) = series.sp_pr.as_ref() {
+                if let Some(fill) = properties.fill.as_ref() {
+                    return resolve_series_paint(fill, index, "fill", theme, color_map, &lookup);
+                }
+                if let Some(fill) = properties.line.as_ref().and_then(|line| line.fill.as_ref()) {
+                    return resolve_series_paint(fill, index, "line", theme, color_map, &lookup);
+                }
+            }
+            resolve_series_accent(index, theme, color_map, &lookup)
+        })
+        .collect()
+}
+
+fn resolve_series_paint(
+    fill: &Fill,
+    series_index: usize,
+    source: &str,
+    theme: &CT_OfficeStyleSheet,
+    color_map: &ColorMap,
+    lookup: &[(&str, RgbColor)],
+) -> Result<Color> {
+    match fill {
+        Fill::NoFill(_) => Ok(Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.0,
+        }),
+        Fill::Solid(solid) => {
+            let choice = solid
+                .color
+                .as_ref()
+                .ok_or_else(|| ChartError::InvalidValue {
+                    element: format!("c:ser[{series_index}] direct {source} paint"),
+                    value: "solid fill has no colour choice".to_owned(),
+                })?;
+            resolve_direct_chart_colour(choice, theme, color_map, lookup, || {
+                format!("c:ser[{series_index}] direct {source} paint")
+            })
+        }
+        Fill::Gradient(_) => unsupported_series_paint(series_index, source, "gradient"),
+        Fill::Pattern(_) => unsupported_series_paint(series_index, source, "pattern"),
+        Fill::Blip(_) => unsupported_series_paint(series_index, source, "picture"),
+    }
+}
+
+fn resolve_direct_chart_colour(
+    choice: &ColorChoice,
+    theme: &CT_OfficeStyleSheet,
+    color_map: &ColorMap,
+    lookup: &[(&str, RgbColor)],
+    element: impl FnOnce() -> String,
+) -> Result<Color> {
+    let ColorChoice::Scheme {
+        value, transforms, ..
+    } = choice
+    else {
+        return resolve_chart_colour(choice, color_map, lookup, element);
+    };
+    let theme_slot =
+        mapped_theme_slot(value, color_map).ok_or_else(|| ChartError::InvalidValue {
+            element: element(),
+            value: format!("no concrete theme slot is available for scheme colour {value}"),
+        })?;
+    let theme_choice = theme.theme_elements.color_scheme.color(theme_slot);
+    let base = concrete_theme_colour(theme_choice).ok_or_else(|| ChartError::InvalidValue {
+        element: format!("a:clrScheme/a:{}", theme_slot.as_str()),
+        value: "selected theme slot has no concrete sRGB or system fallback colour".to_owned(),
+    })?;
+    let mut combined = theme_choice.transforms().to_vec();
+    combined.extend_from_slice(transforms);
+    Ok(resolved_layout_colour(apply_color_transforms(
+        base, &combined,
+    )))
+}
+
+fn mapped_theme_slot(value: &str, color_map: &ColorMap) -> Option<ThemeColorSlot> {
+    let mapped = match value {
+        "bg1" => color_map.theme_slot(ColorMapSlot::Background1),
+        "tx1" => color_map.theme_slot(ColorMapSlot::Text1),
+        "bg2" => color_map.theme_slot(ColorMapSlot::Background2),
+        "tx2" => color_map.theme_slot(ColorMapSlot::Text2),
+        "accent1" => color_map.theme_slot(ColorMapSlot::Accent1),
+        "accent2" => color_map.theme_slot(ColorMapSlot::Accent2),
+        "accent3" => color_map.theme_slot(ColorMapSlot::Accent3),
+        "accent4" => color_map.theme_slot(ColorMapSlot::Accent4),
+        "accent5" => color_map.theme_slot(ColorMapSlot::Accent5),
+        "accent6" => color_map.theme_slot(ColorMapSlot::Accent6),
+        "hlink" => color_map.theme_slot(ColorMapSlot::Hyperlink),
+        "folHlink" => color_map.theme_slot(ColorMapSlot::FollowedHyperlink),
+        "dk1" => ThemeColorSlot::Dark1,
+        "lt1" => ThemeColorSlot::Light1,
+        "dk2" => ThemeColorSlot::Dark2,
+        "lt2" => ThemeColorSlot::Light2,
+        _ => return None,
+    };
+    Some(mapped)
+}
+
+fn unsupported_series_paint(series_index: usize, source: &str, kind: &str) -> Result<Color> {
+    Err(ChartError::InvalidValue {
+        element: format!("c:ser[{series_index}] direct {source} paint"),
+        value: format!("unsupported {kind} paint"),
+    })
+}
+
+fn resolve_series_accent(
+    series_index: usize,
+    theme: &CT_OfficeStyleSheet,
+    color_map: &ColorMap,
+    lookup: &[(&str, RgbColor)],
+) -> Result<Color> {
+    const ACCENTS: [ColorMapSlot; 6] = [
+        ColorMapSlot::Accent1,
+        ColorMapSlot::Accent2,
+        ColorMapSlot::Accent3,
+        ColorMapSlot::Accent4,
+        ColorMapSlot::Accent5,
+        ColorMapSlot::Accent6,
+    ];
+    let semantic_slot = ACCENTS[series_index % ACCENTS.len()];
+    let theme_slot = color_map.theme_slot(semantic_slot);
+    let choice = theme.theme_elements.color_scheme.color(theme_slot);
+    resolve_chart_colour(choice, color_map, lookup, || {
+        format!("c:ser[{series_index}] theme accent")
+    })
+}
+
+fn resolve_chart_colour(
+    choice: &ColorChoice,
+    color_map: &ColorMap,
+    lookup: &[(&str, RgbColor)],
+    element: impl FnOnce() -> String,
+) -> Result<Color> {
+    resolve_color(choice, color_map, lookup)
+        .map(resolved_layout_colour)
+        .map_err(|error| ChartError::InvalidValue {
+            element: element(),
+            value: error.to_string(),
+        })
+}
+
+fn theme_colour_lookup(theme: &CT_OfficeStyleSheet) -> Vec<(&'static str, RgbColor)> {
+    theme
+        .theme_elements
+        .color_scheme
+        .iter()
+        .filter_map(|(slot, choice)| {
+            concrete_theme_colour(choice).map(|colour| (slot.as_str(), colour))
+        })
+        .collect()
+}
+
+fn concrete_theme_colour(choice: &ColorChoice) -> Option<RgbColor> {
+    match choice {
+        ColorChoice::Srgb { value, .. } => Some(*value),
+        ColorChoice::System { last_color, .. } => *last_color,
+        ColorChoice::Scheme { .. } | ColorChoice::Preset { .. } => None,
+    }
+}
+
+fn resolved_layout_colour(colour: ResolvedColor) -> Color {
+    Color {
+        r: f64::from(colour.red) / 255.0,
+        g: f64::from(colour.green) / 255.0,
+        b: f64::from(colour.blue) / 255.0,
+        a: f64::from(colour.alpha) / 255.0,
+    }
+}
+
 fn render_legend(
     chart: &CT_Chart,
     plot: &Plot,
     bounds: Rect,
     fonts: &mut FontManager,
+    series_colours: &[Color],
     paths: &mut Vec<PositionedElement>,
     labels: &mut Vec<PositionedElement>,
 ) -> Result<()> {
@@ -1831,7 +2035,7 @@ fn render_legend(
         return Ok(());
     }
     let x = bounds.x + bounds.width - 58.0;
-    for (index, series) in plot_series(plot).iter().enumerate() {
+    for (index, (series, colour)) in plot_series(plot).iter().zip(series_colours).enumerate() {
         let y = bounds.y + 6.0 + index as f64 * 13.0;
         paths.push(filled_path(
             Path::rect(Rect {
@@ -1840,7 +2044,7 @@ fn render_legend(
                 width: 7.0,
                 height: 7.0,
             }),
-            series_color(index),
+            *colour,
         ));
         labels.push(PositionedElement::Text(shape_label(
             fonts,
@@ -1892,6 +2096,7 @@ fn render_plot_geometry(
     bounds: Rect,
     blanks: DispBlanksAs,
     options: GeometryOptions,
+    series_colours: &[Color],
 ) -> Result<Vec<PositionedElement>> {
     match plot {
         Plot::Bar {
@@ -1902,35 +2107,59 @@ fn render_plot_geometry(
             series,
             ..
         } => render_bar_geometry(
-            *direction, *grouping, *gap_width, *overlap, series, bounds, options,
+            *direction,
+            *grouping,
+            *gap_width,
+            *overlap,
+            series,
+            bounds,
+            options,
+            series_colours,
         ),
         Plot::Line {
             grouping,
             marker,
             series,
             ..
-        } => render_line_geometry(*grouping, *marker, series, bounds, blanks, options),
+        } => render_line_geometry(
+            *grouping,
+            *marker,
+            series,
+            bounds,
+            blanks,
+            options,
+            series_colours,
+        ),
         Plot::Pie {
             first_slice_angle,
             series,
             ..
-        } => render_pie_geometry(*first_slice_angle, None, series, bounds),
+        } => render_pie_geometry(*first_slice_angle, None, series, bounds, series_colours),
         Plot::Doughnut {
             first_slice_angle,
             hole_size,
             series,
             ..
-        } => render_pie_geometry(*first_slice_angle, Some(*hole_size), series, bounds),
+        } => render_pie_geometry(
+            *first_slice_angle,
+            Some(*hole_size),
+            series,
+            bounds,
+            series_colours,
+        ),
         Plot::Area {
             grouping, series, ..
-        } => render_area_geometry(*grouping, series, bounds, blanks, options),
+        } => render_area_geometry(*grouping, series, bounds, blanks, options, series_colours),
         Plot::Scatter { style, series, .. } => {
-            render_scatter_geometry(*style, series, bounds, blanks, options)
+            render_scatter_geometry(*style, series, bounds, blanks, options, series_colours)
         }
-        Plot::Radar { style, series, .. } => render_radar_geometry(*style, series, bounds, options),
+        Plot::Radar { style, series, .. } => {
+            render_radar_geometry(*style, series, bounds, options, series_colours)
+        }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_bar_geometry(
     direction: BarDirection,
     grouping: BarGrouping,
@@ -1939,14 +2168,19 @@ fn render_bar_geometry(
     series: &[Series],
     bounds: Rect,
     options: GeometryOptions,
+    series_colours: &[Color],
 ) -> Result<Vec<PositionedElement>> {
     let bars = bar_rectangles(
         direction, grouping, gap_width, overlap, series, bounds, options,
     )?;
-    Ok(bars
-        .into_iter()
-        .map(|bar| filled_path(Path::rect(bar.rect), series_color(bar.series_index)))
-        .collect())
+    bars.into_iter()
+        .map(|bar| {
+            Ok(filled_path(
+                Path::rect(bar.rect),
+                series_colour(series_colours, bar.series_index)?,
+            ))
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2061,6 +2295,7 @@ fn render_line_geometry(
     bounds: Rect,
     blanks: DispBlanksAs,
     options: GeometryOptions,
+    series_colours: &[Color],
 ) -> Result<Vec<PositionedElement>> {
     validate_series_values(series)?;
     let logical_series = logical_series_values(series)?;
@@ -2083,6 +2318,7 @@ fn render_line_geometry(
         .unwrap_or(Orientation::MinMax);
     let mut elements = Vec::new();
     for (series_index, layer) in layers.iter().enumerate() {
+        let colour = series_colour(series_colours, series_index)?;
         let indexed: Vec<_> = layer
             .iter()
             .map(|(index, _, upper)| (*index, *upper))
@@ -2097,10 +2333,7 @@ fn render_line_geometry(
                 options.category_orientation,
                 value_orientation,
             )?;
-            elements.push(stroked_path(
-                polyline_path(&points, false),
-                series_color(series_index),
-            ));
+            elements.push(stroked_path(polyline_path(&points, false), colour));
         }
         if marker {
             let present: BTreeSet<_> = logical_series[series_index]
@@ -2121,7 +2354,7 @@ fn render_line_geometry(
                 options.category_orientation,
                 value_orientation,
             )?;
-            push_markers(&mut elements, &marker_points, series_index);
+            push_markers(&mut elements, &marker_points, colour);
         }
     }
     Ok(elements)
@@ -2133,6 +2366,7 @@ fn render_area_geometry(
     bounds: Rect,
     blanks: DispBlanksAs,
     options: GeometryOptions,
+    series_colours: &[Color],
 ) -> Result<Vec<PositionedElement>> {
     validate_series_values(series)?;
     let logical_series = logical_series_values(series)?;
@@ -2155,6 +2389,7 @@ fn render_area_geometry(
         .unwrap_or(Orientation::MinMax);
     let mut elements = Vec::new();
     for (series_index, layer) in layers.iter().enumerate() {
+        let colour = series_colour(series_colours, series_index)?;
         let indexes: Vec<_> = layer.iter().map(|(index, _, _)| *index).collect();
         for (start, end) in contiguous_ranges(&indexes, blanks) {
             let segment = &layer[start..end];
@@ -2193,7 +2428,7 @@ fn render_area_geometry(
                     commands,
                     fill_rule: FillRule::NonZero,
                 },
-                series_color(series_index),
+                colour,
             ));
         }
     }
@@ -2206,6 +2441,7 @@ fn render_scatter_geometry(
     bounds: Rect,
     blanks: DispBlanksAs,
     options: GeometryOptions,
+    series_colours: &[Color],
 ) -> Result<Vec<PositionedElement>> {
     validate_series_values(series)?;
     let mut paired_series = Vec::with_capacity(series.len());
@@ -2249,6 +2485,7 @@ fn render_scatter_geometry(
     );
     let mut elements = Vec::new();
     for (series_index, paired) in paired_series.iter().enumerate() {
+        let colour = series_colour(series_colours, series_index)?;
         if draw_line {
             let indexes: Vec<_> = paired.iter().map(|(index, _, _)| *index).collect();
             for (start, end) in contiguous_ranges(&indexes, blanks) {
@@ -2260,10 +2497,7 @@ fn render_scatter_geometry(
                     x_orientation,
                     y_orientation,
                 )?;
-                elements.push(stroked_path(
-                    polyline_path(&points, false),
-                    series_color(series_index),
-                ));
+                elements.push(stroked_path(polyline_path(&points, false), colour));
             }
         }
         if draw_marker {
@@ -2275,7 +2509,7 @@ fn render_scatter_geometry(
                 x_orientation,
                 y_orientation,
             )?;
-            push_markers(&mut elements, &marker_points, series_index);
+            push_markers(&mut elements, &marker_points, colour);
         }
     }
     Ok(elements)
@@ -2369,22 +2603,24 @@ fn render_radar_geometry(
     series: &[Series],
     bounds: Rect,
     options: GeometryOptions,
+    series_colours: &[Color],
 ) -> Result<Vec<PositionedElement>> {
     let point_series = radar_series_points(series, bounds, options)?;
     let mut elements = Vec::new();
     for (series_index, points) in point_series.iter().enumerate() {
+        let colour = series_colour(series_colours, series_index)?;
         let plain_points: Vec<_> = points.iter().map(|(_, point)| *point).collect();
         if plain_points.is_empty() {
             continue;
         }
         let path = polyline_path(&plain_points, true);
         if style == RadarStyle::Filled {
-            elements.push(filled_and_stroked_path(path, series_color(series_index)));
+            elements.push(filled_and_stroked_path(path, colour));
         } else {
-            elements.push(stroked_path(path, series_color(series_index)));
+            elements.push(stroked_path(path, colour));
         }
         if style == RadarStyle::Marker {
-            push_markers(&mut elements, &plain_points, series_index);
+            push_markers(&mut elements, &plain_points, colour);
         }
     }
     Ok(elements)
@@ -2443,11 +2679,17 @@ fn render_pie_geometry(
     hole_size: Option<u8>,
     series: &[Series],
     bounds: Rect,
+    series_colours: &[Color],
 ) -> Result<Vec<PositionedElement>> {
-    Ok(pie_slices(first_slice_angle, hole_size, series, bounds)?
+    pie_slices(first_slice_angle, hole_size, series, bounds)?
         .into_iter()
-        .map(|slice| filled_path(slice.path, series_color(slice.series_index)))
-        .collect())
+        .map(|slice| {
+            Ok(filled_path(
+                slice.path,
+                series_colour(series_colours, slice.series_index)?,
+            ))
+        })
+        .collect()
 }
 
 struct PieSliceGeometry {
@@ -3287,10 +3529,20 @@ fn marker_path(center: Point) -> Path {
     }
 }
 
-fn push_markers(elements: &mut Vec<PositionedElement>, points: &[Point], series_index: usize) {
+fn push_markers(elements: &mut Vec<PositionedElement>, points: &[Point], colour: Color) {
     for point in points {
-        elements.push(filled_path(marker_path(*point), series_color(series_index)));
+        elements.push(filled_path(marker_path(*point), colour));
     }
+}
+
+fn series_colour(series_colours: &[Color], index: usize) -> Result<Color> {
+    series_colours
+        .get(index)
+        .copied()
+        .ok_or_else(|| ChartError::InvalidValue {
+            element: "chart series palette".to_owned(),
+            value: format!("missing resolved colour for series {index}"),
+        })
 }
 
 fn filled_path(path: Path, color: Color) -> PositionedElement {
@@ -3312,51 +3564,12 @@ fn stroked_path(path: Path, color: Color) -> PositionedElement {
 fn filled_and_stroked_path(path: Path, color: Color) -> PositionedElement {
     PositionedElement::Path(PathElement {
         path,
-        fill: Some(Paint::Solid(Color { a: 0.55, ..color })),
+        fill: Some(Paint::Solid(Color {
+            a: color.a * 0.55,
+            ..color
+        })),
         stroke: Some(Stroke::new(Paint::Solid(color), 1.0)),
     })
-}
-
-fn series_color(index: usize) -> Color {
-    const PALETTE: [Color; 6] = [
-        Color {
-            r: 0.278,
-            g: 0.478,
-            b: 0.718,
-            a: 1.0,
-        },
-        Color {
-            r: 0.929,
-            g: 0.490,
-            b: 0.192,
-            a: 1.0,
-        },
-        Color {
-            r: 0.651,
-            g: 0.651,
-            b: 0.651,
-            a: 1.0,
-        },
-        Color {
-            r: 1.0,
-            g: 0.753,
-            b: 0.0,
-            a: 1.0,
-        },
-        Color {
-            r: 0.369,
-            g: 0.608,
-            b: 0.710,
-            a: 1.0,
-        },
-        Color {
-            r: 0.439,
-            g: 0.678,
-            b: 0.278,
-            a: 1.0,
-        },
-    ];
-    PALETTE[index % PALETTE.len()]
 }
 
 type NamespaceBindings = Vec<(Vec<u8>, String)>;
@@ -10424,8 +10637,11 @@ mod tests {
     use std::process::Command;
 
     use oxml_core::raw_xml::{capture_element, capture_empty_element};
+    use oxml_drawing::color::{ColorMap, ColorMapSlot, RgbColor, ThemeColorSlot};
+    use oxml_drawing::theme::CT_OfficeStyleSheet;
     use oxml_layout::{
-        FontManager, LayoutResult, PageFrame, PathCommand, Point, PositionedElement, Rect,
+        Color, FontManager, LayoutResult, PageFrame, Paint, PathCommand, Point, PositionedElement,
+        Rect,
     };
     use oxml_opc::OpcPackage;
     use quick_xml::Reader;
@@ -10436,7 +10652,8 @@ mod tests {
         CT_ChartSpace, CT_DLbls, CT_ShapeProperties, CT_TextBody, ChartGeometry, DataLabelPosition,
         DispBlanksAs, Domain, Grouping, NumberFormat, NumericData, Orientation, Plot, R_NS,
         ScatterStyle, Series, StringRef, TickLabelPosition, TickMark, capture_event, local_name,
-        matches_local_name, nice_number_scale, render_chart, render_geometry,
+        matches_local_name, nice_number_scale, render_chart as render_chart_with_theme,
+        render_geometry as render_geometry_with_theme,
     };
 
     const MANIFEST: &str = include_str!("../../../scripts/pptx-corpus-manifest.tsv");
@@ -10446,6 +10663,29 @@ mod tests {
     const PDFTOTEXT_VERSION: &str = "pdftotext version 26.01.0";
     const PDFTOPPM_VERSION: &str = "pdftoppm version 26.01.0";
     const PLOT_RENDER_NORMALIZED_MAE_THRESHOLD: f64 = 0.0;
+
+    fn render_geometry(chart: &super::CT_Chart, bounds: Rect) -> super::Result<ChartGeometry> {
+        render_geometry_with_theme(
+            chart,
+            bounds,
+            &CT_OfficeStyleSheet::office_default(),
+            &ColorMap::default(),
+        )
+    }
+
+    fn render_chart(
+        chart: &super::CT_Chart,
+        bounds: Rect,
+        fonts: &mut FontManager,
+    ) -> super::Result<oxml_layout::GroupElement> {
+        render_chart_with_theme(
+            chart,
+            bounds,
+            &CT_OfficeStyleSheet::office_default(),
+            &ColorMap::default(),
+            fonts,
+        )
+    }
 
     #[test]
     fn bar_chart_rasterises_at_computed_positions() {
@@ -10502,6 +10742,217 @@ mod tests {
             let pixel = pixmap.pixel(x, y).unwrap();
             assert_ne!((pixel.red(), pixel.green(), pixel.blue()), (255, 255, 255));
         }
+    }
+
+    #[test]
+    fn unstyled_four_series_use_accent_one_through_four() {
+        let chart = four_series_bar_chart();
+        let geometry = render_geometry(&chart.chart, chart_bounds()).unwrap();
+        let colours = path_colours(&geometry);
+
+        assert_eq!(
+            &colours[..4],
+            &[
+                Color::from_hex("156082"),
+                Color::from_hex("E97132"),
+                Color::from_hex("196B24"),
+                Color::from_hex("0F9ED5"),
+            ]
+        );
+    }
+
+    #[test]
+    fn direct_series_solid_colour_overrides_theme_accent() {
+        for (paint, expected) in [
+            (
+                "<a:solidFill><a:srgbClr val=\"123456\"/></a:solidFill>",
+                Color::from_hex("123456"),
+            ),
+            (
+                "<a:ln><a:solidFill><a:srgbClr val=\"654321\"/></a:solidFill></a:ln>",
+                Color::from_hex("654321"),
+            ),
+            (
+                "<a:noFill/>",
+                Color {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 0.0,
+                },
+            ),
+        ] {
+            let styled =
+                plot_series(0).replace("<q:cat>", &format!("<q:spPr>{paint}</q:spPr><q:cat>"));
+            let plot = bar_plot("").replace(&plot_series(0), &styled);
+            let chart = CT_ChartSpace::from_xml(chart_with_plot(&plot).as_bytes()).unwrap();
+            let geometry = render_geometry(&chart.chart, chart_bounds()).unwrap();
+
+            assert_eq!(path_colours(&geometry)[0], expected);
+        }
+
+        let styled = plot_series(0).replace(
+            "<q:cat>",
+            "<q:spPr><a:solidFill><a:srgbClr val=\"123456\"/></a:solidFill></q:spPr><q:cat>",
+        );
+        let plot = bar_plot("").replace(&plot_series(0), &styled);
+        let xml = chart_with_plot(&plot).replace(
+            "</q:plotArea></q:chart>",
+            "</q:plotArea><q:legend/></q:chart>",
+        );
+        let chart = CT_ChartSpace::from_xml(xml.as_bytes()).unwrap();
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let group = render_chart(&chart.chart, chart_bounds(), &mut fonts).unwrap();
+        assert!(group.children.iter().any(|element| matches!(
+            element,
+            PositionedElement::Path(path)
+                if path.fill == Some(Paint::Solid(Color::from_hex("123456")))
+        )));
+
+        let mut theme = CT_OfficeStyleSheet::office_default();
+        let preset = oxml_drawing::fill::Fill::from_xml(
+            br#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:prstClr val="red"/></a:solidFill>"#,
+        )
+        .unwrap();
+        let oxml_drawing::fill::Fill::Solid(preset) = preset else {
+            panic!("expected solid fill");
+        };
+        theme.theme_elements.color_scheme.hyperlink = preset.color.unwrap();
+        let geometry =
+            render_geometry_with_theme(&chart.chart, chart_bounds(), &theme, &ColorMap::default())
+                .unwrap();
+        assert_eq!(path_colours(&geometry)[0], Color::from_hex("123456"));
+
+        for (paint, expected_alpha) in [
+            ("<a:noFill/>", 0.0),
+            (
+                "<a:solidFill><a:srgbClr val=\"123456\"><a:alpha val=\"50000\"/></a:srgbClr></a:solidFill>",
+                (128.0 / 255.0) * 0.55,
+            ),
+        ] {
+            let (_, area, _) = remaining_plot_fixtures()
+                .into_iter()
+                .find(|(kind, _, _)| *kind == "areaChart")
+                .unwrap();
+            let styled_area = area.replace("<q:cat>", &format!("<q:spPr>{paint}</q:spPr><q:cat>"));
+            let chart =
+                CT_ChartSpace::from_xml(chart_with_optional_axes(&styled_area, true).as_bytes())
+                    .unwrap();
+            let geometry = render_geometry(&chart.chart, chart_bounds()).unwrap();
+            let actual_alpha = path_colours(&geometry)[0].a;
+
+            assert!((actual_alpha - expected_alpha).abs() < 1.0e-12);
+        }
+    }
+
+    #[test]
+    fn series_accent_cycle_repeats_after_six() {
+        let chart = seven_series_bar_chart();
+        let geometry = render_geometry(&chart.chart, chart_bounds()).unwrap();
+        let colours = path_colours(&geometry);
+
+        assert_eq!(colours[0], Color::from_hex("156082"));
+        assert_eq!(colours[6], colours[0]);
+    }
+
+    #[test]
+    fn series_colours_honor_colour_map_and_transform_order() {
+        let styled = plot_series(0).replace(
+            "<q:cat>",
+            "<q:spPr><a:solidFill><a:schemeClr val=\"accent1\"><a:shade val=\"80000\"/><a:lumOff val=\"5000\"/><a:alpha val=\"50000\"/></a:schemeClr></a:solidFill></q:spPr><q:cat>",
+        );
+        let plot = bar_plot("").replace(&plot_series(0), &styled);
+        let chart = CT_ChartSpace::from_xml(chart_with_plot(&plot).as_bytes()).unwrap();
+        let color_map =
+            ColorMap::default().with_overrides(&[(ColorMapSlot::Accent1, ThemeColorSlot::Accent4)]);
+        let mut theme = CT_OfficeStyleSheet::office_default();
+        let theme_fill = oxml_drawing::fill::Fill::from_xml(
+            br#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:srgbClr val="336699"><a:tint val="20000"/><a:lumMod val="90000"/></a:srgbClr></a:solidFill>"#,
+        )
+        .unwrap();
+        let oxml_drawing::fill::Fill::Solid(theme_fill) = theme_fill else {
+            panic!("expected solid fill");
+        };
+        let theme_colour = theme_fill.color.unwrap();
+        theme.theme_elements.color_scheme.accent4 = theme_colour.clone();
+        let geometry =
+            render_geometry_with_theme(&chart.chart, chart_bounds(), &theme, &color_map).unwrap();
+        let series_fill = oxml_drawing::fill::Fill::from_xml(
+            br#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:schemeClr val="accent1"><a:shade val="80000"/><a:lumOff val="5000"/><a:alpha val="50000"/></a:schemeClr></a:solidFill>"#,
+        )
+        .unwrap();
+        let oxml_drawing::fill::Fill::Solid(series_fill) = series_fill else {
+            panic!("expected solid fill");
+        };
+        let mut transforms = theme_colour.transforms().to_vec();
+        transforms.extend_from_slice(series_fill.color.as_ref().unwrap().transforms());
+        let expected = oxml_drawing::color::apply_color_transforms(
+            RgbColor::parse("336699").unwrap(),
+            &transforms,
+        );
+
+        assert_eq!(path_colours(&geometry)[0], resolved_layout_colour(expected));
+    }
+
+    #[test]
+    fn chart_colours_do_not_use_word_tint_shade() {
+        let styled = plot_series(0).replace(
+            "<q:cat>",
+            "<q:spPr><a:solidFill><a:srgbClr val=\"808080\"><a:tint val=\"50000\"/></a:srgbClr></a:solidFill></q:spPr><q:cat>",
+        );
+        let plot = bar_plot("").replace(&plot_series(0), &styled);
+        let chart = CT_ChartSpace::from_xml(chart_with_plot(&plot).as_bytes()).unwrap();
+        let geometry = render_geometry(&chart.chart, chart_bounds()).unwrap();
+
+        assert_eq!(
+            path_colours(&geometry)[0],
+            Color {
+                r: 205.0 / 255.0,
+                g: 205.0 / 255.0,
+                b: 205.0 / 255.0,
+                a: 1.0,
+            }
+        );
+    }
+
+    #[test]
+    fn unsupported_direct_series_paint_is_contextual() {
+        let styled = plot_series(0).replace(
+            "<q:cat>",
+            "<q:spPr><a:gradFill><a:gsLst><a:gs pos=\"0\"><a:srgbClr val=\"FF0000\"/></a:gs><a:gs pos=\"100000\"><a:srgbClr val=\"0000FF\"/></a:gs></a:gsLst></a:gradFill></q:spPr><q:cat>",
+        );
+        let plot = bar_plot("").replace(&plot_series(0), &styled);
+        let chart = CT_ChartSpace::from_xml(chart_with_plot(&plot).as_bytes()).unwrap();
+        let error = render_geometry(&chart.chart, chart_bounds()).unwrap_err();
+
+        assert!(error.to_string().contains("c:ser[0] direct fill paint"));
+        assert!(error.to_string().contains("gradient"));
+    }
+
+    #[test]
+    fn resolved_chart_palette_raster_is_deterministic() {
+        let raster = || {
+            let chart = four_series_bar_chart();
+            let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+            let group = render_chart(&chart.chart, chart_bounds(), &mut fonts).unwrap();
+            let layout = LayoutResult::new(
+                vec![PageFrame::new(
+                    1,
+                    200.0,
+                    140.0,
+                    vec![PositionedElement::Group(group)],
+                )],
+                fonts.all_font_data(),
+                None,
+                Vec::new(),
+            );
+            oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap()
+        };
+        let chart = four_series_bar_chart();
+        let geometry = render_geometry(&chart.chart, chart_bounds()).unwrap();
+
+        assert_eq!(path_colours(&geometry)[0], Color::from_hex("156082"));
+        assert_eq!(raster(), raster());
     }
 
     #[test]
@@ -12512,6 +12963,46 @@ mod tests {
             y: 0.0,
             width: 200.0,
             height: 140.0,
+        }
+    }
+
+    fn four_series_bar_chart() -> CT_ChartSpace {
+        let series = (0..4).map(plot_series).collect::<String>();
+        let plot = bar_plot("").replace(&plot_series(0), &series);
+        CT_ChartSpace::from_xml(chart_with_plot(&plot).as_bytes()).unwrap()
+    }
+
+    fn seven_series_bar_chart() -> CT_ChartSpace {
+        let series = (0..7).map(plot_series).collect::<String>();
+        let plot = bar_plot("").replace(&plot_series(0), &series);
+        CT_ChartSpace::from_xml(chart_with_plot(&plot).as_bytes()).unwrap()
+    }
+
+    fn path_colours(geometry: &ChartGeometry) -> Vec<Color> {
+        let mut colours = geometry_children(geometry)
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Path(path) => match path
+                    .fill
+                    .as_ref()
+                    .or_else(|| path.stroke.as_ref().map(|stroke| &stroke.paint))
+                {
+                    Some(Paint::Solid(colour)) => Some(*colour),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        colours.dedup_by(|left, right| left == right);
+        colours
+    }
+
+    fn resolved_layout_colour(colour: oxml_drawing::color::ResolvedColor) -> Color {
+        Color {
+            r: f64::from(colour.red) / 255.0,
+            g: f64::from(colour.green) / 255.0,
+            b: f64::from(colour.blue) / 255.0,
+            a: f64::from(colour.alpha) / 255.0,
         }
     }
 

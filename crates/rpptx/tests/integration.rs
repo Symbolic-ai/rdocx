@@ -453,13 +453,27 @@ fn authored_chart_enters_renderer_deterministically() {
         width: 576.0,
         height: 360.0,
     };
+    let theme = CT_OfficeStyleSheet::office_default();
+    let color_map = ColorMap::default();
 
     let mut first_fonts = FontManager::new_deterministic().expect("load deterministic fonts");
-    let first =
-        render_chart(&chart_space.chart, bounds, &mut first_fonts).expect("render authored chart");
+    let first = render_chart(
+        &chart_space.chart,
+        bounds,
+        &theme,
+        &color_map,
+        &mut first_fonts,
+    )
+    .expect("render authored chart");
     let mut second_fonts = FontManager::new_deterministic().expect("load deterministic fonts");
-    let second = render_chart(&chart_space.chart, bounds, &mut second_fonts)
-        .expect("render authored chart again");
+    let second = render_chart(
+        &chart_space.chart,
+        bounds,
+        &theme,
+        &color_map,
+        &mut second_fonts,
+    )
+    .expect("render authored chart again");
     assert_eq!(format!("{first:?}"), format!("{second:?}"));
 
     let mut paths = 0;

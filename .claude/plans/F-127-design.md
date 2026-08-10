@@ -1,6 +1,6 @@
 # F-127, Chart colour resolution
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S32
 **Size**: M
 **Depends on**: F-125, F-055
@@ -95,15 +95,15 @@ chart geometry. All 28 hashes must match.
 
 ## Implementation checklist
 
-- [ ] Add effective theme and colour-map inputs to chart rendering.
-- [ ] Resolve direct solid series styling with exact precedence.
-- [ ] Resolve the six-slot accent cycle through the established colour map and
+- [x] Add effective theme and colour-map inputs to chart rendering.
+- [x] Resolve direct solid series styling with exact precedence.
+- [x] Resolve the six-slot accent cycle through the established colour map and
       transform stack.
-- [ ] Replace every placeholder series and legend colour call site.
-- [ ] Add focused exact-colour, negative, cycle, and deterministic raster tests
+- [x] Replace every placeholder series and legend colour call site.
+- [x] Add focused exact-colour, negative, cycle, and deterministic raster tests
       to the existing crate root.
-- [ ] Update exactly HLD 09.
-- [ ] Run focused checks, routed checks, microscope, and worker preparation.
+- [x] Update exactly HLD 09.
+- [x] Run focused checks, routed checks, microscope, and worker preparation.
 
 ## Open questions
 
