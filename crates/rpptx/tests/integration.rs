@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oxml_drawing::color::ColorMap;
 use oxml_drawing::theme::CT_OfficeStyleSheet;
+use oxml_layout::{FontManager, PositionedElement, Rect, walk};
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
 use rpptx::{
@@ -15,7 +16,7 @@ use rpptx::{
     ChartKind, ConnectorType, Emu, Error, Fill, Presentation, ShapeKind, ShapeRef, TextBullet,
     TextBulletCharacter, TextBulletChoice, TextFont,
 };
-use rpptx_chart::{AxisData, CT_ChartSpace};
+use rpptx_chart::{AxisData, CT_ChartSpace, render_chart};
 use rpptx_layout::{
     FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,
 };
@@ -429,6 +430,70 @@ fn add_chart_authors_each_supported_family() {
                 .is_empty()
         );
     }
+}
+
+#[test]
+fn authored_chart_enters_renderer_deterministically() {
+    let bytes = presentation_with_authored_chart()
+        .to_bytes()
+        .expect("serialize authored chart for rendering");
+    let package = open_opc(&bytes, "authored chart rendering");
+    let chart_xml = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part, content_type)| {
+            (content_type == content_types::CHART).then(|| package.get_part(part).unwrap())
+        })
+        .expect("authored chart part");
+    let chart_space = CT_ChartSpace::from_xml(chart_xml).expect("parse authored ChartML");
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 576.0,
+        height: 360.0,
+    };
+
+    let mut first_fonts = FontManager::new_deterministic().expect("load deterministic fonts");
+    let first =
+        render_chart(&chart_space.chart, bounds, &mut first_fonts).expect("render authored chart");
+    let mut second_fonts = FontManager::new_deterministic().expect("load deterministic fonts");
+    let second = render_chart(&chart_space.chart, bounds, &mut second_fonts)
+        .expect("render authored chart again");
+    assert_eq!(format!("{first:?}"), format!("{second:?}"));
+
+    let mut paths = 0;
+    let mut text_runs = 0;
+    walk(&first.children, &mut |element, _| match element {
+        PositionedElement::Path(path) => {
+            let path_bounds = path.path.bounds().expect("nonempty authored chart path");
+            assert!(path_bounds.x.is_finite());
+            assert!(path_bounds.y.is_finite());
+            assert!(path_bounds.width.is_finite());
+            assert!(path_bounds.height.is_finite());
+            paths += 1;
+        }
+        PositionedElement::Text(run) => {
+            assert!(run.origin.x.is_finite());
+            assert!(run.origin.y.is_finite());
+            assert!(run.font_size.is_finite());
+            assert!(run.advances.iter().all(|advance| advance.is_finite()));
+            assert!(!run.text.is_empty());
+            text_runs += 1;
+        }
+        PositionedElement::Line {
+            start, end, width, ..
+        } => {
+            assert!(start.x.is_finite());
+            assert!(start.y.is_finite());
+            assert!(end.x.is_finite());
+            assert!(end.y.is_finite());
+            assert!(width.is_finite());
+        }
+        _ => {}
+    });
+    assert!(paths >= 6, "expected authored bars and annotation paths");
+    assert!(text_runs >= 6, "expected authored axis and legend labels");
 }
 
 #[test]

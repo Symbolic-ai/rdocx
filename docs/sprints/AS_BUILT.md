@@ -4115,6 +4115,8 @@ rollover, exact cache-to-cell mapping, and the native PowerPoint gate.
 `add_chart_caches_and_workbook_share_one_source`,
 `add_chart_rejects_invalid_data_without_mutation`,
 `authored_chart_graphic_frame_round_trips`, and the integrated full gate.
+`authored_chart_enters_renderer_deterministically` parses the ChartML produced
+by the owning facade and proves finite, nonempty, repeatable paths and labels.
 Microsoft PowerPoint 16.104, build 16.104.25121423, opened candidate SHA-256
 `e6e9f7eef1c774d0414c5d0c3f1202da1a28635b5d089e15455b7adc3f66cb00`
 without repair. Edit Data showed the authored Category, Revenue, and Cost
