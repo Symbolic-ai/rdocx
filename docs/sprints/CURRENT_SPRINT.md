@@ -32,9 +32,9 @@ legend output so S32 can focus on colour and preserved-chart fallback polish.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-124 | add_chart | L | in-progress | codex |
-| F-125 | Chart rendering: geometry | L | in-progress | codex |
-| F-126 | Chart rendering: axes, gridlines and labels | L | in-progress | codex |
+| F-124 | add_chart | L | done | - |
+| F-125 | Chart rendering: geometry | L | done | - |
+| F-126 | Chart rendering: axes, gridlines and labels | L | done | - |
 
 ## Sequencing note
 

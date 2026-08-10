@@ -168,6 +168,9 @@ defended.
 | F-123 | S30 | M | 2 | 1 | 2026-08-10 | Typed data labels and deterministic number-format projection |
 | F-121 | S30 | M | 2 | 1 | 2026-08-10 | Typed bar and line plots with zero-delta viewer evidence |
 | F-122 | S30 | L | 4 | 1 | 2026-08-10 | Remaining five v1 plot families with SHA-bound viewer evidence |
+| F-124 | S31 | L | 4 | 1 | 2026-08-10 | Atomic editable chart authoring with native PowerPoint evidence |
+| F-125 | S31 | L | 4 | 1 | 2026-08-10 | Backend-neutral geometry for all supported chart families |
+| F-126 | S31 | L | 4 | 1 | 2026-08-10 | Nice-number axes, gridlines, labels, and legends |
 
 ## Velocity
 
@@ -211,6 +214,7 @@ five working days.
 | S28 | 4 | 4 | 5.00 |
 | S29 | 3 | 3 | 5.00 |
 | S30 | 4 | 4 | 5.00 |
+| S31 | 3 | 3 | 5.00 |
 
 ## Escalation record
 
@@ -245,3 +249,4 @@ was done about it. Empty is the expected state.
 | 2026-08-09 | Sprint estimate variance exceeded 30 percent | S28 | Record 4 actual days against 9 estimated and reforecast 45 pending stories at the observed five stories per active week to about 9 active weeks, retaining dependency-defined sprint boundaries |
 | 2026-08-10 | Sprint estimate variance exceeded 30 percent | S29 | Record 3 actual days against 12 estimated and reforecast 42 pending stories at the observed five stories per active week to about 9 active weeks, retaining dependency-defined sprint boundaries |
 | 2026-08-10 | Sprint estimate variance exceeded 30 percent | S30 | Record 4 actual days against 12 estimated and reforecast 38 pending stories at the observed five stories per active week to about 8 active weeks, retaining dependency-defined sprint boundaries |
+| 2026-08-10 | Sprint estimate variance exceeded 30 percent | S31 | Record 3 actual days against 12 estimated and reforecast 35 pending stories at the observed five stories per active week to about 7 active weeks, retaining dependency-defined sprint boundaries |

@@ -4087,3 +4087,117 @@ with counts of 309,502, 233,915, 308,569, 9,865, and 7,161.
 **Notes for future sessions.** Keep one public series type and retain scatter
 wrapper provenance privately. F-125 owns native geometry for every plot family
 and should consume these typed values rather than duplicating ChartML parsing.
+
+### F-124, add_chart
+
+**Sprint.** S31
+**Completed.** 2026-08-10
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `Presentation::add_chart` now validates one `ChartData`
+value and atomically writes the typed ChartML part, editable workbook, slide
+and chart relationships, content-type overrides, and canonical graphic frame.
+All seven supported two-dimensional chart families share this authoring path.
+
+**Non-obvious choices.** Chart and workbook part suffixes advance independently
+from their greatest occupied positive suffix. Workbook cells and ChartML caches
+are derived from the same source value. Every fallible package and slide change
+is staged before the live presentation is updated.
+
+**Deviations from the design plan.** None. Three microscope passes hardened
+independent part numbering, nonpositive extent rollback, relationship-id
+rollover, exact cache-to-cell mapping, and the native PowerPoint gate.
+
+**Spec sections touched.** `docs/hld/09-charts-spec.md`.
+
+**Tests.** `add_chart_writes_complete_relationship_graph`,
+`add_chart_uses_collision_free_part_numbers`,
+`add_chart_caches_and_workbook_share_one_source`,
+`add_chart_rejects_invalid_data_without_mutation`,
+`authored_chart_graphic_frame_round_trips`, and the integrated full gate.
+Microsoft PowerPoint 16.104, build 16.104.25121423, opened candidate SHA-256
+`e6e9f7eef1c774d0414c5d0c3f1202da1a28635b5d089e15455b7adc3f66cb00`
+without repair. Edit Data showed the authored Category, Revenue, and Cost
+values for North, South, and West.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep package mutation on the owning presentation
+facade. Do not split the workbook, ChartML, relationships, and slide frame
+across separate public operations.
+
+### F-125, Chart rendering: geometry
+
+**Sprint.** S31
+**Completed.** 2026-08-10
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `rpptx-chart` now lowers all seven supported plot families
+to finite backend-neutral paths and markers inside stable chart-local bounds.
+The geometry covers clustered and stacked bars, line and area blank policies,
+pie and doughnut wedges, matched scatter points, and radar polygons.
+
+**Non-obvious choices.** Sparse caches retain logical indexes instead of being
+densified. Gap, Zero, and Span are projected without allocating an arbitrary
+declared count. Domain normalization scales before subtraction so opposite
+finite extremes cannot create nonfinite geometry.
+
+**Deviations from the design plan.** Three microscope passes hardened sparse
+blank handling, aggregate overflow, nonfinite scatter categories, and adjacent
+finite-coordinate cases. The approved API and HLD impact did not change.
+
+**Spec sections touched.** `docs/hld/03-architecture.md` and
+`docs/hld/09-charts-spec.md`.
+
+**Tests.** `bar_chart_rasterises_at_computed_positions`,
+`bar_geometry_handles_direction_grouping_gap_and_overlap`,
+`line_scatter_and_radar_emit_paths_and_markers`,
+`pie_doughnut_and_area_emit_closed_paths`,
+`sparse_cache_indexes_preserve_slots_and_scatter_pairing`,
+`finite_extremes_never_produce_nonfinite_geometry`, and the integrated full
+gate. Deterministic raster checks passed with the new
+`rpptx-chart` to `oxml-layout` dependency pointing inward.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep plot geometry independent of package
+resolution and final theme colours. F-127 and F-128 own those boundaries.
+
+### F-126, Chart rendering: axes, gridlines and labels
+
+**Sprint.** S31
+**Completed.** 2026-08-10
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `render_chart` now adds nice-number value axes, category
+axes, gridlines, tick marks, deterministic glyph labels, point-level data
+labels, and legends around the shared plot geometry. Radar charts use radial
+spokes, perimeter labels, and concentric value grids.
+
+**Non-obvious choices.** Annotation expansion is bounded at 16,384 logical
+slots. Label anchors derive from clipped family geometry and retain direction
+for degenerate bars and zero-radius radar points. Parsed point overrides affect
+rendering while their original raw `c:dLbl` subtrees remain the sole
+serialization source.
+
+**Deviations from the design plan.** Seven microscope passes hardened scale
+selection, explicit and reversed bounds, sparse joins, effective number
+formats, short geometry, radar annotations, and exact direction and margin
+coverage. The approved public surface and HLD impact did not change.
+
+**Spec sections touched.** `docs/hld/09-charts-spec.md`.
+
+**Tests.** `zero_to_one_hundred_axis_uses_expected_ticks`,
+`nice_number_ticks_cover_unpinned_extents`,
+`axes_gridlines_and_tick_marks_follow_model_state`,
+`labels_and_legend_shape_with_deterministic_fonts`,
+`inside_and_outside_label_positions_follow_family_geometry`,
+`radar_annotations_use_spokes_perimeter_labels_and_radial_gridlines`,
+`point_label_overrides_render_without_changing_preserved_xml`,
+`labelled_chart_raster_is_deterministic`, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Preserve the shared plot rectangle and z-order
+of gridlines, clipped plot, axes, ticks, legend swatches, and text. Keep every
+text run on the caller-provided deterministic `FontManager`.
