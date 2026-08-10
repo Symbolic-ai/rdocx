@@ -1,6 +1,6 @@
 # F-122, Pie, doughnut, area, scatter and radar plots
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S30
 **Size**: L
 **Depends on**: F-121
@@ -160,15 +160,15 @@ not enter Word sample generation or rendering. All 28 hashes must match.
 
 ## Implementation checklist
 
-- [ ] Extend the plot enum with pie, doughnut, area, scatter, and radar.
-- [ ] Add plot-specific validation and axis ownership rules.
-- [ ] Map scatter x/y wrappers onto the existing numeric series data.
-- [ ] Parse and write all five families in exact schema order.
-- [ ] Preserve unsupported plot families and children verbatim.
-- [ ] Add negative, ordering, preservation, scatter, corpus, and inline tests.
-- [ ] Produce SHA-bound LibreOffice and Poppler render evidence.
-- [ ] Update exactly HLD 09.
-- [ ] Run focused parser, corpus, oracle, microscope, and worker preparation
+- [x] Extend the plot enum with pie, doughnut, area, scatter, and radar.
+- [x] Add plot-specific validation and axis ownership rules.
+- [x] Map scatter x/y wrappers onto the existing numeric series data.
+- [x] Parse and write all five families in exact schema order.
+- [x] Preserve unsupported plot families and children verbatim.
+- [x] Add negative, ordering, preservation, scatter, corpus, and inline tests.
+- [x] Produce SHA-bound LibreOffice and Poppler render evidence.
+- [x] Update exactly HLD 09.
+- [x] Run focused parser, corpus, oracle, microscope, and worker preparation
       checks.
 
 ## Open questions

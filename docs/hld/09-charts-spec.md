@@ -109,9 +109,8 @@ ordered raw children exposed for inspection through `raw_children()`.
 `CT_TextBody` parser as `a:txBody`, with a caller-selected root local name and
 the existing caller-selected writer tag. Title, plot area, and legend are
 behavior-bearing shells. Their attributes and unsupported children stay in
-ordered raw slots. Plot variants, extensions, and unsupported root children
-remain byte-preserved at their schema boundaries until the story that types
-each surface.
+ordered raw slots. Unsupported plot variants, extensions, and unsupported root
+children remain byte-preserved at their schema boundaries.
 
 The pinned 50-deck corpus contains 26 chart parts across 9 decks. Every part
 parses, serialises, reparses, and compares as the same core model. The inline
@@ -165,10 +164,10 @@ sequential.
 `c:tx`, `c:spPr`, `c:dLbls`, `c:cat`, `c:val`, and `c:bubbleSize` write in
 schema order. Markers, data points, trendlines, extensions, unknown attributes,
 and whitespace remain byte-preserved in their original series or reference
-slots. Supported single-family bar and line plot areas own their series through
-the typed plot model below. Unsupported plot areas continue to use preserved
-plot bytes. Across the pinned corpus the model parses and reparses 66 series
-from the 26 chart parts.
+slots. Supported single-family plot areas own their series through the typed
+plot model below. Unsupported plot areas continue to use preserved plot bytes.
+Across the pinned corpus the model parses and reparses 66 series from the 26
+chart parts.
 
 `CT_DLbls` models collection-level number format, position, separator, and the
 six visibility flags for legend key, value, category name, series name,
@@ -193,7 +192,7 @@ LibreOffice 26.2.5.2 renders the SHA-bound candidate, then Poppler 26.01.0
 extracts `25%` from the PDF. The reviewed candidate SHA-256 is
 `4ba02faa8e4cff6cefa7a7dc73fc0eb0c08d62d180f83fa0d3fd56a7e4136242`.
 
-The typed plot surface currently owns two-dimensional bar and line plots:
+The typed plot surface owns all seven two-dimensional v1 plot families:
 
 ```rust
 pub enum Plot {
@@ -214,19 +213,58 @@ pub enum Plot {
         data_labels: Option<CT_DLbls>,
         axis_ids: [AxisId; 2],
     },
+    Pie {
+        first_slice_angle: u16,
+        series: Vec<Series>,
+        data_labels: Option<CT_DLbls>,
+    },
+    Doughnut {
+        first_slice_angle: u16,
+        hole_size: u8,
+        series: Vec<Series>,
+        data_labels: Option<CT_DLbls>,
+    },
+    Area {
+        grouping: Grouping,
+        series: Vec<Series>,
+        data_labels: Option<CT_DLbls>,
+        axis_ids: [AxisId; 2],
+    },
+    Scatter {
+        style: ScatterStyle,
+        series: Vec<Series>,
+        data_labels: Option<CT_DLbls>,
+        axis_ids: [AxisId; 2],
+    },
+    Radar {
+        style: RadarStyle,
+        series: Vec<Series>,
+        data_labels: Option<CT_DLbls>,
+        axis_ids: [AxisId; 2],
+    },
 }
 ```
 
 `BarDirection` distinguishes horizontal bars from columns. `BarGrouping`
 supports clustered, percentage-stacked, stacked, and standard modes.
 `Grouping` supports the percentage-stacked, stacked, and standard line modes.
-Bar gap width is from 0 through 500 and overlap is from -100 through 100. Both
-plot kinds require at least one series and exactly two axis references. Line
-marker and smooth values are typed booleans.
+Bar gap width is from 0 through 500 and overlap is from -100 through 100. Line
+marker and smooth values are typed booleans. Pie and doughnut first-slice
+angles are from 0 through 360. Doughnut hole size is from 10 through 90.
+Scatter and radar styles are closed enums. Every plot requires at least one
+series.
 
-`CT_PlotArea` owns the typed plots and the axis collection. Each plot stores
-only two `AxisId` references. Both identifiers must resolve in the plot-area
-axis set, and the complete set must retain the reciprocal `crossAx` invariant.
+Pie and doughnut plots are axis-free and reject both plot references and
+plot-area axes. Bar, line, area, scatter, and radar plots each own exactly two
+axis references. Both identifiers must resolve in the plot-area axis set, and
+the complete set must retain the reciprocal `crossAx` invariant.
+
+Scatter reuses the public `Series` cache model. Its numeric categories write
+as `c:xVal` and its values write as `c:yVal`. Readers map those wrappers back
+to the same two fields. String x values, missing x or y caches, and any mixture
+of category/value and x/y wrappers are errors.
+
+`CT_PlotArea` owns the typed plots and the axis collection.
 `CT_PlotArea::new` validates authored plots and axes. `plots()`, `plots_mut()`,
 and `axes()` expose the supported owned choice.
 
@@ -237,15 +275,18 @@ unmodelled series payloads remain in ordered raw slots. Repeated series and
 axis-id slots reconcile public insertions, edits, and reordering without moving
 schema-leading content or losing between-item payloads.
 
-Three-dimensional plots, stock, surface, `ofPie`, and other unsupported plot
-families remain opaque. A plot area containing more than one plot family also
-remains opaque, including a supported bar and line combination. The writer
-does not partially rewrite an opaque choice or replace a parsed bar family
-with line, or line with bar, while preserved family-specific payload remains.
+Three-dimensional plots, stock, surface, bubble, `ofPie`, and other unsupported
+plot families remain opaque. A plot area containing more than one plot family
+also remains opaque, including a supported bar and line combination. The
+writer does not partially rewrite an opaque choice or replace a parsed family
+while preserved family-specific payload remains.
 
-The pinned corpus contains 12 bar plots and 3 line plots. The typed boundary
-owns 11 bar plots and 2 line plots. One bar and line combination remains
-opaque, which accounts for the remaining plot of each kind.
+The pinned corpus contains 12 bar plots, 3 line plots, and 1 pie plot. The typed
+boundary owns 11 bar plots, 2 line plots, and the pie plot. One bar and line
+combination remains opaque, which accounts for the remaining plot of each
+kind. The corpus contains no doughnut, area, scatter, or radar plot, so inline
+fixtures provide non-vacuous parse, mutation, ordering, validation, and
+round-trip coverage for those families.
 
 The external viewer gate rewrites only the chart part in representative bar
 and line decks. LibreOffice 26.2.5.2 and Poppler 26.01.0 render originals and
@@ -267,6 +308,40 @@ of 0 and both observed values are 0. The SHA-256 bindings are:
 
 This viewer evidence covers plot serialization. Native bar, line, area, wedge,
 and marker path generation remains in F-125.
+
+The remaining-family viewer gate inserts typed pie, doughnut, area, scatter,
+and radar candidates into the same representative chart deck. Each candidate
+is bound to its SHA-256 before LibreOffice 26.2.5.2 exports it and Poppler
+26.01.0 rasterises page one at 150 dpi. The asserted chart rectangle spans
+pixels `[300,168)` through `[1200,956)`. A pixel is nonblank when any RGB
+channel is below 245, and each candidate must contain at least 1,000 such
+pixels in that rectangle. The observed evidence is:
+
+- Pie candidate
+  `74c3de0d605414ea640de7c999f6d48d5ee00f8c869474a354b1c04c300ac4eb`,
+  render
+  `0f35c6e6d621a160619063aecfb7e5547dc0b64e86679db5de908e2864409c1c`,
+  309,502 nonblank pixels.
+- Doughnut candidate
+  `e41dcdb9403476ac829dc1f578da010c00e2318830ec22e3f881a84b383a7fda`,
+  render
+  `5aa52b1ad8485fb9e54aafe7a19cf007d2afb1af45ddfb98b54d2a0219bf00ed`,
+  233,915 nonblank pixels.
+- Area candidate
+  `271188575c91900a1961cbb483ff57c33bac58b7f00f486a9b36b47f2d25a98d`,
+  render
+  `6a335d9a9517729664a7d6380cce27616fe7680eb2723c38c1a330534cec0a14`,
+  308,569 nonblank pixels.
+- Scatter candidate
+  `8b8d9d248bce055799a5eefea216a81be482fba06cf273698c98398885a5645f`,
+  render
+  `89a6344aa62c47c7bbab922146cfdee88b74404064efb1316db4594e8f9be199`,
+  9,865 nonblank pixels.
+- Radar candidate
+  `36b6ffe9ed5eea646d64aa151e513bbe0073a375bfe40745e83ba3aa90b69dad`,
+  render
+  `921a41e7c46c355a7bf0967429ff2f0cd066aae973313c075898436c1b33cb9f`,
+  7,161 nonblank pixels.
 
 `Axis` models the `Category`, `Value`, `Date` and `Series` roots with typed
 `Scaling`, position, delete state, gridlines, title, `NumberFormat`, tick

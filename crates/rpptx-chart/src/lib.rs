@@ -335,6 +335,8 @@ pub struct Series {
     opaque_name: bool,
     opaque_categories: bool,
     opaque_bubble_size: bool,
+    uses_scatter_wrappers: bool,
+    parsed_from_xml: bool,
     raw_attributes: XmlAttributes,
     namespace_declarations: XmlAttributes,
     raw_children: OrderedRawChildren,
@@ -360,6 +362,8 @@ impl Series {
             opaque_name: false,
             opaque_categories: false,
             opaque_bubble_size: false,
+            uses_scatter_wrappers: false,
+            parsed_from_xml: false,
             raw_attributes: Vec::new(),
             namespace_declarations: Vec::new(),
             raw_children: OrderedRawChildren::default(),
@@ -445,6 +449,10 @@ impl Series {
     }
 
     pub fn to_xml(&self) -> Result<Vec<u8>> {
+        self.to_xml_for_plot(self.uses_scatter_wrappers)
+    }
+
+    fn to_xml_for_plot(&self, scatter: bool) -> Result<Vec<u8>> {
         if self.opaque_name && self.name.is_some() {
             return Err(ChartError::DuplicateElement("c:tx".to_owned()));
         }
@@ -459,10 +467,19 @@ impl Series {
             name.validate()?;
         }
         if let Some(categories) = &self.categories {
+            if scatter && !matches!(categories, AxisData::Numeric(_)) {
+                return Err(ChartError::InvalidValue {
+                    element: "c:xVal".to_owned(),
+                    value: "scatter x values must use a numeric cache".to_owned(),
+                });
+            }
             match categories {
                 AxisData::String(reference) => reference.validate()?,
                 AxisData::Numeric(reference) => reference.validate()?,
             }
+        }
+        if scatter && self.categories.is_none() {
+            return Err(ChartError::MissingElement("c:xVal".to_owned()));
         }
         if let Some(size) = &self.bubble_size {
             size.validate()?;
@@ -524,17 +541,33 @@ impl Series {
         if let Some(categories) = &self.categories {
             let default_markup = WrapperMarkup::default();
             let markup = self.categories_markup.as_ref().unwrap_or(&default_markup);
-            write_wrapper_start(&mut writer, "c:cat", markup)?;
+            write_wrapper_start(
+                &mut writer,
+                if scatter { "c:xVal" } else { "c:cat" },
+                markup,
+            )?;
             match categories {
                 AxisData::String(reference) => reference.write_xml(&mut writer, false)?,
                 AxisData::Numeric(reference) => reference.write_xml(&mut writer, false)?,
             }
-            write_wrapper_end(&mut writer, "c:cat", markup)?;
+            write_wrapper_end(
+                &mut writer,
+                if scatter { "c:xVal" } else { "c:cat" },
+                markup,
+            )?;
         }
         emit_raw(&mut writer, self.raw_children.at(6))?;
-        write_wrapper_start(&mut writer, "c:val", &self.values_markup)?;
+        write_wrapper_start(
+            &mut writer,
+            if scatter { "c:yVal" } else { "c:val" },
+            &self.values_markup,
+        )?;
         self.values.write_xml(&mut writer, false)?;
-        write_wrapper_end(&mut writer, "c:val", &self.values_markup)?;
+        write_wrapper_end(
+            &mut writer,
+            if scatter { "c:yVal" } else { "c:val" },
+            &self.values_markup,
+        )?;
         emit_raw(&mut writer, self.raw_children.at(7))?;
         if let Some(size) = &self.bubble_size {
             let default_markup = WrapperMarkup::default();
@@ -570,6 +603,8 @@ struct SeriesParseState {
     opaque_name: bool,
     opaque_categories: bool,
     opaque_bubble_size: bool,
+    saw_standard_wrapper: bool,
+    saw_scatter_wrapper: bool,
     sp_pr: Option<CT_ShapeProperties>,
     raw_children: OrderedRawChildren,
     boundary: usize,
@@ -627,6 +662,7 @@ impl SeriesParseState {
                 self.boundary = self.boundary.max(5);
             }
             b"cat" => {
+                self.saw_standard_wrapper = true;
                 mark_once(&mut self.categories_seen, "c:cat")?;
                 let parsed = parse_wrapper(&raw, b"cat", &[b"strRef", b"numRef"], namespaces)?;
                 if let Some((choice, reference)) = parsed.choice {
@@ -648,18 +684,47 @@ impl SeriesParseState {
                 }
                 self.boundary = self.boundary.max(6);
             }
-            b"val" => {
-                let parsed = parse_wrapper(&raw, b"val", &[b"numRef"], namespaces)?;
+            b"xVal" => {
+                self.saw_scatter_wrapper = true;
+                mark_once(&mut self.categories_seen, "c:xVal")?;
+                let parsed = parse_wrapper(&raw, b"xVal", &[b"numRef"], namespaces)?;
                 let (_, reference) = parsed
                     .choice
-                    .ok_or_else(|| ChartError::MissingElement("c:val/c:numRef".to_owned()))?;
+                    .ok_or_else(|| ChartError::MissingElement("c:xVal/c:numRef".to_owned()))?;
+                self.categories = Some((
+                    AxisData::Numeric(NumericData::from_xml_with_namespaces(
+                        &reference,
+                        &parsed.namespaces,
+                    )?),
+                    parsed.markup,
+                ));
+                self.boundary = self.boundary.max(6);
+            }
+            b"val" | b"yVal" => {
+                if name == b"yVal" {
+                    self.saw_scatter_wrapper = true;
+                } else {
+                    self.saw_standard_wrapper = true;
+                }
+                let wrapper = if name == b"yVal" {
+                    b"yVal".as_slice()
+                } else {
+                    b"val".as_slice()
+                };
+                let parsed = parse_wrapper(&raw, wrapper, &[b"numRef"], namespaces)?;
+                let (_, reference) = parsed.choice.ok_or_else(|| {
+                    ChartError::MissingElement(format!(
+                        "c:{}/c:numRef",
+                        String::from_utf8_lossy(wrapper)
+                    ))
+                })?;
                 set_once(
                     &mut self.values,
                     (
                         NumericData::from_xml_with_namespaces(&reference, &parsed.namespaces)?,
                         parsed.markup,
                     ),
-                    "c:val",
+                    "c:val or c:yVal",
                 )?;
                 self.boundary = self.boundary.max(7);
             }
@@ -691,6 +756,12 @@ impl SeriesParseState {
         raw_attributes: XmlAttributes,
         namespace_declarations: XmlAttributes,
     ) -> Result<Series> {
+        if self.saw_standard_wrapper && self.saw_scatter_wrapper {
+            return Err(ChartError::InvalidValue {
+                element: "c:ser".to_owned(),
+                value: "category/value and x/y wrappers cannot be combined".to_owned(),
+            });
+        }
         let (index, index_markup) = self
             .index
             .ok_or_else(|| ChartError::MissingElement("c:idx".to_owned()))?;
@@ -730,6 +801,8 @@ impl SeriesParseState {
             opaque_name: self.opaque_name,
             opaque_categories: self.opaque_categories,
             opaque_bubble_size: self.opaque_bubble_size,
+            uses_scatter_wrappers: self.saw_scatter_wrapper,
+            parsed_from_xml: true,
             raw_attributes,
             namespace_declarations,
             raw_children: raw_children_in_schema_order(&self.raw_children, 8),
@@ -1959,6 +2032,69 @@ impl Grouping {
     }
 }
 
+/// Display style for a two-dimensional scatter plot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScatterStyle {
+    Line,
+    LineMarker,
+    Marker,
+    None,
+    Smooth,
+    SmoothMarker,
+}
+
+impl ScatterStyle {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "line" => Some(Self::Line),
+            "lineMarker" => Some(Self::LineMarker),
+            "marker" => Some(Self::Marker),
+            "none" => Some(Self::None),
+            "smooth" => Some(Self::Smooth),
+            "smoothMarker" => Some(Self::SmoothMarker),
+            _ => None,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Line => "line",
+            Self::LineMarker => "lineMarker",
+            Self::Marker => "marker",
+            Self::None => "none",
+            Self::Smooth => "smooth",
+            Self::SmoothMarker => "smoothMarker",
+        }
+    }
+}
+
+/// Display style for a two-dimensional radar plot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RadarStyle {
+    Filled,
+    Marker,
+    Standard,
+}
+
+impl RadarStyle {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "filled" => Some(Self::Filled),
+            "marker" => Some(Self::Marker),
+            "standard" => Some(Self::Standard),
+            _ => None,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Filled => "filled",
+            Self::Marker => "marker",
+            Self::Standard => "standard",
+        }
+    }
+}
+
 /// A supported two-dimensional plot owned by one plot area.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Plot {
@@ -1975,6 +2111,35 @@ pub enum Plot {
         grouping: Grouping,
         marker: bool,
         smooth: bool,
+        series: Vec<Series>,
+        data_labels: Option<CT_DLbls>,
+        axis_ids: [AxisId; 2],
+    },
+    Pie {
+        first_slice_angle: u16,
+        series: Vec<Series>,
+        data_labels: Option<CT_DLbls>,
+    },
+    Doughnut {
+        first_slice_angle: u16,
+        hole_size: u8,
+        series: Vec<Series>,
+        data_labels: Option<CT_DLbls>,
+    },
+    Area {
+        grouping: Grouping,
+        series: Vec<Series>,
+        data_labels: Option<CT_DLbls>,
+        axis_ids: [AxisId; 2],
+    },
+    Scatter {
+        style: ScatterStyle,
+        series: Vec<Series>,
+        data_labels: Option<CT_DLbls>,
+        axis_ids: [AxisId; 2],
+    },
+    Radar {
+        style: RadarStyle,
         series: Vec<Series>,
         data_labels: Option<CT_DLbls>,
         axis_ids: [AxisId; 2],
@@ -2014,9 +2179,72 @@ impl Plot {
         Ok(plot)
     }
 
-    fn axis_ids(&self) -> [AxisId; 2] {
+    pub fn pie(series: Vec<Series>) -> Result<Self> {
+        let plot = Self::Pie {
+            first_slice_angle: 0,
+            series,
+            data_labels: None,
+        };
+        plot.validate()?;
+        Ok(plot)
+    }
+
+    pub fn doughnut(series: Vec<Series>) -> Result<Self> {
+        let plot = Self::Doughnut {
+            first_slice_angle: 0,
+            hole_size: 50,
+            series,
+            data_labels: None,
+        };
+        plot.validate()?;
+        Ok(plot)
+    }
+
+    pub fn area(grouping: Grouping, series: Vec<Series>, axis_ids: [AxisId; 2]) -> Result<Self> {
+        let plot = Self::Area {
+            grouping,
+            series,
+            data_labels: None,
+            axis_ids,
+        };
+        plot.validate()?;
+        Ok(plot)
+    }
+
+    pub fn scatter(
+        style: ScatterStyle,
+        series: Vec<Series>,
+        axis_ids: [AxisId; 2],
+    ) -> Result<Self> {
+        let plot = Self::Scatter {
+            style,
+            series,
+            data_labels: None,
+            axis_ids,
+        };
+        plot.validate()?;
+        Ok(plot)
+    }
+
+    pub fn radar(style: RadarStyle, series: Vec<Series>, axis_ids: [AxisId; 2]) -> Result<Self> {
+        let plot = Self::Radar {
+            style,
+            series,
+            data_labels: None,
+            axis_ids,
+        };
+        plot.validate()?;
+        Ok(plot)
+    }
+
+    fn axis_ids(&self) -> Option<[AxisId; 2]> {
         match self {
-            Self::Bar { axis_ids, .. } | Self::Line { axis_ids, .. } => *axis_ids,
+            Self::Bar { axis_ids, .. }
+            | Self::Line { axis_ids, .. }
+            | Self::Area { axis_ids, .. }
+            | Self::Scatter { axis_ids, .. }
+            | Self::Radar { axis_ids, .. } => Some(*axis_ids),
+            Self::Pie { .. } | Self::Doughnut { .. } => None,
         }
     }
 
@@ -2042,26 +2270,110 @@ impl Plot {
                         value: overlap.to_string(),
                     });
                 }
-                (series, data_labels, axis_ids)
+                (series, data_labels, Some(axis_ids))
             }
             Self::Line {
                 series,
                 data_labels,
                 axis_ids,
                 ..
-            } => (series, data_labels, axis_ids),
+            } => (series, data_labels, Some(axis_ids)),
+            Self::Pie {
+                first_slice_angle,
+                series,
+                data_labels,
+            } => {
+                if *first_slice_angle > 360 {
+                    return Err(ChartError::InvalidValue {
+                        element: "c:firstSliceAng".to_owned(),
+                        value: first_slice_angle.to_string(),
+                    });
+                }
+                (series, data_labels, None)
+            }
+            Self::Doughnut {
+                first_slice_angle,
+                hole_size,
+                series,
+                data_labels,
+            } => {
+                if *first_slice_angle > 360 {
+                    return Err(ChartError::InvalidValue {
+                        element: "c:firstSliceAng".to_owned(),
+                        value: first_slice_angle.to_string(),
+                    });
+                }
+                if !(10..=90).contains(hole_size) {
+                    return Err(ChartError::InvalidValue {
+                        element: "c:holeSize".to_owned(),
+                        value: hole_size.to_string(),
+                    });
+                }
+                (series, data_labels, None)
+            }
+            Self::Area {
+                series,
+                data_labels,
+                axis_ids,
+                ..
+            }
+            | Self::Radar {
+                series,
+                data_labels,
+                axis_ids,
+                ..
+            } => (series, data_labels, Some(axis_ids)),
+            Self::Scatter {
+                series,
+                data_labels,
+                axis_ids,
+                ..
+            } => {
+                for item in series {
+                    if !matches!(item.categories, Some(AxisData::Numeric(_))) {
+                        return Err(ChartError::InvalidValue {
+                            element: "c:xVal".to_owned(),
+                            value: "scatter series requires numeric x values".to_owned(),
+                        });
+                    }
+                }
+                (series, data_labels, Some(axis_ids))
+            }
         };
         if series.is_empty() {
             return Err(ChartError::MissingElement("c:ser".to_owned()));
         }
-        if axis_ids[0] == axis_ids[1] {
-            return Err(ChartError::DuplicateElement(format!(
-                "c:axId {}",
-                axis_ids[0].value()
-            )));
+        let scatter_plot = matches!(self, Self::Scatter { .. });
+        for item in series {
+            if item.bubble_size.is_some() || item.opaque_bubble_size {
+                return Err(ChartError::InvalidValue {
+                    element: "c:bubbleSize".to_owned(),
+                    value: "bubble size is only valid in an opaque bubble plot".to_owned(),
+                });
+            }
+            if item.uses_scatter_wrappers && !scatter_plot {
+                return Err(ChartError::InvalidValue {
+                    element: "c:ser".to_owned(),
+                    value: "x/y wrappers are only valid in scatter plots".to_owned(),
+                });
+            }
+            if scatter_plot && item.parsed_from_xml && !item.uses_scatter_wrappers {
+                return Err(ChartError::InvalidValue {
+                    element: "c:ser".to_owned(),
+                    value: "scatter plots require xVal/yVal wrappers".to_owned(),
+                });
+            }
         }
-        for id in axis_ids {
-            AxisId::new(id.value())?;
+        if let Some(axis_ids) = axis_ids {
+            if axis_ids[0] == axis_ids[1] {
+                return Err(ChartError::DuplicateElement(format!(
+                    "c:axId {}",
+                    axis_ids[0].value()
+                )));
+            }
+            for id in axis_ids {
+                AxisId::new(id.value())?;
+            }
         }
         if let Some(labels) = labels {
             labels.validate()?;
@@ -2400,10 +2712,14 @@ struct PlotMarkup {
     overlap: Option<ScalarMarkup>,
     marker: Option<ScalarMarkup>,
     smooth: Option<ScalarMarkup>,
+    first_slice_angle: Option<ScalarMarkup>,
+    hole_size: Option<ScalarMarkup>,
+    style: Option<ScalarMarkup>,
     axis_ids: Vec<AxisIdMarkup>,
     original_series_keys: Vec<(u32, u32)>,
     original_axis_ids: Vec<AxisId>,
     parsed_bar: Option<bool>,
+    parsed_remaining: Option<&'static str>,
 }
 
 /// A plot-area shell. F-119 through F-122 replace selected raw slots with types.
@@ -3996,7 +4312,16 @@ impl CT_PlotArea {
             .cloned()
             .collect();
         let typed_local = (plot_roots.len() == 1
-            && matches!(plot_roots[0].as_slice(), b"barChart" | b"lineChart"))
+            && matches!(
+                plot_roots[0].as_slice(),
+                b"barChart"
+                    | b"lineChart"
+                    | b"pieChart"
+                    | b"doughnutChart"
+                    | b"areaChart"
+                    | b"scatterChart"
+                    | b"radarChart"
+            ))
         .then(|| plot_roots[0].clone());
 
         let Some(typed_local) = typed_local else {
@@ -4124,7 +4449,13 @@ impl CT_PlotArea {
             return Ok(plots
                 .iter()
                 .flat_map(|plot| match plot {
-                    Plot::Bar { series, .. } | Plot::Line { series, .. } => series.clone(),
+                    Plot::Bar { series, .. }
+                    | Plot::Line { series, .. }
+                    | Plot::Pie { series, .. }
+                    | Plot::Doughnut { series, .. }
+                    | Plot::Area { series, .. }
+                    | Plot::Scatter { series, .. }
+                    | Plot::Radar { series, .. } => series.clone(),
                 })
                 .collect());
         }
@@ -4168,13 +4499,29 @@ impl CT_PlotArea {
         validate_axis_pairs(&self.axes)?;
         for plot in plots {
             plot.validate()?;
-            for id in plot.axis_ids() {
-                if !self.axes.iter().any(|axis| axis.id == id) {
-                    return Err(ChartError::InvalidValue {
-                        element: "c:axId".to_owned(),
-                        value: format!("plot references missing axis {}", id.value()),
-                    });
+            if let Some(axis_ids) = plot.axis_ids() {
+                for id in axis_ids {
+                    if !self.axes.iter().any(|axis| axis.id == id) {
+                        return Err(ChartError::InvalidValue {
+                            element: "c:axId".to_owned(),
+                            value: format!("plot references missing axis {}", id.value()),
+                        });
+                    }
                 }
+            } else if !self.axes.is_empty() {
+                return Err(ChartError::InvalidValue {
+                    element: "c:plotArea".to_owned(),
+                    value: "pie and doughnut plot areas must not own axes".to_owned(),
+                });
+            }
+            if plot.axis_ids().is_some() && self.axes.len() != 2 {
+                return Err(ChartError::InvalidValue {
+                    element: "c:plotArea".to_owned(),
+                    value: format!(
+                        "axis-owned plot requires exactly 2 axes, found {}",
+                        self.axes.len()
+                    ),
+                });
             }
         }
         Ok(())
@@ -4241,11 +4588,356 @@ fn parse_plot(xml: &[u8], inherited: &NamespaceBindings) -> Result<(Plot, PlotMa
     match local.as_slice() {
         b"barChart" => parse_bar_plot(xml, inherited),
         b"lineChart" => parse_line_plot(xml, inherited),
+        b"pieChart" | b"doughnutChart" | b"areaChart" | b"scatterChart" | b"radarChart" => {
+            parse_remaining_plot(xml, inherited, &local)
+        }
         _ => Err(ChartError::UnexpectedElement(format!(
             "c:{}",
             String::from_utf8_lossy(&local)
         ))),
     }
+}
+
+fn parse_remaining_plot(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    local: &[u8],
+) -> Result<(Plot, PlotMarkup)> {
+    let root = String::from_utf8_lossy(local).into_owned();
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(OxmlError::from)?
+        {
+            Event::Start(element) if matches_local_name(element.name().as_ref(), local) => {
+                let namespaces = typed_rewrite_bindings(&element, inherited)?;
+                let (mut raw_attributes, namespace_declarations) =
+                    capture_fixed_root_attributes(&element, &["xmlns:c", "xmlns:a", "xmlns:r"])?;
+                raw_attributes.splice(0..0, namespace_declarations);
+                let mut grouping = None;
+                let mut style = None;
+                let mut first_slice_angle = None;
+                let mut hole_size = None;
+                let mut series = Vec::new();
+                let mut data_labels = None;
+                let mut axis_ids = Vec::new();
+                let mut raw_children = OrderedRawChildren::default();
+                let mut boundary = 0usize;
+                let mut inner = Vec::new();
+                loop {
+                    match reader
+                        .read_event_into(&mut inner)
+                        .map_err(OxmlError::from)?
+                    {
+                        Event::Start(child) => {
+                            let name = chart_child_local(&child, &namespaces)?;
+                            let raw = capture_element(&mut reader, &child)?;
+                            parse_remaining_plot_child(
+                                local,
+                                name.as_deref().unwrap_or_default(),
+                                raw,
+                                &namespaces,
+                                &mut grouping,
+                                &mut style,
+                                &mut first_slice_angle,
+                                &mut hole_size,
+                                &mut series,
+                                &mut data_labels,
+                                &mut axis_ids,
+                                &mut raw_children,
+                                &mut boundary,
+                            )?;
+                        }
+                        Event::Empty(child) => {
+                            let name = chart_child_local(&child, &namespaces)?;
+                            let raw = capture_empty_element(&child)?;
+                            parse_remaining_plot_child(
+                                local,
+                                name.as_deref().unwrap_or_default(),
+                                raw,
+                                &namespaces,
+                                &mut grouping,
+                                &mut style,
+                                &mut first_slice_angle,
+                                &mut hole_size,
+                                &mut series,
+                                &mut data_labels,
+                                &mut axis_ids,
+                                &mut raw_children,
+                                &mut boundary,
+                            )?;
+                        }
+                        event @ (Event::Text(_)
+                        | Event::CData(_)
+                        | Event::Comment(_)
+                        | Event::PI(_)
+                        | Event::GeneralRef(_)) => {
+                            raw_children.push(boundary, capture_event(event)?);
+                        }
+                        Event::End(end) if matches_local_name(end.name().as_ref(), local) => {
+                            let needs_axes =
+                                matches!(local, b"areaChart" | b"scatterChart" | b"radarChart");
+                            if needs_axes && axis_ids.len() != 2 {
+                                return Err(ChartError::InvalidValue {
+                                    element: format!("c:{root}/c:axId"),
+                                    value: format!("expected 2, found {}", axis_ids.len()),
+                                });
+                            }
+                            if !needs_axes && !axis_ids.is_empty() {
+                                return Err(ChartError::InvalidValue {
+                                    element: format!("c:{root}/c:axId"),
+                                    value: "axis-free plot contains axis references".to_owned(),
+                                });
+                            }
+                            let parsed_ids = needs_axes.then(|| [axis_ids[0].0, axis_ids[1].0]);
+                            let original_series_keys = series
+                                .iter()
+                                .map(|item| (item.index, item.order))
+                                .collect::<Vec<_>>();
+                            let plot = match local {
+                                b"pieChart" => Plot::Pie {
+                                    first_slice_angle: first_slice_angle
+                                        .as_ref()
+                                        .map_or(0, |item| item.0),
+                                    series,
+                                    data_labels,
+                                },
+                                b"doughnutChart" => Plot::Doughnut {
+                                    first_slice_angle: first_slice_angle
+                                        .as_ref()
+                                        .map_or(0, |item| item.0),
+                                    hole_size: hole_size.as_ref().map_or(50, |item| item.0),
+                                    series,
+                                    data_labels,
+                                },
+                                b"areaChart" => Plot::Area {
+                                    grouping: grouping
+                                        .as_ref()
+                                        .ok_or_else(|| {
+                                            ChartError::MissingElement("c:grouping".to_owned())
+                                        })?
+                                        .0,
+                                    series,
+                                    data_labels,
+                                    axis_ids: parsed_ids.ok_or_else(|| {
+                                        ChartError::MissingElement("c:areaChart/c:axId".to_owned())
+                                    })?,
+                                },
+                                b"scatterChart" => {
+                                    let lexical = style
+                                        .as_ref()
+                                        .ok_or_else(|| {
+                                            ChartError::MissingElement("c:scatterStyle".to_owned())
+                                        })?
+                                        .0
+                                        .as_str();
+                                    Plot::Scatter {
+                                        style: ScatterStyle::parse(lexical).ok_or_else(|| {
+                                            invalid_attribute(
+                                                "scatterStyle",
+                                                "val",
+                                                lexical.to_owned(),
+                                            )
+                                        })?,
+                                        series,
+                                        data_labels,
+                                        axis_ids: parsed_ids.ok_or_else(|| {
+                                            ChartError::MissingElement(
+                                                "c:scatterChart/c:axId".to_owned(),
+                                            )
+                                        })?,
+                                    }
+                                }
+                                b"radarChart" => {
+                                    let lexical = style
+                                        .as_ref()
+                                        .ok_or_else(|| {
+                                            ChartError::MissingElement("c:radarStyle".to_owned())
+                                        })?
+                                        .0
+                                        .as_str();
+                                    Plot::Radar {
+                                        style: RadarStyle::parse(lexical).ok_or_else(|| {
+                                            invalid_attribute(
+                                                "radarStyle",
+                                                "val",
+                                                lexical.to_owned(),
+                                            )
+                                        })?,
+                                        series,
+                                        data_labels,
+                                        axis_ids: parsed_ids.ok_or_else(|| {
+                                            ChartError::MissingElement(
+                                                "c:radarChart/c:axId".to_owned(),
+                                            )
+                                        })?,
+                                    }
+                                }
+                                _ => {
+                                    return Err(ChartError::UnexpectedElement(format!(
+                                        "c:{}",
+                                        String::from_utf8_lossy(local)
+                                    )));
+                                }
+                            };
+                            plot.validate()?;
+                            let final_boundary = boundary.max(original_series_keys.len() + 6);
+                            return Ok((
+                                plot,
+                                PlotMarkup {
+                                    raw_attributes,
+                                    raw_children: raw_children_in_schema_order(
+                                        &raw_children,
+                                        final_boundary,
+                                    ),
+                                    grouping: grouping.map(|item| item.1),
+                                    first_slice_angle: first_slice_angle.map(|item| item.1),
+                                    hole_size: hole_size.map(|item| item.1),
+                                    style: style.map(|item| item.1),
+                                    axis_ids: axis_ids.into_iter().map(|item| item.1).collect(),
+                                    original_series_keys,
+                                    original_axis_ids: parsed_ids
+                                        .map_or_else(Vec::new, |ids| ids.to_vec()),
+                                    parsed_remaining: match local {
+                                        b"pieChart" => Some("pieChart"),
+                                        b"doughnutChart" => Some("doughnutChart"),
+                                        b"areaChart" => Some("areaChart"),
+                                        b"scatterChart" => Some("scatterChart"),
+                                        b"radarChart" => Some("radarChart"),
+                                        _ => None,
+                                    },
+                                    ..PlotMarkup::default()
+                                },
+                            ));
+                        }
+                        Event::Eof => return Err(missing_end(&format!("c:{root}"))),
+                        _ => {}
+                    }
+                    inner.clear();
+                }
+            }
+            Event::Empty(element) if matches_local_name(element.name().as_ref(), local) => {
+                return Err(ChartError::MissingElement("c:ser".to_owned()));
+            }
+            Event::Start(element) | Event::Empty(element) => {
+                return Err(ChartError::UnexpectedElement(element_name(&element)));
+            }
+            Event::Eof => return Err(ChartError::MissingElement(format!("c:{root}"))),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_remaining_plot_child(
+    root: &[u8],
+    name: &[u8],
+    raw: Vec<u8>,
+    namespaces: &NamespaceBindings,
+    grouping: &mut Option<(Grouping, ScalarMarkup)>,
+    style: &mut Option<(String, ScalarMarkup)>,
+    first_slice_angle: &mut Option<(u16, ScalarMarkup)>,
+    hole_size: &mut Option<(u8, ScalarMarkup)>,
+    series: &mut Vec<Series>,
+    data_labels: &mut Option<CT_DLbls>,
+    axis_ids: &mut Vec<(AxisId, AxisIdMarkup)>,
+    raw_children: &mut OrderedRawChildren,
+    boundary: &mut usize,
+) -> Result<()> {
+    let property_first = matches!(root, b"areaChart" | b"scatterChart" | b"radarChart");
+    let base = usize::from(property_first);
+    match name {
+        b"grouping" if root == b"areaChart" => {
+            let (value, markup) = required_scalar(&raw, "grouping")?;
+            let parsed = Grouping::parse(&value)
+                .ok_or_else(|| invalid_attribute("grouping", "val", value))?;
+            set_once(grouping, (parsed, markup), "c:grouping")?;
+            *boundary = (*boundary).max(1);
+        }
+        b"scatterStyle" if root == b"scatterChart" => {
+            let (value, markup) = required_scalar(&raw, "scatterStyle")?;
+            if ScatterStyle::parse(&value).is_none() {
+                return Err(invalid_attribute("scatterStyle", "val", value));
+            }
+            set_once(style, (value, markup), "c:scatterStyle")?;
+            *boundary = (*boundary).max(1);
+        }
+        b"radarStyle" if root == b"radarChart" => {
+            let (value, markup) = required_scalar(&raw, "radarStyle")?;
+            if RadarStyle::parse(&value).is_none() {
+                return Err(invalid_attribute("radarStyle", "val", value));
+            }
+            set_once(style, (value, markup), "c:radarStyle")?;
+            *boundary = (*boundary).max(1);
+        }
+        b"ser" => {
+            series.push(Series::from_xml_with_namespaces(&raw, namespaces)?);
+            *boundary = (*boundary).max(base + series.len());
+        }
+        b"dLbls" => {
+            set_once(
+                data_labels,
+                CT_DLbls::from_xml_with_namespaces(&raw, namespaces)?,
+                "c:dLbls",
+            )?;
+            *boundary = (*boundary).max(base + series.len() + 1);
+        }
+        b"firstSliceAng" if matches!(root, b"pieChart" | b"doughnutChart") => {
+            let (value, markup) = required_scalar(&raw, "firstSliceAng")?;
+            let parsed = value
+                .parse::<u16>()
+                .map_err(|_| invalid_attribute("firstSliceAng", "val", value.clone()))?;
+            if parsed > 360 {
+                return Err(invalid_attribute("firstSliceAng", "val", value));
+            }
+            set_once(first_slice_angle, (parsed, markup), "c:firstSliceAng")?;
+            *boundary = (*boundary).max(series.len() + 2);
+        }
+        b"holeSize" if root == b"doughnutChart" => {
+            let (value, markup) = required_scalar(&raw, "holeSize")?;
+            let parsed = value
+                .parse::<u8>()
+                .map_err(|_| invalid_attribute("holeSize", "val", value.clone()))?;
+            if !(10..=90).contains(&parsed) {
+                return Err(invalid_attribute("holeSize", "val", value));
+            }
+            set_once(hole_size, (parsed, markup), "c:holeSize")?;
+            *boundary = (*boundary).max(series.len() + 3);
+        }
+        b"axId" if property_first => {
+            if axis_ids.len() == 2 {
+                return Err(ChartError::DuplicateElement("c:axId".to_owned()));
+            }
+            axis_ids.push(parse_axis_id_scalar(&raw, "axId")?);
+            *boundary = (*boundary).max(base + series.len() + 1 + axis_ids.len());
+        }
+        b"axId" => {
+            return Err(ChartError::InvalidValue {
+                element: "c:axId".to_owned(),
+                value: "axis-free plot contains axis reference".to_owned(),
+            });
+        }
+        _ => {
+            let raw_boundary = match (root, name) {
+                (_, b"varyColors") => base,
+                (b"pieChart", b"extLst") => series.len() + 2,
+                (b"doughnutChart", b"extLst") => series.len() + 3,
+                (b"areaChart" | b"scatterChart" | b"radarChart", b"dropLines") => {
+                    base + series.len() + 1
+                }
+                (b"areaChart" | b"scatterChart" | b"radarChart", b"extLst") => {
+                    base + series.len() + 3
+                }
+                _ => *boundary,
+            };
+            raw_children.push(raw_boundary, raw);
+            *boundary = (*boundary).max(raw_boundary);
+        }
+    }
+    Ok(())
 }
 
 fn parse_bar_plot(xml: &[u8], inherited: &NamespaceBindings) -> Result<(Plot, PlotMarkup)> {
@@ -4358,10 +5050,14 @@ fn parse_bar_plot(xml: &[u8], inherited: &NamespaceBindings) -> Result<(Plot, Pl
                                     overlap: overlap.map(|item| item.1),
                                     marker: None,
                                     smooth: None,
+                                    first_slice_angle: None,
+                                    hole_size: None,
+                                    style: None,
                                     axis_ids: axis_ids.into_iter().map(|item| item.1).collect(),
                                     original_series_keys,
                                     original_axis_ids: parsed_ids.to_vec(),
                                     parsed_bar: Some(true),
+                                    parsed_remaining: None,
                                 },
                             ));
                         }
@@ -4566,10 +5262,14 @@ fn parse_line_plot(xml: &[u8], inherited: &NamespaceBindings) -> Result<(Plot, P
                                     overlap: None,
                                     marker: marker.map(|item| item.1),
                                     smooth: smooth.map(|item| item.1),
+                                    first_slice_angle: None,
+                                    hole_size: None,
+                                    style: None,
                                     axis_ids: axis_ids.into_iter().map(|item| item.1).collect(),
                                     original_series_keys,
                                     original_axis_ids: parsed_ids.to_vec(),
                                     parsed_bar: Some(false),
+                                    parsed_remaining: None,
                                 },
                             ));
                         }
@@ -4656,6 +5356,23 @@ fn write_plot<W: Write>(writer: &mut Writer<W>, plot: &Plot, markup: &PlotMarkup
     plot.validate()?;
     if let Some(parsed_bar) = markup.parsed_bar
         && parsed_bar != matches!(plot, Plot::Bar { .. })
+    {
+        return Err(ChartError::InvalidValue {
+            element: "c:plotArea".to_owned(),
+            value: "a parsed plot family cannot be replaced while preserved payload remains"
+                .to_owned(),
+        });
+    }
+    let current_remaining = match plot {
+        Plot::Pie { .. } => Some("pieChart"),
+        Plot::Doughnut { .. } => Some("doughnutChart"),
+        Plot::Area { .. } => Some("areaChart"),
+        Plot::Scatter { .. } => Some("scatterChart"),
+        Plot::Radar { .. } => Some("radarChart"),
+        Plot::Bar { .. } | Plot::Line { .. } => None,
+    };
+    if let Some(parsed) = markup.parsed_remaining
+        && current_remaining != Some(parsed)
     {
         return Err(ChartError::InvalidValue {
             element: "c:plotArea".to_owned(),
@@ -4878,6 +5595,196 @@ fn write_plot<W: Write>(writer: &mut Writer<W>, plot: &Plot, markup: &PlotMarkup
             }
             writer
                 .write_event(Event::End(BytesEnd::new("c:lineChart")))
+                .map_err(OxmlError::from)?;
+        }
+        remaining => {
+            let (
+                root,
+                property,
+                series,
+                data_labels,
+                axis_ids,
+                first_slice_angle,
+                hole_size,
+                scatter,
+            ) = match remaining {
+                Plot::Pie {
+                    first_slice_angle,
+                    series,
+                    data_labels,
+                } => (
+                    "pieChart",
+                    None,
+                    series,
+                    data_labels,
+                    None,
+                    Some(*first_slice_angle),
+                    None,
+                    false,
+                ),
+                Plot::Doughnut {
+                    first_slice_angle,
+                    hole_size,
+                    series,
+                    data_labels,
+                } => (
+                    "doughnutChart",
+                    None,
+                    series,
+                    data_labels,
+                    None,
+                    Some(*first_slice_angle),
+                    Some(*hole_size),
+                    false,
+                ),
+                Plot::Area {
+                    grouping,
+                    series,
+                    data_labels,
+                    axis_ids,
+                } => (
+                    "areaChart",
+                    Some(("c:grouping", grouping.as_str(), markup.grouping.as_ref())),
+                    series,
+                    data_labels,
+                    Some(axis_ids),
+                    None,
+                    None,
+                    false,
+                ),
+                Plot::Scatter {
+                    style,
+                    series,
+                    data_labels,
+                    axis_ids,
+                } => (
+                    "scatterChart",
+                    Some(("c:scatterStyle", style.as_str(), markup.style.as_ref())),
+                    series,
+                    data_labels,
+                    Some(axis_ids),
+                    None,
+                    None,
+                    true,
+                ),
+                Plot::Radar {
+                    style,
+                    series,
+                    data_labels,
+                    axis_ids,
+                } => (
+                    "radarChart",
+                    Some(("c:radarStyle", style.as_str(), markup.style.as_ref())),
+                    series,
+                    data_labels,
+                    Some(axis_ids),
+                    None,
+                    None,
+                    false,
+                ),
+                Plot::Bar { .. } | Plot::Line { .. } => unreachable!("handled above"),
+            };
+            let tag = format!("c:{root}");
+            let mut start = BytesStart::new(&tag);
+            push_attributes(&mut start, &markup.raw_attributes);
+            writer
+                .write_event(Event::Start(start))
+                .map_err(OxmlError::from)?;
+            let base = usize::from(property.is_some());
+            if let Some((name, value, scalar_markup)) = property {
+                emit_raw(writer, markup.raw_children.at(0))?;
+                write_scalar(writer, name, value, scalar_markup)?;
+            }
+            let original_to_current =
+                series_original_to_current(&markup.original_series_keys, series);
+            emit_repeated_raw(
+                writer,
+                &markup.raw_children,
+                base,
+                &original_to_current,
+                series.len(),
+                0,
+            )?;
+            for (index, item) in series.iter().enumerate() {
+                writer
+                    .get_mut()
+                    .write_all(&item.to_xml_for_plot(scatter)?)
+                    .map_err(OxmlError::from)?;
+                emit_repeated_raw(
+                    writer,
+                    &markup.raw_children,
+                    base,
+                    &original_to_current,
+                    series.len(),
+                    index + 1,
+                )?;
+            }
+            if let Some(labels) = data_labels {
+                writer
+                    .get_mut()
+                    .write_all(&labels.to_xml()?)
+                    .map_err(OxmlError::from)?;
+            }
+            let trailing = base + markup.original_series_keys.len();
+            if let Some(axis_ids) = axis_ids {
+                let axis_original_to_current =
+                    axis_original_to_current(&markup.original_axis_ids, axis_ids);
+                let axis_current_to_original =
+                    invert_original_to_current(&axis_original_to_current, axis_ids.len());
+                emit_repeated_raw(
+                    writer,
+                    &markup.raw_children,
+                    trailing + 1,
+                    &axis_original_to_current,
+                    axis_ids.len(),
+                    0,
+                )?;
+                for (index, id) in axis_ids.iter().enumerate() {
+                    let default_markup = default_axis_id_markup(*id);
+                    let original_markup = axis_current_to_original[index]
+                        .and_then(|original| markup.axis_ids.get(original));
+                    write_axis_id(
+                        writer,
+                        "c:axId",
+                        *id,
+                        original_markup.unwrap_or(&default_markup),
+                    )?;
+                    emit_repeated_raw(
+                        writer,
+                        &markup.raw_children,
+                        trailing + 1,
+                        &axis_original_to_current,
+                        axis_ids.len(),
+                        index + 1,
+                    )?;
+                }
+            } else {
+                emit_raw(writer, markup.raw_children.at(trailing + 1))?;
+                if let Some(angle) = first_slice_angle {
+                    if angle != 0 || markup.first_slice_angle.is_some() {
+                        write_scalar(
+                            writer,
+                            "c:firstSliceAng",
+                            &angle.to_string(),
+                            markup.first_slice_angle.as_ref(),
+                        )?;
+                    }
+                    emit_raw(writer, markup.raw_children.at(trailing + 2))?;
+                }
+                if let Some(size) = hole_size {
+                    if size != 50 || markup.hole_size.is_some() {
+                        write_scalar(
+                            writer,
+                            "c:holeSize",
+                            &size.to_string(),
+                            markup.hole_size.as_ref(),
+                        )?;
+                    }
+                    emit_raw(writer, markup.raw_children.at(trailing + 3))?;
+                }
+            }
+            writer
+                .write_event(Event::End(BytesEnd::new(&tag)))
                 .map_err(OxmlError::from)?;
         }
     }
@@ -6279,6 +7186,295 @@ mod tests {
     const PDFTOPPM_VERSION: &str = "pdftoppm version 26.01.0";
     const PLOT_RENDER_NORMALIZED_MAE_THRESHOLD: f64 = 0.0;
 
+    #[test]
+    fn remaining_v1_plots_round_trip_and_render() {
+        for (kind, plot, axes) in remaining_plot_fixtures() {
+            let xml = chart_with_optional_axes(&plot, axes);
+            let parsed = CT_ChartSpace::from_xml(xml.as_bytes())
+                .unwrap_or_else(|error| panic!("{kind}: parse failed: {error}"));
+            assert_eq!(parsed.chart.plot_area.plots().unwrap().len(), 1);
+            assert_eq!(
+                parsed.chart.plot_area.axes().unwrap().len(),
+                usize::from(axes) * 2
+            );
+            let written = parsed
+                .to_xml()
+                .unwrap_or_else(|error| panic!("{kind}: write failed: {error}"));
+            assert_eq!(
+                parsed,
+                CT_ChartSpace::from_xml(&written)
+                    .unwrap_or_else(|error| panic!("{kind}: reparse failed: {error}"))
+            );
+        }
+        if let Some(corpus) = require_or_skip_corpus() {
+            verify_remaining_plot_viewer_gate(&corpus);
+        }
+    }
+
+    #[test]
+    fn remaining_plot_families_write_fixed_prefixes_in_schema_order() {
+        for (kind, plot, axes) in remaining_plot_fixtures() {
+            let parsed =
+                CT_ChartSpace::from_xml(chart_with_optional_axes(&plot, axes).as_bytes()).unwrap();
+            let written = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+            assert!(written.contains(&format!("<c:{kind}")));
+            assert!(!written.contains(&format!("<q:{kind}")));
+            let series = written.find("<c:ser").unwrap();
+            let labels = written.find("<c:dLbls").unwrap();
+            assert!(series < labels, "{kind}: series must precede labels");
+            if matches!(kind, "areaChart" | "scatterChart" | "radarChart") {
+                let property = match kind {
+                    "areaChart" => "<c:grouping",
+                    "scatterChart" => "<c:scatterStyle",
+                    "radarChart" => "<c:radarStyle",
+                    _ => unreachable!(),
+                };
+                assert!(written.find(property).unwrap() < series);
+                assert!(labels < written.find("<c:axId").unwrap());
+            } else {
+                assert!(labels < written.find("<c:firstSliceAng").unwrap());
+            }
+            if kind == "doughnutChart" {
+                assert!(
+                    written.find("<c:firstSliceAng").unwrap()
+                        < written.find("<c:holeSize").unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scatter_series_map_numeric_categories_and_values_to_x_and_y() {
+        let plot = remaining_plot_fixtures()
+            .into_iter()
+            .find(|(kind, _, _)| *kind == "scatterChart")
+            .unwrap()
+            .1;
+        let mut parsed =
+            CT_ChartSpace::from_xml(chart_with_optional_axes(&plot, true).as_bytes()).unwrap();
+        let standalone_series = {
+            let Plot::Scatter { series, .. } = &mut parsed.chart.plot_area.plots_mut().unwrap()[0]
+            else {
+                panic!("expected scatter plot");
+            };
+            let Some(AxisData::Numeric(x_values)) = &mut series[0].categories else {
+                panic!("expected numeric x values");
+            };
+            x_values.values[0] = 3.5;
+            series[0].values.values[0] = 7.5;
+            series[0].clone()
+        };
+        let written = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+        assert!(written.contains("<c:xVal>"));
+        assert!(written.contains("<c:yVal>"));
+        assert!(!written.contains("<c:cat>"));
+        assert!(!written.contains("<c:val>"));
+        assert!(written.contains("<c:v>3.5</c:v>"));
+        assert!(written.contains("<c:v>7.5</c:v>"));
+        let standalone = String::from_utf8(standalone_series.to_xml().unwrap()).unwrap();
+        assert!(standalone.contains("<c:xVal>"));
+        assert!(standalone.contains("<c:yVal>"));
+        assert!(!standalone.contains("<c:cat>"));
+        assert!(!standalone.contains("<c:val>"));
+    }
+
+    #[test]
+    fn malformed_remaining_plots_return_errors_without_panicking() {
+        let series = plot_series(0);
+        let scatter = numeric_plot_series(0);
+        let opaque_bubble = series.replace(
+            "</q:val></q:ser>",
+            "</q:val><q:bubbleSize><x:opaque/></q:bubbleSize></q:ser>",
+        );
+        let cases = [
+            r#"<q:pieChart/>"#.to_owned(),
+            format!(r#"<q:pieChart>{series}<q:firstSliceAng val="361"/></q:pieChart>"#),
+            format!(
+                r#"<q:pieChart>{series}<q:firstSliceAng val="1"/><q:firstSliceAng val="2"/></q:pieChart>"#
+            ),
+            format!(r#"<q:doughnutChart>{series}<q:holeSize val="9"/></q:doughnutChart>"#),
+            format!(
+                r#"<q:doughnutChart>{series}<q:holeSize val="50"/><q:holeSize val="60"/></q:doughnutChart>"#
+            ),
+            format!(
+                r#"<q:areaChart><q:grouping val="clustered"/>{series}<q:axId val="1"/><q:axId val="2"/></q:areaChart>"#
+            ),
+            format!(
+                r#"<q:areaChart><q:grouping val="standard"/><q:grouping val="stacked"/>{series}<q:axId val="1"/><q:axId val="2"/></q:areaChart>"#
+            ),
+            format!(
+                r#"<q:scatterChart><q:scatterStyle val="dots"/>{scatter}<q:axId val="1"/><q:axId val="2"/></q:scatterChart>"#
+            ),
+            format!(
+                r#"<q:scatterChart><q:scatterStyle val="marker"/><q:scatterStyle val="line"/>{scatter}<q:axId val="1"/><q:axId val="2"/></q:scatterChart>"#
+            ),
+            format!(
+                r#"<q:radarChart><q:radarStyle val="smooth"/>{series}<q:axId val="1"/><q:axId val="2"/></q:radarChart>"#
+            ),
+            format!(
+                r#"<q:radarChart><q:radarStyle val="marker"/>{series}<q:dLbls/><q:dLbls/><q:axId val="1"/><q:axId val="2"/></q:radarChart>"#
+            ),
+            format!(r#"<q:pieChart>{series}<q:axId val="1"/></q:pieChart>"#),
+            format!(
+                r#"<q:areaChart><q:grouping val="standard"/>{series}<q:axId val="1"/></q:areaChart>"#
+            ),
+            r#"<q:areaChart><q:grouping val="standard"/><q:axId val="1"/><q:axId val="2"/></q:areaChart>"#.to_owned(),
+            format!(
+                r#"<q:areaChart><q:grouping val="standard"/>{series}<q:axId val="1"/><q:axId val="2"/><q:axId val="3"/></q:areaChart>"#
+            ),
+            format!(
+                r#"<q:scatterChart><q:scatterStyle val="marker"/>{series}<q:axId val="1"/><q:axId val="2"/></q:scatterChart>"#
+            ),
+            format!(
+                r#"<q:scatterChart><q:scatterStyle val="marker"/>{}<q:axId val="1"/><q:axId val="2"/></q:scatterChart>"#,
+                scatter
+                    .replace("<q:yVal>", "<q:val>")
+                    .replace("</q:yVal>", "</q:val>")
+            ),
+            format!(
+                r#"<q:scatterChart><q:scatterStyle val="marker"/>{}<q:axId val="1"/><q:axId val="2"/></q:scatterChart>"#,
+                scatter_without_x(0)
+            ),
+            format!(
+                r#"<q:scatterChart><q:scatterStyle val="marker"/>{}<q:axId val="1"/><q:axId val="2"/></q:scatterChart>"#,
+                scatter_without_y(0)
+            ),
+            format!(r#"<q:pieChart>{opaque_bubble}</q:pieChart>"#),
+        ];
+        for plot in cases {
+            let xml = chart_with_optional_axes(&plot, false);
+            let result = std::panic::catch_unwind(|| CT_ChartSpace::from_xml(xml.as_bytes()));
+            assert!(result.is_ok(), "parser panicked for {plot}");
+            assert!(result.unwrap().is_err(), "malformed plot parsed: {plot}");
+        }
+
+        let missing_axis = format!(
+            r#"<q:areaChart><q:grouping val="standard"/>{series}<q:axId val="-1884094432"/><q:axId val="7"/></q:areaChart>"#
+        );
+        let missing_axis =
+            CT_ChartSpace::from_xml(chart_with_optional_axes(&missing_axis, true).as_bytes())
+                .unwrap_err();
+        assert!(missing_axis.to_string().contains("missing axis 7"));
+
+        let values =
+            NumericData::new("S!$A$1".to_owned(), "General".to_owned(), vec![1.0]).unwrap();
+        let mut bubble_series = Series::new(0, 0, values.clone());
+        bubble_series.bubble_size = Some(values);
+        assert!(Plot::pie(vec![bubble_series]).is_err());
+    }
+
+    #[test]
+    fn unsupported_plot_families_and_children_remain_byte_preserved() {
+        for raw in [
+            r#"<q:pie3DChart x:keep="3d"><q:ser><x:opaque/></q:ser></q:pie3DChart>"#,
+            r#"<q:ofPieChart x:keep="of"><x:opaque/></q:ofPieChart>"#,
+            r#"<q:stockChart x:keep="stock"><x:opaque/></q:stockChart>"#,
+            r#"<q:surfaceChart x:keep="surface"><x:opaque/></q:surfaceChart>"#,
+            r#"<q:bubbleChart x:keep="bubble"><x:opaque/></q:bubbleChart>"#,
+        ] {
+            let parsed =
+                CT_ChartSpace::from_xml(chart_with_optional_axes(raw, false).as_bytes()).unwrap();
+            assert!(parsed.chart.plot_area.plots().is_err());
+            let written = parsed.to_xml().unwrap();
+            assert!(
+                written
+                    .windows(raw.len())
+                    .any(|window| window == raw.as_bytes())
+            );
+        }
+
+        let pie = remaining_plot_fixtures()[0].1.clone();
+        let preserved = r#"<!--point--><q:dPt x:id="1"><q:explosion val="7"/><x:tail/></q:dPt>"#;
+        let plot = pie.replace("<q:dLbls>", &format!("{preserved}<q:dLbls>"));
+        let parsed =
+            CT_ChartSpace::from_xml(chart_with_optional_axes(&plot, false).as_bytes()).unwrap();
+        let written = parsed.to_xml().unwrap();
+        assert!(
+            written
+                .windows(preserved.len())
+                .any(|window| window == preserved.as_bytes())
+        );
+
+        for (kind, mut plot, axes) in [
+            ("pieChart", remaining_plot_fixtures()[0].1.clone(), false),
+            ("areaChart", remaining_plot_fixtures()[2].1.clone(), true),
+        ] {
+            plot = plot.replace(r#"<q:dLbls><q:showVal val="1"/></q:dLbls>"#, "");
+            if kind == "pieChart" {
+                plot = plot.replace(
+                    "</q:extLst></q:pieChart>",
+                    "</q:extLst><!--after-ext--></q:pieChart>",
+                );
+            } else {
+                plot = plot.replace(
+                    "</q:dropLines><q:axId",
+                    "</q:dropLines><!--after-drop-lines--><q:axId",
+                );
+            }
+            let mut parsed =
+                CT_ChartSpace::from_xml(chart_with_optional_axes(&plot, axes).as_bytes()).unwrap();
+            let labels =
+                CT_DLbls::from_xml(format!(r#"<c:dLbls xmlns:c="{C_NS}"/>"#).as_bytes()).unwrap();
+            match &mut parsed.chart.plot_area.plots_mut().unwrap()[0] {
+                Plot::Pie { data_labels, .. } | Plot::Area { data_labels, .. } => {
+                    *data_labels = Some(labels)
+                }
+                _ => panic!("expected pie or area"),
+            }
+            let written = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+            assert!(
+                written.find("<c:dLbls").unwrap() < written.find("<q:extLst").unwrap(),
+                "{kind}: inserted labels must precede the preserved extension"
+            );
+            if kind == "areaChart" {
+                assert!(written.find("<c:dLbls").unwrap() < written.find("<q:dropLines").unwrap());
+                assert!(
+                    written.find("<q:dropLines").unwrap()
+                        < written.find("<!--after-drop-lines-->").unwrap()
+                );
+            } else {
+                assert!(
+                    written.find("<q:extLst").unwrap() < written.find("<!--after-ext-->").unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_supported_corpus_plot_round_trips_structurally() {
+        let Some(corpus) = require_or_skip_corpus() else {
+            return;
+        };
+        verify_fetched_corpus(&corpus);
+        let mut pie_count = 0usize;
+        let mut bar_count = 0usize;
+        let mut line_count = 0usize;
+        for path in manifest_paths() {
+            let package = OpcPackage::open(corpus.join(path)).unwrap();
+            for (part, xml) in &package.parts {
+                if !is_chart_part(part) {
+                    continue;
+                }
+                let parsed = CT_ChartSpace::from_xml(xml).unwrap();
+                if let Ok(plots) = parsed.chart.plot_area.plots() {
+                    for plot in plots {
+                        match plot {
+                            Plot::Pie { .. } => pie_count += 1,
+                            Plot::Bar { .. } => bar_count += 1,
+                            Plot::Line { .. } => line_count += 1,
+                            _ => {}
+                        }
+                    }
+                }
+                let written = parsed.to_xml().unwrap();
+                assert_eq!(parsed, CT_ChartSpace::from_xml(&written).unwrap());
+            }
+        }
+        assert_eq!(pie_count, 1, "typed corpus pie coverage changed");
+        assert_eq!(bar_count, 11, "typed corpus bar coverage changed");
+        assert_eq!(line_count, 2, "typed corpus line coverage changed");
+    }
+
     fn standalone_axis(local: &str, children: &str) -> String {
         format!(
             r#"<c:{local} xmlns:c="{C_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}">{children}</c:{local}>"#
@@ -7638,6 +8834,33 @@ mod tests {
                 b"showDLblsOverMax" | b"extLst" => 11,
                 _ => 0,
             },
+            b"pieChart" => match child {
+                b"ser" => 1,
+                b"dLbls" => 2,
+                b"firstSliceAng" => 3,
+                _ => 0,
+            },
+            b"doughnutChart" => match child {
+                b"ser" => 1,
+                b"dLbls" => 2,
+                b"firstSliceAng" => 3,
+                b"holeSize" => 4,
+                _ => 0,
+            },
+            b"areaChart" => match child {
+                b"grouping" => 1,
+                b"ser" => 2,
+                b"dLbls" => 3,
+                b"axId" => 4,
+                _ => 0,
+            },
+            b"scatterChart" | b"radarChart" => match child {
+                b"scatterStyle" | b"radarStyle" => 1,
+                b"ser" => 2,
+                b"dLbls" => 3,
+                b"axId" => 4,
+                _ => 0,
+            },
             _ => 0,
         }
     }
@@ -7656,8 +8879,25 @@ mod tests {
             ),
             b"plotArea" => !matches!(
                 child,
-                b"barChart" | b"lineChart" | b"catAx" | b"valAx" | b"dateAx" | b"serAx"
+                b"barChart"
+                    | b"lineChart"
+                    | b"pieChart"
+                    | b"doughnutChart"
+                    | b"areaChart"
+                    | b"scatterChart"
+                    | b"radarChart"
+                    | b"catAx"
+                    | b"valAx"
+                    | b"dateAx"
+                    | b"serAx"
             ),
+            b"pieChart" => !matches!(child, b"ser" | b"dLbls" | b"firstSliceAng"),
+            b"doughnutChart" => {
+                !matches!(child, b"ser" | b"dLbls" | b"firstSliceAng" | b"holeSize")
+            }
+            b"areaChart" => !matches!(child, b"grouping" | b"ser" | b"dLbls" | b"axId"),
+            b"scatterChart" => !matches!(child, b"scatterStyle" | b"ser" | b"dLbls" | b"axId"),
+            b"radarChart" => !matches!(child, b"radarStyle" | b"ser" | b"dLbls" | b"axId"),
             b"title" | b"legend" => true,
             _ => false,
         }
@@ -7670,6 +8910,11 @@ mod tests {
                 | b"chart"
                 | b"title"
                 | b"plotArea"
+                | b"pieChart"
+                | b"doughnutChart"
+                | b"areaChart"
+                | b"scatterChart"
+                | b"radarChart"
                 | b"legend"
                 | b"autoTitleDeleted"
                 | b"plotVisOnly"
@@ -7848,6 +9093,77 @@ mod tests {
         format!(
             r#"<q:chartSpace xmlns:q="{C_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}" xmlns:x="urn:producer"><q:chart><q:plotArea>{plot}<q:catAx><q:axId val="-1884094432"/><q:scaling/><q:axPos val="b"/><q:crossAx val="-1884097184"/></q:catAx><q:valAx><q:axId val="-1884097184"/><q:scaling/><q:axPos val="l"/><q:crossAx val="-1884094432"/></q:valAx></q:plotArea></q:chart></q:chartSpace>"#
         )
+    }
+
+    fn chart_with_optional_axes(plot: &str, axes: bool) -> String {
+        let axis_xml = if axes {
+            r#"<q:catAx><q:axId val="-1884094432"/><q:scaling/><q:axPos val="b"/><q:crossAx val="-1884097184"/></q:catAx><q:valAx><q:axId val="-1884097184"/><q:scaling/><q:axPos val="l"/><q:crossAx val="-1884094432"/></q:valAx>"#
+        } else {
+            ""
+        };
+        format!(
+            r#"<q:chartSpace xmlns:q="{C_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}" xmlns:x="urn:producer"><q:chart><q:plotArea>{plot}{axis_xml}</q:plotArea></q:chart></q:chartSpace>"#
+        )
+    }
+
+    fn numeric_plot_series(index: u32) -> String {
+        format!(
+            r#"<q:ser><q:idx val="{index}"/><q:order val="{index}"/><q:xVal><q:numRef><q:f>Sheet1!$A$2:$A$3</q:f><q:numCache><q:formatCode>General</q:formatCode><q:ptCount val="2"/><q:pt idx="0"><q:v>1</q:v></q:pt><q:pt idx="1"><q:v>2</q:v></q:pt></q:numCache></q:numRef></q:xVal><q:yVal><q:numRef><q:f>Sheet1!$B$2:$B$3</q:f><q:numCache><q:formatCode>General</q:formatCode><q:ptCount val="2"/><q:pt idx="0"><q:v>4</q:v></q:pt><q:pt idx="1"><q:v>8</q:v></q:pt></q:numCache></q:numRef></q:yVal></q:ser>"#
+        )
+    }
+
+    fn scatter_without_x(index: u32) -> String {
+        format!(
+            r#"<q:ser><q:idx val="{index}"/><q:order val="{index}"/><q:yVal><q:numRef><q:f>Sheet1!$B$2</q:f><q:numCache><q:formatCode>General</q:formatCode><q:ptCount val="1"/><q:pt idx="0"><q:v>4</q:v></q:pt></q:numCache></q:numRef></q:yVal></q:ser>"#
+        )
+    }
+
+    fn scatter_without_y(index: u32) -> String {
+        format!(
+            r#"<q:ser><q:idx val="{index}"/><q:order val="{index}"/><q:xVal><q:numRef><q:f>Sheet1!$A$2</q:f><q:numCache><q:formatCode>General</q:formatCode><q:ptCount val="1"/><q:pt idx="0"><q:v>1</q:v></q:pt></q:numCache></q:numRef></q:xVal></q:ser>"#
+        )
+    }
+
+    fn remaining_plot_fixtures() -> Vec<(&'static str, String, bool)> {
+        let series = plot_series(0);
+        let scatter = numeric_plot_series(0);
+        vec![
+            (
+                "pieChart",
+                format!(
+                    r#"<q:pieChart x:keep="pie"><q:varyColors val="1"/>{series}<q:dLbls><q:showVal val="1"/></q:dLbls><q:firstSliceAng val="30"/><q:extLst><x:pie/></q:extLst></q:pieChart>"#
+                ),
+                false,
+            ),
+            (
+                "doughnutChart",
+                format!(
+                    r#"<q:doughnutChart x:keep="doughnut"><q:varyColors val="1"/>{series}<q:dLbls><q:showPercent val="1"/></q:dLbls><q:firstSliceAng val="45"/><q:holeSize val="60"/><q:extLst><x:doughnut/></q:extLst></q:doughnutChart>"#
+                ),
+                false,
+            ),
+            (
+                "areaChart",
+                format!(
+                    r#"<q:areaChart x:keep="area"><q:grouping val="standard"/><q:varyColors val="0"/>{series}<q:dLbls><q:showVal val="1"/></q:dLbls><q:dropLines><x:line/></q:dropLines><q:axId val="-1884094432"/><q:axId val="-1884097184"/><q:extLst><x:area/></q:extLst></q:areaChart>"#
+                ),
+                true,
+            ),
+            (
+                "scatterChart",
+                format!(
+                    r#"<q:scatterChart x:keep="scatter"><q:scatterStyle val="marker"/><q:varyColors val="0"/>{scatter}<q:dLbls><q:showVal val="1"/></q:dLbls><q:axId val="-1884094432"/><q:axId val="-1884097184"/><q:extLst><x:scatter/></q:extLst></q:scatterChart>"#
+                ),
+                true,
+            ),
+            (
+                "radarChart",
+                format!(
+                    r#"<q:radarChart x:keep="radar"><q:radarStyle val="marker"/><q:varyColors val="0"/>{series}<q:dLbls><q:showVal val="1"/></q:dLbls><q:axId val="-1884094432"/><q:axId val="-1884097184"/><q:extLst><x:radar/></q:extLst></q:radarChart>"#
+                ),
+                true,
+            ),
+        ]
     }
 
     fn bar_plot(extra: &str) -> String {
@@ -8064,7 +9380,7 @@ mod tests {
                 series[0].index = 7;
                 series[0].values.values[0] = 9.0;
             }
-            Plot::Line { .. } => panic!("expected bar plot"),
+            _ => panic!("expected bar plot"),
         }
         let written = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
         assert!(written.contains(r#"<c:gapWidth val="225"/>"#));
@@ -8159,6 +9475,7 @@ mod tests {
                             match plot {
                                 Plot::Bar { .. } => typed_bar_count += 1,
                                 Plot::Line { .. } => typed_line_count += 1,
+                                _ => {}
                             }
                         }
                     }
@@ -8209,6 +9526,70 @@ mod tests {
         eprintln!(
             "ChartML plot corpus gate checked {typed_bar_count} typed bar, {typed_line_count} typed line, and one preserved bar-line combination"
         );
+    }
+
+    fn verify_remaining_plot_viewer_gate(corpus: &Path) {
+        verify_fetched_corpus(corpus);
+        assert_command_version("soffice", &["--version"], LIBREOFFICE_VERSION);
+        assert_command_version("pdftoppm", &["-v"], PDFTOPPM_VERSION);
+        let source = corpus.join("bar-chart.pptx");
+        let source_sha = sha256(&source);
+        let temp_root = std::env::temp_dir().join(format!(
+            "rpptx-chart-f122-viewer-gate-{}",
+            std::process::id()
+        ));
+        if temp_root.exists() {
+            fs::remove_dir_all(&temp_root).expect("remove stale F-122 evidence");
+        }
+        fs::create_dir_all(&temp_root).expect("create F-122 evidence root");
+
+        for (kind, plot, axes) in remaining_plot_fixtures() {
+            let mut package = OpcPackage::open(&source).expect("open F-122 viewer source");
+            package.set_part(
+                "/ppt/charts/chart1.xml",
+                CT_ChartSpace::from_xml(chart_with_optional_axes(&plot, axes).as_bytes())
+                    .expect("parse F-122 viewer chart")
+                    .to_xml()
+                    .expect("serialize F-122 viewer chart"),
+            );
+            let unbound = temp_root.join(format!("{kind}-candidate.pptx"));
+            package.save(&unbound).expect("save F-122 viewer candidate");
+            let candidate_sha = sha256(&unbound);
+            let evidence = temp_root.join(format!("{source_sha}-{candidate_sha}"));
+            fs::create_dir(&evidence).expect("create SHA-bound F-122 evidence directory");
+            let candidate = evidence.join(format!("{kind}-candidate.pptx"));
+            fs::rename(&unbound, &candidate).expect("bind F-122 candidate to SHA");
+            assert_eq!(sha256(&candidate), candidate_sha);
+            let render = render_deck_to_ppm(&candidate, &evidence, kind, "candidate");
+            let bytes = fs::read(&render).expect("read F-122 viewer PPM");
+            let (width, height, pixels) = ppm_pixels(&bytes);
+            let left = width / 5;
+            let right = width * 4 / 5;
+            let top = height * 3 / 20;
+            let bottom = height * 17 / 20;
+            let mut nonblank = 0usize;
+            for y in top..bottom {
+                for x in left..right {
+                    let offset = (y * width + x) * 3;
+                    if pixels[offset..offset + 3]
+                        .iter()
+                        .any(|channel| *channel < 245)
+                    {
+                        nonblank += 1;
+                    }
+                }
+            }
+            const CHART_RECTANGLE_NONBLANK_THRESHOLD: usize = 1_000;
+            assert!(
+                nonblank >= CHART_RECTANGLE_NONBLANK_THRESHOLD,
+                "{kind}: chart rectangle [{left},{top}) to [{right},{bottom}) contains {nonblank} nonblank pixels, below {CHART_RECTANGLE_NONBLANK_THRESHOLD}"
+            );
+            eprintln!(
+                "F-122 {kind} viewer gate source deck {source_sha}, candidate deck {candidate_sha}, render {}, chart rectangle [{left},{top}) to [{right},{bottom}), RGB<245 nonblank pixels {nonblank} >= {CHART_RECTANGLE_NONBLANK_THRESHOLD}",
+                sha256(&render)
+            );
+        }
+        fs::remove_dir_all(&temp_root).expect("remove F-122 viewer evidence");
     }
 
     fn verify_bar_and_line_viewer_gate(corpus: &Path) {
