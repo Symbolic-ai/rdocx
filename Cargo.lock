@@ -696,6 +696,8 @@ dependencies = [
  "oxml-media",
  "oxml-opc",
  "oxml-pdf",
+ "oxml-sml",
+ "rpptx-chart",
  "rpptx-layout",
  "rpptx-oxml",
  "rpptx-render",
@@ -708,8 +710,11 @@ version = "0.0.0"
 dependencies = [
  "oxml-core",
  "oxml-drawing",
+ "oxml-layout",
  "oxml-opc",
+ "oxml-pdf",
  "quick-xml",
+ "tiny-skia",
 ]
 
 [[package]]

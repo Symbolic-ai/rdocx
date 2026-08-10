@@ -2593,6 +2593,37 @@ fn table_graphic_frame_constructor_writes_the_canonical_shell() {
 }
 
 #[test]
+fn authored_chart_graphic_frame_round_trips() {
+    let frame =
+        CT_GraphicFrame::new_chart(9, "Chart & 9", CT_Transform2D::default(), "rId7").unwrap();
+    let written = frame.to_xml().unwrap();
+    let xml = String::from_utf8(written.clone()).unwrap();
+    assert!(xml.contains(r#"<p:cNvPr id="9" name="Chart &amp; 9"/>"#));
+    assert!(xml.contains(
+        r#"<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">"#
+    ));
+    assert!(xml.contains(
+        r#"<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId7"/>"#
+    ));
+    assert_order(
+        &written,
+        &[
+            "<p:nvGraphicFramePr",
+            "<p:xfrm",
+            "<a:graphic",
+            "<a:graphicData",
+            "<c:chart",
+        ],
+    );
+    let reparsed = CT_GraphicFrame::from_xml(&written).unwrap();
+    assert_eq!(reparsed, frame);
+    assert!(matches!(
+        reparsed.graphic_data.payload,
+        GraphicDataPayload::Chart(_)
+    ));
+}
+
+#[test]
 fn graphic_frame_preserves_unknown_payload_and_extension_xml_byte_for_byte() {
     let payload = r#"<u:payload xmlns:u="urn:unknown" marker="a &amp; b"><u:data><!--kept--></u:data></u:payload>"#;
     let xml = format!(

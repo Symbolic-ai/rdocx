@@ -44,6 +44,8 @@ pub mod rel_types {
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes";
     pub const CHART: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+    pub const PACKAGE: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/package";
 
     // SpreadsheetML relationships.
     pub const WORKSHEET: &str =
@@ -160,7 +162,7 @@ impl Relationships {
 
         Ok(Relationships {
             items,
-            next_id: max_id + 1,
+            next_id: next_relationship_number(max_id),
         })
     }
 
@@ -217,8 +219,7 @@ impl Relationships {
 
     /// Add a new relationship and return its generated ID.
     pub fn add(&mut self, rel_type: &str, target: &str) -> String {
-        let id = format!("rId{}", self.next_id);
-        self.next_id += 1;
+        let id = self.allocate_id();
         self.items.push(Relationship {
             id: id.clone(),
             rel_type: rel_type.to_string(),
@@ -231,8 +232,7 @@ impl Relationships {
     /// Add an externally-targeted relationship (e.g. a hyperlink URL) and
     /// return its generated ID.
     pub fn add_external(&mut self, rel_type: &str, target: &str) -> String {
-        let id = format!("rId{}", self.next_id);
-        self.next_id += 1;
+        let id = self.allocate_id();
         self.items.push(Relationship {
             id: id.clone(),
             rel_type: rel_type.to_string(),
@@ -257,9 +257,36 @@ impl Relationships {
         if let Some(num) = id.strip_prefix("rId").and_then(|s| s.parse::<u32>().ok())
             && num >= self.next_id
         {
-            self.next_id = num + 1;
+            self.next_id = next_relationship_number(num);
         }
     }
+
+    fn allocate_id(&mut self) -> String {
+        let mut candidate = self.next_id;
+        let numeric_space = usize::try_from(u32::MAX).unwrap_or(usize::MAX);
+        let attempts = self.items.len().saturating_add(1).min(numeric_space);
+        for _ in 0..attempts {
+            let id = format!("rId{candidate}");
+            let next = next_relationship_number(candidate);
+            if self.items.iter().all(|relationship| relationship.id != id) {
+                self.next_id = next;
+                return id;
+            }
+            candidate = next;
+        }
+
+        for ordinal in 1u128.. {
+            let id = format!("rIdGenerated{ordinal}");
+            if self.items.iter().all(|relationship| relationship.id != id) {
+                return id;
+            }
+        }
+        unreachable!("the generated relationship id space is unbounded")
+    }
+}
+
+fn next_relationship_number(current: u32) -> u32 {
+    current.checked_add(1).unwrap_or(1).max(1)
 }
 
 #[cfg(test)]
@@ -288,6 +315,7 @@ mod tests {
             rel_types::FOOTNOTES,
             rel_types::ENDNOTES,
             rel_types::CHART,
+            rel_types::PACKAGE,
             rel_types::WORKSHEET,
             rel_types::SHARED_STRINGS,
             rel_types::EXTENDED_PROPERTIES,
@@ -322,6 +350,7 @@ mod tests {
             crate::content_types::EXTENDED_PROPERTIES,
             crate::content_types::CUSTOM_PROPERTIES,
             crate::content_types::THEME,
+            crate::content_types::CHART,
             crate::content_types::PRESENTATION,
             crate::content_types::SLIDESHOW,
             crate::content_types::SLIDE,
@@ -334,6 +363,7 @@ mod tests {
             crate::content_types::TABLE_STYLES,
             crate::content_types::HANDOUT_MASTER,
             crate::content_types::WORKBOOK,
+            crate::content_types::EMBEDDED_WORKBOOK,
             crate::content_types::WORKSHEET,
             crate::content_types::SHARED_STRINGS,
             crate::content_types::STYLES,
@@ -373,5 +403,40 @@ mod tests {
 
         let doc = rels.get_by_type(rel_types::DOCUMENT).unwrap();
         assert_eq!(doc.target, "word/document.xml");
+    }
+
+    #[test]
+    fn high_numeric_relationship_ids_roll_over_without_collision() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId4294967294" Type="type-a" Target="a.xml"/>
+</Relationships>"#;
+        let mut relationships = Relationships::from_xml(xml).unwrap();
+        assert_eq!(relationships.add("type-b", "b.xml"), "rId4294967295");
+        assert_eq!(relationships.add("type-c", "c.xml"), "rId1");
+        assert_eq!(
+            relationships.add_external("type-d", "https://example.com"),
+            "rId2"
+        );
+        let ids = relationships
+            .items
+            .iter()
+            .map(|relationship| relationship.id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(ids.len(), relationships.items.len());
+        assert!(!ids.contains("rId0"));
+    }
+
+    #[test]
+    fn parsed_u32_max_relationship_id_rolls_to_first_free_positive_id() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId4294967295" Type="type-max" Target="max.xml"/>
+  <Relationship Id="rId1" Type="type-one" Target="one.xml"/>
+</Relationships>"#;
+        let mut relationships = Relationships::from_xml(xml).unwrap();
+        assert_eq!(relationships.add("type-two", "two.xml"), "rId2");
+        relationships.add_with_id("rId4294967295", "type-max", "replacement.xml");
+        assert_eq!(relationships.add("type-three", "three.xml"), "rId3");
     }
 }

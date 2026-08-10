@@ -14,7 +14,10 @@ publish = false
 [dependencies]
 oxml-core.workspace = true
 oxml-drawing.workspace = true
+oxml-layout.workspace = true
 quick-xml.workspace = true
 
 [dev-dependencies]
 oxml-opc.workspace = true
+oxml-pdf.workspace = true
+tiny-skia.workspace = true

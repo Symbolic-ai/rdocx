@@ -384,22 +384,60 @@ from the same source data in one operation so they cannot diverge.
 ## Authoring API
 
 ```rust
+pub enum ChartKind {
+    Bar,
+    Line,
+    Pie,
+    Doughnut,
+    Area,
+    Scatter,
+    Radar,
+}
+
 pub struct ChartData {
     pub categories: Vec<String>,
     pub series: Vec<(String, Vec<f64>)>,
     pub number_format: Option<String>,
 }
 
-impl Shapes<'_> {
-    pub fn add_chart(&mut self, kind: ChartKind, bounds: Rect, data: &ChartData)
-        -> Result<GraphicFrame<'_>>;
+impl Presentation {
+    pub fn add_chart(
+        &mut self,
+        slide_index: usize,
+        kind: ChartKind,
+        left: Emu,
+        top: Emu,
+        width: Emu,
+        height: Emu,
+        data: &ChartData,
+    ) -> Result<ShapeRef<'_>>;
 }
 ```
 
-`add_chart` writes the chart part, the workbook part, both sets of
-relationships, both content-type overrides, and the `p:graphicFrame` on the
-slide, then returns a handle for further styling. Part numbering follows the
-`1 + max(existing suffix)` rule from `04-opc-and-packaging.md`.
+The owning facade performs this mutation because the package parts and
+relationships are not available through `SlideMut`. `add_chart` validates the
+complete data value before mutation. Categories and series must be nonempty,
+series lengths must match the category count, numeric values must be finite,
+number formats must be valid, and both chart extents must be positive. Pie and
+doughnut charts accept one series. Scatter categories must parse as finite
+numeric values.
+
+One call writes the typed chart part, one editable workbook part, the
+slide-to-chart and chart-to-workbook relationships, both content-type
+overrides, and the `p:graphicFrame` on the slide. Workbook cells and ChartML
+caches are derived from the same `ChartData`. The package and slide changes are
+staged and become visible together only after serialization succeeds. Chart
+parts use `/ppt/charts/chartN.xml` and `/ppt/embeddings/WorkbookN.xlsx`.
+Each numbered family independently takes the next positive suffix after its
+greatest occupied suffix, following the allocation rule in
+`04-opc-and-packaging.md`.
+
+The native chart candidate has SHA-256
+`e6e9f7eef1c774d0414c5d0c3f1202da1a28635b5d089e15455b7adc3f66cb00`.
+Microsoft PowerPoint 16.104, Info.plist build 16.104.25121423, opened it without
+a repair warning and recognized `Chart 4` as a native chart. Chart Design,
+Edit Data exposed the authored `Category`, `Revenue`, and `Cost` columns with
+rows `North, 12.5, 8.0`, `South, 19.0, 11.5`, and `West, 14.25, 9.75`.
 
 ## Rendering
 
@@ -408,10 +446,112 @@ frame, so **no backend work is needed beyond what `08-rendering-spec.md`
 already requires**. Bars, lines, pie wedges, areas and markers are all paths.
 Gridlines and axis lines are strokes. Labels are glyph runs.
 
-Scales are computed from the cached values: linear axes with a nice-number tick
-algorithm unless `c:scaling` pins a minimum or maximum. Series colours come from
-the chart's own `c:spPr` when present, otherwise from the theme's accent cycle
-resolved through the same colour pipeline as everything else.
+The geometry entry point is `render_geometry(&CT_Chart, Rect) ->
+Result<ChartGeometry>`. Input and output coordinates are typographic points.
+It reserves 36 points on the left, 12 on the right and top, and 28 on the
+bottom, then returns one identity group whose children use chart-local point
+coordinates. Invalid or too-small bounds, opaque or combination plots, and
+empty cached data return contextual errors.
+
+Clustered bars derive their width from the category slot, `c:gapWidth`, series
+count, and `c:overlap`. Stacked bars accumulate positive and negative values
+separately, and percentage stacks normalise against the matching sign total.
+Lines and areas use category-slot centres. Areas close against zero or the
+previous stacked series. Scatter plots map numeric x and y caches directly.
+Pie and doughnut slices use closed cubic wedges, including the first-slice
+angle and doughnut hole size. Radar plots use closed radial polygons. Marker
+paths follow their owning series path, and output order is plot order followed
+by series order.
+
+Category slot counts come from the caches' declared `c:ptCount`, and geometry
+uses each preserved `c:pt/@idx` rather than collapsing sparse caches into dense
+positions. Scatter x and y values pair only when their logical indexes match.
+The private cache-layout accessor also gives newly authored dense caches their
+sequential indexes without exposing parser preservation state publicly.
+
+Sparse line, area, and scatter paths apply `c:dispBlanksAs`. `gap` creates
+separate contiguous path segments, `zero` inserts baseline control points, and
+`span` connects the present points. Zero control points are compressed at the
+boundaries of missing runs, which preserves the same straight baseline without
+allocating one point for every value of an untrusted declared count. Markers
+remain limited to points present in the cache.
+
+Geometry normalises domains after scaling by their largest finite magnitude,
+so opposite finite extremes do not overflow their range. Stacked values,
+percentage totals, pie totals, derived bounds, and every emitted path point
+must remain finite. An overflow or nonfinite mutable cache returns a contextual
+error before backend-neutral geometry is exposed.
+
+Geometry uses a deterministic placeholder solid palette indexed by series.
+The labelled entry point is `render_chart(&CT_Chart, Rect, &mut FontManager) ->
+Result<GroupElement>`. It computes linear scales from cached values and targets
+six ticks. The step is 1, 2, or 5 times a power of ten. Unpinned bounds expand
+to enclosing step multiples, while a `c:scaling` minimum or maximum remains
+exact. Ordinary bar and area value domains include zero. A 0 through 100 value
+axis therefore emits 0, 20, 40, 60, 80, and 100. Constant, fractional,
+negative, mixed-sign, and large finite domains produce increasing finite
+ticks. Standard line and scatter domains use only their rendered values without
+forcing zero in both labelled and geometry-only entry points. Scatter domains
+use only logical indexes with a rendered x and y pair. Zero-valued bars retain
+label anchors, and an all-zero bar chart remains renderable. `c:orientation`
+reverses both tick coordinates and plot geometry.
+
+Major gridlines emit first, followed by one clipped plot group, axis lines and
+major tick marks, legend swatches, then text. Deleted axes emit none of those
+annotations. Axis position controls the plot edge, tick direction, and default label side.
+`c:tickLblPos` can move labels to the high or low side or suppress them.
+Category tick and gridline positions cover the full logical cache count even
+when category text is absent or sparse. Category text retains its cached
+logical indexes and emits only at present slots. Annotation expansion is
+limited to 16,384 logical categories. A larger declared count returns a
+contextual error before allocating annotations. Radar charts instead emit
+category spokes, category labels at distinct outer, inner, or next-to-spoke
+radii, and concentric value gridlines. Radar value labels likewise use distinct
+high, low, and next-to-axis positions. High category-label origins are clamped
+to the label space reserved around the plot, including for narrow plots.
+
+Category labels, numeric tick labels, requested data-label fields, and legend
+series names are shaped into `GlyphRun` values by the caller's `FontManager`.
+The fallback chart style is Carlito at 9 points with black text. Modelled axis
+default-run properties override the typeface, point size, bold, and italic
+values. Axis, numeric category, and data label values use the implemented
+`NumberFormat` subset when a format is present, and deterministic General
+formatting otherwise. The category-axis format overrides the numeric category
+cache format. Unsupported effective projections return a contextual error. Data
+labels project the supported series name, category name, value, percentage, and
+bubble-size flags with the declared separator and position. Percentage totals
+are checked only when an effective collection or point label requests them.
+The effective number format controls percentage precision. Bubble sizes join
+the value cache by preserved logical index. Label anchors come from the same
+family geometry, scales, bounds, and orientations as the plotted marks.
+Inside-base, inside-end, and outside-end positions follow the rendered bar
+segment or radial slice geometry. Inside displacement is clamped to short bars
+and thin rings. Bar retention uses the data endpoint, so an off-plot zero
+baseline does not suppress an in-range value and an out-of-range endpoint does
+not retain a label. Retained bar anchors derive from the clipped visible
+segment. If clipping collapses that segment to a point, inside positions remain
+at that point and outside-end keeps the original vertical or horizontal value
+axis direction. A zero-radius radar anchor likewise keeps its category-spoke
+direction. Radar default domains include zero and preserve negative values for
+all-negative and mixed-sign caches. Radar points outside explicit normal or
+reversed value bounds do not emit geometry or labels. A nonempty radar cache
+whose points are all outside explicit bounds still emits its axes and other
+annotations. Individual
+`c:dLbl` delete, visibility, number-format, position, and separator overrides
+are projected privately by logical index from their namespace-resolved raw
+subtrees. Those subtrees remain byte-preserved as the only serialization source.
+A present legend shell emits
+one placeholder-colour swatch and shaped series name per row in the upper-right
+of the plot. Unsupported legend placement children remain preserved and do not
+change this default layout.
+
+F-127 replaces the placeholder palette with chart and theme colour resolution.
+F-128 resolves chart relationships into the render input, routes supported
+charts to native geometry, and owns preserved-chart fallback selection. Later
+binding work consumes the same concrete geometry contract without adding a
+backend-specific chart path. Series colours then come from the chart's own
+`c:spPr` when present, otherwise from the theme's accent cycle resolved through
+the same colour pipeline as everything else.
 
 For a chart that was **preserved rather than authored**, draw the cached image
 fallback if the file carries one, otherwise a labelled placeholder rectangle
