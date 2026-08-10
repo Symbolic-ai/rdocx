@@ -1,6 +1,6 @@
 # F-123, Data labels and number formats
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S30
 **Size**: M
 **Depends on**: F-119
@@ -142,14 +142,14 @@ do not enter Word sample generation or rendering. All 28 hashes must match.
 
 ## Implementation checklist
 
-- [ ] Reuse the F-120 number-format value for axes and labels.
-- [ ] Add the typed data-label collection and series attachment.
-- [ ] Add deterministic General, decimal, and percentage text projection.
-- [ ] Preserve unsupported label payloads in ordered raw slots.
-- [ ] Add negative, ordering, preservation, and corpus tests.
-- [ ] Produce SHA-bound LibreOffice and Poppler percentage-label evidence.
-- [ ] Update exactly HLD 09.
-- [ ] Run focused parser, corpus, oracle, microscope, and worker preparation
+- [x] Reuse the F-120 number-format value for axes and labels.
+- [x] Add the typed data-label collection and series attachment.
+- [x] Add deterministic General, decimal, and percentage text projection.
+- [x] Preserve unsupported label payloads in ordered raw slots.
+- [x] Add negative, ordering, preservation, and corpus tests.
+- [x] Produce SHA-bound LibreOffice and Poppler percentage-label evidence.
+- [x] Update exactly HLD 09.
+- [x] Run focused parser, corpus, oracle, microscope, and worker preparation
       checks.
 
 ## Open questions

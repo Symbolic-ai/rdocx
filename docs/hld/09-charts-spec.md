@@ -108,10 +108,10 @@ ordered raw children exposed for inspection through `raw_children()`.
 `c:spPr` reuses `CT_ShapeProperties`. `c:txPr` uses the same concrete
 `CT_TextBody` parser as `a:txBody`, with a caller-selected root local name and
 the existing caller-selected writer tag. Title, plot area, and legend are
-behavior-bearing shells. Their attributes and complete current children stay
-in ordered raw slots. Plot variants, series, axes, extensions, and unsupported
-root children remain byte-preserved at their schema boundaries until the story
-that types each surface.
+behavior-bearing shells. Their attributes and unsupported children stay in
+ordered raw slots. Plot variants, extensions, and unsupported root children
+remain byte-preserved at their schema boundaries until the story that types
+each surface.
 
 The pinned 50-deck corpus contains 26 chart parts across 9 decks. Every part
 parses, serialises, reparses, and compares as the same core model. The inline
@@ -150,6 +150,7 @@ pub struct Series {
     pub values: NumericData,
     pub bubble_size: Option<NumericData>,
     pub sp_pr: Option<CT_ShapeProperties>,
+    pub data_labels: Option<CT_DLbls>,
 }
 ```
 
@@ -161,13 +162,36 @@ blank points. Their strictly increasing sparse indexes and declared logical
 count remain intact on round-trip. Newly authored caches are always dense and
 sequential.
 
-`c:tx`, `c:spPr`, `c:cat`, `c:val`, and `c:bubbleSize` write in schema order.
-Markers, data points, labels, trendlines, extensions, unknown attributes, and
-whitespace remain byte-preserved in their original series or reference slots.
-Plot-area serialization continues to use its preserved plot bytes. Its
+`c:tx`, `c:spPr`, `c:dLbls`, `c:cat`, `c:val`, and `c:bubbleSize` write in
+schema order. Markers, data points, trendlines, extensions, unknown attributes,
+and whitespace remain byte-preserved in their original series or reference
+slots. Plot-area serialization continues to use its preserved plot bytes. Its
 read-only series projection validates the common category-based plot payloads
 without claiming ownership of a plot kind. Across the pinned corpus it parses
 and reparses 66 series from the 26 chart parts.
+
+`CT_DLbls` models collection-level number format, position, separator, and the
+six visibility flags for legend key, value, category name, series name,
+percentage, and bubble size. Readers accept bound ChartML prefixes and reject
+duplicate fields, unknown positions, malformed booleans, empty or XML-invalid
+format codes, and XML-invalid separators. Writers use fixed prefixes and the
+ChartML sequence. Individual `c:dLbl` overrides, leader lines, shape and text
+properties, extensions, producer attributes, comments, and whitespace remain
+byte-preserved in ordered raw slots.
+
+`NumberFormat` is the shared value used by axes and data labels. Its
+`format_value` method projects finite cached values through `General`, ordinary
+zero-placeholder decimal precision, and percentage forms such as `0%`,
+`0.0%`, and `0.00%`. Other valid producer codes remain available for
+round-trip but return a contextual projection error. The implementation does
+not claim the wider Excel format language or native label geometry.
+
+The pinned corpus round-trips 34 data-label collections and 35 axis number
+formats. The viewer gate changes only the chart part of `bar-chart.pptx`, sets
+the typed cached values to `0.25`, and writes `showVal` with format `0%`.
+LibreOffice 26.2.5.2 renders the SHA-bound candidate, then Poppler 26.01.0
+extracts `25%` from the PDF. The reviewed candidate SHA-256 is
+`4ba02faa8e4cff6cefa7a7dc73fc0eb0c08d62d180f83fa0d3fd56a7e4136242`.
 
 The later typed plot surface expands the preserved plot-area slots to the
 following model:

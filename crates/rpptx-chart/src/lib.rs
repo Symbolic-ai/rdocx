@@ -325,6 +325,7 @@ pub struct Series {
     pub values: NumericData,
     pub bubble_size: Option<NumericData>,
     pub sp_pr: Option<CT_ShapeProperties>,
+    pub data_labels: Option<CT_DLbls>,
     index_markup: ScalarMarkup,
     order_markup: ScalarMarkup,
     name_markup: Option<WrapperMarkup>,
@@ -349,6 +350,7 @@ impl Series {
             values,
             bubble_size: None,
             sp_pr: None,
+            data_labels: None,
             index_markup: ScalarMarkup::default(),
             order_markup: ScalarMarkup::default(),
             name_markup: None,
@@ -465,6 +467,9 @@ impl Series {
         if let Some(size) = &self.bubble_size {
             size.validate()?;
         }
+        if let Some(labels) = &self.data_labels {
+            labels.validate()?;
+        }
         let mut writer = Writer::new(Vec::new());
         let mut start = BytesStart::new("c:ser");
         start.push_attribute(("xmlns:c", C_NS));
@@ -512,6 +517,10 @@ impl Series {
             properties.write_xml_as(&mut writer, "c:spPr")?;
         }
         emit_raw(&mut writer, self.raw_children.at(4))?;
+        if let Some(labels) = &self.data_labels {
+            labels.write_xml(&mut writer, false)?;
+        }
+        emit_raw(&mut writer, self.raw_children.at(5))?;
         if let Some(categories) = &self.categories {
             let default_markup = WrapperMarkup::default();
             let markup = self.categories_markup.as_ref().unwrap_or(&default_markup);
@@ -522,11 +531,11 @@ impl Series {
             }
             write_wrapper_end(&mut writer, "c:cat", markup)?;
         }
-        emit_raw(&mut writer, self.raw_children.at(5))?;
+        emit_raw(&mut writer, self.raw_children.at(6))?;
         write_wrapper_start(&mut writer, "c:val", &self.values_markup)?;
         self.values.write_xml(&mut writer, false)?;
         write_wrapper_end(&mut writer, "c:val", &self.values_markup)?;
-        emit_raw(&mut writer, self.raw_children.at(6))?;
+        emit_raw(&mut writer, self.raw_children.at(7))?;
         if let Some(size) = &self.bubble_size {
             let default_markup = WrapperMarkup::default();
             let markup = self.bubble_size_markup.as_ref().unwrap_or(&default_markup);
@@ -534,7 +543,7 @@ impl Series {
             size.write_xml(&mut writer, false)?;
             write_wrapper_end(&mut writer, "c:bubbleSize", markup)?;
         }
-        emit_raw(&mut writer, self.raw_children.at(7))?;
+        emit_raw(&mut writer, self.raw_children.at(8))?;
         writer
             .write_event(Event::End(BytesEnd::new("c:ser")))
             .map_err(OxmlError::from)?;
@@ -554,6 +563,7 @@ struct SeriesParseState {
     categories: Option<(AxisData, WrapperMarkup)>,
     values: Option<(NumericData, WrapperMarkup)>,
     bubble_size: Option<(NumericData, WrapperMarkup)>,
+    data_labels: Option<CT_DLbls>,
     name_seen: bool,
     categories_seen: bool,
     bubble_size_seen: bool,
@@ -608,6 +618,14 @@ impl SeriesParseState {
                 set_once(&mut self.sp_pr, properties, "c:spPr")?;
                 self.boundary = self.boundary.max(4);
             }
+            b"dLbls" => {
+                set_once(
+                    &mut self.data_labels,
+                    CT_DLbls::from_xml_with_namespaces(&raw, namespaces)?,
+                    "c:dLbls",
+                )?;
+                self.boundary = self.boundary.max(5);
+            }
             b"cat" => {
                 mark_once(&mut self.categories_seen, "c:cat")?;
                 let parsed = parse_wrapper(&raw, b"cat", &[b"strRef", b"numRef"], namespaces)?;
@@ -626,9 +644,9 @@ impl SeriesParseState {
                     self.categories = Some((categories, parsed.markup));
                 } else {
                     self.opaque_categories = true;
-                    self.raw_children.push(4, raw);
+                    self.raw_children.push(5, raw);
                 }
-                self.boundary = self.boundary.max(5);
+                self.boundary = self.boundary.max(6);
             }
             b"val" => {
                 let parsed = parse_wrapper(&raw, b"val", &[b"numRef"], namespaces)?;
@@ -643,7 +661,7 @@ impl SeriesParseState {
                     ),
                     "c:val",
                 )?;
-                self.boundary = self.boundary.max(6);
+                self.boundary = self.boundary.max(7);
             }
             b"bubbleSize" => {
                 mark_once(&mut self.bubble_size_seen, "c:bubbleSize")?;
@@ -655,9 +673,9 @@ impl SeriesParseState {
                     ));
                 } else {
                     self.opaque_bubble_size = true;
-                    self.raw_children.push(6, raw);
+                    self.raw_children.push(7, raw);
                 }
-                self.boundary = self.boundary.max(7);
+                self.boundary = self.boundary.max(8);
             }
             _ => {
                 let boundary = series_raw_boundary(name, self.boundary);
@@ -702,6 +720,7 @@ impl SeriesParseState {
             values,
             bubble_size,
             sp_pr: self.sp_pr,
+            data_labels: self.data_labels,
             index_markup,
             order_markup,
             name_markup,
@@ -713,17 +732,17 @@ impl SeriesParseState {
             opaque_bubble_size: self.opaque_bubble_size,
             raw_attributes,
             namespace_declarations,
-            raw_children: raw_children_in_schema_order(&self.raw_children, 7),
+            raw_children: raw_children_in_schema_order(&self.raw_children, 8),
         })
     }
 }
 
 fn series_raw_boundary(name: &[u8], current: usize) -> usize {
     match name {
-        b"marker" | b"invertIfNegative" | b"pictureOptions" | b"explosion" | b"dPt" | b"dLbls"
-        | b"trendline" | b"errBars" => 4,
-        b"shape" | b"smooth" => 6,
-        b"extLst" => 7,
+        b"marker" | b"invertIfNegative" | b"pictureOptions" | b"explosion" | b"dPt" => 4,
+        b"trendline" | b"errBars" => 5,
+        b"shape" | b"smooth" => 7,
+        b"extLst" => 8,
         _ => current,
     }
 }
@@ -2070,6 +2089,76 @@ pub struct NumberFormat {
     raw_content: Vec<Vec<u8>>,
 }
 
+/// Placement of a chart data label relative to its data point.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DataLabelPosition {
+    BestFit,
+    Bottom,
+    Center,
+    InsideBase,
+    InsideEnd,
+    Left,
+    OutsideEnd,
+    Right,
+    Top,
+}
+
+impl DataLabelPosition {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "bestFit" => Some(Self::BestFit),
+            "b" => Some(Self::Bottom),
+            "ctr" => Some(Self::Center),
+            "inBase" => Some(Self::InsideBase),
+            "inEnd" => Some(Self::InsideEnd),
+            "l" => Some(Self::Left),
+            "outEnd" => Some(Self::OutsideEnd),
+            "r" => Some(Self::Right),
+            "t" => Some(Self::Top),
+            _ => None,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::BestFit => "bestFit",
+            Self::Bottom => "b",
+            Self::Center => "ctr",
+            Self::InsideBase => "inBase",
+            Self::InsideEnd => "inEnd",
+            Self::Left => "l",
+            Self::OutsideEnd => "outEnd",
+            Self::Right => "r",
+            Self::Top => "t",
+        }
+    }
+}
+
+/// Collection-level data-label defaults for one chart series or plot.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CT_DLbls {
+    pub number_format: Option<NumberFormat>,
+    pub position: Option<DataLabelPosition>,
+    pub separator: Option<String>,
+    pub show_legend_key: bool,
+    pub show_value: bool,
+    pub show_category_name: bool,
+    pub show_series_name: bool,
+    pub show_percent: bool,
+    pub show_bubble_size: bool,
+    position_markup: Option<ScalarMarkup>,
+    show_legend_key_markup: Option<ScalarMarkup>,
+    show_value_markup: Option<ScalarMarkup>,
+    show_category_name_markup: Option<ScalarMarkup>,
+    show_series_name_markup: Option<ScalarMarkup>,
+    show_percent_markup: Option<ScalarMarkup>,
+    show_bubble_size_markup: Option<ScalarMarkup>,
+    separator_markup: Option<TextMarkup>,
+    raw_attributes: XmlAttributes,
+    namespace_declarations: XmlAttributes,
+    raw_children: OrderedRawChildren,
+}
+
 /// How a chart displays cells whose cached values are blank.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DispBlanksAs {
@@ -3107,6 +3196,53 @@ impl NumberFormat {
         Ok(())
     }
 
+    /// Projects one cached value through the supported deterministic subset.
+    pub fn format_value(&self, value: f64) -> Result<String> {
+        if !value.is_finite() {
+            return Err(ChartError::InvalidValue {
+                element: "c:numFmt value".to_owned(),
+                value: value.to_string(),
+            });
+        }
+        if self.format_code == "General" {
+            return Ok(value.to_string());
+        }
+
+        let (numeric_code, percentage) = self
+            .format_code
+            .strip_suffix('%')
+            .map(|code| (code, true))
+            .unwrap_or((&self.format_code, false));
+        let precision = if numeric_code == "0" {
+            Some(0)
+        } else if let Some(decimals) = numeric_code.strip_prefix("0.")
+            && !decimals.is_empty()
+            && decimals.bytes().all(|byte| byte == b'0')
+        {
+            Some(decimals.len())
+        } else {
+            None
+        };
+        let Some(precision) = precision else {
+            return Err(ChartError::InvalidValue {
+                element: "c:numFmt/@formatCode projection".to_owned(),
+                value: self.format_code.clone(),
+            });
+        };
+        let projected = if percentage { value * 100.0 } else { value };
+        if !projected.is_finite() {
+            return Err(ChartError::InvalidValue {
+                element: "c:numFmt value".to_owned(),
+                value: projected.to_string(),
+            });
+        }
+        let mut formatted = format!("{projected:.precision$}");
+        if percentage {
+            formatted.push('%');
+        }
+        Ok(formatted)
+    }
+
     fn validate(&self) -> Result<()> {
         if self.format_code.is_empty() {
             return Err(ChartError::InvalidValue {
@@ -3116,6 +3252,396 @@ impl NumberFormat {
         }
         validate_xml_text(&self.format_code, "c:numFmt/@formatCode")
     }
+}
+
+impl CT_DLbls {
+    pub fn from_xml(xml: &[u8]) -> Result<Self> {
+        Self::from_xml_with_namespaces(xml, &chart_namespace_defaults())
+    }
+
+    fn from_xml_with_namespaces(xml: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader
+                .read_event_into(&mut buffer)
+                .map_err(OxmlError::from)?
+            {
+                Event::Start(element) if matches_local_name(element.name().as_ref(), b"dLbls") => {
+                    chart_root_prefix(&element)?;
+                    if !element_is_in_namespace(&element, C_NS, inherited)? {
+                        return Err(ChartError::UnexpectedElement(element_name(&element)));
+                    }
+                    return Self::from_element(&mut reader, &element, inherited);
+                }
+                Event::Empty(element) if matches_local_name(element.name().as_ref(), b"dLbls") => {
+                    chart_root_prefix(&element)?;
+                    let namespaces = chart_bindings(inherited, &element)?;
+                    if !element_is_in_namespace(&element, C_NS, inherited)? {
+                        return Err(ChartError::UnexpectedElement(element_name(&element)));
+                    }
+                    let (raw_attributes, _) = capture_fixed_root_attributes(
+                        &element,
+                        &["xmlns:c", "xmlns:a", "xmlns:r"],
+                    )?;
+                    return Ok(Self {
+                        raw_attributes,
+                        namespace_declarations: standalone_namespace_declarations(&namespaces)?,
+                        ..Self::default()
+                    });
+                }
+                Event::Start(element) | Event::Empty(element) => {
+                    return Err(ChartError::UnexpectedElement(element_name(&element)));
+                }
+                Event::Eof => return Err(ChartError::MissingElement("c:dLbls".to_owned())),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn from_element(
+        reader: &mut Reader<&[u8]>,
+        start: &BytesStart<'_>,
+        inherited: &NamespaceBindings,
+    ) -> Result<Self> {
+        reject_conflicting_prefix(start, b"a", A_NS)?;
+        let namespaces = chart_bindings(inherited, start)?;
+        require_fixed_namespace(&namespaces, b"c", C_NS, start)?;
+        let (raw_attributes, _) =
+            capture_fixed_root_attributes(start, &["xmlns:c", "xmlns:a", "xmlns:r"])?;
+        let namespace_declarations = standalone_namespace_declarations(&namespaces)?;
+        let mut state = DataLabelsParseState::new(namespaces);
+        let mut buffer = Vec::new();
+        loop {
+            match reader
+                .read_event_into(&mut buffer)
+                .map_err(OxmlError::from)?
+            {
+                Event::Start(element) => {
+                    let name = chart_child_local(&element, &state.namespaces)?;
+                    let raw = capture_element(reader, &element)?;
+                    state.parse_child(name.as_deref().unwrap_or_default(), raw)?;
+                }
+                Event::Empty(element) => {
+                    let name = chart_child_local(&element, &state.namespaces)?;
+                    let raw = capture_empty_element(&element)?;
+                    state.parse_child(name.as_deref().unwrap_or_default(), raw)?;
+                }
+                event @ (Event::Text(_)
+                | Event::CData(_)
+                | Event::Comment(_)
+                | Event::PI(_)
+                | Event::GeneralRef(_)) => state.capture_event(capture_event(event)?),
+                Event::End(element) if matches_local_name(element.name().as_ref(), b"dLbls") => {
+                    return state.finish(raw_attributes, namespace_declarations);
+                }
+                Event::Eof => return Err(missing_end("c:dLbls")),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    pub fn to_xml(&self) -> Result<Vec<u8>> {
+        let mut writer = Writer::new(Vec::new());
+        self.write_xml(&mut writer, true)?;
+        Ok(writer.into_inner())
+    }
+
+    fn write_xml(&self, writer: &mut Writer<Vec<u8>>, standalone: bool) -> Result<()> {
+        self.validate()?;
+        let mut start = BytesStart::new("c:dLbls");
+        if standalone {
+            start.push_attribute(("xmlns:c", C_NS));
+            start.push_attribute(("xmlns:a", A_NS));
+            start.push_attribute(("xmlns:r", R_NS));
+        }
+        push_attributes(&mut start, &self.namespace_declarations);
+        push_attributes(&mut start, &self.raw_attributes);
+        writer
+            .write_event(Event::Start(start))
+            .map_err(OxmlError::from)?;
+        emit_raw(writer, self.raw_children.at(0))?;
+        if let Some(number_format) = &self.number_format {
+            number_format.write_xml(writer)?;
+        }
+        emit_raw(writer, self.raw_children.at(1))?;
+        if let Some(position) = self.position {
+            write_scalar(
+                writer,
+                "c:dLblPos",
+                position.as_str(),
+                self.position_markup.as_ref(),
+            )?;
+        }
+        emit_raw(writer, self.raw_children.at(2))?;
+        write_optional_bool(
+            writer,
+            "c:showLegendKey",
+            self.show_legend_key,
+            self.show_legend_key_markup.as_ref(),
+        )?;
+        emit_raw(writer, self.raw_children.at(3))?;
+        write_optional_bool(
+            writer,
+            "c:showVal",
+            self.show_value,
+            self.show_value_markup.as_ref(),
+        )?;
+        emit_raw(writer, self.raw_children.at(4))?;
+        write_optional_bool(
+            writer,
+            "c:showCatName",
+            self.show_category_name,
+            self.show_category_name_markup.as_ref(),
+        )?;
+        emit_raw(writer, self.raw_children.at(5))?;
+        write_optional_bool(
+            writer,
+            "c:showSerName",
+            self.show_series_name,
+            self.show_series_name_markup.as_ref(),
+        )?;
+        emit_raw(writer, self.raw_children.at(6))?;
+        write_optional_bool(
+            writer,
+            "c:showPercent",
+            self.show_percent,
+            self.show_percent_markup.as_ref(),
+        )?;
+        emit_raw(writer, self.raw_children.at(7))?;
+        write_optional_bool(
+            writer,
+            "c:showBubbleSize",
+            self.show_bubble_size,
+            self.show_bubble_size_markup.as_ref(),
+        )?;
+        emit_raw(writer, self.raw_children.at(8))?;
+        if let Some(separator) = &self.separator {
+            write_text(
+                writer,
+                "c:separator",
+                separator,
+                self.separator_markup
+                    .as_ref()
+                    .unwrap_or(&TextMarkup::default()),
+            )?;
+        }
+        emit_raw(writer, self.raw_children.at(9))?;
+        writer
+            .write_event(Event::End(BytesEnd::new("c:dLbls")))
+            .map_err(OxmlError::from)?;
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<()> {
+        if let Some(number_format) = &self.number_format {
+            number_format.validate()?;
+        }
+        if let Some(separator) = &self.separator {
+            validate_xml_text(separator, "c:separator")?;
+        }
+        Ok(())
+    }
+
+    pub fn raw_children(&self) -> &OrderedRawChildren {
+        &self.raw_children
+    }
+}
+
+struct DataLabelsParseState {
+    namespaces: NamespaceBindings,
+    number_format: Option<NumberFormat>,
+    position: Option<(DataLabelPosition, ScalarMarkup)>,
+    show_legend_key: Option<(bool, ScalarMarkup)>,
+    show_value: Option<(bool, ScalarMarkup)>,
+    show_category_name: Option<(bool, ScalarMarkup)>,
+    show_series_name: Option<(bool, ScalarMarkup)>,
+    show_percent: Option<(bool, ScalarMarkup)>,
+    show_bubble_size: Option<(bool, ScalarMarkup)>,
+    separator: Option<(String, TextMarkup)>,
+    raw_children: OrderedRawChildren,
+    boundary: usize,
+}
+
+impl DataLabelsParseState {
+    fn new(namespaces: NamespaceBindings) -> Self {
+        Self {
+            namespaces,
+            number_format: None,
+            position: None,
+            show_legend_key: None,
+            show_value: None,
+            show_category_name: None,
+            show_series_name: None,
+            show_percent: None,
+            show_bubble_size: None,
+            separator: None,
+            raw_children: OrderedRawChildren::default(),
+            boundary: 0,
+        }
+    }
+
+    fn capture_event(&mut self, raw: Vec<u8>) {
+        self.raw_children.push(self.boundary, raw);
+    }
+
+    fn parse_child(&mut self, name: &[u8], raw: Vec<u8>) -> Result<()> {
+        match name {
+            b"numFmt" => {
+                set_once(
+                    &mut self.number_format,
+                    NumberFormat::from_xml(&raw)?,
+                    "c:numFmt",
+                )?;
+                self.boundary = self.boundary.max(1);
+            }
+            b"dLblPos" => {
+                let (value, markup) = scalar_value(&raw, "dLblPos")?;
+                let lexical = value
+                    .ok_or_else(|| invalid_attribute("dLblPos", "val", "<missing>".to_owned()))?;
+                let position = DataLabelPosition::parse(&lexical)
+                    .ok_or_else(|| invalid_attribute("dLblPos", "val", lexical))?;
+                set_once(&mut self.position, (position, markup), "c:dLblPos")?;
+                self.boundary = self.boundary.max(2);
+            }
+            b"showLegendKey" => {
+                set_once(
+                    &mut self.show_legend_key,
+                    parse_bool_value(&raw, "showLegendKey")?,
+                    "c:showLegendKey",
+                )?;
+                self.boundary = self.boundary.max(3);
+            }
+            b"showVal" => {
+                set_once(
+                    &mut self.show_value,
+                    parse_bool_value(&raw, "showVal")?,
+                    "c:showVal",
+                )?;
+                self.boundary = self.boundary.max(4);
+            }
+            b"showCatName" => {
+                set_once(
+                    &mut self.show_category_name,
+                    parse_bool_value(&raw, "showCatName")?,
+                    "c:showCatName",
+                )?;
+                self.boundary = self.boundary.max(5);
+            }
+            b"showSerName" => {
+                set_once(
+                    &mut self.show_series_name,
+                    parse_bool_value(&raw, "showSerName")?,
+                    "c:showSerName",
+                )?;
+                self.boundary = self.boundary.max(6);
+            }
+            b"showPercent" => {
+                set_once(
+                    &mut self.show_percent,
+                    parse_bool_value(&raw, "showPercent")?,
+                    "c:showPercent",
+                )?;
+                self.boundary = self.boundary.max(7);
+            }
+            b"showBubbleSize" => {
+                set_once(
+                    &mut self.show_bubble_size,
+                    parse_bool_value(&raw, "showBubbleSize")?,
+                    "c:showBubbleSize",
+                )?;
+                self.boundary = self.boundary.max(8);
+            }
+            b"separator" => {
+                set_once(
+                    &mut self.separator,
+                    parse_text_element(&raw, b"separator", &self.namespaces)?,
+                    "c:separator",
+                )?;
+                self.boundary = self.boundary.max(9);
+            }
+            _ => {
+                let boundary = data_labels_raw_boundary(name, self.boundary);
+                self.raw_children.push(boundary, raw);
+                self.boundary = self.boundary.max(boundary);
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(
+        self,
+        raw_attributes: XmlAttributes,
+        namespace_declarations: XmlAttributes,
+    ) -> Result<CT_DLbls> {
+        let (position, position_markup) = optional_markup(self.position);
+        let (show_legend_key, show_legend_key_markup) = optional_bool_markup(self.show_legend_key);
+        let (show_value, show_value_markup) = optional_bool_markup(self.show_value);
+        let (show_category_name, show_category_name_markup) =
+            optional_bool_markup(self.show_category_name);
+        let (show_series_name, show_series_name_markup) =
+            optional_bool_markup(self.show_series_name);
+        let (show_percent, show_percent_markup) = optional_bool_markup(self.show_percent);
+        let (show_bubble_size, show_bubble_size_markup) =
+            optional_bool_markup(self.show_bubble_size);
+        let (separator, separator_markup) = self
+            .separator
+            .map(|(value, markup)| (Some(value), Some(markup)))
+            .unwrap_or((None, None));
+        let labels = CT_DLbls {
+            number_format: self.number_format,
+            position,
+            separator,
+            show_legend_key,
+            show_value,
+            show_category_name,
+            show_series_name,
+            show_percent,
+            show_bubble_size,
+            position_markup,
+            show_legend_key_markup,
+            show_value_markup,
+            show_category_name_markup,
+            show_series_name_markup,
+            show_percent_markup,
+            show_bubble_size_markup,
+            separator_markup,
+            raw_attributes,
+            namespace_declarations,
+            raw_children: raw_children_in_schema_order(&self.raw_children, 9),
+        };
+        labels.validate()?;
+        Ok(labels)
+    }
+}
+
+fn data_labels_raw_boundary(name: &[u8], current: usize) -> usize {
+    match name {
+        b"dLbl" | b"delete" => 0,
+        b"spPr" | b"txPr" => 1,
+        b"showLeaderLines" | b"leaderLines" | b"extLst" => 9,
+        _ => current,
+    }
+}
+
+fn optional_bool_markup(value: Option<(bool, ScalarMarkup)>) -> (bool, Option<ScalarMarkup>) {
+    value
+        .map(|(value, markup)| (value, Some(markup)))
+        .unwrap_or((false, None))
+}
+
+fn write_optional_bool(
+    writer: &mut Writer<Vec<u8>>,
+    tag: &str,
+    value: bool,
+    markup: Option<&ScalarMarkup>,
+) -> Result<()> {
+    if value || markup.is_some() {
+        write_scalar(writer, tag, bool_lexical(value), markup)?;
+    }
+    Ok(())
 }
 
 fn default_axis_id_markup(id: AxisId) -> AxisIdMarkup {
@@ -4558,6 +5084,7 @@ fn missing_end(element: &str) -> ChartError {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
@@ -4567,13 +5094,17 @@ mod tests {
     use quick_xml::events::Event;
 
     use super::{
-        A_NS, Axis, AxisData, AxisId, AxisKind, AxisPosition, C_NS, CT_ChartSpace,
-        CT_ShapeProperties, CT_TextBody, DispBlanksAs, NumericData, Orientation, R_NS, Series,
-        StringRef, TickLabelPosition, TickMark, capture_event, local_name,
+        A_NS, Axis, AxisData, AxisId, AxisKind, AxisPosition, C_NS, CT_ChartSpace, CT_DLbls,
+        CT_ShapeProperties, CT_TextBody, DataLabelPosition, DispBlanksAs, NumberFormat,
+        NumericData, Orientation, R_NS, Series, StringRef, TickLabelPosition, TickMark,
+        capture_event, local_name, matches_local_name,
     };
 
     const MANIFEST: &str = include_str!("../../../scripts/pptx-corpus-manifest.tsv");
     const EXPECTED_DECKS: usize = 50;
+    const LIBREOFFICE_VERSION: &str =
+        "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
+    const PDFTOTEXT_VERSION: &str = "pdftotext version 26.01.0";
 
     fn standalone_axis(local: &str, children: &str) -> String {
         format!(
@@ -4592,6 +5123,309 @@ mod tests {
             r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><c:chart><c:plotArea>{}</c:plotArea></c:chart></c:chartSpace>"#,
             axes.join("")
         )
+    }
+
+    #[test]
+    fn data_labels_write_fixed_prefixes_in_schema_order() {
+        let xml = format!(
+            r#"<q:dLbls xmlns:q="{C_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}" xmlns:x="urn:producer"><q:dLbl><q:idx val="0"/><x:point/></q:dLbl><q:numFmt formatCode="0.0%" sourceLinked="0"/><q:spPr><x:shape/></q:spPr><q:txPr><x:text/></q:txPr><q:dLblPos val="outEnd"/><q:showLegendKey val="1"/><q:showVal val="true"/><q:showCatName val="0"/><q:showSerName val="1"/><q:showPercent val="0"/><q:showBubbleSize val="1"/><q:separator> / </q:separator><q:leaderLines><x:line/></q:leaderLines><q:extLst><q:ext uri="labels"><x:tail/></q:ext></q:extLst></q:dLbls>"#
+        );
+        let parsed = CT_DLbls::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(parsed.number_format.as_ref().unwrap().format_code, "0.0%");
+        assert_eq!(parsed.position, Some(DataLabelPosition::OutsideEnd));
+        assert_eq!(parsed.separator.as_deref(), Some(" / "));
+        assert!(parsed.show_legend_key);
+        assert!(parsed.show_value);
+        assert!(!parsed.show_category_name);
+        assert!(parsed.show_series_name);
+        assert!(!parsed.show_percent);
+        assert!(parsed.show_bubble_size);
+
+        let written = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+        assert!(written.starts_with(&format!(
+            "<c:dLbls xmlns:c=\"{C_NS}\" xmlns:a=\"{A_NS}\" xmlns:r=\"{R_NS}\""
+        )));
+        let mut cursor = 0usize;
+        for tag in [
+            "<q:dLbl",
+            "<c:numFmt",
+            "<q:spPr",
+            "<q:txPr",
+            "<c:dLblPos",
+            "<c:showLegendKey",
+            "<c:showVal",
+            "<c:showCatName",
+            "<c:showSerName",
+            "<c:showPercent",
+            "<c:showBubbleSize",
+            "<c:separator",
+            "<q:leaderLines",
+            "<q:extLst",
+        ] {
+            let position = written[cursor..]
+                .find(tag)
+                .unwrap_or_else(|| panic!("missing ordered data-label tag {tag}"));
+            cursor += position + tag.len();
+        }
+        assert_eq!(parsed, CT_DLbls::from_xml(written.as_bytes()).unwrap());
+    }
+
+    #[test]
+    fn percentage_formatted_label_renders_with_correct_text() {
+        let Some(corpus) = require_or_skip_corpus() else {
+            return;
+        };
+        verify_fetched_corpus(&corpus);
+        assert_command_version("soffice", &["--version"], LIBREOFFICE_VERSION);
+        assert_command_version("pdftotext", &["-v"], PDFTOTEXT_VERSION);
+
+        let source = corpus.join("bar-chart.pptx");
+        let mut package = OpcPackage::open(&source).expect("open percentage-label source deck");
+        let chart_part = "/ppt/charts/chart1.xml";
+        let original_parts = package.parts.clone();
+        let chart_xml = package
+            .get_part(chart_part)
+            .expect("bar chart part")
+            .to_vec();
+        let original_series = first_series_xml(&chart_xml).expect("bar chart series");
+        let mut series = Series::from_xml(&original_series).expect("parse bar chart series");
+        series.values.values.fill(0.25);
+        let labels = CT_DLbls {
+            number_format: Some(NumberFormat::new("0%".to_owned(), false).unwrap()),
+            position: Some(DataLabelPosition::OutsideEnd),
+            show_value: true,
+            ..CT_DLbls::default()
+        };
+        series.data_labels = Some(labels);
+        let replacement = series.to_xml().expect("serialize typed percentage labels");
+        let candidate_chart = replace_once(&chart_xml, &original_series, &replacement);
+        package.set_part(chart_part, candidate_chart);
+        for (part, bytes) in &original_parts {
+            if part == chart_part {
+                assert_ne!(package.parts[part], *bytes);
+            } else {
+                assert_eq!(
+                    package.parts[part], *bytes,
+                    "unexpected changed part {part}"
+                );
+            }
+        }
+
+        let temp_root = std::env::temp_dir().join(format!(
+            "rpptx-chart-f123-label-gate-{}",
+            std::process::id()
+        ));
+        let profile = std::env::temp_dir().join(format!(
+            "rpptx-chart-f123-label-profile-{}",
+            std::process::id()
+        ));
+        if temp_root.exists() {
+            fs::remove_dir_all(&temp_root).expect("remove stale F-123 evidence");
+        }
+        if profile.exists() {
+            fs::remove_dir_all(&profile).expect("remove stale F-123 profile");
+        }
+        fs::create_dir_all(&temp_root).expect("create F-123 evidence root");
+        let unbound_candidate = temp_root.join("f123-percentage-label.pptx");
+        package
+            .save(&unbound_candidate)
+            .expect("save percentage-label candidate");
+        let candidate_sha = sha256(&unbound_candidate);
+        let evidence_dir = temp_root.join(&candidate_sha);
+        fs::create_dir(&evidence_dir).expect("create SHA-bound evidence directory");
+        let candidate = evidence_dir.join("f123-percentage-label.pptx");
+        fs::rename(&unbound_candidate, &candidate).expect("bind candidate to evidence SHA");
+        assert_eq!(sha256(&candidate), candidate_sha);
+
+        let profile_argument = format!("-env:UserInstallation=file://{}", profile.display());
+        let conversion = Command::new("soffice")
+            .args([
+                "--headless",
+                &profile_argument,
+                "--convert-to",
+                "pdf:impress_pdf_Export",
+                "--outdir",
+            ])
+            .arg(&evidence_dir)
+            .arg(&candidate)
+            .output()
+            .expect("run pinned LibreOffice percentage-label gate");
+        assert!(
+            conversion.status.success(),
+            "LibreOffice conversion failed: {}",
+            String::from_utf8_lossy(&conversion.stderr)
+        );
+        let pdf = evidence_dir.join("f123-percentage-label.pdf");
+        assert!(
+            pdf.is_file(),
+            "LibreOffice did not create {}",
+            pdf.display()
+        );
+        let text_path = evidence_dir.join("f123-percentage-label.txt");
+        let extraction = Command::new("pdftotext")
+            .arg(&pdf)
+            .arg(&text_path)
+            .output()
+            .expect("run pinned Poppler percentage-label extraction");
+        assert!(
+            extraction.status.success(),
+            "pdftotext failed: {}",
+            String::from_utf8_lossy(&extraction.stderr)
+        );
+        let extracted = fs::read_to_string(&text_path).expect("read percentage-label text");
+        assert!(
+            extracted.contains("25%"),
+            "SHA-bound viewer text lacks 25%: {extracted:?}"
+        );
+        for artifact in [&candidate, &pdf, &text_path] {
+            assert_eq!(
+                artifact.parent(),
+                Some(evidence_dir.as_path()),
+                "evidence escaped candidate SHA"
+            );
+        }
+        eprintln!("F-123 candidate/render/text evidence SHA-256 {candidate_sha}, extracted 25%");
+        fs::remove_dir_all(&temp_root).expect("remove F-123 evidence");
+        if profile.exists() {
+            fs::remove_dir_all(&profile).expect("remove F-123 profile");
+        }
+    }
+
+    #[test]
+    fn common_number_formats_project_cached_values_deterministically() {
+        for (code, value, expected) in [
+            ("General", 0.25, "0.25"),
+            ("0", 12.6, "13"),
+            ("0.0", 12.64, "12.6"),
+            ("0.00", -12.645, "-12.64"),
+            ("0%", 0.25, "25%"),
+            ("0.0%", 0.256, "25.6%"),
+            ("0.00%", 0.256, "25.60%"),
+        ] {
+            let format = NumberFormat::new(code.to_owned(), false).unwrap();
+            assert_eq!(format.format_value(value).unwrap(), expected, "{code}");
+        }
+    }
+
+    #[test]
+    fn malformed_data_labels_and_number_formats_return_errors_without_panicking() {
+        let cases = [
+            format!(
+                r#"<c:dLbls xmlns:c="{C_NS}"><c:showVal val="1"/><c:showVal val="0"/></c:dLbls>"#
+            ),
+            format!(r#"<c:dLbls xmlns:c="{C_NS}"><c:showVal val="yes"/></c:dLbls>"#),
+            format!(r#"<c:dLbls xmlns:c="{C_NS}"><c:dLblPos val="middle"/></c:dLbls>"#),
+            format!(
+                r#"<c:dLbls xmlns:c="{C_NS}"><c:numFmt formatCode="" sourceLinked="1"/></c:dLbls>"#
+            ),
+            format!(
+                r#"<c:dLbls xmlns:c="{C_NS}"><c:numFmt formatCode="0" sourceLinked="maybe"/></c:dLbls>"#
+            ),
+        ];
+        for xml in cases {
+            let result = std::panic::catch_unwind(|| CT_DLbls::from_xml(xml.as_bytes()));
+            assert!(result.is_ok(), "data-label parser panicked for {xml}");
+            assert!(result.unwrap().is_err(), "malformed labels parsed: {xml}");
+        }
+
+        let invalid_code = NumberFormat::new("bad\u{0}code".to_owned(), false);
+        assert!(invalid_code.is_err());
+        let unsupported = NumberFormat::new("#,##0".to_owned(), false).unwrap();
+        assert!(unsupported.format_value(12.0).is_err());
+        let general = NumberFormat::new("General".to_owned(), false).unwrap();
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(general.format_value(value).is_err());
+        }
+
+        let invalid_separator = CT_DLbls {
+            separator: Some("bad\u{0}separator".to_owned()),
+            ..CT_DLbls::default()
+        };
+        assert!(invalid_separator.to_xml().is_err());
+    }
+
+    #[test]
+    fn data_labels_preserve_point_overrides_and_extensions_byte_for_byte() {
+        let xml = format!(
+            r#"<q:dLbls xmlns:q="{C_NS}" xmlns:x="urn:producer" x:keep="labels"><!--before--><q:dLbl x:keep="point"><q:idx val="0"/><q:spPr><x:shape/></q:spPr><q:txPr><x:text/></q:txPr><q:extLst><q:ext uri="point"><x:point/></q:ext></q:extLst></q:dLbl><?after-point?><q:numFmt formatCode="0%" sourceLinked="0"/><q:spPr><x:collection-shape/></q:spPr><q:txPr><x:collection-text/></q:txPr><q:showVal val="1"/><q:separator><![CDATA[ | ]]></q:separator><q:showLeaderLines val="1"/><q:leaderLines><q:spPr><x:leader-shape/></q:spPr></q:leaderLines><q:extLst><q:ext uri="collection"><x:tail/></q:ext></q:extLst><!--after--></q:dLbls>"#
+        );
+        let parsed = CT_DLbls::from_xml(xml.as_bytes()).unwrap();
+        let written = parsed.to_xml().unwrap();
+        for raw in [
+            br#"<!--before-->"#.as_slice(),
+            br#"<q:dLbl x:keep="point"><q:idx val="0"/><q:spPr><x:shape/></q:spPr><q:txPr><x:text/></q:txPr><q:extLst><q:ext uri="point"><x:point/></q:ext></q:extLst></q:dLbl>"#.as_slice(),
+            br#"<?after-point?>"#.as_slice(),
+            br#"<q:spPr><x:collection-shape/></q:spPr>"#.as_slice(),
+            br#"<q:txPr><x:collection-text/></q:txPr>"#.as_slice(),
+            br#"<q:showLeaderLines val="1"/>"#.as_slice(),
+            br#"<q:leaderLines><q:spPr><x:leader-shape/></q:spPr></q:leaderLines>"#.as_slice(),
+            br#"<q:extLst><q:ext uri="collection"><x:tail/></q:ext></q:extLst>"#.as_slice(),
+            br#"<!--after-->"#.as_slice(),
+        ] {
+            assert!(
+                written.windows(raw.len()).any(|window| window == raw),
+                "preserved data-label bytes changed: {}",
+                String::from_utf8_lossy(raw)
+            );
+        }
+        assert_eq!(parsed, CT_DLbls::from_xml(&written).unwrap());
+    }
+
+    #[test]
+    fn every_corpus_data_label_collection_round_trips_structurally() {
+        let Some(corpus) = require_or_skip_corpus() else {
+            return;
+        };
+        verify_fetched_corpus(&corpus);
+        let mut label_collections = 0usize;
+        let mut axis_number_formats = 0usize;
+        for path in manifest_paths() {
+            let package = OpcPackage::open(corpus.join(path))
+                .unwrap_or_else(|error| panic!("{path}: open failed: {error}"));
+            for (part, xml) in &package.parts {
+                if !is_chart_part(part) {
+                    continue;
+                }
+                let chart = CT_ChartSpace::from_xml(xml)
+                    .unwrap_or_else(|error| panic!("{path} {part}: parse failed: {error}"));
+                for series in chart.chart.plot_area.series().unwrap_or_else(|error| {
+                    panic!("{path} {part}: series projection failed: {error}")
+                }) {
+                    if let Some(labels) = series.data_labels {
+                        let written = labels.to_xml().unwrap_or_else(|error| {
+                            panic!("{path} {part}: label write failed: {error}")
+                        });
+                        let reparsed = CT_DLbls::from_xml(&written).unwrap_or_else(|error| {
+                            panic!("{path} {part}: written labels parse failed: {error}")
+                        });
+                        assert_eq!(labels, reparsed, "{path} {part}: labels changed");
+                        label_collections += 1;
+                    }
+                }
+                for axis in chart.chart.plot_area.axes().unwrap_or_else(|error| {
+                    panic!("{path} {part}: axis projection failed: {error}")
+                }) {
+                    if axis.number_format.is_some() {
+                        let written = axis.to_xml().unwrap_or_else(|error| {
+                            panic!("{path} {part}: axis write failed: {error}")
+                        });
+                        let reparsed = Axis::from_xml(&written).unwrap_or_else(|error| {
+                            panic!("{path} {part}: written axis parse failed: {error}")
+                        });
+                        assert_eq!(axis, reparsed, "{path} {part}: axis changed");
+                        axis_number_formats += 1;
+                    }
+                }
+            }
+        }
+        assert!(label_collections > 0, "the pinned corpus has no c:dLbls");
+        assert!(
+            axis_number_formats > 0,
+            "the pinned corpus has no axis c:numFmt"
+        );
+        eprintln!(
+            "ChartML data-label corpus gate checked {label_collections} collections and {axis_number_formats} axis number formats"
+        );
     }
 
     fn full_axis(local: &str, position: &str) -> String {
@@ -5125,7 +5959,6 @@ mod tests {
             br#"<!--before-->"#.as_slice(),
             br#"<x:between/>"#.as_slice(),
             br#"<q:dPt x:id="one"><q:idx val="0"/></q:dPt>"#.as_slice(),
-            br#"<q:dLbls x:id="labels"/>"#.as_slice(),
             br#"<q:trendline x:id="trend"/>"#.as_slice(),
             br#"<q:extLst><q:ext uri="keep"><x:data/></q:ext></q:extLst>"#.as_slice(),
             br#"<!--point-->"#.as_slice(),
@@ -5140,6 +5973,9 @@ mod tests {
         let written = String::from_utf8(written.clone()).unwrap();
         assert!(written.contains(r#"x:keep="series""#));
         assert!(written.contains(r#"x:keep="formula""#));
+        assert!(written.contains("<c:dLbls"));
+        assert!(written.contains(r#"x:id="labels""#));
+        assert!(parsed.data_labels.is_some());
         assert_eq!(parsed, Series::from_xml(written.as_bytes()).unwrap());
     }
 
@@ -5685,6 +6521,86 @@ mod tests {
             workspace
                 .contains("rpptx-chart = { path = \"crates/rpptx-chart\", version = \"0.0.0\" }")
         );
+    }
+
+    fn first_series_xml(xml: &[u8]) -> Option<Vec<u8>> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer).ok()? {
+                Event::Start(element) if matches_local_name(element.name().as_ref(), b"ser") => {
+                    return capture_element(&mut reader, &element).ok();
+                }
+                Event::Empty(element) if matches_local_name(element.name().as_ref(), b"ser") => {
+                    return capture_empty_element(&element).ok();
+                }
+                Event::Eof => return None,
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn replace_once(haystack: &[u8], needle: &[u8], replacement: &[u8]) -> Vec<u8> {
+        let offset = haystack
+            .windows(needle.len())
+            .position(|window| window == needle)
+            .expect("serialized source series occurs in chart part");
+        assert!(
+            !haystack[offset + needle.len()..]
+                .windows(needle.len())
+                .any(|window| window == needle),
+            "source series unexpectedly occurs more than once"
+        );
+        let mut result = Vec::with_capacity(haystack.len() - needle.len() + replacement.len());
+        result.extend_from_slice(&haystack[..offset]);
+        result.extend_from_slice(replacement);
+        result.extend_from_slice(&haystack[offset + needle.len()..]);
+        result
+    }
+
+    fn assert_command_version(program: &str, arguments: &[&str], expected: &str) {
+        let output = Command::new(program)
+            .args(arguments)
+            .output()
+            .unwrap_or_else(|error| panic!("run {program} version check: {error}"));
+        assert!(
+            output.status.success(),
+            "{program} version check failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).expect("version stdout is UTF-8");
+        let stderr = String::from_utf8(output.stderr).expect("version stderr is UTF-8");
+        let actual = if stdout.trim().is_empty() {
+            stderr.trim()
+        } else {
+            stdout.trim()
+        };
+        assert_eq!(
+            actual.lines().next(),
+            Some(expected),
+            "{program} version drift"
+        );
+    }
+
+    fn sha256(path: &Path) -> String {
+        let output = Command::new("shasum")
+            .args(["-a", "256"])
+            .arg(path)
+            .output()
+            .unwrap_or_else(|error| panic!("{}: run shasum: {error}", path.display()));
+        assert!(
+            output.status.success(),
+            "{}: shasum failed: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .expect("shasum output is UTF-8")
+            .split_whitespace()
+            .next()
+            .expect("shasum digest")
+            .to_owned()
     }
 
     fn workspace_root() -> PathBuf {
