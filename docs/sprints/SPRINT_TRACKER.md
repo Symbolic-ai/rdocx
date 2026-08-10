@@ -172,6 +172,8 @@ defended.
 | F-124 | S31 | L | 4 | 1 | 2026-08-10 | Atomic editable chart authoring with native PowerPoint evidence |
 | F-125 | S31 | L | 4 | 1 | 2026-08-10 | Backend-neutral geometry for all supported chart families |
 | F-126 | S31 | L | 4 | 1 | 2026-08-10 | Nice-number axes, gridlines, labels, and legends |
+| F-127 | S32 | M | 2 | 1 | 2026-08-10 | Exact direct and theme-mapped chart series colours |
+| F-128 | S32 | S | 1 | 1 | 2026-08-10 | Source-scoped native charts and bounded preserved fallbacks |
 
 ## Velocity
 

@@ -30,8 +30,8 @@ diagnostic placeholder so authored and preserved charts both render predictably.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-127 | Chart colour resolution | M | in-progress | codex |
-| F-128 | Preserved chart fallback | S | in-progress | codex |
+| F-127 | Chart colour resolution | M | done | - |
+| F-128 | Preserved chart fallback | S | done | - |
 
 ## Sequencing note
 
