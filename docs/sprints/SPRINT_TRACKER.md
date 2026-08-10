@@ -43,6 +43,7 @@ defended.
 | S28 | M11 | 4 | 4 | 0 | 9 | 4 | Completed M11 with mutable tables, slide collection operations, presentation properties, and one SHA-bound ten-slide acceptance deck. PowerPoint, Keynote, Google Slides, and LibreOffice accepted the deck without repair or conversion error, all 28 hashes remained unchanged, and no crate was published |
 | S29 | M12 | 3 | 3 | 0 | 12 | 3 | Established the chart data layer with a minimal editable workbook writer, schema-aware ChartML core types, and consistent formula references and caches. Excel and LibreOffice Calc accepted the generated workbook, all 50 pinned decks passed the chart corpus gates, all 28 hashes remained unchanged, and no crate was published |
 | S30 | M12 | 4 | 4 | 0 | 12 | 4 | Completed typed axes, data labels, number formats, and all seven v1 plot families with reciprocal axis validation, 50-deck structural gates, SHA-bound viewer evidence, all 28 hashes unchanged, and no crate published |
+| S31 | M12 | 3 | 3 | 0 | 12 | 3 | Added atomic editable chart authoring, backend-neutral chart geometry, and deterministic axes, gridlines, labels, and legends. Pinned PowerPoint accepted the generated chart without repair and exposed exact editable workbook values, all 50 pinned chart decks and 28 hashes passed unchanged, and no crate was published |
 
 ## Completed features
 
