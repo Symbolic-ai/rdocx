@@ -30,7 +30,7 @@ ready for S31 authoring and rendering work.
 |------|-------|------|--------|-------|
 | F-120 | Axes | L | in-progress | codex |
 | F-123 | Data labels and number formats | M | in-progress | codex |
-| F-121 | Bar and line plots | M | pending | - |
+| F-121 | Bar and line plots | M | in-progress | codex |
 | F-122 | Pie, doughnut, area, scatter and radar plots | L | pending | - |
 
 ## Sequencing note
