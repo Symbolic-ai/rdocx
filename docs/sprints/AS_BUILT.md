@@ -3929,3 +3929,161 @@ The required corpus gate verified 66 series across all 26 chart parts in the
 **Notes for future sessions.** Authoring code should supply formulae and value
 vectors once and let the ChartML writer derive cache metadata. Plot stories
 must preserve the stable series schema slots and URI-aware namespace rules.
+
+### F-120, Axes
+
+**Sprint.** S30
+**Completed.** 2026-08-10
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `rpptx-chart` now models category, value, date, and series
+axes with scaling, gridlines, titles, number formats, ticks, shape and text
+properties, positions, and reciprocal cross-axis references. Plot areas expose
+validated typed axes while preserving unsupported children and producer
+markup in schema order.
+
+**Non-obvious choices.** Axis identifiers accept the producer-compatible range
+from signed 32-bit minimum through unsigned 32-bit maximum because the corpus
+contains negative PowerPoint identifiers. Parsed root-family provenance blocks
+unsafe relabelling when opaque family-specific content exists, while newly
+constructed axes remain freely editable.
+
+**Deviations from the design plan.** Five microscope passes hardened parsed
+axis relabelling, constructed versus parsed provenance, structural equality,
+and lexical identifier preservation. The approved API and HLD impact did not
+change.
+
+**Spec sections touched.** `docs/hld/09-charts-spec.md`.
+
+**Tests.** `axis_id_pairs_are_reciprocal`,
+`all_axis_forms_write_fixed_prefixes_in_schema_order`,
+`malformed_axis_values_return_errors_without_panicking`,
+`axes_preserve_unmodelled_children_byte_for_byte`,
+`every_corpus_axis_round_trips_structurally`, and the integrated full gate.
+The required corpus gate verified 40 axes across 26 chart parts in all 50
+pinned decks.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep axes owned by the plot area and plots
+limited to identifier references. Preserve unchanged identifier lexemes for
+round-trip output, but compare and validate their normalized numeric values.
+
+### F-123, Data labels and number formats
+
+**Sprint.** S30
+**Completed.** 2026-08-10
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Series now carry typed collection-level data labels with
+number format, position, separator, and visibility flags. The shared
+`NumberFormat` value projects `General`, fixed decimal, and percentage forms
+deterministically while preserving unsupported valid producer codes for
+round-trip output.
+
+**Non-obvious choices.** Cache source formatting and label formatting remain
+separate XML states. Individual point labels, leader lines, shape properties,
+text properties, and extensions remain ordered raw payloads. Native glyph
+placement remains outside this model boundary.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** `docs/hld/09-charts-spec.md`.
+
+**Tests.** `data_labels_write_fixed_prefixes_in_schema_order`,
+`common_number_formats_project_cached_values_deterministically`,
+`malformed_data_labels_and_number_formats_return_errors_without_panicking`,
+`data_labels_preserve_point_overrides_and_extensions_byte_for_byte`,
+`every_corpus_data_label_collection_round_trips_structurally`,
+`percentage_formatted_label_renders_with_correct_text`, and the integrated
+full gate. The corpus gate verified 34 label collections and 35 axis number
+formats. LibreOffice 26.2.5.2 and Poppler 26.01.0 extracted `25%` from candidate
+SHA-256 `4ba02faa8e4cff6cefa7a7dc73fc0eb0c08d62d180f83fa0d3fd56a7e4136242`.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Treat `format_value` as a deliberately small
+renderer projection, not an Excel format-language engine. F-126 owns label
+placement and should consume this typed state without reparsing ChartML.
+
+### F-121, Bar and line plots
+
+**Sprint.** S30
+**Completed.** 2026-08-10
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Plot areas now own typed single-family bar and line plots
+with validated properties, series, data labels, and exactly two references to
+the plot-area axis set. Unsupported 3-D plots and combination choices remain
+opaque and byte-preserved.
+
+**Non-obvious choices.** Mutable repeated series and axis references reconcile
+preserved raw boundaries through stable exact and positional matching. Parsed
+bar and line families cannot be relabelled while incompatible preserved
+payload remains. Viewer acceptance compares decoded pixels with a zero-error
+threshold rather than adding native chart geometry.
+
+**Deviations from the design plan.** Eight microscope passes hardened malformed
+single-family validation, exact viewer equality, typed versus opaque corpus
+counts, repeated-child raw boundaries, mutable identity reconciliation,
+family replacement, and the binary PPM parser.
+
+**Spec sections touched.** `docs/hld/09-charts-spec.md`.
+
+**Tests.** `bar_and_line_plots_round_trip_and_render`,
+`bar_and_line_plots_write_fixed_prefixes_in_schema_order`,
+`malformed_bar_and_line_plots_return_errors_without_panicking`,
+`unsupported_and_combo_plots_remain_byte_preserved`,
+`public_plot_edits_preserve_axes_and_unselected_payloads`,
+`every_corpus_bar_and_line_plot_round_trips_structurally`, and the integrated
+full gate. The corpus gate verified 11 typed bar plots, 2 typed line plots, and
+one preserved bar-line combination. Pinned original and candidate renders had
+normalized RGB mean absolute error `0.00000000` for both families.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** A plot owns axis references, not axis objects.
+Keep combination choices opaque until a dedicated story can model and validate
+the entire choice without partially rewriting it.
+
+### F-122, Pie, doughnut, area, scatter and radar plots
+
+**Sprint.** S30
+**Completed.** 2026-08-10
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The typed plot boundary now covers all seven v1 families.
+Pie and doughnut plots are axis-free, area and radar plots use paired axes, and
+scatter plots map existing numeric category and value caches to `c:xVal` and
+`c:yVal`. Unsupported bubble, stock, surface, `ofPie`, and 3-D choices remain
+opaque.
+
+**Non-obvious choices.** Scatter wrapper provenance remains private on the
+shared public `Series` value, so standalone and plot-level round trips retain
+the correct wrappers. Typed families reject both public and preserved bubble
+payload. Family-specific raw boundaries remain stable when optional typed
+children are inserted or removed.
+
+**Deviations from the design plan.** Three microscope passes hardened optional
+child insertion order, standalone scatter wrapper preservation, bubble-only
+payload rejection, the malformed-input matrix, and live raw-boundary updates.
+The corpus gap for four families remained as designed and is covered by inline
+fixtures plus pinned viewer candidates.
+
+**Spec sections touched.** `docs/hld/09-charts-spec.md`.
+
+**Tests.** `remaining_v1_plots_round_trip_and_render`,
+`remaining_plot_families_write_fixed_prefixes_in_schema_order`,
+`scatter_series_map_numeric_categories_and_values_to_x_and_y`,
+`malformed_remaining_plots_return_errors_without_panicking`,
+`unsupported_plot_families_and_children_remain_byte_preserved`,
+`every_supported_corpus_plot_round_trips_structurally`, and the integrated full
+gate. The corpus supplied one typed pie plot. SHA-bound candidates for pie,
+doughnut, area, scatter, and radar exceeded the 1,000 nonblank-pixel threshold
+with counts of 309,502, 233,915, 308,569, 9,865, and 7,161.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep one public series type and retain scatter
+wrapper provenance privately. F-125 owns native geometry for every plot family
+and should consume these typed values rather than duplicating ChartML parsing.

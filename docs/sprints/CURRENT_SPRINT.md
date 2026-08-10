@@ -1,62 +1,59 @@
-# Current Sprint, S29
+# Current Sprint, S30
 
 **Milestone**: M12 Charts.
 
-**Goal**: Establish the chart data layer with a deliberately minimal embedded
-workbook writer, the core ChartML tree, and series references whose formulae
-and caches remain consistent. The result must provide the data foundation that
-later chart authoring and rendering stories can use without expanding
-`oxml-sml` into a general spreadsheet library.
+**Goal**: Type the ChartML axis and plot surfaces on top of the S29 data layer,
+covering the seven v1 plot families without weakening schema ordering or raw
+preservation. Add data labels and number formats so the completed model is
+ready for S31 authoring and rendering work.
 
 ## Spec references
 
-- `docs/hld/00-vision.md`, for the decision that chart support spans ChartML
-  and a minimal SpreadsheetML writer.
-- `docs/hld/01-glossary.md`, for the `oxml-sml` and `rpptx-chart` vocabulary and
-  ownership boundary.
-- `docs/hld/02-scope-and-non-goals.md`, for the v1 chart surface and the
-  permanent limit that `oxml-sml` is not a spreadsheet library.
-- `docs/hld/03-architecture.md`, for crate ownership and the acyclic dependency
-  direction between format-neutral and PresentationML code.
-- `docs/hld/04-opc-and-packaging.md`, for chart and embedded-workbook part
-  locations and collision-safe numeric suffix allocation.
-- `docs/hld/09-charts-spec.md`, for the workbook package, core ChartML types,
-  series model, formula references, and mandatory caches.
-- `docs/hld/12-testing-strategy.md`, for corpus round-trip, differential, and
-  deterministic verification requirements.
-- `docs/hld/13-risks-and-open-questions.md`, for schema child ordering and the
-  deliberate containment of chart scope.
-- `docs/hld/14-development-backlog.md`, for F-117 through F-119 dependencies,
+- `docs/hld/02-scope-and-non-goals.md`, for the seven chart families included
+  in v1 and the boundary that unsupported 3-D content remains preserved.
+- `docs/hld/03-architecture.md`, for `rpptx-chart` ownership and the acyclic
+  dependency direction between ChartML and the other workspace crates.
+- `docs/hld/09-charts-spec.md`, for the axis forms, paired `crossAx` ids, plot
+  variants, series attachment, data-label surface, and number formats.
+- `docs/hld/12-testing-strategy.md`, for corpus structural round-trip,
+  deterministic rendering, and differential evidence requirements.
+- `docs/hld/13-risks-and-open-questions.md`, for schema child ordering, raw XML
+  preservation, and containment of the chart scope.
+- `docs/hld/14-development-backlog.md`, for F-120 through F-123 dependencies,
   sizes, focused test gates, and the M12 milestone gate.
-- `docs/hld/15-build-and-toolchain.md`, for the reserved unpublished
-  `oxml-sml` and `rpptx-chart` packages and their publication ordering.
+- `docs/hld/15-build-and-toolchain.md`, for the unpublished `rpptx-chart`
+  package boundary and the rule that it remains at version 0.0.0.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-117 | oxml-sml workbook writer | L | done | - |
-| F-118 | ChartML core types | L | done | - |
-| F-119 | Series and data references | L | done | - |
+| F-120 | Axes | L | done | - |
+| F-123 | Data labels and number formats | M | done | - |
+| F-121 | Bar and line plots | M | done | - |
+| F-122 | Pie, doughnut, area, scatter and radar plots | L | done | - |
 
 ## Sequencing note
 
-F-117 and F-118 are independent and may proceed in parallel. F-119 follows
-F-118 because series, category, value, formula-reference, and cache types attach
-to the core ChartML tree. The workbook and ChartML data paths remain separate
-in this sprint and converge in the later `add_chart` story.
+Rows are listed in dependency order, not F-ID order. F-120 and F-123 both use
+the completed S29 model, but they share the ChartML source and number-format
+seam, so F-120 runs first and F-123 reuses that reviewed value. F-121 then
+attaches bar and line plots to the typed axes and labelled series. F-122 follows
+F-121 so every remaining v1 plot family extends one reviewed plot boundary
+instead of introducing a competing representation.
 
 ## Definition of done for this sprint
 
-- `oxml-sml` writes a complete one-worksheet `.xlsx` with numeric and string
-  cells, shared strings when needed, number formats, and defined ranges. Excel
-  and LibreOffice Calc open the result cleanly.
-- The core ChartML space, chart, plot-area, title, and legend types parse and
-  write in schema order while preserving unmodelled XML. A corpus chart part
-  round-trips structurally.
-- Series, category, value, string-reference, numeric-reference, and cache types
-  preserve one source of truth. A written chart carries a formula reference and
-  a consistent cache so viewers can render it without opening the workbook.
-- The full workspace gate passes, all 28 deterministic hashes remain unchanged,
-  the chart development crates remain unpublished at version 0.0.0, and no
-  crate is published.
+- Category, value, date, and series axes parse and write in schema order, with
+  scaling, gridlines, ticks, labels, number formats, and consistent paired
+  `crossAx` identifiers.
+- Bar and line plots round-trip and render, then pie, doughnut, area, scatter,
+  and radar plots use the same typed plot boundary and pass their focused
+  render gates.
+- Data labels and number formats attach to the series model without breaking
+  formula, cache, or raw-preservation invariants. A percentage-formatted label
+  renders with the expected text.
+- Every supported axis and plot surface passes the pinned corpus structural
+  round-trip gate, the full workspace gate passes, all 28 deterministic hashes
+  remain unchanged unless a design plan declares a reviewed delta, and
+  `rpptx-chart` remains unpublished at version 0.0.0.
