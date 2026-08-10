@@ -155,13 +155,13 @@ pub struct StringRef {
 
 impl StringRef {
     pub fn new(formula: String, values: Vec<String>) -> Result<Self> {
-        validate_formula(&formula, "c:strRef/c:f")?;
-        validate_point_count(values.len(), "c:strCache")?;
-        Ok(Self {
+        let reference = Self {
             formula,
             values,
             markup: ReferenceMarkup::default(),
-        })
+        };
+        reference.validate()?;
+        Ok(reference)
     }
 
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
@@ -171,11 +171,13 @@ impl StringRef {
     fn from_xml_with_namespaces(xml: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
         let parsed = parse_reference(xml, b"strRef", b"strCache", false, inherited)?;
         let values = parsed.values;
-        Ok(Self {
+        let reference = Self {
             formula: parsed.formula,
             values,
             markup: parsed.markup,
-        })
+        };
+        reference.validate()?;
+        Ok(reference)
     }
 
     pub fn to_xml(&self) -> Result<Vec<u8>> {
@@ -187,6 +189,9 @@ impl StringRef {
 
     fn validate(&self) -> Result<()> {
         validate_formula(&self.formula, "c:strRef/c:f")?;
+        for value in &self.values {
+            validate_xml_text(value, "c:strCache/c:pt/c:v")?;
+        }
         validate_point_count(self.values.len(), "c:strCache")
     }
 
@@ -1572,7 +1577,7 @@ fn validate_formula(formula: &str, element: &str) -> Result<()> {
             value: formula.to_owned(),
         });
     }
-    Ok(())
+    validate_xml_text(formula, element)
 }
 
 fn validate_format_code(format_code: &str) -> Result<()> {
@@ -1582,7 +1587,22 @@ fn validate_format_code(format_code: &str) -> Result<()> {
             value: format_code.to_owned(),
         });
     }
-    Ok(())
+    validate_xml_text(format_code, "c:formatCode")
+}
+
+fn validate_xml_text(value: &str, element: &str) -> Result<()> {
+    if value.chars().all(|character| {
+        matches!(
+            character,
+            '\u{9}' | '\u{A}' | '\u{D}' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}'
+        )
+    }) {
+        return Ok(());
+    }
+    Err(ChartError::InvalidValue {
+        element: element.to_owned(),
+        value: value.to_owned(),
+    })
 }
 
 fn validate_numeric_values(values: &[f64]) -> Result<()> {
@@ -3248,6 +3268,39 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn chart_text_rejects_xml_forbidden_characters_and_escapes_metacharacters() {
+        assert!(StringRef::new("S!$A$1\u{1}".to_owned(), Vec::new()).is_err());
+        assert!(StringRef::new("S!$A$1".to_owned(), vec!["invalid\u{1}".to_owned()]).is_err());
+        assert!(
+            NumericData::new("S!$A$1\u{1}".to_owned(), "General".to_owned(), Vec::new()).is_err()
+        );
+        assert!(
+            NumericData::new("S!$A$1".to_owned(), "General\u{1}".to_owned(), Vec::new()).is_err()
+        );
+
+        let mut strings = StringRef::new("S!$A$1".to_owned(), vec!["valid".to_owned()]).unwrap();
+        strings.formula = "invalid\u{1}".to_owned();
+        assert!(strings.to_xml().is_err());
+        strings.formula = "S!$A$1".to_owned();
+        strings.values[0] = "invalid\u{1}".to_owned();
+        assert!(strings.to_xml().is_err());
+
+        let mut numbers =
+            NumericData::new("S!$A$1".to_owned(), "General".to_owned(), Vec::new()).unwrap();
+        numbers.formula = "invalid\u{1}".to_owned();
+        assert!(numbers.to_xml().is_err());
+        numbers.formula = "S!$A$1".to_owned();
+        numbers.format_code = "invalid\u{1}".to_owned();
+        assert!(numbers.to_xml().is_err());
+
+        let strings =
+            StringRef::new("S!$A$1&".to_owned(), vec!["North < West & East".to_owned()]).unwrap();
+        let written = String::from_utf8(strings.to_xml().unwrap()).unwrap();
+        assert!(written.contains("S!$A$1&amp;"));
+        assert!(written.contains("North &lt; West &amp; East"));
     }
 
     #[test]

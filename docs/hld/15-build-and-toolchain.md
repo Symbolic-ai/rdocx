@@ -153,10 +153,10 @@ release allowlist.
 a workspace member and workspace dependency at version 0.0.0 with
 `publish = false`. Its direct normal dependencies are only `oxml-core`,
 `oxml-drawing`, and `quick-xml`. It has no facade dependency, and no `oxml-*`
-dependency gains an edge back to the `rdocx-*` or `rpptx-*` families. Its 12.8
-KiB archive contains five files: Cargo's VCS metadata, lockfile, normalized and
-original manifests, and the single source file. It is not present in the
-release allowlist.
+dependency gains an edge back to the `rdocx-*` or `rpptx-*` families. Its
+archive contains five files: Cargo's VCS metadata, lockfile, normalized and
+original manifests, and the single source file. It remains below the crates.io
+10 MiB limit and is not present in the release allowlist.
 
 Two tag namespaces:
 

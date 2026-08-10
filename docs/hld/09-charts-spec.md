@@ -88,9 +88,8 @@ values are errors.
 ```rust
 pub struct CT_ChartSpace {
     pub chart: CT_Chart,
-    pub sp_pr: Option<ShapeProperties>,
-    pub tx_pr: Option<TextBody>,
-    pub raw_children: OrderedRawChildren,
+    pub sp_pr: Option<CT_ShapeProperties>,
+    pub tx_pr: Option<CT_TextBody>,
 }
 
 pub struct CT_Chart {
@@ -102,6 +101,9 @@ pub struct CT_Chart {
     pub disp_blanks_as: DispBlanksAs,
 }
 ```
+
+The example lists the public fields. Preservation state remains private, with
+ordered raw children exposed for inspection through `raw_children()`.
 
 `c:spPr` reuses `CT_ShapeProperties`. `c:txPr` uses the same concrete
 `CT_TextBody` parser as `a:txBody`, with a caller-selected root local name and
