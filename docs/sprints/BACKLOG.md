@@ -27,10 +27,10 @@ regenerated, never hand-edited.
 | M9, Inheritance resolver                    | 8  | 8 | 0 | 0  |
 | M10, Renderer                               | 20 | 20 | 0 | 0  |
 | M11, Write API                              | 12 | 12 | 0 | 0  |
-| M12, Charts                                 | 12 | 7 | 0 | 5  |
+| M12, Charts                                 | 12 | 7 | 1 | 4  |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **158** | **120** | **0** | **38** |
+| **Total** | **158** | **120** | **1** | **37** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -248,7 +248,7 @@ regenerated, never hand-edited.
 | F-121 | Bar and line plots                           | S30 | M | done |
 | F-122 | Pie, doughnut, area, scatter and radar plots | S30 | L | done |
 | F-123 | Data labels and number formats               | S30 | M | done |
-| F-124 | add_chart                                    | S31 | L | pending |
+| F-124 | add_chart                                    | S31 | L | in-progress |
 | F-125 | Chart rendering: geometry                    | S31 | L | pending |
 | F-126 | Chart rendering: axes, gridlines and labels  | S31 | L | pending |
 | F-127 | Chart colour resolution                      | S32 | M | pending |
