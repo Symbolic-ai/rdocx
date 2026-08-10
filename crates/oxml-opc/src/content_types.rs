@@ -39,6 +39,14 @@ pub const TABLE_STYLES: &str =
 pub const HANDOUT_MASTER: &str =
     "application/vnd.openxmlformats-officedocument.presentationml.handoutMaster+xml";
 
+pub const WORKBOOK: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+pub const WORKSHEET: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+pub const SHARED_STRINGS: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml";
+pub const STYLES: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml";
+
 /// A single content type entry, either a Default by extension or an Override by part name.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContentType {

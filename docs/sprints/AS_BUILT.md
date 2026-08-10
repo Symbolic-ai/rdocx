@@ -3807,3 +3807,125 @@ passed.
 **Notes for future sessions.** Keep every viewer row bound to the same frozen
 artifact SHA. Never promote a pending row without a positive observed open or
 import, exact slide count, clean conversion result, and close or export result.
+
+### F-117, oxml-sml workbook writer
+
+**Sprint.** S29
+**Completed.** 2026-08-10
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The workspace now contains an unpublished `oxml-sml`
+crate that writes one-sheet `.xlsx` packages with string and numeric columns,
+shared strings, number formats, defined ranges, deterministic relationships,
+and the complete minimal OPC part graph.
+
+**Non-obvious choices.** The API is column-oriented and validates all lengths,
+formula ranges, finite numbers, sheet names, shared-string counts, and XML
+string escapes before package construction. Shared-string indexes are stable,
+and workbook output is byte-identical for the same input.
+
+**Deviations from the design plan.** Microscope review added complete
+SpreadsheetML escaping for attribute normalization and reserved sequences,
+row-limit validation, aggregate shared-string overflow protection, and an
+executable viewer-artifact binding. The approved crate boundary did not
+change.
+
+**Spec sections touched.** `docs/hld/09-charts-spec.md` and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `workbook_package_has_the_minimal_editable_part_graph`,
+`formula_ranges_quote_sheet_names_and_track_column_lengths`,
+`spreadsheet_strings_escape_xml_and_reserved_sequences_exactly`,
+`viewer_gate_candidate_is_bound_to_recorded_sha`, and the integrated full
+gate. Excel 16.104 and LibreOffice Calc 26.2.5.2 opened the same artifact
+without repair at SHA-256
+`8f8d12aa4ebe94f86c8164fd251cdb23845f985090be0fb6c77242aaa0fba329`.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep `oxml-sml` deliberately smaller than a
+spreadsheet library. Chart authoring should consume its deterministic workbook
+package and formula ranges rather than adding workbook-reading or calculation
+features here.
+
+### F-118, ChartML core types
+
+**Sprint.** S29
+**Completed.** 2026-08-10
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The workspace now contains an unpublished `rpptx-chart`
+crate with typed ChartML space, chart, plot-area, title, legend, flags, shape
+properties, and text properties. It reads aliases by namespace URI, writes
+fixed `c`, `a`, and `r` prefixes in schema order, and preserves unsupported
+ChartML at stable schema boundaries.
+
+**Non-obvious choices.** The core plot shells remain intentionally opaque for
+later plot and axis stories. DrawingML text parsing accepts the caller-owned
+`c:txPr` root while reusing the existing concrete text-body implementation.
+Corpus preservation evidence retains parent path, schema boundary, sibling
+order, and exact bytes.
+
+**Deviations from the design plan.** Microscope review hardened schema-slot
+stability after public edits, comments and processing instructions, scalar
+extension data, nested namespace handling, first-parse preservation evidence,
+and trailing root validation. The approved core-only type boundary remained
+unchanged.
+
+**Spec sections touched.** `docs/hld/09-charts-spec.md` and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `chart_space_reads_aliases_and_writes_fixed_prefixes_in_schema_order`,
+`core_chart_shells_preserve_unmodelled_children_byte_for_byte`,
+`malformed_core_chart_values_return_errors_without_panicking`,
+`every_corpus_chart_part_round_trips_structurally`, and the integrated full
+gate. The required corpus gate verified 26 chart parts across 9 of 50 pinned
+decks.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep plot kinds, axes, and series attached to
+the stable raw schema seams until their owning F-IDs type them. Namespace
+resolution must remain URI-aware even when output prefixes are canonical.
+
+### F-119, Series and data references
+
+**Sprint.** S29
+**Completed.** 2026-08-10
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `rpptx-chart` now models series indexes and order, names,
+string and numeric references, category and value data, bubble sizes, formulae,
+format codes, and literal caches. Constructors derive cache counts and point
+indexes from one value vector, while corpus parsing retains valid sparse
+producer caches and unsupported series payloads.
+
+**Non-obvious choices.** Series projection resolves mixed and inherited
+prefixes by namespace URI. Preserved payloads use stable schema slots so public
+edits cannot reorder markers, labels, error bars, shapes, or extensions. Typed
+fixed-prefix rewrites reject conflicting local bindings, and cache edits
+reconcile preserved point boundaries without dropping schema-final payloads.
+
+**Deviations from the design plan.** The corpus demonstrated that a logical
+point count may exceed the number of cached points when all retained indexes
+remain in range, so the plan and HLD were aligned with valid sparse caches.
+Nine microscope passes hardened namespace propagation, duplicate wrapper
+detection, public-edit behavior, cache resizing, and schema-slot stability
+before the independent review became clean.
+
+**Spec sections touched.** `docs/hld/09-charts-spec.md`.
+
+**Tests.** `series_formula_and_cache_are_consistent_with_one_source`,
+`string_and_numeric_references_write_fixed_prefixes_in_schema_order`,
+`malformed_series_and_cache_values_return_errors_without_panicking`,
+`series_preserves_unmodelled_children_byte_for_byte`,
+`public_series_edits_do_not_duplicate_or_drop_preserved_payloads`,
+`every_corpus_series_round_trips_structurally`, and the integrated full gate.
+The required corpus gate verified 66 series across all 26 chart parts in the
+50 pinned decks.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Authoring code should supply formulae and value
+vectors once and let the ChartML writer derive cache metadata. Plot stories
+must preserve the stable series schema slots and URI-aware namespace rules.

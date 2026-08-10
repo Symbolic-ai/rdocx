@@ -470,6 +470,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxml-sml"
+version = "0.0.0"
+dependencies = [
+ "oxml-opc",
+ "quick-xml",
+ "thiserror",
+]
+
+[[package]]
 name = "pdf-writer"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -691,6 +700,16 @@ dependencies = [
  "rpptx-oxml",
  "rpptx-render",
  "thiserror",
+]
+
+[[package]]
+name = "rpptx-chart"
+version = "0.0.0"
+dependencies = [
+ "oxml-core",
+ "oxml-drawing",
+ "oxml-opc",
+ "quick-xml",
 ]
 
 [[package]]

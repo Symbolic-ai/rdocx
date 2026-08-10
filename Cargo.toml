@@ -7,7 +7,9 @@ members = [
     "crates/oxml-media",
     "crates/oxml-opc",
     "crates/oxml-pdf",
+    "crates/oxml-sml",
     "crates/rpptx",
+    "crates/rpptx-chart",
     "crates/rpptx-layout",
     "crates/rpptx-oxml",
     "crates/rpptx-render",
@@ -40,7 +42,9 @@ oxml-layout = { path = "crates/oxml-layout", version = "0.0.0" }
 oxml-media = { path = "crates/oxml-media", version = "0.0.0" }
 oxml-opc = { path = "crates/oxml-opc", version = "0.0.0" }
 oxml-pdf = { path = "crates/oxml-pdf", version = "0.0.0" }
+oxml-sml = { path = "crates/oxml-sml", version = "0.0.0" }
 rpptx = { path = "crates/rpptx", version = "0.0.0" }
+rpptx-chart = { path = "crates/rpptx-chart", version = "0.0.0" }
 rpptx-layout = { path = "crates/rpptx-layout", version = "0.0.0" }
 rpptx-oxml = { path = "crates/rpptx-oxml", version = "0.0.0" }
 rpptx-render = { path = "crates/rpptx-render", version = "0.0.0" }

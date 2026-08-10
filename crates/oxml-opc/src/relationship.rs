@@ -45,6 +45,12 @@ pub mod rel_types {
     pub const CHART: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
 
+    // SpreadsheetML relationships.
+    pub const WORKSHEET: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
+    pub const SHARED_STRINGS: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings";
+
     // PresentationML relationships.
     pub const SLIDE: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
@@ -282,6 +288,8 @@ mod tests {
             rel_types::FOOTNOTES,
             rel_types::ENDNOTES,
             rel_types::CHART,
+            rel_types::WORKSHEET,
+            rel_types::SHARED_STRINGS,
             rel_types::EXTENDED_PROPERTIES,
             rel_types::CUSTOM_PROPERTIES,
             rel_types::SLIDE,
@@ -325,6 +333,10 @@ mod tests {
             crate::content_types::VIEW_PROPS,
             crate::content_types::TABLE_STYLES,
             crate::content_types::HANDOUT_MASTER,
+            crate::content_types::WORKBOOK,
+            crate::content_types::WORKSHEET,
+            crate::content_types::SHARED_STRINGS,
+            crate::content_types::STYLES,
         ];
 
         let mut content_types = std::collections::HashSet::new();

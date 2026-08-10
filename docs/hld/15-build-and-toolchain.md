@@ -142,6 +142,22 @@ Implemented development crates keep the reserved `version = "0.0.0"` and set
 allowlist of the seven released rdocx packages, so adding implementation code
 does not turn a reserved name into a publication candidate.
 
+`oxml-sml` is an implemented development crate under that rule. It is a
+workspace member and workspace dependency at version 0.0.0 with
+`publish = false`. Its normal graph contains only `oxml-opc`, `quick-xml`, and
+`thiserror`, and its package contains only the generated Cargo metadata,
+lockfile, manifest, README, and single source file. It is not present in the
+release allowlist.
+
+`rpptx-chart` is also an implemented development crate under that rule. It is
+a workspace member and workspace dependency at version 0.0.0 with
+`publish = false`. Its direct normal dependencies are only `oxml-core`,
+`oxml-drawing`, and `quick-xml`. It has no facade dependency, and no `oxml-*`
+dependency gains an edge back to the `rdocx-*` or `rpptx-*` families. Its
+archive contains five files: Cargo's VCS metadata, lockfile, normalized and
+original manifests, and the single source file. It remains below the crates.io
+10 MiB limit and is not present in the release allowlist.
+
 Two tag namespaces:
 
 | Tag | Workflow | Publishes |
