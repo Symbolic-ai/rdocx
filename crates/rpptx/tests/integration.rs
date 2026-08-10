@@ -98,6 +98,54 @@ fn presentation_with_authored_chart() -> Presentation {
     presentation
 }
 
+fn override_color_map(accent1: &str) -> String {
+    format!(
+        r#"<a:overrideClrMapping bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="{accent1}" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>"#
+    )
+}
+
+fn authored_chart_with_color_maps(slide_mapping: Option<&str>, layout_mapping: &str) -> Vec<u8> {
+    let bytes = presentation_with_authored_chart().to_bytes().unwrap();
+    let mut package = open_opc(&bytes, "authored chart color maps");
+    let slide_part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part, content_type)| {
+            (content_type == content_types::SLIDE).then_some(part.clone())
+        })
+        .expect("slide content type override");
+    let layout_part = {
+        let relationship = package
+            .get_part_rels(&slide_part)
+            .and_then(|relationships| relationships.get_by_type(rel_types::SLIDE_LAYOUT))
+            .expect("slide layout relationship");
+        OpcPackage::resolve_rel_target(&slide_part, &relationship.target)
+    };
+    let master_mapping = "<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>";
+
+    let slide_xml = String::from_utf8(package.get_part(&slide_part).unwrap().to_vec()).unwrap();
+    assert!(slide_xml.contains(master_mapping));
+    let slide_xml = match slide_mapping {
+        Some(mapping) => slide_xml.replace(
+            master_mapping,
+            &format!("<p:clrMapOvr>{mapping}</p:clrMapOvr>"),
+        ),
+        None => slide_xml.replace(master_mapping, ""),
+    };
+    package.set_part(&slide_part, slide_xml.into_bytes());
+
+    let layout_xml = String::from_utf8(package.get_part(&layout_part).unwrap().to_vec()).unwrap();
+    assert!(layout_xml.contains(master_mapping));
+    let layout_xml = layout_xml.replace(
+        master_mapping,
+        &format!("<p:clrMapOvr>{layout_mapping}</p:clrMapOvr>"),
+    );
+    package.set_part(&layout_part, layout_xml.into_bytes());
+
+    write_package(&package, "authored chart color maps", "write color maps")
+}
+
 #[test]
 fn add_chart_writes_complete_relationship_graph() {
     let bytes = presentation_with_authored_chart()
@@ -160,6 +208,28 @@ fn add_chart_writes_complete_relationship_graph() {
             .validate()
             .is_empty()
     );
+}
+
+#[test]
+fn authored_chart_honors_slide_layout_and_master_color_maps() {
+    let baseline = deterministic_render(&presentation_with_authored_chart().to_bytes().unwrap());
+    let layout_mapping = override_color_map("accent6");
+    let slide_mapping = override_color_map("accent5");
+
+    let master = deterministic_render(&authored_chart_with_color_maps(
+        Some("<a:masterClrMapping/>"),
+        &layout_mapping,
+    ));
+    let layout = deterministic_render(&authored_chart_with_color_maps(None, &layout_mapping));
+    let slide = deterministic_render(&authored_chart_with_color_maps(
+        Some(&slide_mapping),
+        &layout_mapping,
+    ));
+
+    assert_eq!(master, baseline);
+    assert_ne!(layout, baseline);
+    assert_ne!(slide, baseline);
+    assert_ne!(slide, layout);
 }
 
 #[test]
@@ -4377,18 +4447,17 @@ fn effective_visual_color_map(
     layout: &CT_SlideLayout,
     slide: &CT_Slide,
 ) -> ColorMap {
-    for override_value in [
-        slide.color_map_override.as_ref(),
-        layout.color_map_override.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
+    match slide
+        .color_map_override
+        .as_ref()
+        .or(layout.color_map_override.as_ref())
     {
-        if let ColorMapOverrideKind::Override(map) = &override_value.kind {
-            return map.clone();
-        }
+        Some(override_value) => match &override_value.kind {
+            ColorMapOverrideKind::Master => master.color_map.clone(),
+            ColorMapOverrideKind::Override(map) => map.clone(),
+        },
+        None => master.color_map.clone(),
     }
-    master.color_map.clone()
 }
 
 fn normalized_visual_oracle_records(decks: &[ResolvedVisualDeck]) -> String {

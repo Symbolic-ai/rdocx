@@ -687,18 +687,17 @@ fn effective_color_map(
     layout: &CT_SlideLayout,
     slide: &CT_Slide,
 ) -> ColorMap {
-    for override_value in [
-        slide.color_map_override.as_ref(),
-        layout.color_map_override.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
+    match slide
+        .color_map_override
+        .as_ref()
+        .or(layout.color_map_override.as_ref())
     {
-        if let ColorMapOverrideKind::Override(map) = &override_value.kind {
-            return map.clone();
-        }
+        Some(override_value) => match &override_value.kind {
+            ColorMapOverrideKind::Master => master.color_map.clone(),
+            ColorMapOverrideKind::Override(map) => map.clone(),
+        },
+        None => master.color_map.clone(),
     }
-    master.color_map.clone()
 }
 
 fn related_part(
