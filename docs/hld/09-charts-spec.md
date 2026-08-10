@@ -556,14 +556,28 @@ strokes, pie and doughnut wedges, areas, scatter and line markers, and legend
 swatches all consume the same resolved series colour. Unsupported legend
 placement children remain preserved and do not change this default layout.
 
-F-128 resolves chart relationships into the render input, routes supported
-charts to native geometry, and owns preserved-chart fallback selection. Later
-binding work consumes the same concrete geometry contract without adding a
-backend-specific chart path.
+Package assembly resolves chart relationships in separate slide, layout and
+master scopes and parses internal targets as `CT_ChartSpace`. The resolver
+passes supported charts, local frame bounds, the effective theme and colour map,
+and the caller's font manager to the native chart entry point. It freezes the
+returned group in `ResolvedContent`, so the ordinary presentation renderer can
+lower it without a chart-specific backend path.
 
-For a chart that was **preserved rather than authored**, draw the cached image
-fallback if the file carries one, otherwise a labelled placeholder rectangle
-with a diagnostic. This is the same fallback discipline used for SmartArt.
+For a chart that was **preserved rather than authored**, the resolver draws the
+immediate typed cached-picture fallback when the native projection is
+unsupported, the embedded image resolves in the same source scope, its bytes
+match the declared PNG or JPEG content type, encoded bytes and decoded scanline
+or pixel storage stay within 16 MiB caps, JPEG uses the 8-bit three-component
+layout shared by the raster and PDF backends, the stricter raster boundary
+visibly decodes it at native pixel bounds, and the resolver accepts that
+renderer content type. The corpus renderer and integration gates call the same
+crate-local package rendering function.
+Otherwise it emits a labelled placeholder rectangle. Both routes record the
+stable chart diagnostic. Missing previews, unsupported preview formats,
+malformed or invisible preview bytes, content-type mismatches, and missing,
+external, missing-target or malformed chart relationships keep their more
+specific source context. The preserved chart and alternate-content bytes remain
+the sole serialisation source.
 
 ## What is not in v1
 

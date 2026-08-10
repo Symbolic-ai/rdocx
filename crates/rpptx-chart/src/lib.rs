@@ -232,6 +232,40 @@ pub fn render_chart(
     })
 }
 
+/// Shapes the stable label used inside a visible unsupported-chart fallback.
+pub fn render_chart_placeholder(bounds: Rect, fonts: &mut FontManager) -> Result<GroupElement> {
+    if !bounds.width.is_finite()
+        || !bounds.height.is_finite()
+        || bounds.width <= 0.0
+        || bounds.height <= 0.0
+    {
+        return Err(ChartError::InvalidValue {
+            element: "chart fallback bounds".to_owned(),
+            value: "width and height must be finite and positive".to_owned(),
+        });
+    }
+    let label = shape_label(
+        fonts,
+        "Unsupported chart",
+        Point {
+            x: 4.0,
+            y: (bounds.height / 2.0).max(9.0),
+        },
+    )?;
+    Ok(GroupElement {
+        transform: Transform::IDENTITY,
+        clip: Some(Path::rect(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: bounds.width,
+            height: bounds.height,
+        })),
+        opacity: 1.0,
+        effects: Vec::new(),
+        children: vec![PositionedElement::Text(label)],
+    })
+}
+
 /// Converts one supported typed chart into chart-local backend-neutral paths.
 pub fn render_geometry(
     chart: &CT_Chart,

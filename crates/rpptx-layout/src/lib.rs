@@ -2,7 +2,10 @@
 
 use std::collections::HashMap;
 
-use oxml_layout::{Diagnostic, Effect, MediaId, Paint, Path, Point, Rect, Stroke, Transform};
+use oxml_layout::{
+    Diagnostic, Effect, GroupElement, MediaId, Paint, Path, Point, Rect, Stroke, Transform,
+};
+use rpptx_chart::CT_ChartSpace;
 
 mod context;
 mod font;
@@ -43,6 +46,36 @@ impl ScopedMediaIds {
     pub fn content_type(&self, source: FlattenedSource, relationship_id: &str) -> Option<&str> {
         let media_id = self.get(source, relationship_id)?;
         self.media_content_types.get(&media_id).map(String::as_str)
+    }
+}
+
+/// One chart relationship target projected during package assembly.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ChartResource {
+    Parsed(Box<CT_ChartSpace>),
+    External(String),
+    MissingTarget(String),
+    Invalid(String),
+}
+
+/// Parsed chart resources kept separate by their producing part's scope.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ScopedChartResources {
+    pub slide: HashMap<String, ChartResource>,
+    pub layout: HashMap<String, ChartResource>,
+    pub master: HashMap<String, ChartResource>,
+}
+
+impl ScopedChartResources {
+    /// Look up a chart relationship only in its producing part's scope.
+    pub fn get(&self, source: FlattenedSource, relationship_id: &str) -> Option<&ChartResource> {
+        match source {
+            FlattenedSource::Slide => &self.slide,
+            FlattenedSource::Layout => &self.layout,
+            FlattenedSource::Master => &self.master,
+            FlattenedSource::Background => return None,
+        }
+        .get(relationship_id)
     }
 }
 
@@ -152,6 +185,7 @@ pub enum ResolvedContent {
     Text(ResolvedTextBody),
     Image(ResolvedImage),
     Table(ResolvedTable),
+    Group(GroupElement),
 }
 
 /// One resolved image shared by shape pictures and slide backgrounds.

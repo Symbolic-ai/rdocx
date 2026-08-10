@@ -89,7 +89,7 @@ pub enum FieldKind {
 }
 
 /// A positioned run of shaped glyphs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GlyphRun {
     /// Baseline origin of the first glyph (in points).
     pub origin: Point,
@@ -116,7 +116,7 @@ pub struct GlyphRun {
 }
 
 /// A positioned element on a page.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum PositionedElement {
     /// A run of shaped text glyphs.
@@ -174,7 +174,7 @@ pub enum Effect {
 }
 
 /// A group of positioned children in one local coordinate system.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GroupElement {
     /// Maps child-local coordinates into the parent coordinate system.
     pub transform: Transform,

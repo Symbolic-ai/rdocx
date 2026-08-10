@@ -1,6 +1,6 @@
 # F-128, Preserved chart fallback
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S32
 **Size**: S
 **Depends on**: F-125
@@ -126,20 +126,20 @@ sample generator or renderer. All 28 hashes must match.
 
 ## Implementation checklist
 
-- [ ] Project chart relationship identifiers and paired picture fallbacks
+- [x] Project chart relationship identifiers and paired picture fallbacks
       without changing their raw serialization source.
-- [ ] Assemble source-scoped parsed chart resources and cached media.
-- [ ] Add a backend-neutral resolved group content case and lower it normally.
-- [ ] Route supported charts through the F-127 renderer with effective theme
+- [x] Assemble source-scoped parsed chart resources and cached media.
+- [x] Add a backend-neutral resolved group content case and lower it normally.
+- [x] Route supported charts through the F-127 renderer with effective theme
       and colour-map inputs.
-- [ ] Route unsupported charts to cached pictures or a labelled diagnostic
+- [x] Route unsupported charts to cached pictures or a labelled diagnostic
       placeholder.
-- [ ] Replace the F-124 bypass test with an end-to-end presentation rendering
+- [x] Replace the F-124 bypass test with an end-to-end presentation rendering
       assertion while retaining its editable-data evidence.
-- [ ] Add focused relationship, preservation, diagnostic, and deterministic
+- [x] Add focused relationship, preservation, diagnostic, and deterministic
       render tests to existing test binaries.
-- [ ] Update exactly the five listed HLD files.
-- [ ] Run focused checks, routed checks, microscope, and worker preparation.
+- [x] Update exactly the five listed HLD files.
+- [x] Run focused checks, routed checks, microscope, and worker preparation.
 
 ## Open questions
 

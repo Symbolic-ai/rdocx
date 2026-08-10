@@ -469,6 +469,13 @@ pub struct RenderInput {
 format-neutral `ResolvedSlide` values from `rpptx-layout`. Raw PresentationML
 parts remain on the upstream assembly side of that boundary:
 
+`ResolvedContent::Group` carries frozen backend-neutral chart output. The
+ordinary shape lowering path inserts that group below the graphic-frame
+transform, exactly as it does other local shape content. No PDF or raster path
+contains chart-specific logic. Because the group may contain labels already
+shaped by the resolver, `layout_presentation_with_font_manager` consumes the
+same `FontManager` that produced the group and then shapes ordinary slide text.
+
 `ResolvedSlide::background` is an optional `ResolvedBackground`, either a
 backend-neutral `Paint` or a shared `ResolvedImage`. `ResolvedContent::Image`
 and `ResolvedShape::image_fill` use the same `ResolvedImage` structure, which
@@ -535,11 +542,35 @@ appears on every slide.
 Upstream package assembly also constructs the source-neutral `ScopedMediaIds`
 maps consumed by `ResolveCtx::resolve_slide_with_media` and records package
 content types by resolved media ID. Only embedded picture relationships enter
-those maps. Linked media remains diagnosed and no renderer performs network
-access. Direct background picture fills use the scope of the slide, layout, or
-master that supplied `p:bg`. Theme-referenced picture fills are rejected
+those maps. The target must be present, its declared content type must match its
+sniffed PNG or JPEG format. JPEG inputs must use the 8-bit, three-component
+layout supported by both the raster decoder and PDF pass-through path. Encoded
+bytes and decoded scanline or pixel storage must remain within 16 MiB caps, and
+the stricter raster backend must visibly
+decode it at its native pixel bounds before it enters renderer input. Native
+bounds retain sparse visible pixels that a one-pixel probe could miss. This
+also covers the PDF backend, whose JPEG path is a less strict pass-through.
+Missing, unsupported, malformed,
+invisible or content-type-mismatched media stay unresolved so the owning shape
+can retain its visible fallback and diagnostic. Linked media remains diagnosed
+and no renderer performs network access. Direct background picture fills use
+the scope of the slide, layout, or master that
+supplied `p:bg`. Theme-referenced picture fills are rejected
 precisely until a theme media scope exists. They never fall back to a same-named
 identifier in another scope.
+
+The same assembly step constructs `ScopedChartResources`. Each internal chart
+relationship resolves against its producing part, parses the target as
+`CT_ChartSpace`, and stays in the slide, layout or master map that owns its
+identifier. External, missing-target and invalid resources remain typed
+failures for contextual diagnostics. A same-named identifier in another scope
+is never consulted. The resolver consumes these maps before `RenderInput` is
+constructed and freezes either native group content, cached-picture content or
+a labelled bounds fallback.
+
+The corpus renderer and integration tests call the same crate-local package
+rendering function. Relationship assembly, media admission, chart parsing,
+resolution and ordinary renderer lowering therefore have one production path.
 
 An OLE payload remains raw for serialization. Its optional standard fallback
 `p:pic` is an upstream projection only. When that picture has an embedded PNG

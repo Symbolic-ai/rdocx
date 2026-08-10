@@ -27,6 +27,7 @@ rpptx-oxml.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+miniz_oxide.workspace = true
 oxml-drawing.workspace = true
 oxml-layout.workspace = true
 oxml-pdf.workspace = true

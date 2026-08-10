@@ -2406,7 +2406,7 @@ fn graphic_data_uri_dispatch_recognises_table_chart_smartart_and_ole() {
         .as_bytes(),
     )
     .unwrap();
-    let GraphicDataPayload::Table(table) = &table_frame.graphic_data.payload else {
+    let GraphicDataPayload::Table(table) = table_frame.graphic_data.payload() else {
         panic!("table URI did not select the typed table branch");
     };
     assert_eq!(table.grid.columns.len(), 1);
@@ -2432,7 +2432,7 @@ fn graphic_data_uri_dispatch_recognises_table_chart_smartart_and_ole() {
     ] {
         let frame =
             CT_GraphicFrame::from_xml(graphic_frame_fixture(uri, payload).as_bytes()).unwrap();
-        let raw = match (&frame.graphic_data.payload, expected) {
+        let raw = match (frame.graphic_data.payload(), expected) {
             (GraphicDataPayload::Chart(raw), "chart")
             | (GraphicDataPayload::SmartArt(raw), "smartart")
             | (GraphicDataPayload::Other(raw), "other") => raw,
@@ -2474,7 +2474,7 @@ fn ole_payload_projects_optional_fallback_picture_without_rewriting_raw_bytes() 
         .as_bytes(),
     )
     .unwrap();
-    let GraphicDataPayload::Ole { raw, preview } = &frame.graphic_data.payload else {
+    let GraphicDataPayload::Ole { raw, preview } = frame.graphic_data.payload() else {
         panic!("OLE URI did not select the OLE branch");
     };
 
@@ -2514,7 +2514,7 @@ fn ole_payload_projects_optional_fallback_picture_without_rewriting_raw_bytes() 
     )
     .unwrap();
     assert!(matches!(
-        absent.graphic_data.payload,
+        absent.graphic_data.payload(),
         GraphicDataPayload::Ole { preview: None, .. }
     ));
 }
@@ -2580,7 +2580,7 @@ fn table_graphic_frame_constructor_writes_the_canonical_shell() {
     let reparsed = CT_GraphicFrame::from_xml(&written).unwrap();
     assert_eq!(reparsed, frame);
     assert!(matches!(
-        reparsed.graphic_data.payload,
+        reparsed.graphic_data.payload(),
         GraphicDataPayload::Table(_)
     ));
 
@@ -2593,9 +2593,30 @@ fn table_graphic_frame_constructor_writes_the_canonical_shell() {
 }
 
 #[test]
+fn chart_relationship_projection_ignores_unqualified_and_foreign_ids() {
+    for payload in [
+        r#"<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" id="plain"/>"#,
+        r#"<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:x="urn:foreign" x:id="foreign"/>"#,
+        r#"<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id=""/>"#,
+    ] {
+        let frame = CT_GraphicFrame::from_xml(
+            graphic_frame_fixture(
+                "http://schemas.openxmlformats.org/drawingml/2006/chart",
+                payload,
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(frame.chart_relationship_id(), None);
+    }
+}
+
+#[test]
 fn authored_chart_graphic_frame_round_trips() {
-    let frame =
+    let mut frame =
         CT_GraphicFrame::new_chart(9, "Chart & 9", CT_Transform2D::default(), "rId7").unwrap();
+    assert!(frame.graphic_data.table_mut().is_none());
+    assert_eq!(frame.chart_relationship_id(), Some("rId7"));
     let written = frame.to_xml().unwrap();
     let xml = String::from_utf8(written.clone()).unwrap();
     assert!(xml.contains(r#"<p:cNvPr id="9" name="Chart &amp; 9"/>"#));
@@ -2616,11 +2637,77 @@ fn authored_chart_graphic_frame_round_trips() {
         ],
     );
     let reparsed = CT_GraphicFrame::from_xml(&written).unwrap();
+    assert_eq!(reparsed.chart_relationship_id(), Some("rId7"));
     assert_eq!(reparsed, frame);
     assert!(matches!(
-        reparsed.graphic_data.payload,
+        reparsed.graphic_data.payload(),
         GraphicDataPayload::Chart(_)
     ));
+}
+
+#[test]
+fn chart_choice_and_picture_fallback_remain_byte_preserved() {
+    let raw = format!(
+        r#"<mc:AlternateContent xmlns:mc="{MC_NS}" xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:z="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:rel="{R_NS}" marker="kept"><mc:Choice Requires="z"><q:graphicFrame><q:nvGraphicFramePr/><q:xfrm><d:off x="1" y="2"/><d:ext cx="127000" cy="254000"/></q:xfrm><d:graphic><d:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><z:chart rel:id="chartAlias"/></d:graphicData></d:graphic></q:graphicFrame></mc:Choice><mc:Fallback><q:pic><q:nvPicPr><q:cNvPr/><q:cNvPicPr/><q:nvPr/></q:nvPicPr><q:blipFill><d:blip rel:embed="previewAlias"/><d:stretch><d:fillRect/></d:stretch></q:blipFill><q:spPr/></q:pic></mc:Fallback></mc:AlternateContent>"#
+    );
+    let tree_xml = format!(
+        r#"<q:spTree xmlns:q="{P_NS}" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="{MC_NS}" xmlns:z="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:rel="{R_NS}"><q:nvGrpSpPr/><q:grpSpPr/>{raw}</q:spTree>"#
+    );
+    let tree = rpptx_oxml::shape_tree::CT_ShapeTree::from_xml(tree_xml.as_bytes()).unwrap();
+    let ShapeTreeChild::AlternateContent(alternate) = &tree.children[0] else {
+        panic!("expected chart alternate content");
+    };
+
+    assert_eq!(
+        alternate
+            .chart_choice()
+            .and_then(CT_GraphicFrame::chart_relationship_id),
+        Some("chartAlias")
+    );
+    assert!(alternate.picture_fallback().is_some());
+    assert_eq!(alternate.raw_xml(), raw.as_bytes());
+
+    let written = tree.to_xml().unwrap();
+    assert!(
+        written
+            .windows(raw.len())
+            .any(|window| window == raw.as_bytes()),
+        "the preserved alternate-content subtree must remain byte-identical"
+    );
+}
+
+#[test]
+fn malformed_non_chart_choice_remains_opaque() {
+    let raw = format!(
+        r#"<mc:AlternateContent xmlns:mc="{MC_NS}" xmlns:p="{P_NS}"><mc:Choice Requires="x"><p:graphicFrame><p:xfrm/></p:graphicFrame></mc:Choice><mc:Fallback/></mc:AlternateContent>"#
+    );
+    let tree_xml = format!(
+        r#"<p:spTree xmlns:p="{P_NS}" xmlns:mc="{MC_NS}"><p:nvGrpSpPr/><p:grpSpPr/>{raw}</p:spTree>"#
+    );
+
+    let tree = rpptx_oxml::shape_tree::CT_ShapeTree::from_xml(tree_xml.as_bytes()).unwrap();
+    let ShapeTreeChild::AlternateContent(alternate) = &tree.children[0] else {
+        panic!("expected preserved alternate content");
+    };
+    assert!(alternate.chart_choice().is_none());
+    assert_eq!(alternate.raw_xml(), raw.as_bytes());
+}
+
+#[test]
+fn non_chart_choice_with_descendant_chart_uri_remains_opaque() {
+    let raw = format!(
+        r#"<mc:AlternateContent xmlns:mc="{MC_NS}" xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><mc:Choice Requires="x"><p:graphicFrame><p:nvGraphicFramePr/><p:xfrm/><a:graphic><a:graphicData uri="urn:producer"><x:extension><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"/></x:extension></a:graphicData></a:graphic></p:graphicFrame></mc:Choice><mc:Fallback/></mc:AlternateContent>"#
+    );
+    let tree_xml = format!(
+        r#"<p:spTree xmlns:p="{P_NS}" xmlns:mc="{MC_NS}"><p:nvGrpSpPr/><p:grpSpPr/>{raw}</p:spTree>"#
+    );
+
+    let tree = rpptx_oxml::shape_tree::CT_ShapeTree::from_xml(tree_xml.as_bytes()).unwrap();
+    let ShapeTreeChild::AlternateContent(alternate) = &tree.children[0] else {
+        panic!("expected preserved alternate content");
+    };
+    assert!(alternate.chart_choice().is_none());
+    assert_eq!(alternate.raw_xml(), raw.as_bytes());
 }
 
 #[test]
@@ -2630,7 +2717,7 @@ fn graphic_frame_preserves_unknown_payload_and_extension_xml_byte_for_byte() {
         r#"<p:graphicFrame xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer" x:frame="kept"><x:before/><!--frame-kept--><p:nvGraphicFramePr x:nv="kept"><!--nv-kept--><x:nv-child/><?nv kept?></p:nvGraphicFramePr><x:between-nv-and-xfrm/><p:xfrm/><x:between-xfrm-and-graphic/><a:graphic x:graphic="kept"><x:graphic-before/><!--graphic-kept--><a:graphicData uri="urn:producer:data" x:data="kept"><!--data-before-->{payload}<?data kept?><x:payload-after/></a:graphicData><x:graphic-after/></a:graphic><x:before-ext/><p:extLst><p:ext uri="kept"><x:extension/></p:ext></p:extLst><x:after/></p:graphicFrame>"#
     );
     let frame = CT_GraphicFrame::from_xml(xml.as_bytes()).unwrap();
-    let GraphicDataPayload::Other(actual) = &frame.graphic_data.payload else {
+    let GraphicDataPayload::Other(actual) = frame.graphic_data.payload() else {
         panic!("unknown URI did not select the opaque branch");
     };
     assert_eq!(actual, payload.as_bytes());
@@ -2689,7 +2776,7 @@ fn empty_namespace_shadow_does_not_hide_later_inherited_binding() {
     assert!(frame_text.contains(r#"<x:shadow xmlns:x="urn:inner"/>"#));
     assert!(frame_text.contains("<x:needed/>"));
 
-    let GraphicDataPayload::Table(table) = &frame.graphic_data.payload else {
+    let GraphicDataPayload::Table(table) = frame.graphic_data.payload() else {
         panic!("table URI did not select the typed table branch");
     };
     let table_xml = table.to_xml().unwrap();
@@ -3004,7 +3091,7 @@ fn verify_graphic_frames(
                         .unwrap_or_else(|error| panic!("{deck} {part}: {error}")),
                     "{deck} {part}: graphic frame changed"
                 );
-                match &frame.graphic_data.payload {
+                match frame.graphic_data.payload() {
                     GraphicDataPayload::Table(table) => {
                         assert_eq!(frame.graphic_data.uri, TABLE_GRAPHIC_DATA_URI);
                         assert_eq!(

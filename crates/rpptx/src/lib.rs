@@ -2515,9 +2515,7 @@ impl ShapeMut<'_> {
         let ShapeTreeChild::GraphicFrame(frame) = self.child else {
             return None;
         };
-        let GraphicDataPayload::Table(table) = &mut frame.graphic_data.payload else {
-            return None;
-        };
+        let table = frame.graphic_data.table_mut()?;
         Some(TableMut {
             table,
             transform: &mut frame.transform,
@@ -3270,7 +3268,7 @@ impl<'a> ShapeRef<'a> {
     pub fn text(&self) -> Option<String> {
         match self.child {
             ShapeTreeChild::Shape(shape) => shape.text_body.as_ref().map(|text| text.plain_text()),
-            ShapeTreeChild::GraphicFrame(frame) => match &frame.graphic_data.payload {
+            ShapeTreeChild::GraphicFrame(frame) => match frame.graphic_data.payload() {
                 GraphicDataPayload::Table(table) => Some(
                     table
                         .rows
@@ -3300,7 +3298,7 @@ impl<'a> ShapeRef<'a> {
         let ShapeTreeChild::GraphicFrame(frame) = self.child else {
             return None;
         };
-        let GraphicDataPayload::Table(table) = &frame.graphic_data.payload else {
+        let GraphicDataPayload::Table(table) = frame.graphic_data.payload() else {
             return None;
         };
         Some(TableRef { table })

@@ -28,7 +28,7 @@ crates/
 
   # PresentationML
   rpptx-oxml         PresentationML types
-  rpptx-layout       inheritance resolver and flattener
+  rpptx-layout       inheritance resolver, chart routing and flattener
   rpptx-render       resolved slides to page frames
   rpptx-chart        ChartML model and renderer
   rpptx              the python-pptx-shaped facade, plus assets/default.pptx
@@ -88,6 +88,12 @@ and the renderer be built and tested independently.
 typed ChartML caches lower directly to `PathElement` and `Group` values. The
 edge points from the format-specific chart crate to format-neutral layout, and
 no PDF or raster backend becomes a chart dependency.
+
+**`rpptx-layout` depends on `rpptx-chart` for native chart projection.** Package
+assembly parses scoped ChartML targets, then the resolver freezes a completed
+backend-neutral group or a visible fallback in `ResolvedContent`. This edge
+stays within the PresentationML family. `rpptx-render` and the format-neutral
+backends consume only the frozen group and do not parse ChartML.
 
 ## What stays put
 

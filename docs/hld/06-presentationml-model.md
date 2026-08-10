@@ -412,21 +412,32 @@ pub enum ShapeTreeChild {
 
 pub struct CT_AlternateContent {
     raw_xml: Vec<u8>,
+    chart_choice: Option<Box<CT_GraphicFrame>>,
     selected_fallback: Option<Vec<ShapeTreeChild>>,
 }
 ```
 
 `CT_AlternateContent` selects ordered typed members only from its one immediate
 `mc:Fallback` child. It resolves the branch by namespace URI and uses the same
-shape-tree dispatch as `p:spTree` and `p:grpSp`. Every `mc:Choice` stays opaque
-and is not evaluated. No fallback is valid and produces no selection. An empty
-fallback produces an empty selection, while more than one immediate MC
-fallback is invalid.
+shape-tree dispatch as `p:spTree` and `p:grpSp`. An immediate `mc:Choice` stays
+opaque except for a read-only projection of its first chart-bearing
+`p:graphicFrame`. Only the schema-positioned
+`p:graphicFrame/a:graphic/a:graphicData` payload can select that projection.
+Descendant extension payloads stay opaque. The projection resolves the
+`c:chart@r:id` attribute by namespace URI and pairs it with the first immediate
+typed `p:pic` fallback.
+Other choices are not evaluated. No fallback is valid and produces no
+selection. An empty fallback produces an empty selection, while more than one
+immediate MC fallback is invalid.
 
 The captured `raw_xml` subtree is the only serialisation source. The selected
 fallback is a read-only rendering view and is never written back in place of
 the producer XML, so choices, comments, processing instructions, attributes,
 entities, whitespace, and fallback content remain byte-identical.
+
+The graphic-data payload is exposed read-only. Typed table payloads retain a
+dedicated mutable accessor, while chart and opaque payload bytes cannot be
+mutated independently of their relationship projection.
 
 `CT_ConnectionShape` types the connector's required `p:spPr` and its optional
 start and end connections. Each present `a:stCxn` or `a:endCxn` carries the
@@ -478,9 +489,10 @@ Preserved as opaque bytes in v1: `p:timing`, `p:transition`, `p:custShowLst`,
 `p14:sectionLst`, comments, ink, `p:contentPart`, SmartArt `dgm:` payloads, OLE
 and ActiveX, and every `mc:AlternateContent` alternative.
 
-An `mc:AlternateContent` model may inspect its selected fallback, but the full
-captured subtree remains opaque for serialisation and round-trips
-byte-identically.
+An `mc:AlternateContent` model may inspect its selected fallback and an
+immediate chart choice. The full captured subtree remains opaque for
+serialisation and round-trips byte-identically. Malformed non-chart choices are
+not parsed merely because they contain a graphic-frame element.
 
 The gate on this is a full-corpus round-trip. Every modelled root parses,
 serialises, reparses, and compares structurally. The expected package replaces

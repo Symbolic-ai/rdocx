@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Cursor;
@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oxml_drawing::color::ColorMap;
 use oxml_drawing::theme::CT_OfficeStyleSheet;
-use oxml_layout::{FontManager, PositionedElement, Rect, walk};
+use oxml_layout::{PositionedElement, walk};
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
 use rpptx::{
@@ -16,7 +16,7 @@ use rpptx::{
     ChartKind, ConnectorType, Emu, Error, Fill, Presentation, ShapeKind, ShapeRef, TextBullet,
     TextBulletCharacter, TextBulletChoice, TextFont,
 };
-use rpptx_chart::{AxisData, CT_ChartSpace, render_chart};
+use rpptx_chart::{AxisData, CT_ChartSpace};
 use rpptx_layout::{
     FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,
 };
@@ -28,10 +28,12 @@ use rpptx_oxml::shape_tree::ShapeTreeChild;
 use rpptx_oxml::slide_parts::{
     BackgroundRendering, CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind,
 };
-use rpptx_render::{RenderInput, layout_presentation_deterministic};
 
 #[path = "../examples/dump_deck.rs"]
 mod dump_deck;
+#[allow(dead_code)]
+#[path = "../examples/render_deck.rs"]
+mod render_deck_example;
 
 const P_NS: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
 const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
@@ -433,81 +435,170 @@ fn add_chart_authors_each_supported_family() {
 }
 
 #[test]
-fn authored_chart_enters_renderer_deterministically() {
+fn authored_chart_relationship_enters_presentation_renderer() {
     let bytes = presentation_with_authored_chart()
         .to_bytes()
         .expect("serialize authored chart for rendering");
-    let package = open_opc(&bytes, "authored chart rendering");
-    let chart_xml = package
-        .content_types
-        .overrides
-        .iter()
-        .find_map(|(part, content_type)| {
-            (content_type == content_types::CHART).then(|| package.get_part(part).unwrap())
-        })
-        .expect("authored chart part");
-    let chart_space = CT_ChartSpace::from_xml(chart_xml).expect("parse authored ChartML");
-    let bounds = Rect {
-        x: 0.0,
-        y: 0.0,
-        width: 576.0,
-        height: 360.0,
-    };
-    let theme = CT_OfficeStyleSheet::office_default();
-    let color_map = ColorMap::default();
-
-    let mut first_fonts = FontManager::new_deterministic().expect("load deterministic fonts");
-    let first = render_chart(
-        &chart_space.chart,
-        bounds,
-        &theme,
-        &color_map,
-        &mut first_fonts,
-    )
-    .expect("render authored chart");
-    let mut second_fonts = FontManager::new_deterministic().expect("load deterministic fonts");
-    let second = render_chart(
-        &chart_space.chart,
-        bounds,
-        &theme,
-        &color_map,
-        &mut second_fonts,
-    )
-    .expect("render authored chart again");
-    assert_eq!(format!("{first:?}"), format!("{second:?}"));
+    let rendered = render_presentation_package(&bytes);
 
     let mut paths = 0;
     let mut text_runs = 0;
-    walk(&first.children, &mut |element, _| match element {
-        PositionedElement::Path(path) => {
-            let path_bounds = path.path.bounds().expect("nonempty authored chart path");
-            assert!(path_bounds.x.is_finite());
-            assert!(path_bounds.y.is_finite());
-            assert!(path_bounds.width.is_finite());
-            assert!(path_bounds.height.is_finite());
-            paths += 1;
-        }
-        PositionedElement::Text(run) => {
-            assert!(run.origin.x.is_finite());
-            assert!(run.origin.y.is_finite());
-            assert!(run.font_size.is_finite());
-            assert!(run.advances.iter().all(|advance| advance.is_finite()));
-            assert!(!run.text.is_empty());
-            text_runs += 1;
-        }
-        PositionedElement::Line {
-            start, end, width, ..
-        } => {
-            assert!(start.x.is_finite());
-            assert!(start.y.is_finite());
-            assert!(end.x.is_finite());
-            assert!(end.y.is_finite());
-            assert!(width.is_finite());
-        }
-        _ => {}
-    });
+    walk(
+        &rendered.pages[0].elements,
+        &mut |element, _| match element {
+            PositionedElement::Path(path) => {
+                let path_bounds = path.path.bounds().expect("nonempty authored chart path");
+                assert!(path_bounds.x.is_finite());
+                assert!(path_bounds.y.is_finite());
+                assert!(path_bounds.width.is_finite());
+                assert!(path_bounds.height.is_finite());
+                paths += 1;
+            }
+            PositionedElement::Text(run) => {
+                assert!(run.origin.x.is_finite());
+                assert!(run.origin.y.is_finite());
+                assert!(run.font_size.is_finite());
+                assert!(run.advances.iter().all(|advance| advance.is_finite()));
+                assert!(!run.text.is_empty());
+                text_runs += 1;
+            }
+            PositionedElement::Line {
+                start, end, width, ..
+            } => {
+                assert!(start.x.is_finite());
+                assert!(start.y.is_finite());
+                assert!(end.x.is_finite());
+                assert!(end.y.is_finite());
+                assert!(width.is_finite());
+            }
+            _ => {}
+        },
+    );
     assert!(paths >= 6, "expected authored bars and annotation paths");
     assert!(text_runs >= 6, "expected authored axis and legend labels");
+}
+
+#[test]
+fn supported_and_fallback_charts_render_deterministically() {
+    let supported = presentation_with_authored_chart().to_bytes().unwrap();
+    let preview = valid_one_pixel_png();
+    let fallback =
+        presentation_with_three_dimensional_chart_fallback(Some((&preview, "image/png")));
+    let missing = presentation_with_three_dimensional_chart_fallback(None);
+    let malformed =
+        presentation_with_three_dimensional_chart_fallback(Some((b"not a PNG", "image/png")));
+    let mut corrupt_png = valid_one_pixel_png();
+    corrupt_png[41] = 0;
+    let corrupt =
+        presentation_with_three_dimensional_chart_fallback(Some((&corrupt_png, "image/png")));
+    let mismatched =
+        presentation_with_three_dimensional_chart_fallback(Some((&preview, "image/jpeg")));
+    let jpeg = valid_template_jpeg();
+    let jpeg_fallback =
+        presentation_with_three_dimensional_chart_fallback(Some((&jpeg, "image/jpeg")));
+    let sof = jpeg
+        .windows(2)
+        .position(|window| matches!(window, [0xff, 0xc0] | [0xff, 0xc2]))
+        .unwrap();
+    let sof_length = usize::from(u16::from_be_bytes([jpeg[sof + 2], jpeg[sof + 3]]));
+    let corrupt_jpeg = jpeg[..sof + 2 + sof_length].to_vec();
+    assert!(oxml_media::probe(&corrupt_jpeg).is_some());
+    let corrupt_jpeg_fallback =
+        presentation_with_three_dimensional_chart_fallback(Some((&corrupt_jpeg, "image/jpeg")));
+    let mismatched_jpeg =
+        presentation_with_three_dimensional_chart_fallback(Some((&jpeg, "image/png")));
+    let inflation_bomb = png_inflation_bomb();
+    assert!(oxml_media::probe(&inflation_bomb).is_some());
+    let inflation_bomb_fallback =
+        presentation_with_three_dimensional_chart_fallback(Some((&inflation_bomb, "image/png")));
+    let oversized = png_header(u32::MAX, u32::MAX);
+    let oversized_fallback =
+        presentation_with_three_dimensional_chart_fallback(Some((&oversized, "image/png")));
+    let sparse = sparse_preview_png();
+    let sparse_fallback =
+        presentation_with_three_dimensional_chart_fallback(Some((&sparse, "image/png")));
+    let grayscale_jpeg = valid_grayscale_jpeg();
+    assert_eq!(oxml_media::probe(&grayscale_jpeg).unwrap().channels, 1);
+    let grayscale_jpeg_fallback =
+        presentation_with_three_dimensional_chart_fallback(Some((&grayscale_jpeg, "image/jpeg")));
+    let cmyk_jpeg = valid_cmyk_jpeg();
+    assert_eq!(oxml_media::probe(&cmyk_jpeg).unwrap().channels, 4);
+    let cmyk_jpeg_fallback =
+        presentation_with_three_dimensional_chart_fallback(Some((&cmyk_jpeg, "image/jpeg")));
+
+    for bytes in [
+        &supported,
+        &fallback,
+        &missing,
+        &malformed,
+        &corrupt,
+        &mismatched,
+        &jpeg_fallback,
+        &corrupt_jpeg_fallback,
+        &mismatched_jpeg,
+        &inflation_bomb_fallback,
+        &oversized_fallback,
+        &sparse_fallback,
+        &grayscale_jpeg_fallback,
+        &cmyk_jpeg_fallback,
+    ] {
+        let first = render_presentation_package(bytes);
+        let second = render_presentation_package(bytes);
+        assert_eq!(format!("{first:?}"), format!("{second:?}"));
+        assert_eq!(
+            oxml_pdf::render_page_to_png(&first, 0, 96.0).unwrap(),
+            oxml_pdf::render_page_to_png(&second, 0, 96.0).unwrap()
+        );
+    }
+
+    let rendered_fallback = render_presentation_package(&fallback);
+    let mut cached_images = Vec::new();
+    walk(&rendered_fallback.pages[0].elements, &mut |element, _| {
+        if let PositionedElement::Image { data, .. } = element {
+            cached_images.push(data.clone());
+        }
+    });
+    assert_eq!(cached_images, vec![preview]);
+
+    let rendered_jpeg = render_presentation_package(&jpeg_fallback);
+    let mut cached_jpegs = Vec::new();
+    walk(&rendered_jpeg.pages[0].elements, &mut |element, _| {
+        if let PositionedElement::Image { data, .. } = element {
+            cached_jpegs.push(data.clone());
+        }
+    });
+    assert_eq!(cached_jpegs, vec![jpeg]);
+
+    let rendered_sparse = render_presentation_package(&sparse_fallback);
+    let mut cached_sparse_images = Vec::new();
+    walk(&rendered_sparse.pages[0].elements, &mut |element, _| {
+        if let PositionedElement::Image { data, .. } = element {
+            cached_sparse_images.push(data.clone());
+        }
+    });
+    assert_eq!(cached_sparse_images, vec![sparse]);
+
+    for bytes in [
+        &missing,
+        &malformed,
+        &corrupt,
+        &mismatched,
+        &corrupt_jpeg_fallback,
+        &mismatched_jpeg,
+        &inflation_bomb_fallback,
+        &oversized_fallback,
+        &grayscale_jpeg_fallback,
+        &cmyk_jpeg_fallback,
+    ] {
+        let rendered = render_presentation_package(bytes);
+        let mut labels = Vec::new();
+        walk(&rendered.pages[0].elements, &mut |element, _| {
+            if let PositionedElement::Text(run) = element {
+                labels.push(run.text.clone());
+            }
+        });
+        assert!(labels.iter().any(|label| label == "Unsupported chart"));
+    }
 }
 
 #[test]
@@ -1701,7 +1792,7 @@ fn merge_then_split_restores_the_original_grid() {
     else {
         panic!("expected table graphic frame");
     };
-    let GraphicDataPayload::Table(table) = &frame.graphic_data.payload else {
+    let GraphicDataPayload::Table(table) = frame.graphic_data.payload() else {
         panic!("expected table payload");
     };
     assert_eq!(
@@ -2024,6 +2115,104 @@ fn valid_one_pixel_png() -> Vec<u8> {
         0xcf, 0xc0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xf7, 0x03, 0x41, 0x43, 0x00, 0x00, 0x00,
         0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
     ]
+}
+
+fn png_inflation_bomb() -> Vec<u8> {
+    let inflated = vec![0; 1024 * 1024];
+    let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&inflated, 6);
+    let mut png = png_header(1, 1);
+    png.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
+    png.extend_from_slice(b"IDAT");
+    png.extend_from_slice(&compressed);
+    png.extend_from_slice(&[0; 4]);
+    png.extend_from_slice(&0_u32.to_be_bytes());
+    png.extend_from_slice(b"IEND");
+    png.extend_from_slice(&[0; 4]);
+    png
+}
+
+fn sparse_preview_png() -> Vec<u8> {
+    let width = 9_u32;
+    let height = 9_u32;
+    let mut pixels = Vec::with_capacity((width * height * 4 + height) as usize);
+    for row in 0..height {
+        pixels.push(0);
+        for column in 0..width {
+            if row == 0 && column == 0 {
+                pixels.extend_from_slice(&[255, 0, 0, 255]);
+            } else {
+                pixels.extend_from_slice(&[0, 0, 0, 0]);
+            }
+        }
+    }
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&width.to_be_bytes());
+    ihdr.extend_from_slice(&height.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&pixels, 6);
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    append_png_chunk(&mut png, b"IHDR", &ihdr);
+    append_png_chunk(&mut png, b"IDAT", &compressed);
+    append_png_chunk(&mut png, b"IEND", &[]);
+    png
+}
+
+fn append_png_chunk(png: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+    png.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    png.extend_from_slice(kind);
+    png.extend_from_slice(data);
+    let mut crc = 0xffff_ffff_u32;
+    for byte in kind.iter().chain(data) {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320 & 0_u32.wrapping_sub(crc & 1));
+        }
+    }
+    png.extend_from_slice(&(!crc).to_be_bytes());
+}
+
+fn valid_template_jpeg() -> Vec<u8> {
+    let bytes = Presentation::new().unwrap().to_bytes().unwrap();
+    open_opc(&bytes, "bundled template JPEG")
+        .get_part("/docProps/thumbnail.jpeg")
+        .unwrap()
+        .to_vec()
+}
+
+fn valid_grayscale_jpeg() -> Vec<u8> {
+    decode_base64_fixture(
+        "/9j/4AAQSkZJRgABAQAASABIAAD/4QNERXhpZgAATU0AKgAAAAgACQEPAAIAAAAIAAAAegEQAAIAAAAOAAAAggEaAAUAAAABAAAAkAEbAAUAAAABAAAAmAEoAAMAAAABAAIAAAExAAIAAAAMAAAAoAEyAAIAAAAUAAAArIdpAAQAAAABAAAAwIglAAQAAAABAAACegAAAABPbmVQbHVzAE9ORVBMVVMgQTUwMTAAAAAASAAAAAEAAABIAAAAAUdJTVAgMi44LjIyADIwMTk6MTE6MjYgMjI6Mzc6NDQAABuCmgAFAAAAAQAAAgqCnQAFAAAAAQAAAhKIIgADAAAAAQAAAACIJwADAAAAAQBkAACQAAAHAAAABDAyMjCQAwACAAAAFAAAAhqQBAACAAAAFAAAAi6RAQAHAAAABAECAwCSAQAKAAAAAQAAAkKSAgAFAAAAAQAAAkqSAwAKAAAAAQAAAlKSBwADAAAAAQAAAACSCQADAAAAAQAQAACSCgAFAAAAAQAAAlqSkAACAAAABwAAAmKSkQACAAAABwAAAmqSkgACAAAABwAAAnKgAAAHAAAABDAxMDCgAQADAAAAAf//AACgAgAEAAAAAQAAAAGgAwAEAAAAAQAAAAGiFwADAAAAAQACAACjAQAHAAAAAQEAAACkAgADAAAAAQAAAACkAwADAAAAAQAAAACkBQADAAAAAQAYAACkBgADAAAAAQAAAAAAAAAAAAAAAQAABgsAAAARAAAACjIwMTk6MTE6MDkgMTA6NTk6MzYAMjAxOToxMTowOSAxMDo1OTozNgAAAAhHAAAAyAAAAJkAAABkAAAAJQAAAAUAABAHAAAD6DYwMjY5NQAANjAyNjk1AAA2MDI2OTUAAAAIAAEAAgAAAAJOAAAAAAIABQAAAAMAAALgAAMAAgAAAAJFAAAAAAQABQAAAAMAAAL4AAUAAQAAAAEAAAAAAAYABQAAAAEAAAMQAAcABQAAAAMAAAMYAB0AAgAAAAsAAAMwAAAAAAAAADAAAAABAAAAMwAAAAEAAAZnAAAAZAAAAAIAAAABAAAAEgAAAAEAAABoAAAAZAABK6cAAAPoAAAACQAAAAEAAAA7AAAAAQAAACQAAAABMjAxOToxMTowOQAA/+0AeFBob3Rvc2hvcCAzLjAAOEJJTQQEAAAAAAA/HAFaAAMbJUccAgAAAgACHAI/AAYxMDU5MzYcAj4ACDIwMTkxMTA5HAI3AAgyMDE5MTEwORwCPAAGMTA1OTM2ADhCSU0EJQAAAAAAEG0diLVAz066cPvLhCa6YLX/wAALCAABAAEBAREA/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9sAQwACAgICAgIDAgIDBQMDAwUGBQUFBQYIBgYGBgYICggICAgICAoKCgoKCgoKDAwMDAwMDg4ODg4PDw8PDw8PDw8P/90ABAAB/9oACAEBAAA/APTK/9k=",
+    )
+}
+
+fn valid_cmyk_jpeg() -> Vec<u8> {
+    decode_base64_fixture(
+        "/9j/4AAQSkZJRgABAQAASABIAAD/4QEGRXhpZgAATU0AKgAAAAgACAEGAAMAAAABAAIAAAESAAMAAAABAAEAAAEaAAUAAAABAAAAbgEbAAUAAAABAAAAdgEoAAMAAAABAAIAAAExAAIAAAAhAAAAfgEyAAIAAAAUAAAAoIdpAAQAAAABAAAAtAAAAAAAAABIAAAAAQAAAEgAAAABQWRvYmUgUGhvdG9zaG9wIDI0LjYgKE1hY2ludG9zaCkAADIwMjQ6MDM6MjMgMDk6NTY6MDMAAASQAAAHAAAABDAyMzGQBAACAAAAFAAAAOqgAgAEAAAAAQAAAAGgAwAEAAAAAQAAAAEAAAAAMjAyMjowNDoxMiAxMjowNTo1MQD/7QBkUGhvdG9zaG9wIDMuMAA4QklNBAQAAAAAACwcAVoAAxslRxwCAAACAAIcAj4ACDIwMjIwNDEyHAI/AAsxMjA1NTErMDIwMDhCSU0EJQAAAAAAEOtjiDMDJLv+fLJTuujhSZT/7gAOQWRvYmUAZAAAAAAA/8AAFAgAAQABBAERAAIRAQMRAQQRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/bAEMAAgICAgICAwICAwUDAwMFBgUFBQUGCAYGBgYGCAoICAgICAgKCgoKCgoKCgwMDAwMDA4ODg4ODw8PDw8PDw8PD//bAEMBAgMDBAQEBwQEBxALCQsQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEP/dAAQAAf/aAA4EAQACEQMRBBEAPwDj6/qA/wA7z+/D/9k=",
+    )
+}
+
+fn decode_base64_fixture(encoded: &str) -> Vec<u8> {
+    let mut output = Vec::with_capacity(encoded.len() * 3 / 4);
+    let mut accumulator = 0_u32;
+    let mut bits = 0_u32;
+    for byte in encoded.bytes().take_while(|byte| *byte != b'=') {
+        let value = match byte {
+            b'A'..=b'Z' => u32::from(byte - b'A'),
+            b'a'..=b'z' => u32::from(byte - b'a') + 26,
+            b'0'..=b'9' => u32::from(byte - b'0') + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => panic!("invalid fixture base64"),
+        };
+        accumulator = (accumulator << 6) | value;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            output.push((accumulator >> bits) as u8);
+            accumulator &= (1_u32 << bits).wrapping_sub(1);
+        }
+    }
+    output
 }
 
 #[test]
@@ -4308,7 +4497,7 @@ fn resolved_run_fills(content: &ResolvedContent) -> Vec<String> {
                 collect_body(body);
             }
         }
-        ResolvedContent::None | ResolvedContent::Image(_) => {}
+        ResolvedContent::None | ResolvedContent::Image(_) | ResolvedContent::Group(_) => {}
     }
     fills
 }
@@ -4328,6 +4517,15 @@ fn resolved_content_text(content: &ResolvedContent) -> String {
             })
             .collect::<Vec<_>>()
             .join("\n"),
+        ResolvedContent::Group(group) => {
+            let mut text = Vec::new();
+            walk(&group.children, &mut |element, _| {
+                if let PositionedElement::Text(run) = element {
+                    text.push(run.text.clone());
+                }
+            });
+            text.join("\n")
+        }
         ResolvedContent::None | ResolvedContent::Image(_) => String::new(),
     }
 }
@@ -4404,59 +4602,76 @@ fn open_opc(bytes: &[u8], deck: &str) -> OpcPackage {
 }
 
 fn deterministic_render(bytes: &[u8]) -> Vec<u8> {
-    let package = open_opc(bytes, "F-112 deterministic render");
-    let presentation_part = package.main_document_part().unwrap();
-    let presentation =
-        CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
-    let size = presentation
-        .slide_size
-        .as_ref()
-        .map_or((720.0, 540.0), |size| {
-            (size.cx.0 as f64 / 12_700.0, size.cy.0 as f64 / 12_700.0)
-        });
-    let relationship = package
-        .get_part_rels(&presentation_part)
-        .unwrap()
-        .get_by_id(&presentation.slide_ids[0].relationship_id)
-        .unwrap();
-    let slide_part = OpcPackage::resolve_rel_target(&presentation_part, &relationship.target);
-    let layout_part = related_visual_part(
-        &package,
-        &slide_part,
-        rel_types::SLIDE_LAYOUT,
-        Path::new("F-112"),
-    );
-    let master_part = related_visual_part(
-        &package,
-        &layout_part,
-        rel_types::SLIDE_MASTER,
-        Path::new("F-112"),
-    );
-    let theme_part =
-        related_visual_part(&package, &master_part, rel_types::THEME, Path::new("F-112"));
-    let slide = CT_Slide::from_xml(package.get_part(&slide_part).unwrap()).unwrap();
-    let layout = CT_SlideLayout::from_xml(package.get_part(&layout_part).unwrap()).unwrap();
-    let master = CT_SlideMaster::from_xml(package.get_part(&master_part).unwrap()).unwrap();
-    let theme = CT_OfficeStyleSheet::from_xml(package.get_part(&theme_part).unwrap()).unwrap();
-    let color_map = effective_visual_color_map(&master, &layout, &slide);
-    let resolved = ResolveCtx::new(
-        &theme,
-        color_map,
-        &master,
-        &layout,
-        &slide,
-        &presentation.default_text_style.unwrap_or_default(),
-    )
-    .resolve_slide(size)
-    .unwrap();
-    let render_input = RenderInput {
-        slides: vec![resolved],
-        media: HashMap::new(),
-        fonts: Vec::new(),
-        metadata: None,
-    };
-    let layout = layout_presentation_deterministic(&render_input).unwrap();
+    let layout = render_presentation_package(bytes);
     oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap()
+}
+
+fn render_presentation_package(bytes: &[u8]) -> oxml_layout::LayoutResult {
+    let package = open_opc(bytes, "F-112 deterministic render");
+    render_deck_example::render_package(&package, Path::new("F-128 integration package"))
+        .unwrap()
+        .layout
+}
+
+fn presentation_with_three_dimensional_chart_fallback(preview: Option<(&[u8], &str)>) -> Vec<u8> {
+    let bytes = presentation_with_authored_chart().to_bytes().unwrap();
+    let mut package = open_opc(&bytes, "three-dimensional chart fallback");
+    let chart_part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part, content_type)| {
+            (content_type == content_types::CHART).then_some(part.clone())
+        })
+        .unwrap();
+    package.set_part(
+        &chart_part,
+        br#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:bar3DChart><c:barDir val="col"/></c:bar3DChart></c:plotArea></c:chart></c:chartSpace>"#.to_vec(),
+    );
+    let slide_part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part, content_type)| {
+            (content_type == content_types::SLIDE).then_some(part.clone())
+        })
+        .unwrap();
+    let preview_target = "../media/f128-chart-preview.png";
+    let preview_id = package
+        .get_or_create_part_rels(&slide_part)
+        .add(rel_types::IMAGE, preview_target);
+    let slide_xml = String::from_utf8(package.get_part(&slide_part).unwrap().to_vec()).unwrap();
+    let frame_start = slide_xml.find("<p:graphicFrame").unwrap();
+    let frame_close = "</p:graphicFrame>";
+    let frame_end =
+        frame_start + slide_xml[frame_start..].find(frame_close).unwrap() + frame_close.len();
+    let frame = &slide_xml[frame_start..frame_end];
+    let fallback_picture = format!(
+        r#"<p:pic><p:nvPicPr><p:cNvPr/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip xmlns:r="{R_NS}" r:embed="{preview_id}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>"#
+    );
+    let alternate = format!(
+        r#"<mc:AlternateContent xmlns:mc="{MC_NS}"><mc:Choice xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" Requires="c">{frame}</mc:Choice><mc:Fallback>{fallback_picture}</mc:Fallback></mc:AlternateContent>"#
+    );
+    package.set_part(
+        &slide_part,
+        format!(
+            "{}{}{}",
+            &slide_xml[..frame_start],
+            alternate,
+            &slide_xml[frame_end..]
+        )
+        .into_bytes(),
+    );
+    if let Some((preview, content_type)) = preview {
+        let preview_part = OpcPackage::resolve_rel_target(&slide_part, preview_target);
+        package.set_part(&preview_part, preview.to_vec());
+        package
+            .content_types
+            .add_override(&preview_part, content_type);
+    }
+    let mut output = Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    output.into_inner()
 }
 
 fn modelled_part_bytes(
