@@ -159,6 +159,9 @@ defended.
 | F-114 | S28 | M | 2 | 1 | 2026-08-09 | Validated slide removal, movement, duplication, and graph repair |
 | F-115 | S28 | S | 1 | 1 | 2026-08-09 | Slide and presentation properties with valid slideshow output |
 | F-116 | S28 | M | 2 | 1 | 2026-08-09 | One SHA-bound ten-slide acceptance deck across four viewers |
+| F-117 | S29 | L | 4 | 1 | 2026-08-10 | Minimal deterministic one-sheet SpreadsheetML workbook writer |
+| F-118 | S29 | L | 4 | 1 | 2026-08-10 | Schema-aware ChartML core with ordered opaque preservation |
+| F-119 | S29 | L | 4 | 1 | 2026-08-10 | Formula references and caches from one source of series data |
 
 ## Velocity
 
