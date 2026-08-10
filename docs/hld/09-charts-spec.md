@@ -116,8 +116,59 @@ parses, serialises, reparses, and compares as the same core model. The inline
 fixture keeps prefix, ordering, malformed-value, and raw-preservation coverage
 available without the external corpus.
 
-The later typed plot and series surface expands the preserved plot-area slots
-to the following model:
+The typed series layer adds concrete formula-backed string and numeric caches.
+`StringRef::new` receives one formula and one string vector.
+`NumericData::new` receives one formula, one number format, and one numeric
+vector. Writers derive `c:ptCount`, sequential `c:pt/@idx` values, and every
+cached `c:v` from those vectors. Callers cannot supply independent cache
+metadata that disagrees with the data.
+
+```rust
+pub struct StringRef {
+    pub formula: String,
+    pub values: Vec<String>,
+}
+
+pub struct NumericData {
+    pub formula: String,
+    pub format_code: String,
+    pub values: Vec<f64>,
+}
+
+pub enum AxisData {
+    String(StringRef),
+    Numeric(NumericData),
+}
+
+pub struct Series {
+    pub index: u32,
+    pub order: u32,
+    pub name: Option<StringRef>,
+    pub categories: Option<AxisData>,
+    pub values: NumericData,
+    pub bubble_size: Option<NumericData>,
+    pub sp_pr: Option<CT_ShapeProperties>,
+}
+```
+
+Series readers require `c:idx`, `c:order`, and a formula-backed `c:val`. They
+reject duplicate modelled children, empty formulae, missing caches and cache
+metadata, invalid counts, duplicate or descending point indexes, indexes
+outside the declared count, and nonfinite numbers. Producer caches may omit
+blank points. Their strictly increasing sparse indexes and declared logical
+count remain intact on round-trip. Newly authored caches are always dense and
+sequential.
+
+`c:tx`, `c:spPr`, `c:cat`, `c:val`, and `c:bubbleSize` write in schema order.
+Markers, data points, labels, trendlines, extensions, unknown attributes, and
+whitespace remain byte-preserved in their original series or reference slots.
+Plot-area serialization continues to use its preserved plot bytes. Its
+read-only series projection validates the common category-based plot payloads
+without claiming ownership of a plot kind. Across the pinned corpus it parses
+and reparses 66 series from the 26 chart parts.
+
+The later typed plot surface expands the preserved plot-area slots to the
+following model:
 
 ```rust
 

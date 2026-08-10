@@ -1,6 +1,6 @@
 # F-119, Series and data references
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S29
 **Size**: L
 **Depends on**: F-118
@@ -69,7 +69,10 @@ sequential point indexes, and cached `c:v` values during serialization. There
 is no separate caller-supplied cache count or point index that could disagree.
 Reject empty formulae, nonfinite numeric values, missing required index,
 order, or values, duplicate modeled children, malformed point indexes, and a
-declared point count that differs from the parsed points.
+declared point count smaller than a parsed point index. Valid sparse producer
+caches retain their larger logical count and nonsequential in-range indexes.
+Constructed caches remain dense and derive their count and sequential indexes
+from one value vector.
 
 `Series::from_xml` and `to_xml` model `c:idx`, `c:order`, optional `c:tx`,
 optional `c:spPr`, optional `c:cat`, required `c:val`, and optional
@@ -141,15 +144,15 @@ sample generation or rendering. All 28 hashes must match.
 
 ## Implementation checklist
 
-- [ ] Add concrete string, numeric, category, and series values to the existing
+- [x] Add concrete string, numeric, category, and series values to the existing
       crate root.
-- [ ] Derive cache metadata and points from one supplied value vector.
-- [ ] Parse and write the modeled series children in schema order.
-- [ ] Preserve unsupported series payloads in their original slots.
-- [ ] Add the consistency gate, negative cases, and corpus-wide series
+- [x] Derive cache metadata and points from one supplied value vector.
+- [x] Parse and write the modeled series children in schema order.
+- [x] Preserve unsupported series payloads in their original slots.
+- [x] Add the consistency gate, negative cases, and corpus-wide series
       round-trip coverage.
-- [ ] Update exactly HLD 09.
-- [ ] Run focused parser, corpus, preservation, microscope, and worker
+- [x] Update exactly HLD 09.
+- [x] Run focused parser, corpus, preservation, microscope, and worker
       preparation checks.
 
 ## Open questions
