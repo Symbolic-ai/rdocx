@@ -384,22 +384,60 @@ from the same source data in one operation so they cannot diverge.
 ## Authoring API
 
 ```rust
+pub enum ChartKind {
+    Bar,
+    Line,
+    Pie,
+    Doughnut,
+    Area,
+    Scatter,
+    Radar,
+}
+
 pub struct ChartData {
     pub categories: Vec<String>,
     pub series: Vec<(String, Vec<f64>)>,
     pub number_format: Option<String>,
 }
 
-impl Shapes<'_> {
-    pub fn add_chart(&mut self, kind: ChartKind, bounds: Rect, data: &ChartData)
-        -> Result<GraphicFrame<'_>>;
+impl Presentation {
+    pub fn add_chart(
+        &mut self,
+        slide_index: usize,
+        kind: ChartKind,
+        left: Emu,
+        top: Emu,
+        width: Emu,
+        height: Emu,
+        data: &ChartData,
+    ) -> Result<ShapeRef<'_>>;
 }
 ```
 
-`add_chart` writes the chart part, the workbook part, both sets of
-relationships, both content-type overrides, and the `p:graphicFrame` on the
-slide, then returns a handle for further styling. Part numbering follows the
-`1 + max(existing suffix)` rule from `04-opc-and-packaging.md`.
+The owning facade performs this mutation because the package parts and
+relationships are not available through `SlideMut`. `add_chart` validates the
+complete data value before mutation. Categories and series must be nonempty,
+series lengths must match the category count, numeric values must be finite,
+number formats must be valid, and both chart extents must be positive. Pie and
+doughnut charts accept one series. Scatter categories must parse as finite
+numeric values.
+
+One call writes the typed chart part, one editable workbook part, the
+slide-to-chart and chart-to-workbook relationships, both content-type
+overrides, and the `p:graphicFrame` on the slide. Workbook cells and ChartML
+caches are derived from the same `ChartData`. The package and slide changes are
+staged and become visible together only after serialization succeeds. Chart
+parts use `/ppt/charts/chartN.xml` and `/ppt/embeddings/WorkbookN.xlsx`.
+Each numbered family independently takes the next positive suffix after its
+greatest occupied suffix, following the allocation rule in
+`04-opc-and-packaging.md`.
+
+The native chart candidate has SHA-256
+`e6e9f7eef1c774d0414c5d0c3f1202da1a28635b5d089e15455b7adc3f66cb00`.
+Microsoft PowerPoint 16.104, Info.plist build 16.104.25121423, opened it without
+a repair warning and recognized `Chart 4` as a native chart. Chart Design,
+Edit Data exposed the authored `Category`, `Revenue`, and `Cost` columns with
+rows `North, 12.5, 8.0`, `South, 19.0, 11.5`, and `West, 14.25, 9.75`.
 
 ## Rendering
 

@@ -1,6 +1,6 @@
 # F-124, add_chart
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S31
 **Size**: L
 **Depends on**: F-117, F-121
@@ -79,15 +79,16 @@ spec's historical `Shapes::add_chart` sketch. It is required because
 the concrete facade.
 
 Validate nonempty categories and series, equal series lengths, finite values,
-valid number formats, and chart-family requirements before mutating state.
+valid number formats, positive chart extents, and chart-family requirements
+before mutating state.
 Build one worksheet with a category column followed by numeric series columns.
 Use its formula ranges for the ChartML caches so workbook and cache data share
 one source. Build the corresponding typed plot and paired axes where the
 family requires them.
 
-Allocate `/ppt/charts/chartN.xml` and
-`/ppt/embeddings/Microsoft_Excel_WorksheetN.xlsx` from the maximum occupied
-numeric suffix plus one. Add the slide-to-chart relationship, the
+Allocate `/ppt/charts/chartN.xml` and `/ppt/embeddings/WorkbookN.xlsx`
+independently after the greatest occupied positive suffix in each numbered
+family. Add the slide-to-chart relationship, the
 chart-to-workbook package relationship, chart and workbook content-type
 overrides, and the chart graphic frame. Stage package and slide values and
 commit only after every serialization succeeds.
@@ -109,9 +110,9 @@ commit only after every serialization succeeds.
 |---|---|---|
 | integration, gate | `created_chart_opens_and_edit_data_matches_source` | A saved chart opens without repair in pinned PowerPoint and Edit Data exposes the authored categories and values |
 | unit | `add_chart_writes_complete_relationship_graph` | Slide, chart, workbook parts, both relationship scopes, and both content-type overrides resolve to exact targets |
-| unit | `add_chart_uses_collision_free_part_numbers` | Existing sparse chart and embedding suffixes produce maximum suffix plus one |
+| unit | `add_chart_uses_collision_free_part_numbers` | Existing sparse chart and embedding suffixes each produce their own maximum suffix plus one |
 | unit | `add_chart_caches_and_workbook_share_one_source` | Chart formulae, cached values, and worksheet cells agree for every series |
-| negative | `add_chart_rejects_invalid_data_without_mutation` | Empty, ragged, nonfinite, or invalid format data returns an error and leaves package and slide bytes unchanged |
+| negative | `add_chart_rejects_invalid_data_without_mutation` | Empty, ragged, nonfinite, invalid format, or nonpositive extent data returns an error and leaves package and slide bytes unchanged |
 | round-trip | `authored_chart_graphic_frame_round_trips` | The chart relationship payload writes in schema order and reparses without losing unrelated frame XML |
 
 The test gate is: a created chart opens in PowerPoint and "Edit Data" shows the
@@ -147,16 +148,16 @@ or its rendering path. All 28 hashes must match.
 
 ## Implementation checklist
 
-- [ ] Add the required unpublished crate dependencies and OPC constants.
-- [ ] Add the schema-ordered chart graphic-frame constructor.
-- [ ] Add `ChartKind`, `ChartData`, validation, and typed ChartML construction.
-- [ ] Write the workbook, chart part, relationships, content types, and frame
+- [x] Add the required unpublished crate dependencies and OPC constants.
+- [x] Add the schema-ordered chart graphic-frame constructor.
+- [x] Add `ChartKind`, `ChartData`, validation, and typed ChartML construction.
+- [x] Write the workbook, chart part, relationships, content types, and frame
       atomically with collision-free names.
-- [ ] Add focused graph, cache consistency, naming, rollback, and round-trip
+- [x] Add focused graph, cache consistency, naming, rollback, and round-trip
       tests to existing test entrypoints.
-- [ ] Produce SHA-bound pinned PowerPoint open and Edit Data evidence.
-- [ ] Update exactly HLD 09.
-- [ ] Run focused checks, routed checks, microscope, and worker preparation.
+- [x] Produce SHA-bound pinned PowerPoint open and Edit Data evidence.
+- [x] Update exactly HLD 09.
+- [x] Run focused checks, routed checks, microscope, and worker preparation.
 
 ## Open questions
 

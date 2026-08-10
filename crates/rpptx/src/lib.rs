@@ -27,6 +27,12 @@ use oxml_media::{ImageFormat, MediaNamer, probe, resolve};
 use oxml_opc::content_types;
 use oxml_opc::relationship::{Relationship, rel_types};
 use oxml_opc::{OpcError, OpcPackage, Relationships};
+use oxml_sml::{Column, Workbook};
+use rpptx_chart::{
+    Axis, AxisData, AxisId, AxisKind, AxisPosition, BarDirection, BarGrouping, CT_ChartSpace,
+    CT_Legend, CT_PlotArea, Grouping, NumericData, Plot, RadarStyle, ScatterStyle, Series,
+    StringRef,
+};
 use rpptx_oxml::connector::CT_ConnectionShape;
 use rpptx_oxml::graphic_frame::{CT_GraphicFrame, GraphicDataPayload};
 use rpptx_oxml::notes_parts::CT_NotesSlide;
@@ -46,6 +52,26 @@ const DEFAULT_CORE_PROPERTIES_PART: &str = "/docProps/core.xml";
 
 /// A result returned by the `rpptx` read facade.
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// One supported two-dimensional chart family.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChartKind {
+    Bar,
+    Line,
+    Pie,
+    Doughnut,
+    Area,
+    Scatter,
+    Radar,
+}
+
+/// Data used to author one chart and its editable workbook.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChartData {
+    pub categories: Vec<String>,
+    pub series: Vec<(String, Vec<f64>)>,
+    pub number_format: Option<String>,
+}
 
 /// An error opening, resolving, or serialising a presentation package.
 #[derive(Debug, Error)]
@@ -135,6 +161,12 @@ pub enum Error {
 
     #[error("{operation} failed: {message}")]
     InvalidSlideMutation {
+        operation: &'static str,
+        message: String,
+    },
+
+    #[error("{operation} failed: {message}")]
+    InvalidChartMutation {
         operation: &'static str,
         message: String,
     },
@@ -1274,6 +1306,331 @@ impl Presentation {
         Ok(shape_ref(
             tree.append_child(ShapeTreeChild::Picture(picture)),
         ))
+    }
+
+    /// Appends an editable relationship-backed chart to one slide.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_chart(
+        &mut self,
+        slide_index: usize,
+        kind: ChartKind,
+        left: Emu,
+        top: Emu,
+        width: Emu,
+        height: Emu,
+        data: &ChartData,
+    ) -> Result<ShapeRef<'_>> {
+        let slide = self
+            .slides
+            .get(slide_index)
+            .ok_or(Error::UnknownSlideIndex {
+                index: slide_index,
+                slide_count: self.slides.len(),
+            })?;
+        validate_chart_extents(width, height)?;
+        validate_chart_data(kind, data)?;
+        let slide_part = slide.part_name.clone();
+        let id = ShapeIdAllocator::scan(&slide.slide.common_slide_data.shape_tree).allocate();
+        let chart_number = next_numbered_part_number(&self.package, "/ppt/charts/chart", ".xml");
+        let workbook_number =
+            next_numbered_part_number(&self.package, "/ppt/embeddings/Workbook", ".xlsx");
+        let chart_part = format!("/ppt/charts/chart{chart_number}.xml");
+        let workbook_part = format!("/ppt/embeddings/Workbook{workbook_number}.xlsx");
+
+        let mut package = self.package.clone();
+        let slide_relationship_id = package.get_or_create_part_rels(&slide_part).add(
+            rel_types::CHART,
+            &relative_part_target(&slide_part, &chart_part),
+        );
+        let workbook_relationship_id = package.get_or_create_part_rels(&chart_part).add(
+            rel_types::PACKAGE,
+            &relative_part_target(&chart_part, &workbook_part),
+        );
+        let (chart_xml, workbook_bytes) =
+            authored_chart_parts(kind, data, &workbook_relationship_id)?;
+        let frame = CT_GraphicFrame::new_chart(
+            id,
+            &format!("Chart {id}"),
+            positioned_transform(left, top, width, height),
+            &slide_relationship_id,
+        )
+        .map_err(|error| invalid_chart_mutation("add chart", error.to_string()))?;
+        frame
+            .to_xml()
+            .map_err(|error| invalid_chart_mutation("add chart", error.to_string()))?;
+
+        package.set_part(&chart_part, chart_xml);
+        package.set_part(&workbook_part, workbook_bytes);
+        package
+            .content_types
+            .add_override(&chart_part, content_types::CHART);
+        package
+            .content_types
+            .add_override(&workbook_part, content_types::EMBEDDED_WORKBOOK);
+
+        self.package = package;
+        let tree = &mut self.slides[slide_index].slide.common_slide_data.shape_tree;
+        Ok(shape_ref(tree.append_child(ShapeTreeChild::GraphicFrame(
+            Box::new(frame),
+        ))))
+    }
+}
+
+fn validate_chart_extents(width: Emu, height: Emu) -> Result<()> {
+    if width.0 <= 0 || height.0 <= 0 {
+        return Err(invalid_chart_mutation(
+            "add chart",
+            "chart width and height must be positive",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_chart_data(kind: ChartKind, data: &ChartData) -> Result<()> {
+    if data.categories.is_empty() {
+        return Err(invalid_chart_mutation(
+            "add chart",
+            "at least one category is required",
+        ));
+    }
+    if data.series.is_empty() {
+        return Err(invalid_chart_mutation(
+            "add chart",
+            "at least one series is required",
+        ));
+    }
+    if matches!(kind, ChartKind::Pie | ChartKind::Doughnut) && data.series.len() != 1 {
+        return Err(invalid_chart_mutation(
+            "add chart",
+            "pie and doughnut charts require exactly one series",
+        ));
+    }
+    for (name, values) in &data.series {
+        if values.len() != data.categories.len() {
+            return Err(invalid_chart_mutation(
+                "add chart",
+                format!(
+                    "series {name:?} has {} values for {} categories",
+                    values.len(),
+                    data.categories.len()
+                ),
+            ));
+        }
+        if values.iter().any(|value| !value.is_finite()) {
+            return Err(invalid_chart_mutation(
+                "add chart",
+                format!("series {name:?} contains a nonfinite value"),
+            ));
+        }
+    }
+    if kind == ChartKind::Scatter {
+        for category in &data.categories {
+            if category
+                .parse::<f64>()
+                .ok()
+                .is_none_or(|value| !value.is_finite())
+            {
+                return Err(invalid_chart_mutation(
+                    "add chart",
+                    format!("scatter category {category:?} is not a finite number"),
+                ));
+            }
+        }
+    }
+    if let Some(format) = &data.number_format {
+        NumericData::new("Sheet1!$A$2".to_owned(), format.clone(), vec![0.0])
+            .map_err(|error| invalid_chart_mutation("add chart", error.to_string()))?;
+    }
+    Ok(())
+}
+
+fn authored_chart_parts(
+    kind: ChartKind,
+    data: &ChartData,
+    workbook_relationship_id: &str,
+) -> Result<(Vec<u8>, Vec<u8>)> {
+    let category_column = if kind == ChartKind::Scatter {
+        Column::Number {
+            header: "Category".to_owned(),
+            values: data
+                .categories
+                .iter()
+                .map(|value| value.parse::<f64>().expect("validated scatter category"))
+                .collect(),
+            number_format: None,
+        }
+    } else {
+        Column::Text {
+            header: "Category".to_owned(),
+            values: data.categories.clone(),
+        }
+    };
+    let mut columns = Vec::with_capacity(data.series.len() + 1);
+    columns.push(category_column);
+    columns.extend(data.series.iter().map(|(name, values)| Column::Number {
+        header: name.clone(),
+        values: values.clone(),
+        number_format: data.number_format.clone(),
+    }));
+    let workbook = Workbook::new("Sheet1", columns)
+        .map_err(|error| invalid_chart_mutation("add chart", error.to_string()))?;
+    let category_formula = workbook
+        .formula_range(0)
+        .expect("validated categories produce a formula range");
+    let number_format = data.number_format.as_deref().unwrap_or("General");
+    let mut chart_series = Vec::with_capacity(data.series.len());
+    for (index, (name, values)) in data.series.iter().enumerate() {
+        let values_formula = workbook
+            .formula_range(index + 1)
+            .expect("validated series produces a formula range");
+        let values = NumericData::new(values_formula, number_format.to_owned(), values.clone())
+            .map_err(|error| invalid_chart_mutation("add chart", error.to_string()))?;
+        let mut series = Series::new(index as u32, index as u32, values);
+        series.name = Some(
+            StringRef::new(
+                format!("Sheet1!${}$1", spreadsheet_column_name(index + 1)),
+                vec![name.clone()],
+            )
+            .map_err(|error| invalid_chart_mutation("add chart", error.to_string()))?,
+        );
+        series.categories = Some(if kind == ChartKind::Scatter {
+            AxisData::Numeric(
+                NumericData::new(
+                    category_formula.clone(),
+                    "General".to_owned(),
+                    data.categories
+                        .iter()
+                        .map(|value| value.parse::<f64>().expect("validated scatter category"))
+                        .collect(),
+                )
+                .map_err(|error| invalid_chart_mutation("add chart", error.to_string()))?,
+            )
+        } else {
+            AxisData::String(
+                StringRef::new(category_formula.clone(), data.categories.clone())
+                    .map_err(|error| invalid_chart_mutation("add chart", error.to_string()))?,
+            )
+        });
+        chart_series.push(series);
+    }
+
+    let category_axis_id = AxisId::new(48_650_112)
+        .map_err(|error| invalid_chart_mutation("add chart", error.to_string()))?;
+    let value_axis_id = AxisId::new(48_672_768)
+        .map_err(|error| invalid_chart_mutation("add chart", error.to_string()))?;
+    let axis_ids = [category_axis_id, value_axis_id];
+    let (plot, axes) = match kind {
+        ChartKind::Bar => (
+            Plot::bar(
+                BarDirection::Column,
+                BarGrouping::Clustered,
+                chart_series,
+                axis_ids,
+            ),
+            category_value_axes(category_axis_id, value_axis_id),
+        ),
+        ChartKind::Line => (
+            Plot::line(Grouping::Standard, chart_series, axis_ids),
+            category_value_axes(category_axis_id, value_axis_id),
+        ),
+        ChartKind::Pie => (Plot::pie(chart_series), Vec::new()),
+        ChartKind::Doughnut => (Plot::doughnut(chart_series), Vec::new()),
+        ChartKind::Area => (
+            Plot::area(Grouping::Standard, chart_series, axis_ids),
+            category_value_axes(category_axis_id, value_axis_id),
+        ),
+        ChartKind::Scatter => (
+            Plot::scatter(ScatterStyle::LineMarker, chart_series, axis_ids),
+            vec![
+                Axis::new(
+                    AxisKind::Value,
+                    category_axis_id,
+                    AxisPosition::Bottom,
+                    value_axis_id,
+                ),
+                Axis::new(
+                    AxisKind::Value,
+                    value_axis_id,
+                    AxisPosition::Left,
+                    category_axis_id,
+                ),
+            ],
+        ),
+        ChartKind::Radar => (
+            Plot::radar(RadarStyle::Standard, chart_series, axis_ids),
+            category_value_axes(category_axis_id, value_axis_id),
+        ),
+    };
+    let plot = plot.map_err(|error| invalid_chart_mutation("add chart", error.to_string()))?;
+    let plot_area = CT_PlotArea::new(vec![plot], axes)
+        .map_err(|error| invalid_chart_mutation("add chart", error.to_string()))?;
+    let chart_shell = format!(
+        r#"<c:chartSpace xmlns:c="{}" xmlns:a="{}" xmlns:r="{}"><c:chart><c:plotArea/></c:chart><c:externalData r:id="{}"><c:autoUpdate val="0"/></c:externalData></c:chartSpace>"#,
+        rpptx_chart::C_NS,
+        rpptx_chart::A_NS,
+        rpptx_chart::R_NS,
+        workbook_relationship_id,
+    );
+    let mut chart_space = CT_ChartSpace::from_xml(chart_shell.as_bytes())
+        .map_err(|error| invalid_chart_mutation("add chart", error.to_string()))?;
+    chart_space.chart.auto_title_deleted = true;
+    chart_space.chart.plot_area = plot_area;
+    chart_space.chart.legend = (data.series.len() > 1).then(CT_Legend::default);
+    let chart_xml = chart_space
+        .to_xml()
+        .map_err(|error| invalid_chart_mutation("add chart", error.to_string()))?;
+    let workbook_bytes = workbook
+        .to_xlsx_bytes()
+        .map_err(|error| invalid_chart_mutation("add chart", error.to_string()))?;
+    Ok((chart_xml, workbook_bytes))
+}
+
+fn category_value_axes(category: AxisId, value: AxisId) -> Vec<Axis> {
+    vec![
+        Axis::new(AxisKind::Category, category, AxisPosition::Bottom, value),
+        Axis::new(AxisKind::Value, value, AxisPosition::Left, category),
+    ]
+}
+
+fn spreadsheet_column_name(mut index: usize) -> String {
+    let mut name = Vec::new();
+    index += 1;
+    while index != 0 {
+        let remainder = (index - 1) % 26;
+        name.push((b'A' + remainder as u8) as char);
+        index = (index - 1) / 26;
+    }
+    name.iter().rev().collect()
+}
+
+fn next_numbered_part_number(package: &OpcPackage, prefix: &str, suffix: &str) -> usize {
+    let occupied = package
+        .parts
+        .keys()
+        .filter_map(|part| numbered_part_suffix(part, prefix, suffix))
+        .collect::<HashSet<_>>();
+    let mut candidate = occupied
+        .iter()
+        .copied()
+        .max()
+        .and_then(|value| value.checked_add(1))
+        .unwrap_or(1);
+    while occupied.contains(&candidate) {
+        candidate = candidate.checked_add(1).unwrap_or(1);
+    }
+    candidate
+}
+
+fn numbered_part_suffix(part: &str, prefix: &str, suffix: &str) -> Option<usize> {
+    let value = part.strip_prefix(prefix)?.strip_suffix(suffix)?;
+    let parsed = value.parse::<usize>().ok()?;
+    (parsed != 0).then_some(parsed)
+}
+
+fn invalid_chart_mutation(operation: &'static str, message: impl Into<String>) -> Error {
+    Error::InvalidChartMutation {
+        operation,
+        message: message.into(),
     }
 }
 

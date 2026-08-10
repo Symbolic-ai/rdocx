@@ -125,6 +125,54 @@ impl CT_GraphicFrame {
         })
     }
 
+    /// Creates a chart-bearing graphic frame with a relationship payload.
+    pub fn new_chart(
+        id: u32,
+        name: &str,
+        transform: CT_Transform2D,
+        relationship_id: &str,
+    ) -> Result<Self> {
+        if relationship_id.is_empty() {
+            return Err(OxmlError::InvalidValue(
+                "a chart graphic frame requires a relationship id".to_owned(),
+            ));
+        }
+        let mut writer = Writer::new(Vec::new());
+        let mut chart = BytesStart::new("c:chart");
+        chart.push_attribute(("xmlns:c", CHART_URI));
+        chart.push_attribute((
+            "xmlns:r",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+        ));
+        chart.push_attribute(("r:id", relationship_id));
+        writer.write_event(Event::Empty(chart))?;
+        let name = quick_xml::escape::escape(name);
+        Ok(Self {
+            transform,
+            graphic_data: CT_GraphicData {
+                uri: CHART_URI.to_owned(),
+                payload: GraphicDataPayload::Chart(writer.into_inner()),
+                raw_attributes: Vec::new(),
+                raw_children: OrderedRawChildren::default(),
+            },
+            non_visual_properties: RawElementShell {
+                non_visual_id: Some(id),
+                drawing_properties_index: Some(0),
+                attributes: Vec::new(),
+                children: vec![
+                    format!(r#"<p:cNvPr id="{id}" name="{name}"/>"#).into_bytes(),
+                    b"<p:cNvGraphicFramePr/>".to_vec(),
+                    b"<p:nvPr/>".to_vec(),
+                ],
+            },
+            graphic_attributes: Vec::new(),
+            graphic_raw_children: OrderedRawChildren::default(),
+            extension_xml: None,
+            raw_attributes: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+        })
+    }
+
     pub(crate) fn non_visual_id(&self) -> Option<u32> {
         self.non_visual_properties.non_visual_id
     }

@@ -16,6 +16,7 @@ pub const EXTENDED_PROPERTIES: &str =
 pub const CUSTOM_PROPERTIES: &str =
     "application/vnd.openxmlformats-officedocument.custom-properties+xml";
 pub const THEME: &str = "application/vnd.openxmlformats-officedocument.theme+xml";
+pub const CHART: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
 
 pub const PRESENTATION: &str =
     "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml";
@@ -41,6 +42,8 @@ pub const HANDOUT_MASTER: &str =
 
 pub const WORKBOOK: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+pub const EMBEDDED_WORKBOOK: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 pub const WORKSHEET: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
 pub const SHARED_STRINGS: &str =

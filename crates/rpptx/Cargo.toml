@@ -21,6 +21,8 @@ oxml-drawing.workspace = true
 oxml-layout.workspace = true
 oxml-media.workspace = true
 oxml-opc.workspace = true
+oxml-sml.workspace = true
+rpptx-chart.workspace = true
 rpptx-oxml.workspace = true
 thiserror.workspace = true
 

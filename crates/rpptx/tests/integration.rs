@@ -11,10 +11,11 @@ use oxml_drawing::theme::CT_OfficeStyleSheet;
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
 use rpptx::{
-    Angle, CT_LineProperties, CT_TextCharacterProperties, CT_TextParagraphProperties,
-    ConnectorType, Emu, Error, Fill, Presentation, ShapeKind, ShapeRef, TextBullet,
+    Angle, CT_LineProperties, CT_TextCharacterProperties, CT_TextParagraphProperties, ChartData,
+    ChartKind, ConnectorType, Emu, Error, Fill, Presentation, ShapeKind, ShapeRef, TextBullet,
     TextBulletCharacter, TextBulletChoice, TextFont,
 };
+use rpptx_chart::{AxisData, CT_ChartSpace};
 use rpptx_layout::{
     FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,
 };
@@ -47,6 +48,9 @@ const KEYNOTE_VERSION: &str = "14.4";
 const KEYNOTE_BUILD: &str = "7043.0.93";
 const LIBREOFFICE_VERSION: &str = "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
 const F116_CANDIDATE_PATH: &str = "/private/tmp/rdocx-f116-m11-write-api.pptx";
+const F124_CANDIDATE_PATH: &str = "/private/tmp/rdocx-f124-add-chart.pptx";
+const F124_ARTIFACT_SHA256: &str =
+    "e6e9f7eef1c774d0414c5d0c3f1202da1a28635b5d089e15455b7adc3f66cb00";
 const F116_ARTIFACT_SHA256: &str =
     "d36da6e8849eabd4487d2572baea19c3716ee7d0fe03aaa4714a28ce3c41de4f";
 const F116_FINAL_TITLES: [&str; 10] = [
@@ -62,6 +66,404 @@ const F116_FINAL_TITLES: [&str; 10] = [
     "F-116 slide 09",
 ];
 static F116_TEMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+fn f124_chart_data() -> ChartData {
+    ChartData {
+        categories: vec!["North".to_owned(), "South".to_owned(), "West".to_owned()],
+        series: vec![
+            ("Revenue".to_owned(), vec![12.5, 19.0, 14.25]),
+            ("Cost".to_owned(), vec![8.0, 11.5, 9.75]),
+        ],
+        number_format: Some("0.00".to_owned()),
+    }
+}
+
+fn presentation_with_authored_chart() -> Presentation {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add chart slide");
+    presentation
+        .add_chart(
+            0,
+            ChartKind::Bar,
+            Emu(914_400),
+            Emu(914_400),
+            Emu(7_315_200),
+            Emu(4_572_000),
+            &f124_chart_data(),
+        )
+        .expect("add authored chart");
+    presentation
+}
+
+#[test]
+fn add_chart_writes_complete_relationship_graph() {
+    let bytes = presentation_with_authored_chart()
+        .to_bytes()
+        .expect("serialize authored chart");
+    let package = open_opc(&bytes, "authored chart graph");
+    let chart_part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part, content_type)| {
+            (content_type == content_types::CHART).then_some(part.as_str())
+        })
+        .expect("chart content type override");
+    let workbook_part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part, content_type)| {
+            (content_type == content_types::EMBEDDED_WORKBOOK).then_some(part.as_str())
+        })
+        .expect("workbook content type override");
+    let slide_part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part, content_type)| {
+            (content_type == content_types::SLIDE).then_some(part.as_str())
+        })
+        .expect("slide content type override");
+    let chart_relationship = package
+        .get_part_rels(slide_part)
+        .expect("slide relationships")
+        .get_by_type(rel_types::CHART)
+        .expect("slide to chart relationship");
+    assert_eq!(
+        OpcPackage::resolve_rel_target(slide_part, &chart_relationship.target),
+        chart_part
+    );
+    let workbook_relationship = package
+        .get_part_rels(chart_part)
+        .expect("chart relationships")
+        .get_by_type(rel_types::PACKAGE)
+        .expect("chart to workbook relationship");
+    assert_eq!(
+        OpcPackage::resolve_rel_target(chart_part, &workbook_relationship.target),
+        workbook_part
+    );
+    let slide_xml = String::from_utf8(package.get_part(slide_part).unwrap().to_vec()).unwrap();
+    assert!(slide_xml.contains(&format!(r#"<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="{R_NS}" r:id="{}"/>"#, chart_relationship.id)));
+    let chart_xml = String::from_utf8(package.get_part(chart_part).unwrap().to_vec()).unwrap();
+    assert!(chart_xml.contains(&format!(
+        r#"<c:externalData r:id="{}">"#,
+        workbook_relationship.id
+    )));
+    assert!(package.get_part(workbook_part).is_some());
+    assert!(
+        Presentation::from_bytes(&bytes)
+            .unwrap()
+            .validate()
+            .is_empty()
+    );
+}
+
+#[test]
+fn add_chart_uses_collision_free_part_numbers() {
+    let mut source = Presentation::new().unwrap();
+    source.add_slide(0).unwrap();
+    let mut package = open_opc(&source.to_bytes().unwrap(), "sparse chart fixture");
+    package.set_part("/ppt/charts/chart2.xml", b"occupied chart".to_vec());
+    package.set_part(
+        "/ppt/embeddings/Workbook7.xlsx",
+        b"occupied workbook".to_vec(),
+    );
+    package
+        .content_types
+        .add_override("/ppt/charts/chart2.xml", content_types::CHART);
+    package.content_types.add_override(
+        "/ppt/embeddings/Workbook7.xlsx",
+        content_types::EMBEDDED_WORKBOOK,
+    );
+    let mut bytes = Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut presentation = Presentation::from_bytes(&bytes.into_inner()).unwrap();
+    presentation
+        .add_chart(
+            0,
+            ChartKind::Line,
+            Emu(1),
+            Emu(2),
+            Emu(3),
+            Emu(4),
+            &f124_chart_data(),
+        )
+        .unwrap();
+    let package = open_opc(&presentation.to_bytes().unwrap(), "numbered chart");
+    assert!(package.parts.contains_key("/ppt/charts/chart3.xml"));
+    assert!(package.parts.contains_key("/ppt/embeddings/Workbook8.xlsx"));
+    assert_eq!(
+        package.get_part("/ppt/charts/chart2.xml"),
+        Some(b"occupied chart".as_slice())
+    );
+}
+
+#[test]
+fn add_chart_caches_and_workbook_share_one_source() {
+    let bytes = presentation_with_authored_chart().to_bytes().unwrap();
+    let package = open_opc(&bytes, "authored chart cache");
+    let chart_part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part, content_type)| {
+            (content_type == content_types::CHART).then_some(part.as_str())
+        })
+        .unwrap();
+    let chart = CT_ChartSpace::from_xml(package.get_part(chart_part).unwrap()).unwrap();
+    let series = chart.chart.plot_area.series().unwrap();
+    assert_eq!(series.len(), 2);
+    let expected_series = [
+        (
+            "Sheet1!$B$1",
+            "Revenue",
+            "Sheet1!$B$2:$B$4",
+            [12.5, 19.0, 14.25],
+        ),
+        ("Sheet1!$C$1", "Cost", "Sheet1!$C$2:$C$4", [8.0, 11.5, 9.75]),
+    ];
+    for (actual, (name_formula, name, value_formula, values)) in series.iter().zip(expected_series)
+    {
+        let actual_name = actual.name.as_ref().unwrap();
+        assert_eq!(actual_name.formula, name_formula);
+        assert_eq!(actual_name.values, [name]);
+        let AxisData::String(categories) = actual.categories.as_ref().unwrap() else {
+            panic!("category series must use a string cache");
+        };
+        assert_eq!(categories.formula, "Sheet1!$A$2:$A$4");
+        assert_eq!(categories.values, ["North", "South", "West"]);
+        assert_eq!(actual.values.formula, value_formula);
+        assert_eq!(actual.values.format_code, "0.00");
+        assert_eq!(actual.values.values, values);
+    }
+    let workbook_relationship = package
+        .get_part_rels(chart_part)
+        .unwrap()
+        .get_by_type(rel_types::PACKAGE)
+        .unwrap();
+    let workbook_part = OpcPackage::resolve_rel_target(chart_part, &workbook_relationship.target);
+    let workbook =
+        OpcPackage::from_reader(Cursor::new(package.get_part(&workbook_part).unwrap())).unwrap();
+    let worksheet = String::from_utf8(
+        workbook
+            .get_part("/xl/worksheets/sheet1.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let shared_strings =
+        String::from_utf8(workbook.get_part("/xl/sharedStrings.xml").unwrap().to_vec()).unwrap();
+    let shared_strings = shared_string_values(&shared_strings);
+    let expected_cells = BTreeMap::from([
+        ("A1", "Category"),
+        ("A2", "North"),
+        ("A3", "South"),
+        ("A4", "West"),
+        ("B1", "Revenue"),
+        ("B2", "12.5"),
+        ("B3", "19"),
+        ("B4", "14.25"),
+        ("C1", "Cost"),
+        ("C2", "8"),
+        ("C3", "11.5"),
+        ("C4", "9.75"),
+    ]);
+    let actual_cells = expected_cells
+        .keys()
+        .map(|address| {
+            let (shared, value) = worksheet_cell(&worksheet, address);
+            let value = if shared {
+                shared_strings[value.parse::<usize>().unwrap()].as_str()
+            } else {
+                value
+            };
+            (*address, value)
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(actual_cells, expected_cells);
+}
+
+#[test]
+fn add_chart_rejects_invalid_data_without_mutation() {
+    let invalid = [
+        ChartData {
+            categories: Vec::new(),
+            series: vec![("Revenue".to_owned(), Vec::new())],
+            number_format: None,
+        },
+        ChartData {
+            categories: vec!["North".to_owned()],
+            series: Vec::new(),
+            number_format: None,
+        },
+        ChartData {
+            categories: vec!["North".to_owned(), "South".to_owned()],
+            series: vec![("Revenue".to_owned(), vec![12.5])],
+            number_format: None,
+        },
+        ChartData {
+            categories: vec!["North".to_owned()],
+            series: vec![("Revenue".to_owned(), vec![f64::NAN])],
+            number_format: None,
+        },
+        ChartData {
+            categories: vec!["North".to_owned()],
+            series: vec![("Revenue".to_owned(), vec![12.5])],
+            number_format: Some(String::new()),
+        },
+    ];
+    for data in invalid {
+        let mut presentation = Presentation::new().unwrap();
+        presentation.add_slide(0).unwrap();
+        let before = presentation.to_bytes().unwrap();
+        assert!(
+            presentation
+                .add_chart(0, ChartKind::Bar, Emu(1), Emu(2), Emu(3), Emu(4), &data,)
+                .is_err()
+        );
+        assert_eq!(presentation.to_bytes().unwrap(), before);
+    }
+
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(0).unwrap();
+    let before = presentation.to_bytes().unwrap();
+    assert!(
+        presentation
+            .add_chart(
+                0,
+                ChartKind::Pie,
+                Emu(1),
+                Emu(2),
+                Emu(3),
+                Emu(4),
+                &f124_chart_data(),
+            )
+            .is_err()
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    for (width, height) in [
+        (Emu(0), Emu(1)),
+        (Emu(-1), Emu(1)),
+        (Emu(1), Emu(0)),
+        (Emu(1), Emu(-1)),
+    ] {
+        assert!(
+            presentation
+                .add_chart(
+                    0,
+                    ChartKind::Bar,
+                    Emu(1),
+                    Emu(2),
+                    width,
+                    height,
+                    &f124_chart_data(),
+                )
+                .is_err()
+        );
+        assert_eq!(presentation.to_bytes().unwrap(), before);
+    }
+
+    let scatter = ChartData {
+        categories: vec!["not numeric".to_owned()],
+        series: vec![("Revenue".to_owned(), vec![12.5])],
+        number_format: None,
+    };
+    assert!(
+        presentation
+            .add_chart(
+                0,
+                ChartKind::Scatter,
+                Emu(1),
+                Emu(2),
+                Emu(3),
+                Emu(4),
+                &scatter,
+            )
+            .is_err()
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn add_chart_authors_each_supported_family() {
+    let one_series = ChartData {
+        categories: vec!["1".to_owned(), "2".to_owned(), "3".to_owned()],
+        series: vec![("Revenue".to_owned(), vec![12.5, 19.0, 14.25])],
+        number_format: None,
+    };
+    for (kind, plot_element) in [
+        (ChartKind::Bar, "c:barChart"),
+        (ChartKind::Line, "c:lineChart"),
+        (ChartKind::Pie, "c:pieChart"),
+        (ChartKind::Doughnut, "c:doughnutChart"),
+        (ChartKind::Area, "c:areaChart"),
+        (ChartKind::Scatter, "c:scatterChart"),
+        (ChartKind::Radar, "c:radarChart"),
+    ] {
+        let mut presentation = Presentation::new().unwrap();
+        presentation.add_slide(0).unwrap();
+        presentation
+            .add_chart(0, kind, Emu(1), Emu(2), Emu(3), Emu(4), &one_series)
+            .unwrap();
+        let bytes = presentation.to_bytes().unwrap();
+        let package = open_opc(&bytes, "supported authored chart");
+        let chart = package
+            .content_types
+            .overrides
+            .iter()
+            .find_map(|(part, content_type)| {
+                (content_type == content_types::CHART).then(|| package.get_part(part).unwrap())
+            })
+            .unwrap();
+        let chart = String::from_utf8(chart.to_vec()).unwrap();
+        assert!(
+            chart.contains(&format!("<{plot_element}>")),
+            "{kind:?}: {chart}"
+        );
+        assert!(
+            Presentation::from_bytes(&bytes)
+                .unwrap()
+                .validate()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+#[ignore = "manual PowerPoint open and Edit Data acceptance"]
+fn created_chart_opens_and_edit_data_matches_source() {
+    let bytes = presentation_with_authored_chart().to_bytes().unwrap();
+    fs::write(F124_CANDIDATE_PATH, &bytes).unwrap();
+    let sha = sha256(Path::new(F124_CANDIDATE_PATH));
+    eprintln!("F-124 PowerPoint candidate: {F124_CANDIDATE_PATH}, SHA-256 {sha}");
+    assert_eq!(sha, F124_ARTIFACT_SHA256);
+    assert!(open_opc(&bytes, "F-124 candidate").parts.len() > 1);
+}
+
+fn shared_string_values(xml: &str) -> Vec<String> {
+    xml.split("<t>")
+        .skip(1)
+        .map(|tail| tail.split_once("</t>").unwrap().0.to_owned())
+        .collect()
+}
+
+fn worksheet_cell<'a>(xml: &'a str, address: &str) -> (bool, &'a str) {
+    let marker = format!(r#"<c r="{address}""#);
+    let cell = xml
+        .split_once(&marker)
+        .unwrap_or_else(|| panic!("missing worksheet cell {address}"))
+        .1;
+    let (attributes, cell) = cell.split_once('>').unwrap();
+    let cell = cell.split_once("</c>").unwrap().0;
+    let value = cell
+        .split_once("<v>")
+        .and_then(|(_, tail)| tail.split_once("</v>"))
+        .map(|(value, _)| value)
+        .unwrap_or_else(|| panic!("missing worksheet value {address}"));
+    (attributes.contains(r#"t="s""#), value)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CrossViewerObservation {

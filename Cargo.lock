@@ -696,6 +696,8 @@ dependencies = [
  "oxml-media",
  "oxml-opc",
  "oxml-pdf",
+ "oxml-sml",
+ "rpptx-chart",
  "rpptx-layout",
  "rpptx-oxml",
  "rpptx-render",
