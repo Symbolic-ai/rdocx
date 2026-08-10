@@ -10,10 +10,10 @@ use oxml_core::xml::{local_name, matches_local_name};
 use oxml_core::xml_text::{decode_plain, resolve_entity};
 use oxml_drawing::order::OrderedRawChildren;
 use oxml_drawing::shape_props::{CT_ShapeProperties, ShapePropertiesError};
-use oxml_drawing::text::{CT_TextBody, TextError};
+use oxml_drawing::text::{CT_TextBody, CT_TextCharacterProperties, TextError};
 use oxml_layout::{
-    Color, FillRule, GroupElement, Paint, Path, PathCommand, PathElement, Point, PositionedElement,
-    Rect, Stroke, Transform,
+    Color, FillRule, FontManager, GlyphRun, GroupElement, Paint, Path, PathCommand, PathElement,
+    Point, PositionedElement, Rect, Stroke, Transform,
 };
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
@@ -26,6 +26,11 @@ pub const C_PREFIX: &str = "c";
 pub const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 /// The office-document relationships namespace written on a chart-space root.
 pub const R_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const MAX_CATEGORY_ANNOTATIONS: usize = 16_384;
+const PLOT_MARGIN_LEFT: f64 = 36.0;
+const PLOT_MARGIN_RIGHT: f64 = 12.0;
+const PLOT_MARGIN_TOP: f64 = 12.0;
+const PLOT_MARGIN_BOTTOM: f64 = 28.0;
 
 /// Errors produced while reading or writing the implemented ChartML core.
 #[derive(Debug)]
@@ -115,6 +120,102 @@ pub struct ChartGeometry {
     pub elements: Vec<PositionedElement>,
 }
 
+#[derive(Clone, Debug)]
+struct AxisScale {
+    domain: Domain,
+    ticks: Vec<f64>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AxisMapping {
+    domain: Domain,
+    orientation: Orientation,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct GeometryOptions {
+    category_orientation: Orientation,
+    value: Option<AxisMapping>,
+    scatter_x: Option<AxisMapping>,
+    scatter_y: Option<AxisMapping>,
+}
+
+#[derive(Default)]
+struct ChartAnnotations {
+    gridlines: Vec<PositionedElement>,
+    axis_lines: Vec<PositionedElement>,
+    ticks: Vec<PositionedElement>,
+    labels: Vec<PositionedElement>,
+}
+
+/// Converts one supported typed chart into a labelled backend-neutral group.
+pub fn render_chart(
+    chart: &CT_Chart,
+    bounds: Rect,
+    fonts: &mut FontManager,
+) -> Result<GroupElement> {
+    let plot_bounds = geometry_plot_bounds(bounds)?;
+    let plots = chart.plot_area.plots()?;
+    let plot = plots
+        .first()
+        .ok_or_else(|| ChartError::MissingElement("c:plot".to_owned()))?;
+    plot.validate()?;
+    let axes = chart.plot_area.axes()?;
+    let options = geometry_options(plot, &axes, chart.disp_blanks_as)?;
+    let plot_children = render_plot_geometry(plot, plot_bounds, chart.disp_blanks_as, options)?;
+    if plot_children.is_empty() && !plot_can_render_without_marks(plot) {
+        return Err(ChartError::InvalidValue {
+            element: "c:plotArea".to_owned(),
+            value: "plot has no renderable cached data".to_owned(),
+        });
+    }
+
+    let mut chart_annotations =
+        render_axes_and_labels(plot, &axes, plot_bounds, chart.disp_blanks_as, fonts)?;
+    let mut annotations = Vec::new();
+    render_data_labels(
+        plot,
+        plot_bounds,
+        chart.disp_blanks_as,
+        options,
+        fonts,
+        &mut chart_annotations.labels,
+    )?;
+    render_legend(
+        chart,
+        plot,
+        plot_bounds,
+        fonts,
+        &mut annotations,
+        &mut chart_annotations.labels,
+    )?;
+
+    validate_geometry_coordinates(&chart_annotations.gridlines)?;
+    validate_geometry_coordinates(&plot_children)?;
+    validate_geometry_coordinates(&chart_annotations.axis_lines)?;
+    validate_geometry_coordinates(&chart_annotations.ticks)?;
+    validate_geometry_coordinates(&annotations)?;
+    let mut children = chart_annotations.gridlines;
+    children.push(PositionedElement::Group(GroupElement {
+        transform: Transform::IDENTITY,
+        clip: Some(Path::rect(plot_bounds)),
+        opacity: 1.0,
+        effects: Vec::new(),
+        children: plot_children,
+    }));
+    children.extend(chart_annotations.axis_lines);
+    children.extend(chart_annotations.ticks);
+    children.extend(annotations);
+    children.extend(chart_annotations.labels);
+    Ok(GroupElement {
+        transform: Transform::IDENTITY,
+        clip: None,
+        opacity: 1.0,
+        effects: Vec::new(),
+        children,
+    })
+}
+
 /// Converts one supported typed chart into chart-local backend-neutral paths.
 pub fn render_geometry(chart: &CT_Chart, bounds: Rect) -> Result<ChartGeometry> {
     let plot_bounds = geometry_plot_bounds(bounds)?;
@@ -123,8 +224,13 @@ pub fn render_geometry(chart: &CT_Chart, bounds: Rect) -> Result<ChartGeometry> 
         .first()
         .ok_or_else(|| ChartError::MissingElement("c:plot".to_owned()))?;
     plot.validate()?;
-    let children = render_plot_geometry(plot, plot_bounds, chart.disp_blanks_as)?;
-    if children.is_empty() {
+    let children = render_plot_geometry(
+        plot,
+        plot_bounds,
+        chart.disp_blanks_as,
+        geometry_options(plot, &[], chart.disp_blanks_as)?,
+    )?;
+    if children.is_empty() && !plot_can_render_without_marks(plot) {
         return Err(ChartError::InvalidValue {
             element: "c:plotArea".to_owned(),
             value: "plot has no renderable cached data".to_owned(),
@@ -143,11 +249,17 @@ pub fn render_geometry(chart: &CT_Chart, bounds: Rect) -> Result<ChartGeometry> 
     })
 }
 
+fn plot_can_render_without_marks(plot: &Plot) -> bool {
+    matches!(
+        plot,
+        Plot::Radar { series, .. }
+            if series
+                .iter()
+                .any(|series| !series.values.values.is_empty())
+    )
+}
+
 fn geometry_plot_bounds(bounds: Rect) -> Result<Rect> {
-    const LEFT: f64 = 36.0;
-    const RIGHT: f64 = 12.0;
-    const TOP: f64 = 12.0;
-    const BOTTOM: f64 = 28.0;
     if ![bounds.x, bounds.y, bounds.width, bounds.height]
         .into_iter()
         .all(f64::is_finite)
@@ -165,10 +277,10 @@ fn geometry_plot_bounds(bounds: Rect) -> Result<Rect> {
         });
     }
     let plot_bounds = Rect {
-        x: bounds.x + LEFT,
-        y: bounds.y + TOP,
-        width: bounds.width - LEFT - RIGHT,
-        height: bounds.height - TOP - BOTTOM,
+        x: bounds.x + PLOT_MARGIN_LEFT,
+        y: bounds.y + PLOT_MARGIN_TOP,
+        width: bounds.width - PLOT_MARGIN_LEFT - PLOT_MARGIN_RIGHT,
+        height: bounds.height - PLOT_MARGIN_TOP - PLOT_MARGIN_BOTTOM,
     };
     if ![
         plot_bounds.x,
@@ -189,6 +301,1557 @@ fn geometry_plot_bounds(bounds: Rect) -> Result<Rect> {
         });
     }
     Ok(plot_bounds)
+}
+
+fn geometry_options(plot: &Plot, axes: &[Axis], blanks: DispBlanksAs) -> Result<GeometryOptions> {
+    let mut options = GeometryOptions::default();
+    if let Some(category_axis) = axes.iter().find(|axis| axis.kind != AxisKind::Value) {
+        options.category_orientation = category_axis.scaling.orientation;
+    }
+
+    if let Plot::Scatter { axis_ids, .. } = plot {
+        let (x_domain, y_domain) = scatter_domains(plot, blanks)?;
+        if let Some(axis) = axes.iter().find(|axis| axis.id == axis_ids[0]) {
+            options.scatter_x = Some(axis_mapping(axis, x_domain)?);
+        }
+        if let Some(axis) = axes.iter().find(|axis| axis.id == axis_ids[1]) {
+            options.scatter_y = Some(axis_mapping(axis, y_domain)?);
+        }
+    } else if let Some(domain) = plot_value_domain(plot, blanks)? {
+        options.value = Some(
+            axes.iter()
+                .find(|axis| axis.kind == AxisKind::Value)
+                .map(|axis| axis_mapping(axis, domain))
+                .transpose()?
+                .unwrap_or(AxisMapping {
+                    domain,
+                    orientation: Orientation::MinMax,
+                }),
+        );
+    }
+    Ok(options)
+}
+
+fn axis_mapping(axis: &Axis, extent: Domain) -> Result<AxisMapping> {
+    if axis.scaling.log_base.is_some() {
+        return Err(ChartError::InvalidValue {
+            element: "c:scaling/c:logBase".to_owned(),
+            value: "native chart rendering currently supports linear axes".to_owned(),
+        });
+    }
+    let scale = nice_number_scale(extent, axis.scaling.minimum, axis.scaling.maximum, 6)?;
+    Ok(AxisMapping {
+        domain: scale.domain,
+        orientation: axis.scaling.orientation,
+    })
+}
+
+fn plot_value_domain(plot: &Plot, blanks: DispBlanksAs) -> Result<Option<Domain>> {
+    let domain = match plot {
+        Plot::Bar {
+            grouping, series, ..
+        } => {
+            let logical = logical_series_values(series)?;
+            let stacked = matches!(grouping, BarGrouping::Stacked | BarGrouping::PercentStacked);
+            let layers =
+                stacked_series_bounds(&logical, stacked, *grouping == BarGrouping::PercentStacked)?;
+            domain_from_layers(&layers)?
+        }
+        Plot::Line {
+            grouping, series, ..
+        } => {
+            let logical = logical_series_values(series)?;
+            if *grouping == Grouping::Standard {
+                let values = if blanks == DispBlanksAs::Zero {
+                    zero_filled_series(&logical, series_category_count(series)?)
+                        .into_iter()
+                        .flat_map(|(_, points)| points.into_iter().map(|(_, value)| value))
+                        .collect::<Vec<_>>()
+                } else {
+                    logical
+                        .into_iter()
+                        .flat_map(|(_, points)| points.into_iter().map(|(_, value)| value))
+                        .collect::<Vec<_>>()
+                };
+                data_domain(&values, false)?
+            } else {
+                let layers =
+                    stacked_series_bounds(&logical, true, *grouping == Grouping::PercentStacked)?;
+                domain_from_layers(&layers)?
+            }
+        }
+        Plot::Area {
+            grouping, series, ..
+        } => {
+            let logical = logical_series_values(series)?;
+            let layers = stacked_series_bounds(
+                &logical,
+                *grouping != Grouping::Standard,
+                *grouping == Grouping::PercentStacked,
+            )?;
+            domain_from_layers(&layers)?
+        }
+        Plot::Radar { series, .. } => {
+            let values = series
+                .iter()
+                .flat_map(|series| series.values.values.iter().copied())
+                .collect::<Vec<_>>();
+            data_domain(&values, true)?
+        }
+        Plot::Pie { .. } | Plot::Doughnut { .. } | Plot::Scatter { .. } => return Ok(None),
+    };
+    Ok(Some(domain))
+}
+
+fn scatter_domains(plot: &Plot, blanks: DispBlanksAs) -> Result<(Domain, Domain)> {
+    let Plot::Scatter { series, .. } = plot else {
+        return Err(ChartError::UnexpectedElement("non-scatter plot".to_owned()));
+    };
+    let mut x_values = Vec::new();
+    let mut y_values = Vec::new();
+    for series in series {
+        for (_, x, y) in scatter_render_points(series, blanks)? {
+            x_values.push(x);
+            y_values.push(y);
+        }
+    }
+    Ok((
+        data_domain(&x_values, false)?,
+        data_domain(&y_values, false)?,
+    ))
+}
+
+fn render_axes_and_labels(
+    plot: &Plot,
+    axes: &[Axis],
+    bounds: Rect,
+    blanks: DispBlanksAs,
+    fonts: &mut FontManager,
+) -> Result<ChartAnnotations> {
+    if matches!(plot, Plot::Radar { .. }) {
+        return render_radar_axes_and_labels(plot, axes, bounds, blanks, fonts);
+    }
+    let mut annotations = ChartAnnotations::default();
+    let series = plot_series(plot);
+    let category_count = if series.is_empty() {
+        1
+    } else {
+        series_category_count(series)?
+    };
+    for axis in axes {
+        if axis.deleted {
+            continue;
+        }
+        axis_line(&mut annotations.axis_lines, bounds, axis.position);
+        if axis.kind == AxisKind::Value {
+            let extent = axis_extent(plot, axis, blanks)?;
+            let scale = nice_number_scale(extent, axis.scaling.minimum, axis.scaling.maximum, 6)?;
+            for tick in &scale.ticks {
+                let coordinate = axis_tick_coordinate(
+                    *tick,
+                    scale.domain,
+                    bounds,
+                    axis.position,
+                    axis.scaling.orientation,
+                )?;
+                if axis.major_gridlines.is_some() {
+                    major_gridline(
+                        &mut annotations.gridlines,
+                        bounds,
+                        axis.position,
+                        coordinate,
+                    );
+                }
+                axis_tick(
+                    &mut annotations.ticks,
+                    bounds,
+                    axis.position,
+                    coordinate,
+                    axis.major_tick_mark,
+                );
+                if axis.tick_label_position != TickLabelPosition::None {
+                    let text = format_axis_value(axis.number_format.as_ref(), *tick)?;
+                    let origin = tick_label_origin(
+                        bounds,
+                        axis.position,
+                        axis.tick_label_position,
+                        coordinate,
+                    );
+                    annotations
+                        .labels
+                        .push(PositionedElement::Text(shape_label_with_properties(
+                            fonts,
+                            &text,
+                            origin,
+                            axis.tx_pr.as_ref(),
+                        )?));
+                }
+            }
+        } else {
+            let count = category_count;
+            if count > MAX_CATEGORY_ANNOTATIONS {
+                return Err(ChartError::InvalidValue {
+                    element: "c:catAx annotations".to_owned(),
+                    value: format!(
+                        "logical category count {count} exceeds {MAX_CATEGORY_ANNOTATIONS}"
+                    ),
+                });
+            }
+            let category_labels: BTreeMap<_, _> =
+                if axis.tick_label_position != TickLabelPosition::None {
+                    series
+                        .first()
+                        .map(|series| series_categories(series, axis.number_format.as_ref()))
+                        .transpose()?
+                        .unwrap_or_default()
+                        .into_iter()
+                        .collect()
+                } else {
+                    BTreeMap::new()
+                };
+            for logical_index in 0..count {
+                let index = oriented_category_index(logical_index, count, axis.scaling.orientation);
+                let fraction = (index as f64 + 0.5) / count as f64;
+                let coordinate =
+                    if matches!(axis.position, AxisPosition::Bottom | AxisPosition::Top) {
+                        bounds.x + fraction * bounds.width
+                    } else {
+                        bounds.y + fraction * bounds.height
+                    };
+                if axis.major_gridlines.is_some() {
+                    major_gridline(
+                        &mut annotations.gridlines,
+                        bounds,
+                        axis.position,
+                        coordinate,
+                    );
+                }
+                axis_tick(
+                    &mut annotations.ticks,
+                    bounds,
+                    axis.position,
+                    coordinate,
+                    axis.major_tick_mark,
+                );
+                if axis.tick_label_position != TickLabelPosition::None
+                    && let Some(text) = category_labels.get(&logical_index)
+                {
+                    let origin = tick_label_origin(
+                        bounds,
+                        axis.position,
+                        axis.tick_label_position,
+                        coordinate,
+                    );
+                    annotations
+                        .labels
+                        .push(PositionedElement::Text(shape_label_with_properties(
+                            fonts,
+                            text,
+                            origin,
+                            axis.tx_pr.as_ref(),
+                        )?));
+                }
+            }
+        }
+    }
+    Ok(annotations)
+}
+
+fn render_radar_axes_and_labels(
+    plot: &Plot,
+    axes: &[Axis],
+    bounds: Rect,
+    blanks: DispBlanksAs,
+    fonts: &mut FontManager,
+) -> Result<ChartAnnotations> {
+    let mut annotations = ChartAnnotations::default();
+    let series = plot_series(plot);
+    let count = series_category_count(series)?;
+    if count > MAX_CATEGORY_ANNOTATIONS {
+        return Err(ChartError::InvalidValue {
+            element: "c:radarChart annotations".to_owned(),
+            value: format!("logical category count {count} exceeds {MAX_CATEGORY_ANNOTATIONS}"),
+        });
+    }
+    let center = Point {
+        x: bounds.x + bounds.width / 2.0,
+        y: bounds.y + bounds.height / 2.0,
+    };
+    let radius = bounds.width.min(bounds.height) / 2.0;
+    for axis in axes {
+        if axis.deleted {
+            continue;
+        }
+        if axis.kind == AxisKind::Value {
+            let scale = nice_number_scale(
+                axis_extent(plot, axis, blanks)?,
+                axis.scaling.minimum,
+                axis.scaling.maximum,
+                6,
+            )?;
+            annotations.axis_lines.push(stroked_segment(
+                center,
+                radial_point(center, radius, 0, count),
+                Color::BLACK,
+                1.0,
+            ));
+            for tick in &scale.ticks {
+                let distance =
+                    normalized_value_oriented(*tick, scale.domain, axis.scaling.orientation)?
+                        * radius;
+                if axis.major_gridlines.is_some() && distance > 0.0 {
+                    let points: Vec<_> = (0..count)
+                        .map(|index| radial_point(center, distance, index, count))
+                        .collect();
+                    annotations
+                        .gridlines
+                        .push(PositionedElement::Path(PathElement {
+                            path: polyline_path(&points, true),
+                            fill: None,
+                            stroke: Some(Stroke::new(
+                                Paint::Solid(Color {
+                                    r: 0.82,
+                                    g: 0.82,
+                                    b: 0.82,
+                                    a: 1.0,
+                                }),
+                                0.5,
+                            )),
+                        }));
+                }
+                radar_value_tick(
+                    &mut annotations.ticks,
+                    center,
+                    distance,
+                    axis.major_tick_mark,
+                );
+                let origin = match axis.tick_label_position {
+                    TickLabelPosition::High => Some(Point {
+                        x: center.x + radius + 4.0,
+                        y: center.y - distance + 3.0,
+                    }),
+                    TickLabelPosition::Low => Some(Point {
+                        x: center.x - radius - 30.0,
+                        y: center.y - distance + 3.0,
+                    }),
+                    TickLabelPosition::NextTo => Some(Point {
+                        x: center.x + 4.0,
+                        y: center.y - distance + 3.0,
+                    }),
+                    TickLabelPosition::None => None,
+                };
+                if let Some(origin) = origin {
+                    let text = format_axis_value(axis.number_format.as_ref(), *tick)?;
+                    annotations
+                        .labels
+                        .push(PositionedElement::Text(shape_label_with_properties(
+                            fonts,
+                            &text,
+                            origin,
+                            axis.tx_pr.as_ref(),
+                        )?));
+                }
+            }
+        } else {
+            let category_labels: BTreeMap<_, _> =
+                if axis.tick_label_position != TickLabelPosition::None {
+                    series
+                        .first()
+                        .map(|series| series_categories(series, axis.number_format.as_ref()))
+                        .transpose()?
+                        .unwrap_or_default()
+                        .into_iter()
+                        .collect()
+                } else {
+                    BTreeMap::new()
+                };
+            for logical_index in 0..count {
+                let index = oriented_category_index(logical_index, count, axis.scaling.orientation);
+                let end = radial_point(center, radius, index, count);
+                annotations
+                    .axis_lines
+                    .push(stroked_segment(center, end, Color::BLACK, 1.0));
+                radar_category_tick(
+                    &mut annotations.ticks,
+                    center,
+                    radius,
+                    index,
+                    count,
+                    axis.major_tick_mark,
+                );
+                if let Some(text) = category_labels.get(&logical_index) {
+                    let Some(origin) = radar_category_label_origin(
+                        bounds,
+                        center,
+                        radius,
+                        index,
+                        count,
+                        axis.tick_label_position,
+                    ) else {
+                        continue;
+                    };
+                    annotations
+                        .labels
+                        .push(PositionedElement::Text(shape_label_with_properties(
+                            fonts,
+                            text,
+                            origin,
+                            axis.tx_pr.as_ref(),
+                        )?));
+                }
+            }
+        }
+    }
+    Ok(annotations)
+}
+
+fn radar_category_label_origin(
+    bounds: Rect,
+    center: Point,
+    radius: f64,
+    index: usize,
+    count: usize,
+    position: TickLabelPosition,
+) -> Option<Point> {
+    let label_radius = match position {
+        TickLabelPosition::High => radius + 18.0,
+        TickLabelPosition::Low => (radius - 10.0).max(0.0),
+        TickLabelPosition::NextTo => radius + 10.0,
+        TickLabelPosition::None => return None,
+    };
+    let label = radial_point(center, label_radius, index, count);
+    let mut origin = Point {
+        x: label.x - 4.0,
+        y: label.y + 3.0,
+    };
+    if position == TickLabelPosition::High {
+        origin.x = origin.x.clamp(
+            bounds.x - PLOT_MARGIN_LEFT,
+            bounds.x + bounds.width + PLOT_MARGIN_RIGHT,
+        );
+        origin.y = origin.y.clamp(
+            bounds.y - PLOT_MARGIN_TOP,
+            bounds.y + bounds.height + PLOT_MARGIN_BOTTOM,
+        );
+    }
+    Some(origin)
+}
+
+fn radar_value_tick(
+    elements: &mut Vec<PositionedElement>,
+    center: Point,
+    distance: f64,
+    mark: TickMark,
+) {
+    let (left, right) = match mark {
+        TickMark::None => return,
+        TickMark::Inside => (4.0, 0.0),
+        TickMark::Outside => (0.0, 4.0),
+        TickMark::Cross => (2.0, 2.0),
+    };
+    let y = center.y - distance;
+    elements.push(stroked_segment(
+        Point {
+            x: center.x - left,
+            y,
+        },
+        Point {
+            x: center.x + right,
+            y,
+        },
+        Color::BLACK,
+        1.0,
+    ));
+}
+
+fn radar_category_tick(
+    elements: &mut Vec<PositionedElement>,
+    center: Point,
+    radius: f64,
+    index: usize,
+    count: usize,
+    mark: TickMark,
+) {
+    let (inside, outside) = match mark {
+        TickMark::None => return,
+        TickMark::Inside => (4.0, 0.0),
+        TickMark::Outside => (0.0, 4.0),
+        TickMark::Cross => (2.0, 2.0),
+    };
+    elements.push(stroked_segment(
+        radial_point(center, radius - inside, index, count),
+        radial_point(center, radius + outside, index, count),
+        Color::BLACK,
+        1.0,
+    ));
+}
+
+fn axis_extent(plot: &Plot, axis: &Axis, blanks: DispBlanksAs) -> Result<Domain> {
+    if let Plot::Scatter { axis_ids, .. } = plot {
+        let (x, y) = scatter_domains(plot, blanks)?;
+        return Ok(if axis.id == axis_ids[0] { x } else { y });
+    }
+    plot_value_domain(plot, blanks)?.ok_or_else(|| ChartError::InvalidValue {
+        element: "chart axis".to_owned(),
+        value: "axis-free plot supplied an axis".to_owned(),
+    })
+}
+
+fn axis_tick_coordinate(
+    value: f64,
+    domain: Domain,
+    bounds: Rect,
+    position: AxisPosition,
+    orientation: Orientation,
+) -> Result<f64> {
+    if matches!(position, AxisPosition::Bottom | AxisPosition::Top) {
+        map_x_oriented(value, domain, bounds, orientation)
+    } else {
+        map_y_oriented(value, domain, bounds, orientation)
+    }
+}
+
+fn axis_line(elements: &mut Vec<PositionedElement>, bounds: Rect, position: AxisPosition) {
+    let (start, end) = match position {
+        AxisPosition::Bottom => (
+            Point {
+                x: bounds.x,
+                y: bounds.y + bounds.height,
+            },
+            Point {
+                x: bounds.x + bounds.width,
+                y: bounds.y + bounds.height,
+            },
+        ),
+        AxisPosition::Top => (
+            Point {
+                x: bounds.x,
+                y: bounds.y,
+            },
+            Point {
+                x: bounds.x + bounds.width,
+                y: bounds.y,
+            },
+        ),
+        AxisPosition::Left => (
+            Point {
+                x: bounds.x,
+                y: bounds.y,
+            },
+            Point {
+                x: bounds.x,
+                y: bounds.y + bounds.height,
+            },
+        ),
+        AxisPosition::Right => (
+            Point {
+                x: bounds.x + bounds.width,
+                y: bounds.y,
+            },
+            Point {
+                x: bounds.x + bounds.width,
+                y: bounds.y + bounds.height,
+            },
+        ),
+    };
+    elements.push(stroked_segment(start, end, Color::BLACK, 1.0));
+}
+
+fn major_gridline(
+    elements: &mut Vec<PositionedElement>,
+    bounds: Rect,
+    position: AxisPosition,
+    coordinate: f64,
+) {
+    let (start, end) = if matches!(position, AxisPosition::Bottom | AxisPosition::Top) {
+        (
+            Point {
+                x: coordinate,
+                y: bounds.y,
+            },
+            Point {
+                x: coordinate,
+                y: bounds.y + bounds.height,
+            },
+        )
+    } else {
+        (
+            Point {
+                x: bounds.x,
+                y: coordinate,
+            },
+            Point {
+                x: bounds.x + bounds.width,
+                y: coordinate,
+            },
+        )
+    };
+    elements.push(stroked_segment(
+        start,
+        end,
+        Color {
+            r: 0.82,
+            g: 0.82,
+            b: 0.82,
+            a: 1.0,
+        },
+        0.5,
+    ));
+}
+
+fn axis_tick(
+    elements: &mut Vec<PositionedElement>,
+    bounds: Rect,
+    position: AxisPosition,
+    coordinate: f64,
+    mark: TickMark,
+) {
+    let (inside, outside) = match mark {
+        TickMark::None => return,
+        TickMark::Inside => (4.0, 0.0),
+        TickMark::Outside => (0.0, 4.0),
+        TickMark::Cross => (2.0, 2.0),
+    };
+    let (start, end) = match position {
+        AxisPosition::Bottom => (
+            Point {
+                x: coordinate,
+                y: bounds.y + bounds.height - inside,
+            },
+            Point {
+                x: coordinate,
+                y: bounds.y + bounds.height + outside,
+            },
+        ),
+        AxisPosition::Top => (
+            Point {
+                x: coordinate,
+                y: bounds.y + inside,
+            },
+            Point {
+                x: coordinate,
+                y: bounds.y - outside,
+            },
+        ),
+        AxisPosition::Left => (
+            Point {
+                x: bounds.x + inside,
+                y: coordinate,
+            },
+            Point {
+                x: bounds.x - outside,
+                y: coordinate,
+            },
+        ),
+        AxisPosition::Right => (
+            Point {
+                x: bounds.x + bounds.width - inside,
+                y: coordinate,
+            },
+            Point {
+                x: bounds.x + bounds.width + outside,
+                y: coordinate,
+            },
+        ),
+    };
+    elements.push(stroked_segment(start, end, Color::BLACK, 1.0));
+}
+
+fn tick_label_origin(
+    bounds: Rect,
+    axis_position: AxisPosition,
+    label_position: TickLabelPosition,
+    coordinate: f64,
+) -> Point {
+    let side = match label_position {
+        TickLabelPosition::NextTo => axis_position,
+        TickLabelPosition::High => {
+            if matches!(axis_position, AxisPosition::Bottom | AxisPosition::Top) {
+                AxisPosition::Top
+            } else {
+                AxisPosition::Right
+            }
+        }
+        TickLabelPosition::Low => {
+            if matches!(axis_position, AxisPosition::Bottom | AxisPosition::Top) {
+                AxisPosition::Bottom
+            } else {
+                AxisPosition::Left
+            }
+        }
+        TickLabelPosition::None => axis_position,
+    };
+    match side {
+        AxisPosition::Bottom => Point {
+            x: coordinate - 4.0,
+            y: bounds.y + bounds.height + 12.0,
+        },
+        AxisPosition::Top => Point {
+            x: coordinate - 4.0,
+            y: bounds.y - 4.0,
+        },
+        AxisPosition::Left => Point {
+            x: bounds.x - 30.0,
+            y: coordinate + 3.0,
+        },
+        AxisPosition::Right => Point {
+            x: bounds.x + bounds.width + 4.0,
+            y: coordinate + 3.0,
+        },
+    }
+}
+
+fn format_axis_value(format: Option<&NumberFormat>, value: f64) -> Result<String> {
+    if let Some(format) = format {
+        format.format_value(value)
+    } else {
+        NumberFormat::new("General".to_owned(), false)?.format_value(value)
+    }
+}
+
+fn shape_label(fonts: &mut FontManager, text: &str, origin: Point) -> Result<GlyphRun> {
+    shape_label_with_properties(fonts, text, origin, None)
+}
+
+fn shape_label_with_properties(
+    fonts: &mut FontManager,
+    text: &str,
+    origin: Point,
+    properties: Option<&CT_TextBody>,
+) -> Result<GlyphRun> {
+    const FAMILY: &str = "Carlito";
+    const SIZE: f64 = 9.0;
+    let properties = properties.and_then(chart_text_properties);
+    let family = properties
+        .and_then(|properties| properties.latin.as_ref())
+        .map(|font| font.typeface.as_str())
+        .unwrap_or(FAMILY);
+    let size = properties
+        .and_then(|properties| properties.font_size)
+        .map(|size| f64::from(size) / 100.0)
+        .unwrap_or(SIZE);
+    let bold = properties
+        .and_then(|properties| properties.bold)
+        .unwrap_or(false);
+    let italic = properties
+        .and_then(|properties| properties.italic)
+        .unwrap_or(false);
+    let font_id = fonts
+        .resolve_font_for_text(Some(family), bold, italic, text)
+        .map_err(|error| ChartError::InvalidValue {
+            element: "chart label font".to_owned(),
+            value: error.to_string(),
+        })?;
+    let shaped =
+        fonts
+            .shape_text(font_id, text, size)
+            .map_err(|error| ChartError::InvalidValue {
+                element: "chart label shaping".to_owned(),
+                value: error.to_string(),
+            })?;
+    Ok(GlyphRun {
+        origin,
+        font_id,
+        font_size: size,
+        glyph_ids: shaped.glyph_ids,
+        advances: shaped.advances,
+        text: text.to_owned(),
+        color: Color::BLACK,
+        bold,
+        italic,
+        field_kind: None,
+        footnote_id: None,
+    })
+}
+
+fn chart_text_properties(body: &CT_TextBody) -> Option<&CT_TextCharacterProperties> {
+    body.paragraphs()
+        .first()
+        .and_then(|paragraph| paragraph.properties.as_ref())
+        .and_then(|properties| properties.default_run_properties.as_ref())
+}
+
+fn stroked_segment(start: Point, end: Point, color: Color, width: f64) -> PositionedElement {
+    PositionedElement::Path(PathElement {
+        path: Path {
+            commands: vec![PathCommand::MoveTo(start), PathCommand::LineTo(end)],
+            fill_rule: FillRule::NonZero,
+        },
+        fill: None,
+        stroke: Some(Stroke::new(Paint::Solid(color), width)),
+    })
+}
+
+fn plot_series(plot: &Plot) -> &[Series] {
+    match plot {
+        Plot::Bar { series, .. }
+        | Plot::Line { series, .. }
+        | Plot::Pie { series, .. }
+        | Plot::Doughnut { series, .. }
+        | Plot::Area { series, .. }
+        | Plot::Scatter { series, .. }
+        | Plot::Radar { series, .. } => series,
+    }
+}
+
+fn plot_data_labels(plot: &Plot) -> Option<&CT_DLbls> {
+    match plot {
+        Plot::Bar { data_labels, .. }
+        | Plot::Line { data_labels, .. }
+        | Plot::Pie { data_labels, .. }
+        | Plot::Doughnut { data_labels, .. }
+        | Plot::Area { data_labels, .. }
+        | Plot::Scatter { data_labels, .. }
+        | Plot::Radar { data_labels, .. } => data_labels.as_ref(),
+    }
+}
+
+fn series_categories(
+    series: &Series,
+    number_format: Option<&NumberFormat>,
+) -> Result<Vec<(usize, String)>> {
+    let Some(categories) = &series.categories else {
+        return Ok(Vec::new());
+    };
+    match categories {
+        AxisData::String(data) => {
+            let (_, indexes) = cache_layout(&data.markup, data.values.len())?;
+            indexes
+                .into_iter()
+                .zip(&data.values)
+                .map(|(index, value)| {
+                    usize::try_from(index)
+                        .map(|index| (index, value.clone()))
+                        .map_err(|_| ChartError::InvalidValue {
+                            element: "c:cat/c:pt/@idx".to_owned(),
+                            value: index.to_string(),
+                        })
+                })
+                .collect()
+        }
+        AxisData::Numeric(data) => {
+            let (_, indexes) = cache_layout(&data.markup, data.values.len())?;
+            let cache_format;
+            let format = if let Some(format) = number_format {
+                format
+            } else {
+                cache_format = NumberFormat::new(data.format_code.clone(), false)?;
+                &cache_format
+            };
+            indexes
+                .into_iter()
+                .zip(&data.values)
+                .map(|(index, value)| {
+                    let index = usize::try_from(index).map_err(|_| ChartError::InvalidValue {
+                        element: "c:cat/c:pt/@idx".to_owned(),
+                        value: index.to_string(),
+                    })?;
+                    let text = format.format_value(*value)?;
+                    Ok((index, text))
+                })
+                .collect()
+        }
+    }
+}
+
+fn series_name(series: &Series, index: usize) -> String {
+    series
+        .name
+        .as_ref()
+        .and_then(|name| name.values.first())
+        .cloned()
+        .unwrap_or_else(|| format!("Series {}", index + 1))
+}
+
+fn render_data_labels(
+    plot: &Plot,
+    bounds: Rect,
+    blanks: DispBlanksAs,
+    options: GeometryOptions,
+    fonts: &mut FontManager,
+    elements: &mut Vec<PositionedElement>,
+) -> Result<()> {
+    let plot_labels = plot_data_labels(plot);
+    let anchors = plot_label_anchors(plot, bounds, blanks, options)?;
+    for (series_index, series) in plot_series(plot).iter().enumerate() {
+        let Some(labels) = series.data_labels.as_ref().or(plot_labels) else {
+            continue;
+        };
+        let overrides = point_label_overrides(labels)?;
+        let mut categories = None;
+        let mut bubble_sizes = None;
+        let (_, values) = logical_numeric_values(&series.values)?;
+        let mut percentage_total = None;
+        for (logical_index, value) in values {
+            let point_override = overrides.get(&logical_index);
+            if point_override.is_some_and(|point| point.deleted == Some(true)) {
+                continue;
+            }
+            let effective_labels = point_override
+                .map(|point| point.apply_to(labels))
+                .unwrap_or_else(|| labels.clone());
+            let labels = &effective_labels;
+            let Some(anchor) = anchors.get(&(series_index, logical_index)).copied() else {
+                continue;
+            };
+            let mut fields = Vec::new();
+            if labels.show_series_name {
+                fields.push(series_name(series, series_index));
+            }
+            if labels.show_category_name {
+                if categories.is_none() {
+                    categories = Some(
+                        series_categories(series, None)?
+                            .into_iter()
+                            .collect::<BTreeMap<_, _>>(),
+                    );
+                }
+                if let Some(category) = categories
+                    .as_ref()
+                    .and_then(|categories| categories.get(&logical_index))
+                {
+                    fields.push(category.clone());
+                }
+            }
+            if labels.show_value {
+                fields.push(format_axis_value(labels.number_format.as_ref(), value)?);
+            }
+            if labels.show_percent {
+                let total = if let Some(total) = percentage_total {
+                    total
+                } else {
+                    let total = series
+                        .values
+                        .values
+                        .iter()
+                        .copied()
+                        .filter(|value| *value > 0.0)
+                        .try_fold(0.0, |total, value| {
+                            checked_geometry_sum(total, value, "data-label percentage total")
+                        })?;
+                    percentage_total = Some(total);
+                    total
+                };
+                if total > 0.0 {
+                    let text = if let Some(format) = &labels.number_format {
+                        format.format_value(value / total)?
+                    } else {
+                        NumberFormat::new("0%".to_owned(), false)?.format_value(value / total)?
+                    };
+                    fields.push(text);
+                }
+            }
+            if labels.show_bubble_size {
+                if bubble_sizes.is_none() {
+                    bubble_sizes = Some(
+                        series
+                            .bubble_size
+                            .as_ref()
+                            .map(logical_numeric_values)
+                            .transpose()?
+                            .map(|(_, values)| values.into_iter().collect::<BTreeMap<_, _>>())
+                            .unwrap_or_default(),
+                    );
+                }
+                if let Some(value) = bubble_sizes
+                    .as_ref()
+                    .and_then(|sizes| sizes.get(&logical_index))
+                {
+                    fields.push(format_axis_value(labels.number_format.as_ref(), *value)?);
+                }
+            }
+            if fields.is_empty() {
+                continue;
+            }
+            let separator = labels.separator.as_deref().unwrap_or(", ");
+            let text = fields.join(separator);
+            let origin = anchor.origin(labels.position);
+            elements.push(PositionedElement::Text(shape_label(fonts, &text, origin)?));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, Default)]
+struct PointLabelOverride {
+    index: Option<usize>,
+    deleted: Option<bool>,
+    number_format: Option<NumberFormat>,
+    position: Option<DataLabelPosition>,
+    separator: Option<String>,
+    show_legend_key: Option<bool>,
+    show_value: Option<bool>,
+    show_category_name: Option<bool>,
+    show_series_name: Option<bool>,
+    show_percent: Option<bool>,
+    show_bubble_size: Option<bool>,
+}
+
+impl PointLabelOverride {
+    fn apply_to(&self, labels: &CT_DLbls) -> CT_DLbls {
+        let mut effective = labels.clone();
+        if let Some(value) = &self.number_format {
+            effective.number_format = Some(value.clone());
+        }
+        if let Some(value) = self.position {
+            effective.position = Some(value);
+        }
+        if let Some(value) = &self.separator {
+            effective.separator = Some(value.clone());
+        }
+        if let Some(value) = self.show_legend_key {
+            effective.show_legend_key = value;
+        }
+        if let Some(value) = self.show_value {
+            effective.show_value = value;
+        }
+        if let Some(value) = self.show_category_name {
+            effective.show_category_name = value;
+        }
+        if let Some(value) = self.show_series_name {
+            effective.show_series_name = value;
+        }
+        if let Some(value) = self.show_percent {
+            effective.show_percent = value;
+        }
+        if let Some(value) = self.show_bubble_size {
+            effective.show_bubble_size = value;
+        }
+        effective
+    }
+}
+
+fn point_label_overrides(labels: &CT_DLbls) -> Result<BTreeMap<usize, PointLabelOverride>> {
+    let mut namespaces = chart_namespace_defaults();
+    for (name, namespace) in &labels.namespace_declarations {
+        let prefix = if name == "xmlns" {
+            Vec::new()
+        } else if let Some(prefix) = name.strip_prefix("xmlns:") {
+            prefix.as_bytes().to_vec()
+        } else {
+            continue;
+        };
+        upsert_namespace_binding(&mut namespaces, prefix, namespace.clone());
+    }
+    let mut overrides = BTreeMap::new();
+    for raw in labels.raw_children.at(0) {
+        if chart_root_local(raw, &namespaces)?.as_deref() != Some(b"dLbl") {
+            continue;
+        }
+        let point = parse_point_label_override(raw, &namespaces)?;
+        let index = point
+            .index
+            .ok_or_else(|| ChartError::MissingElement("c:dLbl/c:idx".to_owned()))?;
+        if overrides.insert(index, point).is_some() {
+            return Err(ChartError::DuplicateElement(format!(
+                "c:dLbl[c:idx={index}]"
+            )));
+        }
+    }
+    Ok(overrides)
+}
+
+fn parse_point_label_override(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+) -> Result<PointLabelOverride> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut namespaces = None;
+    let mut state = PointLabelOverride::default();
+    let mut order = 0;
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(OxmlError::from)?
+        {
+            Event::Start(element) if namespaces.is_none() => {
+                if !matches_local_name(element.name().as_ref(), b"dLbl")
+                    || !element_is_in_namespace(&element, C_NS, inherited)?
+                {
+                    return Err(ChartError::UnexpectedElement(element_name(&element)));
+                }
+                namespaces = Some(chart_bindings(inherited, &element)?);
+            }
+            Event::Start(element) => {
+                let bindings = namespaces
+                    .as_ref()
+                    .ok_or_else(|| ChartError::UnexpectedElement(element_name(&element)))?;
+                let name = chart_child_local(&element, bindings)?;
+                let raw = capture_element(&mut reader, &element)?;
+                parse_point_label_child(&mut state, name.as_deref(), &raw, bindings, &mut order)?;
+            }
+            Event::Empty(element) => {
+                let bindings = namespaces
+                    .as_ref()
+                    .ok_or_else(|| ChartError::UnexpectedElement(element_name(&element)))?;
+                let name = chart_child_local(&element, bindings)?;
+                let raw = capture_empty_element(&element)?;
+                parse_point_label_child(&mut state, name.as_deref(), &raw, bindings, &mut order)?;
+            }
+            Event::End(element) if matches_local_name(element.name().as_ref(), b"dLbl") => {
+                if state.index.is_none() {
+                    return Err(ChartError::MissingElement("c:dLbl/c:idx".to_owned()));
+                }
+                return Ok(state);
+            }
+            Event::Eof => return Err(missing_end("c:dLbl")),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn parse_point_label_child(
+    state: &mut PointLabelOverride,
+    name: Option<&[u8]>,
+    raw: &[u8],
+    namespaces: &NamespaceBindings,
+    order: &mut usize,
+) -> Result<()> {
+    let Some(name) = name else {
+        return Ok(());
+    };
+    let rank = match name {
+        b"idx" => 0,
+        b"delete" => 1,
+        b"layout" => 2,
+        b"tx" => 3,
+        b"numFmt" => 4,
+        b"spPr" => 5,
+        b"txPr" => 6,
+        b"dLblPos" => 7,
+        b"showLegendKey" => 8,
+        b"showVal" => 9,
+        b"showCatName" => 10,
+        b"showSerName" => 11,
+        b"showPercent" => 12,
+        b"showBubbleSize" => 13,
+        b"separator" => 14,
+        b"showLeaderLines" => 15,
+        b"leaderLines" => 16,
+        b"extLst" => 17,
+        _ => return Ok(()),
+    };
+    if rank < *order {
+        return Err(ChartError::InvalidValue {
+            element: "c:dLbl".to_owned(),
+            value: format!("c:{} is out of schema order", String::from_utf8_lossy(name)),
+        });
+    }
+    *order = rank;
+    match name {
+        b"idx" => {
+            let (index, _) = parse_u32_scalar(raw, "idx")?;
+            let index = usize::try_from(index).map_err(|_| ChartError::InvalidValue {
+                element: "c:dLbl/c:idx".to_owned(),
+                value: index.to_string(),
+            })?;
+            set_once(&mut state.index, index, "c:dLbl/c:idx")?;
+        }
+        b"delete" => set_once(
+            &mut state.deleted,
+            parse_bool_value(raw, "delete")?.0,
+            "c:dLbl/c:delete",
+        )?,
+        b"numFmt" => set_once(
+            &mut state.number_format,
+            NumberFormat::from_xml(raw)?,
+            "c:dLbl/c:numFmt",
+        )?,
+        b"dLblPos" => {
+            let (value, _) = scalar_value(raw, "dLblPos")?;
+            let value =
+                value.ok_or_else(|| invalid_attribute("dLblPos", "val", "<missing>".to_owned()))?;
+            let position = DataLabelPosition::parse(&value)
+                .ok_or_else(|| invalid_attribute("dLblPos", "val", value))?;
+            set_once(&mut state.position, position, "c:dLbl/c:dLblPos")?;
+        }
+        b"showLegendKey" => set_once(
+            &mut state.show_legend_key,
+            parse_bool_value(raw, "showLegendKey")?.0,
+            "c:dLbl/c:showLegendKey",
+        )?,
+        b"showVal" => set_once(
+            &mut state.show_value,
+            parse_bool_value(raw, "showVal")?.0,
+            "c:dLbl/c:showVal",
+        )?,
+        b"showCatName" => set_once(
+            &mut state.show_category_name,
+            parse_bool_value(raw, "showCatName")?.0,
+            "c:dLbl/c:showCatName",
+        )?,
+        b"showSerName" => set_once(
+            &mut state.show_series_name,
+            parse_bool_value(raw, "showSerName")?.0,
+            "c:dLbl/c:showSerName",
+        )?,
+        b"showPercent" => set_once(
+            &mut state.show_percent,
+            parse_bool_value(raw, "showPercent")?.0,
+            "c:dLbl/c:showPercent",
+        )?,
+        b"showBubbleSize" => set_once(
+            &mut state.show_bubble_size,
+            parse_bool_value(raw, "showBubbleSize")?.0,
+            "c:dLbl/c:showBubbleSize",
+        )?,
+        b"separator" => set_once(
+            &mut state.separator,
+            parse_text_element(raw, b"separator", namespaces)?.0,
+            "c:dLbl/c:separator",
+        )?,
+        _ => {}
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LabelAnchor {
+    center: Point,
+    base: Point,
+    end: Point,
+    direction: Point,
+}
+
+impl LabelAnchor {
+    const fn point(center: Point) -> Self {
+        Self {
+            center,
+            base: center,
+            end: center,
+            direction: Point { x: 0.0, y: 0.0 },
+        }
+    }
+
+    const fn segment(center: Point, base: Point, end: Point) -> Self {
+        Self {
+            center,
+            base,
+            end,
+            direction: Point {
+                x: end.x - base.x,
+                y: end.y - base.y,
+            },
+        }
+    }
+
+    const fn directed_segment(center: Point, base: Point, end: Point, direction: Point) -> Self {
+        Self {
+            center,
+            base,
+            end,
+            direction,
+        }
+    }
+
+    fn origin(self, position: Option<DataLabelPosition>) -> Point {
+        let mut origin = self.center;
+        match position.unwrap_or(DataLabelPosition::BestFit) {
+            DataLabelPosition::Bottom => origin.y += 8.0,
+            DataLabelPosition::Top => origin.y -= 5.0,
+            DataLabelPosition::Left => origin.x -= 8.0,
+            DataLabelPosition::Right => origin.x += 8.0,
+            DataLabelPosition::InsideBase => {
+                origin = self.along_segment(self.base, 5.0, true).unwrap_or(Point {
+                    x: origin.x,
+                    y: origin.y + 8.0,
+                });
+            }
+            DataLabelPosition::InsideEnd => {
+                origin = self.along_segment(self.end, -5.0, true).unwrap_or(origin);
+            }
+            DataLabelPosition::OutsideEnd => {
+                origin = self.along_segment(self.end, 5.0, false).unwrap_or(Point {
+                    x: origin.x,
+                    y: origin.y - 5.0,
+                });
+            }
+            DataLabelPosition::BestFit | DataLabelPosition::Center => {}
+        }
+        origin
+    }
+
+    fn along_segment(self, origin: Point, distance: f64, clamp_inside: bool) -> Option<Point> {
+        let dx = self.end.x - self.base.x;
+        let dy = self.end.y - self.base.y;
+        let length = dx.hypot(dy);
+        let (dx, dy, direction_length) = if length.is_finite() && length > 0.0 {
+            (dx, dy, length)
+        } else {
+            let direction_length = self.direction.x.hypot(self.direction.y);
+            if !direction_length.is_finite() || direction_length == 0.0 {
+                return None;
+            }
+            (self.direction.x, self.direction.y, direction_length)
+        };
+        let distance = if clamp_inside {
+            distance.clamp(-length / 2.0, length / 2.0)
+        } else {
+            distance
+        };
+        Some(Point {
+            x: origin.x + dx / direction_length * distance,
+            y: origin.y + dy / direction_length * distance,
+        })
+    }
+}
+
+fn plot_label_anchors(
+    plot: &Plot,
+    bounds: Rect,
+    blanks: DispBlanksAs,
+    options: GeometryOptions,
+) -> Result<BTreeMap<(usize, usize), LabelAnchor>> {
+    let mut anchors = BTreeMap::new();
+    match plot {
+        Plot::Bar {
+            direction,
+            grouping,
+            gap_width,
+            overlap,
+            series,
+            ..
+        } => {
+            for bar in bar_rectangles(
+                *direction, *grouping, *gap_width, *overlap, series, bounds, options,
+            )? {
+                if !point_in_rect(bar.end, bounds) {
+                    continue;
+                }
+                let visible_base = Point {
+                    x: bar.base.x.clamp(bounds.x, bounds.x + bounds.width),
+                    y: bar.base.y.clamp(bounds.y, bounds.y + bounds.height),
+                };
+                let visible_end = Point {
+                    x: bar.end.x.clamp(bounds.x, bounds.x + bounds.width),
+                    y: bar.end.y.clamp(bounds.y, bounds.y + bounds.height),
+                };
+                anchors.insert(
+                    (bar.series_index, bar.logical_index),
+                    LabelAnchor::directed_segment(
+                        Point {
+                            x: (visible_base.x + visible_end.x) / 2.0,
+                            y: (visible_base.y + visible_end.y) / 2.0,
+                        },
+                        visible_base,
+                        visible_end,
+                        Point {
+                            x: bar.end.x - bar.base.x,
+                            y: bar.end.y - bar.base.y,
+                        },
+                    ),
+                );
+            }
+        }
+        Plot::Line {
+            grouping, series, ..
+        }
+        | Plot::Area {
+            grouping, series, ..
+        } => {
+            for (series_index, points) in
+                category_label_points(*grouping, series, bounds, blanks, options)?
+                    .into_iter()
+                    .enumerate()
+            {
+                for (logical_index, point) in points {
+                    anchors.insert((series_index, logical_index), LabelAnchor::point(point));
+                }
+            }
+        }
+        Plot::Scatter { series, .. } => {
+            let (x_domain, y_domain) = scatter_domains(plot, blanks)?;
+            let x_mapping = options.scatter_x.unwrap_or(AxisMapping {
+                domain: x_domain,
+                orientation: Orientation::MinMax,
+            });
+            let y_mapping = options.scatter_y.unwrap_or(AxisMapping {
+                domain: y_domain,
+                orientation: Orientation::MinMax,
+            });
+            for (series_index, series) in series.iter().enumerate() {
+                let indexed = matched_scatter_points(series)?;
+                let points = scatter_points(
+                    &indexed,
+                    x_mapping.domain,
+                    y_mapping.domain,
+                    bounds,
+                    x_mapping.orientation,
+                    y_mapping.orientation,
+                )?;
+                for ((logical_index, _, _), point) in indexed.into_iter().zip(points) {
+                    anchors.insert((series_index, logical_index), LabelAnchor::point(point));
+                }
+            }
+        }
+        Plot::Radar { series, .. } => {
+            let center = Point {
+                x: bounds.x + bounds.width / 2.0,
+                y: bounds.y + bounds.height / 2.0,
+            };
+            let category_count = series_category_count(series)?;
+            for (series_index, points) in radar_series_points(series, bounds, options)?
+                .into_iter()
+                .enumerate()
+            {
+                for (logical_index, point) in points {
+                    let spoke = radial_point(
+                        center,
+                        1.0,
+                        oriented_category_index(
+                            logical_index,
+                            category_count,
+                            options.category_orientation,
+                        ),
+                        category_count,
+                    );
+                    anchors.insert(
+                        (series_index, logical_index),
+                        LabelAnchor::directed_segment(
+                            point,
+                            center,
+                            point,
+                            Point {
+                                x: spoke.x - center.x,
+                                y: spoke.y - center.y,
+                            },
+                        ),
+                    );
+                }
+            }
+        }
+        Plot::Pie {
+            first_slice_angle,
+            series,
+            ..
+        } => {
+            for slice in pie_slices(*first_slice_angle, None, series, bounds)? {
+                anchors.insert(
+                    (slice.series_index, slice.logical_index),
+                    LabelAnchor::segment(slice.anchor, slice.base, slice.end),
+                );
+            }
+        }
+        Plot::Doughnut {
+            first_slice_angle,
+            hole_size,
+            series,
+            ..
+        } => {
+            for slice in pie_slices(*first_slice_angle, Some(*hole_size), series, bounds)? {
+                anchors.insert(
+                    (slice.series_index, slice.logical_index),
+                    LabelAnchor::segment(slice.anchor, slice.base, slice.end),
+                );
+            }
+        }
+    }
+    anchors.retain(|_, anchor| point_in_rect(anchor.end, bounds));
+    Ok(anchors)
+}
+
+fn category_label_points(
+    grouping: Grouping,
+    series: &[Series],
+    bounds: Rect,
+    blanks: DispBlanksAs,
+    options: GeometryOptions,
+) -> Result<Vec<Vec<(usize, Point)>>> {
+    validate_series_values(series)?;
+    let logical_series = logical_series_values(series)?;
+    let category_count = series_category_count(series)?;
+    let calculated_series = if blanks == DispBlanksAs::Zero {
+        zero_filled_series(&logical_series, category_count)
+    } else {
+        logical_series.clone()
+    };
+    let layers = stacked_series_bounds(
+        &calculated_series,
+        grouping != Grouping::Standard,
+        grouping == Grouping::PercentStacked,
+    )?;
+    let domain = options
+        .value
+        .map(|mapping| mapping.domain)
+        .unwrap_or(domain_from_layers(&layers)?);
+    let value_orientation = options
+        .value
+        .map(|mapping| mapping.orientation)
+        .unwrap_or(Orientation::MinMax);
+    let mut point_series = Vec::with_capacity(layers.len());
+    for (series_index, layer) in layers.iter().enumerate() {
+        let present: BTreeSet<_> = logical_series[series_index]
+            .1
+            .iter()
+            .map(|(index, _)| *index)
+            .collect();
+        let indexed: Vec<_> = layer
+            .iter()
+            .filter(|(index, _, _)| present.contains(index))
+            .map(|(index, _, upper)| (*index, *upper))
+            .collect();
+        let points = category_points(
+            &indexed,
+            category_count,
+            domain,
+            bounds,
+            options.category_orientation,
+            value_orientation,
+        )?;
+        point_series.push(
+            indexed
+                .into_iter()
+                .map(|(index, _)| index)
+                .zip(points)
+                .collect(),
+        );
+    }
+    Ok(point_series)
+}
+
+fn point_in_rect(point: Point, bounds: Rect) -> bool {
+    const EPSILON: f64 = 1.0e-9;
+    point.x >= bounds.x - EPSILON
+        && point.x <= bounds.x + bounds.width + EPSILON
+        && point.y >= bounds.y - EPSILON
+        && point.y <= bounds.y + bounds.height + EPSILON
+}
+
+fn render_legend(
+    chart: &CT_Chart,
+    plot: &Plot,
+    bounds: Rect,
+    fonts: &mut FontManager,
+    paths: &mut Vec<PositionedElement>,
+    labels: &mut Vec<PositionedElement>,
+) -> Result<()> {
+    if chart.legend.is_none() {
+        return Ok(());
+    }
+    let x = bounds.x + bounds.width - 58.0;
+    for (index, series) in plot_series(plot).iter().enumerate() {
+        let y = bounds.y + 6.0 + index as f64 * 13.0;
+        paths.push(filled_path(
+            Path::rect(Rect {
+                x,
+                y,
+                width: 7.0,
+                height: 7.0,
+            }),
+            series_color(index),
+        ));
+        labels.push(PositionedElement::Text(shape_label(
+            fonts,
+            &series_name(series, index),
+            Point {
+                x: x + 10.0,
+                y: y + 7.0,
+            },
+        )?));
+    }
+    Ok(())
 }
 
 fn validate_geometry_coordinates(elements: &[PositionedElement]) -> Result<()> {
@@ -228,6 +1891,7 @@ fn render_plot_geometry(
     plot: &Plot,
     bounds: Rect,
     blanks: DispBlanksAs,
+    options: GeometryOptions,
 ) -> Result<Vec<PositionedElement>> {
     match plot {
         Plot::Bar {
@@ -237,13 +1901,15 @@ fn render_plot_geometry(
             overlap,
             series,
             ..
-        } => render_bar_geometry(*direction, *grouping, *gap_width, *overlap, series, bounds),
+        } => render_bar_geometry(
+            *direction, *grouping, *gap_width, *overlap, series, bounds, options,
+        ),
         Plot::Line {
             grouping,
             marker,
             series,
             ..
-        } => render_line_geometry(*grouping, *marker, series, bounds, blanks),
+        } => render_line_geometry(*grouping, *marker, series, bounds, blanks, options),
         Plot::Pie {
             first_slice_angle,
             series,
@@ -257,11 +1923,11 @@ fn render_plot_geometry(
         } => render_pie_geometry(*first_slice_angle, Some(*hole_size), series, bounds),
         Plot::Area {
             grouping, series, ..
-        } => render_area_geometry(*grouping, series, bounds, blanks),
+        } => render_area_geometry(*grouping, series, bounds, blanks, options),
         Plot::Scatter { style, series, .. } => {
-            render_scatter_geometry(*style, series, bounds, blanks)
+            render_scatter_geometry(*style, series, bounds, blanks, options)
         }
-        Plot::Radar { style, series, .. } => render_radar_geometry(*style, series, bounds),
+        Plot::Radar { style, series, .. } => render_radar_geometry(*style, series, bounds, options),
     }
 }
 
@@ -272,14 +1938,49 @@ fn render_bar_geometry(
     overlap: i8,
     series: &[Series],
     bounds: Rect,
+    options: GeometryOptions,
 ) -> Result<Vec<PositionedElement>> {
+    let bars = bar_rectangles(
+        direction, grouping, gap_width, overlap, series, bounds, options,
+    )?;
+    Ok(bars
+        .into_iter()
+        .map(|bar| filled_path(Path::rect(bar.rect), series_color(bar.series_index)))
+        .collect())
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BarRectangle {
+    series_index: usize,
+    logical_index: usize,
+    rect: Rect,
+    base: Point,
+    end: Point,
+}
+
+fn bar_rectangles(
+    direction: BarDirection,
+    grouping: BarGrouping,
+    gap_width: u16,
+    overlap: i8,
+    series: &[Series],
+    bounds: Rect,
+    options: GeometryOptions,
+) -> Result<Vec<BarRectangle>> {
     validate_series_values(series)?;
     let logical_series = logical_series_values(series)?;
     let category_count = series_category_count(series)?;
     let stacked = matches!(grouping, BarGrouping::Stacked | BarGrouping::PercentStacked);
     let percent = grouping == BarGrouping::PercentStacked;
     let layers = stacked_series_bounds(&logical_series, stacked, percent)?;
-    let domain = domain_from_layers(&layers)?;
+    let domain = options
+        .value
+        .map(|mapping| mapping.domain)
+        .unwrap_or(domain_from_layers(&layers)?);
+    let value_orientation = options
+        .value
+        .map(|mapping| mapping.orientation)
+        .unwrap_or(Orientation::MinMax);
     let category_extent = if direction == BarDirection::Column {
         bounds.width
     } else {
@@ -297,9 +1998,14 @@ fn render_bar_geometry(
         bars_per_cluster as f64 - (bars_per_cluster.saturating_sub(1)) as f64 * overlap_fraction;
     let bar_extent = cluster_extent / divisor;
     let advance = bar_extent * (1.0 - overlap_fraction);
-    let mut elements = Vec::new();
+    let mut bars = Vec::new();
     for (series_index, layer) in layers.iter().enumerate() {
-        for &(category, start, end) in layer {
+        for &(logical_index, start, end) in layer {
+            let category = oriented_category_index(
+                logical_index,
+                category_count,
+                options.category_orientation,
+            );
             let cluster_start = category as f64 / category_count as f64 * category_extent
                 + (slot - cluster_extent) / 2.0;
             let category_start = if stacked {
@@ -307,31 +2013,45 @@ fn render_bar_geometry(
             } else {
                 cluster_start + series_index as f64 * advance
             };
-            let rect = if direction == BarDirection::Column {
-                let y0 = map_y(start, domain, bounds)?;
-                let y1 = map_y(end, domain, bounds)?;
-                Rect {
-                    x: bounds.x + category_start,
-                    y: y0.min(y1),
-                    width: bar_extent,
-                    height: (y1 - y0).abs(),
-                }
+            let (rect, base, end) = if direction == BarDirection::Column {
+                let y0 = map_y_oriented(start, domain, bounds, value_orientation)?;
+                let y1 = map_y_oriented(end, domain, bounds, value_orientation)?;
+                let center_x = bounds.x + category_start + bar_extent / 2.0;
+                (
+                    Rect {
+                        x: bounds.x + category_start,
+                        y: y0.min(y1),
+                        width: bar_extent,
+                        height: (y1 - y0).abs(),
+                    },
+                    Point { x: center_x, y: y0 },
+                    Point { x: center_x, y: y1 },
+                )
             } else {
-                let x0 = map_x(start, domain, bounds)?;
-                let x1 = map_x(end, domain, bounds)?;
-                Rect {
-                    x: x0.min(x1),
-                    y: bounds.y + category_start,
-                    width: (x1 - x0).abs(),
-                    height: bar_extent,
-                }
+                let x0 = map_x_oriented(start, domain, bounds, value_orientation)?;
+                let x1 = map_x_oriented(end, domain, bounds, value_orientation)?;
+                let center_y = bounds.y + category_start + bar_extent / 2.0;
+                (
+                    Rect {
+                        x: x0.min(x1),
+                        y: bounds.y + category_start,
+                        width: (x1 - x0).abs(),
+                        height: bar_extent,
+                    },
+                    Point { x: x0, y: center_y },
+                    Point { x: x1, y: center_y },
+                )
             };
-            if rect.width > 0.0 && rect.height > 0.0 {
-                elements.push(filled_path(Path::rect(rect), series_color(series_index)));
-            }
+            bars.push(BarRectangle {
+                series_index,
+                logical_index,
+                rect,
+                base,
+                end,
+            });
         }
     }
-    Ok(elements)
+    Ok(bars)
 }
 
 fn render_line_geometry(
@@ -340,6 +2060,7 @@ fn render_line_geometry(
     series: &[Series],
     bounds: Rect,
     blanks: DispBlanksAs,
+    options: GeometryOptions,
 ) -> Result<Vec<PositionedElement>> {
     validate_series_values(series)?;
     let logical_series = logical_series_values(series)?;
@@ -352,7 +2073,14 @@ fn render_line_geometry(
     let stacked = grouping != Grouping::Standard;
     let percent = grouping == Grouping::PercentStacked;
     let layers = stacked_series_bounds(&calculated_series, stacked, percent)?;
-    let domain = domain_from_layers(&layers)?;
+    let domain = options
+        .value
+        .map(|mapping| mapping.domain)
+        .unwrap_or(domain_from_layers(&layers)?);
+    let value_orientation = options
+        .value
+        .map(|mapping| mapping.orientation)
+        .unwrap_or(Orientation::MinMax);
     let mut elements = Vec::new();
     for (series_index, layer) in layers.iter().enumerate() {
         let indexed: Vec<_> = layer
@@ -361,7 +2089,14 @@ fn render_line_geometry(
             .collect();
         let indexes: Vec<_> = indexed.iter().map(|(index, _)| *index).collect();
         for (start, end) in contiguous_ranges(&indexes, blanks) {
-            let points = category_points(&indexed[start..end], category_count, domain, bounds)?;
+            let points = category_points(
+                &indexed[start..end],
+                category_count,
+                domain,
+                bounds,
+                options.category_orientation,
+                value_orientation,
+            )?;
             elements.push(stroked_path(
                 polyline_path(&points, false),
                 series_color(series_index),
@@ -378,7 +2113,14 @@ fn render_line_geometry(
                 .copied()
                 .filter(|(index, _)| present.contains(index))
                 .collect();
-            let marker_points = category_points(&marker_values, category_count, domain, bounds)?;
+            let marker_points = category_points(
+                &marker_values,
+                category_count,
+                domain,
+                bounds,
+                options.category_orientation,
+                value_orientation,
+            )?;
             push_markers(&mut elements, &marker_points, series_index);
         }
     }
@@ -390,6 +2132,7 @@ fn render_area_geometry(
     series: &[Series],
     bounds: Rect,
     blanks: DispBlanksAs,
+    options: GeometryOptions,
 ) -> Result<Vec<PositionedElement>> {
     validate_series_values(series)?;
     let logical_series = logical_series_values(series)?;
@@ -402,7 +2145,14 @@ fn render_area_geometry(
     let stacked = grouping != Grouping::Standard;
     let percent = grouping == Grouping::PercentStacked;
     let layers = stacked_series_bounds(&calculated_series, stacked, percent)?;
-    let domain = domain_from_layers(&layers)?;
+    let domain = options
+        .value
+        .map(|mapping| mapping.domain)
+        .unwrap_or(domain_from_layers(&layers)?);
+    let value_orientation = options
+        .value
+        .map(|mapping| mapping.orientation)
+        .unwrap_or(Orientation::MinMax);
     let mut elements = Vec::new();
     for (series_index, layer) in layers.iter().enumerate() {
         let indexes: Vec<_> = layer.iter().map(|(index, _, _)| *index).collect();
@@ -416,8 +2166,22 @@ fn render_area_geometry(
                 .iter()
                 .map(|(index, lower, _)| (*index, *lower))
                 .collect();
-            let top = category_points(&top_values, category_count, domain, bounds)?;
-            let mut bottom = category_points(&lower_values, category_count, domain, bounds)?;
+            let top = category_points(
+                &top_values,
+                category_count,
+                domain,
+                bounds,
+                options.category_orientation,
+                value_orientation,
+            )?;
+            let mut bottom = category_points(
+                &lower_values,
+                category_count,
+                domain,
+                bounds,
+                options.category_orientation,
+                value_orientation,
+            )?;
             bottom.reverse();
             let mut commands = Vec::with_capacity(top.len() + bottom.len() + 2);
             commands.push(PathCommand::MoveTo(top[0]));
@@ -441,6 +2205,7 @@ fn render_scatter_geometry(
     series: &[Series],
     bounds: Rect,
     blanks: DispBlanksAs,
+    options: GeometryOptions,
 ) -> Result<Vec<PositionedElement>> {
     validate_series_values(series)?;
     let mut paired_series = Vec::with_capacity(series.len());
@@ -448,49 +2213,29 @@ fn render_scatter_geometry(
     let mut all_x = Vec::new();
     let mut all_y = Vec::new();
     for item in series {
-        let Some(AxisData::Numeric(x_values)) = &item.categories else {
-            return Err(ChartError::InvalidValue {
-                element: "c:xVal".to_owned(),
-                value: "scatter series requires numeric cached x values".to_owned(),
-            });
-        };
-        validate_finite(&x_values.values, "c:xVal/c:numCache")?;
-        let (x_count, x_points) = logical_numeric_values(x_values)?;
-        let (y_count, y_points) = logical_numeric_values(&item.values)?;
-        let x_by_index: BTreeMap<_, _> = x_points.into_iter().collect();
-        let y_by_index: BTreeMap<_, _> = y_points.into_iter().collect();
-        let markers: Vec<_> = y_by_index
-            .iter()
-            .filter_map(|(index, y)| x_by_index.get(index).map(|x| (index, *x, y)))
-            .map(|(index, x, y)| (*index, x, *y))
-            .collect();
-        let paired = if blanks == DispBlanksAs::Zero {
-            let count = x_count.max(y_count);
-            let present = x_by_index
-                .keys()
-                .chain(y_by_index.keys())
-                .copied()
-                .collect();
-            zero_control_indexes(count, &present)
-                .into_iter()
-                .map(|index| {
-                    (
-                        index,
-                        x_by_index.get(&index).copied().unwrap_or(0.0),
-                        y_by_index.get(&index).copied().unwrap_or(0.0),
-                    )
-                })
-                .collect()
-        } else {
-            markers.clone()
-        };
+        let markers = matched_scatter_points(item)?;
+        let paired = scatter_render_points(item, blanks)?;
         all_x.extend(paired.iter().map(|(_, x, _)| *x));
         all_y.extend(paired.iter().map(|(_, _, y)| *y));
         paired_series.push(paired);
         marker_series.push(markers);
     }
-    let x_domain = data_domain(&all_x, false)?;
-    let y_domain = data_domain(&all_y, false)?;
+    let x_domain = options
+        .scatter_x
+        .map(|mapping| mapping.domain)
+        .unwrap_or(data_domain(&all_x, false)?);
+    let y_domain = options
+        .scatter_y
+        .map(|mapping| mapping.domain)
+        .unwrap_or(data_domain(&all_y, false)?);
+    let x_orientation = options
+        .scatter_x
+        .map(|mapping| mapping.orientation)
+        .unwrap_or(Orientation::MinMax);
+    let y_orientation = options
+        .scatter_y
+        .map(|mapping| mapping.orientation)
+        .unwrap_or(Orientation::MinMax);
     let draw_line = matches!(
         style,
         ScatterStyle::Line
@@ -507,7 +2252,14 @@ fn render_scatter_geometry(
         if draw_line {
             let indexes: Vec<_> = paired.iter().map(|(index, _, _)| *index).collect();
             for (start, end) in contiguous_ranges(&indexes, blanks) {
-                let points = scatter_points(&paired[start..end], x_domain, y_domain, bounds)?;
+                let points = scatter_points(
+                    &paired[start..end],
+                    x_domain,
+                    y_domain,
+                    bounds,
+                    x_orientation,
+                    y_orientation,
+                )?;
                 elements.push(stroked_path(
                     polyline_path(&points, false),
                     series_color(series_index),
@@ -515,12 +2267,82 @@ fn render_scatter_geometry(
             }
         }
         if draw_marker {
-            let marker_points =
-                scatter_points(&marker_series[series_index], x_domain, y_domain, bounds)?;
+            let marker_points = scatter_points(
+                &marker_series[series_index],
+                x_domain,
+                y_domain,
+                bounds,
+                x_orientation,
+                y_orientation,
+            )?;
             push_markers(&mut elements, &marker_points, series_index);
         }
     }
     Ok(elements)
+}
+
+type ScatterPoint = (usize, f64, f64);
+
+struct ScatterPointMaps {
+    x_count: usize,
+    y_count: usize,
+    x_by_index: BTreeMap<usize, f64>,
+    y_by_index: BTreeMap<usize, f64>,
+}
+
+fn scatter_point_maps(series: &Series) -> Result<ScatterPointMaps> {
+    let Some(AxisData::Numeric(x_values)) = &series.categories else {
+        return Err(ChartError::InvalidValue {
+            element: "c:xVal".to_owned(),
+            value: "scatter series requires numeric cached x values".to_owned(),
+        });
+    };
+    validate_finite(&x_values.values, "c:xVal/c:numCache")?;
+    let (x_count, x_points) = logical_numeric_values(x_values)?;
+    let (y_count, y_points) = logical_numeric_values(&series.values)?;
+    Ok(ScatterPointMaps {
+        x_count,
+        y_count,
+        x_by_index: x_points.into_iter().collect(),
+        y_by_index: y_points.into_iter().collect(),
+    })
+}
+
+fn matched_scatter_points(series: &Series) -> Result<Vec<ScatterPoint>> {
+    let points = scatter_point_maps(series)?;
+    Ok(points
+        .y_by_index
+        .iter()
+        .filter_map(|(index, y)| points.x_by_index.get(index).map(|x| (*index, *x, *y)))
+        .collect())
+}
+
+fn scatter_render_points(series: &Series, blanks: DispBlanksAs) -> Result<Vec<ScatterPoint>> {
+    let points = scatter_point_maps(series)?;
+    if blanks != DispBlanksAs::Zero {
+        return Ok(points
+            .y_by_index
+            .iter()
+            .filter_map(|(index, y)| points.x_by_index.get(index).map(|x| (*index, *x, *y)))
+            .collect());
+    }
+    let count = points.x_count.max(points.y_count);
+    let present = points
+        .x_by_index
+        .keys()
+        .chain(points.y_by_index.keys())
+        .copied()
+        .collect();
+    Ok(zero_control_indexes(count, &present)
+        .into_iter()
+        .map(|index| {
+            (
+                index,
+                points.x_by_index.get(&index).copied().unwrap_or(0.0),
+                points.y_by_index.get(&index).copied().unwrap_or(0.0),
+            )
+        })
+        .collect())
 }
 
 fn scatter_points(
@@ -528,13 +2350,15 @@ fn scatter_points(
     x_domain: Domain,
     y_domain: Domain,
     bounds: Rect,
+    x_orientation: Orientation,
+    y_orientation: Orientation,
 ) -> Result<Vec<Point>> {
     values
         .iter()
         .map(|(_, x, y)| {
             Ok(Point {
-                x: map_x(*x, x_domain, bounds)?,
-                y: map_y(*y, y_domain, bounds)?,
+                x: map_x_oriented(*x, x_domain, bounds, x_orientation)?,
+                y: map_y_oriented(*y, y_domain, bounds, y_orientation)?,
             })
         })
         .collect()
@@ -544,49 +2368,74 @@ fn render_radar_geometry(
     style: RadarStyle,
     series: &[Series],
     bounds: Rect,
+    options: GeometryOptions,
 ) -> Result<Vec<PositionedElement>> {
-    validate_series_values(series)?;
-    let logical_series = logical_series_values(series)?;
-    let category_count = series_category_count(series)?;
-    let maximum = logical_series
-        .iter()
-        .flat_map(|(_, points)| points.iter().map(|(_, value)| *value))
-        .fold(0.0_f64, f64::max);
-    if maximum <= 0.0 {
-        return Err(ChartError::InvalidValue {
-            element: "c:radarChart".to_owned(),
-            value: "radar caches have no positive renderable values".to_owned(),
-        });
-    }
-    let center = Point {
-        x: bounds.x + bounds.width / 2.0,
-        y: bounds.y + bounds.height / 2.0,
-    };
-    let radius = bounds.width.min(bounds.height) / 2.0;
+    let point_series = radar_series_points(series, bounds, options)?;
     let mut elements = Vec::new();
-    for (series_index, (_, logical)) in logical_series.iter().enumerate() {
-        let points: Vec<_> = logical
-            .iter()
-            .map(|(category, value)| {
-                radial_point(
-                    center,
-                    value.max(0.0) / maximum * radius,
-                    *category,
-                    category_count,
-                )
-            })
-            .collect();
-        let path = polyline_path(&points, true);
+    for (series_index, points) in point_series.iter().enumerate() {
+        let plain_points: Vec<_> = points.iter().map(|(_, point)| *point).collect();
+        if plain_points.is_empty() {
+            continue;
+        }
+        let path = polyline_path(&plain_points, true);
         if style == RadarStyle::Filled {
             elements.push(filled_and_stroked_path(path, series_color(series_index)));
         } else {
             elements.push(stroked_path(path, series_color(series_index)));
         }
         if style == RadarStyle::Marker {
-            push_markers(&mut elements, &points, series_index);
+            push_markers(&mut elements, &plain_points, series_index);
         }
     }
     Ok(elements)
+}
+
+fn radar_series_points(
+    series: &[Series],
+    bounds: Rect,
+    options: GeometryOptions,
+) -> Result<Vec<Vec<(usize, Point)>>> {
+    validate_series_values(series)?;
+    let logical_series = logical_series_values(series)?;
+    let category_count = series_category_count(series)?;
+    let values = logical_series
+        .iter()
+        .flat_map(|(_, points)| points.iter().map(|(_, value)| *value))
+        .collect::<Vec<_>>();
+    let mapping = options.value.unwrap_or(AxisMapping {
+        domain: data_domain(&values, true)?,
+        orientation: Orientation::MinMax,
+    });
+    let center = Point {
+        x: bounds.x + bounds.width / 2.0,
+        y: bounds.y + bounds.height / 2.0,
+    };
+    let radius = bounds.width.min(bounds.height) / 2.0;
+    let mut point_series = Vec::with_capacity(logical_series.len());
+    for (_, logical) in &logical_series {
+        let mut points = Vec::with_capacity(logical.len());
+        for (category, value) in logical {
+            if *value < mapping.domain.min || *value > mapping.domain.max {
+                continue;
+            }
+            points.push((
+                *category,
+                radial_point(
+                    center,
+                    normalized_value_oriented(*value, mapping.domain, mapping.orientation)?
+                        * radius,
+                    oriented_category_index(
+                        *category,
+                        category_count,
+                        options.category_orientation,
+                    ),
+                    category_count,
+                ),
+            ));
+        }
+        point_series.push(points);
+    }
+    Ok(point_series)
 }
 
 fn render_pie_geometry(
@@ -595,6 +2444,27 @@ fn render_pie_geometry(
     series: &[Series],
     bounds: Rect,
 ) -> Result<Vec<PositionedElement>> {
+    Ok(pie_slices(first_slice_angle, hole_size, series, bounds)?
+        .into_iter()
+        .map(|slice| filled_path(slice.path, series_color(slice.series_index)))
+        .collect())
+}
+
+struct PieSliceGeometry {
+    series_index: usize,
+    logical_index: usize,
+    path: Path,
+    anchor: Point,
+    base: Point,
+    end: Point,
+}
+
+fn pie_slices(
+    first_slice_angle: u16,
+    hole_size: Option<u8>,
+    series: &[Series],
+    bounds: Rect,
+) -> Result<Vec<PieSliceGeometry>> {
     validate_series_values(series)?;
     let center = Point {
         x: bounds.x + bounds.width / 2.0,
@@ -603,11 +2473,10 @@ fn render_pie_geometry(
     let radius = bounds.width.min(bounds.height) / 2.0;
     let mut elements = Vec::new();
     for (series_index, item) in series.iter().enumerate() {
-        let total = item
-            .values
-            .values
+        let (_, logical) = logical_numeric_values(&item.values)?;
+        let total = logical
             .iter()
-            .copied()
+            .map(|(_, value)| *value)
             .filter(|value| *value > 0.0)
             .try_fold(0.0, |total, value| {
                 checked_geometry_sum(total, value, "pie value total")
@@ -616,8 +2485,8 @@ fn render_pie_geometry(
             continue;
         }
         let mut angle = f64::from(first_slice_angle).to_radians() - std::f64::consts::FRAC_PI_2;
-        for value in &item.values.values {
-            if *value <= 0.0 {
+        for (logical_index, value) in logical {
+            if value <= 0.0 {
                 continue;
             }
             let next = angle + value / total * std::f64::consts::TAU;
@@ -632,7 +2501,21 @@ fn render_pie_geometry(
             } else {
                 pie_wedge(center, radius, angle, next)
             };
-            elements.push(filled_path(path, series_color(series_index)));
+            let inner_radius = hole_size
+                .map(|hole| radius * f64::from(hole) / 100.0)
+                .unwrap_or(0.0);
+            let anchor_radius = hole_size
+                .map(|_| (radius + inner_radius) / 2.0)
+                .unwrap_or(radius * 2.0 / 3.0);
+            let midpoint = (angle + next) / 2.0;
+            elements.push(PieSliceGeometry {
+                series_index,
+                logical_index,
+                path,
+                anchor: circle_point(center, anchor_radius, midpoint),
+                base: circle_point(center, inner_radius, midpoint),
+                end: circle_point(center, radius, midpoint),
+            });
             angle = next;
         }
     }
@@ -849,10 +2732,247 @@ fn checked_geometry_sum(current: f64, value: f64, context: &str) -> Result<f64> 
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Domain {
     min: f64,
     max: f64,
+}
+
+fn nice_number_scale(
+    extent: Domain,
+    pinned_minimum: Option<f64>,
+    pinned_maximum: Option<f64>,
+    target_tick_count: usize,
+) -> Result<AxisScale> {
+    if target_tick_count < 2
+        || !extent.min.is_finite()
+        || !extent.max.is_finite()
+        || pinned_minimum.is_some_and(|value| !value.is_finite())
+        || pinned_maximum.is_some_and(|value| !value.is_finite())
+    {
+        return Err(ChartError::InvalidValue {
+            element: "chart axis scale".to_owned(),
+            value: "scale bounds and target tick count must be finite and valid".to_owned(),
+        });
+    }
+
+    let mut data_min = extent.min.min(extent.max);
+    let mut data_max = extent.min.max(extent.max);
+    if data_min == data_max {
+        let expanded = expand_constant_domain(data_min)?;
+        data_min = expanded.min;
+        data_max = expanded.max;
+    }
+    let requested_min = match (pinned_minimum, pinned_maximum) {
+        (Some(minimum), _) => minimum,
+        (None, Some(maximum)) if data_min >= maximum => {
+            extend_bound(maximum, stable_positive_step(data_min, data_max, 3)?, false)?
+        }
+        (None, _) => data_min,
+    };
+    let requested_max = match (pinned_minimum, pinned_maximum) {
+        (_, Some(maximum)) => maximum,
+        (Some(minimum), None) if data_max <= minimum => {
+            extend_bound(minimum, stable_positive_step(data_min, data_max, 3)?, true)?
+        }
+        (_, None) => data_max,
+    };
+    if requested_min >= requested_max {
+        return Err(ChartError::InvalidValue {
+            element: "c:scaling".to_owned(),
+            value: format!("minimum {requested_min} is not less than maximum {requested_max}"),
+        });
+    }
+
+    let raw_step = stable_positive_step(requested_min, requested_max, target_tick_count)?;
+    let step = nice_step(raw_step)?;
+    let rounded_minimum = (requested_min / step).floor() * step;
+    let rounded_maximum = (requested_max / step).ceil() * step;
+    let lower_fallback = pinned_minimum.is_none() && !rounded_minimum.is_finite();
+    let upper_fallback = pinned_maximum.is_none() && !rounded_maximum.is_finite();
+    let minimum = pinned_minimum.unwrap_or(if rounded_minimum.is_finite() {
+        rounded_minimum
+    } else {
+        requested_min
+    });
+    let maximum = pinned_maximum.unwrap_or(if rounded_maximum.is_finite() {
+        rounded_maximum
+    } else {
+        requested_max
+    });
+    if !minimum.is_finite() || !maximum.is_finite() || minimum >= maximum {
+        return Err(ChartError::InvalidValue {
+            element: "chart axis scale".to_owned(),
+            value: "nice-number bounds are nonfinite or empty".to_owned(),
+        });
+    }
+
+    let first = (minimum / step).ceil();
+    let last = (maximum / step).floor();
+    let tick_count = if last >= first {
+        (last - first).min(1024.0) as usize + 1
+    } else {
+        0
+    };
+    let mut ticks = Vec::with_capacity(tick_count);
+    for index in 0..tick_count {
+        let tick = (first + index as f64) * step;
+        if tick.is_finite() && tick >= minimum && tick <= maximum {
+            ticks.push(clean_tick(tick, step));
+        }
+    }
+    if lower_fallback && ticks.first().is_none_or(|tick| *tick > minimum) {
+        ticks.insert(0, minimum);
+    }
+    if upper_fallback && ticks.last().is_none_or(|tick| *tick < maximum) {
+        ticks.push(maximum);
+    }
+    if ticks.len() < 2 {
+        ticks.extend([minimum, maximum]);
+        ticks.sort_by(f64::total_cmp);
+    }
+    ticks.dedup_by(|left, right| *left == *right);
+    if ticks.len() < 2 || !ticks.windows(2).all(|pair| pair[0] < pair[1]) {
+        return Err(ChartError::InvalidValue {
+            element: "chart axis scale".to_owned(),
+            value: "scale cannot produce two increasing finite ticks".to_owned(),
+        });
+    }
+    Ok(AxisScale {
+        domain: Domain {
+            min: minimum,
+            max: maximum,
+        },
+        ticks,
+    })
+}
+
+const MIN_POSITIVE_SUBNORMAL: f64 = f64::from_bits(1);
+
+fn stable_positive_step(minimum: f64, maximum: f64, target_tick_count: usize) -> Result<f64> {
+    let scale = minimum.abs().max(maximum.abs());
+    let scale = if scale == 0.0 {
+        MIN_POSITIVE_SUBNORMAL
+    } else {
+        scale
+    };
+    let normalized =
+        (maximum / scale - minimum / scale) / target_tick_count.saturating_sub(1) as f64;
+    let step = normalized * scale;
+    if normalized.is_finite() && normalized > 0.0 && step.is_finite() {
+        Ok(step.max(MIN_POSITIVE_SUBNORMAL))
+    } else {
+        Err(ChartError::InvalidValue {
+            element: "chart axis scale".to_owned(),
+            value: "scale step is nonfinite or empty".to_owned(),
+        })
+    }
+}
+
+fn nice_step(raw_step: f64) -> Result<f64> {
+    if !raw_step.is_finite() || raw_step <= 0.0 {
+        return Err(ChartError::InvalidValue {
+            element: "chart axis scale".to_owned(),
+            value: format!("invalid raw tick step {raw_step}"),
+        });
+    }
+    let magnitude = 10.0_f64
+        .powf(raw_step.log10().floor())
+        .max(MIN_POSITIVE_SUBNORMAL);
+    let fraction = raw_step / magnitude;
+    let multiplier = if fraction <= 1.0 {
+        1.0
+    } else if fraction <= 2.0 {
+        2.0
+    } else if fraction <= 5.0 {
+        5.0
+    } else {
+        10.0
+    };
+    let step = (multiplier * magnitude).max(MIN_POSITIVE_SUBNORMAL);
+    if step.is_finite() && step > 0.0 {
+        Ok(step)
+    } else {
+        Err(ChartError::InvalidValue {
+            element: "chart axis scale".to_owned(),
+            value: "nice-number step is nonfinite".to_owned(),
+        })
+    }
+}
+
+fn expand_constant_domain(value: f64) -> Result<Domain> {
+    if value == 0.0 {
+        return Ok(Domain {
+            min: -1.0,
+            max: 1.0,
+        });
+    }
+    let padding = (value.abs() * 0.5).max(MIN_POSITIVE_SUBNORMAL);
+    let minimum = value - padding;
+    let maximum = value + padding;
+    if minimum.is_finite() && maximum.is_finite() && minimum < maximum {
+        return Ok(Domain {
+            min: minimum,
+            max: maximum,
+        });
+    }
+    let domain = if value.is_sign_positive() {
+        Domain {
+            min: 0.0,
+            max: value,
+        }
+    } else {
+        Domain {
+            min: value,
+            max: 0.0,
+        }
+    };
+    if domain.min < domain.max {
+        Ok(domain)
+    } else {
+        Err(ChartError::InvalidValue {
+            element: "chart axis scale".to_owned(),
+            value: format!("constant value {value} has no finite renderable extent"),
+        })
+    }
+}
+
+fn extend_bound(bound: f64, span: f64, positive: bool) -> Result<f64> {
+    let candidate = if positive { bound + span } else { bound - span };
+    let extended = if candidate.is_finite()
+        && if positive {
+            candidate > bound
+        } else {
+            candidate < bound
+        } {
+        candidate
+    } else if positive {
+        bound.next_up()
+    } else {
+        bound.next_down()
+    };
+    if extended.is_finite()
+        && if positive {
+            extended > bound
+        } else {
+            extended < bound
+        }
+    {
+        Ok(extended)
+    } else {
+        Err(ChartError::InvalidValue {
+            element: "c:scaling".to_owned(),
+            value: format!("one-sided bound {bound} leaves no finite automatic extent"),
+        })
+    }
+}
+
+fn clean_tick(value: f64, step: f64) -> f64 {
+    if value.abs() <= step.abs() * 1.0e-12 {
+        0.0
+    } else {
+        value
+    }
 }
 
 fn domain_from_layers(layers: &[GeometryLayer]) -> Result<Domain> {
@@ -897,6 +3017,9 @@ fn data_domain(values: &[f64], include_zero: bool) -> Result<Domain> {
         max = max.max(0.0);
     }
     if min == max {
+        if !include_zero {
+            return expand_constant_domain(min);
+        }
         if min > 0.0 {
             min = 0.0;
         } else if max < 0.0 {
@@ -928,8 +3051,23 @@ fn normalized_value(value: f64, domain: Domain) -> Result<f64> {
     Ok(normalized)
 }
 
-fn map_x(value: f64, domain: Domain, bounds: Rect) -> Result<f64> {
-    let coordinate = bounds.x + normalized_value(value, domain)? * bounds.width;
+fn normalized_value_oriented(value: f64, domain: Domain, orientation: Orientation) -> Result<f64> {
+    let normalized = normalized_value(value, domain)?;
+    Ok(if orientation == Orientation::MaxMin {
+        1.0 - normalized
+    } else {
+        normalized
+    })
+}
+
+fn map_x_oriented(
+    value: f64,
+    domain: Domain,
+    bounds: Rect,
+    orientation: Orientation,
+) -> Result<f64> {
+    let coordinate =
+        bounds.x + normalized_value_oriented(value, domain, orientation)? * bounds.width;
     if coordinate.is_finite() {
         Ok(coordinate)
     } else {
@@ -940,8 +3078,14 @@ fn map_x(value: f64, domain: Domain, bounds: Rect) -> Result<f64> {
     }
 }
 
-fn map_y(value: f64, domain: Domain, bounds: Rect) -> Result<f64> {
-    let coordinate = bounds.y + bounds.height - normalized_value(value, domain)? * bounds.height;
+fn map_y_oriented(
+    value: f64,
+    domain: Domain,
+    bounds: Rect,
+    orientation: Orientation,
+) -> Result<f64> {
+    let coordinate = bounds.y + bounds.height
+        - normalized_value_oriented(value, domain, orientation)? * bounds.height;
     if coordinate.is_finite() {
         Ok(coordinate)
     } else {
@@ -952,17 +3096,28 @@ fn map_y(value: f64, domain: Domain, bounds: Rect) -> Result<f64> {
     }
 }
 
+fn oriented_category_index(index: usize, count: usize, orientation: Orientation) -> usize {
+    if orientation == Orientation::MaxMin && index < count {
+        count - index - 1
+    } else {
+        index
+    }
+}
+
 fn category_points(
     values: &[(usize, f64)],
     count: usize,
     domain: Domain,
     bounds: Rect,
+    category_orientation: Orientation,
+    value_orientation: Orientation,
 ) -> Result<Vec<Point>> {
     values
         .iter()
         .map(|(index, value)| {
-            let x = bounds.x + (*index as f64 + 0.5) / count as f64 * bounds.width;
-            let y = map_y(*value, domain, bounds)?;
+            let index = oriented_category_index(*index, count, category_orientation);
+            let x = bounds.x + (index as f64 + 0.5) / count as f64 * bounds.width;
+            let y = map_y_oriented(*value, domain, bounds, value_orientation)?;
             if !x.is_finite() {
                 return Err(ChartError::InvalidValue {
                     element: "chart geometry coordinate".to_owned(),
@@ -8269,7 +10424,9 @@ mod tests {
     use std::process::Command;
 
     use oxml_core::raw_xml::{capture_element, capture_empty_element};
-    use oxml_layout::{LayoutResult, PageFrame, PathCommand, Point, PositionedElement, Rect};
+    use oxml_layout::{
+        FontManager, LayoutResult, PageFrame, PathCommand, Point, PositionedElement, Rect,
+    };
     use oxml_opc::OpcPackage;
     use quick_xml::Reader;
     use quick_xml::events::Event;
@@ -8277,9 +10434,9 @@ mod tests {
     use super::{
         A_NS, Axis, AxisData, AxisId, AxisKind, AxisPosition, BarDirection, BarGrouping, C_NS,
         CT_ChartSpace, CT_DLbls, CT_ShapeProperties, CT_TextBody, ChartGeometry, DataLabelPosition,
-        DispBlanksAs, Grouping, NumberFormat, NumericData, Orientation, Plot, R_NS, ScatterStyle,
-        Series, StringRef, TickLabelPosition, TickMark, capture_event, local_name,
-        matches_local_name, render_geometry,
+        DispBlanksAs, Domain, Grouping, NumberFormat, NumericData, Orientation, Plot, R_NS,
+        ScatterStyle, Series, StringRef, TickLabelPosition, TickMark, capture_event, local_name,
+        matches_local_name, nice_number_scale, render_chart, render_geometry,
     };
 
     const MANIFEST: &str = include_str!("../../../scripts/pptx-corpus-manifest.tsv");
@@ -8521,7 +10678,7 @@ mod tests {
         let line_geometry = render_geometry(&line.chart, chart_bounds()).unwrap();
         assert_path_points(
             path_commands(&line_geometry)[0],
-            &[Point { x: 74.0, y: 62.0 }, Point { x: 150.0, y: 12.0 }],
+            &[Point { x: 74.0, y: 112.0 }, Point { x: 150.0, y: 12.0 }],
             false,
         );
         assert_rects_near(
@@ -8529,7 +10686,7 @@ mod tests {
             &[
                 Rect {
                     x: 71.5,
-                    y: 59.5,
+                    y: 109.5,
                     width: 5.0,
                     height: 5.0,
                 },
@@ -8791,7 +10948,14 @@ mod tests {
         let gap = render_geometry(&line.chart, chart_bounds()).unwrap();
         let gap_commands = path_commands(&gap);
         assert_eq!(gap_commands.len(), 2);
-        assert_path_points(gap_commands[0], &[first], false);
+        assert_path_points(
+            gap_commands[0],
+            &[Point {
+                x: first.x,
+                y: 112.0,
+            }],
+            false,
+        );
         assert_path_points(gap_commands[1], &[last], false);
         line.chart.disp_blanks_as = DispBlanksAs::Zero;
         assert_path_points(
@@ -8802,7 +10966,13 @@ mod tests {
         line.chart.disp_blanks_as = DispBlanksAs::Span;
         assert_path_points(
             path_commands(&render_geometry(&line.chart, chart_bounds()).unwrap())[0],
-            &[first, last],
+            &[
+                Point {
+                    x: first.x,
+                    y: 112.0,
+                },
+                last,
+            ],
             false,
         );
 
@@ -8918,6 +11088,80 @@ mod tests {
             &[Point { x: 36.0, y: 112.0 }, Point { x: 188.0, y: 12.0 }],
             false,
         );
+    }
+
+    #[test]
+    fn sparse_scatter_domains_and_labels_use_only_matched_points() {
+        let scatter = format!(
+            r#"<q:scatterChart><q:scatterStyle val="lineMarker"/>{}<q:dLbls><q:showVal val="1"/></q:dLbls><q:axId val="-1884094432"/><q:axId val="-1884097184"/></q:scatterChart>"#,
+            sparse_scatter_series()
+        );
+        let chart = CT_ChartSpace::from_xml(chart_with_plot(&scatter).as_bytes()).unwrap();
+        let plot = &chart.chart.plot_area.plots().unwrap()[0];
+        assert_eq!(
+            super::scatter_domains(plot, DispBlanksAs::Gap).unwrap(),
+            (
+                Domain {
+                    min: 10.0,
+                    max: 40.0,
+                },
+                Domain {
+                    min: 100.0,
+                    max: 400.0,
+                },
+            )
+        );
+        let axes = chart.chart.plot_area.axes().unwrap();
+        let options = super::geometry_options(plot, &axes, DispBlanksAs::Gap).unwrap();
+        let anchors =
+            super::plot_label_anchors(plot, chart_bounds(), DispBlanksAs::Gap, options).unwrap();
+        assert_eq!(
+            anchors.keys().copied().collect::<Vec<_>>(),
+            vec![(0, 0), (0, 3)]
+        );
+        assert_eq!(anchors[&(0, 0)].center, Point { x: 0.0, y: 140.0 });
+        assert_eq!(anchors[&(0, 3)].center, Point { x: 200.0, y: 0.0 });
+    }
+
+    #[test]
+    fn sparse_bubble_size_labels_resolve_logical_indexes() {
+        let scatter = format!(
+            r#"<q:scatterChart><q:scatterStyle val="marker"/>{}<q:dLbls><q:showBubbleSize val="1"/></q:dLbls><q:axId val="-1884094432"/><q:axId val="-1884097184"/></q:scatterChart>"#,
+            sparse_scatter_series()
+        );
+        let mut chart = CT_ChartSpace::from_xml(chart_with_plot(&scatter).as_bytes()).unwrap();
+        let plot = &mut chart.chart.plot_area.plots_mut().unwrap()[0];
+        let Plot::Scatter { series, .. } = plot else {
+            panic!("expected scatter plot");
+        };
+        series[0].bubble_size = Some(
+            NumericData::from_xml(
+                format!(
+                    r#"<q:numRef xmlns:q="{C_NS}"><q:f>Sheet1!$C$2:$C$5</q:f><q:numCache><q:formatCode>General</q:formatCode><q:ptCount val="4"/><q:pt idx="0"><q:v>5</q:v></q:pt><q:pt idx="3"><q:v>9</q:v></q:pt></q:numCache></q:numRef>"#
+                )
+                .as_bytes(),
+            )
+            .unwrap(),
+        );
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let mut rendered = Vec::new();
+        super::render_data_labels(
+            plot,
+            chart_bounds(),
+            DispBlanksAs::Gap,
+            super::GeometryOptions::default(),
+            &mut fonts,
+            &mut rendered,
+        )
+        .unwrap();
+        let text: Vec<_> = rendered
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, vec!["5", "9"]);
     }
 
     #[test]
@@ -9081,6 +11325,1185 @@ mod tests {
             oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap()
         };
         assert_eq!(raster(first), raster(second));
+    }
+
+    #[test]
+    fn zero_to_one_hundred_axis_uses_expected_ticks() {
+        let scale = nice_number_scale(
+            Domain {
+                min: 0.0,
+                max: 100.0,
+            },
+            None,
+            None,
+            6,
+        )
+        .unwrap();
+        assert_eq!(scale.ticks, vec![0.0, 20.0, 40.0, 60.0, 80.0, 100.0]);
+    }
+
+    #[test]
+    fn nice_number_ticks_cover_unpinned_extents() {
+        for domain in [
+            Domain {
+                min: 3.0,
+                max: 97.0,
+            },
+            Domain {
+                min: -97.0,
+                max: -3.0,
+            },
+            Domain {
+                min: -3.5,
+                max: 8.25,
+            },
+            Domain {
+                min: 0.125,
+                max: 0.875,
+            },
+            Domain {
+                min: 1.0e12,
+                max: 7.0e12,
+            },
+            Domain {
+                min: -f64::MAX,
+                max: f64::MAX,
+            },
+            Domain {
+                min: f64::from_bits(1),
+                max: f64::from_bits(5),
+            },
+        ] {
+            let scale = nice_number_scale(domain, None, None, 6).unwrap();
+            assert!(scale.domain.min <= domain.min);
+            assert!(scale.domain.max >= domain.max);
+            assert!(scale.ticks.iter().all(|tick| tick.is_finite()));
+            assert!(scale.ticks.windows(2).all(|pair| pair[0] < pair[1]));
+        }
+
+        let constant = nice_number_scale(Domain { min: 4.0, max: 4.0 }, None, None, 6).unwrap();
+        assert!(constant.domain.min < 4.0 && constant.domain.max > 4.0);
+    }
+
+    #[test]
+    fn one_sided_explicit_scale_beyond_data_derives_a_valid_opposite_bound() {
+        let minimum = nice_number_scale(
+            Domain {
+                min: 0.0,
+                max: 10.0,
+            },
+            Some(20.0),
+            None,
+            6,
+        )
+        .unwrap();
+        assert_eq!(minimum.domain.min, 20.0);
+        assert!(minimum.domain.max > 20.0);
+        assert!(minimum.ticks.windows(2).all(|pair| pair[0] < pair[1]));
+
+        let maximum = nice_number_scale(
+            Domain {
+                min: 0.0,
+                max: 10.0,
+            },
+            None,
+            Some(-20.0),
+            6,
+        )
+        .unwrap();
+        assert_eq!(maximum.domain.max, -20.0);
+        assert!(maximum.domain.min < -20.0);
+        assert!(maximum.ticks.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn standard_line_domain_does_not_force_zero() {
+        let mut chart =
+            CT_ChartSpace::from_xml(chart_with_plot(&line_plot("")).as_bytes()).unwrap();
+        let plot = &mut chart.chart.plot_area.plots_mut().unwrap()[0];
+        let Plot::Line { series, .. } = plot else {
+            panic!("expected line plot");
+        };
+        series[0].values.values = vec![1_000.0, 1_010.0];
+        assert_eq!(
+            super::plot_value_domain(plot, DispBlanksAs::Gap).unwrap(),
+            Some(Domain {
+                min: 1_000.0,
+                max: 1_010.0,
+            })
+        );
+        let geometry = render_geometry(&chart.chart, chart_bounds()).unwrap();
+        assert_path_points(
+            path_commands(&geometry)[0],
+            &[Point { x: 74.0, y: 112.0 }, Point { x: 150.0, y: 12.0 }],
+            false,
+        );
+    }
+
+    #[test]
+    fn explicit_scaling_bounds_and_orientation_are_honored() {
+        let scale = nice_number_scale(
+            Domain {
+                min: 25.0,
+                max: 75.0,
+            },
+            Some(0.0),
+            Some(100.0),
+            6,
+        )
+        .unwrap();
+        assert_eq!(
+            scale.domain,
+            Domain {
+                min: 0.0,
+                max: 100.0
+            }
+        );
+        assert_eq!(
+            super::map_y_oriented(0.0, scale.domain, chart_bounds(), Orientation::MaxMin).unwrap(),
+            0.0
+        );
+        assert_eq!(
+            super::map_y_oriented(100.0, scale.domain, chart_bounds(), Orientation::MaxMin)
+                .unwrap(),
+            140.0
+        );
+
+        let mut chart = labelled_bar_chart();
+        let Plot::Bar { series, .. } = &mut chart.chart.plot_area.plots_mut().unwrap()[0] else {
+            panic!("expected bar plot");
+        };
+        series[0].values.values = vec![25.0, 75.0];
+        let value_axis = chart
+            .chart
+            .plot_area
+            .axes
+            .iter_mut()
+            .find(|axis| axis.kind == AxisKind::Value)
+            .unwrap();
+        value_axis.scaling.orientation = Orientation::MaxMin;
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let group = render_chart(&chart.chart, chart_bounds(), &mut fonts).unwrap();
+        let plot = group
+            .children
+            .iter()
+            .find_map(|element| match element {
+                PositionedElement::Group(group) => Some(group),
+                _ => None,
+            })
+            .unwrap();
+        let bars: Vec<_> = plot
+            .children
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Path(path) => path.path.bounds(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bars.len(), 2);
+        assert!((bars[0].y - 12.0).abs() < 1.0e-9);
+        assert!((bars[0].height - 25.0).abs() < 1.0e-9);
+        assert!((bars[1].height - 75.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn family_label_anchors_share_rendered_geometry() {
+        let mut bar = CT_ChartSpace::from_xml(chart_with_plot(&bar_plot("")).as_bytes()).unwrap();
+        let bar_plot = &mut bar.chart.plot_area.plots_mut().unwrap()[0];
+        let Plot::Bar { series, .. } = bar_plot else {
+            panic!("expected bar plot");
+        };
+        let mut second = series[0].clone();
+        second.index = 1;
+        second.order = 1;
+        series.push(second);
+        let anchors = super::plot_label_anchors(
+            bar_plot,
+            chart_bounds(),
+            DispBlanksAs::Gap,
+            super::GeometryOptions::default(),
+        )
+        .unwrap();
+        assert_point_near(anchors[&(0, 0)].center, Point { x: 40.0, y: 105.0 });
+        assert_point_near(anchors[&(1, 0)].center, Point { x: 60.0, y: 105.0 });
+
+        let pie = CT_ChartSpace::from_xml(
+            chart_with_optional_axes(
+                &remaining_plot_fixtures()
+                    .into_iter()
+                    .find(|(kind, _, _)| *kind == "pieChart")
+                    .unwrap()
+                    .1,
+                false,
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let Plot::Pie {
+            first_slice_angle,
+            series,
+            ..
+        } = &pie.chart.plot_area.plots().unwrap()[0]
+        else {
+            panic!("expected pie plot");
+        };
+        let slices = super::pie_slices(*first_slice_angle, None, series, chart_bounds()).unwrap();
+        assert_eq!(slices.len(), 2);
+        let first_span = std::f64::consts::TAU / 3.0;
+        let first_midpoint = f64::from(*first_slice_angle).to_radians()
+            - std::f64::consts::FRAC_PI_2
+            + first_span / 2.0;
+        assert_point_near(
+            slices[0].anchor,
+            super::circle_point(Point { x: 100.0, y: 70.0 }, 140.0 / 3.0, first_midpoint),
+        );
+        let second_midpoint = first_midpoint + std::f64::consts::PI;
+        assert_point_near(
+            slices[1].anchor,
+            super::circle_point(Point { x: 100.0, y: 70.0 }, 140.0 / 3.0, second_midpoint),
+        );
+
+        let radar = format!(
+            r#"<q:radarChart><q:radarStyle val="standard"/>{}<q:axId val="-1884094432"/><q:axId val="-1884097184"/></q:radarChart>"#,
+            plot_series(0)
+        );
+        let radar = CT_ChartSpace::from_xml(chart_with_plot(&radar).as_bytes()).unwrap();
+        let Plot::Radar { series, .. } = &radar.chart.plot_area.plots().unwrap()[0] else {
+            panic!("expected radar plot");
+        };
+        let radar_points =
+            super::radar_series_points(series, chart_bounds(), super::GeometryOptions::default())
+                .unwrap();
+        assert_eq!(radar_points[0][0], (0, Point { x: 100.0, y: 35.0 }));
+        assert_eq!(radar_points[0][1], (1, Point { x: 100.0, y: 140.0 }));
+    }
+
+    #[test]
+    fn radar_annotations_use_spokes_perimeter_labels_and_radial_gridlines() {
+        let radar_plot = format!(
+            r#"<q:radarChart><q:radarStyle val="marker"/>{}<q:axId val="-1884094432"/><q:axId val="-1884097184"/></q:radarChart>"#,
+            sparse_category_series()
+        );
+        let mut chart = CT_ChartSpace::from_xml(chart_with_plot(&radar_plot).as_bytes()).unwrap();
+        for axis in &mut chart.chart.plot_area.axes {
+            axis.major_tick_mark = TickMark::Cross;
+            if axis.kind == AxisKind::Value {
+                axis.major_gridlines = Some(super::ChartLines::default());
+            }
+        }
+        let plot = &chart.chart.plot_area.plots().unwrap()[0];
+        let axes = chart.chart.plot_area.axes().unwrap();
+        let bounds = super::geometry_plot_bounds(chart_bounds()).unwrap();
+        let center = Point { x: 112.0, y: 62.0 };
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let annotations =
+            super::render_axes_and_labels(plot, &axes, bounds, DispBlanksAs::Gap, &mut fonts)
+                .unwrap();
+        assert_eq!(annotations.axis_lines.len(), 4);
+        for spoke in annotations.axis_lines.iter().take(3) {
+            let PositionedElement::Path(spoke) = spoke else {
+                panic!("radar spoke must be a path");
+            };
+            assert_eq!(
+                spoke.path.commands.first(),
+                Some(&PathCommand::MoveTo(center))
+            );
+        }
+        assert!(!annotations.gridlines.is_empty());
+        for gridline in &annotations.gridlines {
+            let PositionedElement::Path(gridline) = gridline else {
+                panic!("radar gridline must be a path");
+            };
+            assert_eq!(gridline.path.commands.last(), Some(&PathCommand::Close));
+            let radii: Vec<_> = gridline
+                .path
+                .commands
+                .iter()
+                .filter_map(|command| match command {
+                    PathCommand::MoveTo(point) | PathCommand::LineTo(point) => {
+                        Some((point.x - center.x).hypot(point.y - center.y))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(radii.len(), 3);
+            assert!(
+                radii
+                    .windows(2)
+                    .all(|pair| (pair[0] - pair[1]).abs() < 1.0e-9)
+            );
+        }
+        let text: Vec<_> = annotations
+            .labels
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(text.contains(&"North"));
+        assert!(text.contains(&"West"));
+    }
+
+    #[test]
+    fn radar_tick_label_positions_are_distinct() {
+        let radar_plot = format!(
+            r#"<q:radarChart><q:radarStyle val="marker"/>{}<q:axId val="-1884094432"/><q:axId val="-1884097184"/></q:radarChart>"#,
+            plot_series(0)
+        );
+        let chart = CT_ChartSpace::from_xml(chart_with_plot(&radar_plot).as_bytes()).unwrap();
+        let plot = &chart.chart.plot_area.plots().unwrap()[0];
+        let axes = chart.chart.plot_area.axes().unwrap();
+        let bounds = super::geometry_plot_bounds(chart_bounds()).unwrap();
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+
+        let category_axis = axes
+            .iter()
+            .find(|axis| axis.kind == AxisKind::Category)
+            .unwrap();
+        for (position, expected) in [
+            (TickLabelPosition::High, Point { x: 108.0, y: 0.0 }),
+            (TickLabelPosition::Low, Point { x: 108.0, y: 25.0 }),
+            (TickLabelPosition::NextTo, Point { x: 108.0, y: 5.0 }),
+        ] {
+            let mut axis = category_axis.clone();
+            axis.tick_label_position = position;
+            let annotations =
+                super::render_axes_and_labels(plot, &[axis], bounds, DispBlanksAs::Gap, &mut fonts)
+                    .unwrap();
+            let north = annotations
+                .labels
+                .iter()
+                .find_map(|element| match element {
+                    PositionedElement::Text(run) if run.text == "North" => Some(run),
+                    _ => None,
+                })
+                .unwrap();
+            assert_point_near(north.origin, expected);
+        }
+        let mut hidden_category = category_axis.clone();
+        hidden_category.tick_label_position = TickLabelPosition::None;
+        let annotations = super::render_axes_and_labels(
+            plot,
+            &[hidden_category],
+            bounds,
+            DispBlanksAs::Gap,
+            &mut fonts,
+        )
+        .unwrap();
+        assert!(annotations.labels.is_empty());
+
+        let narrow_bounds = Rect {
+            x: 36.0,
+            y: 12.0,
+            width: 24.0,
+            height: 100.0,
+        };
+        let narrow_center = Point { x: 48.0, y: 62.0 };
+        assert_eq!(
+            super::radar_category_label_origin(
+                narrow_bounds,
+                narrow_center,
+                12.0,
+                1,
+                4,
+                TickLabelPosition::High,
+            ),
+            Some(Point { x: 72.0, y: 65.0 })
+        );
+        assert_eq!(
+            super::radar_category_label_origin(
+                narrow_bounds,
+                narrow_center,
+                12.0,
+                1,
+                4,
+                TickLabelPosition::NextTo,
+            ),
+            Some(Point { x: 66.0, y: 65.0 })
+        );
+
+        let value_axis = axes
+            .iter()
+            .find(|axis| axis.kind == AxisKind::Value)
+            .unwrap();
+        for (position, expected) in [
+            (TickLabelPosition::High, Point { x: 166.0, y: 65.0 }),
+            (TickLabelPosition::Low, Point { x: 32.0, y: 65.0 }),
+            (TickLabelPosition::NextTo, Point { x: 116.0, y: 65.0 }),
+        ] {
+            let mut axis = value_axis.clone();
+            axis.tick_label_position = position;
+            let annotations =
+                super::render_axes_and_labels(plot, &[axis], bounds, DispBlanksAs::Gap, &mut fonts)
+                    .unwrap();
+            let zero = annotations
+                .labels
+                .iter()
+                .find_map(|element| match element {
+                    PositionedElement::Text(run) if run.text == "0" => Some(run),
+                    _ => None,
+                })
+                .unwrap();
+            assert_point_near(zero.origin, expected);
+        }
+        let mut hidden_value = value_axis.clone();
+        hidden_value.tick_label_position = TickLabelPosition::None;
+        let annotations = super::render_axes_and_labels(
+            plot,
+            &[hidden_value],
+            bounds,
+            DispBlanksAs::Gap,
+            &mut fonts,
+        )
+        .unwrap();
+        assert!(annotations.labels.is_empty());
+    }
+
+    #[test]
+    fn radar_negative_and_mixed_sign_domains_preserve_values() {
+        let radar_plot = format!(
+            r#"<q:radarChart><q:radarStyle val="standard"/>{}<q:axId val="-1884094432"/><q:axId val="-1884097184"/></q:radarChart>"#,
+            plot_series(0)
+        );
+        let mut chart = CT_ChartSpace::from_xml(chart_with_plot(&radar_plot).as_bytes()).unwrap();
+        let plot = &mut chart.chart.plot_area.plots_mut().unwrap()[0];
+        let Plot::Radar { series, .. } = plot else {
+            panic!("expected radar plot");
+        };
+        series[0].values.values = vec![-10.0, -5.0];
+        let points =
+            super::radar_series_points(series, chart_bounds(), super::GeometryOptions::default())
+                .unwrap();
+        assert_eq!(points[0][0], (0, Point { x: 100.0, y: 70.0 }));
+        assert_eq!(points[0][1], (1, Point { x: 100.0, y: 105.0 }));
+
+        series[0].values.values = vec![-5.0, 10.0];
+        let options = super::GeometryOptions {
+            value: Some(super::AxisMapping {
+                domain: Domain {
+                    min: -10.0,
+                    max: 10.0,
+                },
+                orientation: Orientation::MinMax,
+            }),
+            ..super::GeometryOptions::default()
+        };
+        let points = super::radar_series_points(series, chart_bounds(), options).unwrap();
+        assert_eq!(points[0][0], (0, Point { x: 100.0, y: 52.5 }));
+        assert_eq!(points[0][1], (1, Point { x: 100.0, y: 140.0 }));
+    }
+
+    #[test]
+    fn radar_explicit_bounds_suppress_out_of_range_points_and_labels() {
+        let radar_plot = format!(
+            r#"<q:radarChart><q:radarStyle val="marker"/>{}<q:dLbls><q:showVal val="1"/></q:dLbls><q:axId val="-1884094432"/><q:axId val="-1884097184"/></q:radarChart>"#,
+            plot_series(0)
+        );
+        let mut chart = CT_ChartSpace::from_xml(chart_with_plot(&radar_plot).as_bytes()).unwrap();
+        let plot = &mut chart.chart.plot_area.plots_mut().unwrap()[0];
+        let Plot::Radar { series, .. } = plot else {
+            panic!("expected radar plot");
+        };
+        series[0].values.values = vec![25.0, 75.0];
+        let options = super::GeometryOptions {
+            value: Some(super::AxisMapping {
+                domain: Domain {
+                    min: 50.0,
+                    max: 100.0,
+                },
+                orientation: Orientation::MinMax,
+            }),
+            ..super::GeometryOptions::default()
+        };
+        let points = super::radar_series_points(series, chart_bounds(), options).unwrap();
+        assert_eq!(points[0], vec![(1, Point { x: 100.0, y: 105.0 })]);
+        let anchors =
+            super::plot_label_anchors(plot, chart_bounds(), DispBlanksAs::Gap, options).unwrap();
+        assert_eq!(anchors.keys().copied().collect::<Vec<_>>(), vec![(0, 1)]);
+
+        let Plot::Radar { series, .. } = plot else {
+            panic!("expected radar plot");
+        };
+        series[0].values.values = vec![75.0, 125.0];
+        let reversed = super::GeometryOptions {
+            value: Some(super::AxisMapping {
+                domain: Domain {
+                    min: 50.0,
+                    max: 100.0,
+                },
+                orientation: Orientation::MaxMin,
+            }),
+            ..super::GeometryOptions::default()
+        };
+        let points = super::radar_series_points(series, chart_bounds(), reversed).unwrap();
+        assert_eq!(points[0], vec![(0, Point { x: 100.0, y: 35.0 })]);
+        let anchors =
+            super::plot_label_anchors(plot, chart_bounds(), DispBlanksAs::Gap, reversed).unwrap();
+        assert_eq!(anchors.keys().copied().collect::<Vec<_>>(), vec![(0, 0)]);
+
+        let value_axis = chart
+            .chart
+            .plot_area
+            .axes
+            .iter_mut()
+            .find(|axis| axis.kind == AxisKind::Value)
+            .unwrap();
+        value_axis.scaling.minimum = Some(50.0);
+        value_axis.scaling.maximum = Some(100.0);
+        let plot = &mut chart.chart.plot_area.plots_mut().unwrap()[0];
+        let Plot::Radar { series, .. } = plot else {
+            panic!("expected radar plot");
+        };
+        series[0].values.values = vec![25.0, 25.0];
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let rendered = render_chart(&chart.chart, chart_bounds(), &mut fonts).unwrap();
+        assert!(rendered.children.iter().any(|element| matches!(
+            element,
+            PositionedElement::Group(group) if group.clip.is_some() && group.children.is_empty()
+        )));
+        assert!(
+            rendered
+                .children
+                .iter()
+                .any(|element| matches!(element, PositionedElement::Path(_)))
+        );
+        assert!(!rendered.children.iter().any(|element| matches!(
+            element,
+            PositionedElement::Text(run) if run.text == "25"
+        )));
+    }
+
+    #[test]
+    fn inside_and_outside_label_positions_follow_family_geometry() {
+        let mut horizontal =
+            CT_ChartSpace::from_xml(chart_with_plot(&bar_plot("")).as_bytes()).unwrap();
+        let plot = &mut horizontal.chart.plot_area.plots_mut().unwrap()[0];
+        let Plot::Bar { direction, .. } = plot else {
+            panic!("expected bar plot");
+        };
+        *direction = BarDirection::Bar;
+        let anchors = super::plot_label_anchors(
+            plot,
+            chart_bounds(),
+            DispBlanksAs::Gap,
+            super::GeometryOptions::default(),
+        )
+        .unwrap();
+        let anchor = anchors[&(0, 0)];
+        assert_point_near(
+            anchor.origin(Some(DataLabelPosition::InsideBase)),
+            Point { x: 5.0, y: 35.0 },
+        );
+        assert_point_near(
+            anchor.origin(Some(DataLabelPosition::InsideEnd)),
+            Point { x: 95.0, y: 35.0 },
+        );
+        assert_point_near(
+            anchor.origin(Some(DataLabelPosition::OutsideEnd)),
+            Point { x: 105.0, y: 35.0 },
+        );
+
+        let mut negative =
+            CT_ChartSpace::from_xml(chart_with_plot(&bar_plot("")).as_bytes()).unwrap();
+        let plot = &mut negative.chart.plot_area.plots_mut().unwrap()[0];
+        let Plot::Bar { series, .. } = plot else {
+            panic!("expected bar plot");
+        };
+        series[0].values.values = vec![-1.0, -2.0];
+        let anchors = super::plot_label_anchors(
+            plot,
+            chart_bounds(),
+            DispBlanksAs::Gap,
+            super::GeometryOptions::default(),
+        )
+        .unwrap();
+        assert_point_near(
+            anchors[&(0, 0)].origin(Some(DataLabelPosition::OutsideEnd)),
+            Point { x: 50.0, y: 75.0 },
+        );
+        let reversed = super::GeometryOptions {
+            value: Some(super::AxisMapping {
+                domain: Domain {
+                    min: -2.0,
+                    max: 0.0,
+                },
+                orientation: Orientation::MaxMin,
+            }),
+            ..super::GeometryOptions::default()
+        };
+        let anchors =
+            super::plot_label_anchors(plot, chart_bounds(), DispBlanksAs::Gap, reversed).unwrap();
+        assert_point_near(
+            anchors[&(0, 0)].origin(Some(DataLabelPosition::OutsideEnd)),
+            Point { x: 50.0, y: 65.0 },
+        );
+
+        let pie = CT_ChartSpace::from_xml(
+            chart_with_optional_axes(
+                &remaining_plot_fixtures()
+                    .into_iter()
+                    .find(|(kind, _, _)| *kind == "pieChart")
+                    .unwrap()
+                    .1,
+                false,
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let Plot::Pie { series, .. } = &pie.chart.plot_area.plots().unwrap()[0] else {
+            panic!("expected pie plot");
+        };
+        let pie_slice = &super::pie_slices(30, None, series, chart_bounds()).unwrap()[0];
+        assert_point_near(
+            super::LabelAnchor::segment(pie_slice.anchor, pie_slice.base, pie_slice.end)
+                .origin(Some(DataLabelPosition::OutsideEnd)),
+            Point { x: 175.0, y: 70.0 },
+        );
+        let doughnut_slice = &super::pie_slices(30, Some(60), series, chart_bounds()).unwrap()[0];
+        assert_point_near(
+            super::LabelAnchor::segment(
+                doughnut_slice.anchor,
+                doughnut_slice.base,
+                doughnut_slice.end,
+            )
+            .origin(Some(DataLabelPosition::InsideBase)),
+            Point { x: 147.0, y: 70.0 },
+        );
+
+        let short = super::LabelAnchor::segment(
+            Point { x: 2.0, y: 0.0 },
+            Point { x: 0.0, y: 0.0 },
+            Point { x: 4.0, y: 0.0 },
+        );
+        assert_eq!(
+            short.origin(Some(DataLabelPosition::InsideBase)),
+            Point { x: 2.0, y: 0.0 }
+        );
+        assert_eq!(
+            short.origin(Some(DataLabelPosition::InsideEnd)),
+            Point { x: 2.0, y: 0.0 }
+        );
+        let thin_bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 80.0,
+            height: 80.0,
+        };
+        let thin = &super::pie_slices(30, Some(90), series, thin_bounds).unwrap()[0];
+        let thin = super::LabelAnchor::segment(thin.anchor, thin.base, thin.end);
+        assert_point_near(
+            thin.origin(Some(DataLabelPosition::InsideBase)),
+            Point { x: 78.0, y: 40.0 },
+        );
+        assert_point_near(
+            thin.origin(Some(DataLabelPosition::InsideEnd)),
+            Point { x: 78.0, y: 40.0 },
+        );
+    }
+
+    #[test]
+    fn degenerate_bar_and_radar_anchors_preserve_family_direction() {
+        let mut bars = CT_ChartSpace::from_xml(chart_with_plot(&bar_plot("")).as_bytes()).unwrap();
+        let plot = &mut bars.chart.plot_area.plots_mut().unwrap()[0];
+        let Plot::Bar { series, .. } = plot else {
+            panic!("expected bar plot");
+        };
+        series[0].values.values = vec![80.0, 125.0];
+        for (direction, orientation, boundary, outside) in [
+            (
+                BarDirection::Column,
+                Orientation::MinMax,
+                Point { x: 50.0, y: 140.0 },
+                Point { x: 50.0, y: 135.0 },
+            ),
+            (
+                BarDirection::Column,
+                Orientation::MaxMin,
+                Point { x: 50.0, y: 0.0 },
+                Point { x: 50.0, y: 5.0 },
+            ),
+            (
+                BarDirection::Bar,
+                Orientation::MinMax,
+                Point { x: 0.0, y: 35.0 },
+                Point { x: 5.0, y: 35.0 },
+            ),
+            (
+                BarDirection::Bar,
+                Orientation::MaxMin,
+                Point { x: 200.0, y: 35.0 },
+                Point { x: 195.0, y: 35.0 },
+            ),
+        ] {
+            let Plot::Bar {
+                direction: plot_direction,
+                ..
+            } = plot
+            else {
+                panic!("expected bar plot");
+            };
+            *plot_direction = direction;
+            let options = super::GeometryOptions {
+                value: Some(super::AxisMapping {
+                    domain: Domain {
+                        min: 80.0,
+                        max: 100.0,
+                    },
+                    orientation,
+                }),
+                ..super::GeometryOptions::default()
+            };
+            let anchors =
+                super::plot_label_anchors(plot, chart_bounds(), DispBlanksAs::Gap, options)
+                    .unwrap();
+            let anchor = anchors[&(0, 0)];
+            assert_point_near(anchor.center, boundary);
+            assert_point_near(anchor.base, boundary);
+            assert_point_near(anchor.end, boundary);
+            assert_point_near(anchor.origin(Some(DataLabelPosition::InsideBase)), boundary);
+            assert_point_near(anchor.origin(Some(DataLabelPosition::InsideEnd)), boundary);
+            assert_point_near(anchor.origin(Some(DataLabelPosition::OutsideEnd)), outside);
+        }
+
+        let radar_plot = format!(
+            r#"<q:radarChart><q:radarStyle val="standard"/>{}<q:axId val="-1884094432"/><q:axId val="-1884097184"/></q:radarChart>"#,
+            plot_series(0)
+        );
+        let mut radar = CT_ChartSpace::from_xml(chart_with_plot(&radar_plot).as_bytes()).unwrap();
+        let plot = &mut radar.chart.plot_area.plots_mut().unwrap()[0];
+        let Plot::Radar { series, .. } = plot else {
+            panic!("expected radar plot");
+        };
+        series[0].values.values = vec![0.0, 0.0, 0.0, 0.0];
+        let anchors = super::plot_label_anchors(
+            plot,
+            chart_bounds(),
+            DispBlanksAs::Gap,
+            super::GeometryOptions::default(),
+        )
+        .unwrap();
+        let center = Point { x: 100.0, y: 70.0 };
+        for logical_index in 0..4 {
+            assert_point_near(
+                anchors[&(0, logical_index)].origin(Some(DataLabelPosition::InsideBase)),
+                center,
+            );
+            assert_point_near(
+                anchors[&(0, logical_index)].origin(Some(DataLabelPosition::InsideEnd)),
+                center,
+            );
+        }
+        assert_point_near(
+            anchors[&(0, 0)].origin(Some(DataLabelPosition::OutsideEnd)),
+            Point { x: 100.0, y: 65.0 },
+        );
+        assert_point_near(
+            anchors[&(0, 1)].origin(Some(DataLabelPosition::OutsideEnd)),
+            Point { x: 105.0, y: 70.0 },
+        );
+        assert_point_near(
+            anchors[&(0, 2)].origin(Some(DataLabelPosition::OutsideEnd)),
+            Point { x: 100.0, y: 75.0 },
+        );
+        assert_point_near(
+            anchors[&(0, 3)].origin(Some(DataLabelPosition::OutsideEnd)),
+            Point { x: 95.0, y: 70.0 },
+        );
+    }
+
+    #[test]
+    fn labels_outside_explicit_axis_bounds_are_suppressed() {
+        let mut chart =
+            CT_ChartSpace::from_xml(chart_with_plot(&line_plot("")).as_bytes()).unwrap();
+        {
+            let plot = &mut chart.chart.plot_area.plots_mut().unwrap()[0];
+            let Plot::Line { series, .. } = plot else {
+                panic!("expected line plot");
+            };
+            series[0].values.values = vec![25.0, 75.0];
+        }
+        let value_axis = chart
+            .chart
+            .plot_area
+            .axes
+            .iter_mut()
+            .find(|axis| axis.kind == AxisKind::Value)
+            .unwrap();
+        value_axis.scaling.minimum = Some(50.0);
+        value_axis.scaling.maximum = Some(100.0);
+        value_axis.scaling.orientation = Orientation::MaxMin;
+        let plot = &chart.chart.plot_area.plots().unwrap()[0];
+        let axes = chart.chart.plot_area.axes().unwrap();
+        let options = super::geometry_options(plot, &axes, DispBlanksAs::Gap).unwrap();
+        let anchors =
+            super::plot_label_anchors(plot, chart_bounds(), DispBlanksAs::Gap, options).unwrap();
+        assert!(!anchors.contains_key(&(0, 0)));
+        assert_point_near(anchors[&(0, 1)].center, Point { x: 150.0, y: 70.0 });
+
+        let mut bars = CT_ChartSpace::from_xml(chart_with_plot(&bar_plot("")).as_bytes()).unwrap();
+        let plot = &mut bars.chart.plot_area.plots_mut().unwrap()[0];
+        let Plot::Bar { series, .. } = plot else {
+            panic!("expected bar plot");
+        };
+        series[0].values.values = vec![90.0, 125.0];
+        let options = super::GeometryOptions {
+            value: Some(super::AxisMapping {
+                domain: Domain {
+                    min: 80.0,
+                    max: 100.0,
+                },
+                orientation: Orientation::MinMax,
+            }),
+            ..super::GeometryOptions::default()
+        };
+        let anchors =
+            super::plot_label_anchors(plot, chart_bounds(), DispBlanksAs::Gap, options).unwrap();
+        assert_eq!(anchors.keys().copied().collect::<Vec<_>>(), vec![(0, 0)]);
+        assert_point_near(anchors[&(0, 0)].base, Point { x: 50.0, y: 140.0 });
+        assert_point_near(anchors[&(0, 0)].end, Point { x: 50.0, y: 70.0 });
+        assert_point_near(anchors[&(0, 0)].center, Point { x: 50.0, y: 105.0 });
+        assert_point_near(
+            anchors[&(0, 0)].origin(Some(DataLabelPosition::InsideBase)),
+            Point { x: 50.0, y: 135.0 },
+        );
+    }
+
+    #[test]
+    fn zero_bars_render_and_emit_requested_value_labels() {
+        let mut chart = CT_ChartSpace::from_xml(chart_with_plot(&bar_plot("")).as_bytes()).unwrap();
+        let plot = &mut chart.chart.plot_area.plots_mut().unwrap()[0];
+        let Plot::Bar { series, .. } = plot else {
+            panic!("expected bar plot");
+        };
+        series[0].values.values = vec![0.0, 0.0];
+        let geometry = render_geometry(&chart.chart, chart_bounds()).unwrap();
+        assert_eq!(path_commands(&geometry).len(), 2);
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        render_chart(&chart.chart, chart_bounds(), &mut fonts).unwrap();
+        let plot = &chart.chart.plot_area.plots().unwrap()[0];
+        let mut labels = Vec::new();
+        super::render_data_labels(
+            plot,
+            chart_bounds(),
+            DispBlanksAs::Gap,
+            super::GeometryOptions::default(),
+            &mut fonts,
+            &mut labels,
+        )
+        .unwrap();
+        let text: Vec<_> = labels
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, vec!["0", "0"]);
+    }
+
+    #[test]
+    fn axes_gridlines_and_tick_marks_follow_model_state() {
+        let chart = labelled_bar_chart();
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let group = render_chart(&chart.chart, chart_bounds(), &mut fonts).unwrap();
+        let ranks: Vec<_> = group
+            .children
+            .iter()
+            .map(|element| match element {
+                PositionedElement::Group(group) => {
+                    assert!(group.clip.is_some());
+                    1
+                }
+                PositionedElement::Path(path)
+                    if path
+                        .stroke
+                        .as_ref()
+                        .is_some_and(|stroke| stroke.width == 0.5) =>
+                {
+                    0
+                }
+                PositionedElement::Path(path) if path.fill.is_some() => 4,
+                PositionedElement::Path(path) => {
+                    let bounds = path.path.bounds().expect("axis or tick bounds");
+                    assert_eq!(path.stroke.as_ref().map(|stroke| stroke.width), Some(1.0));
+                    if bounds.width > 4.0 || bounds.height > 4.0 {
+                        2
+                    } else {
+                        3
+                    }
+                }
+                PositionedElement::Text(_) => 5,
+                _ => panic!("unexpected labelled chart element"),
+            })
+            .collect();
+        assert!(ranks.windows(2).all(|pair| pair[0] <= pair[1]), "{ranks:?}");
+        for required in 0..=5 {
+            assert!(
+                ranks.contains(&required),
+                "missing z-order rank {required}: {ranks:?}"
+            );
+        }
+        assert_eq!(ranks.iter().filter(|rank| **rank == 1).count(), 1);
+        assert_eq!(ranks.iter().filter(|rank| **rank == 2).count(), 2);
+
+        let mut deleted = chart.clone();
+        for axis in &mut deleted.chart.plot_area.axes {
+            axis.deleted = true;
+        }
+        let deleted_group = render_chart(&deleted.chart, chart_bounds(), &mut fonts).unwrap();
+        assert_eq!(
+            deleted_group
+                .children
+                .iter()
+                .filter(|element| {
+                    matches!(
+                        element,
+                        PositionedElement::Path(path) if path.stroke.is_some()
+                    )
+                })
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn category_ticks_cover_unlabelled_and_sparse_logical_slots() {
+        let mut chart = CT_ChartSpace::from_xml(chart_with_plot(&bar_plot("")).as_bytes()).unwrap();
+        let Plot::Bar { series, .. } = &mut chart.chart.plot_area.plots_mut().unwrap()[0] else {
+            panic!("expected bar plot");
+        };
+        series[0].categories = None;
+        let plot = &chart.chart.plot_area.plots().unwrap()[0];
+        let mut category_axis = chart
+            .chart
+            .plot_area
+            .axes()
+            .unwrap()
+            .into_iter()
+            .find(|axis| axis.kind == AxisKind::Category)
+            .unwrap();
+        category_axis.major_gridlines = Some(super::ChartLines::default());
+        category_axis.major_tick_mark = TickMark::Cross;
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let annotations = super::render_axes_and_labels(
+            plot,
+            &[category_axis],
+            chart_bounds(),
+            DispBlanksAs::Gap,
+            &mut fonts,
+        )
+        .unwrap();
+        assert_eq!(annotations.gridlines.len(), 2);
+        assert_eq!(annotations.ticks.len(), 2);
+        assert!(annotations.labels.is_empty());
+
+        let sparse_plot = format!(
+            r#"<q:barChart><q:barDir val="col"/><q:grouping val="clustered"/>{}<q:gapWidth val="150"/><q:overlap val="0"/><q:axId val="-1884094432"/><q:axId val="-1884097184"/></q:barChart>"#,
+            sparse_category_series()
+        );
+        let sparse = CT_ChartSpace::from_xml(chart_with_plot(&sparse_plot).as_bytes()).unwrap();
+        let plot = &sparse.chart.plot_area.plots().unwrap()[0];
+        let mut category_axis = sparse
+            .chart
+            .plot_area
+            .axes()
+            .unwrap()
+            .into_iter()
+            .find(|axis| axis.kind == AxisKind::Category)
+            .unwrap();
+        category_axis.major_gridlines = Some(super::ChartLines::default());
+        category_axis.major_tick_mark = TickMark::Cross;
+        let annotations = super::render_axes_and_labels(
+            plot,
+            &[category_axis],
+            chart_bounds(),
+            DispBlanksAs::Gap,
+            &mut fonts,
+        )
+        .unwrap();
+        assert_eq!(annotations.gridlines.len(), 3);
+        assert_eq!(annotations.ticks.len(), 3);
+        assert_eq!(annotations.labels.len(), 2);
+
+        let oversized_plot = sparse_plot.replacen(
+            r#"<q:ptCount val="3"/>"#,
+            r#"<q:ptCount val="4294967295"/>"#,
+            1,
+        );
+        let oversized =
+            CT_ChartSpace::from_xml(chart_with_plot(&oversized_plot).as_bytes()).unwrap();
+        let plot = &oversized.chart.plot_area.plots().unwrap()[0];
+        let category_axis = oversized
+            .chart
+            .plot_area
+            .axes()
+            .unwrap()
+            .into_iter()
+            .find(|axis| axis.kind == AxisKind::Category)
+            .unwrap();
+        let result = super::render_axes_and_labels(
+            plot,
+            &[category_axis],
+            chart_bounds(),
+            DispBlanksAs::Gap,
+            &mut fonts,
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("oversized category annotations rendered"),
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("logical category count 4294967295")
+        );
+        assert!(error.to_string().contains("exceeds 16384"));
+    }
+
+    #[test]
+    fn unsupported_numeric_category_formats_return_projection_errors() {
+        let mut chart = CT_ChartSpace::from_xml(chart_with_plot(&bar_plot("")).as_bytes()).unwrap();
+        let Plot::Bar { series, .. } = &mut chart.chart.plot_area.plots_mut().unwrap()[0] else {
+            panic!("expected bar plot");
+        };
+        series[0].categories = Some(AxisData::Numeric(
+            NumericData::new(
+                "Sheet1!$A$2:$A$3".to_owned(),
+                "General".to_owned(),
+                vec![1.0, 2.0],
+            )
+            .unwrap(),
+        ));
+        let plot = &chart.chart.plot_area.plots().unwrap()[0];
+        let mut category_axis = chart
+            .chart
+            .plot_area
+            .axes()
+            .unwrap()
+            .into_iter()
+            .find(|axis| axis.kind == AxisKind::Category)
+            .unwrap();
+        category_axis.number_format = Some(NumberFormat::new("0.00".to_owned(), false).unwrap());
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let annotations = super::render_axes_and_labels(
+            plot,
+            &[category_axis.clone()],
+            chart_bounds(),
+            DispBlanksAs::Gap,
+            &mut fonts,
+        )
+        .unwrap();
+        let text: Vec<_> = annotations
+            .labels
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, vec!["1.00", "2.00"]);
+
+        category_axis.number_format = Some(NumberFormat::new("#,##0".to_owned(), false).unwrap());
+        let result = super::render_axes_and_labels(
+            plot,
+            &[category_axis],
+            chart_bounds(),
+            DispBlanksAs::Gap,
+            &mut fonts,
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("unsupported category-axis format rendered"),
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("c:numFmt/@formatCode projection")
+        );
+        assert!(error.to_string().contains("#,##0"));
+    }
+
+    #[test]
+    fn labels_and_legend_shape_with_deterministic_fonts() {
+        let chart = labelled_bar_chart();
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let group = render_chart(&chart.chart, chart_bounds(), &mut fonts).unwrap();
+        let labels: Vec<_> = group
+            .children
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run),
+                _ => None,
+            })
+            .collect();
+        for text in ["North", "South", "20", "Sales", "100"] {
+            assert!(labels.iter().any(|run| run.text == text), "missing {text}");
+        }
+        let styled_tick = labels.iter().find(|run| run.text == "20").unwrap();
+        assert_eq!(styled_tick.font_size, 12.0);
+        assert!(styled_tick.bold);
+        assert!(
+            labels
+                .iter()
+                .all(|run| !run.glyph_ids.is_empty() && run.glyph_ids.len() == run.advances.len())
+        );
+    }
+
+    #[test]
+    fn labelled_chart_raster_is_deterministic() {
+        let raster = || {
+            let chart = labelled_bar_chart();
+            let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+            let group = render_chart(&chart.chart, chart_bounds(), &mut fonts).unwrap();
+            let layout = LayoutResult::new(
+                vec![PageFrame::new(
+                    1,
+                    200.0,
+                    140.0,
+                    vec![PositionedElement::Group(group)],
+                )],
+                fonts.all_font_data(),
+                None,
+                Vec::new(),
+            );
+            oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap()
+        };
+        assert_eq!(raster(), raster());
+    }
+
+    fn labelled_bar_chart() -> CT_ChartSpace {
+        let series = plot_series(0)
+            .replace(
+                "<q:cat>",
+                "<q:tx><q:strRef><q:f>Sheet1!$B$1</q:f><q:strCache><q:ptCount val=\"1\"/><q:pt idx=\"0\"><q:v>Sales</q:v></q:pt></q:strCache></q:strRef></q:tx><q:cat>",
+            )
+            .replace("<q:v>1</q:v>", "<q:v>0</q:v>")
+            .replace("<q:v>2</q:v>", "<q:v>100</q:v>");
+        let plot = format!(
+            r#"<q:barChart><q:barDir val="col"/><q:grouping val="clustered"/>{series}<q:dLbls><q:numFmt formatCode="0" sourceLinked="0"/><q:showVal val="1"/></q:dLbls><q:gapWidth val="150"/><q:overlap val="0"/><q:axId val="-1884094432"/><q:axId val="-1884097184"/></q:barChart>"#
+        );
+        let xml = chart_with_plot(&plot)
+            .replacen(
+                "<q:scaling/>",
+                "<q:scaling><q:orientation val=\"minMax\"/></q:scaling>",
+                1,
+            )
+            .replacen(
+                "<q:scaling/>",
+                "<q:scaling><q:max val=\"100\"/><q:min val=\"0\"/></q:scaling>",
+                1,
+            )
+            .replace(
+                "<q:axPos val=\"b\"/>",
+                "<q:axPos val=\"b\"/><q:majorTickMark val=\"cross\"/>",
+            )
+            .replace(
+                "<q:axPos val=\"l\"/>",
+                "<q:axPos val=\"l\"/><q:majorGridlines/><q:numFmt formatCode=\"0\" sourceLinked=\"0\"/><q:majorTickMark val=\"out\"/><q:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr sz=\"1200\" b=\"1\"><a:latin typeface=\"Carlito\"/></a:defRPr></a:pPr></a:p></q:txPr>",
+            )
+            .replace("</q:plotArea></q:chart>", "</q:plotArea><q:legend/></q:chart>");
+        CT_ChartSpace::from_xml(xml.as_bytes()).unwrap()
     }
 
     fn chart_bounds() -> Rect {
@@ -10528,6 +13951,210 @@ mod tests {
                 String::from_utf8_lossy(xml)
             );
         }
+    }
+
+    #[test]
+    fn point_label_overrides_render_without_changing_preserved_xml() {
+        let raw_overrides = r#"<q:dLbl><q:idx val="1"/><q:numFmt formatCode="0.0" sourceLinked="0"/><q:dLblPos val="r"/><q:showVal val="1"/><q:showCatName val="1"/><q:separator> / </q:separator><q:extLst><x:point/></q:extLst></q:dLbl>"#;
+        let plot = bar_plot("").replace(
+            r#"<q:dLbls><q:showVal val="1"/></q:dLbls>"#,
+            &format!(
+                r#"<q:dLbls>{raw_overrides}<q:numFmt formatCode="0" sourceLinked="0"/><q:showVal val="1"/><q:showCatName val="1"/><q:separator>, </q:separator></q:dLbls>"#
+            ),
+        );
+        let chart = CT_ChartSpace::from_xml(chart_with_plot(&plot).as_bytes()).unwrap();
+        let plot = &chart.chart.plot_area.plots().unwrap()[0];
+        let Plot::Bar { data_labels, .. } = plot else {
+            panic!("expected bar plot");
+        };
+        let labels = data_labels.as_ref().unwrap();
+        let written = labels.to_xml().unwrap();
+        assert!(
+            written
+                .windows(raw_overrides.len())
+                .any(|window| window == raw_overrides.as_bytes())
+        );
+        let overrides = super::point_label_overrides(labels).unwrap();
+        assert_eq!(overrides.keys().copied().collect::<Vec<_>>(), vec![1]);
+
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let mut rendered = Vec::new();
+        super::render_data_labels(
+            plot,
+            chart_bounds(),
+            DispBlanksAs::Gap,
+            super::GeometryOptions::default(),
+            &mut fonts,
+            &mut rendered,
+        )
+        .unwrap();
+        let labels: Vec<_> = rendered
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[0].text, "North, 1");
+        assert_eq!(labels[1].text, "South / 2.0");
+        assert_point_near(labels[0].origin, Point { x: 50.0, y: 105.0 });
+        assert_point_near(labels[1].origin, Point { x: 158.0, y: 70.0 });
+        assert_eq!(
+            CT_DLbls::from_xml(&written).unwrap().to_xml().unwrap(),
+            written
+        );
+    }
+
+    #[test]
+    fn malformed_point_label_overrides_return_contextual_errors() {
+        let cases = [
+            r#"<q:dLbls xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/chart"><q:dLbl><q:showVal val="1"/></q:dLbl></q:dLbls>"#,
+            r#"<q:dLbls xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/chart"><q:dLbl><q:idx val="0"/><q:idx val="1"/></q:dLbl></q:dLbls>"#,
+            r#"<q:dLbls xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/chart"><q:dLbl><q:idx val="point"/></q:dLbl></q:dLbls>"#,
+            r#"<q:dLbls xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/chart"><q:dLbl><q:idx val="0"/><q:showVal val="maybe"/></q:dLbl></q:dLbls>"#,
+            r#"<q:dLbls xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/chart"><q:dLbl><q:idx val="0"/><q:dLblPos val="middle"/></q:dLbl></q:dLbls>"#,
+            r#"<q:dLbls xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/chart"><q:dLbl><q:idx val="0"/><q:showVal val="1"/><q:dLblPos val="r"/></q:dLbl></q:dLbls>"#,
+            r#"<q:dLbls xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/chart"><q:dLbl><q:idx val="0"/></q:dLbl><q:dLbl><q:idx val="0"/></q:dLbl></q:dLbls>"#,
+        ];
+        for xml in cases {
+            let labels = CT_DLbls::from_xml(xml.as_bytes()).unwrap();
+            let result = std::panic::catch_unwind(|| super::point_label_overrides(&labels));
+            assert!(result.is_ok(), "point-label parser panicked for {xml}");
+            assert!(
+                result.unwrap().is_err(),
+                "malformed point labels parsed: {xml}"
+            );
+        }
+
+        let foreign = format!(
+            r#"<q:dLbls xmlns:q="{C_NS}" xmlns:x="urn:foreign"><x:dLbl><x:idx val="0"/></x:dLbl></q:dLbls>"#
+        );
+        let labels = CT_DLbls::from_xml(foreign.as_bytes()).unwrap();
+        assert!(super::point_label_overrides(&labels).unwrap().is_empty());
+    }
+
+    #[test]
+    fn percentage_label_aggregation_rejects_nonfinite_totals() {
+        let mut chart = CT_ChartSpace::from_xml(chart_with_plot(&bar_plot("")).as_bytes()).unwrap();
+        let plot = &mut chart.chart.plot_area.plots_mut().unwrap()[0];
+        let Plot::Bar { series, .. } = plot else {
+            panic!("expected bar plot");
+        };
+        series[0].values.values = vec![f64::MAX, f64::MAX];
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        super::render_data_labels(
+            plot,
+            chart_bounds(),
+            DispBlanksAs::Gap,
+            super::GeometryOptions::default(),
+            &mut fonts,
+            &mut Vec::new(),
+        )
+        .expect("value-only labels do not need a percentage total");
+        let Plot::Bar { data_labels, .. } = plot else {
+            panic!("expected bar plot");
+        };
+        data_labels.as_mut().unwrap().show_percent = true;
+        let error = super::render_data_labels(
+            plot,
+            chart_bounds(),
+            DispBlanksAs::Gap,
+            super::GeometryOptions::default(),
+            &mut fonts,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("data-label percentage total"));
+
+        let overrides = r#"<q:dLbl><q:idx val="0"/><q:showPercent val="0"/></q:dLbl><q:dLbl><q:idx val="1"/><q:showPercent val="0"/></q:dLbl>"#;
+        let plot_xml = bar_plot("").replace(
+            r#"<q:dLbls><q:showVal val="1"/></q:dLbls>"#,
+            &format!(
+                r#"<q:dLbls>{overrides}<q:showVal val="1"/><q:showPercent val="1"/></q:dLbls>"#
+            ),
+        );
+        let mut chart = CT_ChartSpace::from_xml(chart_with_plot(&plot_xml).as_bytes()).unwrap();
+        let plot = &mut chart.chart.plot_area.plots_mut().unwrap()[0];
+        let Plot::Bar { series, .. } = plot else {
+            panic!("expected bar plot");
+        };
+        series[0].values.values = vec![f64::MAX, f64::MAX];
+        super::render_data_labels(
+            plot,
+            chart_bounds(),
+            DispBlanksAs::Gap,
+            super::GeometryOptions::default(),
+            &mut fonts,
+            &mut Vec::new(),
+        )
+        .expect("effective point overrides disable percentage aggregation");
+    }
+
+    #[test]
+    fn percentage_labels_use_effective_number_format_precision() {
+        let mut chart = CT_ChartSpace::from_xml(chart_with_plot(&bar_plot("")).as_bytes()).unwrap();
+        let plot = &mut chart.chart.plot_area.plots_mut().unwrap()[0];
+        let Plot::Bar {
+            series,
+            data_labels,
+            ..
+        } = plot
+        else {
+            panic!("expected bar plot");
+        };
+        series[0].values.values = vec![1.0, 2.0];
+        let labels = data_labels.as_mut().unwrap();
+        labels.show_value = false;
+        labels.show_percent = true;
+        labels.number_format = Some(NumberFormat::new("0.00%".to_owned(), false).unwrap());
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let mut rendered = Vec::new();
+        super::render_data_labels(
+            plot,
+            chart_bounds(),
+            DispBlanksAs::Gap,
+            super::GeometryOptions::default(),
+            &mut fonts,
+            &mut rendered,
+        )
+        .unwrap();
+        let text: Vec<_> = rendered
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, vec!["33.33%", "66.67%"]);
+
+        let point_override = r#"<q:dLbl><q:idx val="0"/><q:numFmt formatCode="0.00%" sourceLinked="0"/><q:showPercent val="1"/></q:dLbl>"#;
+        let plot_xml = bar_plot("").replace(
+            r#"<q:dLbls><q:showVal val="1"/></q:dLbls>"#,
+            &format!(
+                r#"<q:dLbls>{point_override}<q:numFmt formatCode="0%" sourceLinked="0"/><q:showPercent val="1"/></q:dLbls>"#
+            ),
+        );
+        let chart = CT_ChartSpace::from_xml(chart_with_plot(&plot_xml).as_bytes()).unwrap();
+        let plot = &chart.chart.plot_area.plots().unwrap()[0];
+        let mut rendered = Vec::new();
+        super::render_data_labels(
+            plot,
+            chart_bounds(),
+            DispBlanksAs::Gap,
+            super::GeometryOptions::default(),
+            &mut fonts,
+            &mut rendered,
+        )
+        .unwrap();
+        let text: Vec<_> = rendered
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, vec!["33.33%", "67%"]);
     }
 
     #[test]

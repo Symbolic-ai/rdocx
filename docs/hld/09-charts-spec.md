@@ -445,17 +445,75 @@ must remain finite. An overflow or nonfinite mutable cache returns a contextual
 error before backend-neutral geometry is exposed.
 
 Geometry uses a deterministic placeholder solid palette indexed by series.
-F-126 adds axes, gridlines, labels, and legends without changing plot paths.
+The labelled entry point is `render_chart(&CT_Chart, Rect, &mut FontManager) ->
+Result<GroupElement>`. It computes linear scales from cached values and targets
+six ticks. The step is 1, 2, or 5 times a power of ten. Unpinned bounds expand
+to enclosing step multiples, while a `c:scaling` minimum or maximum remains
+exact. Ordinary bar and area value domains include zero. A 0 through 100 value
+axis therefore emits 0, 20, 40, 60, 80, and 100. Constant, fractional,
+negative, mixed-sign, and large finite domains produce increasing finite
+ticks. Standard line and scatter domains use only their rendered values without
+forcing zero in both labelled and geometry-only entry points. Scatter domains
+use only logical indexes with a rendered x and y pair. Zero-valued bars retain
+label anchors, and an all-zero bar chart remains renderable. `c:orientation`
+reverses both tick coordinates and plot geometry.
+
+Major gridlines emit first, followed by one clipped plot group, axis lines and
+major tick marks, legend swatches, then text. Deleted axes emit none of those
+annotations. Axis position controls the plot edge, tick direction, and default label side.
+`c:tickLblPos` can move labels to the high or low side or suppress them.
+Category tick and gridline positions cover the full logical cache count even
+when category text is absent or sparse. Category text retains its cached
+logical indexes and emits only at present slots. Annotation expansion is
+limited to 16,384 logical categories. A larger declared count returns a
+contextual error before allocating annotations. Radar charts instead emit
+category spokes, category labels at distinct outer, inner, or next-to-spoke
+radii, and concentric value gridlines. Radar value labels likewise use distinct
+high, low, and next-to-axis positions. High category-label origins are clamped
+to the label space reserved around the plot, including for narrow plots.
+
+Category labels, numeric tick labels, requested data-label fields, and legend
+series names are shaped into `GlyphRun` values by the caller's `FontManager`.
+The fallback chart style is Carlito at 9 points with black text. Modelled axis
+default-run properties override the typeface, point size, bold, and italic
+values. Axis, numeric category, and data label values use the implemented
+`NumberFormat` subset when a format is present, and deterministic General
+formatting otherwise. The category-axis format overrides the numeric category
+cache format. Unsupported effective projections return a contextual error. Data
+labels project the supported series name, category name, value, percentage, and
+bubble-size flags with the declared separator and position. Percentage totals
+are checked only when an effective collection or point label requests them.
+The effective number format controls percentage precision. Bubble sizes join
+the value cache by preserved logical index. Label anchors come from the same
+family geometry, scales, bounds, and orientations as the plotted marks.
+Inside-base, inside-end, and outside-end positions follow the rendered bar
+segment or radial slice geometry. Inside displacement is clamped to short bars
+and thin rings. Bar retention uses the data endpoint, so an off-plot zero
+baseline does not suppress an in-range value and an out-of-range endpoint does
+not retain a label. Retained bar anchors derive from the clipped visible
+segment. If clipping collapses that segment to a point, inside positions remain
+at that point and outside-end keeps the original vertical or horizontal value
+axis direction. A zero-radius radar anchor likewise keeps its category-spoke
+direction. Radar default domains include zero and preserve negative values for
+all-negative and mixed-sign caches. Radar points outside explicit normal or
+reversed value bounds do not emit geometry or labels. A nonempty radar cache
+whose points are all outside explicit bounds still emits its axes and other
+annotations. Individual
+`c:dLbl` delete, visibility, number-format, position, and separator overrides
+are projected privately by logical index from their namespace-resolved raw
+subtrees. Those subtrees remain byte-preserved as the only serialization source.
+A present legend shell emits
+one placeholder-colour swatch and shaped series name per row in the upper-right
+of the plot. Unsupported legend placement children remain preserved and do not
+change this default layout.
+
 F-127 replaces the placeholder palette with chart and theme colour resolution.
 F-128 resolves chart relationships into the render input, routes supported
 charts to native geometry, and owns preserved-chart fallback selection. Later
 binding work consumes the same concrete geometry contract without adding a
-backend-specific chart path.
-
-Scales are computed from the cached values: linear axes with a nice-number tick
-algorithm unless `c:scaling` pins a minimum or maximum. Series colours come from
-the chart's own `c:spPr` when present, otherwise from the theme's accent cycle
-resolved through the same colour pipeline as everything else.
+backend-specific chart path. Series colours then come from the chart's own
+`c:spPr` when present, otherwise from the theme's accent cycle resolved through
+the same colour pipeline as everything else.
 
 For a chart that was **preserved rather than authored**, draw the cached image
 fallback if the file carries one, otherwise a labelled placeholder rectangle
