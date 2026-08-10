@@ -27,10 +27,10 @@ regenerated, never hand-edited.
 | M9, Inheritance resolver                    | 8  | 8 | 0 | 0  |
 | M10, Renderer                               | 20 | 20 | 0 | 0  |
 | M11, Write API                              | 12 | 12 | 0 | 0  |
-| M12, Charts                                 | 12 | 7 | 2 | 3  |
+| M12, Charts                                 | 12 | 7 | 3 | 2  |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **158** | **120** | **2** | **36** |
+| **Total** | **158** | **120** | **3** | **35** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -250,7 +250,7 @@ regenerated, never hand-edited.
 | F-123 | Data labels and number formats               | S30 | M | done |
 | F-124 | add_chart                                    | S31 | L | in-progress |
 | F-125 | Chart rendering: geometry                    | S31 | L | in-progress |
-| F-126 | Chart rendering: axes, gridlines and labels  | S31 | L | pending |
+| F-126 | Chart rendering: axes, gridlines and labels  | S31 | L | in-progress |
 | F-127 | Chart colour resolution                      | S32 | M | pending |
 | F-128 | Preserved chart fallback                     | S32 | S | pending |
 <!-- AUTOGEN:backlog-M12 END -->
