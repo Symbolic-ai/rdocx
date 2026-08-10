@@ -165,10 +165,10 @@ sequential.
 `c:tx`, `c:spPr`, `c:dLbls`, `c:cat`, `c:val`, and `c:bubbleSize` write in
 schema order. Markers, data points, trendlines, extensions, unknown attributes,
 and whitespace remain byte-preserved in their original series or reference
-slots. Plot-area serialization continues to use its preserved plot bytes. Its
-read-only series projection validates the common category-based plot payloads
-without claiming ownership of a plot kind. Across the pinned corpus it parses
-and reparses 66 series from the 26 chart parts.
+slots. Supported single-family bar and line plot areas own their series through
+the typed plot model below. Unsupported plot areas continue to use preserved
+plot bytes. Across the pinned corpus the model parses and reparses 66 series
+from the 26 chart parts.
 
 `CT_DLbls` models collection-level number format, position, separator, and the
 six visibility flags for legend key, value, category name, series name,
@@ -193,33 +193,80 @@ LibreOffice 26.2.5.2 renders the SHA-bound candidate, then Poppler 26.01.0
 extracts `25%` from the PDF. The reviewed candidate SHA-256 is
 `4ba02faa8e4cff6cefa7a7dc73fc0eb0c08d62d180f83fa0d3fd56a7e4136242`.
 
-The later typed plot surface expands the preserved plot-area slots to the
-following model:
+The typed plot surface currently owns two-dimensional bar and line plots:
 
 ```rust
-
 pub enum Plot {
-    Bar { direction: BarDirection, grouping: BarGrouping, gap_width: u16,
-          overlap: i8, series: Vec<Series> },
-    Line { marker: bool, smooth: bool, series: Vec<Series> },
-    Pie { first_slice_ang: u16, series: Vec<Series> },
-    Doughnut { hole_size: u8, series: Vec<Series> },
-    Scatter { style: ScatterStyle, series: Vec<Series> },
-    Area { grouping: Grouping, series: Vec<Series> },
-    Radar { style: RadarStyle, series: Vec<Series> },
-}
-
-pub struct Series {
-    pub index: u32, pub order: u32,
-    pub name: Option<StringRef>,
-    pub categories: Option<AxisData>,   // c:cat
-    pub values: NumericData,            // c:val
-    pub bubble_size: Option<NumericData>,
-    pub sp_pr: Option<ShapeProperties>,
-    pub data_labels: Option<CT_DLbls>,
-    pub points: Vec<CT_DPt>,
+    Bar {
+        direction: BarDirection,
+        grouping: BarGrouping,
+        gap_width: u16,
+        overlap: i8,
+        series: Vec<Series>,
+        data_labels: Option<CT_DLbls>,
+        axis_ids: [AxisId; 2],
+    },
+    Line {
+        grouping: Grouping,
+        marker: bool,
+        smooth: bool,
+        series: Vec<Series>,
+        data_labels: Option<CT_DLbls>,
+        axis_ids: [AxisId; 2],
+    },
 }
 ```
+
+`BarDirection` distinguishes horizontal bars from columns. `BarGrouping`
+supports clustered, percentage-stacked, stacked, and standard modes.
+`Grouping` supports the percentage-stacked, stacked, and standard line modes.
+Bar gap width is from 0 through 500 and overlap is from -100 through 100. Both
+plot kinds require at least one series and exactly two axis references. Line
+marker and smooth values are typed booleans.
+
+`CT_PlotArea` owns the typed plots and the axis collection. Each plot stores
+only two `AxisId` references. Both identifiers must resolve in the plot-area
+axis set, and the complete set must retain the reciprocal `crossAx` invariant.
+`CT_PlotArea::new` validates authored plots and axes. `plots()`, `plots_mut()`,
+and `axes()` expose the supported owned choice.
+
+Readers accept any prefix bound to ChartML. Writers use fixed `c:`, `a:`, and
+`r:` prefixes and the ChartML child sequence. Plot attributes, comments,
+whitespace, extensions, `varyColors`, line decorations, bar series lines, and
+unmodelled series payloads remain in ordered raw slots. Repeated series and
+axis-id slots reconcile public insertions, edits, and reordering without moving
+schema-leading content or losing between-item payloads.
+
+Three-dimensional plots, stock, surface, `ofPie`, and other unsupported plot
+families remain opaque. A plot area containing more than one plot family also
+remains opaque, including a supported bar and line combination. The writer
+does not partially rewrite an opaque choice or replace a parsed bar family
+with line, or line with bar, while preserved family-specific payload remains.
+
+The pinned corpus contains 12 bar plots and 3 line plots. The typed boundary
+owns 11 bar plots and 2 line plots. One bar and line combination remains
+opaque, which accounts for the remaining plot of each kind.
+
+The external viewer gate rewrites only the chart part in representative bar
+and line decks. LibreOffice 26.2.5.2 and Poppler 26.01.0 render originals and
+candidates at 150 dpi. Normalized RGB mean absolute error has an exact threshold
+of 0 and both observed values are 0. The SHA-256 bindings are:
+
+- Bar original deck
+  `79e1d218bfb2903e8dc8425a6b1997d9c1976f5a5f025bada85b0c47b5777969`,
+  candidate deck
+  `20a73449769a7e50c009d375cfda8da9beee7f367447caa905c233673f159dbf`,
+  and both renders
+  `97e9579bf906bca51b127683ca1e476c93545e0f95d40683ce21ce9c8c127529`.
+- Line original deck
+  `a2319540fb096629874e8c2baf91b9f8afd1386bfba411efff503b96dce9e9a1`,
+  candidate deck
+  `509bf5bba48ae3a39f9b207d989c3958316f00735ffd0fc835ddd620d4887769`,
+  and both renders
+  `e5a44127c31edde36e470ad5fa541206c5c9c2080d4618af8d5d0567d084cdc9`.
+
+This viewer evidence covers plot serialization. Native bar, line, area, wedge,
+and marker path generation remains in F-125.
 
 `Axis` models the `Category`, `Value`, `Date` and `Series` roots with typed
 `Scaling`, position, delete state, gridlines, title, `NumberFormat`, tick

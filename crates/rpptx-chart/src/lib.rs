@@ -1878,6 +1878,201 @@ impl AxisId {
     }
 }
 
+/// Whether bars extend along the category or value axis.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BarDirection {
+    Bar,
+    Column,
+}
+
+impl BarDirection {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "bar" => Some(Self::Bar),
+            "col" => Some(Self::Column),
+            _ => None,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bar => "bar",
+            Self::Column => "col",
+        }
+    }
+}
+
+/// Grouping modes supported by a two-dimensional bar plot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BarGrouping {
+    Clustered,
+    PercentStacked,
+    Stacked,
+    Standard,
+}
+
+impl BarGrouping {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "clustered" => Some(Self::Clustered),
+            "percentStacked" => Some(Self::PercentStacked),
+            "stacked" => Some(Self::Stacked),
+            "standard" => Some(Self::Standard),
+            _ => None,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Clustered => "clustered",
+            Self::PercentStacked => "percentStacked",
+            Self::Stacked => "stacked",
+            Self::Standard => "standard",
+        }
+    }
+}
+
+/// Grouping modes shared by line and later area plots.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Grouping {
+    PercentStacked,
+    Stacked,
+    Standard,
+}
+
+impl Grouping {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "percentStacked" => Some(Self::PercentStacked),
+            "stacked" => Some(Self::Stacked),
+            "standard" => Some(Self::Standard),
+            _ => None,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::PercentStacked => "percentStacked",
+            Self::Stacked => "stacked",
+            Self::Standard => "standard",
+        }
+    }
+}
+
+/// A supported two-dimensional plot owned by one plot area.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Plot {
+    Bar {
+        direction: BarDirection,
+        grouping: BarGrouping,
+        gap_width: u16,
+        overlap: i8,
+        series: Vec<Series>,
+        data_labels: Option<CT_DLbls>,
+        axis_ids: [AxisId; 2],
+    },
+    Line {
+        grouping: Grouping,
+        marker: bool,
+        smooth: bool,
+        series: Vec<Series>,
+        data_labels: Option<CT_DLbls>,
+        axis_ids: [AxisId; 2],
+    },
+}
+
+impl Plot {
+    pub fn bar(
+        direction: BarDirection,
+        grouping: BarGrouping,
+        series: Vec<Series>,
+        axis_ids: [AxisId; 2],
+    ) -> Result<Self> {
+        let plot = Self::Bar {
+            direction,
+            grouping,
+            gap_width: 150,
+            overlap: 0,
+            series,
+            data_labels: None,
+            axis_ids,
+        };
+        plot.validate()?;
+        Ok(plot)
+    }
+
+    pub fn line(grouping: Grouping, series: Vec<Series>, axis_ids: [AxisId; 2]) -> Result<Self> {
+        let plot = Self::Line {
+            grouping,
+            marker: false,
+            smooth: false,
+            series,
+            data_labels: None,
+            axis_ids,
+        };
+        plot.validate()?;
+        Ok(plot)
+    }
+
+    fn axis_ids(&self) -> [AxisId; 2] {
+        match self {
+            Self::Bar { axis_ids, .. } | Self::Line { axis_ids, .. } => *axis_ids,
+        }
+    }
+
+    fn validate(&self) -> Result<()> {
+        let (series, labels, axis_ids) = match self {
+            Self::Bar {
+                gap_width,
+                overlap,
+                series,
+                data_labels,
+                axis_ids,
+                ..
+            } => {
+                if *gap_width > 500 {
+                    return Err(ChartError::InvalidValue {
+                        element: "c:gapWidth".to_owned(),
+                        value: gap_width.to_string(),
+                    });
+                }
+                if !(-100..=100).contains(overlap) {
+                    return Err(ChartError::InvalidValue {
+                        element: "c:overlap".to_owned(),
+                        value: overlap.to_string(),
+                    });
+                }
+                (series, data_labels, axis_ids)
+            }
+            Self::Line {
+                series,
+                data_labels,
+                axis_ids,
+                ..
+            } => (series, data_labels, axis_ids),
+        };
+        if series.is_empty() {
+            return Err(ChartError::MissingElement("c:ser".to_owned()));
+        }
+        if axis_ids[0] == axis_ids[1] {
+            return Err(ChartError::DuplicateElement(format!(
+                "c:axId {}",
+                axis_ids[0].value()
+            )));
+        }
+        for id in axis_ids {
+            AxisId::new(id.value())?;
+        }
+        if let Some(labels) = labels {
+            labels.validate()?;
+        }
+        for item in series {
+            item.values.validate()?;
+        }
+        Ok(())
+    }
+}
+
 /// The concrete ChartML root used by an axis.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum AxisKind {
@@ -2194,12 +2389,32 @@ pub struct CT_Title {
     raw_children: OrderedRawChildren,
 }
 
+/// Preserved lexical and ordered-raw state for one typed plot.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct PlotMarkup {
+    raw_attributes: XmlAttributes,
+    raw_children: OrderedRawChildren,
+    direction: Option<ScalarMarkup>,
+    grouping: Option<ScalarMarkup>,
+    gap_width: Option<ScalarMarkup>,
+    overlap: Option<ScalarMarkup>,
+    marker: Option<ScalarMarkup>,
+    smooth: Option<ScalarMarkup>,
+    axis_ids: Vec<AxisIdMarkup>,
+    original_series_keys: Vec<(u32, u32)>,
+    original_axis_ids: Vec<AxisId>,
+    parsed_bar: Option<bool>,
+}
+
 /// A plot-area shell. F-119 through F-122 replace selected raw slots with types.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CT_PlotArea {
     raw_attributes: Vec<(String, String)>,
     raw_children: OrderedRawChildren,
     namespace_bindings: NamespaceBindings,
+    plots: Option<Vec<Plot>>,
+    plot_markup: Vec<PlotMarkup>,
+    axes: Vec<Axis>,
 }
 
 /// A chart legend shell whose current children remain opaque.
@@ -3769,30 +3984,150 @@ impl CT_Title {
 
 impl CT_PlotArea {
     fn from_xml_with_namespaces(xml: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
-        let (raw_attributes, raw_children) = parse_raw_shell(xml, b"plotArea", "c:plotArea")?;
+        let (raw_attributes, captured_children) = parse_raw_shell(xml, b"plotArea", "c:plotArea")?;
         let namespace_bindings = root_chart_bindings(xml, b"plotArea", inherited)?;
-        Ok(Self {
+        let direct_roots: Vec<_> = captured_children
+            .at(0)
+            .filter_map(|raw| chart_root_local(raw, &namespace_bindings).transpose())
+            .collect::<Result<_>>()?;
+        let plot_roots: Vec<_> = direct_roots
+            .iter()
+            .filter(|local| is_plot_container(local))
+            .cloned()
+            .collect();
+        let typed_local = (plot_roots.len() == 1
+            && matches!(plot_roots[0].as_slice(), b"barChart" | b"lineChart"))
+        .then(|| plot_roots[0].clone());
+
+        let Some(typed_local) = typed_local else {
+            return Ok(Self {
+                raw_attributes,
+                raw_children: captured_children,
+                namespace_bindings,
+                plots: None,
+                plot_markup: Vec::new(),
+                axes: Vec::new(),
+            });
+        };
+
+        let mut raw_children = OrderedRawChildren::default();
+        let mut plots = Vec::new();
+        let mut plot_markup = Vec::new();
+        let mut axes = Vec::new();
+        let mut boundary = 0usize;
+        for raw in captured_children.at(0) {
+            let local = chart_root_local(raw, &namespace_bindings)?;
+            if local.as_deref() == Some(typed_local.as_slice()) {
+                let (plot, markup) = parse_plot(raw, &namespace_bindings)?;
+                plots.push(plot);
+                plot_markup.push(markup);
+                boundary = 1;
+            } else if local.as_deref().and_then(AxisKind::parse).is_some() {
+                axes.push(Axis::from_xml_with_namespaces(raw, &namespace_bindings)?);
+                boundary = axes.len() + 1;
+            } else {
+                raw_children.push(boundary, raw.to_vec());
+            }
+        }
+        let plot_area = Self {
             raw_attributes,
             raw_children,
             namespace_bindings,
-        })
+            plots: Some(plots),
+            plot_markup,
+            axes,
+        };
+        plot_area.validate_typed()?;
+        Ok(plot_area)
     }
 
     fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        write_raw_shell(
-            writer,
-            "c:plotArea",
-            &self.raw_attributes,
-            &self.raw_children,
-        )
+        let Some(plots) = &self.plots else {
+            return write_raw_shell(
+                writer,
+                "c:plotArea",
+                &self.raw_attributes,
+                &self.raw_children,
+            );
+        };
+        self.validate_typed()?;
+        let mut start = BytesStart::new("c:plotArea");
+        push_attributes(&mut start, &self.raw_attributes);
+        writer
+            .write_event(Event::Start(start))
+            .map_err(OxmlError::from)?;
+        emit_raw(writer, self.raw_children.at(0))?;
+        for (index, plot) in plots.iter().enumerate() {
+            write_plot(
+                writer,
+                plot,
+                self.plot_markup
+                    .get(index)
+                    .unwrap_or(&PlotMarkup::default()),
+            )?;
+        }
+        emit_raw(writer, self.raw_children.at(1))?;
+        for (index, axis) in self.axes.iter().enumerate() {
+            writer
+                .get_mut()
+                .write_all(&axis.to_xml()?)
+                .map_err(OxmlError::from)?;
+            emit_raw(writer, self.raw_children.at(index + 2))?;
+        }
+        writer
+            .write_event(Event::End(BytesEnd::new("c:plotArea")))
+            .map_err(OxmlError::from)?;
+        Ok(())
     }
 
     pub fn raw_children(&self) -> &OrderedRawChildren {
         &self.raw_children
     }
 
+    /// Creates a supported single-family plot area with owned axes.
+    pub fn new(plots: Vec<Plot>, axes: Vec<Axis>) -> Result<Self> {
+        let plot_area = Self {
+            raw_attributes: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+            namespace_bindings: chart_namespace_defaults(),
+            plot_markup: vec![PlotMarkup::default(); plots.len()],
+            plots: Some(plots),
+            axes,
+        };
+        plot_area.validate_typed()?;
+        Ok(plot_area)
+    }
+
+    /// Returns the owned supported plots, or an error for an opaque choice.
+    pub fn plots(&self) -> Result<&[Plot]> {
+        self.plots
+            .as_deref()
+            .ok_or_else(|| ChartError::InvalidValue {
+                element: "c:plotArea".to_owned(),
+                value: "unsupported or combination plot area is opaque".to_owned(),
+            })
+    }
+
+    /// Returns mutable supported plots without exposing opaque content to edits.
+    pub fn plots_mut(&mut self) -> Result<&mut [Plot]> {
+        self.plots
+            .as_deref_mut()
+            .ok_or_else(|| ChartError::InvalidValue {
+                element: "c:plotArea".to_owned(),
+                value: "cannot combine typed plots with an opaque plot choice".to_owned(),
+            })
+    }
+
     /// Parses the common series payloads nested in category-based plot shells.
     pub fn series(&self) -> Result<Vec<Series>> {
+        if let Some(plots) = &self.plots {
+            return Ok(plots
+                .iter()
+                .flat_map(|plot| match plot {
+                    Plot::Bar { series, .. } | Plot::Line { series, .. } => series.clone(),
+                })
+                .collect());
+        }
         let mut series = Vec::new();
         for raw in self.raw_children.at(0) {
             parse_plot_series(raw, &self.namespace_bindings, &mut series)?;
@@ -3802,6 +4137,10 @@ impl CT_PlotArea {
 
     /// Parses and validates the direct axis children of this plot area.
     pub fn axes(&self) -> Result<Vec<Axis>> {
+        if self.plots.is_some() {
+            self.validate_typed()?;
+            return Ok(self.axes.clone());
+        }
         let mut axes = Vec::new();
         for raw in self.raw_children.at(0) {
             if let Some(axis) = parse_plot_axis(raw, &self.namespace_bindings)? {
@@ -3811,6 +4150,838 @@ impl CT_PlotArea {
         validate_axis_pairs(&axes)?;
         Ok(axes)
     }
+
+    fn validate_typed(&self) -> Result<()> {
+        let plots = self
+            .plots
+            .as_ref()
+            .ok_or_else(|| ChartError::InvalidValue {
+                element: "c:plotArea".to_owned(),
+                value: "opaque plot area has no typed validation view".to_owned(),
+            })?;
+        if plots.len() != 1 {
+            return Err(ChartError::InvalidValue {
+                element: "c:plotArea".to_owned(),
+                value: "typed plot area requires exactly one plot family".to_owned(),
+            });
+        }
+        validate_axis_pairs(&self.axes)?;
+        for plot in plots {
+            plot.validate()?;
+            for id in plot.axis_ids() {
+                if !self.axes.iter().any(|axis| axis.id == id) {
+                    return Err(ChartError::InvalidValue {
+                        element: "c:axId".to_owned(),
+                        value: format!("plot references missing axis {}", id.value()),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for CT_PlotArea {
+    fn default() -> Self {
+        Self {
+            raw_attributes: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+            namespace_bindings: chart_namespace_defaults(),
+            plots: Some(Vec::new()),
+            plot_markup: Vec::new(),
+            axes: Vec::new(),
+        }
+    }
+}
+
+fn chart_root_local(xml: &[u8], inherited: &NamespaceBindings) -> Result<Option<Vec<u8>>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(OxmlError::from)?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                return Ok(element_is_in_namespace(&element, C_NS, inherited)?
+                    .then(|| local_name(element.name().as_ref()).to_vec()));
+            }
+            Event::Eof => return Ok(None),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn is_plot_container(local: &[u8]) -> bool {
+    matches!(
+        local,
+        b"areaChart"
+            | b"area3DChart"
+            | b"barChart"
+            | b"bar3DChart"
+            | b"bubbleChart"
+            | b"doughnutChart"
+            | b"lineChart"
+            | b"line3DChart"
+            | b"ofPieChart"
+            | b"pieChart"
+            | b"pie3DChart"
+            | b"radarChart"
+            | b"scatterChart"
+            | b"stockChart"
+            | b"surfaceChart"
+            | b"surface3DChart"
+    )
+}
+
+fn parse_plot(xml: &[u8], inherited: &NamespaceBindings) -> Result<(Plot, PlotMarkup)> {
+    let local = chart_root_local(xml, inherited)?
+        .ok_or_else(|| ChartError::MissingElement("c:barChart or c:lineChart".to_owned()))?;
+    match local.as_slice() {
+        b"barChart" => parse_bar_plot(xml, inherited),
+        b"lineChart" => parse_line_plot(xml, inherited),
+        _ => Err(ChartError::UnexpectedElement(format!(
+            "c:{}",
+            String::from_utf8_lossy(&local)
+        ))),
+    }
+}
+
+fn parse_bar_plot(xml: &[u8], inherited: &NamespaceBindings) -> Result<(Plot, PlotMarkup)> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(OxmlError::from)?
+        {
+            Event::Start(element) if matches_local_name(element.name().as_ref(), b"barChart") => {
+                let namespaces = typed_rewrite_bindings(&element, inherited)?;
+                let (mut raw_attributes, namespace_declarations) =
+                    capture_fixed_root_attributes(&element, &["xmlns:c", "xmlns:a", "xmlns:r"])?;
+                raw_attributes.splice(0..0, namespace_declarations);
+                let mut direction = None;
+                let mut grouping = None;
+                let mut gap_width = None;
+                let mut overlap = None;
+                let mut series = Vec::new();
+                let mut data_labels = None;
+                let mut axis_ids = Vec::new();
+                let mut raw_children = OrderedRawChildren::default();
+                let mut boundary = 0usize;
+                let mut inner = Vec::new();
+                loop {
+                    match reader
+                        .read_event_into(&mut inner)
+                        .map_err(OxmlError::from)?
+                    {
+                        Event::Start(child) => {
+                            let name = chart_child_local(&child, &namespaces)?;
+                            let raw = capture_element(&mut reader, &child)?;
+                            parse_bar_child(
+                                name.as_deref().unwrap_or_default(),
+                                raw,
+                                &namespaces,
+                                &mut direction,
+                                &mut grouping,
+                                &mut gap_width,
+                                &mut overlap,
+                                &mut series,
+                                &mut data_labels,
+                                &mut axis_ids,
+                                &mut raw_children,
+                                &mut boundary,
+                            )?;
+                        }
+                        Event::Empty(child) => {
+                            let name = chart_child_local(&child, &namespaces)?;
+                            let raw = capture_empty_element(&child)?;
+                            parse_bar_child(
+                                name.as_deref().unwrap_or_default(),
+                                raw,
+                                &namespaces,
+                                &mut direction,
+                                &mut grouping,
+                                &mut gap_width,
+                                &mut overlap,
+                                &mut series,
+                                &mut data_labels,
+                                &mut axis_ids,
+                                &mut raw_children,
+                                &mut boundary,
+                            )?;
+                        }
+                        event @ (Event::Text(_)
+                        | Event::CData(_)
+                        | Event::Comment(_)
+                        | Event::PI(_)
+                        | Event::GeneralRef(_)) => {
+                            raw_children.push(boundary, capture_event(event)?);
+                        }
+                        Event::End(end) if matches_local_name(end.name().as_ref(), b"barChart") => {
+                            let (direction, direction_markup) = direction
+                                .ok_or_else(|| ChartError::MissingElement("c:barDir".to_owned()))?;
+                            let (grouping, grouping_markup) = grouping.ok_or_else(|| {
+                                ChartError::MissingElement("c:grouping".to_owned())
+                            })?;
+                            if axis_ids.len() != 2 {
+                                return Err(ChartError::InvalidValue {
+                                    element: "c:barChart/c:axId".to_owned(),
+                                    value: format!("expected 2, found {}", axis_ids.len()),
+                                });
+                            }
+                            let parsed_ids = [axis_ids[0].0, axis_ids[1].0];
+                            let original_series_keys: Vec<(u32, u32)> =
+                                series.iter().map(|item| (item.index, item.order)).collect();
+                            let plot = Plot::Bar {
+                                direction,
+                                grouping,
+                                gap_width: gap_width.as_ref().map_or(150, |item| item.0),
+                                overlap: overlap.as_ref().map_or(0, |item| item.0),
+                                series,
+                                data_labels,
+                                axis_ids: parsed_ids,
+                            };
+                            plot.validate()?;
+                            return Ok((
+                                plot,
+                                PlotMarkup {
+                                    raw_attributes,
+                                    raw_children: raw_children_in_schema_order(
+                                        &raw_children,
+                                        original_series_keys.len() + 7,
+                                    ),
+                                    direction: Some(direction_markup),
+                                    grouping: Some(grouping_markup),
+                                    gap_width: gap_width.map(|item| item.1),
+                                    overlap: overlap.map(|item| item.1),
+                                    marker: None,
+                                    smooth: None,
+                                    axis_ids: axis_ids.into_iter().map(|item| item.1).collect(),
+                                    original_series_keys,
+                                    original_axis_ids: parsed_ids.to_vec(),
+                                    parsed_bar: Some(true),
+                                },
+                            ));
+                        }
+                        Event::Eof => return Err(missing_end("c:barChart")),
+                        _ => {}
+                    }
+                    inner.clear();
+                }
+            }
+            Event::Empty(element) if matches_local_name(element.name().as_ref(), b"barChart") => {
+                return Err(ChartError::MissingElement("c:barDir".to_owned()));
+            }
+            Event::Start(element) | Event::Empty(element) => {
+                return Err(ChartError::UnexpectedElement(element_name(&element)));
+            }
+            Event::Eof => return Err(ChartError::MissingElement("c:barChart".to_owned())),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_bar_child(
+    name: &[u8],
+    raw: Vec<u8>,
+    namespaces: &NamespaceBindings,
+    direction: &mut Option<(BarDirection, ScalarMarkup)>,
+    grouping: &mut Option<(BarGrouping, ScalarMarkup)>,
+    gap_width: &mut Option<(u16, ScalarMarkup)>,
+    overlap: &mut Option<(i8, ScalarMarkup)>,
+    series: &mut Vec<Series>,
+    data_labels: &mut Option<CT_DLbls>,
+    axis_ids: &mut Vec<(AxisId, AxisIdMarkup)>,
+    raw_children: &mut OrderedRawChildren,
+    boundary: &mut usize,
+) -> Result<()> {
+    match name {
+        b"barDir" => {
+            let (value, markup) = required_scalar(&raw, "barDir")?;
+            let value = BarDirection::parse(&value)
+                .ok_or_else(|| invalid_attribute("barDir", "val", value))?;
+            set_once(direction, (value, markup), "c:barDir")?;
+            *boundary = (*boundary).max(1);
+        }
+        b"grouping" => {
+            let (value, markup) = required_scalar(&raw, "grouping")?;
+            let value = BarGrouping::parse(&value)
+                .ok_or_else(|| invalid_attribute("grouping", "val", value))?;
+            set_once(grouping, (value, markup), "c:grouping")?;
+            *boundary = (*boundary).max(2);
+        }
+        b"ser" => {
+            series.push(Series::from_xml_with_namespaces(&raw, namespaces)?);
+            *boundary = (*boundary).max(series.len() + 2);
+        }
+        b"dLbls" => {
+            set_once(
+                data_labels,
+                CT_DLbls::from_xml_with_namespaces(&raw, namespaces)?,
+                "c:dLbls",
+            )?;
+            *boundary = (*boundary).max(series.len() + 3);
+        }
+        b"gapWidth" => {
+            let (value, markup) = required_scalar(&raw, "gapWidth")?;
+            let parsed = value
+                .parse::<u16>()
+                .map_err(|_| invalid_attribute("gapWidth", "val", value.clone()))?;
+            if parsed > 500 {
+                return Err(invalid_attribute("gapWidth", "val", value));
+            }
+            set_once(gap_width, (parsed, markup), "c:gapWidth")?;
+            *boundary = (*boundary).max(series.len() + 4);
+        }
+        b"overlap" => {
+            let (value, markup) = required_scalar(&raw, "overlap")?;
+            let parsed = value
+                .parse::<i8>()
+                .map_err(|_| invalid_attribute("overlap", "val", value.clone()))?;
+            if !(-100..=100).contains(&parsed) {
+                return Err(invalid_attribute("overlap", "val", value));
+            }
+            set_once(overlap, (parsed, markup), "c:overlap")?;
+            *boundary = (*boundary).max(series.len() + 5);
+        }
+        b"axId" => {
+            if axis_ids.len() == 2 {
+                return Err(ChartError::DuplicateElement("c:axId".to_owned()));
+            }
+            axis_ids.push(parse_axis_id_scalar(&raw, "axId")?);
+            *boundary = (*boundary).max(series.len() + 5 + axis_ids.len());
+        }
+        _ => raw_children.push(*boundary, raw),
+    }
+    Ok(())
+}
+
+fn parse_line_plot(xml: &[u8], inherited: &NamespaceBindings) -> Result<(Plot, PlotMarkup)> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(OxmlError::from)?
+        {
+            Event::Start(element) if matches_local_name(element.name().as_ref(), b"lineChart") => {
+                let namespaces = typed_rewrite_bindings(&element, inherited)?;
+                let (mut raw_attributes, namespace_declarations) =
+                    capture_fixed_root_attributes(&element, &["xmlns:c", "xmlns:a", "xmlns:r"])?;
+                raw_attributes.splice(0..0, namespace_declarations);
+                let mut grouping = None;
+                let mut marker = None;
+                let mut smooth = None;
+                let mut series = Vec::new();
+                let mut data_labels = None;
+                let mut axis_ids = Vec::new();
+                let mut raw_children = OrderedRawChildren::default();
+                let mut boundary = 0usize;
+                let mut inner = Vec::new();
+                loop {
+                    match reader
+                        .read_event_into(&mut inner)
+                        .map_err(OxmlError::from)?
+                    {
+                        Event::Start(child) => {
+                            let name = chart_child_local(&child, &namespaces)?;
+                            let raw = capture_element(&mut reader, &child)?;
+                            parse_line_child(
+                                name.as_deref().unwrap_or_default(),
+                                raw,
+                                &namespaces,
+                                &mut grouping,
+                                &mut marker,
+                                &mut smooth,
+                                &mut series,
+                                &mut data_labels,
+                                &mut axis_ids,
+                                &mut raw_children,
+                                &mut boundary,
+                            )?;
+                        }
+                        Event::Empty(child) => {
+                            let name = chart_child_local(&child, &namespaces)?;
+                            let raw = capture_empty_element(&child)?;
+                            parse_line_child(
+                                name.as_deref().unwrap_or_default(),
+                                raw,
+                                &namespaces,
+                                &mut grouping,
+                                &mut marker,
+                                &mut smooth,
+                                &mut series,
+                                &mut data_labels,
+                                &mut axis_ids,
+                                &mut raw_children,
+                                &mut boundary,
+                            )?;
+                        }
+                        event @ (Event::Text(_)
+                        | Event::CData(_)
+                        | Event::Comment(_)
+                        | Event::PI(_)
+                        | Event::GeneralRef(_)) => {
+                            raw_children.push(boundary, capture_event(event)?);
+                        }
+                        Event::End(end)
+                            if matches_local_name(end.name().as_ref(), b"lineChart") =>
+                        {
+                            let (grouping, grouping_markup) = grouping.ok_or_else(|| {
+                                ChartError::MissingElement("c:grouping".to_owned())
+                            })?;
+                            if axis_ids.len() != 2 {
+                                return Err(ChartError::InvalidValue {
+                                    element: "c:lineChart/c:axId".to_owned(),
+                                    value: format!("expected 2, found {}", axis_ids.len()),
+                                });
+                            }
+                            let parsed_ids = [axis_ids[0].0, axis_ids[1].0];
+                            let original_series_keys: Vec<(u32, u32)> =
+                                series.iter().map(|item| (item.index, item.order)).collect();
+                            let plot = Plot::Line {
+                                grouping,
+                                marker: marker.as_ref().is_some_and(|item| item.0),
+                                smooth: smooth.as_ref().is_some_and(|item| item.0),
+                                series,
+                                data_labels,
+                                axis_ids: parsed_ids,
+                            };
+                            plot.validate()?;
+                            return Ok((
+                                plot,
+                                PlotMarkup {
+                                    raw_attributes,
+                                    raw_children: raw_children_in_schema_order(
+                                        &raw_children,
+                                        original_series_keys.len() + 6,
+                                    ),
+                                    direction: None,
+                                    grouping: Some(grouping_markup),
+                                    gap_width: None,
+                                    overlap: None,
+                                    marker: marker.map(|item| item.1),
+                                    smooth: smooth.map(|item| item.1),
+                                    axis_ids: axis_ids.into_iter().map(|item| item.1).collect(),
+                                    original_series_keys,
+                                    original_axis_ids: parsed_ids.to_vec(),
+                                    parsed_bar: Some(false),
+                                },
+                            ));
+                        }
+                        Event::Eof => return Err(missing_end("c:lineChart")),
+                        _ => {}
+                    }
+                    inner.clear();
+                }
+            }
+            Event::Empty(element) if matches_local_name(element.name().as_ref(), b"lineChart") => {
+                return Err(ChartError::MissingElement("c:grouping".to_owned()));
+            }
+            Event::Start(element) | Event::Empty(element) => {
+                return Err(ChartError::UnexpectedElement(element_name(&element)));
+            }
+            Event::Eof => return Err(ChartError::MissingElement("c:lineChart".to_owned())),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_line_child(
+    name: &[u8],
+    raw: Vec<u8>,
+    namespaces: &NamespaceBindings,
+    grouping: &mut Option<(Grouping, ScalarMarkup)>,
+    marker: &mut Option<(bool, ScalarMarkup)>,
+    smooth: &mut Option<(bool, ScalarMarkup)>,
+    series: &mut Vec<Series>,
+    data_labels: &mut Option<CT_DLbls>,
+    axis_ids: &mut Vec<(AxisId, AxisIdMarkup)>,
+    raw_children: &mut OrderedRawChildren,
+    boundary: &mut usize,
+) -> Result<()> {
+    match name {
+        b"grouping" => {
+            let (value, markup) = required_scalar(&raw, "grouping")?;
+            let value = Grouping::parse(&value)
+                .ok_or_else(|| invalid_attribute("grouping", "val", value))?;
+            set_once(grouping, (value, markup), "c:grouping")?;
+            *boundary = (*boundary).max(1);
+        }
+        b"ser" => {
+            series.push(Series::from_xml_with_namespaces(&raw, namespaces)?);
+            *boundary = (*boundary).max(series.len() + 1);
+        }
+        b"dLbls" => {
+            set_once(
+                data_labels,
+                CT_DLbls::from_xml_with_namespaces(&raw, namespaces)?,
+                "c:dLbls",
+            )?;
+            *boundary = (*boundary).max(series.len() + 2);
+        }
+        b"marker" => {
+            set_once(marker, parse_bool_value(&raw, "marker")?, "c:marker")?;
+            *boundary = (*boundary).max(series.len() + 3);
+        }
+        b"smooth" => {
+            set_once(smooth, parse_bool_value(&raw, "smooth")?, "c:smooth")?;
+            *boundary = (*boundary).max(series.len() + 4);
+        }
+        b"axId" => {
+            if axis_ids.len() == 2 {
+                return Err(ChartError::DuplicateElement("c:axId".to_owned()));
+            }
+            axis_ids.push(parse_axis_id_scalar(&raw, "axId")?);
+            *boundary = (*boundary).max(series.len() + 4 + axis_ids.len());
+        }
+        _ => raw_children.push(*boundary, raw),
+    }
+    Ok(())
+}
+
+fn required_scalar(xml: &[u8], local: &str) -> Result<(String, ScalarMarkup)> {
+    let (value, markup) = scalar_value(xml, local)?;
+    let value = value.ok_or_else(|| invalid_attribute(local, "val", "<missing>".to_owned()))?;
+    Ok((value, markup))
+}
+
+fn write_plot<W: Write>(writer: &mut Writer<W>, plot: &Plot, markup: &PlotMarkup) -> Result<()> {
+    plot.validate()?;
+    if let Some(parsed_bar) = markup.parsed_bar
+        && parsed_bar != matches!(plot, Plot::Bar { .. })
+    {
+        return Err(ChartError::InvalidValue {
+            element: "c:plotArea".to_owned(),
+            value: "a parsed plot family cannot be replaced while preserved payload remains"
+                .to_owned(),
+        });
+    }
+    match plot {
+        Plot::Bar {
+            direction,
+            grouping,
+            gap_width,
+            overlap,
+            series,
+            data_labels,
+            axis_ids,
+        } => {
+            let mut start = BytesStart::new("c:barChart");
+            push_attributes(&mut start, &markup.raw_attributes);
+            writer
+                .write_event(Event::Start(start))
+                .map_err(OxmlError::from)?;
+            emit_raw(writer, markup.raw_children.at(0))?;
+            write_scalar(
+                writer,
+                "c:barDir",
+                direction.as_str(),
+                markup.direction.as_ref(),
+            )?;
+            emit_raw(writer, markup.raw_children.at(1))?;
+            write_scalar(
+                writer,
+                "c:grouping",
+                grouping.as_str(),
+                markup.grouping.as_ref(),
+            )?;
+            let original_to_current =
+                series_original_to_current(&markup.original_series_keys, series);
+            emit_repeated_raw(
+                writer,
+                &markup.raw_children,
+                2,
+                &original_to_current,
+                series.len(),
+                0,
+            )?;
+            for (index, item) in series.iter().enumerate() {
+                writer
+                    .get_mut()
+                    .write_all(&item.to_xml()?)
+                    .map_err(OxmlError::from)?;
+                emit_repeated_raw(
+                    writer,
+                    &markup.raw_children,
+                    2,
+                    &original_to_current,
+                    series.len(),
+                    index + 1,
+                )?;
+            }
+            if let Some(labels) = data_labels {
+                writer
+                    .get_mut()
+                    .write_all(&labels.to_xml()?)
+                    .map_err(OxmlError::from)?;
+            }
+            let trailing = markup.original_series_keys.len();
+            emit_raw(writer, markup.raw_children.at(trailing + 3))?;
+            if *gap_width != 150 || markup.gap_width.is_some() {
+                write_scalar(
+                    writer,
+                    "c:gapWidth",
+                    &gap_width.to_string(),
+                    markup.gap_width.as_ref(),
+                )?;
+            }
+            emit_raw(writer, markup.raw_children.at(trailing + 4))?;
+            if *overlap != 0 || markup.overlap.is_some() {
+                write_scalar(
+                    writer,
+                    "c:overlap",
+                    &overlap.to_string(),
+                    markup.overlap.as_ref(),
+                )?;
+            }
+            let axis_original_to_current =
+                axis_original_to_current(&markup.original_axis_ids, axis_ids);
+            let axis_current_to_original =
+                invert_original_to_current(&axis_original_to_current, axis_ids.len());
+            emit_repeated_raw(
+                writer,
+                &markup.raw_children,
+                trailing + 5,
+                &axis_original_to_current,
+                axis_ids.len(),
+                0,
+            )?;
+            for (index, id) in axis_ids.iter().enumerate() {
+                let default_markup = default_axis_id_markup(*id);
+                let original_markup = axis_current_to_original[index]
+                    .and_then(|original| markup.axis_ids.get(original));
+                write_axis_id(
+                    writer,
+                    "c:axId",
+                    *id,
+                    original_markup.unwrap_or(&default_markup),
+                )?;
+                emit_repeated_raw(
+                    writer,
+                    &markup.raw_children,
+                    trailing + 5,
+                    &axis_original_to_current,
+                    axis_ids.len(),
+                    index + 1,
+                )?;
+            }
+            writer
+                .write_event(Event::End(BytesEnd::new("c:barChart")))
+                .map_err(OxmlError::from)?;
+        }
+        Plot::Line {
+            grouping,
+            marker,
+            smooth,
+            series,
+            data_labels,
+            axis_ids,
+        } => {
+            let mut start = BytesStart::new("c:lineChart");
+            push_attributes(&mut start, &markup.raw_attributes);
+            writer
+                .write_event(Event::Start(start))
+                .map_err(OxmlError::from)?;
+            emit_raw(writer, markup.raw_children.at(0))?;
+            write_scalar(
+                writer,
+                "c:grouping",
+                grouping.as_str(),
+                markup.grouping.as_ref(),
+            )?;
+            let original_to_current =
+                series_original_to_current(&markup.original_series_keys, series);
+            emit_repeated_raw(
+                writer,
+                &markup.raw_children,
+                1,
+                &original_to_current,
+                series.len(),
+                0,
+            )?;
+            for (index, item) in series.iter().enumerate() {
+                writer
+                    .get_mut()
+                    .write_all(&item.to_xml()?)
+                    .map_err(OxmlError::from)?;
+                emit_repeated_raw(
+                    writer,
+                    &markup.raw_children,
+                    1,
+                    &original_to_current,
+                    series.len(),
+                    index + 1,
+                )?;
+            }
+            if let Some(labels) = data_labels {
+                writer
+                    .get_mut()
+                    .write_all(&labels.to_xml()?)
+                    .map_err(OxmlError::from)?;
+            }
+            let trailing = markup.original_series_keys.len();
+            emit_raw(writer, markup.raw_children.at(trailing + 2))?;
+            if *marker || markup.marker.is_some() {
+                write_scalar(
+                    writer,
+                    "c:marker",
+                    bool_lexical(*marker),
+                    markup.marker.as_ref(),
+                )?;
+            }
+            emit_raw(writer, markup.raw_children.at(trailing + 3))?;
+            if *smooth || markup.smooth.is_some() {
+                write_scalar(
+                    writer,
+                    "c:smooth",
+                    bool_lexical(*smooth),
+                    markup.smooth.as_ref(),
+                )?;
+            }
+            let axis_original_to_current =
+                axis_original_to_current(&markup.original_axis_ids, axis_ids);
+            let axis_current_to_original =
+                invert_original_to_current(&axis_original_to_current, axis_ids.len());
+            emit_repeated_raw(
+                writer,
+                &markup.raw_children,
+                trailing + 4,
+                &axis_original_to_current,
+                axis_ids.len(),
+                0,
+            )?;
+            for (index, id) in axis_ids.iter().enumerate() {
+                let default_markup = default_axis_id_markup(*id);
+                let original_markup = axis_current_to_original[index]
+                    .and_then(|original| markup.axis_ids.get(original));
+                write_axis_id(
+                    writer,
+                    "c:axId",
+                    *id,
+                    original_markup.unwrap_or(&default_markup),
+                )?;
+                emit_repeated_raw(
+                    writer,
+                    &markup.raw_children,
+                    trailing + 4,
+                    &axis_original_to_current,
+                    axis_ids.len(),
+                    index + 1,
+                )?;
+            }
+            writer
+                .write_event(Event::End(BytesEnd::new("c:lineChart")))
+                .map_err(OxmlError::from)?;
+        }
+    }
+    Ok(())
+}
+
+fn series_original_to_current(original: &[(u32, u32)], current: &[Series]) -> Vec<Option<usize>> {
+    let mut used = vec![false; current.len()];
+    let mut matches = vec![None; original.len()];
+    for original_index in 0..original.len().min(current.len()) {
+        if original[original_index]
+            == (current[original_index].index, current[original_index].order)
+        {
+            matches[original_index] = Some(original_index);
+            used[original_index] = true;
+        }
+    }
+    for (original_index, key) in original.iter().enumerate() {
+        if matches[original_index].is_some() {
+            continue;
+        }
+        if let Some(current_index) = current
+            .iter()
+            .enumerate()
+            .position(|(index, item)| !used[index] && (item.index, item.order) == *key)
+        {
+            matches[original_index] = Some(current_index);
+            used[current_index] = true;
+        }
+    }
+    match_unidentified_by_position(&mut matches, &mut used);
+    matches
+}
+
+fn axis_original_to_current(original: &[AxisId], current: &[AxisId]) -> Vec<Option<usize>> {
+    let mut used = vec![false; current.len()];
+    let mut matches = vec![None; original.len()];
+    for (original_index, id) in original.iter().enumerate() {
+        if let Some(current_index) = current
+            .iter()
+            .enumerate()
+            .position(|(index, current_id)| !used[index] && current_id == id)
+        {
+            matches[original_index] = Some(current_index);
+            used[current_index] = true;
+        }
+    }
+    match_unidentified_by_position(&mut matches, &mut used);
+    matches
+}
+
+fn match_unidentified_by_position(matches: &mut [Option<usize>], used: &mut [bool]) {
+    for original_index in 0..matches.len() {
+        if matches[original_index].is_none() && original_index < used.len() && !used[original_index]
+        {
+            matches[original_index] = Some(original_index);
+            used[original_index] = true;
+        }
+    }
+    for matched in matches.iter_mut().filter(|matched| matched.is_none()) {
+        if let Some(current_index) = used.iter().position(|used| !used) {
+            *matched = Some(current_index);
+            used[current_index] = true;
+        }
+    }
+}
+
+fn invert_original_to_current(
+    original_to_current: &[Option<usize>],
+    current_len: usize,
+) -> Vec<Option<usize>> {
+    let mut current_to_original = vec![None; current_len];
+    for (original, current) in original_to_current.iter().enumerate() {
+        if let Some(current) = current {
+            current_to_original[*current] = Some(original);
+        }
+    }
+    current_to_original
+}
+
+fn emit_repeated_raw<W: Write>(
+    writer: &mut Writer<W>,
+    raw_children: &OrderedRawChildren,
+    offset: usize,
+    original_to_current: &[Option<usize>],
+    current_len: usize,
+    current_boundary: usize,
+) -> Result<()> {
+    if current_boundary == 0 {
+        emit_raw(writer, raw_children.at(offset))?;
+    }
+    for original_boundary in 1..=original_to_current.len() {
+        let effective = original_to_current
+            .iter()
+            .skip(original_boundary)
+            .flatten()
+            .copied()
+            .next()
+            .unwrap_or(current_len);
+        if effective == current_boundary {
+            emit_raw(writer, raw_children.at(offset + original_boundary))?;
+        }
+    }
+    Ok(())
 }
 
 fn parse_plot_axis(xml: &[u8], inherited: &NamespaceBindings) -> Result<Option<Axis>> {
@@ -5094,10 +6265,10 @@ mod tests {
     use quick_xml::events::Event;
 
     use super::{
-        A_NS, Axis, AxisData, AxisId, AxisKind, AxisPosition, C_NS, CT_ChartSpace, CT_DLbls,
-        CT_ShapeProperties, CT_TextBody, DataLabelPosition, DispBlanksAs, NumberFormat,
-        NumericData, Orientation, R_NS, Series, StringRef, TickLabelPosition, TickMark,
-        capture_event, local_name, matches_local_name,
+        A_NS, Axis, AxisData, AxisId, AxisKind, AxisPosition, BarDirection, BarGrouping, C_NS,
+        CT_ChartSpace, CT_DLbls, CT_ShapeProperties, CT_TextBody, DataLabelPosition, DispBlanksAs,
+        Grouping, NumberFormat, NumericData, Orientation, Plot, R_NS, Series, StringRef,
+        TickLabelPosition, TickMark, capture_event, local_name, matches_local_name,
     };
 
     const MANIFEST: &str = include_str!("../../../scripts/pptx-corpus-manifest.tsv");
@@ -5105,6 +6276,8 @@ mod tests {
     const LIBREOFFICE_VERSION: &str =
         "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
     const PDFTOTEXT_VERSION: &str = "pdftotext version 26.01.0";
+    const PDFTOPPM_VERSION: &str = "pdftoppm version 26.01.0";
+    const PLOT_RENDER_NORMALIZED_MAE_THRESHOLD: f64 = 0.0;
 
     fn standalone_axis(local: &str, children: &str) -> String {
         format!(
@@ -5859,7 +7032,7 @@ mod tests {
 
     #[test]
     fn plot_area_series_ignores_inherited_foreign_plot_aliases() {
-        let xml = br#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:x="urn:producer"><c:chart><c:plotArea><x:barChart><x:ser><x:idx val="9"/><x:order val="9"/><x:val><x:numRef><x:f>foreign</x:f><x:numCache><x:formatCode>General</x:formatCode><x:ptCount val="0"/></x:numCache></x:numRef></x:val></x:ser></x:barChart><c:barChart><q:ser><q:idx val="1"/><q:order val="0"/><q:marker><x:data/></q:marker><q:val><q:numRef><q:f>Sheet1!$B$2</q:f><q:numCache><q:formatCode>General</q:formatCode><q:ptCount val="1"/><q:pt idx="0"><q:v>3</q:v></q:pt></q:numCache></q:numRef></q:val></q:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#;
+        let xml = br#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:x="urn:producer"><c:chart><c:plotArea><x:barChart><x:ser><x:idx val="9"/><x:order val="9"/><x:val><x:numRef><x:f>foreign</x:f><x:numCache><x:formatCode>General</x:formatCode><x:ptCount val="0"/></x:numCache></x:numRef></x:val></x:ser></x:barChart><c:barChart><q:ser><q:idx val="1"/><q:order val="0"/><q:marker><x:data/></q:marker><q:val><q:numRef><q:f>Sheet1!$B$2</q:f><q:numCache><q:formatCode>General</q:formatCode><q:ptCount val="1"/><q:pt idx="0"><q:v>3</q:v></q:pt></q:numCache></q:numRef></q:val></q:ser></c:barChart><c:pieChart/></c:plotArea></c:chart></c:chartSpace>"#;
         let chart = CT_ChartSpace::from_xml(xml).unwrap();
         let series = chart.chart.plot_area.series().unwrap();
         assert_eq!(series.len(), 1);
@@ -5872,7 +7045,7 @@ mod tests {
         assert!(written.contains("<q:marker><x:data/></q:marker>"));
         assert_eq!(series[0], Series::from_xml(written.as_bytes()).unwrap());
 
-        let conflicting = br#"<q:chartSpace xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/chart"><q:chart><q:plotArea><q:barChart xmlns:c="urn:foreign"><q:ser><q:idx val="0"/><q:order val="0"/><q:val><q:numRef><q:f>Sheet1!$A$1</q:f><q:numCache><q:formatCode>General</q:formatCode><q:ptCount val="0"/></q:numCache></q:numRef></q:val></q:ser></q:barChart></q:plotArea></q:chart></q:chartSpace>"#;
+        let conflicting = br#"<q:chartSpace xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/chart"><q:chart><q:plotArea><q:barChart xmlns:c="urn:foreign"><q:ser><q:idx val="0"/><q:order val="0"/><q:val><q:numRef><q:f>Sheet1!$A$1</q:f><q:numCache><q:formatCode>General</q:formatCode><q:ptCount val="0"/></q:numCache></q:numRef></q:val></q:ser></q:barChart><q:pieChart/></q:plotArea></q:chart></q:chartSpace>"#;
         let chart = CT_ChartSpace::from_xml(conflicting).unwrap();
         assert!(chart.chart.plot_area.series().is_err());
     }
@@ -6481,7 +7654,11 @@ mod tests {
                     | b"plotVisOnly"
                     | b"dispBlanksAs"
             ),
-            b"title" | b"plotArea" | b"legend" => true,
+            b"plotArea" => !matches!(
+                child,
+                b"barChart" | b"lineChart" | b"catAx" | b"valAx" | b"dateAx" | b"serAx"
+            ),
+            b"title" | b"legend" => true,
             _ => false,
         }
     }
@@ -6659,5 +7836,554 @@ mod tests {
             return false;
         };
         !stem.is_empty() && stem.bytes().all(|byte| byte.is_ascii_digit())
+    }
+
+    fn plot_series(index: u32) -> String {
+        format!(
+            r#"<q:ser><q:idx val="{index}"/><q:order val="{index}"/><q:cat><q:strRef><q:f>Sheet1!$A$2:$A$3</q:f><q:strCache><q:ptCount val="2"/><q:pt idx="0"><q:v>North</q:v></q:pt><q:pt idx="1"><q:v>South</q:v></q:pt></q:strCache></q:strRef></q:cat><q:val><q:numRef><q:f>Sheet1!$B$2:$B$3</q:f><q:numCache><q:formatCode>General</q:formatCode><q:ptCount val="2"/><q:pt idx="0"><q:v>1</q:v></q:pt><q:pt idx="1"><q:v>2</q:v></q:pt></q:numCache></q:numRef></q:val></q:ser>"#
+        )
+    }
+
+    fn chart_with_plot(plot: &str) -> String {
+        format!(
+            r#"<q:chartSpace xmlns:q="{C_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}" xmlns:x="urn:producer"><q:chart><q:plotArea>{plot}<q:catAx><q:axId val="-1884094432"/><q:scaling/><q:axPos val="b"/><q:crossAx val="-1884097184"/></q:catAx><q:valAx><q:axId val="-1884097184"/><q:scaling/><q:axPos val="l"/><q:crossAx val="-1884094432"/></q:valAx></q:plotArea></q:chart></q:chartSpace>"#
+        )
+    }
+
+    fn bar_plot(extra: &str) -> String {
+        format!(
+            r#"<q:barChart x:keep="bar"><q:barDir val="col"/><q:grouping val="clustered"/><q:varyColors val="1"/>{}<q:dLbls><q:showVal val="1"/></q:dLbls><q:gapWidth val="150"/><q:overlap val="0"/><q:serLines><x:line/></q:serLines><q:axId val="-1884094432"/><q:axId val="-1884097184"/>{extra}</q:barChart>"#,
+            plot_series(0)
+        )
+    }
+
+    fn line_plot(extra: &str) -> String {
+        format!(
+            r#"<q:lineChart x:keep="line"><q:grouping val="standard"/><q:varyColors val="0"/>{}<q:dLbls><q:showVal val="1"/></q:dLbls><q:dropLines><x:line/></q:dropLines><q:marker val="1"/><q:smooth val="0"/><q:axId val="-1884094432"/><q:axId val="-1884097184"/>{extra}</q:lineChart>"#,
+            plot_series(0)
+        )
+    }
+
+    #[test]
+    fn bar_and_line_plots_round_trip_and_render() {
+        for (xml, is_bar) in [
+            (chart_with_plot(&bar_plot("")), true),
+            (chart_with_plot(&line_plot("")), false),
+        ] {
+            let parsed = CT_ChartSpace::from_xml(xml.as_bytes()).unwrap();
+            let plots = parsed.chart.plot_area.plots().unwrap();
+            assert_eq!(plots.len(), 1);
+            assert_eq!(matches!(plots[0], Plot::Bar { .. }), is_bar);
+            assert_eq!(matches!(plots[0], Plot::Line { .. }), !is_bar);
+            assert_eq!(parsed.chart.plot_area.axes().unwrap().len(), 2);
+            let written = parsed.to_xml().unwrap();
+            let reparsed = CT_ChartSpace::from_xml(&written).unwrap();
+            assert_eq!(parsed, reparsed);
+        }
+        if let Some(corpus) = require_or_skip_corpus() {
+            verify_bar_and_line_viewer_gate(&corpus);
+        }
+    }
+
+    #[test]
+    fn ppm_parser_preserves_whitespace_valued_first_pixels() {
+        for first_pixel in *b" \n\r\t" {
+            let mut ppm = b"P6\n1 1\n255\n".to_vec();
+            ppm.extend_from_slice(&[first_pixel, 0x7f, 0xff]);
+            let (width, height, pixels) = ppm_pixels(&ppm);
+            assert_eq!((width, height), (1, 1));
+            assert_eq!(pixels, [first_pixel, 0x7f, 0xff]);
+        }
+
+        let ppm = b"P6\r\n1 1\r\n255\r\n\x7f\xff";
+        assert_eq!(ppm_pixels(ppm).2, [b'\n', 0x7f, 0xff]);
+    }
+
+    #[test]
+    fn bar_and_line_plots_write_fixed_prefixes_in_schema_order() {
+        for xml in [
+            chart_with_plot(&bar_plot(r#"<q:extLst><x:bar-tail/></q:extLst>"#)),
+            chart_with_plot(&line_plot(r#"<q:extLst><x:line-tail/></q:extLst>"#)),
+        ] {
+            let parsed = CT_ChartSpace::from_xml(xml.as_bytes()).unwrap();
+            let written = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+            assert!(written.contains("<c:barChart") || written.contains("<c:lineChart"));
+            assert!(!written.contains("<q:barChart"));
+            assert!(!written.contains("<q:lineChart"));
+            if written.contains("<c:barChart") {
+                let positions: Vec<_> = [
+                    "<c:barDir",
+                    "<c:grouping",
+                    "<q:varyColors",
+                    "<c:ser",
+                    "<c:dLbls",
+                    "<c:gapWidth",
+                    "<c:overlap",
+                    "<q:serLines",
+                    "<c:axId",
+                    "<q:extLst",
+                ]
+                .iter()
+                .map(|tag| written.find(tag).unwrap())
+                .collect();
+                assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+            } else {
+                let positions: Vec<_> = [
+                    "<c:grouping",
+                    "<q:varyColors",
+                    "<c:ser",
+                    "<c:dLbls",
+                    "<q:dropLines",
+                    "<c:marker",
+                    "<c:smooth",
+                    "<c:axId",
+                    "<q:extLst",
+                ]
+                .iter()
+                .map(|tag| written.find(tag).unwrap())
+                .collect();
+                assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+            }
+            assert!(CT_ChartSpace::from_xml(written.as_bytes()).is_ok());
+        }
+
+        for plot in [bar_plot(""), line_plot("")] {
+            let first = plot_series(0);
+            let with_series_boundary = plot.replacen(
+                &first,
+                &format!(
+                    "{first}<!--between-series--><?series-boundary?>\n  {}",
+                    plot_series(1)
+                ),
+                1,
+            );
+            let with_axis_boundary = with_series_boundary.replacen(
+                r#"<q:axId val="-1884094432"/><q:axId val="-1884097184"/>"#,
+                r#"<q:axId val="-1884094432"/><!--between-axis-ids--><?axis-boundary?>
+  <q:axId val="-1884097184"/>"#,
+                1,
+            );
+            let parsed =
+                CT_ChartSpace::from_xml(chart_with_plot(&with_axis_boundary).as_bytes()).unwrap();
+            let written = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+            assert!(written.contains("</c:ser><!--between-series--><?series-boundary?>\n  <c:ser"));
+            assert!(written.contains(
+                r#"<c:axId val="-1884094432"/><!--between-axis-ids--><?axis-boundary?>
+  <c:axId val="-1884097184"/>"#
+            ));
+            assert_eq!(parsed, CT_ChartSpace::from_xml(written.as_bytes()).unwrap());
+        }
+    }
+
+    #[test]
+    fn malformed_bar_and_line_plots_return_errors_without_panicking() {
+        let valid_series = plot_series(0);
+        let cases = [
+            format!(r#"<q:barChart><q:grouping val="clustered"/>{valid_series}<q:axId val="1"/><q:axId val="2"/></q:barChart>"#),
+            format!(r#"<q:barChart><q:barDir val="diagonal"/><q:grouping val="clustered"/>{valid_series}<q:axId val="1"/><q:axId val="2"/></q:barChart>"#),
+            format!(r#"<q:barChart><q:barDir val="col"/><q:grouping val="clustered"/>{valid_series}<q:gapWidth val="501"/><q:axId val="1"/><q:axId val="2"/></q:barChart>"#),
+            format!(r#"<q:barChart><q:barDir val="col"/><q:grouping val="clustered"/>{valid_series}<q:overlap val="-101"/><q:axId val="1"/><q:axId val="2"/></q:barChart>"#),
+            format!(r#"<q:lineChart><q:grouping val="clustered"/>{valid_series}<q:axId val="1"/><q:axId val="2"/></q:lineChart>"#),
+            format!(r#"<q:lineChart><q:grouping val="standard"/>{valid_series}<q:marker val="maybe"/><q:axId val="1"/><q:axId val="2"/></q:lineChart>"#),
+            r#"<q:lineChart><q:grouping val="standard"/><q:axId val="1"/><q:axId val="2"/></q:lineChart>"#.to_owned(),
+            format!(r#"<q:lineChart><q:grouping val="standard"/>{valid_series}<q:axId val="1"/><q:axId val="1"/></q:lineChart>"#),
+            format!(r#"<q:barChart><q:barDir val="col"/><q:grouping val="clustered"/><q:grouping val="stacked"/>{valid_series}<q:axId val="-1884094432"/><q:axId val="-1884097184"/></q:barChart>"#),
+            format!(r#"<q:barChart><q:barDir val="col"/><q:grouping val="clustered"/>{valid_series}<q:axId val="1"/><q:axId val="2"/></q:barChart>"#),
+        ];
+        for plot in cases {
+            let xml = chart_with_plot(&plot);
+            let result = std::panic::catch_unwind(|| CT_ChartSpace::from_xml(xml.as_bytes()));
+            assert!(result.is_ok(), "plot parser panicked for {plot}");
+            assert!(result.unwrap().is_err(), "malformed plot parsed: {plot}");
+        }
+
+        let missing_axis = format!(
+            r#"<q:chartSpace xmlns:q="{C_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><q:chart><q:plotArea>{}<q:catAx><q:axId val="-1884094432"/><q:scaling/><q:axPos val="b"/><q:crossAx val="-1884097184"/></q:catAx></q:plotArea></q:chart></q:chartSpace>"#,
+            bar_plot("")
+        );
+        assert!(CT_ChartSpace::from_xml(missing_axis.as_bytes()).is_err());
+
+        let values =
+            NumericData::new("S!$A$1".to_owned(), "General".to_owned(), vec![1.0]).unwrap();
+        let series = vec![Series::new(0, 0, values)];
+        let ids = [AxisId::new(1).unwrap(), AxisId::new(2).unwrap()];
+        let mut invalid =
+            Plot::bar(BarDirection::Column, BarGrouping::Clustered, series, ids).unwrap();
+        if let Plot::Bar { gap_width, .. } = &mut invalid {
+            *gap_width = 501;
+        }
+        assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn unsupported_and_combo_plots_remain_byte_preserved() {
+        let bar = bar_plot("");
+        let line = line_plot("");
+        let combo = chart_with_plot(&format!("<!--before-->{bar}<?between?>{line}<!--after-->"));
+        let parsed = CT_ChartSpace::from_xml(combo.as_bytes()).unwrap();
+        assert!(parsed.chart.plot_area.plots().is_err());
+        let written = parsed.to_xml().unwrap();
+        for raw in [
+            bar.as_bytes(),
+            line.as_bytes(),
+            br#"<!--before-->"#.as_slice(),
+            br#"<?between?>"#.as_slice(),
+            br#"<!--after-->"#.as_slice(),
+        ] {
+            assert!(written.windows(raw.len()).any(|window| window == raw));
+        }
+
+        let unsupported = chart_with_plot(
+            r#"<q:bar3DChart x:keep="three"><q:barDir val="col"/><q:ser><x:opaque/></q:ser></q:bar3DChart>"#,
+        );
+        let parsed = CT_ChartSpace::from_xml(unsupported.as_bytes()).unwrap();
+        assert!(parsed.chart.plot_area.plots().is_err());
+        assert!(
+            String::from_utf8(parsed.to_xml().unwrap())
+                .unwrap()
+                .contains(r#"<q:bar3DChart x:keep="three">"#)
+        );
+    }
+
+    #[test]
+    fn public_plot_edits_preserve_axes_and_unselected_payloads() {
+        let xml = chart_with_plot(&bar_plot(
+            r#"<q:extLst><q:ext uri="keep"><x:tail/></q:ext></q:extLst>"#,
+        ));
+        let mut parsed = CT_ChartSpace::from_xml(xml.as_bytes()).unwrap();
+        let axes_before = parsed.chart.plot_area.axes().unwrap();
+        match &mut parsed.chart.plot_area.plots_mut().unwrap()[0] {
+            Plot::Bar {
+                gap_width,
+                overlap,
+                series,
+                ..
+            } => {
+                *gap_width = 225;
+                *overlap = -25;
+                series[0].index = 7;
+                series[0].values.values[0] = 9.0;
+            }
+            Plot::Line { .. } => panic!("expected bar plot"),
+        }
+        let written = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+        assert!(written.contains(r#"<c:gapWidth val="225"/>"#));
+        assert!(written.contains(r#"<c:overlap val="-25"/>"#));
+        assert!(written.contains("<c:v>9</c:v>"));
+        assert!(written.contains("<q:varyColors val=\"1\"/>"));
+        assert!(written.find("<q:varyColors").unwrap() < written.find("<c:ser").unwrap());
+        assert!(written.contains("<q:serLines><x:line/></q:serLines>"));
+        assert!(written.contains(r#"<q:extLst><q:ext uri="keep"><x:tail/></q:ext></q:extLst>"#));
+        let reparsed = CT_ChartSpace::from_xml(written.as_bytes()).unwrap();
+        assert_eq!(axes_before, reparsed.chart.plot_area.axes().unwrap());
+
+        let first = plot_series(0);
+        let colliding_series =
+            bar_plot("").replacen(&first, &format!("{first}{}", plot_series(1)), 1);
+        let mut collision =
+            CT_ChartSpace::from_xml(chart_with_plot(&colliding_series).as_bytes()).unwrap();
+        if let Plot::Bar { series, .. } = &mut collision.chart.plot_area.plots_mut().unwrap()[0] {
+            series[0].index = series[1].index;
+            series[0].order = series[1].order;
+        }
+        let collision = String::from_utf8(collision.to_xml().unwrap()).unwrap();
+        assert!(collision.find("<q:varyColors").unwrap() < collision.find("<c:ser").unwrap());
+
+        let mut inserted = CT_ChartSpace::from_xml(xml.as_bytes()).unwrap();
+        if let Plot::Bar { series, .. } = &mut inserted.chart.plot_area.plots_mut().unwrap()[0] {
+            let mut new_series = series[0].clone();
+            new_series.index = 99;
+            new_series.order = 99;
+            series.insert(0, new_series);
+        }
+        let inserted = String::from_utf8(inserted.to_xml().unwrap()).unwrap();
+        assert!(inserted.find("<q:varyColors").unwrap() < inserted.find("<c:ser").unwrap());
+
+        let axis_payload = bar_plot("").replacen(
+            r#"<q:axId val="-1884094432"/><q:axId val="-1884097184"/>"#,
+            r#"<q:axId val="-1884094432" x:slot="category"/><!--axis-anchor--><q:axId val="-1884097184" x:slot="value"/>"#,
+            1,
+        );
+        let mut swapped =
+            CT_ChartSpace::from_xml(chart_with_plot(&axis_payload).as_bytes()).unwrap();
+        if let Plot::Bar { axis_ids, .. } = &mut swapped.chart.plot_area.plots_mut().unwrap()[0] {
+            axis_ids.swap(0, 1);
+        }
+        let swapped = String::from_utf8(swapped.to_xml().unwrap()).unwrap();
+        let anchor = swapped.find("<!--axis-anchor-->").unwrap();
+        let value_axis = swapped
+            .find(r#"<c:axId val="-1884097184" x:slot="value"/>"#)
+            .unwrap();
+        let category_axis = swapped
+            .find(r#"<c:axId val="-1884094432" x:slot="category"/>"#)
+            .unwrap();
+        let series_lines = swapped.find("<q:serLines").unwrap();
+        assert!(series_lines < value_axis && series_lines < category_axis);
+        assert!(anchor < value_axis && value_axis < category_axis);
+
+        let mut replaced = CT_ChartSpace::from_xml(xml.as_bytes()).unwrap();
+        let Plot::Bar {
+            series, axis_ids, ..
+        } = &replaced.chart.plot_area.plots().unwrap()[0]
+        else {
+            panic!("expected bar plot");
+        };
+        let line = Plot::line(Grouping::Standard, series.clone(), *axis_ids).unwrap();
+        replaced.chart.plot_area.plots_mut().unwrap()[0] = line;
+        assert!(replaced.to_xml().is_err());
+    }
+
+    #[test]
+    fn every_corpus_bar_and_line_plot_round_trips_structurally() {
+        let Some(corpus) = require_or_skip_corpus() else {
+            return;
+        };
+        verify_fetched_corpus(&corpus);
+        let mut typed_bar_count = 0usize;
+        let mut typed_line_count = 0usize;
+        let mut opaque_bar_count = 0usize;
+        let mut opaque_line_count = 0usize;
+        let mut opaque_combo_count = 0usize;
+        for path in manifest_paths() {
+            let package = OpcPackage::open(corpus.join(path))
+                .unwrap_or_else(|error| panic!("{path}: open failed: {error}"));
+            for (part, xml) in &package.parts {
+                if !is_chart_part(part) {
+                    continue;
+                }
+                let chart = CT_ChartSpace::from_xml(xml)
+                    .unwrap_or_else(|error| panic!("{path} {part}: parse failed: {error}"));
+                match chart.chart.plot_area.plots() {
+                    Ok(plots) => {
+                        for plot in plots {
+                            match plot {
+                                Plot::Bar { .. } => typed_bar_count += 1,
+                                Plot::Line { .. } => typed_line_count += 1,
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        let mut preserved_plot_count = 0usize;
+                        for raw in chart.chart.plot_area.raw_children.at(0) {
+                            if let Ok(Some(local)) = super::chart_root_local(
+                                raw,
+                                &chart.chart.plot_area.namespace_bindings,
+                            ) {
+                                match local.as_slice() {
+                                    b"barChart" => {
+                                        opaque_bar_count += 1;
+                                        preserved_plot_count += 1;
+                                    }
+                                    b"lineChart" => {
+                                        opaque_line_count += 1;
+                                        preserved_plot_count += 1;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        if preserved_plot_count > 1 {
+                            opaque_combo_count += 1;
+                        }
+                    }
+                }
+                let written = chart
+                    .to_xml()
+                    .unwrap_or_else(|error| panic!("{path} {part}: chart write failed: {error}"));
+                let reparsed = CT_ChartSpace::from_xml(&written).unwrap_or_else(|error| {
+                    panic!("{path} {part}: written chart parse failed: {error}")
+                });
+                assert_eq!(chart, reparsed, "{path} {part}: chart model changed");
+            }
+        }
+        assert_eq!(typed_bar_count, 11, "typed corpus bar coverage changed");
+        assert_eq!(typed_line_count, 2, "typed corpus line coverage changed");
+        assert_eq!(opaque_bar_count, 1, "preserved combo bar coverage changed");
+        assert_eq!(
+            opaque_line_count, 1,
+            "preserved combo line coverage changed"
+        );
+        assert_eq!(opaque_combo_count, 1, "preserved combo coverage changed");
+        assert_eq!(typed_bar_count + opaque_bar_count, 12);
+        assert_eq!(typed_line_count + opaque_line_count, 3);
+        eprintln!(
+            "ChartML plot corpus gate checked {typed_bar_count} typed bar, {typed_line_count} typed line, and one preserved bar-line combination"
+        );
+    }
+
+    fn verify_bar_and_line_viewer_gate(corpus: &Path) {
+        verify_fetched_corpus(corpus);
+        assert_command_version("soffice", &["--version"], LIBREOFFICE_VERSION);
+        assert_command_version("pdftoppm", &["-v"], PDFTOPPM_VERSION);
+        let temp_root = std::env::temp_dir().join(format!(
+            "rpptx-chart-f121-viewer-gate-{}",
+            std::process::id()
+        ));
+        if temp_root.exists() {
+            fs::remove_dir_all(&temp_root).expect("remove stale F-121 evidence");
+        }
+        fs::create_dir_all(&temp_root).expect("create F-121 evidence root");
+
+        for (kind, deck) in [("bar", "bar-chart.pptx"), ("line", "line-chart.pptx")] {
+            let source = corpus.join(deck);
+            let original_sha = sha256(&source);
+            let mut package = OpcPackage::open(&source)
+                .unwrap_or_else(|error| panic!("{deck}: open viewer source: {error}"));
+            let chart_part = "/ppt/charts/chart1.xml";
+            let original_parts = package.parts.clone();
+            let parsed = CT_ChartSpace::from_xml(
+                package
+                    .get_part(chart_part)
+                    .unwrap_or_else(|| panic!("{deck}: missing {chart_part}")),
+            )
+            .unwrap_or_else(|error| panic!("{deck}: parse viewer chart: {error}"));
+            assert!(
+                parsed.chart.plot_area.plots().is_ok(),
+                "{deck}: plot is opaque"
+            );
+            package.set_part(
+                chart_part,
+                parsed
+                    .to_xml()
+                    .unwrap_or_else(|error| panic!("{deck}: serialize viewer chart: {error}")),
+            );
+            for (part, bytes) in &original_parts {
+                if part == chart_part {
+                    assert_ne!(package.parts[part], *bytes, "{deck}: chart did not rewrite");
+                } else {
+                    assert_eq!(package.parts[part], *bytes, "{deck}: changed part {part}");
+                }
+            }
+
+            let unbound = temp_root.join(format!("{kind}-candidate.pptx"));
+            package
+                .save(&unbound)
+                .unwrap_or_else(|error| panic!("{deck}: save viewer candidate: {error}"));
+            let candidate_sha = sha256(&unbound);
+            let evidence = temp_root.join(format!("{original_sha}-{candidate_sha}"));
+            fs::create_dir(&evidence).expect("create SHA-bound F-121 evidence directory");
+            let original = evidence.join(format!("{kind}-original.pptx"));
+            let candidate = evidence.join(format!("{kind}-candidate.pptx"));
+            fs::copy(&source, &original).expect("copy SHA-bound viewer original");
+            fs::rename(&unbound, &candidate).expect("bind viewer candidate to SHA");
+            assert_eq!(sha256(&original), original_sha);
+            assert_eq!(sha256(&candidate), candidate_sha);
+
+            let original_render = render_deck_to_ppm(&original, &evidence, kind, "original");
+            let candidate_render = render_deck_to_ppm(&candidate, &evidence, kind, "candidate");
+            let original_bytes = fs::read(&original_render).expect("read original PPM");
+            let candidate_bytes = fs::read(&candidate_render).expect("read candidate PPM");
+            let normalized_mae = normalized_ppm_mae(&original_bytes, &candidate_bytes);
+            assert!(
+                normalized_mae <= PLOT_RENDER_NORMALIZED_MAE_THRESHOLD,
+                "{deck}: normalized RGB MAE {normalized_mae:.8} exceeds {:.8}",
+                PLOT_RENDER_NORMALIZED_MAE_THRESHOLD
+            );
+            eprintln!(
+                "F-121 {kind} viewer gate original deck {original_sha}, candidate deck {candidate_sha}, original render {}, candidate render {}, normalized RGB MAE {normalized_mae:.8} <= {:.8}",
+                sha256(&original_render),
+                sha256(&candidate_render),
+                PLOT_RENDER_NORMALIZED_MAE_THRESHOLD
+            );
+        }
+        fs::remove_dir_all(&temp_root).expect("remove F-121 viewer evidence");
+    }
+
+    fn render_deck_to_ppm(deck: &Path, evidence: &Path, kind: &str, side: &str) -> PathBuf {
+        let profile = std::env::temp_dir().join(format!(
+            "rpptx-chart-f121-{kind}-{side}-profile-{}",
+            std::process::id()
+        ));
+        if profile.exists() {
+            fs::remove_dir_all(&profile).expect("remove stale F-121 viewer profile");
+        }
+        let profile_argument = format!("-env:UserInstallation=file://{}", profile.display());
+        let conversion = Command::new("soffice")
+            .args([
+                "--headless",
+                &profile_argument,
+                "--convert-to",
+                "pdf:impress_pdf_Export",
+                "--outdir",
+            ])
+            .arg(evidence)
+            .arg(deck)
+            .output()
+            .expect("run pinned LibreOffice F-121 viewer gate");
+        assert!(
+            conversion.status.success(),
+            "{}: LibreOffice conversion failed: {}",
+            deck.display(),
+            String::from_utf8_lossy(&conversion.stderr)
+        );
+        let pdf = deck.with_extension("pdf");
+        assert!(
+            pdf.is_file(),
+            "LibreOffice did not create {}",
+            pdf.display()
+        );
+        let prefix = evidence.join(format!("{kind}-{side}"));
+        let raster = Command::new("pdftoppm")
+            .args(["-f", "1", "-singlefile", "-r", "150"])
+            .arg(&pdf)
+            .arg(&prefix)
+            .output()
+            .expect("run pinned Poppler F-121 raster gate");
+        assert!(
+            raster.status.success(),
+            "{}: pdftoppm failed: {}",
+            pdf.display(),
+            String::from_utf8_lossy(&raster.stderr)
+        );
+        if profile.exists() {
+            fs::remove_dir_all(&profile).expect("remove F-121 viewer profile");
+        }
+        prefix.with_extension("ppm")
+    }
+
+    fn normalized_ppm_mae(left: &[u8], right: &[u8]) -> f64 {
+        let (left_width, left_height, left_pixels) = ppm_pixels(left);
+        let (right_width, right_height, right_pixels) = ppm_pixels(right);
+        assert_eq!((left_width, left_height), (right_width, right_height));
+        assert_eq!(left_pixels.len(), right_pixels.len());
+        let difference: u64 = left_pixels
+            .iter()
+            .zip(right_pixels)
+            .map(|(left, right)| u64::from(left.abs_diff(*right)))
+            .sum();
+        difference as f64 / (left_pixels.len() as f64 * 255.0)
+    }
+
+    fn ppm_pixels(bytes: &[u8]) -> (usize, usize, &[u8]) {
+        let mut cursor = 0usize;
+        let mut tokens = Vec::new();
+        while tokens.len() < 4 {
+            while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+                cursor += 1;
+            }
+            if cursor < bytes.len() && bytes[cursor] == b'#' {
+                while cursor < bytes.len() && bytes[cursor] != b'\n' {
+                    cursor += 1;
+                }
+                continue;
+            }
+            let start = cursor;
+            while cursor < bytes.len() && !bytes[cursor].is_ascii_whitespace() {
+                cursor += 1;
+            }
+            tokens.push(std::str::from_utf8(&bytes[start..cursor]).expect("PPM header UTF-8"));
+        }
+        assert_eq!(tokens[0], "P6");
+        let width = tokens[1].parse::<usize>().expect("PPM width");
+        let height = tokens[2].parse::<usize>().expect("PPM height");
+        assert_eq!(tokens[3], "255");
+        assert!(
+            cursor < bytes.len() && bytes[cursor].is_ascii_whitespace(),
+            "PPM header must end with whitespace"
+        );
+        cursor += 1;
+        let pixels = &bytes[cursor..];
+        assert_eq!(pixels.len(), width * height * 3, "PPM pixel length");
+        (width, height, pixels)
     }
 }

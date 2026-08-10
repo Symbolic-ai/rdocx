@@ -1,6 +1,6 @@
 # F-121, Bar and line plots
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S30
 **Size**: M
 **Depends on**: F-119, F-120
@@ -144,14 +144,14 @@ not enter Word sample generation or rendering. All 28 hashes must match.
 
 ## Implementation checklist
 
-- [ ] Add bar and line plot enums, values, constructors, and validation.
-- [ ] Promote supported single-family plot areas to owned plots and axes.
-- [ ] Parse and write bar and line children in exact schema order.
-- [ ] Preserve unsupported, 3-D, and combination plot areas verbatim.
-- [ ] Add negative, mutation, ordering, preservation, and corpus tests.
-- [ ] Produce SHA-bound LibreOffice and Poppler render evidence.
-- [ ] Update exactly HLD 09.
-- [ ] Run focused parser, corpus, oracle, microscope, and worker preparation
+- [x] Add bar and line plot enums, values, constructors, and validation.
+- [x] Promote supported single-family plot areas to owned plots and axes.
+- [x] Parse and write bar and line children in exact schema order.
+- [x] Preserve unsupported, 3-D, and combination plot areas verbatim.
+- [x] Add negative, mutation, ordering, preservation, and corpus tests.
+- [x] Produce SHA-bound LibreOffice and Poppler render evidence.
+- [x] Update exactly HLD 09.
+- [x] Run focused parser, corpus, oracle, microscope, and worker preparation
       checks.
 
 ## Open questions
