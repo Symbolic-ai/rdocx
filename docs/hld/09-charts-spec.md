@@ -197,10 +197,22 @@ pub struct Series {
 }
 ```
 
-Axes are `c:catAx`, `c:valAx`, `c:dateAx` and `c:serAx`, each carrying an id,
-scaling, delete flag, position, gridlines, title, number format, tick marks,
-label position and a `crossAx` back-reference. **Axis ids are arbitrary but must
-pair consistently through `c:crossAx`.**
+`Axis` models the `Category`, `Value`, `Date` and `Series` roots with typed
+`Scaling`, position, delete state, gridlines, title, `NumberFormat`, tick
+marks, label position, shape properties, text properties and a `cross_axis`
+reference. `AxisId` accepts the producer-compatible range from `i32::MIN`
+through `u32::MAX`. Parsed identifier spellings are preserved when unchanged,
+while equality and pairing use the normalized numeric value.
+
+`CT_PlotArea::axes()` projects direct axis children and validates the complete
+nonempty axis graph. Identifiers are unique, each cross reference resolves in
+the same plot area, no axis crosses itself and every reference is reciprocal.
+Parsing rejects missing required children, duplicate modelled children,
+invalid enum and boolean values, nonfinite or inconsistent scaling bounds and
+out-of-range identifiers. Writing uses fixed `c:`, `a:` and `r:` prefixes in
+schema order. Unsupported type-specific children, extensions, attributes,
+comments and whitespace remain in ordered raw slots. The pinned 50-deck corpus
+currently exercises 40 axes across 26 chart parts.
 
 ## Cached values are not optional
 

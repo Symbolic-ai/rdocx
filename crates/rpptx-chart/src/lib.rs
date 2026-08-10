@@ -1835,6 +1835,241 @@ fn capture_fixed_attributes(start: &BytesStart<'_>, fixed: &[&str]) -> Result<Xm
     Ok(attributes)
 }
 
+/// A producer-compatible ChartML axis identifier.
+///
+/// ECMA-376 names an unsigned value, but PowerPoint emits signed 32-bit
+/// lexical values in real chart parts. The accepted domain covers both forms.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct AxisId(i64);
+
+impl AxisId {
+    pub fn new(value: i64) -> Result<Self> {
+        if (i64::from(i32::MIN)..=i64::from(u32::MAX)).contains(&value) {
+            Ok(Self(value))
+        } else {
+            Err(ChartError::InvalidValue {
+                element: "c:axId".to_owned(),
+                value: value.to_string(),
+            })
+        }
+    }
+
+    pub const fn value(self) -> i64 {
+        self.0
+    }
+}
+
+/// The concrete ChartML root used by an axis.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum AxisKind {
+    Category,
+    Value,
+    Date,
+    Series,
+}
+
+impl AxisKind {
+    fn parse(local: &[u8]) -> Option<Self> {
+        match local {
+            b"catAx" => Some(Self::Category),
+            b"valAx" => Some(Self::Value),
+            b"dateAx" => Some(Self::Date),
+            b"serAx" => Some(Self::Series),
+            _ => None,
+        }
+    }
+
+    const fn local(self) -> &'static str {
+        match self {
+            Self::Category => "catAx",
+            Self::Value => "valAx",
+            Self::Date => "dateAx",
+            Self::Series => "serAx",
+        }
+    }
+}
+
+/// Direction of values along an axis scale.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Orientation {
+    #[default]
+    MinMax,
+    MaxMin,
+}
+
+impl Orientation {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "minMax" => Some(Self::MinMax),
+            "maxMin" => Some(Self::MaxMin),
+            _ => None,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::MinMax => "minMax",
+            Self::MaxMin => "maxMin",
+        }
+    }
+}
+
+/// Which side of the plot area carries an axis.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AxisPosition {
+    Bottom,
+    Left,
+    Right,
+    Top,
+}
+
+impl AxisPosition {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "b" => Some(Self::Bottom),
+            "l" => Some(Self::Left),
+            "r" => Some(Self::Right),
+            "t" => Some(Self::Top),
+            _ => None,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bottom => "b",
+            Self::Left => "l",
+            Self::Right => "r",
+            Self::Top => "t",
+        }
+    }
+}
+
+/// Placement of a major or minor tick relative to its axis line.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TickMark {
+    Cross,
+    Inside,
+    #[default]
+    None,
+    Outside,
+}
+
+impl TickMark {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "cross" => Some(Self::Cross),
+            "in" => Some(Self::Inside),
+            "none" => Some(Self::None),
+            "out" => Some(Self::Outside),
+            _ => None,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cross => "cross",
+            Self::Inside => "in",
+            Self::None => "none",
+            Self::Outside => "out",
+        }
+    }
+}
+
+/// Placement of tick labels relative to an axis.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TickLabelPosition {
+    High,
+    Low,
+    #[default]
+    NextTo,
+    None,
+}
+
+impl TickLabelPosition {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "high" => Some(Self::High),
+            "low" => Some(Self::Low),
+            "nextTo" => Some(Self::NextTo),
+            "none" => Some(Self::None),
+            _ => None,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::High => "high",
+            Self::Low => "low",
+            Self::NextTo => "nextTo",
+            Self::None => "none",
+        }
+    }
+}
+
+/// The modelled values of `c:scaling`.
+#[derive(Clone, Debug)]
+pub struct Scaling {
+    pub log_base: Option<f64>,
+    pub orientation: Orientation,
+    pub maximum: Option<f64>,
+    pub minimum: Option<f64>,
+    log_base_markup: Option<ScalarMarkup>,
+    orientation_markup: Option<ScalarMarkup>,
+    maximum_markup: Option<ScalarMarkup>,
+    minimum_markup: Option<ScalarMarkup>,
+    raw_attributes: XmlAttributes,
+    raw_children: OrderedRawChildren,
+}
+
+impl PartialEq for Scaling {
+    fn eq(&self, other: &Self) -> bool {
+        self.log_base == other.log_base
+            && self.orientation == other.orientation
+            && self.maximum == other.maximum
+            && self.minimum == other.minimum
+            && optional_scalar_markup_eq(&self.log_base_markup, &other.log_base_markup)
+            && optional_scalar_markup_eq(&self.orientation_markup, &other.orientation_markup)
+            && optional_scalar_markup_eq(&self.maximum_markup, &other.maximum_markup)
+            && optional_scalar_markup_eq(&self.minimum_markup, &other.minimum_markup)
+            && self.raw_attributes == other.raw_attributes
+            && self.raw_children == other.raw_children
+    }
+}
+
+impl Default for Scaling {
+    fn default() -> Self {
+        Self {
+            log_base: None,
+            orientation: Orientation::MinMax,
+            maximum: None,
+            minimum: None,
+            log_base_markup: None,
+            orientation_markup: None,
+            maximum_markup: None,
+            minimum_markup: None,
+            raw_attributes: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+        }
+    }
+}
+
+/// Shape properties on a major or minor gridline container.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ChartLines {
+    pub sp_pr: Option<CT_ShapeProperties>,
+    raw_attributes: XmlAttributes,
+    raw_children: OrderedRawChildren,
+}
+
+/// Number format applied to axis values and labels.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NumberFormat {
+    pub format_code: String,
+    pub source_linked: bool,
+    raw_attributes: XmlAttributes,
+    raw_content: Vec<Vec<u8>>,
+}
+
 /// How a chart displays cells whose cached values are blank.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DispBlanksAs {
@@ -1883,6 +2118,1109 @@ pub struct CT_PlotArea {
 pub struct CT_Legend {
     raw_attributes: Vec<(String, String)>,
     raw_children: OrderedRawChildren,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct AxisIdMarkup {
+    scalar: ScalarMarkup,
+    parsed: AxisId,
+    lexical: String,
+}
+
+/// The common modelled sequence of one ChartML axis.
+#[derive(Clone, Debug)]
+pub struct Axis {
+    pub kind: AxisKind,
+    pub id: AxisId,
+    pub scaling: Scaling,
+    pub deleted: bool,
+    pub position: AxisPosition,
+    pub major_gridlines: Option<ChartLines>,
+    pub minor_gridlines: Option<ChartLines>,
+    pub title: Option<CT_Title>,
+    pub number_format: Option<NumberFormat>,
+    pub major_tick_mark: TickMark,
+    pub minor_tick_mark: TickMark,
+    pub tick_label_position: TickLabelPosition,
+    pub sp_pr: Option<CT_ShapeProperties>,
+    pub tx_pr: Option<CT_TextBody>,
+    pub cross_axis: AxisId,
+    parsed_kind: Option<AxisKind>,
+    id_markup: AxisIdMarkup,
+    delete_markup: Option<ScalarMarkup>,
+    position_markup: ScalarMarkup,
+    major_tick_mark_markup: Option<ScalarMarkup>,
+    minor_tick_mark_markup: Option<ScalarMarkup>,
+    tick_label_position_markup: Option<ScalarMarkup>,
+    cross_axis_markup: AxisIdMarkup,
+    raw_attributes: XmlAttributes,
+    namespace_declarations: XmlAttributes,
+    raw_children: OrderedRawChildren,
+}
+
+impl PartialEq for Axis {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && self.id == other.id
+            && axis_id_markup_eq(&self.id_markup, &other.id_markup)
+            && self.scaling == other.scaling
+            && self.deleted == other.deleted
+            && optional_scalar_markup_eq(&self.delete_markup, &other.delete_markup)
+            && self.position == other.position
+            && self.position_markup == other.position_markup
+            && self.major_gridlines == other.major_gridlines
+            && self.minor_gridlines == other.minor_gridlines
+            && self.title == other.title
+            && self.number_format == other.number_format
+            && self.major_tick_mark == other.major_tick_mark
+            && optional_scalar_markup_eq(
+                &self.major_tick_mark_markup,
+                &other.major_tick_mark_markup,
+            )
+            && self.minor_tick_mark == other.minor_tick_mark
+            && optional_scalar_markup_eq(
+                &self.minor_tick_mark_markup,
+                &other.minor_tick_mark_markup,
+            )
+            && self.tick_label_position == other.tick_label_position
+            && optional_scalar_markup_eq(
+                &self.tick_label_position_markup,
+                &other.tick_label_position_markup,
+            )
+            && self.sp_pr == other.sp_pr
+            && self.tx_pr == other.tx_pr
+            && self.cross_axis == other.cross_axis
+            && axis_id_markup_eq(&self.cross_axis_markup, &other.cross_axis_markup)
+            && self.raw_attributes == other.raw_attributes
+            && self.namespace_declarations == other.namespace_declarations
+            && self.raw_children == other.raw_children
+    }
+}
+
+impl Axis {
+    pub fn new(kind: AxisKind, id: AxisId, position: AxisPosition, cross_axis: AxisId) -> Self {
+        Self {
+            kind,
+            id,
+            scaling: Scaling::default(),
+            deleted: false,
+            position,
+            major_gridlines: None,
+            minor_gridlines: None,
+            title: None,
+            number_format: None,
+            major_tick_mark: TickMark::None,
+            minor_tick_mark: TickMark::None,
+            tick_label_position: TickLabelPosition::NextTo,
+            sp_pr: None,
+            tx_pr: None,
+            cross_axis,
+            parsed_kind: None,
+            id_markup: default_axis_id_markup(id),
+            delete_markup: None,
+            position_markup: ScalarMarkup::default(),
+            major_tick_mark_markup: None,
+            minor_tick_mark_markup: None,
+            tick_label_position_markup: None,
+            cross_axis_markup: default_axis_id_markup(cross_axis),
+            raw_attributes: Vec::new(),
+            namespace_declarations: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+        }
+    }
+
+    pub fn from_xml(xml: &[u8]) -> Result<Self> {
+        Self::from_xml_with_namespaces(xml, &chart_namespace_defaults())
+    }
+
+    fn from_xml_with_namespaces(xml: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader
+                .read_event_into(&mut buffer)
+                .map_err(OxmlError::from)?
+            {
+                Event::Start(element) => {
+                    let name = element.name();
+                    let local = local_name(name.as_ref());
+                    let Some(kind) = AxisKind::parse(local) else {
+                        return Err(ChartError::UnexpectedElement(element_name(&element)));
+                    };
+                    chart_root_prefix(&element)?;
+                    if !element_is_in_namespace(&element, C_NS, inherited)? {
+                        return Err(ChartError::UnexpectedElement(element_name(&element)));
+                    }
+                    return Self::from_element(&mut reader, &element, inherited, kind);
+                }
+                Event::Empty(element) => {
+                    let name = element.name();
+                    let local = local_name(name.as_ref());
+                    if AxisKind::parse(local).is_some() {
+                        return Err(ChartError::MissingElement("c:axId".to_owned()));
+                    }
+                    return Err(ChartError::UnexpectedElement(element_name(&element)));
+                }
+                Event::Eof => return Err(ChartError::MissingElement("ChartML axis".to_owned())),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn from_element(
+        reader: &mut Reader<&[u8]>,
+        start: &BytesStart<'_>,
+        inherited: &NamespaceBindings,
+        kind: AxisKind,
+    ) -> Result<Self> {
+        reject_conflicting_prefix(start, b"a", A_NS)?;
+        reject_conflicting_prefix(start, b"r", R_NS)?;
+        let namespaces = chart_bindings(inherited, start)?;
+        require_fixed_namespace(&namespaces, b"c", C_NS, start)?;
+        require_fixed_namespace(&namespaces, b"a", A_NS, start)?;
+        require_fixed_namespace(&namespaces, b"r", R_NS, start)?;
+        let (raw_attributes, _) =
+            capture_fixed_root_attributes(start, &["xmlns:c", "xmlns:a", "xmlns:r"])?;
+        let namespace_declarations = standalone_namespace_declarations(&namespaces)?;
+        let mut state = AxisParseState::default();
+        let mut buffer = Vec::new();
+        loop {
+            match reader
+                .read_event_into(&mut buffer)
+                .map_err(OxmlError::from)?
+            {
+                Event::Start(element) => {
+                    let name = chart_child_local(&element, &namespaces)?;
+                    let raw = capture_element(reader, &element)?;
+                    state.parse_child(name.as_deref().unwrap_or_default(), raw, &namespaces)?;
+                }
+                Event::Empty(element) => {
+                    let name = chart_child_local(&element, &namespaces)?;
+                    let raw = capture_empty_element(&element)?;
+                    state.parse_child(name.as_deref().unwrap_or_default(), raw, &namespaces)?;
+                }
+                event @ (Event::Text(_)
+                | Event::CData(_)
+                | Event::Comment(_)
+                | Event::PI(_)
+                | Event::GeneralRef(_)) => state.capture_event(capture_event(event)?),
+                Event::End(element)
+                    if matches_local_name(element.name().as_ref(), kind.local().as_bytes()) =>
+                {
+                    break;
+                }
+                Event::Eof => return Err(missing_end(&format!("c:{}", kind.local()))),
+                _ => {}
+            }
+            buffer.clear();
+        }
+        state.finish(kind, raw_attributes, namespace_declarations)
+    }
+
+    pub fn to_xml(&self) -> Result<Vec<u8>> {
+        self.validate()?;
+        let mut writer = Writer::new(Vec::new());
+        let root = format!("c:{}", self.kind.local());
+        let mut start = BytesStart::new(&root);
+        start.push_attribute(("xmlns:c", C_NS));
+        start.push_attribute(("xmlns:a", A_NS));
+        start.push_attribute(("xmlns:r", R_NS));
+        push_attributes(&mut start, &self.namespace_declarations);
+        push_attributes(&mut start, &self.raw_attributes);
+        writer
+            .write_event(Event::Start(start))
+            .map_err(OxmlError::from)?;
+        emit_raw(&mut writer, self.raw_children.at(0))?;
+        write_axis_id(&mut writer, "c:axId", self.id, &self.id_markup)?;
+        emit_raw(&mut writer, self.raw_children.at(1))?;
+        self.scaling.write_xml(&mut writer)?;
+        emit_raw(&mut writer, self.raw_children.at(2))?;
+        if self.deleted || self.delete_markup.is_some() {
+            write_scalar(
+                &mut writer,
+                "c:delete",
+                bool_lexical(self.deleted),
+                self.delete_markup.as_ref(),
+            )?;
+        }
+        emit_raw(&mut writer, self.raw_children.at(3))?;
+        write_scalar(
+            &mut writer,
+            "c:axPos",
+            self.position.as_str(),
+            Some(&self.position_markup),
+        )?;
+        emit_raw(&mut writer, self.raw_children.at(4))?;
+        if let Some(lines) = &self.major_gridlines {
+            lines.write_xml(&mut writer, "c:majorGridlines")?;
+        }
+        emit_raw(&mut writer, self.raw_children.at(5))?;
+        if let Some(lines) = &self.minor_gridlines {
+            lines.write_xml(&mut writer, "c:minorGridlines")?;
+        }
+        emit_raw(&mut writer, self.raw_children.at(6))?;
+        if let Some(title) = &self.title {
+            title.write_xml(&mut writer)?;
+        }
+        emit_raw(&mut writer, self.raw_children.at(7))?;
+        if let Some(number_format) = &self.number_format {
+            number_format.write_xml(&mut writer)?;
+        }
+        emit_raw(&mut writer, self.raw_children.at(8))?;
+        if self.major_tick_mark != TickMark::None || self.major_tick_mark_markup.is_some() {
+            write_scalar(
+                &mut writer,
+                "c:majorTickMark",
+                self.major_tick_mark.as_str(),
+                self.major_tick_mark_markup.as_ref(),
+            )?;
+        }
+        emit_raw(&mut writer, self.raw_children.at(9))?;
+        if self.minor_tick_mark != TickMark::None || self.minor_tick_mark_markup.is_some() {
+            write_scalar(
+                &mut writer,
+                "c:minorTickMark",
+                self.minor_tick_mark.as_str(),
+                self.minor_tick_mark_markup.as_ref(),
+            )?;
+        }
+        emit_raw(&mut writer, self.raw_children.at(10))?;
+        if self.tick_label_position != TickLabelPosition::NextTo
+            || self.tick_label_position_markup.is_some()
+        {
+            write_scalar(
+                &mut writer,
+                "c:tickLblPos",
+                self.tick_label_position.as_str(),
+                self.tick_label_position_markup.as_ref(),
+            )?;
+        }
+        emit_raw(&mut writer, self.raw_children.at(11))?;
+        if let Some(properties) = &self.sp_pr {
+            properties.write_xml_as(&mut writer, "c:spPr")?;
+        }
+        emit_raw(&mut writer, self.raw_children.at(12))?;
+        if let Some(text) = &self.tx_pr {
+            text.write_xml_as(&mut writer, "c:txPr")?;
+        }
+        emit_raw(&mut writer, self.raw_children.at(13))?;
+        write_axis_id(
+            &mut writer,
+            "c:crossAx",
+            self.cross_axis,
+            &self.cross_axis_markup,
+        )?;
+        emit_raw(&mut writer, self.raw_children.at(14))?;
+        writer
+            .write_event(Event::End(BytesEnd::new(&root)))
+            .map_err(OxmlError::from)?;
+        Ok(writer.into_inner())
+    }
+
+    pub fn raw_children(&self) -> &OrderedRawChildren {
+        &self.raw_children
+    }
+
+    fn validate(&self) -> Result<()> {
+        if let Some(parsed_kind) = self.parsed_kind
+            && self.kind != parsed_kind
+        {
+            return Err(ChartError::InvalidValue {
+                element: "ChartML axis root".to_owned(),
+                value: format!(
+                    "parsed c:{} cannot be relabelled c:{}",
+                    parsed_kind.local(),
+                    self.kind.local()
+                ),
+            });
+        }
+        AxisId::new(self.id.value())?;
+        AxisId::new(self.cross_axis.value())?;
+        self.scaling.validate()?;
+        if let Some(number_format) = &self.number_format {
+            number_format.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct AxisParseState {
+    id: Option<(AxisId, AxisIdMarkup)>,
+    scaling: Option<Scaling>,
+    deleted: Option<(bool, ScalarMarkup)>,
+    position: Option<(AxisPosition, ScalarMarkup)>,
+    major_gridlines: Option<ChartLines>,
+    minor_gridlines: Option<ChartLines>,
+    title: Option<CT_Title>,
+    number_format: Option<NumberFormat>,
+    major_tick_mark: Option<(TickMark, ScalarMarkup)>,
+    minor_tick_mark: Option<(TickMark, ScalarMarkup)>,
+    tick_label_position: Option<(TickLabelPosition, ScalarMarkup)>,
+    sp_pr: Option<CT_ShapeProperties>,
+    tx_pr: Option<CT_TextBody>,
+    cross_axis: Option<(AxisId, AxisIdMarkup)>,
+    raw_children: OrderedRawChildren,
+    boundary: usize,
+}
+
+impl AxisParseState {
+    fn capture_event(&mut self, raw: Vec<u8>) {
+        self.raw_children.push(self.boundary, raw);
+    }
+
+    fn parse_child(
+        &mut self,
+        name: &[u8],
+        raw: Vec<u8>,
+        namespaces: &NamespaceBindings,
+    ) -> Result<()> {
+        match name {
+            b"axId" => {
+                set_once(&mut self.id, parse_axis_id_scalar(&raw, "axId")?, "c:axId")?;
+                self.boundary = self.boundary.max(1);
+            }
+            b"scaling" => {
+                set_once(
+                    &mut self.scaling,
+                    Scaling::from_xml(&raw, namespaces)?,
+                    "c:scaling",
+                )?;
+                self.boundary = self.boundary.max(2);
+            }
+            b"delete" => {
+                set_once(
+                    &mut self.deleted,
+                    parse_bool_value(&raw, "delete")?,
+                    "c:delete",
+                )?;
+                self.boundary = self.boundary.max(3);
+            }
+            b"axPos" => {
+                set_once(&mut self.position, parse_axis_position(&raw)?, "c:axPos")?;
+                self.boundary = self.boundary.max(4);
+            }
+            b"majorGridlines" => {
+                set_once(
+                    &mut self.major_gridlines,
+                    ChartLines::from_xml(&raw, b"majorGridlines", namespaces)?,
+                    "c:majorGridlines",
+                )?;
+                self.boundary = self.boundary.max(5);
+            }
+            b"minorGridlines" => {
+                set_once(
+                    &mut self.minor_gridlines,
+                    ChartLines::from_xml(&raw, b"minorGridlines", namespaces)?,
+                    "c:minorGridlines",
+                )?;
+                self.boundary = self.boundary.max(6);
+            }
+            b"title" => {
+                set_once(&mut self.title, CT_Title::from_xml(&raw)?, "c:title")?;
+                self.boundary = self.boundary.max(7);
+            }
+            b"numFmt" => {
+                set_once(
+                    &mut self.number_format,
+                    NumberFormat::from_xml(&raw)?,
+                    "c:numFmt",
+                )?;
+                self.boundary = self.boundary.max(8);
+            }
+            b"majorTickMark" => {
+                set_once(
+                    &mut self.major_tick_mark,
+                    parse_tick_mark(&raw, "majorTickMark")?,
+                    "c:majorTickMark",
+                )?;
+                self.boundary = self.boundary.max(9);
+            }
+            b"minorTickMark" => {
+                set_once(
+                    &mut self.minor_tick_mark,
+                    parse_tick_mark(&raw, "minorTickMark")?,
+                    "c:minorTickMark",
+                )?;
+                self.boundary = self.boundary.max(10);
+            }
+            b"tickLblPos" => {
+                set_once(
+                    &mut self.tick_label_position,
+                    parse_tick_label_position(&raw)?,
+                    "c:tickLblPos",
+                )?;
+                self.boundary = self.boundary.max(11);
+            }
+            b"spPr" => {
+                reject_conflicting_prefix_in_xml(&raw, b"a", A_NS)?;
+                let properties = CT_ShapeProperties::from_xml(&raw)?;
+                let mut writer = Writer::new(Vec::new());
+                properties.write_xml_as(&mut writer, "c:spPr")?;
+                reject_rewritten_foreign_elements(&raw, &writer.into_inner(), namespaces, b"spPr")?;
+                set_once(&mut self.sp_pr, properties, "c:spPr")?;
+                self.boundary = self.boundary.max(12);
+            }
+            b"txPr" => {
+                reject_conflicting_prefix_in_xml(&raw, b"a", A_NS)?;
+                let text = CT_TextBody::from_xml_as(&raw, b"txPr")?;
+                let mut writer = Writer::new(Vec::new());
+                text.write_xml_as(&mut writer, "c:txPr")?;
+                reject_rewritten_foreign_elements(&raw, &writer.into_inner(), namespaces, b"txPr")?;
+                set_once(&mut self.tx_pr, text, "c:txPr")?;
+                self.boundary = self.boundary.max(13);
+            }
+            b"crossAx" => {
+                set_once(
+                    &mut self.cross_axis,
+                    parse_axis_id_scalar(&raw, "crossAx")?,
+                    "c:crossAx",
+                )?;
+                self.boundary = self.boundary.max(14);
+            }
+            _ => self.raw_children.push(self.boundary, raw),
+        }
+        Ok(())
+    }
+
+    fn finish(
+        self,
+        kind: AxisKind,
+        raw_attributes: XmlAttributes,
+        namespace_declarations: XmlAttributes,
+    ) -> Result<Axis> {
+        let (id, id_markup) = self
+            .id
+            .ok_or_else(|| ChartError::MissingElement("c:axId".to_owned()))?;
+        let scaling = self
+            .scaling
+            .ok_or_else(|| ChartError::MissingElement("c:scaling".to_owned()))?;
+        let (position, position_markup) = self
+            .position
+            .ok_or_else(|| ChartError::MissingElement("c:axPos".to_owned()))?;
+        let (cross_axis, cross_axis_markup) = self
+            .cross_axis
+            .ok_or_else(|| ChartError::MissingElement("c:crossAx".to_owned()))?;
+        let (deleted, delete_markup) = self
+            .deleted
+            .map(|(value, markup)| (value, Some(markup)))
+            .unwrap_or((false, None));
+        let (major_tick_mark, major_tick_mark_markup) = self
+            .major_tick_mark
+            .map(|(value, markup)| (value, Some(markup)))
+            .unwrap_or((TickMark::None, None));
+        let (minor_tick_mark, minor_tick_mark_markup) = self
+            .minor_tick_mark
+            .map(|(value, markup)| (value, Some(markup)))
+            .unwrap_or((TickMark::None, None));
+        let (tick_label_position, tick_label_position_markup) = self
+            .tick_label_position
+            .map(|(value, markup)| (value, Some(markup)))
+            .unwrap_or((TickLabelPosition::NextTo, None));
+        let axis = Axis {
+            kind,
+            id,
+            scaling,
+            deleted,
+            position,
+            major_gridlines: self.major_gridlines,
+            minor_gridlines: self.minor_gridlines,
+            title: self.title,
+            number_format: self.number_format,
+            major_tick_mark,
+            minor_tick_mark,
+            tick_label_position,
+            sp_pr: self.sp_pr,
+            tx_pr: self.tx_pr,
+            cross_axis,
+            parsed_kind: Some(kind),
+            id_markup,
+            delete_markup,
+            position_markup,
+            major_tick_mark_markup,
+            minor_tick_mark_markup,
+            tick_label_position_markup,
+            cross_axis_markup,
+            raw_attributes,
+            namespace_declarations,
+            raw_children: raw_children_in_schema_order(&self.raw_children, 14),
+        };
+        axis.validate()?;
+        Ok(axis)
+    }
+}
+
+impl Scaling {
+    fn from_xml(xml: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader
+                .read_event_into(&mut buffer)
+                .map_err(OxmlError::from)?
+            {
+                Event::Start(element)
+                    if matches_local_name(element.name().as_ref(), b"scaling") =>
+                {
+                    let namespaces = typed_rewrite_bindings(&element, inherited)?;
+                    let raw_attributes = capture_attributes(&element)?;
+                    let mut log_base = None;
+                    let mut orientation = None;
+                    let mut maximum = None;
+                    let mut minimum = None;
+                    let mut raw_children = OrderedRawChildren::default();
+                    let mut boundary = 0usize;
+                    let mut inner = Vec::new();
+                    loop {
+                        match reader
+                            .read_event_into(&mut inner)
+                            .map_err(OxmlError::from)?
+                        {
+                            Event::Start(child) => {
+                                let name = chart_child_local(&child, &namespaces)?;
+                                let raw = capture_element(&mut reader, &child)?;
+                                parse_scaling_child(
+                                    name.as_deref().unwrap_or_default(),
+                                    raw,
+                                    &mut log_base,
+                                    &mut orientation,
+                                    &mut maximum,
+                                    &mut minimum,
+                                    &mut raw_children,
+                                    &mut boundary,
+                                )?;
+                            }
+                            Event::Empty(child) => {
+                                let name = chart_child_local(&child, &namespaces)?;
+                                let raw = capture_empty_element(&child)?;
+                                parse_scaling_child(
+                                    name.as_deref().unwrap_or_default(),
+                                    raw,
+                                    &mut log_base,
+                                    &mut orientation,
+                                    &mut maximum,
+                                    &mut minimum,
+                                    &mut raw_children,
+                                    &mut boundary,
+                                )?;
+                            }
+                            event @ (Event::Text(_)
+                            | Event::CData(_)
+                            | Event::Comment(_)
+                            | Event::PI(_)
+                            | Event::GeneralRef(_)) => {
+                                raw_children.push(boundary, capture_event(event)?);
+                            }
+                            Event::End(end)
+                                if matches_local_name(end.name().as_ref(), b"scaling") =>
+                            {
+                                let (log_base, log_base_markup) = optional_markup(log_base);
+                                let (orientation, orientation_markup) = orientation
+                                    .map(|(value, markup)| (value, Some(markup)))
+                                    .unwrap_or((Orientation::MinMax, None));
+                                let (maximum, maximum_markup) = optional_markup(maximum);
+                                let (minimum, minimum_markup) = optional_markup(minimum);
+                                let scaling = Self {
+                                    log_base,
+                                    orientation,
+                                    maximum,
+                                    minimum,
+                                    log_base_markup,
+                                    orientation_markup,
+                                    maximum_markup,
+                                    minimum_markup,
+                                    raw_attributes,
+                                    raw_children: raw_children_in_schema_order(&raw_children, 4),
+                                };
+                                scaling.validate()?;
+                                return Ok(scaling);
+                            }
+                            Event::Eof => return Err(missing_end("c:scaling")),
+                            _ => {}
+                        }
+                        inner.clear();
+                    }
+                }
+                Event::Empty(element)
+                    if matches_local_name(element.name().as_ref(), b"scaling") =>
+                {
+                    typed_rewrite_bindings(&element, inherited)?;
+                    return Ok(Self {
+                        raw_attributes: capture_attributes(&element)?,
+                        ..Self::default()
+                    });
+                }
+                Event::Start(element) | Event::Empty(element) => {
+                    return Err(ChartError::UnexpectedElement(element_name(&element)));
+                }
+                Event::Eof => return Err(ChartError::MissingElement("c:scaling".to_owned())),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        self.validate()?;
+        let mut start = BytesStart::new("c:scaling");
+        push_attributes(&mut start, &self.raw_attributes);
+        writer
+            .write_event(Event::Start(start))
+            .map_err(OxmlError::from)?;
+        emit_raw(writer, self.raw_children.at(0))?;
+        if let Some(value) = self.log_base {
+            write_scalar(
+                writer,
+                "c:logBase",
+                &value.to_string(),
+                self.log_base_markup.as_ref(),
+            )?;
+        }
+        emit_raw(writer, self.raw_children.at(1))?;
+        if self.orientation != Orientation::MinMax || self.orientation_markup.is_some() {
+            write_scalar(
+                writer,
+                "c:orientation",
+                self.orientation.as_str(),
+                self.orientation_markup.as_ref(),
+            )?;
+        }
+        emit_raw(writer, self.raw_children.at(2))?;
+        if let Some(value) = self.maximum {
+            write_scalar(
+                writer,
+                "c:max",
+                &value.to_string(),
+                self.maximum_markup.as_ref(),
+            )?;
+        }
+        emit_raw(writer, self.raw_children.at(3))?;
+        if let Some(value) = self.minimum {
+            write_scalar(
+                writer,
+                "c:min",
+                &value.to_string(),
+                self.minimum_markup.as_ref(),
+            )?;
+        }
+        emit_raw(writer, self.raw_children.at(4))?;
+        writer
+            .write_event(Event::End(BytesEnd::new("c:scaling")))
+            .map_err(OxmlError::from)?;
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<()> {
+        if let Some(value) = self.log_base
+            && (!value.is_finite() || !(2.0..=1000.0).contains(&value))
+        {
+            return Err(ChartError::InvalidValue {
+                element: "c:logBase".to_owned(),
+                value: value.to_string(),
+            });
+        }
+        for (element, value) in [("c:max", self.maximum), ("c:min", self.minimum)] {
+            if let Some(value) = value
+                && !value.is_finite()
+            {
+                return Err(ChartError::InvalidValue {
+                    element: element.to_owned(),
+                    value: value.to_string(),
+                });
+            }
+        }
+        if let (Some(minimum), Some(maximum)) = (self.minimum, self.maximum)
+            && minimum > maximum
+        {
+            return Err(ChartError::InvalidValue {
+                element: "c:scaling".to_owned(),
+                value: format!("minimum {minimum} exceeds maximum {maximum}"),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_scaling_child(
+    name: &[u8],
+    raw: Vec<u8>,
+    log_base: &mut Option<(f64, ScalarMarkup)>,
+    orientation: &mut Option<(Orientation, ScalarMarkup)>,
+    maximum: &mut Option<(f64, ScalarMarkup)>,
+    minimum: &mut Option<(f64, ScalarMarkup)>,
+    raw_children: &mut OrderedRawChildren,
+    boundary: &mut usize,
+) -> Result<()> {
+    match name {
+        b"logBase" => {
+            set_once(log_base, parse_f64_scalar(&raw, "logBase")?, "c:logBase")?;
+            *boundary = (*boundary).max(1);
+        }
+        b"orientation" => {
+            let (value, markup) = scalar_value(&raw, "orientation")?;
+            let value = value
+                .ok_or_else(|| invalid_attribute("orientation", "val", "<missing>".to_owned()))?;
+            let parsed = Orientation::parse(&value)
+                .ok_or_else(|| invalid_attribute("orientation", "val", value))?;
+            set_once(orientation, (parsed, markup), "c:orientation")?;
+            *boundary = (*boundary).max(2);
+        }
+        b"max" => {
+            set_once(maximum, parse_f64_scalar(&raw, "max")?, "c:max")?;
+            *boundary = (*boundary).max(3);
+        }
+        b"min" => {
+            set_once(minimum, parse_f64_scalar(&raw, "min")?, "c:min")?;
+            *boundary = (*boundary).max(4);
+        }
+        _ => raw_children.push(*boundary, raw),
+    }
+    Ok(())
+}
+
+impl ChartLines {
+    fn from_xml(xml: &[u8], local: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader
+                .read_event_into(&mut buffer)
+                .map_err(OxmlError::from)?
+            {
+                Event::Start(element) if matches_local_name(element.name().as_ref(), local) => {
+                    let namespaces = typed_rewrite_bindings(&element, inherited)?;
+                    let raw_attributes = capture_attributes(&element)?;
+                    let mut sp_pr = None;
+                    let mut raw_children = OrderedRawChildren::default();
+                    let mut boundary = 0usize;
+                    let mut inner = Vec::new();
+                    loop {
+                        match reader
+                            .read_event_into(&mut inner)
+                            .map_err(OxmlError::from)?
+                        {
+                            Event::Start(child) => {
+                                let name = chart_child_local(&child, &namespaces)?;
+                                let raw = capture_element(&mut reader, &child)?;
+                                if name.as_deref() == Some(b"spPr") {
+                                    parse_chart_lines_shape(&raw, &namespaces, &mut sp_pr)?;
+                                    boundary = 1;
+                                } else {
+                                    raw_children.push(boundary, raw);
+                                }
+                            }
+                            Event::Empty(child) => {
+                                let name = chart_child_local(&child, &namespaces)?;
+                                let raw = capture_empty_element(&child)?;
+                                if name.as_deref() == Some(b"spPr") {
+                                    parse_chart_lines_shape(&raw, &namespaces, &mut sp_pr)?;
+                                    boundary = 1;
+                                } else {
+                                    raw_children.push(boundary, raw);
+                                }
+                            }
+                            event @ (Event::Text(_)
+                            | Event::CData(_)
+                            | Event::Comment(_)
+                            | Event::PI(_)
+                            | Event::GeneralRef(_)) => {
+                                raw_children.push(boundary, capture_event(event)?);
+                            }
+                            Event::End(end) if matches_local_name(end.name().as_ref(), local) => {
+                                return Ok(Self {
+                                    sp_pr,
+                                    raw_attributes,
+                                    raw_children: raw_children_in_schema_order(&raw_children, 1),
+                                });
+                            }
+                            Event::Eof => {
+                                return Err(missing_end(&format!(
+                                    "c:{}",
+                                    String::from_utf8_lossy(local)
+                                )));
+                            }
+                            _ => {}
+                        }
+                        inner.clear();
+                    }
+                }
+                Event::Empty(element) if matches_local_name(element.name().as_ref(), local) => {
+                    typed_rewrite_bindings(&element, inherited)?;
+                    return Ok(Self {
+                        sp_pr: None,
+                        raw_attributes: capture_attributes(&element)?,
+                        raw_children: OrderedRawChildren::default(),
+                    });
+                }
+                Event::Start(element) | Event::Empty(element) => {
+                    return Err(ChartError::UnexpectedElement(element_name(&element)));
+                }
+                Event::Eof => {
+                    return Err(ChartError::MissingElement(format!(
+                        "c:{}",
+                        String::from_utf8_lossy(local)
+                    )));
+                }
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn write_xml<W: Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
+        let mut start = BytesStart::new(tag);
+        push_attributes(&mut start, &self.raw_attributes);
+        if self.sp_pr.is_none() && self.raw_children.is_empty() {
+            writer
+                .write_event(Event::Empty(start))
+                .map_err(OxmlError::from)?;
+            return Ok(());
+        }
+        writer
+            .write_event(Event::Start(start))
+            .map_err(OxmlError::from)?;
+        emit_raw(writer, self.raw_children.at(0))?;
+        if let Some(properties) = &self.sp_pr {
+            properties.write_xml_as(writer, "c:spPr")?;
+        }
+        emit_raw(writer, self.raw_children.at(1))?;
+        writer
+            .write_event(Event::End(BytesEnd::new(tag)))
+            .map_err(OxmlError::from)?;
+        Ok(())
+    }
+}
+
+fn parse_chart_lines_shape(
+    raw: &[u8],
+    namespaces: &NamespaceBindings,
+    slot: &mut Option<CT_ShapeProperties>,
+) -> Result<()> {
+    reject_conflicting_prefix_in_xml(raw, b"a", A_NS)?;
+    let properties = CT_ShapeProperties::from_xml(raw)?;
+    let mut writer = Writer::new(Vec::new());
+    properties.write_xml_as(&mut writer, "c:spPr")?;
+    reject_rewritten_foreign_elements(raw, &writer.into_inner(), namespaces, b"spPr")?;
+    set_once(slot, properties, "c:spPr")
+}
+
+impl NumberFormat {
+    pub fn new(format_code: String, source_linked: bool) -> Result<Self> {
+        let number_format = Self {
+            format_code,
+            source_linked,
+            raw_attributes: Vec::new(),
+            raw_content: Vec::new(),
+        };
+        number_format.validate()?;
+        Ok(number_format)
+    }
+
+    fn from_xml(xml: &[u8]) -> Result<Self> {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader
+                .read_event_into(&mut buffer)
+                .map_err(OxmlError::from)?
+            {
+                Event::Empty(element) if matches_local_name(element.name().as_ref(), b"numFmt") => {
+                    return Self::from_element(&element, Vec::new());
+                }
+                Event::Start(element) if matches_local_name(element.name().as_ref(), b"numFmt") => {
+                    let mut raw_content = Vec::new();
+                    let mut inner = Vec::new();
+                    loop {
+                        match reader
+                            .read_event_into(&mut inner)
+                            .map_err(OxmlError::from)?
+                        {
+                            Event::End(end)
+                                if matches_local_name(end.name().as_ref(), b"numFmt") =>
+                            {
+                                return Self::from_element(&element, raw_content);
+                            }
+                            event @ (Event::Text(_)
+                            | Event::CData(_)
+                            | Event::Comment(_)
+                            | Event::PI(_)
+                            | Event::GeneralRef(_)) => raw_content.push(capture_event(event)?),
+                            Event::Eof => return Err(missing_end("c:numFmt")),
+                            _ => return Err(ChartError::UnexpectedElement("c:numFmt".to_owned())),
+                        }
+                        inner.clear();
+                    }
+                }
+                Event::Start(element) | Event::Empty(element) => {
+                    return Err(ChartError::UnexpectedElement(element_name(&element)));
+                }
+                Event::Eof => return Err(ChartError::MissingElement("c:numFmt".to_owned())),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn from_element(element: &BytesStart<'_>, raw_content: Vec<Vec<u8>>) -> Result<Self> {
+        reject_conflicting_prefix(element, b"c", C_NS)?;
+        let format_code = attribute_value(element, b"formatCode")?
+            .ok_or_else(|| invalid_attribute("numFmt", "formatCode", "<missing>".to_owned()))?;
+        let source_linked = attribute_value(element, b"sourceLinked")?
+            .ok_or_else(|| invalid_attribute("numFmt", "sourceLinked", "<missing>".to_owned()))?;
+        let source_linked = parse_bool_lexical("numFmt", "sourceLinked", &source_linked)?;
+        let number_format = Self {
+            format_code,
+            source_linked,
+            raw_attributes: capture_attributes_excluding(
+                element,
+                &[b"formatCode", b"sourceLinked"],
+            )?,
+            raw_content,
+        };
+        number_format.validate()?;
+        Ok(number_format)
+    }
+
+    fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        self.validate()?;
+        let mut start = BytesStart::new("c:numFmt");
+        start.push_attribute(("formatCode", self.format_code.as_str()));
+        start.push_attribute(("sourceLinked", bool_lexical(self.source_linked)));
+        push_attributes(&mut start, &self.raw_attributes);
+        if self.raw_content.is_empty() {
+            writer
+                .write_event(Event::Empty(start))
+                .map_err(OxmlError::from)?;
+            return Ok(());
+        }
+        writer
+            .write_event(Event::Start(start))
+            .map_err(OxmlError::from)?;
+        for raw in &self.raw_content {
+            writer.get_mut().write_all(raw).map_err(OxmlError::from)?;
+        }
+        writer
+            .write_event(Event::End(BytesEnd::new("c:numFmt")))
+            .map_err(OxmlError::from)?;
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.format_code.is_empty() {
+            return Err(ChartError::InvalidValue {
+                element: "c:numFmt/@formatCode".to_owned(),
+                value: self.format_code.clone(),
+            });
+        }
+        validate_xml_text(&self.format_code, "c:numFmt/@formatCode")
+    }
+}
+
+fn default_axis_id_markup(id: AxisId) -> AxisIdMarkup {
+    AxisIdMarkup {
+        scalar: ScalarMarkup::default(),
+        parsed: id,
+        lexical: id.value().to_string(),
+    }
+}
+
+fn parse_axis_id_scalar(xml: &[u8], local: &str) -> Result<(AxisId, AxisIdMarkup)> {
+    let (value, scalar) = scalar_value(xml, local)?;
+    let lexical = value.ok_or_else(|| invalid_attribute(local, "val", "<missing>".to_owned()))?;
+    let parsed = lexical
+        .parse::<i64>()
+        .map_err(|_| invalid_attribute(local, "val", lexical.clone()))?;
+    let id = AxisId::new(parsed).map_err(|_| invalid_attribute(local, "val", lexical.clone()))?;
+    Ok((
+        id,
+        AxisIdMarkup {
+            scalar,
+            parsed: id,
+            lexical,
+        },
+    ))
+}
+
+fn write_axis_id<W: Write>(
+    writer: &mut Writer<W>,
+    tag: &str,
+    id: AxisId,
+    markup: &AxisIdMarkup,
+) -> Result<()> {
+    AxisId::new(id.value())?;
+    let normalized;
+    let value = if id == markup.parsed {
+        markup.lexical.as_str()
+    } else {
+        normalized = id.value().to_string();
+        normalized.as_str()
+    };
+    write_scalar(writer, tag, value, Some(&markup.scalar))
+}
+
+fn parse_f64_scalar(xml: &[u8], local: &str) -> Result<(f64, ScalarMarkup)> {
+    let (value, markup) = scalar_value(xml, local)?;
+    let value = value.ok_or_else(|| invalid_attribute(local, "val", "<missing>".to_owned()))?;
+    let parsed = value
+        .parse::<f64>()
+        .map_err(|_| invalid_attribute(local, "val", value.clone()))?;
+    if !parsed.is_finite() {
+        return Err(invalid_attribute(local, "val", value));
+    }
+    Ok((parsed, markup))
+}
+
+fn parse_axis_position(xml: &[u8]) -> Result<(AxisPosition, ScalarMarkup)> {
+    let (value, markup) = scalar_value(xml, "axPos")?;
+    let value = value.ok_or_else(|| invalid_attribute("axPos", "val", "<missing>".to_owned()))?;
+    let parsed =
+        AxisPosition::parse(&value).ok_or_else(|| invalid_attribute("axPos", "val", value))?;
+    Ok((parsed, markup))
+}
+
+fn parse_tick_mark(xml: &[u8], local: &str) -> Result<(TickMark, ScalarMarkup)> {
+    let (value, markup) = scalar_value(xml, local)?;
+    let value = value.ok_or_else(|| invalid_attribute(local, "val", "<missing>".to_owned()))?;
+    let parsed = TickMark::parse(&value).ok_or_else(|| invalid_attribute(local, "val", value))?;
+    Ok((parsed, markup))
+}
+
+fn parse_tick_label_position(xml: &[u8]) -> Result<(TickLabelPosition, ScalarMarkup)> {
+    let (value, markup) = scalar_value(xml, "tickLblPos")?;
+    let value =
+        value.ok_or_else(|| invalid_attribute("tickLblPos", "val", "<missing>".to_owned()))?;
+    let parsed = TickLabelPosition::parse(&value)
+        .ok_or_else(|| invalid_attribute("tickLblPos", "val", value))?;
+    Ok((parsed, markup))
+}
+
+fn optional_markup<T>(value: Option<(T, ScalarMarkup)>) -> (Option<T>, Option<ScalarMarkup>) {
+    value
+        .map(|(value, markup)| (Some(value), Some(markup)))
+        .unwrap_or((None, None))
+}
+
+fn optional_scalar_markup_eq(left: &Option<ScalarMarkup>, right: &Option<ScalarMarkup>) -> bool {
+    let empty = ScalarMarkup::default();
+    left.as_ref().unwrap_or(&empty) == right.as_ref().unwrap_or(&empty)
+}
+
+fn axis_id_markup_eq(left: &AxisIdMarkup, right: &AxisIdMarkup) -> bool {
+    left.scalar == right.scalar
+}
+
+const fn bool_lexical(value: bool) -> &'static str {
+    if value { "1" } else { "0" }
+}
+
+fn parse_bool_lexical(element: &str, attribute: &str, value: &str) -> Result<bool> {
+    match value {
+        "1" | "true" => Ok(true),
+        "0" | "false" => Ok(false),
+        _ => Err(invalid_attribute(element, attribute, value.to_owned())),
+    }
 }
 
 impl CT_Title {
@@ -1935,6 +3273,85 @@ impl CT_PlotArea {
         }
         Ok(series)
     }
+
+    /// Parses and validates the direct axis children of this plot area.
+    pub fn axes(&self) -> Result<Vec<Axis>> {
+        let mut axes = Vec::new();
+        for raw in self.raw_children.at(0) {
+            if let Some(axis) = parse_plot_axis(raw, &self.namespace_bindings)? {
+                axes.push(axis);
+            }
+        }
+        validate_axis_pairs(&axes)?;
+        Ok(axes)
+    }
+}
+
+fn parse_plot_axis(xml: &[u8], inherited: &NamespaceBindings) -> Result<Option<Axis>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(OxmlError::from)?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                if !element_is_in_namespace(&element, C_NS, inherited)? {
+                    return Ok(None);
+                }
+                let name = element.name();
+                if AxisKind::parse(local_name(name.as_ref())).is_none() {
+                    return Ok(None);
+                }
+                return Axis::from_xml_with_namespaces(xml, inherited).map(Some);
+            }
+            Event::Eof => return Ok(None),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn validate_axis_pairs(axes: &[Axis]) -> Result<()> {
+    for (index, axis) in axes.iter().enumerate() {
+        if axes[..index].iter().any(|other| other.id == axis.id) {
+            return Err(ChartError::DuplicateElement(format!(
+                "c:axId {}",
+                axis.id.value()
+            )));
+        }
+    }
+    for axis in axes {
+        if axis.id == axis.cross_axis {
+            return Err(ChartError::InvalidValue {
+                element: "c:crossAx".to_owned(),
+                value: format!("axis {} crosses itself", axis.id.value()),
+            });
+        }
+        let crossed = axes
+            .iter()
+            .find(|candidate| candidate.id == axis.cross_axis)
+            .ok_or_else(|| ChartError::InvalidValue {
+                element: "c:crossAx".to_owned(),
+                value: format!(
+                    "axis {} references missing axis {}",
+                    axis.id.value(),
+                    axis.cross_axis.value()
+                ),
+            })?;
+        if crossed.cross_axis != axis.id {
+            return Err(ChartError::InvalidValue {
+                element: "c:crossAx".to_owned(),
+                value: format!(
+                    "axis {} references {}, which references {}",
+                    axis.id.value(),
+                    crossed.id.value(),
+                    crossed.cross_axis.value()
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn parse_plot_series(
@@ -3043,6 +4460,29 @@ fn capture_attributes_except(start: &BytesStart<'_>, excluded: &[u8]) -> Result<
     Ok(attributes)
 }
 
+fn capture_attributes_excluding(
+    start: &BytesStart<'_>,
+    excluded: &[&[u8]],
+) -> Result<XmlAttributes> {
+    let mut attributes = Vec::new();
+    for attribute in start.attributes() {
+        let attribute = attribute.map_err(OxmlError::from)?;
+        if excluded.contains(&attribute.key.as_ref()) {
+            continue;
+        }
+        attributes.push((
+            std::str::from_utf8(attribute.key.as_ref())
+                .map_err(OxmlError::from)?
+                .to_owned(),
+            attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())
+                .map_err(OxmlError::from)?
+                .into_owned(),
+        ));
+    }
+    Ok(attributes)
+}
+
 fn push_attributes(start: &mut BytesStart<'_>, attributes: &[(String, String)]) {
     for (name, value) in attributes {
         start.push_attribute((name.as_str(), value.as_str()));
@@ -3127,12 +4567,385 @@ mod tests {
     use quick_xml::events::Event;
 
     use super::{
-        AxisData, CT_ChartSpace, CT_ShapeProperties, CT_TextBody, DispBlanksAs, NumericData,
-        Series, StringRef, capture_event, local_name,
+        A_NS, Axis, AxisData, AxisId, AxisKind, AxisPosition, C_NS, CT_ChartSpace,
+        CT_ShapeProperties, CT_TextBody, DispBlanksAs, NumericData, Orientation, R_NS, Series,
+        StringRef, TickLabelPosition, TickMark, capture_event, local_name,
     };
 
     const MANIFEST: &str = include_str!("../../../scripts/pptx-corpus-manifest.tsv");
     const EXPECTED_DECKS: usize = 50;
+
+    fn standalone_axis(local: &str, children: &str) -> String {
+        format!(
+            r#"<c:{local} xmlns:c="{C_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}">{children}</c:{local}>"#
+        )
+    }
+
+    fn minimal_axis(local: &str, id: &str, position: &str, cross_axis: &str) -> String {
+        format!(
+            r#"<c:{local}><c:axId val="{id}"/><c:scaling/><c:axPos val="{position}"/><c:crossAx val="{cross_axis}"/></c:{local}>"#
+        )
+    }
+
+    fn chart_with_axes(axes: &[String]) -> String {
+        format!(
+            r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><c:chart><c:plotArea>{}</c:plotArea></c:chart></c:chartSpace>"#,
+            axes.join("")
+        )
+    }
+
+    fn full_axis(local: &str, position: &str) -> String {
+        format!(
+            r#"<q:{local} xmlns:q="{C_NS}" xmlns:d="{A_NS}" xmlns:r="{R_NS}" xmlns:x="urn:producer"><q:axId val="-1125255920"/><q:scaling><q:logBase val="10"/><q:orientation val="maxMin"/><q:max val="100"/><q:min val="-10"/></q:scaling><q:delete val="1"/><q:axPos val="{position}"/><q:majorGridlines><q:spPr><d:ln/></q:spPr></q:majorGridlines><q:minorGridlines/><q:title><x:title/></q:title><q:numFmt formatCode="0.0" sourceLinked="0"/><q:majorTickMark val="cross"/><q:minorTickMark val="in"/><q:tickLblPos val="high"/><q:spPr><d:solidFill><d:srgbClr val="112233"/></d:solidFill></q:spPr><q:txPr><d:bodyPr/><d:p/></q:txPr><q:crossAx val="-1004303696"/></q:{local}>"#
+        )
+    }
+
+    #[test]
+    fn axis_id_pairs_are_reciprocal() {
+        assert_eq!(
+            AxisId::new(i64::from(i32::MIN)).unwrap().value(),
+            i64::from(i32::MIN)
+        );
+        assert_eq!(
+            AxisId::new(i64::from(u32::MAX)).unwrap().value(),
+            i64::from(u32::MAX)
+        );
+        assert!(AxisId::new(i64::from(i32::MIN) - 1).is_err());
+        assert!(AxisId::new(i64::from(u32::MAX) + 1).is_err());
+
+        let valid = chart_with_axes(&[
+            minimal_axis("catAx", "-1884094432", "b", "-1884097184"),
+            minimal_axis("valAx", "-1884097184", "l", "-1884094432"),
+        ]);
+        let axes = CT_ChartSpace::from_xml(valid.as_bytes())
+            .unwrap()
+            .chart
+            .plot_area
+            .axes()
+            .unwrap();
+        assert_eq!(axes.len(), 2);
+        assert_eq!(axes[0].id.value(), -1_884_094_432);
+        assert_eq!(axes[0].cross_axis, axes[1].id);
+        assert_eq!(axes[1].cross_axis, axes[0].id);
+
+        let invalid_sets = [
+            vec![
+                minimal_axis("catAx", "1", "b", "2"),
+                minimal_axis("valAx", "1", "l", "2"),
+            ],
+            vec![minimal_axis("catAx", "1", "b", "1")],
+            vec![minimal_axis("catAx", "1", "b", "2")],
+            vec![
+                minimal_axis("catAx", "1", "b", "2"),
+                minimal_axis("valAx", "2", "l", "3"),
+                minimal_axis("serAx", "3", "r", "2"),
+            ],
+        ];
+        for axes in invalid_sets {
+            let chart = CT_ChartSpace::from_xml(chart_with_axes(&axes).as_bytes()).unwrap();
+            assert!(chart.chart.plot_area.axes().is_err());
+        }
+
+        let empty = CT_ChartSpace::from_xml(chart_with_axes(&[]).as_bytes()).unwrap();
+        assert!(empty.chart.plot_area.axes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn all_axis_forms_write_fixed_prefixes_in_schema_order() {
+        for (local, kind, position) in [
+            ("catAx", AxisKind::Category, AxisPosition::Bottom),
+            ("valAx", AxisKind::Value, AxisPosition::Left),
+            ("dateAx", AxisKind::Date, AxisPosition::Top),
+            ("serAx", AxisKind::Series, AxisPosition::Right),
+        ] {
+            let xml = full_axis(local, position.as_str());
+            let parsed = Axis::from_xml(xml.as_bytes()).unwrap();
+            assert_eq!(parsed.kind, kind);
+            assert_eq!(parsed.id.value(), -1_125_255_920);
+            assert_eq!(parsed.scaling.log_base, Some(10.0));
+            assert_eq!(parsed.scaling.orientation, Orientation::MaxMin);
+            assert_eq!(parsed.scaling.maximum, Some(100.0));
+            assert_eq!(parsed.scaling.minimum, Some(-10.0));
+            assert!(parsed.deleted);
+            assert_eq!(parsed.position, position);
+            assert!(parsed.major_gridlines.is_some());
+            assert!(parsed.minor_gridlines.is_some());
+            assert!(parsed.title.is_some());
+            assert_eq!(parsed.number_format.as_ref().unwrap().format_code, "0.0");
+            assert_eq!(parsed.major_tick_mark, TickMark::Cross);
+            assert_eq!(parsed.minor_tick_mark, TickMark::Inside);
+            assert_eq!(parsed.tick_label_position, TickLabelPosition::High);
+            assert!(parsed.sp_pr.is_some());
+            assert!(parsed.tx_pr.is_some());
+            assert_eq!(parsed.cross_axis.value(), -1_004_303_696);
+
+            let written = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+            assert!(written.starts_with(&format!(
+                "<c:{local} xmlns:c=\"{C_NS}\" xmlns:a=\"{A_NS}\" xmlns:r=\"{R_NS}\""
+            )));
+            assert!(written.contains("<c:axId val=\"-1125255920\""));
+            let mut cursor = 0usize;
+            for tag in [
+                "<c:axId",
+                "<c:scaling",
+                "<c:delete",
+                "<c:axPos",
+                "<c:majorGridlines",
+                "<c:minorGridlines",
+                "<c:title",
+                "<c:numFmt",
+                "<c:majorTickMark",
+                "<c:minorTickMark",
+                "<c:tickLblPos",
+                "<c:spPr",
+                "<c:txPr",
+                "<c:crossAx",
+            ] {
+                let position = written[cursor..]
+                    .find(tag)
+                    .unwrap_or_else(|| panic!("missing ordered axis tag {tag}"));
+                cursor += position + tag.len();
+            }
+            assert_eq!(parsed, Axis::from_xml(written.as_bytes()).unwrap());
+        }
+
+        let mut constructed = Axis::new(
+            AxisKind::Value,
+            AxisId::new(1).unwrap(),
+            AxisPosition::Left,
+            AxisId::new(2).unwrap(),
+        );
+        assert_eq!(
+            constructed,
+            Axis::from_xml(&constructed.to_xml().unwrap()).unwrap()
+        );
+        constructed.kind = AxisKind::Category;
+        constructed.id = AxisId::new(3).unwrap();
+        constructed.cross_axis = AxisId::new(4).unwrap();
+        constructed.scaling.minimum = Some(0.0);
+        constructed.scaling.maximum = Some(10.0);
+        let written = constructed.to_xml().unwrap();
+        assert!(written.starts_with(b"<c:catAx"));
+        assert_eq!(constructed, Axis::from_xml(&written).unwrap());
+    }
+
+    #[test]
+    fn axis_equality_normalizes_ids_without_losing_lexical_preservation() {
+        let padded = Axis::from_xml(
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"01\"/><c:scaling/><c:axPos val=\"b\"/><c:crossAx val=\"002\"/>",
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let normalized = Axis::from_xml(
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"1\"/><c:scaling/><c:axPos val=\"b\"/><c:crossAx val=\"2\"/>",
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(padded, normalized);
+
+        let preserved = String::from_utf8(padded.to_xml().unwrap()).unwrap();
+        assert!(preserved.contains("<c:axId val=\"01\""));
+        assert!(preserved.contains("<c:crossAx val=\"002\""));
+
+        let mut mutated = padded;
+        mutated.id = AxisId::new(3).unwrap();
+        mutated.cross_axis = AxisId::new(4).unwrap();
+        let rewritten = String::from_utf8(mutated.to_xml().unwrap()).unwrap();
+        assert!(rewritten.contains("<c:axId val=\"3\""));
+        assert!(rewritten.contains("<c:crossAx val=\"4\""));
+        assert!(!rewritten.contains("val=\"01\""));
+        assert!(!rewritten.contains("val=\"002\""));
+    }
+
+    #[test]
+    fn malformed_axis_values_return_errors_without_panicking() {
+        let cases = [
+            standalone_axis(
+                "catAx",
+                "<c:scaling/><c:axPos val=\"b\"/><c:crossAx val=\"2\"/>",
+            ),
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"1\"/><c:axPos val=\"b\"/><c:crossAx val=\"2\"/>",
+            ),
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"1\"/><c:scaling/><c:crossAx val=\"2\"/>",
+            ),
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"1\"/><c:scaling/><c:axPos val=\"b\"/>",
+            ),
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"-2147483649\"/><c:scaling/><c:axPos val=\"b\"/><c:crossAx val=\"2\"/>",
+            ),
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"4294967296\"/><c:scaling/><c:axPos val=\"b\"/><c:crossAx val=\"2\"/>",
+            ),
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"1\"/><c:scaling><c:logBase val=\"1\"/></c:scaling><c:axPos val=\"b\"/><c:crossAx val=\"2\"/>",
+            ),
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"1\"/><c:scaling><c:max val=\"NaN\"/></c:scaling><c:axPos val=\"b\"/><c:crossAx val=\"2\"/>",
+            ),
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"1\"/><c:scaling><c:max val=\"1\"/><c:min val=\"2\"/></c:scaling><c:axPos val=\"b\"/><c:crossAx val=\"2\"/>",
+            ),
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"1\"/><c:scaling><c:orientation val=\"sideways\"/></c:scaling><c:axPos val=\"b\"/><c:crossAx val=\"2\"/>",
+            ),
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"1\"/><c:scaling/><c:delete val=\"yes\"/><c:axPos val=\"b\"/><c:crossAx val=\"2\"/>",
+            ),
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"1\"/><c:scaling/><c:axPos val=\"middle\"/><c:crossAx val=\"2\"/>",
+            ),
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"1\"/><c:scaling/><c:axPos val=\"b\"/><c:majorTickMark val=\"near\"/><c:crossAx val=\"2\"/>",
+            ),
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"1\"/><c:scaling/><c:axPos val=\"b\"/><c:tickLblPos val=\"middle\"/><c:crossAx val=\"2\"/>",
+            ),
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"1\"/><c:axId val=\"2\"/><c:scaling/><c:axPos val=\"b\"/><c:crossAx val=\"2\"/>",
+            ),
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"1\"/><c:scaling/><c:axPos val=\"b\"/><c:numFmt sourceLinked=\"1\"/><c:crossAx val=\"2\"/>",
+            ),
+            standalone_axis(
+                "catAx",
+                "<c:axId val=\"1\"/><c:scaling/><c:axPos val=\"b\"/><c:numFmt formatCode=\"0\" sourceLinked=\"maybe\"/><c:crossAx val=\"2\"/>",
+            ),
+        ];
+        for xml in cases {
+            let result = std::panic::catch_unwind(|| Axis::from_xml(xml.as_bytes()));
+            assert!(result.is_ok(), "axis parser panicked for {xml}");
+            assert!(result.unwrap().is_err(), "malformed axis parsed: {xml}");
+        }
+
+        let mut axis = Axis::new(
+            AxisKind::Value,
+            AxisId::new(1).unwrap(),
+            AxisPosition::Left,
+            AxisId::new(2).unwrap(),
+        );
+        axis.scaling.maximum = Some(f64::INFINITY);
+        assert!(axis.to_xml().is_err());
+    }
+
+    #[test]
+    fn axes_preserve_unmodelled_children_byte_for_byte() {
+        let xml = format!(
+            r#"<q:catAx xmlns:q="{C_NS}" xmlns:d="{A_NS}" xmlns:x="urn:producer" x:keep="axis"><!--before--><q:axId val="-1884094432" x:keep="id"/><?after-id?><q:scaling x:keep="scaling"><!--scale--><q:orientation val="minMax"/><q:extLst><q:ext uri="scale"><x:data/></q:ext></q:extLst></q:scaling><q:axPos val="b"/><q:majorGridlines x:keep="grid"><x:grid/></q:majorGridlines><q:title><x:title/></q:title><q:crossAx val="-1884097184"/><q:crosses val="autoZero"/><q:auto val="1"><x:auto/></q:auto><q:extLst><q:ext uri="axis"><x:tail/></q:ext></q:extLst><!--after--></q:catAx>"#
+        );
+        let parsed = Axis::from_xml(xml.as_bytes()).unwrap();
+        let mut relabelled = parsed.clone();
+        relabelled.kind = AxisKind::Value;
+        assert!(
+            relabelled.to_xml().is_err(),
+            "a parsed category axis must not retain its tail under a value-axis root"
+        );
+        let written = parsed.to_xml().unwrap();
+        for raw in [
+            br#"<!--before-->"#.as_slice(),
+            br#"<?after-id?>"#.as_slice(),
+            br#"<!--scale-->"#.as_slice(),
+            br#"<q:extLst><q:ext uri="scale"><x:data/></q:ext></q:extLst>"#.as_slice(),
+            br#"<x:grid/>"#.as_slice(),
+            br#"<x:title/>"#.as_slice(),
+            br#"<q:crosses val="autoZero"/>"#.as_slice(),
+            br#"<q:auto val="1"><x:auto/></q:auto>"#.as_slice(),
+            br#"<q:extLst><q:ext uri="axis"><x:tail/></q:ext></q:extLst>"#.as_slice(),
+            br#"<!--after-->"#.as_slice(),
+        ] {
+            assert!(
+                written.windows(raw.len()).any(|window| window == raw),
+                "preserved axis bytes changed: {}",
+                String::from_utf8_lossy(raw)
+            );
+        }
+        let written = String::from_utf8(written).unwrap();
+        assert!(written.starts_with("<c:catAx"));
+        assert!(written.contains("x:keep=\"axis\""));
+        assert!(written.contains("x:keep=\"id\""));
+        assert_eq!(parsed, Axis::from_xml(written.as_bytes()).unwrap());
+    }
+
+    #[test]
+    fn every_corpus_axis_round_trips_structurally() {
+        let Some(corpus) = require_or_skip_corpus() else {
+            return;
+        };
+        verify_fetched_corpus(&corpus);
+        let mut axis_count = 0usize;
+        let mut chart_parts = 0usize;
+        let mut kinds = HashSet::new();
+        for path in manifest_paths() {
+            let package = OpcPackage::open(corpus.join(path))
+                .unwrap_or_else(|error| panic!("{path}: open failed: {error}"));
+            for (part, xml) in &package.parts {
+                if !is_chart_part(part) {
+                    continue;
+                }
+                let chart = CT_ChartSpace::from_xml(xml)
+                    .unwrap_or_else(|error| panic!("{path} {part}: parse failed: {error}"));
+                let axes = chart.chart.plot_area.axes().unwrap_or_else(|error| {
+                    panic!("{path} {part}: axis projection failed: {error}")
+                });
+                for axis in axes {
+                    kinds.insert(axis.kind);
+                    let written = axis.to_xml().unwrap_or_else(|error| {
+                        panic!("{path} {part}: axis write failed: {error}")
+                    });
+                    let reparsed = Axis::from_xml(&written).unwrap_or_else(|error| {
+                        panic!("{path} {part}: written axis parse failed: {error}")
+                    });
+                    assert_eq!(axis, reparsed, "{path} {part}: axis model changed");
+                    axis_count += 1;
+                }
+                chart_parts += 1;
+            }
+        }
+        assert!(
+            axis_count > 0,
+            "the pinned corpus contained no ChartML axes"
+        );
+        assert!(kinds.contains(&AxisKind::Category));
+        assert!(kinds.contains(&AxisKind::Value));
+
+        for kind in ["dateAx", "serAx"] {
+            let parsed = Axis::from_xml(
+                standalone_axis(
+                    kind,
+                    "<c:axId val=\"1\"/><c:scaling/><c:axPos val=\"b\"/><c:crossAx val=\"2\"/>",
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            assert_eq!(parsed, Axis::from_xml(&parsed.to_xml().unwrap()).unwrap());
+        }
+        eprintln!(
+            "ChartML axis corpus gate checked {axis_count} axes across {chart_parts} chart parts"
+        );
+    }
 
     #[test]
     fn series_formula_and_cache_are_consistent_with_one_source() {

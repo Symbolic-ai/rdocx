@@ -1,6 +1,6 @@
 # F-120, Axes
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S30
 **Size**: L
 **Depends on**: F-118
@@ -143,14 +143,14 @@ sample generation or rendering. All 28 hashes must match.
 
 ## Implementation checklist
 
-- [ ] Add the producer-compatible `AxisId` domain and axis enums.
-- [ ] Parse and write the four axis roots and common schema sequence.
-- [ ] Preserve unsupported axis content in ordered raw slots.
-- [ ] Add plot-area axis projection and reciprocal-pair validation.
-- [ ] Add inline negative, ordering, preservation, and all-form fixtures.
-- [ ] Add the non-vacuous corpus axis gate and record coverage.
-- [ ] Update exactly HLD 09.
-- [ ] Run focused parser, corpus, preservation, microscope, and worker
+- [x] Add the producer-compatible `AxisId` domain and axis enums.
+- [x] Parse and write the four axis roots and common schema sequence.
+- [x] Preserve unsupported axis content in ordered raw slots.
+- [x] Add plot-area axis projection and reciprocal-pair validation.
+- [x] Add inline negative, ordering, preservation, and all-form fixtures.
+- [x] Add the non-vacuous corpus axis gate and record coverage.
+- [x] Update exactly HLD 09.
+- [x] Run focused parser, corpus, preservation, microscope, and worker
       preparation checks.
 
 ## Open questions
