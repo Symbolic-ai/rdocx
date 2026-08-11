@@ -25,11 +25,12 @@ References are out, categorically. Four options were weighed:
 
 ```rust
 pub enum PathSeg { Body(usize), Row(usize), Cell(usize),
-                   Para(usize), Run(usize), Slide(usize), Shape(usize) }
+                   Para(usize), Run(usize) }
 pub struct ContentPath { pub segs: SmallVec<[PathSeg; 5]>, pub revision: u64 }
+pub struct RevisionCounter { current: u64 }
 
 #[pyclass(name = "Document")]
-struct PyDocument { inner: rdocx::Document, revision: u64 }
+struct PyDocument { inner: rdocx::Document, revision: RevisionCounter }
 
 #[pyclass(name = "Paragraph")]
 struct PyParagraph { doc: Py<PyDocument>, path: ContentPath }
@@ -40,8 +41,9 @@ Aliasing is checked by PyO3's own `RefCell` on the pyclass, so a violation is a
 clean `RuntimeError`, never undefined behaviour. Resolution is a handful of
 vector index operations, negligible against FFI overhead.
 
-`Shape(usize)` repeats for nesting into groups, so
-`shape.text_frame.paragraphs[i].runs[j]` is one path.
+The shared crate starts with only the Word path variants consumed by the rdocx
+binding. The rpptx binding adds `Slide(usize)` and repeatable `Shape(usize)`
+variants when its existing F-136 consumer is implemented.
 
 ### The invalidation problem, handled loudly
 
@@ -50,9 +52,11 @@ An index path addresses a **position**, not an object. After
 to be paragraph 4. python-docx does not have this problem because it holds an
 lxml element pointer that follows the element.
 
-v0.1 therefore carries a **document revision counter**, bumped by every
-structural mutation and captured by every handle at construction. A mismatch
-raises:
+v0.1 therefore carries a **document revision counter**, bumped after every
+successful structural mutation and captured by every handle at construction.
+Failed and value-only mutations do not bump it. The shared crate reports a
+concrete Rust `StaleElementError` on mismatch. The package binding maps that
+domain error to its Python exception with the same revisions and message:
 
 ```
 rdocx.StaleElementError: paragraph handle was created at document revision 4,
@@ -126,13 +130,18 @@ doc.save_pdf("out.pdf")                        # documented as an rdocx extensio
 - **Tri-state properties return `None` for inherit**, `True` or `False` when
   explicit. rdocx's `Option<bool>` already matches. Never collapse `None` to
   `False`.
-- `Length` subclasses `int` and returns EMU, matching `docx.shared.Length`, with
-  `.inches`, `.cm`, `.mm`, `.pt`, `.emu` and `.twips`. This detail decides
-  whether copy-pasted code works.
+- `Length` is a pure-Python subclass of `int` and returns EMU, matching
+  `docx.shared.Length`, with `.inches`, `.cm`, `.mm`, `.pt`, `.emu` and
+  `.twips`. Its extension helpers delegate conversion to
+  `oxml_py_support`, which delegates to the truncation-pinned
+  `oxml_core::Length`. This detail decides whether copy-pasted code works and
+  keeps native-base inheritance out of the Python 3.9 limited ABI.
 - Enums are pure-Python `IntEnum` shims so `WD_ALIGN_PARAGRAPH.CENTER == 1`
   holds and they carry docstrings.
-- `RdocxError(Exception)` is the base, with `PackageError`, `XmlError`,
-  `StaleElementError` and `LayoutError` beneath it.
+- The package layer owns `RdocxError(Exception)` as the base, with
+  `PackageError`, `XmlError`, `StaleElementError` and `LayoutError` beneath it.
+  It maps the shared stale-domain error rather than fixing a Python base class
+  inside `oxml-py-support`.
 
 `rpptx` mirrors python-pptx the same way.
 

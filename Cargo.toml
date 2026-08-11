@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/oxml-core",
+    "crates/oxml-py-support",
     "crates/oxml-drawing",
     "crates/oxml-layout",
     "crates/oxml-media",
@@ -46,6 +47,7 @@ push = false
 [workspace.dependencies]
 # Internal crates
 oxml-core = { path = "crates/oxml-core", version = "0.1.2" }
+oxml-py-support = { path = "crates/oxml-py-support", version = "0.4.1" }
 oxml-drawing = { path = "crates/oxml-drawing", version = "0.1.2" }
 oxml-layout = { path = "crates/oxml-layout", version = "0.1.2" }
 oxml-media = { path = "crates/oxml-media", version = "0.1.2" }
@@ -88,6 +90,7 @@ itoa = "1"
 regex = "1.13"
 clap = { version = "4.6", features = ["derive"] }
 serde_json = "1"
+smallvec = "1.15"
 pdf-writer = "0.15"
 subsetter = "0.2"
 miniz_oxide = "0.9"

@@ -369,7 +369,7 @@ class SprintWorkflowTests(unittest.TestCase):
             self.assertIn(family, family_counts)
             family_counts[family] += 1
 
-        self.assertEqual(family_counts, {"workspace": 8, "incubating": 12})
+        self.assertEqual(family_counts, {"workspace": 9, "incubating": 12})
 
     def test_release_command_is_the_only_release_tag_authority(self) -> None:
         release = (workflow.REPO / ".claude/commands/release.md").read_text(

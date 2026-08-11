@@ -995,8 +995,9 @@ Cached image if present, else a labelled placeholder with a diagnostic.
 target platform.
 
 ### F-129, oxml-py-support (M)
-`ContentPath`, `PathSeg`, the revision counter, `StaleElementError`, the `Length`
-pyclass, error mapping.
+Word `ContentPath` and `PathSeg` values, the revision counter, the Rust
+`StaleElementError`, and canonical `Length` conversion helpers. Presentation
+path variants wait for F-136.
 **Test gate**: a stale path raises the named error with both revisions in the
 message.
 
@@ -1012,7 +1013,8 @@ Font and paragraph-format sub-handles, tri-state properties, tables.
 **Test gate**: `r.font.bold` returns `None` when unset, not `False`.
 
 ### F-132, Python enums, units and exceptions (M)
-The `IntEnum` shims, `Length` subclassing `int`, the exception hierarchy.
+The `IntEnum` shims, pure-Python `Length` subclassing `int`, the package
+exception hierarchy, and mapping from shared Rust binding errors.
 **Depends on**: F-129.
 **Test gate**: `WD_ALIGN_PARAGRAPH.CENTER == 1` and `Inches(1) == 914400`.
 

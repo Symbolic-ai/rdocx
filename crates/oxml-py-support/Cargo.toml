@@ -1,0 +1,20 @@
+[package]
+name = "oxml-py-support"
+description = "Shared content-path, revision, and unit support for Python OOXML bindings"
+version.workspace = true
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[package.metadata.release]
+shared-version = "workspace"
+tag-name = "v{{version}}"
+
+[dependencies]
+oxml-core = { workspace = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true }

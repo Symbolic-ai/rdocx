@@ -470,6 +470,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxml-py-support"
+version = "0.4.1"
+dependencies = [
+ "oxml-core",
+ "smallvec",
+ "thiserror",
+]
+
+[[package]]
 name = "oxml-sml"
 version = "0.1.2"
 dependencies = [

@@ -15,7 +15,8 @@ crates/
   oxml-pdf           PDF writer and tiny-skia rasteriser
   oxml-sml           minimal SpreadsheetML writer, chart workbooks only
   oxml-cli-support   range parsing, JSON envelope, output-path defaulting
-  oxml-py-support    content paths, stale-element errors, the Length pyclass
+  oxml-py-support    content paths, revision checks, stale-domain errors,
+                     Length conversion helpers
 
   # WordprocessingML
   rdocx-opc          deprecated shim over oxml-opc

@@ -1,6 +1,6 @@
 # F-129, oxml-py-support
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S33
 **Size**: M
 **Depends on**: none
@@ -69,11 +69,15 @@ revisions in the message. Focused commands are
 
 ## HLD impact
 
+- `docs/hld/03-architecture.md`
 - `docs/hld/10-bindings-spec.md`
 - `docs/hld/14-development-backlog.md`
+- `docs/hld/15-build-and-toolchain.md`
 
-These files must make the viable F-129 and F-132 ownership split explicit and
-defer presentation-only path variants to their named consumer.
+These files must make the viable F-129 and F-132 ownership split explicit,
+correct the shared crate summary, and defer presentation-only path variants to
+their named consumer. The build specification must count the new unpublished
+workspace-version package without changing the exact published stable family.
 
 ## Risk routing
 
@@ -97,12 +101,12 @@ sample generation, document serialization, layout, or rendering.
 
 ## Implementation checklist
 
-- [ ] Add the unpublished workspace crate and dependencies.
-- [ ] Implement Word path segments, content paths, and the revision counter.
-- [ ] Implement the stale-domain error and concrete revision validation.
-- [ ] Delegate conversion helpers to the canonical shared `Length`.
-- [ ] Add inline unit and regression tests.
-- [ ] Run focused checks and every risk rider.
+- [x] Add the unpublished workspace crate and dependencies.
+- [x] Implement Word path segments, content paths, and the revision counter.
+- [x] Implement the stale-domain error and concrete revision validation.
+- [x] Delegate conversion helpers to the canonical shared `Length`.
+- [x] Add inline unit and regression tests.
+- [x] Run focused checks and every risk rider.
 
 ## Open questions
 
