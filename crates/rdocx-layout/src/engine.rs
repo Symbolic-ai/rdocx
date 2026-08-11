@@ -8,17 +8,15 @@ use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::text::{BreakType, CT_P, FieldType, RunContent};
 
 use crate::block::{self, LayoutBlock, ParagraphBlock};
-use crate::error::Result;
-use crate::font::FontManager;
-use crate::input::LayoutInput;
-use crate::line::{self, InlineItem, LineBreakParams, LineItem, TextSegment};
-use crate::output::{
-    Color, DocumentMetadata, FieldKind, GlyphRun, LayoutResult, PageFrame, Point,
-    PositionedElement, Rect,
-};
+use crate::convert;
+use crate::input::{ImageData, LayoutInput};
 use crate::paginator::{self, HeaderFooterContent, PageGeometry};
 use crate::style_resolver::{self, NumberingState};
 use crate::table;
+use oxml_layout::{
+    Color, DocumentMetadata, FieldKind, FontManager, GlyphRun, InlineItem, LayoutResult, LineItem,
+    MediaId, PageFrame, Point, PositionedElement, Rect, Result, TextSegment, break_into_lines,
+};
 
 /// The layout engine.
 pub struct Engine {
@@ -153,8 +151,19 @@ impl Engine {
             title_pg: final_title_pg,
         });
 
+        let mut media = input
+            .images
+            .values()
+            .map(|image| (MediaId::from_bytes(&image.data), image.clone()))
+            .collect::<std::collections::HashMap<_, _>>();
+        media.entry(MediaId::from_bytes(&[])).or_insert(ImageData {
+            data: Vec::new(),
+            content_type: String::new(),
+        });
+
         // Paginate across all sections
-        let (mut pages, outlines) = paginator::paginate_sections(&sections, &self.font_manager);
+        let (mut pages, outlines) =
+            paginator::paginate_sections(&sections, &self.font_manager, &media);
 
         // Post-pagination pass: substitute field placeholders
         let total_pages = pages.len();
@@ -170,9 +179,6 @@ impl Engine {
 
         // Post-pagination pass: apply page background color
         apply_page_background(&mut pages, input);
-
-        // Post-pagination pass: resolve inline image data
-        resolve_inline_images(&mut pages, input);
 
         // Post-pagination pass: render footnotes at page bottoms
         if input.footnotes.is_some() || input.endnotes.is_some() {
@@ -198,12 +204,7 @@ impl Engine {
             creator: Some("rdocx".to_string()),
         });
 
-        Ok(LayoutResult {
-            pages,
-            fonts,
-            metadata,
-            outlines,
-        })
+        Ok(LayoutResult::new(pages, fonts, metadata, outlines))
     }
 }
 
@@ -256,35 +257,12 @@ fn extract_background_color(xml: &str) -> Option<Color> {
     None
 }
 
-/// Resolve inline image data from input.images by embed_id.
-///
-/// During pagination, inline images are created with empty data and an embed_id.
-/// This pass fills in the actual image bytes and content type.
-fn resolve_inline_images(pages: &mut [PageFrame], input: &LayoutInput) {
-    for page in pages.iter_mut() {
-        for element in &mut page.elements {
-            if let PositionedElement::Image {
-                data,
-                content_type,
-                embed_id: Some(eid),
-                ..
-            } = element
-                && data.is_empty()
-                && let Some(img) = input.images.get(eid.as_str())
-            {
-                *data = img.data.clone();
-                *content_type = img.content_type.clone();
-            }
-        }
-    }
-}
-
 /// Replace field placeholder GlyphRuns with actual values.
 fn substitute_fields(
     elements: &mut [PositionedElement],
     page_number: usize,
     total_pages: usize,
-    fm: &mut crate::font::FontManager,
+    fm: &mut FontManager,
 ) {
     for element in elements.iter_mut() {
         if let PositionedElement::Text(run) = element
@@ -519,24 +497,11 @@ pub fn layout_paragraph(
     let space_after = effective_ppr.space_after.map(|t| t.to_pt()).unwrap_or(0.0);
     let ind_left = effective_ppr.ind_left.map(|t| t.to_pt()).unwrap_or(0.0);
     let ind_right = effective_ppr.ind_right.map(|t| t.to_pt()).unwrap_or(0.0);
-    let ind_first_line = effective_ppr
-        .ind_first_line
-        .map(|t| t.to_pt())
-        .unwrap_or(0.0);
-    let ind_hanging = effective_ppr.ind_hanging.map(|t| t.to_pt()).unwrap_or(0.0);
-
     let keep_next = effective_ppr.keep_next.unwrap_or(false);
     let keep_lines = effective_ppr.keep_lines.unwrap_or(false);
     let page_break_before = effective_ppr.page_break_before.unwrap_or(false);
     let widow_control = effective_ppr.widow_control.unwrap_or(true);
-    let jc = effective_ppr.jc;
-
-    // Collect tab stops
-    let tab_stops = effective_ppr
-        .tabs
-        .as_ref()
-        .map(|t| t.tabs.clone())
-        .unwrap_or_default();
+    let jc = convert::alignment(effective_ppr.jc);
 
     // Parse shading color
     let shading = effective_ppr
@@ -590,6 +555,7 @@ pub fn layout_paragraph(
                     width: shaped.width,
                     ascent: metrics.ascent,
                     descent: metrics.descent,
+                    line_gap: 0.0,
                     color,
                     bold: marker_bold,
                     italic: marker_italic,
@@ -653,7 +619,7 @@ pub fn layout_paragraph(
         let color = resolve_run_color(&effective_rpr, input.theme.as_ref());
 
         // Decoration properties
-        let underline = effective_rpr.underline;
+        let underline = convert::underline(effective_rpr.underline);
         let strike = effective_rpr.strike.unwrap_or(false);
         let dstrike = effective_rpr.dstrike.unwrap_or(false);
         let highlight = effective_rpr.highlight.and_then(highlight_to_color);
@@ -713,7 +679,7 @@ pub fn layout_paragraph(
                         shaped.width += extra * shaped.advances.len() as f64;
                     }
 
-                    inline_items.push(InlineItem::Text(TextSegment {
+                    inline_items.extend(convert::text_segments(TextSegment {
                         text,
                         font_id,
                         font_size,
@@ -722,6 +688,7 @@ pub fn layout_paragraph(
                         width: shaped.width,
                         ascent: metrics.ascent,
                         descent: metrics.descent,
+                        line_gap: 0.0,
                         color,
                         bold,
                         italic,
@@ -750,7 +717,7 @@ pub fn layout_paragraph(
                         inline_items.push(InlineItem::Image {
                             width,
                             height,
-                            embed_id: inline.embed_id.clone(),
+                            media_id: media_id_for_relationship(input, &inline.embed_id),
                         });
                     }
                 }
@@ -772,6 +739,7 @@ pub fn layout_paragraph(
                         width: shaped.width,
                         ascent: metrics.ascent,
                         descent: metrics.descent,
+                        line_gap: 0.0,
                         color,
                         bold,
                         italic,
@@ -801,6 +769,7 @@ pub fn layout_paragraph(
                         width: shaped.width,
                         ascent: sup_metrics.ascent,
                         descent: sup_metrics.descent,
+                        line_gap: 0.0,
                         color,
                         bold,
                         italic,
@@ -819,19 +788,10 @@ pub fn layout_paragraph(
     }
 
     // Line breaking
-    let line_params = LineBreakParams {
-        available_width,
-        ind_left,
-        ind_right,
-        ind_first_line,
-        ind_hanging,
-        tab_stops,
-        line_spacing: effective_ppr.line_spacing,
-        line_rule: effective_ppr.line_rule,
-        jc,
-    };
+    let line_params = convert::line_break_params(&effective_ppr, available_width);
 
-    let lines = line::break_into_lines(&inline_items, &line_params, fm)?;
+    let mut lines = break_into_lines(&inline_items, &line_params, fm)?;
+    convert::restore_word_line_heights(&mut lines, &effective_ppr);
 
     let mut result = block::build_paragraph_block(
         lines,
@@ -909,8 +869,9 @@ fn collect_anchored_drawings(
                         text,
                     }
                 }
+                None if anchor.embed_id.is_empty() => continue,
                 None => block::AnchoredContent::Image {
-                    embed_id: anchor.embed_id.clone(),
+                    media_id: media_id_for_relationship(input, &anchor.embed_id),
                 },
             };
 
@@ -927,6 +888,13 @@ fn collect_anchored_drawings(
         }
     }
     Ok(out)
+}
+
+fn media_id_for_relationship(input: &LayoutInput, relationship_id: &str) -> MediaId {
+    input.images.get(relationship_id).map_or_else(
+        || MediaId::from_bytes(&[]),
+        |image| MediaId::from_bytes(&image.data),
+    )
 }
 
 /// Merge direct paragraph properties (only fields explicitly set in the XML).
@@ -1281,6 +1249,30 @@ mod tests {
         if let Ok(result) = result {
             assert_eq!(result.pages.len(), 1);
         }
+    }
+
+    #[test]
+    fn empty_shapeless_anchor_keeps_the_pre_cutover_omission() {
+        let input = make_input_with_text("");
+        let mut paragraph = CT_P::new();
+        paragraph.add_run("").content = vec![RunContent::Drawing(
+            rdocx_oxml::drawing::CT_Drawing::anchor(rdocx_oxml::drawing::CT_Anchor::background(
+                "", 914_400, 914_400,
+            )),
+        )];
+        let mut font_manager = FontManager::new();
+        let mut numbering_state = NumberingState::new();
+
+        let anchored = collect_anchored_drawings(
+            &paragraph,
+            &input.styles,
+            &input,
+            &mut font_manager,
+            &mut numbering_state,
+        )
+        .expect("empty shapeless anchor collection should succeed");
+
+        assert!(anchored.is_empty());
     }
 
     #[test]

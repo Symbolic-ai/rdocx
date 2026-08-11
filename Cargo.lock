@@ -550,12 +550,13 @@ name = "rdocx"
 version = "0.4.1"
 dependencies = [
  "oxml-core",
+ "oxml-layout",
  "oxml-media",
  "oxml-opc",
+ "oxml-pdf",
  "rdocx-html",
  "rdocx-layout",
  "rdocx-oxml",
- "rdocx-pdf",
  "regex",
  "thiserror",
 ]
@@ -582,11 +583,8 @@ dependencies = [
 name = "rdocx-layout"
 version = "0.4.1"
 dependencies = [
- "fontdb",
- "harfrust",
+ "oxml-layout",
  "rdocx-oxml",
- "thiserror",
- "ttf-parser",
  "unicode-linebreak",
 ]
 
@@ -612,12 +610,7 @@ dependencies = [
 name = "rdocx-pdf"
 version = "0.4.1"
 dependencies = [
- "miniz_oxide 0.9.1",
- "pdf-writer",
- "rdocx-layout",
- "subsetter",
- "tiny-skia",
- "ttf-parser",
+ "oxml-pdf",
 ]
 
 [[package]]

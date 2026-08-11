@@ -53,9 +53,9 @@ pub struct Document {
     /// Footnotes: loaded from word/footnotes.xml on open, written back on save.
     footnotes: rdocx_oxml::footnotes::CT_Footnotes,
     /// Normal layout, including system font discovery, computed on first use.
-    layout_cache: Mutex<Option<Arc<rdocx_layout::LayoutResult>>>,
+    layout_cache: Mutex<Option<Arc<oxml_layout::LayoutResult>>>,
     /// Bundled-font-only layout used by deterministic rendering.
-    deterministic_layout_cache: Mutex<Option<Arc<rdocx_layout::LayoutResult>>>,
+    deterministic_layout_cache: Mutex<Option<Arc<oxml_layout::LayoutResult>>>,
 }
 
 /// Fallback part names used when a document does not already declare one.
@@ -224,7 +224,7 @@ impl Document {
     }
 
     /// Return the normal-font layout, computing it once after each mutation.
-    fn cached_layout(&self) -> Result<Arc<rdocx_layout::LayoutResult>> {
+    fn cached_layout(&self) -> Result<Arc<oxml_layout::LayoutResult>> {
         let mut cache = self
             .layout_cache
             .lock()
@@ -242,7 +242,7 @@ impl Document {
     }
 
     /// Return the bundled-font-only layout, computing it once after mutation.
-    fn cached_deterministic_layout(&self) -> Result<Arc<rdocx_layout::LayoutResult>> {
+    fn cached_deterministic_layout(&self) -> Result<Arc<oxml_layout::LayoutResult>> {
         let mut cache = self
             .deterministic_layout_cache
             .lock()
@@ -2179,7 +2179,7 @@ impl Document {
     /// 3. Bundled fonts (if `bundled-fonts` feature is enabled)
     pub fn to_pdf(&self) -> Result<Vec<u8>> {
         let layout = self.cached_layout()?;
-        Ok(rdocx_pdf::render_to_pdf(&layout))
+        Ok(oxml_pdf::render_to_pdf(&layout))
     }
 
     /// Render the document to PDF bytes using bundled fonts without system
@@ -2189,7 +2189,7 @@ impl Document {
     /// layout and is suitable for reproducible render baselines.
     pub fn to_pdf_deterministic(&self) -> Result<Vec<u8>> {
         let layout = self.cached_deterministic_layout()?;
-        Ok(rdocx_pdf::render_to_pdf(&layout))
+        Ok(oxml_pdf::render_to_pdf(&layout))
     }
 
     /// Render the document to PDF bytes with user-provided font files.
@@ -2215,7 +2215,7 @@ impl Document {
         #[cfg(test)]
         record_layout_invocation();
         let layout = rdocx_layout::layout_document(&input)?;
-        Ok(rdocx_pdf::render_to_pdf(&layout))
+        Ok(oxml_pdf::render_to_pdf(&layout))
     }
 
     /// Save the document as a PDF file.
@@ -2296,7 +2296,7 @@ impl Document {
     /// * `dpi` - Resolution (72 = 1:1, 150 = standard, 300 = high quality)
     pub fn render_page_to_png(&self, page_index: usize, dpi: f64) -> Result<Option<Vec<u8>>> {
         let layout = self.cached_layout()?;
-        Ok(rdocx_pdf::render_page_to_png(&layout, page_index, dpi))
+        Ok(oxml_pdf::render_page_to_png(&layout, page_index, dpi))
     }
 
     /// Render a single page to PNG using bundled fonts without system font
@@ -2311,19 +2311,19 @@ impl Document {
         dpi: f64,
     ) -> Result<Option<Vec<u8>>> {
         let layout = self.cached_deterministic_layout()?;
-        Ok(rdocx_pdf::render_page_to_png(&layout, page_index, dpi))
+        Ok(oxml_pdf::render_page_to_png(&layout, page_index, dpi))
     }
 
     /// Render all pages of the document to PNG bytes.
     pub fn render_all_pages(&self, dpi: f64) -> Result<Vec<Vec<u8>>> {
         let layout = self.cached_layout()?;
-        Ok(rdocx_pdf::render_all_pages(&layout, dpi))
+        Ok(oxml_pdf::render_all_pages(&layout, dpi))
     }
 
     /// Return a cloned positioned page from the cached normal-font layout.
     ///
     /// `page_index` is zero-based. An index beyond the document returns `None`.
-    pub fn layout_page(&self, page_index: usize) -> Result<Option<rdocx_layout::PageFrame>> {
+    pub fn layout_page(&self, page_index: usize) -> Result<Option<oxml_layout::PageFrame>> {
         let layout = self.cached_layout()?;
         Ok(layout.pages.get(page_index).cloned())
     }
@@ -3166,7 +3166,7 @@ mod tests {
         doc.render_page_to_png_deterministic(0, 1.0).unwrap();
         assert_eq!(layout_invocations(), 2);
 
-        let (family, font_data) = rdocx_layout::bundled_fonts::bundled_font_data()[0];
+        let (family, font_data) = oxml_layout::bundled_fonts::bundled_font_data()[0];
         doc.to_pdf_with_fonts(&[(family, font_data)]).unwrap();
         doc.to_pdf_with_fonts(&[(family, font_data)]).unwrap();
         assert_eq!(layout_invocations(), 4);
@@ -3211,7 +3211,7 @@ mod tests {
         let input = doc.build_layout_input();
         let layout = rdocx_layout::layout_document_deterministic(&input)
             .expect("deterministic layout should succeed");
-        let bundled_fonts = rdocx_layout::bundled_fonts::bundled_font_data();
+        let bundled_fonts = oxml_layout::bundled_fonts::bundled_font_data();
 
         assert!(!layout.fonts.is_empty());
         for font in &layout.fonts {
@@ -3225,7 +3225,7 @@ mod tests {
             );
         }
 
-        let inspected = rdocx_pdf::render_page_to_png(&layout, 0, 150.0)
+        let inspected = oxml_pdf::render_page_to_png(&layout, 0, 150.0)
             .expect("document should have a first page");
         let facade = doc
             .render_page_to_png_deterministic(0, 150.0)
@@ -3893,6 +3893,48 @@ mod tests {
         let rel = found.expect("no inline image found on read");
         let data = doc2.image_data(&rel).expect("image bytes missing");
         assert_eq!(data, png);
+    }
+
+    #[test]
+    fn layout_resolves_relationship_images_to_shared_media() {
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x9E, 0xDD, 0x22,
+            0x71, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        let mut document = Document::new();
+        document.add_picture(png, "first.png", Length::inches(1.0), Length::inches(1.0));
+        document.add_picture(png, "second.png", Length::inches(1.0), Length::inches(1.0));
+
+        let page = document
+            .layout_page(0)
+            .expect("layout should succeed")
+            .expect("document should have a first page");
+        let images = page
+            .elements
+            .iter()
+            .filter_map(|element| match element {
+                oxml_layout::PositionedElement::Image {
+                    data,
+                    content_type,
+                    media_id,
+                    ..
+                } => Some((data, content_type, media_id)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(images.len(), 2);
+        assert!(images.iter().all(|(data, _, _)| data.as_slice() == png));
+        assert!(
+            images
+                .iter()
+                .all(|(_, content_type, _)| *content_type == "image/png")
+        );
+        assert_eq!(*images[0].2, oxml_layout::MediaId::from_bytes(png));
+        assert_eq!(images[0].2, images[1].2);
     }
 }
 

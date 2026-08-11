@@ -15,14 +15,7 @@ categories.workspace = true
 shared-version = "workspace"
 tag-name = "v{{version}}"
 
-[features]
-default = ["bundled-fonts"]
-bundled-fonts = []
-
 [dependencies]
+oxml-layout = { workspace = true }
 rdocx-oxml = { workspace = true }
-thiserror = { workspace = true }
-fontdb = { workspace = true }
-harfrust = { workspace = true }
-ttf-parser = { workspace = true }
 unicode-linebreak = { workspace = true }

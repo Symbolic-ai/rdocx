@@ -5,18 +5,19 @@ Owners: `oxml-layout` for the types, `oxml-pdf` for the backends,
 
 ## The seam that makes this cheap
 
-The staged `crates/oxml-pdf` backend consumes `oxml-layout::LayoutResult` and
+The `crates/oxml-pdf` backend consumes `oxml-layout::LayoutResult` and
 uses `oxml-media` for image format and header metadata. Its writer, font,
 image, and raster modules support the existing text, line, rectangle, image,
-link, metadata, and outline paths. The released `crates/rdocx-pdf` backend
-remains dependency-separate, but carries the approved F-039 global CTM writer
-change until the F-046 cutover removes the duplicate. The shared contract is:
+link, metadata, and outline paths. `rdocx` uses this backend directly, and
+`rdocx-pdf` contains only the deprecated `pub use oxml_pdf::*` compatibility
+shim. The shared contract is:
 
 ```rust
 pub struct LayoutResult { pages: Vec<PageFrame>, fonts: Vec<FontData>,
-                          metadata: Option<DocumentMetadata>, outlines: Vec<OutlineEntry> }
+                          metadata: Option<DocumentMetadata>, outlines: Vec<OutlineEntry>,
+                          diagnostics: Vec<Diagnostic> }
 pub struct PageFrame { page_number: usize, width: f64, height: f64,
-                       elements: Vec<PositionedElement> }
+                       elements: Vec<PositionedElement>, background: Option<Paint> }
 ```
 
 **A slide is a page with a fixed size.** Font subsetting, ToUnicode CMaps, JPEG
@@ -25,13 +26,10 @@ all carry over unchanged. That is roughly 1,667 lines the presentation side does
 not have to write.
 
 `Group` recursively emits a saved graphics state, its local matrix, optional
-clip and opacity, its children, and a matching restore. Group effects and the
-raster path remain staged for their owning stories. `Path` emits geometry,
-solid fill and solid stroke operators. Gradient and tile paints remain staged
-for their resource-owning stories. The font, image, and link collection passes
-use `walk` and depth-first leaf ordinals so nested content shares stable resource
-identity with recursive emission. The published backend does not depend on this
-staged crate before the shared-crate cutover.
+clip and opacity, its children, and a matching restore. `Path` emits geometry,
+solid fill and solid stroke operators. The font, image, and link collection
+passes use `walk` and depth-first leaf ordinals so nested content shares stable
+resource identity with recursive emission.
 
 ## Extending `PositionedElement`
 
@@ -97,8 +95,8 @@ pub enum PositionedElement {
 gains `background: Option<Paint>`, and `LayoutResult` gains
 `diagnostics: Vec<Diagnostic>`. The two structs are also non-exhaustive and use
 constructors that take their previous required fields, defaulting the new
-fields to `None` and an empty vector. This surface remains staged in unpublished
-`oxml-layout` at version 0.0.0.
+fields to `None` and an empty vector. This surface is published in
+`oxml-layout` 0.1.2.
 
 ### Why `Group` is the whole design
 

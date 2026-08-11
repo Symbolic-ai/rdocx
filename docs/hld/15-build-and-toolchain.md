@@ -19,14 +19,14 @@ developed with, `rust-version` says what it is guaranteed to compile with.
 
 ## Deterministic rendering
 
-`crates/rdocx-layout/src/font.rs:93` calls `db.load_system_fonts()`. System
-fonts differ between machines and between a developer's machine and a CI runner.
+Normal `oxml-layout` construction may load system fonts. System fonts differ
+between machines and between a developer's machine and a CI runner.
 
 **This makes any recorded render baseline unreproducible**, which would poison
 both the hash harness and the SSIM gate: a baseline recorded locally would
 mismatch CI in a way indistinguishable from a real regression.
 
-`rdocx-layout` provides an explicit deterministic mode:
+`oxml-layout` provides an explicit deterministic mode:
 
 ```rust
 impl FontManager {
@@ -36,17 +36,16 @@ impl FontManager {
 }
 ```
 
-The constructor starts with a fresh font database, loads only the checked-in
-bundled font bytes, and returns a layout error when `bundled-fonts` is disabled.
-It never calls system-font discovery. Document-embedded fonts remain explicit
-layout inputs, so they are deterministic too.
+The constructor starts with a fresh font database and loads only the checked-in
+bundled font bytes. It never calls system-font discovery. Document-embedded
+fonts remain explicit layout inputs, so they are deterministic too.
 
 `Engine::new_deterministic()` and `layout_document_deterministic()` carry that
 database through layout. The public facade exposes
 `Document::render_page_to_png_deterministic()` and
 `Document::to_pdf_deterministic()`. Both reuse the separate cached
 bundled-font-only layout. The PDF facade passes that layout directly to
-`rdocx_pdf::render_to_pdf`, which gives the golden-PNG gate deterministic PDF
+`oxml_pdf::render_to_pdf`, which gives the golden-PNG gate deterministic PDF
 input without changing the normal PDF API. Existing constructors and rendering
 methods still load system fonts for library users.
 
@@ -71,8 +70,7 @@ on CI runners as it always would have.
 
 | Crate | Feature | Default | Notes |
 |---|---|---|---|
-| `rdocx-layout` | `bundled-fonts` | on | The 20 bundled TTFs and the deterministic rendering path |
-| `oxml-layout` | `system-fonts` | on | **New.** Off for wasm, where `fontconfig` will not build |
+| `oxml-layout` | `system-fonts` | on | Off for wasm, where `fontconfig` will not build |
 | `rpptx` | `default-template` | on | The bundled `default.pptx` |
 | `rpptx` | `render` | on | Pulls in `rpptx-render` and `oxml-pdf` |
 | `rdocx-py`, `rpptx-py` | `extension-module` | off | Must stay off for `cargo test` |

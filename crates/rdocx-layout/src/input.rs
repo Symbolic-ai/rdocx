@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+pub use oxml_layout::FontFile;
 use rdocx_oxml::core_properties::CoreProperties;
 use rdocx_oxml::document::CT_Document;
 use rdocx_oxml::footnotes::CT_Footnotes;
@@ -17,15 +18,6 @@ pub struct ImageData {
     pub data: Vec<u8>,
     /// MIME content type (e.g., "image/png").
     pub content_type: String,
-}
-
-/// Font data provided by the user or extracted from a DOCX file.
-#[derive(Debug, Clone)]
-pub struct FontFile {
-    /// Font family name (e.g., "Calibri", "Arial").
-    pub family: String,
-    /// Raw font file bytes (TTF/OTF).
-    pub data: Vec<u8>,
 }
 
 /// All inputs needed to lay out a DOCX document.

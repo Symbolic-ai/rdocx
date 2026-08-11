@@ -2,10 +2,10 @@
 
 How the `oxml-*` crates are extracted without breaking a shipped library.
 
-Covers milestones M1 through M6. Shared implementations are staged in their new
-crate before a later facade step deletes the old files and installs re-exports.
-This keeps `cargo test --workspace` green at every independently revertible
-step. Git still recognises the final delete and add pairs as moves.
+Covers milestones M1 through M6. Shared implementations live in their neutral
+crates, while the released Word family retains only format-specific models and
+small compatibility shims. Each extraction step kept `cargo test --workspace`
+green and independently revertible.
 
 ## The safety net comes first
 
@@ -21,11 +21,11 @@ API. For each sample, record a digest of the flushed `document.xml`,
 every step, and treat any delta as a defect until it is explained.
 
 **Deterministic font mode is a prerequisite for that harness**, not an
-optimisation. `crates/rdocx-layout/src/font.rs:93` calls `load_system_fonts()`,
-and system fonts differ by platform, so a digest recorded on one machine would
-not match one recorded on another. The harness and the SSIM gate render from
-bundled fonts only, with system loading bypassed. This is also the first thing
-to exercise the `--no-default-features` path.
+optimisation. System fonts differ by platform, so a digest recorded on one
+machine would not match one recorded on another. The harness and the SSIM gate
+use `oxml_layout::FontManager::new_deterministic()` and render from bundled
+fonts only, with system loading bypassed. The shared layout
+`--no-default-features` path proves the same isolation used by WASM.
 
 ## The facade trick
 
@@ -78,13 +78,13 @@ the real shared crates have an approved publication path. This preserves the
 full package dry-run gate without publishing development crates early, and
 each step remains independently revertable.
 
-## The one piece of real API design
+## The Word conversion boundary
 
-**`crates/rdocx-layout/src/line.rs` is the only file in the extraction that
-cannot move verbatim.** It imports `CT_TabStop`, `ST_Jc`, `ST_TabJc`,
-`ST_Underline` and `Twips` from `rdocx-oxml`.
+`oxml-layout` owns line breaking and its parameters. The concrete functions in
+`crates/rdocx-layout/src/convert.rs` translate the retained Word flow values at
+the engine boundary.
 
-| Today | In `oxml-layout` |
+| Word input | Shared layout value |
 |---|---|
 | `CT_TabStop` | `TabStop { pos_pt: f64, align: TabAlign, leader: Option<TabLeader> }` |
 | `ST_Jc` | `Align { Start, Center, End, Justify, Distribute }` |
@@ -96,10 +96,11 @@ Tab positions become points rather than twips, because the layout engine already
 works in points everywhere else. Replacing the stringly-typed `line_rule` with a
 proper enum is a strict improvement.
 
-A roughly 40-line `LineBreakParams::from_docx` in a new
-`crates/rdocx-layout/src/convert.rs` keeps the docx side intact. Budget 150 to
-250 changed lines across `engine.rs`, `paginator.rs`, `block.rs` and `table.rs`,
-plus rewriting `line.rs`'s 11 tests. **Gate hard on the hash harness.**
+The converter uses concrete functions rather than a trait. It also preserves
+the pre-cutover glyph slices at Unicode wrap opportunities and restores Word's
+automatic line-height formula after shared line breaking. Those compatibility
+steps keep the 28-entry hash harness byte-identical while slide text retains
+its shared point-size spacing semantics.
 
 ## Preserve behaviour, do not improve it
 
@@ -165,9 +166,10 @@ affected at all**. crates.io indexes by crate name, docs.rs builds from the
 uploaded tarball, and no redirect is involved.
 
 The rdocx cutover is a breaking release regardless of its assigned version.
-`Error::Opc` now wraps `oxml_opc::OpcError`, while the later layout cutover
-changes `Error::Layout` and public `line.rs` types. `PositionedElement` also
-becomes `#[non_exhaustive]`.
+`Error::Opc` wraps `oxml_opc::OpcError`, `Error::Layout` wraps
+`oxml_layout::LayoutError`, and the removed public `rdocx_layout::line` module
+is replaced by shared root types. `PositionedElement` is also
+`#[non_exhaustive]`.
 
 ## Release tooling
 

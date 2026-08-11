@@ -69,16 +69,20 @@ The `rdocx` facade depends on it directly for collision-free Word media names,
 sniffed package metadata, and byte-first HTML and layout MIME inputs.
 
 **`oxml-layout` is where the format boundary genuinely falls.** Its
-`output.rs` is already 100 percent docx-free: page frames, positioned elements,
-glyph runs, colours and fonts. Its sibling `input.rs` is 100 percent
-docx-specific and stays in `rdocx-layout`. That seam is the reason the PDF
-backend transfers for free.
+output, font, and line modules are 100 percent docx-free: page frames,
+positioned elements, glyph runs, colours, fonts, and owned line parameters.
+`rdocx-layout` keeps its Word-specific input and converts paragraph alignment,
+tabs, leaders, underlines, spacing, wrapping, and twips in `convert.rs`. The
+converter also preserves Word's established glyph slicing and automatic line
+height at this boundary. That seam is the reason the PDF backend transfers for
+free.
 
 **`oxml-pdf` consumes `LayoutResult` and shared image metadata.** It depends on
 `oxml-layout` for the rendering contract and on `oxml-media` for byte sniffing
 and header probing. It has no format-specific workspace dependency. A slide is
 a page with a fixed size, so the same crate serves both formats without knowing
-either exists.
+either exists. The `rdocx` facade renders through this crate directly, while
+`rdocx-pdf` remains an exact deprecated re-export shim.
 
 **`rpptx-layout` is separate from `rpptx-render`.** The inheritance resolver
 produces a `ResolvedSlide` in which every theme reference, colour transform and
@@ -106,7 +110,10 @@ and footers, footnotes, placeholder replacement, and `drawing.rs`. The
 so it is not migrated.
 
 `rdocx-layout` keeps the flow model: the engine, the paginator, blocks, tables
-and the style resolver. Slides do not paginate, so none of it transfers.
+and the style resolver. Slides do not paginate, so none of it transfers. The
+flow engine resolves Word relationship IDs to content-addressed `MediaId`
+values before pagination, and page output carries the resolved bytes and MIME
+type rather than a relationship-scoped placeholder.
 
 ## Versioning
 

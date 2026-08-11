@@ -1,6 +1,6 @@
 # F-046, rdocx layout and PDF cutover
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S32.2
 **Size**: M
 **Depends on**: F-030, F-037, F-047 through F-050, F-X005
@@ -115,15 +115,15 @@ a defect and blocks integration.
 
 ## Implementation checklist
 
-- [ ] Install shared layout types and font services behind the retained flow model.
-- [ ] Add the concrete Word-to-shared conversion module.
-- [ ] Replace relationship-scoped image placeholders with resolved media IDs.
-- [ ] Use shared constructors for pages and layout results.
-- [ ] Delete duplicate neutral layout sources and bundled assets.
-- [ ] Replace `rdocx-pdf` with the exact shared backend shim.
-- [ ] Move rdocx rendering and layout error paths to shared types.
-- [ ] Run conversion, layout, PDF, dependency, WASM, package, and hash gates.
-- [ ] Update exactly the four listed HLD files.
+- [x] Install shared layout types and font services behind the retained flow model.
+- [x] Add the concrete Word-to-shared conversion module.
+- [x] Replace relationship-scoped image placeholders with resolved media IDs.
+- [x] Use shared constructors for pages and layout results.
+- [x] Delete duplicate neutral layout sources and bundled assets.
+- [x] Replace `rdocx-pdf` with the exact shared backend shim.
+- [x] Move rdocx rendering and layout error paths to shared types.
+- [x] Run conversion, layout, PDF, dependency, WASM, package, and hash gates.
+- [x] Update exactly the four listed HLD files.
 
 ## Open questions
 

@@ -4,10 +4,9 @@ use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Tbl, CT_TblBorders, CT_TblGrid, ST_VerticalJc, VMerge};
 
 use crate::block::ParagraphBlock;
-use crate::error::Result;
-use crate::font::FontManager;
 use crate::input::LayoutInput;
 use crate::style_resolver::NumberingState;
+use oxml_layout::{Color, FontManager, Result};
 
 /// A laid-out table.
 #[derive(Debug, Clone)]
@@ -67,7 +66,7 @@ pub struct TableCell {
     /// Cell-level borders.
     pub borders: Option<CT_TblBorders>,
     /// Cell background shading color.
-    pub shading: Option<crate::output::Color>,
+    pub shading: Option<Color>,
     /// Cell margin left in points.
     pub margin_left: f64,
     /// Cell margin top in points.
@@ -168,7 +167,7 @@ pub fn layout_table(
                 .and_then(|p| p.shading.as_ref())
                 .and_then(|shd| shd.fill.as_ref())
                 .filter(|f| f.as_str() != "auto")
-                .map(|f| crate::output::Color::from_hex(f));
+                .map(|f| Color::from_hex(f));
 
             // Calculate cell width from spanned columns
             let cell_width: f64 = (col_index..col_index + grid_span as usize)
@@ -473,7 +472,7 @@ mod tests {
             fonts: Vec::new(),
         };
 
-        let mut fm = crate::font::FontManager::new();
+        let mut fm = FontManager::new();
         let mut num_state = crate::style_resolver::NumberingState::new();
 
         let result = layout_table(&outer, 234.0, &styles, &input, &mut fm, &mut num_state);
