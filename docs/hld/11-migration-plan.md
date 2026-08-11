@@ -129,9 +129,10 @@ so it remains unchanged.
 
 ## What happens to the published crates
 
-All seven released rdocx crates are published at 0.4.1. The development-only
-`oxml-*` and `rpptx*` crates remain unpublished until PowerPoint development is
-complete and a separate release is explicitly approved.
+All seven released rdocx crates are published at 0.4.1. The 12 implemented
+`oxml-*` and `rpptx*` packages are published at the complete shared 0.1.2
+boundary. Released rdocx consumers may depend on those registry-backed shared
+crates as their individual cutover stories land.
 
 | Crate | Fate |
 |---|---|
@@ -144,9 +145,13 @@ complete and a separate release is explicitly approved.
 **Do not yank anything.** Yanking is for broken or insecure releases. It breaks
 fresh resolution for existing users and does not remove the crate.
 
-Set each deprecated crate's `description` to "deprecated: moved to `oxml-opc`".
-That string is what appears on crates.io search results and docs.rs, and it is
-the only whole-crate deprecation signal Cargo surfaces.
+The `rdocx-opc` shim re-exports `oxml_opc` exactly and carries the package
+description `deprecated: moved to oxml-opc`. That string is what appears on
+crates.io search results and docs.rs, and it is the only whole-crate
+deprecation signal Cargo surfaces. Retained paths such as
+`rdocx_opc::OpcPackage` are type-identical to the shared type. The removed
+Word-specific `OpcPackage::new_docx` and `ContentTypes::new_docx` constructors
+are an intentional breaking change.
 
 A shim is cheap insurance specifically for `rdocx-oxml`, because rdocx's public
 API currently **leaks** its types (`CT_PPr`, `CT_SectPr`, `VMerge`, `Twips`)
@@ -158,10 +163,10 @@ The repository keeps the name `tensorbee/rdocx`, so **no existing link is
 affected at all**. crates.io indexes by crate name, docs.rs builds from the
 uploaded tarball, and no redirect is involved.
 
-The eventual rdocx cutover is a breaking release regardless of its assigned
-version. `Error::Opc` and `Error::Layout` change their inner types, `line.rs` is
-a public module whose types change, and `PositionedElement` becomes
-`#[non_exhaustive]`.
+The rdocx cutover is a breaking release regardless of its assigned version.
+`Error::Opc` now wraps `oxml_opc::OpcError`, while the later layout cutover
+changes `Error::Layout` and public `line.rs` types. `PositionedElement` also
+becomes `#[non_exhaustive]`.
 
 ## Release tooling
 

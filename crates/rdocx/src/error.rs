@@ -5,7 +5,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("OPC package error: {0}")]
-    Opc(#[from] rdocx_opc::OpcError),
+    Opc(#[from] oxml_opc::OpcError),
 
     #[error("OXML parsing error: {0}")]
     Oxml(#[from] rdocx_oxml::OxmlError),

@@ -1,18 +1,57 @@
 //! Integration tests for rdocx — end-to-end document creation and round-trip.
 
+use oxml_opc::OpcPackage;
+use oxml_opc::relationship::rel_types;
 use rdocx::Document;
 use rdocx::paragraph::Alignment;
 use rdocx::table::VerticalAlignment;
 use rdocx::{
     BorderStyle, Length, SectionBreak, StyleBuilder, TabAlignment, TabLeader, UnderlineStyle,
 };
-use rdocx_opc::OpcPackage;
-use rdocx_opc::relationship::rel_types;
 
 fn document_xml(document: &mut Document) -> Vec<u8> {
     let bytes = document.to_bytes().unwrap();
     let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
     package.get_part("/word/document.xml").unwrap().to_vec()
+}
+
+#[test]
+fn rdocx_error_opc_wraps_the_shared_error_type() {
+    let shared_error = oxml_opc::OpcError::PartNotFound("missing.xml".to_string());
+    let error: rdocx::Error = shared_error.into();
+
+    match error {
+        rdocx::Error::Opc(inner) => {
+            let _: oxml_opc::OpcError = inner;
+        }
+        other => panic!("expected shared OPC error, got {other}"),
+    }
+}
+
+#[test]
+fn new_document_uses_the_shared_word_package_setup() {
+    let mut document = Document::new();
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+
+    assert_eq!(
+        package.main_document_part().as_deref(),
+        Some("/word/document.xml")
+    );
+    assert_eq!(
+        package.content_types.content_type_for("/word/document.xml"),
+        Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml")
+    );
+    assert_eq!(
+        package.content_types.content_type_for("/word/styles.xml"),
+        Some("application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml")
+    );
+    assert!(package.get_part("/word/styles.xml").is_some());
+    let styles = package
+        .get_part_rels("/word/document.xml")
+        .and_then(|rels| rels.get_by_type(rel_types::STYLES))
+        .expect("new document must relate its styles part");
+    assert_eq!(styles.target, "styles.xml");
 }
 
 #[test]

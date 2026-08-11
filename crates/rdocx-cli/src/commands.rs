@@ -349,7 +349,7 @@ pub fn validate(file: &Path) -> Result<bool> {
     // --- Structural errors ---
 
     // Every relationship must point at a part that is actually in the package.
-    let package = rdocx_opc::OpcPackage::open(file)?;
+    let package = oxml_opc::OpcPackage::open(file)?;
     if let Some(doc_part) = package.main_document_part() {
         if package.get_part(&doc_part).is_none() {
             errors.push(format!("main document part {doc_part} is missing"));
@@ -360,7 +360,7 @@ pub fn validate(file: &Path) -> Result<bool> {
                 if rel.target_mode.as_deref() == Some("External") {
                     continue;
                 }
-                let target = rdocx_opc::OpcPackage::resolve_rel_target(&doc_part, &rel.target);
+                let target = oxml_opc::OpcPackage::resolve_rel_target(&doc_part, &rel.target);
                 if package.get_part(&target).is_none() {
                     errors.push(format!(
                         "relationship {} points at missing part {target}",

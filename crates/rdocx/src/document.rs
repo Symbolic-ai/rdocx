@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 #[cfg(test)]
 use std::cell::Cell;
 
-use rdocx_opc::OpcPackage;
-use rdocx_opc::relationship::rel_types;
+use oxml_opc::OpcPackage;
+use oxml_opc::relationship::rel_types;
 use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
 use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, CT_Inline};
 use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef, HdrFtrType};
@@ -61,6 +61,8 @@ pub struct Document {
 const DEFAULT_STYLES_PART: &str = "/word/styles.xml";
 const DEFAULT_NUMBERING_PART: &str = "/word/numbering.xml";
 const DEFAULT_CORE_PROPERTIES_PART: &str = "/docProps/core.xml";
+const DOCUMENT_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
 const STYLES_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml";
 const NUMBERING_CONTENT_TYPE: &str =
@@ -80,10 +82,18 @@ fn record_layout_invocation() {
     LAYOUT_INVOCATIONS.set(LAYOUT_INVOCATIONS.get() + 1);
 }
 
+fn new_word_package() -> OpcPackage {
+    let mut package = OpcPackage::with_main_part("word/document.xml", DOCUMENT_CONTENT_TYPE);
+    package
+        .content_types
+        .add_override(DEFAULT_STYLES_PART, STYLES_CONTENT_TYPE);
+    package
+}
+
 impl Document {
     /// Create a new, empty document with default page setup and styles.
     pub fn new() -> Self {
-        let mut package = OpcPackage::new_docx();
+        let mut package = new_word_package();
         let document = CT_Document::new();
         let styles = CT_Styles::new_default();
 
@@ -764,7 +774,7 @@ impl Document {
     /// new run in a hyperlink span.
     pub fn append_hyperlink(&mut self, text: &str, url: &str) {
         self.invalidate_layout();
-        use rdocx_opc::relationship::rel_types;
+        use oxml_opc::relationship::rel_types;
 
         let rel_id = {
             let rels = self.package.get_or_create_part_rels(&self.doc_part_name);
@@ -813,7 +823,7 @@ impl Document {
 
     /// Resolve a hyperlink relationship ID to its external URL.
     pub fn hyperlink_url(&self, rel_id: &str) -> Option<String> {
-        use rdocx_opc::relationship::rel_types;
+        use oxml_opc::relationship::rel_types;
         let rels = self.package.get_part_rels(&self.doc_part_name)?;
         rels.items
             .iter()
@@ -2218,7 +2228,7 @@ impl Document {
 
     /// Build an HtmlInput from the document's current state.
     fn build_html_input(&self) -> rdocx_html::HtmlInput {
-        use rdocx_opc::relationship::rel_types;
+        use oxml_opc::relationship::rel_types;
         use std::collections::HashMap;
 
         let mut images: HashMap<String, rdocx_html::ImageData> = HashMap::new();
@@ -2301,8 +2311,8 @@ impl Document {
 
     /// Build a LayoutInput from the document's current state.
     fn build_layout_input(&self) -> rdocx_layout::LayoutInput {
+        use oxml_opc::relationship::rel_types;
         use rdocx_layout::{ImageData, LayoutInput};
-        use rdocx_opc::relationship::rel_types;
         use std::collections::HashMap;
 
         let mut headers: HashMap<String, CT_HdrFtr> = HashMap::new();
@@ -2581,7 +2591,7 @@ impl Document {
     ///
     /// Resolves hyperlink relationship IDs to their target URLs where possible.
     pub fn links(&self) -> Vec<LinkInfo> {
-        use rdocx_opc::relationship::rel_types;
+        use oxml_opc::relationship::rel_types;
 
         // Build a map of hyperlink rel_id -> target URL
         let mut url_map = std::collections::HashMap::new();

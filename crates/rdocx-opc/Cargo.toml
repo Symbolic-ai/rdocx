@@ -1,6 +1,6 @@
 [package]
 name = "rdocx-opc"
-description = "Open Packaging Convention (OPC) reader/writer for OOXML packages"
+description = "deprecated: moved to oxml-opc"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,6 +16,4 @@ shared-version = "workspace"
 tag-name = "v{{version}}"
 
 [dependencies]
-zip = { workspace = true }
-quick-xml = { workspace = true }
-thiserror = { workspace = true }
+oxml-opc = { workspace = true }

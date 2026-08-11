@@ -99,8 +99,8 @@ The dedicated package CI job compares `cargo package -p oxml-layout --list`
 against all 20 TTFs, the three family licence files, and the Caladea notice. It
 then runs verified packaging without `--no-verify` and rejects a missing
 archive or one larger than the crates.io 10 MiB limit. `oxml-layout` is a
-publication candidate, while the release workflow remains the authority that
-decides whether it is published.
+published 0.1.2 package, while the release workflow remains the authority for
+every later publication.
 
 The same treatment applies to `crates/rpptx/assets/default.pptx`. **An asset
 must live under its own crate's directory**: a workspace-root `assets/` compiles
@@ -135,13 +135,13 @@ the reviewed release path described below.
 The binding crates are not published there, and the WASM packages use the npm
 publication path.
 
-All 12 implemented shared and PowerPoint packages are prepared as explicit
-publication candidates at the common incubating version 0.1.2. They are
+All 12 implemented shared and PowerPoint packages are published at the common
+incubating version 0.1.2. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`,
-`rpptx-render`, and `rpptx`. Manifest eligibility does not authorize
-publication. Only the reviewed `/release rpptx-v0.1.2` path can activate their
-exact allowlist after its separate final approval.
+`rpptx-render`, and `rpptx`. The reviewed `rpptx-v0.1.2` release activated that
+exact allowlist after its separate final approval. Manifest eligibility alone
+does not authorize any later publication.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness, runs the self-contained

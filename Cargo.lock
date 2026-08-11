@@ -550,9 +550,9 @@ name = "rdocx"
 version = "0.4.1"
 dependencies = [
  "oxml-core",
+ "oxml-opc",
  "rdocx-html",
  "rdocx-layout",
- "rdocx-opc",
  "rdocx-oxml",
  "rdocx-pdf",
  "regex",
@@ -564,8 +564,8 @@ name = "rdocx-cli"
 version = "0.4.1"
 dependencies = [
  "clap",
+ "oxml-opc",
  "rdocx",
- "rdocx-opc",
  "rdocx-oxml",
  "serde_json",
 ]
@@ -593,9 +593,7 @@ dependencies = [
 name = "rdocx-opc"
 version = "0.4.1"
 dependencies = [
- "quick-xml",
- "thiserror",
- "zip",
+ "oxml-opc",
 ]
 
 [[package]]
@@ -626,8 +624,8 @@ name = "rdocx-wasm"
 version = "0.4.1"
 dependencies = [
  "js-sys",
+ "oxml-opc",
  "rdocx-html",
- "rdocx-opc",
  "rdocx-oxml",
  "wasm-bindgen",
 ]

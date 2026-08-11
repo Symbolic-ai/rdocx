@@ -1,6 +1,6 @@
 # F-022, rdocx-opc deprecation shim
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S32.2
 **Size**: S
 **Depends on**: F-018, F-X005
@@ -101,14 +101,14 @@ package bytes and renders.
 
 ## Implementation checklist
 
-- [ ] Replace the duplicate crate with the exact shared re-export shim.
-- [ ] Remove four obsolete modules and implementation dependencies.
-- [ ] Move the library, CLI, and WASM consumers directly to `oxml-opc`.
-- [ ] Rebuild Word package setup from generic constructors in existing files.
-- [ ] Change and test the high-level OPC error type.
-- [ ] Prove retained legacy type identity and document removed constructors.
-- [ ] Run OPC, workspace, WASM, packaging, dependency, and hash gates.
-- [ ] Update exactly the three listed HLD files.
+- [x] Replace the duplicate crate with the exact shared re-export shim.
+- [x] Remove four obsolete modules and implementation dependencies.
+- [x] Move the library, CLI, and WASM consumers directly to `oxml-opc`.
+- [x] Rebuild Word package setup from generic constructors in existing files.
+- [x] Change and test the high-level OPC error type.
+- [x] Prove retained legacy type identity and document removed constructors.
+- [x] Run OPC, workspace, WASM, packaging, dependency, and hash gates.
+- [x] Update exactly the three listed HLD files.
 
 ## Open questions
 

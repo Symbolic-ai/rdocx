@@ -20,7 +20,7 @@ tag-name = "v{{version}}"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-rdocx-opc = { workspace = true }
+oxml-opc = { workspace = true }
 rdocx-oxml = { workspace = true }
 rdocx-html = { workspace = true }
 wasm-bindgen = { workspace = true }
