@@ -34,7 +34,7 @@ versions.
 | F-016 | Length re-export | S | in-progress | codex |
 | F-022 | rdocx-opc deprecation shim | S | in-progress | codex |
 | F-027 | rdocx adopts oxml-media | M | in-progress | codex |
-| F-028 | add_picture_auto | S | pending | - |
+| F-028 | add_picture_auto | S | in-progress | codex |
 | F-046 | rdocx layout and PDF cutover | M | pending | - |
 | F-051 | CHANGELOG and migration notes | S | pending | - |
 
