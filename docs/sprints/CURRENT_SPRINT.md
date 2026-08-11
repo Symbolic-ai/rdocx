@@ -26,7 +26,7 @@ expanded publication workflow, and the missing CI jobs as one reviewable wave.
 | F-047 | Packaging include and size gate | M | in-progress | codex |
 | F-048 | Automate split-family release preparation | M | in-progress | codex |
 | F-050 | CI matrix additions | S | pending | - |
-| F-049 | Extend publish.yml to the extracted workspace | M | pending | - |
+| F-049 | Extend publish.yml to the extracted workspace | M | in-progress | codex |
 
 ## Sequencing note
 
