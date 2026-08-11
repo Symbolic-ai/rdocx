@@ -18,6 +18,7 @@ tag-name = "v{{version}}"
 
 [dependencies]
 oxml-core = { workspace = true }
+oxml-media = { workspace = true }
 oxml-opc = { workspace = true }
 rdocx-oxml = { workspace = true }
 rdocx-layout = { workspace = true }

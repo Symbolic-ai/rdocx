@@ -69,7 +69,7 @@ plainly: most of this migration is a re-export block.
 | 8 | PowerPoint implementation | Finish and review the shared-crate publication plan before any released rdocx package consumes real development code |
 | 9 | `rdocx-oxml` and `Length` cutover | Apply the re-export block above and delete the staged duplicates |
 | 10 | `rdocx-opc` cutover | Install the deprecated shim, flip direct consumers, and change `rdocx::Error::Opc` to the shared type |
-| 11 | Media and layout cutover | Move released rdocx consumers onto the published shared crates and delete their staged duplicates |
+| 11 | Media and layout cutover | Released rdocx media handling uses published `oxml-media`. The layout type cutover follows separately |
 | 12 | `rdocx-pdf` cutover | Install `pub use oxml_pdf::*` after the shared backend is publishable |
 
 Staging steps keep every released rdocx package on its published dependency
@@ -121,11 +121,12 @@ The exception is behaviour that is a **defect**, which is fixed in M1 as its own
 commit with a reviewed hash delta: the image counter, the JPEG marker walk, and
 core-property resolution.
 
-One intentional package-structure change is expected in M3: content types become
-sniffed from magic bytes, so a mislabelled `.png` that is really a JPEG gets a
-`.jpeg` part and `image/jpeg`. Pin that behavior in a focused package regression.
-The 28-entry hash harness does not include content types or relationship targets,
-so it remains unchanged.
+One intentional package-structure difference is isolated in M3: rdocx content
+types and media part extensions are sniffed from magic bytes, so a mislabelled
+`.png` that is really a JPEG gets a `.jpeg` part and `image/jpeg`. A focused
+package regression pins the part name, content type, and relationship target.
+The 28-entry hash harness does not include those fields, so it remains
+unchanged.
 
 ## What happens to the published crates
 

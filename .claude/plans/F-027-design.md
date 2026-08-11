@@ -1,6 +1,6 @@
 # F-027, rdocx adopts oxml-media
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S32.2
 **Size**: M
 **Depends on**: F-023, F-025, F-X005
@@ -97,13 +97,13 @@ intentional media metadata evidence because the harness does not collect it.
 
 ## Implementation checklist
 
-- [ ] Add the published shared media dependency.
-- [ ] Replace local numbering with scanned `MediaNamer` state.
-- [ ] Rewire storage and downstream MIME resolution to byte-first formats.
-- [ ] Delete all duplicate numbering, extension, and MIME helpers.
-- [ ] Add the exact mislabelled-image package regression.
-- [ ] Run focused, dependency, package, workspace, and hash gates.
-- [ ] Update exactly the four listed HLD files.
+- [x] Add the published shared media dependency.
+- [x] Replace local numbering with scanned `MediaNamer` state.
+- [x] Rewire storage and downstream MIME resolution to byte-first formats.
+- [x] Delete all duplicate numbering, extension, and MIME helpers.
+- [x] Add the exact mislabelled-image package regression.
+- [x] Run focused, dependency, package, workspace, and hash gates.
+- [x] Update exactly the four listed HLD files.
 
 ## Open questions
 

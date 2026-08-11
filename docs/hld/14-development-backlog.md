@@ -237,8 +237,9 @@ Word's 96.
 **Test gate**: a 96 dpi PNG probed at `default_dpi = 72` yields the expected EMU.
 
 ### F-027, rdocx adopts oxml-media (M)
-Delete `image_extension`, `image_content_type`, `guess_image_content_type` and
-the `image_counter` field. Rewire `store_image_part`.
+`rdocx::Document` uses `MediaNamer` for scanned collision-free allocation and
+shared byte-first format resolution for package metadata, HTML, and layout
+inputs. The facade has no local image numbering, extension, or MIME helper.
 **Depends on**: F-023, F-025, F-X005.
 **Test gate**: a mislabelled image is stored with its sniffed extension and
 content type, naming remains collision-safe, and the hash harness is unchanged.

@@ -8,6 +8,46 @@ use std::collections::HashMap;
 use rdocx::{Document, Length};
 
 #[test]
+fn mislabelled_jpeg_uses_sniffed_package_metadata() {
+    let jpeg = [0xff, 0xd8, 0xff, 0xd9];
+    let mut seed = Document::new();
+    let seed_bytes = seed.to_bytes().unwrap();
+    let mut seed_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed_bytes)).unwrap();
+    seed_package
+        .content_types
+        .add_default("jpeg", "application/octet-stream");
+    let mut reopened_bytes = std::io::Cursor::new(Vec::new());
+    seed_package.write_to(&mut reopened_bytes).unwrap();
+    let mut document = Document::from_bytes(&reopened_bytes.into_inner()).unwrap();
+
+    document.add_picture(
+        &jpeg,
+        "mislabelled.png",
+        Length::inches(1.0),
+        Length::inches(1.0),
+    );
+
+    let bytes = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let part_name = "/word/media/image1.jpeg";
+
+    assert_eq!(package.get_part(part_name), Some(jpeg.as_slice()));
+    assert_eq!(
+        package.content_types.content_type_for(part_name),
+        Some("image/jpeg")
+    );
+
+    let image_relationship = package
+        .get_part_rels("/word/document.xml")
+        .and_then(|relationships| {
+            relationships.get_by_type(oxml_opc::relationship::rel_types::IMAGE)
+        })
+        .expect("document should relate the sniffed image part");
+    assert_eq!(image_relationship.target, "media/image1.jpeg");
+}
+
+#[test]
 fn next_image_name_uses_the_highest_existing_index_not_the_part_count() {
     let cases: &[(&[&str], &str)] = &[
         (

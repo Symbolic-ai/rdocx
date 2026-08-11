@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 #[cfg(test)]
 use std::cell::Cell;
 
+use oxml_media::MediaNamer;
 use oxml_opc::OpcPackage;
 use oxml_opc::relationship::rel_types;
 use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
@@ -47,8 +48,8 @@ pub struct Document {
     styles_part_name: String,
     /// Part name for numbering definitions, resolved the same way.
     numbering_part_name: String,
-    /// Greatest numeric suffix among existing image media parts.
-    image_counter: usize,
+    /// Collision-free allocator for image media parts.
+    image_namer: MediaNamer,
     /// Footnotes: loaded from word/footnotes.xml on open, written back on save.
     footnotes: rdocx_oxml::footnotes::CT_Footnotes,
     /// Normal layout, including system font discovery, computed on first use.
@@ -112,7 +113,7 @@ impl Document {
             doc_part_name: "/word/document.xml".to_string(),
             styles_part_name: DEFAULT_STYLES_PART.to_string(),
             numbering_part_name: DEFAULT_NUMBERING_PART.to_string(),
-            image_counter: 0,
+            image_namer: MediaNamer::scan("/word/media", "image", std::iter::empty()),
             footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
             layout_cache: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
@@ -177,12 +178,11 @@ impl Document {
             .and_then(|part| package.get_part(part))
             .and_then(|xml| CoreProperties::from_xml(xml).ok());
 
-        let image_counter = package
-            .parts
-            .keys()
-            .filter_map(|name| image_number_from_part_name(name))
-            .max()
-            .unwrap_or(0);
+        let image_namer = MediaNamer::scan(
+            "/word/media",
+            "image",
+            package.parts.keys().map(String::as_str),
+        );
 
         let footnotes = package
             .get_part_rels(&doc_part_name)
@@ -204,7 +204,7 @@ impl Document {
             styles_part_name: styles_part_name.unwrap_or_else(|| DEFAULT_STYLES_PART.to_string()),
             numbering_part_name: numbering_part_name
                 .unwrap_or_else(|| DEFAULT_NUMBERING_PART.to_string()),
-            image_counter,
+            image_namer,
             footnotes,
             layout_cache: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
@@ -711,22 +711,6 @@ impl Document {
         }
     }
 
-    /// Return the next unique image number and bump the counter.
-    fn next_image_number(&mut self) -> usize {
-        let mut candidate = self.image_counter.checked_add(1).unwrap_or(1);
-        while self
-            .package
-            .parts
-            .keys()
-            .filter_map(|name| image_number_from_part_name(name))
-            .any(|number| number == candidate)
-        {
-            candidate = candidate.checked_add(1).unwrap_or(1);
-        }
-        self.image_counter = candidate;
-        candidate
-    }
-
     /// Store image bytes as a new media part and declare its content type.
     ///
     /// Returns the relationship target to use when referencing it, e.g.
@@ -734,18 +718,28 @@ impl Document {
     /// from a header or footer must be related to *that* part, not the
     /// document, so the caller decides where it is attached.
     fn store_image_part(&mut self, image_data: &[u8], filename: &str) -> String {
-        let ext = image_extension(filename);
-        let image_num = self.next_image_number();
+        let format = oxml_media::resolve(image_data, filename);
+        let extension = format.extension();
+        let part_name = self.image_namer.next_part_name(extension);
 
-        self.package.set_part(
-            &format!("/word/media/image{image_num}.{ext}"),
-            image_data.to_vec(),
-        );
-        self.package
-            .content_types
-            .add_default(&ext, image_content_type(&ext));
+        self.package.set_part(&part_name, image_data.to_vec());
+        let content_type = format.content_type();
+        match self.package.content_types.content_type_for(&part_name) {
+            Some(existing) if existing == content_type => {}
+            Some(_) => self
+                .package
+                .content_types
+                .add_override(&part_name, content_type),
+            None => self
+                .package
+                .content_types
+                .add_default(extension, content_type),
+        }
 
-        format!("media/image{image_num}.{ext}")
+        part_name
+            .strip_prefix("/word/")
+            .unwrap_or(&part_name)
+            .to_owned()
     }
 
     /// Embed an image into the OPC package and return the relationship ID.
@@ -2241,7 +2235,9 @@ impl Document {
                         let part_name =
                             OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
                         if let Some(data) = self.package.get_part(&part_name) {
-                            let content_type = guess_image_content_type(&part_name);
+                            let content_type = oxml_media::resolve(data, &part_name)
+                                .content_type()
+                                .to_owned();
                             images.insert(
                                 rel.id.clone(),
                                 rdocx_html::ImageData {
@@ -2350,7 +2346,9 @@ impl Document {
                         let part_name =
                             OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
                         if let Some(data) = self.package.get_part(&part_name) {
-                            let content_type = guess_image_content_type(&part_name);
+                            let content_type = oxml_media::resolve(data, &part_name)
+                                .content_type()
+                                .to_owned();
                             images.insert(
                                 rel.id.clone(),
                                 ImageData {
@@ -2778,52 +2776,6 @@ fn relative_target(source_part: &str, target_part: &str) -> String {
     }
 }
 
-/// The lower-cased file extension of `filename`, defaulting to `png`.
-fn image_number_from_part_name(name: &str) -> Option<usize> {
-    let suffix = name.strip_prefix("/word/media/image")?;
-    let digit_count = suffix
-        .bytes()
-        .take_while(|byte| byte.is_ascii_digit())
-        .count();
-    if digit_count == 0 {
-        return None;
-    }
-    suffix[..digit_count]
-        .parse::<usize>()
-        .ok()
-        .filter(|index| *index > 0)
-}
-
-fn image_extension(filename: &str) -> String {
-    match filename.rsplit_once('.') {
-        Some((_, ext)) if !ext.is_empty() => ext.to_lowercase(),
-        _ => "png".to_string(),
-    }
-}
-
-/// Map an image file extension to its MIME type.
-///
-/// This is the single place the mapping lives; header, footer, body and
-/// raw-XML image paths all go through it, so they cannot drift apart and
-/// start disagreeing about, say, whether GIF is supported.
-fn image_content_type(ext: &str) -> &'static str {
-    match ext {
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "bmp" => "image/bmp",
-        "tiff" | "tif" => "image/tiff",
-        "svg" => "image/svg+xml",
-        "webp" => "image/webp",
-        // PNG is both the common case and a safe default for unknown types.
-        _ => "image/png",
-    }
-}
-
-/// Guess image content type from the part name extension.
-fn guess_image_content_type(part_name: &str) -> String {
-    image_content_type(&image_extension(part_name)).to_string()
-}
-
 /// A node in the document outline tree.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutlineNode {
@@ -3201,6 +3153,31 @@ mod tests {
     fn document_remains_send_and_sync() {
         fn assert_send_and_sync<T: Send + Sync>() {}
         assert_send_and_sync::<Document>();
+    }
+
+    #[test]
+    fn html_and_layout_media_use_sniffed_content_type() {
+        let jpeg = [0xff, 0xd8, 0xff, 0xd9];
+        let mut document = Document::new();
+        document
+            .package
+            .set_part("/word/media/misleading.png", jpeg.to_vec());
+        let relationship_id = document
+            .package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(rel_types::IMAGE, "media/misleading.png");
+
+        let html_input = document.build_html_input();
+        let layout_input = document.build_layout_input();
+
+        assert_eq!(
+            html_input.images[&relationship_id].content_type,
+            "image/jpeg"
+        );
+        assert_eq!(
+            layout_input.images[&relationship_id].content_type,
+            "image/jpeg"
+        );
     }
 
     #[test]

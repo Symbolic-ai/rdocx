@@ -550,6 +550,7 @@ name = "rdocx"
 version = "0.4.1"
 dependencies = [
  "oxml-core",
+ "oxml-media",
  "oxml-opc",
  "rdocx-html",
  "rdocx-layout",

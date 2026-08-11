@@ -98,13 +98,13 @@ the package.
 
 **Numeric suffixes are allocated after the greatest positive parsed suffix,
 never as `count + 1`.** Deleting slide 2 and then adding a slide must not
-collide with slide 3. The rdocx image counter parses the consecutive decimal
-digits after `/word/media/image`, including `usize::MAX`, and ignores missing,
+collide with slide 3. `MediaNamer` scans positive decimal suffixes in the
+requested directory and stem, including `usize::MAX`, and ignores missing,
 signed, zero, nonnumeric and unrelated suffixes. Ordinary packages allocate
 `1 + max(existing suffix)`. At the finite boundary, checked increment wraps
 from `usize::MAX` to 1 and skips every occupied parsed suffix until a free
-positive number is found. Allocation never creates `image0` or overwrites an
-existing numbered image part.
+positive number is found. Both facades use this allocator, so allocation never
+creates `image0` or overwrites an existing numbered image part.
 
 Canonical part layouts:
 
@@ -165,6 +165,13 @@ impl MediaNamer {
 filename extension, so a `.png` that is really a JPEG receives the JPEG
 extension and content type. Unknown bytes fall back through a recognised
 filename extension and finally to PNG for compatibility.
+
+`rdocx::Document` scans existing `/word/media/imageN.ext` parts into a
+`MediaNamer` when it opens. Every body, header, footer, and raw-XML image path
+uses the allocator and registers the sniffed canonical extension and content
+type before adding its relationship. HTML and layout extraction resolve MIME
+from the stored bytes first, so a misleading package part name cannot override
+the actual image format.
 
 **`native_size` takes the DPI rather than baking one in**, because the right
 default differs by consumer: python-docx assumes 72 when a file declares none,

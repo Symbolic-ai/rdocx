@@ -65,6 +65,8 @@ alone, which matters for `rdocx-wasm`, which wants only `OpcPackage`.
 **`oxml-media` has no dependencies at all.** It owns byte sniffing, image header
 probing, and intrinsic EMU sizing through its local `NativeSize` value. It
 remains a leaf that anything can take cheaply without importing `oxml-core`.
+The `rdocx` facade depends on it directly for collision-free Word media names,
+sniffed package metadata, and byte-first HTML and layout MIME inputs.
 
 **`oxml-layout` is where the format boundary genuinely falls.** Its
 `output.rs` is already 100 percent docx-free: page frames, positioned elements,
