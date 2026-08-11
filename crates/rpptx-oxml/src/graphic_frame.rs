@@ -56,9 +56,25 @@ impl GraphicDataPayload {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CT_GraphicData {
     pub uri: String,
-    pub payload: GraphicDataPayload,
+    payload: GraphicDataPayload,
+    chart_relationship_id: Option<String>,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
+}
+
+impl CT_GraphicData {
+    /// Returns the URI-dispatched payload as a read-only serialization source.
+    pub fn payload(&self) -> &GraphicDataPayload {
+        &self.payload
+    }
+
+    /// Returns the mutable typed table payload, when this graphic is a table.
+    pub fn table_mut(&mut self) -> Option<&mut CT_Table> {
+        match &mut self.payload {
+            GraphicDataPayload::Table(table) => Some(table),
+            _ => None,
+        }
+    }
 }
 
 /// One typed PresentationML `p:graphicFrame`.
@@ -104,6 +120,7 @@ impl CT_GraphicFrame {
             graphic_data: CT_GraphicData {
                 uri: TABLE_URI.to_owned(),
                 payload: GraphicDataPayload::Table(Box::new(table)),
+                chart_relationship_id: None,
                 raw_attributes: Vec::new(),
                 raw_children: OrderedRawChildren::default(),
             },
@@ -152,6 +169,7 @@ impl CT_GraphicFrame {
             graphic_data: CT_GraphicData {
                 uri: CHART_URI.to_owned(),
                 payload: GraphicDataPayload::Chart(writer.into_inner()),
+                chart_relationship_id: Some(relationship_id.to_owned()),
                 raw_attributes: Vec::new(),
                 raw_children: OrderedRawChildren::default(),
             },
@@ -175,6 +193,11 @@ impl CT_GraphicFrame {
 
     pub(crate) fn non_visual_id(&self) -> Option<u32> {
         self.non_visual_properties.non_visual_id
+    }
+
+    /// Returns the namespace-resolved `c:chart@r:id` rendering projection.
+    pub fn chart_relationship_id(&self) -> Option<&str> {
+        self.graphic_data.chart_relationship_id.as_deref()
     }
 
     /// Changes the producer-facing non-visual frame name.
@@ -529,6 +552,7 @@ impl CT_GraphicData {
                         .filter(|(name, _)| name != "uri")
                         .collect();
                     let mut payload = None;
+                    let mut chart_relationship_id = None;
                     let mut raw_children = OrderedRawChildren::default();
                     let mut buffer = Vec::new();
                     loop {
@@ -541,6 +565,7 @@ impl CT_GraphicData {
                                     raw,
                                     &child_namespaces,
                                     &mut payload,
+                                    &mut chart_relationship_id,
                                     &mut raw_children,
                                 )?;
                             }
@@ -552,6 +577,7 @@ impl CT_GraphicData {
                                     raw,
                                     &child_namespaces,
                                     &mut payload,
+                                    &mut chart_relationship_id,
                                     &mut raw_children,
                                 )?;
                             }
@@ -576,6 +602,7 @@ impl CT_GraphicData {
                     return Ok(Self {
                         uri,
                         payload: required(payload, "a:graphicData payload")?,
+                        chart_relationship_id,
                         raw_attributes,
                         raw_children,
                     });
@@ -610,6 +637,7 @@ fn capture_payload(
     raw: Vec<u8>,
     namespaces: &NamespaceBindings,
     payload: &mut Option<GraphicDataPayload>,
+    chart_relationship_id: &mut Option<String>,
     raw_children: &mut OrderedRawChildren,
 ) -> Result<()> {
     if payload.is_some() {
@@ -623,7 +651,10 @@ fn capture_payload(
                 &raw, &inherited,
             )?))
         }
-        CHART_URI => GraphicDataPayload::Chart(raw),
+        CHART_URI => {
+            *chart_relationship_id = parse_chart_relationship_id(&raw, namespaces)?;
+            GraphicDataPayload::Chart(raw)
+        }
         DIAGRAM_URI => GraphicDataPayload::SmartArt(raw),
         OLE_URI => GraphicDataPayload::Ole {
             preview: parse_ole_preview(&raw, &namespaces.entries())
@@ -635,6 +666,45 @@ fn capture_payload(
         _ => GraphicDataPayload::Other(raw),
     });
     Ok(())
+}
+
+fn parse_chart_relationship_id(
+    raw: &[u8],
+    inherited: &NamespaceBindings,
+) -> Result<Option<String>> {
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) | Event::Empty(start) => {
+                let namespaces = inherited.with_start(&start)?;
+                if local_name(start.name().as_ref()) != b"chart"
+                    || namespaces.element_uri(start.name().as_ref()) != Some(CHART_URI)
+                {
+                    return Ok(None);
+                }
+                for attribute in start.attributes() {
+                    let attribute = attribute?;
+                    if local_name(attribute.key.as_ref()) == b"id"
+                        && namespaces.attribute_uri(attribute.key.as_ref())
+                            == Some(crate::namespace::R_NS)
+                    {
+                        let value = attribute
+                            .decoded_and_normalized_value(
+                                quick_xml::XmlVersion::Implicit1_0,
+                                start.decoder(),
+                            )?
+                            .into_owned();
+                        return Ok((!value.is_empty()).then_some(value));
+                    }
+                }
+                return Ok(None);
+            }
+            Event::Eof => return Ok(None),
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 fn parse_ole_preview(raw: &[u8], inherited: &[(String, String)]) -> Result<Option<CT_Picture>> {

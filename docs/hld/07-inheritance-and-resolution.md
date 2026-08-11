@@ -63,6 +63,7 @@ pub enum ResolvedContent {
         rotate_with_shape: bool,
     },
     Table(ResolvedTable),
+    Group(GroupElement),
 }
 
 pub enum ResolvedImagePlacement {
@@ -162,6 +163,22 @@ the boundary in points using 12,700 EMU per point. The same scoped resource
 value records each resolved media item's package content type when format
 support must be decided before the renderer boundary.
 
+`ResolveCtx::resolve_slide_with_chart_resources` additionally accepts
+`ScopedChartResources` and the caller's `FontManager`. The chart maps keep
+slide, layout and master relationship identifiers separate. A parsed supported
+chart freezes the `rpptx-chart` result as `ResolvedContent::Group`. The group
+contains only backend-neutral paths and shaped labels. Missing, external,
+missing-target and invalid ChartML resources retain the producing scope and
+relationship identifier in their diagnostics.
+
+An unsupported chart choice uses its immediate typed fallback picture when the
+embedded image relationship resolves in the same source scope. The outer
+graphic-frame transform remains authoritative, while the nested picture
+supplies crop and placement. Without a usable preview, the resolver freezes a
+group containing the shaped `Unsupported chart` label and keeps bounds-fallback
+geometry for its visible outline. Both fallback routes record the stable chart
+unsupported category.
+
 An OLE graphic frame retains its raw payload as the sole serialization source
 and may project a standard fallback `p:pic` for static rendering. Layout uses
 that projection only when the blip is embedded, its relationship resolves in
@@ -185,8 +202,9 @@ then apply rotation and centre flips in DrawingML order. A leaf outside a group
 carries `Transform::IDENTITY`.
 
 Unrepresentable content remains visible as a bounds fallback with a stable
-unsupported category and a diagnostic. This includes charts, SmartArt, OLE
-without a supported resolved static preview, unknown graphic frames,
+unsupported category and a diagnostic. This includes unsupported charts
+without a usable cached image, SmartArt, OLE without a supported resolved
+static preview, unknown graphic frames,
 connectors with absent, unknown, or failed geometry,
 image media pending relationship resolution, preset geometry pending
 evaluation, and fill forms that the backend-neutral paint model cannot

@@ -4203,3 +4203,85 @@ coverage. The approved public surface and HLD impact did not change.
 **Notes for future sessions.** Preserve the shared plot rectangle and z-order
 of gridlines, clipped plot, axes, ticks, legend swatches, and text. Keep every
 text run on the caller-provided deterministic `FontManager`.
+
+### F-127, Chart colour resolution
+
+**Sprint.** S32
+**Completed.** 2026-08-10
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Presentation charts now resolve direct series fill and
+line paint before a mapped accent1 through accent6 cycle. The effective theme,
+colour map, theme-slot transforms, series transforms, and alpha flow through
+every geometry family, marker, data label, and legend swatch.
+
+**Non-obvious choices.** Direct `a:noFill` remains transparent. Filled area and
+radar paths compose their established 55 percent policy with resolved alpha.
+Only the selected concrete theme slot is required, so unrelated theme entries
+cannot block a direct series colour.
+
+**Deviations from the design plan.** None. Three microscope passes hardened
+transparent filled plots, unused theme slots, and the order of theme-slot and
+series transforms.
+
+**Spec sections touched.** `docs/hld/09-charts-spec.md`.
+
+**Tests.** `unstyled_four_series_use_accent_one_through_four`,
+`direct_series_solid_colour_overrides_theme_accent`,
+`series_accent_cycle_repeats_after_six`,
+`series_colours_honor_colour_map_and_transform_order`,
+`unsupported_direct_series_paint_is_contextual`,
+`resolved_chart_palette_raster_is_deterministic`,
+`authored_chart_enters_renderer_deterministically`, and the integrated full
+gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep presentation chart colour resolution on
+the exact DrawingML pipeline. The deliberately naive Word tint and shade helper
+remains outside this path.
+
+### F-128, Preserved chart fallback
+
+**Sprint.** S32
+**Completed.** 2026-08-10
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Presentation package rendering now resolves chart
+relationships in slide, layout, and master scope. Supported charts enter the
+ordinary renderer as frozen backend-neutral groups. Unsupported charts use a
+compatible immediate cached picture or a labelled placeholder with a stable
+diagnostic.
+
+**Non-obvious choices.** AlternateContent and ChartML raw bytes remain the only
+serialization source. Cached preview admission matches sniffed MIME and backend
+capabilities, accepts only 8-bit three-component JPEG, and caps encoded,
+decoded, and PNG inflation storage at 16 MiB before decoding. Integration tests
+and the corpus driver call the same package-rendering function.
+
+**Deviations from the design plan.** Seven microscope passes hardened missing,
+malformed, corrupt, mismatched, sparse, oversized, grayscale, and CMYK cached
+previews. They also tightened schema-positioned chart projection, immutable raw
+payload access, source-scoped resolution, and production-path test coverage.
+The approved routing and HLD scope did not change.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/06-presentationml-model.md`,
+`docs/hld/07-inheritance-and-resolution.md`,
+`docs/hld/08-rendering-spec.md`, and `docs/hld/09-charts-spec.md`.
+
+**Tests.** `three_dimensional_chart_uses_cached_image_and_diagnostic`,
+`authored_chart_relationship_enters_presentation_renderer`,
+`same_chart_relationship_id_is_scoped_to_its_source_part`,
+`unsupported_chart_without_preview_keeps_labelled_bounds`,
+`missing_or_external_chart_relationship_is_contextual`,
+`chart_choice_and_picture_fallback_remain_byte_preserved`,
+`non_chart_choice_with_descendant_chart_uri_remains_opaque`,
+`supported_and_fallback_charts_render_deterministically`, and the integrated
+full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Treat cached chart previews as untrusted package
+media. Keep admission bounded and aligned with every backend before allowing a
+preview to suppress the visible labelled fallback.

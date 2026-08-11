@@ -314,6 +314,7 @@ fn collect_non_visual_ids(children: &[ShapeTreeChild], occupied: &mut HashSet<u3
 #[derive(Clone, Debug, PartialEq)]
 pub struct CT_AlternateContent {
     raw_xml: Vec<u8>,
+    chart_choice: Option<Box<CT_GraphicFrame>>,
     selected_fallback: Option<Vec<ShapeTreeChild>>,
 }
 
@@ -326,6 +327,22 @@ impl CT_AlternateContent {
     /// Returns ordered typed members from the immediate `mc:Fallback` branch.
     pub fn selected_fallback(&self) -> Option<&[ShapeTreeChild]> {
         self.selected_fallback.as_deref()
+    }
+
+    /// Returns the first immediate chart-bearing compatibility choice.
+    pub fn chart_choice(&self) -> Option<&CT_GraphicFrame> {
+        self.chart_choice.as_deref()
+    }
+
+    /// Returns the first immediate typed picture in the paired fallback branch.
+    pub fn picture_fallback(&self) -> Option<&CT_Picture> {
+        self.selected_fallback.as_deref()?.iter().find_map(|child| {
+            if let ShapeTreeChild::Picture(picture) = child {
+                Some(picture)
+            } else {
+                None
+            }
+        })
     }
 
     fn from_fragment(xml: &[u8], inherited: &[(String, String)]) -> Result<Self> {
@@ -353,6 +370,7 @@ impl CT_AlternateContent {
                     }
                     return Ok(Self {
                         raw_xml: xml.to_vec(),
+                        chart_choice: None,
                         selected_fallback: None,
                     });
                 }
@@ -370,6 +388,7 @@ impl CT_AlternateContent {
         namespaces: &NamespaceBindings,
         raw_xml: &[u8],
     ) -> Result<Self> {
+        let mut chart_choice = None;
         let mut selected_fallback = None;
         let mut buffer = Vec::new();
         loop {
@@ -378,13 +397,20 @@ impl CT_AlternateContent {
                     let child_namespaces = namespaces.with_start(&child)?;
                     let is_fallback = local_name(child.name().as_ref()) == b"Fallback"
                         && child_namespaces.element_uri(child.name().as_ref()) == Some(MC_NS);
+                    let is_choice = local_name(child.name().as_ref()) == b"Choice"
+                        && child_namespaces.element_uri(child.name().as_ref()) == Some(MC_NS);
                     let raw = capture_element(reader, &child)?;
-                    if is_fallback {
+                    if is_choice && chart_choice.is_none() {
+                        chart_choice = parse_chart_choice(&raw, &child_namespaces.entries())?;
+                    } else if is_fallback {
                         if selected_fallback.is_some() {
                             return Err(duplicate_fallback());
                         }
-                        selected_fallback =
-                            Some(parse_fallback_members(&raw, &child_namespaces.entries())?);
+                        selected_fallback = Some(parse_compatibility_members(
+                            &raw,
+                            &child_namespaces.entries(),
+                            b"Fallback",
+                        )?);
                     }
                 }
                 Event::Empty(child) => {
@@ -401,6 +427,7 @@ impl CT_AlternateContent {
                 Event::End(end) if local_name(end.name().as_ref()) == b"AlternateContent" => {
                     return Ok(Self {
                         raw_xml: raw_xml.to_vec(),
+                        chart_choice,
                         selected_fallback,
                     });
                 }
@@ -419,6 +446,122 @@ impl CT_AlternateContent {
         writer.get_mut().write_all(&self.raw_xml)?;
         Ok(())
     }
+}
+
+fn parse_chart_choice(
+    xml: &[u8],
+    inherited: &[(String, String)],
+) -> Result<Option<Box<CT_GraphicFrame>>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut namespaces = NamespaceBindings::from_entries(inherited);
+    let mut inside_choice = false;
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if !inside_choice => {
+                namespaces = namespaces.with_start(&start)?;
+                if local_name(start.name().as_ref()) != b"Choice"
+                    || namespaces.element_uri(start.name().as_ref()) != Some(MC_NS)
+                {
+                    return Err(unexpected(&start));
+                }
+                inside_choice = true;
+            }
+            Event::Start(child) if inside_choice => {
+                let child_namespaces = namespaces.with_start(&child)?;
+                let is_frame = local_name(child.name().as_ref()) == b"graphicFrame"
+                    && child_namespaces.element_uri(child.name().as_ref()) == Some(P_NS);
+                let raw = capture_element(&mut reader, &child)?;
+                if is_frame && graphic_frame_projects_chart(&raw, &child_namespaces)? {
+                    let frame = CT_GraphicFrame::from_fragment(&raw, &child_namespaces.entries())?;
+                    return Ok(Some(Box::new(frame)));
+                }
+            }
+            Event::Empty(child) if inside_choice => {
+                let child_namespaces = namespaces.with_start(&child)?;
+                if local_name(child.name().as_ref()) == b"graphicFrame"
+                    && child_namespaces.element_uri(child.name().as_ref()) == Some(P_NS)
+                {
+                    let raw = capture_empty_element(&child)?;
+                    if graphic_frame_projects_chart(&raw, &child_namespaces)? {
+                        let frame =
+                            CT_GraphicFrame::from_fragment(&raw, &child_namespaces.entries())?;
+                        return Ok(Some(Box::new(frame)));
+                    }
+                }
+            }
+            Event::End(end) if local_name(end.name().as_ref()) == b"Choice" => return Ok(None),
+            Event::Eof => return Err(OxmlError::MissingElement("closing mc:Choice".to_owned())),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn graphic_frame_projects_chart(raw: &[u8], inherited: &NamespaceBindings) -> Result<bool> {
+    let mut reader = Reader::from_reader(raw);
+    let mut scopes = vec![inherited.clone()];
+    let mut graphic_depth = None;
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) => {
+                let depth = scopes.len() - 1;
+                let namespaces = scopes
+                    .last()
+                    .expect("namespace root is retained")
+                    .with_start(&start)?;
+                if depth == 1
+                    && local_name(start.name().as_ref()) == b"graphic"
+                    && namespaces.element_uri(start.name().as_ref()) == Some(A_NS)
+                {
+                    graphic_depth = Some(depth);
+                }
+                let chart_data = depth == 2
+                    && graphic_depth == Some(1)
+                    && is_chart_graphic_data(&start, &namespaces)?;
+                scopes.push(namespaces);
+                if chart_data {
+                    return Ok(true);
+                }
+            }
+            Event::Empty(start) => {
+                let depth = scopes.len() - 1;
+                let namespaces = scopes
+                    .last()
+                    .expect("namespace root is retained")
+                    .with_start(&start)?;
+                if depth == 2
+                    && graphic_depth == Some(1)
+                    && is_chart_graphic_data(&start, &namespaces)?
+                {
+                    return Ok(true);
+                }
+            }
+            Event::End(_) => {
+                if graphic_depth == Some(scopes.len().saturating_sub(2)) {
+                    graphic_depth = None;
+                }
+                if scopes.len() > 1 {
+                    scopes.pop();
+                }
+            }
+            Event::Eof => return Ok(false),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn is_chart_graphic_data(
+    start: &quick_xml::events::BytesStart<'_>,
+    namespaces: &NamespaceBindings,
+) -> Result<bool> {
+    Ok(local_name(start.name().as_ref()) == b"graphicData"
+        && namespaces.element_uri(start.name().as_ref()) == Some(A_NS)
+        && all_attributes(start)?.iter().any(|(name, value)| {
+            name == "uri" && value == "http://schemas.openxmlformats.org/drawingml/2006/chart"
+        }))
 }
 
 fn duplicate_fallback() -> OxmlError {
@@ -1545,9 +1688,10 @@ fn capture_group_child(
     Ok(())
 }
 
-fn parse_fallback_members(
+fn parse_compatibility_members(
     xml: &[u8],
     inherited: &[(String, String)],
+    expected_name: &[u8],
 ) -> Result<Vec<ShapeTreeChild>> {
     let mut reader = Reader::from_reader(xml);
     let mut buffer = Vec::new();
@@ -1555,32 +1699,38 @@ fn parse_fallback_members(
         match reader.read_event_into(&mut buffer)? {
             Event::Start(start) => {
                 let namespaces = NamespaceBindings::from_entries(inherited).with_start(&start)?;
-                if local_name(start.name().as_ref()) != b"Fallback"
+                if local_name(start.name().as_ref()) != expected_name
                     || namespaces.element_uri(start.name().as_ref()) != Some(MC_NS)
                 {
                     return Err(unexpected(&start));
                 }
-                return parse_fallback_reader(&mut reader, &namespaces);
+                return parse_compatibility_reader(&mut reader, &namespaces, expected_name);
             }
             Event::Empty(start) => {
                 let namespaces = NamespaceBindings::from_entries(inherited).with_start(&start)?;
-                if local_name(start.name().as_ref()) != b"Fallback"
+                if local_name(start.name().as_ref()) != expected_name
                     || namespaces.element_uri(start.name().as_ref()) != Some(MC_NS)
                 {
                     return Err(unexpected(&start));
                 }
                 return Ok(Vec::new());
             }
-            Event::Eof => return Err(OxmlError::MissingElement("mc:Fallback".to_owned())),
+            Event::Eof => {
+                return Err(OxmlError::MissingElement(format!(
+                    "mc:{}",
+                    String::from_utf8_lossy(expected_name)
+                )));
+            }
             _ => {}
         }
         buffer.clear();
     }
 }
 
-fn parse_fallback_reader(
+fn parse_compatibility_reader(
     reader: &mut Reader<&[u8]>,
     namespaces: &NamespaceBindings,
+    expected_name: &[u8],
 ) -> Result<Vec<ShapeTreeChild>> {
     let mut children = Vec::new();
     let mut buffer = Vec::new();
@@ -1604,11 +1754,14 @@ fn parse_fallback_reader(
                     children.push(child);
                 }
             }
-            Event::End(end) if local_name(end.name().as_ref()) == b"Fallback" => {
+            Event::End(end) if local_name(end.name().as_ref()) == expected_name => {
                 return Ok(children);
             }
             Event::Eof => {
-                return Err(OxmlError::MissingElement("closing mc:Fallback".to_owned()));
+                return Err(OxmlError::MissingElement(format!(
+                    "closing mc:{}",
+                    String::from_utf8_lossy(expected_name)
+                )));
             }
             _ => {}
         }

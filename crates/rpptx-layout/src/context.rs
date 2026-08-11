@@ -25,10 +25,12 @@ use oxml_drawing::text::{
 use oxml_drawing::theme::CT_OfficeStyleSheet;
 use oxml_drawing::xfrm::CT_Transform2D;
 use oxml_layout::{
-    Color, Diagnostic, Effect, FillRule, GradientStop, LineCap, LineJoin, Paint, Path, PathCommand,
-    Point, Rect, Stroke, Transform,
+    Color, Diagnostic, Effect, FillRule, FontManager, GradientStop, LineCap, LineJoin, Paint, Path,
+    PathCommand, Point, Rect, Stroke, Transform,
 };
+use rpptx_chart::{render_chart, render_chart_placeholder};
 use rpptx_oxml::graphic_frame::GraphicDataPayload;
+use rpptx_oxml::picture::CT_Picture;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType, PlaceholderKey};
 use rpptx_oxml::shape_tree::{CT_Shape, ShapeTreeChild};
 use rpptx_oxml::slide_parts::{BackgroundRendering, CT_Slide, CT_SlideLayout, CT_SlideMaster};
@@ -37,13 +39,13 @@ use crate::ResolveError;
 use crate::style::{referenced_fill, substitute_fill};
 use crate::text::EffectiveListStyle;
 use crate::{
-    ParagraphAlignment, ResolvedAutofit, ResolvedBackground, ResolvedBullet, ResolvedBulletSize,
-    ResolvedContent, ResolvedGeometry, ResolvedImage, ResolvedImagePlacement, ResolvedLineEnd,
-    ResolvedLineEndKind, ResolvedLineEndSize, ResolvedParagraph, ResolvedRectAlignment,
-    ResolvedRunStyle, ResolvedShape, ResolvedSlide, ResolvedTable, ResolvedTableBorder,
-    ResolvedTableCell, ResolvedTableRow, ResolvedTextBody, ResolvedTextRun, ResolvedTextSpacing,
-    ResolvedTileFlip, ResolvedTilePlacement, ScopedHyperlinkTargets, ScopedMediaIds, TextAnchor,
-    TextDirection, TextInsets,
+    ChartResource, ParagraphAlignment, ResolvedAutofit, ResolvedBackground, ResolvedBullet,
+    ResolvedBulletSize, ResolvedContent, ResolvedGeometry, ResolvedImage, ResolvedImagePlacement,
+    ResolvedLineEnd, ResolvedLineEndKind, ResolvedLineEndSize, ResolvedParagraph,
+    ResolvedRectAlignment, ResolvedRunStyle, ResolvedShape, ResolvedSlide, ResolvedTable,
+    ResolvedTableBorder, ResolvedTableCell, ResolvedTableRow, ResolvedTextBody, ResolvedTextRun,
+    ResolvedTextSpacing, ResolvedTileFlip, ResolvedTilePlacement, ScopedChartResources,
+    ScopedHyperlinkTargets, ScopedMediaIds, TextAnchor, TextDirection, TextInsets,
 };
 
 /// The producer part that supplied the effective background.
@@ -324,7 +326,7 @@ impl<'a> ResolveCtx<'a> {
 
     /// Resolves one owned renderer-facing slide at the supplied point size.
     pub fn resolve_slide(&self, size: (f64, f64)) -> Result<ResolvedSlide, ResolveError> {
-        self.resolve_slide_inner(size, None, None)
+        self.resolve_slide_inner(size, None, None, None, None)
     }
 
     /// Resolves one slide using embedded media identifiers scoped to source parts.
@@ -333,7 +335,7 @@ impl<'a> ResolveCtx<'a> {
         size: (f64, f64),
         media: &ScopedMediaIds,
     ) -> Result<ResolvedSlide, ResolveError> {
-        self.resolve_slide_inner(size, Some(media), None)
+        self.resolve_slide_inner(size, Some(media), None, None, None)
     }
 
     /// Resolves one slide with source-scoped media and external hyperlink targets.
@@ -343,7 +345,25 @@ impl<'a> ResolveCtx<'a> {
         media: &ScopedMediaIds,
         hyperlinks: &ScopedHyperlinkTargets,
     ) -> Result<ResolvedSlide, ResolveError> {
-        self.resolve_slide_inner(size, Some(media), Some(hyperlinks))
+        self.resolve_slide_inner(size, Some(media), Some(hyperlinks), None, None)
+    }
+
+    /// Resolves one slide with source-scoped charts and the caller's font manager.
+    pub fn resolve_slide_with_chart_resources(
+        &self,
+        size: (f64, f64),
+        media: &ScopedMediaIds,
+        hyperlinks: &ScopedHyperlinkTargets,
+        charts: &ScopedChartResources,
+        fonts: &mut FontManager,
+    ) -> Result<ResolvedSlide, ResolveError> {
+        self.resolve_slide_inner(
+            size,
+            Some(media),
+            Some(hyperlinks),
+            Some(charts),
+            Some(fonts),
+        )
     }
 
     fn resolve_slide_inner(
@@ -351,6 +371,8 @@ impl<'a> ResolveCtx<'a> {
         size: (f64, f64),
         media: Option<&ScopedMediaIds>,
         hyperlinks: Option<&ScopedHyperlinkTargets>,
+        charts: Option<&ScopedChartResources>,
+        mut fonts: Option<&mut FontManager>,
     ) -> Result<ResolvedSlide, ResolveError> {
         let mut slide = ResolvedSlide {
             size,
@@ -415,7 +437,8 @@ impl<'a> ResolveCtx<'a> {
                         },
                         child,
                         media,
-                        hyperlinks,
+                        (hyperlinks, charts),
+                        fonts.as_deref_mut(),
                         &mut slide.diagnostics,
                     )? {
                         slide.shapes.push(shape);
@@ -431,9 +454,14 @@ impl<'a> ResolveCtx<'a> {
         placement: ShapePlacement,
         child: &ShapeTreeChild,
         media: Option<&ScopedMediaIds>,
-        hyperlinks: Option<&ScopedHyperlinkTargets>,
+        scoped_resources: (
+            Option<&ScopedHyperlinkTargets>,
+            Option<&ScopedChartResources>,
+        ),
+        fonts: Option<&mut FontManager>,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<Option<ResolvedShape>, ResolveError> {
+        let (hyperlinks, charts) = scoped_resources;
         let ShapePlacement {
             source,
             group_scale,
@@ -498,7 +526,7 @@ impl<'a> ResolveCtx<'a> {
                     return Ok(None);
                 };
                 let bounds = scaled_group_bounds(bounds, group_scale);
-                let (content, unsupported, bounds_fallback) = match &frame.graphic_data.payload {
+                let (content, unsupported, bounds_fallback) = match frame.graphic_data.payload() {
                     GraphicDataPayload::Table(table) => (
                         ResolvedContent::Table(self.resolve_table(
                             table,
@@ -509,7 +537,16 @@ impl<'a> ResolveCtx<'a> {
                         None,
                         false,
                     ),
-                    GraphicDataPayload::Chart(_) => (ResolvedContent::None, Some("chart"), true),
+                    GraphicDataPayload::Chart(_) => self.resolve_chart_content(
+                        frame,
+                        None,
+                        source,
+                        bounds,
+                        media,
+                        charts,
+                        fonts,
+                        diagnostics,
+                    )?,
                     GraphicDataPayload::SmartArt(_) => {
                         (ResolvedContent::None, Some("SmartArt"), true)
                     }
@@ -657,8 +694,170 @@ impl<'a> ResolveCtx<'a> {
                     unsupported,
                 }))
             }
-            ShapeTreeChild::GroupShape(_) | ShapeTreeChild::AlternateContent(_) => Ok(None),
+            ShapeTreeChild::AlternateContent(alternate) => {
+                let Some(frame) = alternate.chart_choice() else {
+                    return Ok(None);
+                };
+                let Some((bounds, rotation_deg, flip_h, flip_v)) =
+                    transform_values(Some(&frame.transform))
+                else {
+                    return Ok(None);
+                };
+                let bounds = scaled_group_bounds(bounds, group_scale);
+                let (content, unsupported, bounds_fallback) = if charts.is_some() && fonts.is_some()
+                {
+                    self.resolve_chart_content(
+                        frame,
+                        alternate.picture_fallback(),
+                        source,
+                        bounds,
+                        media,
+                        charts,
+                        fonts,
+                        diagnostics,
+                    )?
+                } else if let Some(picture) = alternate.picture_fallback() {
+                    let (content, _) = resolve_picture_content(picture, source, media, diagnostics);
+                    let has_image = matches!(content, ResolvedContent::Image(_));
+                    (content, Some("chart"), !has_image)
+                } else {
+                    (ResolvedContent::None, Some("chart"), true)
+                };
+                if bounds_fallback {
+                    diagnostics.push(Diagnostic {
+                        message: "unsupported chart content retained as bounds".to_owned(),
+                    });
+                }
+                Ok(Some(ResolvedShape {
+                    group_transform,
+                    bounds,
+                    rotation_deg,
+                    flip_h,
+                    flip_v,
+                    geometry: if bounds_fallback {
+                        ResolvedGeometry::BoundsFallback
+                    } else {
+                        ResolvedGeometry::Rectangle
+                    },
+                    fill: None,
+                    image_fill: None,
+                    line: None,
+                    head_end: None,
+                    tail_end: None,
+                    shadow: None,
+                    content,
+                    unsupported,
+                }))
+            }
+            ShapeTreeChild::GroupShape(_) => Ok(None),
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_chart_content(
+        &self,
+        frame: &rpptx_oxml::graphic_frame::CT_GraphicFrame,
+        fallback: Option<&CT_Picture>,
+        source: FlattenedSource,
+        bounds: Rect,
+        media: Option<&ScopedMediaIds>,
+        charts: Option<&ScopedChartResources>,
+        fonts: Option<&mut FontManager>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<(ResolvedContent, Option<&'static str>, bool), ResolveError> {
+        let Some(charts) = charts else {
+            return Ok((ResolvedContent::None, Some("chart"), true));
+        };
+        let Some(fonts) = fonts else {
+            return Ok((ResolvedContent::None, Some("chart"), true));
+        };
+        let relationship_id = frame.chart_relationship_id();
+        let resource = relationship_id.and_then(|id| charts.get(source, id));
+        let failure = match (relationship_id, resource) {
+            (None, _) => "chart payload has no relationship identifier".to_owned(),
+            (Some(id), None) => format!(
+                "missing {} chart relationship `{id}`",
+                flattened_source_name(source)
+            ),
+            (Some(_), Some(ChartResource::External(target))) => format!(
+                "external {} chart relationship `{}` targets `{target}`",
+                flattened_source_name(source),
+                relationship_id.expect("matched a relationship id")
+            ),
+            (Some(_), Some(ChartResource::MissingTarget(target))) => format!(
+                "missing {} chart target `{target}` for relationship `{}`",
+                flattened_source_name(source),
+                relationship_id.expect("matched a relationship id")
+            ),
+            (Some(_), Some(ChartResource::Invalid(detail))) => format!(
+                "invalid {} chart relationship `{}`: {detail}",
+                flattened_source_name(source),
+                relationship_id.expect("matched a relationship id")
+            ),
+            (Some(_), Some(ChartResource::Parsed(chart_space))) => {
+                let local_bounds = Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: bounds.width,
+                    height: bounds.height,
+                };
+                match render_chart(
+                    &chart_space.chart,
+                    local_bounds,
+                    self.theme,
+                    &self.color_map,
+                    fonts,
+                ) {
+                    Ok(group) => {
+                        return Ok((ResolvedContent::Group(group), None, false));
+                    }
+                    Err(error) => error.to_string(),
+                }
+            }
+        };
+
+        if let Some(picture) = fallback {
+            let (content, _) = resolve_picture_content(picture, source, media, diagnostics);
+            let relationship_id = picture
+                .blip_fill
+                .as_ref()
+                .and_then(|fill| fill.blip.as_ref())
+                .and_then(|blip| blip.embed.as_deref());
+            let renderer_compatible = relationship_id
+                .and_then(|id| media.and_then(|media| media.content_type(source, id)))
+                .is_some_and(renderer_compatible_image_content_type);
+            if matches!(content, ResolvedContent::Image(_)) && renderer_compatible {
+                diagnostics.push(Diagnostic {
+                    message: format!("unsupported chart rendered as cached image: {failure}"),
+                });
+                return Ok((content, Some("chart"), false));
+            }
+            if matches!(content, ResolvedContent::Image(_)) {
+                diagnostics.push(Diagnostic {
+                    message: format!(
+                        "unsupported chart cached image is not renderer-compatible: {failure}"
+                    ),
+                });
+            }
+        }
+
+        let placeholder = render_chart_placeholder(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: bounds.width,
+                height: bounds.height,
+            },
+            fonts,
+        )
+        .map_err(|error| ResolveError::ConcreteValue {
+            kind: "chart placeholder",
+            detail: error.to_string(),
+        })?;
+        diagnostics.push(Diagnostic {
+            message: format!("unsupported chart rendered as labelled placeholder: {failure}"),
+        });
+        Ok((ResolvedContent::Group(placeholder), Some("chart"), true))
     }
 
     fn resolve_ordinary_shape(
@@ -857,6 +1056,12 @@ impl<'a> ResolveCtx<'a> {
         }
         (ResolvedGeometry::Rectangle, None)
     }
+}
+
+fn renderer_compatible_image_content_type(content_type: &str) -> bool {
+    content_type.eq_ignore_ascii_case("image/png")
+        || content_type.eq_ignore_ascii_case("image/jpeg")
+        || content_type.eq_ignore_ascii_case("image/jpg")
 }
 
 fn resolve_picture_content(
@@ -2628,7 +2833,16 @@ fn emit_tree_inner<'a>(
                 );
             }
             ShapeTreeChild::AlternateContent(alternate) => {
-                if let Some(fallback) = alternate.selected_fallback() {
+                if alternate.chart_choice().is_some() {
+                    emit_leaf(
+                        child,
+                        rules,
+                        parent_transform,
+                        parent_issues,
+                        emitted_latent,
+                        output,
+                    );
+                } else if let Some(fallback) = alternate.selected_fallback() {
                     emit_tree_inner(
                         fallback,
                         rules,
@@ -2937,6 +3151,7 @@ mod tests {
     use oxml_drawing::theme::CT_OfficeStyleSheet;
     use oxml_opc::OpcPackage;
     use oxml_opc::relationship::rel_types;
+    use rpptx_chart::CT_ChartSpace;
     use rpptx_oxml::placeholder::PhType;
     use rpptx_oxml::presentation::CT_Presentation;
     use rpptx_oxml::shape_tree::{CT_Shape, ShapeTreeChild};
@@ -2944,13 +3159,17 @@ mod tests {
 
     use super::{BackgroundSource, FlattenedItem, FlattenedSource, ResolveCtx, transform_values};
     use crate::{
-        Diagnostic, ResolvedAutofit, ResolvedBackground, ResolvedBullet, ResolvedBulletSize,
-        ResolvedContent, ResolvedGeometry, ResolvedImagePlacement, ResolvedLineEnd,
-        ResolvedLineEndKind, ResolvedLineEndSize, ResolvedRectAlignment, ResolvedSlide,
-        ResolvedTextRun, ResolvedTextSpacing, ResolvedTileFlip, ScopedHyperlinkTargets,
-        ScopedMediaIds, TextAnchor as ResolvedTextAnchor, TextDirection,
+        ChartResource, Diagnostic, ResolvedAutofit, ResolvedBackground, ResolvedBullet,
+        ResolvedBulletSize, ResolvedContent, ResolvedGeometry, ResolvedImagePlacement,
+        ResolvedLineEnd, ResolvedLineEndKind, ResolvedLineEndSize, ResolvedRectAlignment,
+        ResolvedSlide, ResolvedTextRun, ResolvedTextSpacing, ResolvedTileFlip,
+        ScopedChartResources, ScopedHyperlinkTargets, ScopedMediaIds,
+        TextAnchor as ResolvedTextAnchor, TextDirection,
     };
-    use oxml_layout::{Color, Effect, MediaId, Paint, PathCommand, Point, Rect, Transform};
+    use oxml_layout::{
+        Color, Effect, FontManager, MediaId, Paint, PathCommand, Point, PositionedElement, Rect,
+        Transform, walk,
+    };
 
     const P_NS: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
     const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
@@ -5613,6 +5832,210 @@ mod tests {
         assert_eq!(field_type.as_deref(), Some("slidenum"));
     }
 
+    #[test]
+    fn three_dimensional_chart_uses_cached_image_and_diagnostic() {
+        let alternate = chart_alternate("rIdChart", Some("rIdPreview"));
+        let fixture = Fixture::new(&alternate, "", "");
+        let preview = MediaId(47);
+        let media = ScopedMediaIds {
+            slide: HashMap::from([("rIdPreview".to_owned(), preview)]),
+            media_content_types: HashMap::from([(preview, "image/png".to_owned())]),
+            ..ScopedMediaIds::default()
+        };
+        let charts = ScopedChartResources {
+            slide: HashMap::from([(
+                "rIdChart".to_owned(),
+                ChartResource::Parsed(Box::new(three_dimensional_chart())),
+            )]),
+            ..ScopedChartResources::default()
+        };
+        let mut fonts = FontManager::new_deterministic().unwrap();
+
+        let resolved = fixture
+            .context()
+            .resolve_slide_with_chart_resources(
+                (720.0, 540.0),
+                &media,
+                &ScopedHyperlinkTargets::default(),
+                &charts,
+                &mut fonts,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            resolved.shapes[0].content,
+            ResolvedContent::Image(ref image) if image.media == preview
+        ));
+        assert!(resolved.shapes[0].unsupported.is_some());
+        assert!(resolved.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("unsupported chart")
+                && diagnostic.message.contains("cached image")
+        }));
+
+        let unsupported_media = ScopedMediaIds {
+            slide: HashMap::from([("rIdPreview".to_owned(), preview)]),
+            media_content_types: HashMap::from([(preview, "image/x-wmf".to_owned())]),
+            ..ScopedMediaIds::default()
+        };
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        let resolved = fixture
+            .context()
+            .resolve_slide_with_chart_resources(
+                (720.0, 540.0),
+                &unsupported_media,
+                &ScopedHyperlinkTargets::default(),
+                &charts,
+                &mut fonts,
+            )
+            .unwrap();
+        assert!(matches!(
+            resolved.shapes[0].content,
+            ResolvedContent::Group(_)
+        ));
+        assert!(resolved.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("not renderer-compatible")
+                && diagnostic.message.contains("unsupported chart")
+        }));
+    }
+
+    #[test]
+    fn same_chart_relationship_id_is_scoped_to_its_source_part() {
+        let fixture = Fixture::new(
+            &chart_frame_at("rId8", 200),
+            &chart_frame_at("rId8", 100),
+            &chart_frame("rId8"),
+        );
+        let slide = ChartResource::MissingTarget("/ppt/charts/slide.xml".to_owned());
+        let layout = ChartResource::MissingTarget("/ppt/charts/layout.xml".to_owned());
+        let master = ChartResource::MissingTarget("/ppt/charts/master.xml".to_owned());
+        let charts = ScopedChartResources {
+            slide: HashMap::from([("rId8".to_owned(), slide.clone())]),
+            layout: HashMap::from([("rId8".to_owned(), layout.clone())]),
+            master: HashMap::from([("rId8".to_owned(), master.clone())]),
+        };
+
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        let resolved = fixture
+            .context()
+            .resolve_slide_with_chart_resources(
+                (720.0, 540.0),
+                &ScopedMediaIds::default(),
+                &ScopedHyperlinkTargets::default(),
+                &charts,
+                &mut fonts,
+            )
+            .unwrap();
+        assert_eq!(resolved.shapes.len(), 3);
+        let diagnostics = resolved
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+        for (scope, target) in [
+            ("master", "/ppt/charts/master.xml"),
+            ("layout", "/ppt/charts/layout.xml"),
+            ("slide", "/ppt/charts/slide.xml"),
+        ] {
+            assert!(diagnostics.iter().any(|message| {
+                message.contains(scope) && message.contains("rId8") && message.contains(target)
+            }));
+        }
+    }
+
+    #[test]
+    fn unsupported_chart_without_preview_keeps_labelled_bounds() {
+        let fixture = Fixture::new(&chart_frame("rIdChart"), "", "");
+        let charts = ScopedChartResources {
+            slide: HashMap::from([(
+                "rIdChart".to_owned(),
+                ChartResource::Parsed(Box::new(three_dimensional_chart())),
+            )]),
+            ..ScopedChartResources::default()
+        };
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        let resolved = fixture
+            .context()
+            .resolve_slide_with_chart_resources(
+                (720.0, 540.0),
+                &ScopedMediaIds::default(),
+                &ScopedHyperlinkTargets::default(),
+                &charts,
+                &mut fonts,
+            )
+            .unwrap();
+
+        assert_eq!(
+            resolved.shapes[0].geometry,
+            ResolvedGeometry::BoundsFallback
+        );
+        let ResolvedContent::Group(group) = &resolved.shapes[0].content else {
+            panic!("unsupported chart should retain a labelled group");
+        };
+        let mut labels = Vec::new();
+        walk(&group.children, &mut |element, _| {
+            if let PositionedElement::Text(run) = element {
+                labels.push(run.text.clone());
+            }
+        });
+        assert_eq!(labels, vec!["Unsupported chart"]);
+    }
+
+    #[test]
+    fn missing_or_external_chart_relationship_is_contextual() {
+        let children = format!(
+            "{}{}{}",
+            chart_frame("missingChart"),
+            chart_frame_at("externalChart", 200),
+            chart_frame_at("missingTarget", 400)
+        );
+        let fixture = Fixture::new(&children, "", "");
+        let charts = ScopedChartResources {
+            slide: HashMap::from([
+                (
+                    "externalChart".to_owned(),
+                    ChartResource::External("https://example.invalid/chart.xml".to_owned()),
+                ),
+                (
+                    "missingTarget".to_owned(),
+                    ChartResource::MissingTarget("/ppt/charts/missing.xml".to_owned()),
+                ),
+            ]),
+            ..ScopedChartResources::default()
+        };
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        let resolved = fixture
+            .context()
+            .resolve_slide_with_chart_resources(
+                (720.0, 540.0),
+                &ScopedMediaIds::default(),
+                &ScopedHyperlinkTargets::default(),
+                &charts,
+                &mut fonts,
+            )
+            .unwrap();
+        let diagnostics = resolved
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|message| { message.contains("slide") && message.contains("missingChart") })
+        );
+        assert!(diagnostics.iter().any(|message| {
+            message.contains("slide")
+                && message.contains("externalChart")
+                && message.contains("https://example.invalid/chart.xml")
+        }));
+        assert!(diagnostics.iter().any(|message| {
+            message.contains("slide")
+                && message.contains("missingTarget")
+                && message.contains("/ppt/charts/missing.xml")
+        }));
+    }
+
     fn shape_with_details(
         ph_type: Option<&str>,
         idx: Option<u32>,
@@ -5632,6 +6055,33 @@ mod tests {
         format!(
             "<p:sp><p:nvSpPr><p:cNvPr/><p:cNvSpPr/><p:nvPr>{placeholder}</p:nvPr></p:nvSpPr><p:spPr>{shape_properties}</p:spPr>{text_body}</p:sp>"
         )
+    }
+
+    fn chart_frame(relationship_id: &str) -> String {
+        chart_frame_at(relationship_id, 0)
+    }
+
+    fn chart_frame_at(relationship_id: &str, x: i64) -> String {
+        format!(
+            r#"<p:graphicFrame><p:nvGraphicFramePr/><p:xfrm><a:off x="{x}" y="0"/><a:ext cx="1270000" cy="762000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="{relationship_id}"/></a:graphicData></a:graphic></p:graphicFrame>"#
+        )
+    }
+
+    fn chart_alternate(relationship_id: &str, preview_id: Option<&str>) -> String {
+        let preview = preview_id.map_or_else(String::new, |preview_id| {
+            picture(preview_id, "", "<a:stretch><a:fillRect/></a:stretch>", 999)
+        });
+        format!(
+            r#"<mc:AlternateContent><mc:Choice Requires="c">{}</mc:Choice><mc:Fallback>{preview}</mc:Fallback></mc:AlternateContent>"#,
+            chart_frame(relationship_id)
+        )
+    }
+
+    fn three_dimensional_chart() -> CT_ChartSpace {
+        CT_ChartSpace::from_xml(
+            br#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:bar3DChart><c:barDir val="col"/></c:bar3DChart></c:plotArea></c:chart></c:chartSpace>"#,
+        )
+        .unwrap()
     }
 
     fn connector(preset: &str, cx: i64, cy: i64, adjustments: &str, line: &str) -> String {

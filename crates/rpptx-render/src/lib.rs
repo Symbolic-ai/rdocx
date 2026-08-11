@@ -207,7 +207,7 @@ pub struct RenderInput {
 pub fn layout_presentation(input: &RenderInput) -> Result<LayoutResult, RenderInputError> {
     let mut font_manager = FontManager::new();
     font_manager.load_additional_fonts(&input.fonts);
-    layout_presentation_with_fonts(input, font_manager)
+    layout_presentation_with_font_manager(input, font_manager)
 }
 
 /// Lower every resolved slide using only bundled and presentation-embedded fonts.
@@ -222,10 +222,11 @@ pub fn layout_presentation_deterministic(
             detail: error.to_string(),
         })?;
     font_manager.load_additional_fonts(&input.fonts);
-    layout_presentation_with_fonts(input, font_manager)
+    layout_presentation_with_font_manager(input, font_manager)
 }
 
-fn layout_presentation_with_fonts(
+/// Lowers every slide with the same manager that shaped any frozen group content.
+pub fn layout_presentation_with_font_manager(
     input: &RenderInput,
     mut font_manager: FontManager,
 ) -> Result<LayoutResult, RenderInputError> {
@@ -376,6 +377,9 @@ fn lower_shape(
         }
         ResolvedContent::Table(table) => {
             children.extend(lower_table(table, font_manager, page_number)?);
+        }
+        ResolvedContent::Group(group) => {
+            children.push(PositionedElement::Group(group.clone()));
         }
         _ => {}
     }

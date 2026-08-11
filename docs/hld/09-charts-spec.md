@@ -446,12 +446,14 @@ frame, so **no backend work is needed beyond what `08-rendering-spec.md`
 already requires**. Bars, lines, pie wedges, areas and markers are all paths.
 Gridlines and axis lines are strokes. Labels are glyph runs.
 
-The geometry entry point is `render_geometry(&CT_Chart, Rect) ->
-Result<ChartGeometry>`. Input and output coordinates are typographic points.
-It reserves 36 points on the left, 12 on the right and top, and 28 on the
-bottom, then returns one identity group whose children use chart-local point
-coordinates. Invalid or too-small bounds, opaque or combination plots, and
-empty cached data return contextual errors.
+The geometry entry point receives `&CT_Chart`, `Rect`, the effective
+`&CT_OfficeStyleSheet`, and the effective `&ColorMap`, then returns
+`Result<ChartGeometry>`. The labelled entry point receives the same theme and
+colour-map inputs before its `FontManager`. Input and output coordinates are
+typographic points. Geometry reserves 36 points on the left, 12 on the right
+and top, and 28 on the bottom, then returns one identity group whose children
+use chart-local point coordinates. Invalid or too-small bounds, opaque or
+combination plots, and empty cached data return contextual errors.
 
 Clustered bars derive their width from the category slot, `c:gapWidth`, series
 count, and `c:overlap`. Stacked bars accumulate positive and negative values
@@ -482,9 +484,17 @@ percentage totals, pie totals, derived bounds, and every emitted path point
 must remain finite. An overflow or nonfinite mutable cache returns a contextual
 error before backend-neutral geometry is exposed.
 
-Geometry uses a deterministic placeholder solid palette indexed by series.
-The labelled entry point is `render_chart(&CT_Chart, Rect, &mut FontManager) ->
-Result<GroupElement>`. It computes linear scales from cached values and targets
+Before geometry is lowered, each typed series receives one resolved colour.
+A direct solid fill in its `c:spPr` wins, followed by a direct solid line fill.
+A direct `a:noFill` is transparent. A present gradient, pattern, picture, or
+colourless solid paint returns a contextual series projection error instead of
+silently falling back. Without direct paint, series use accent1 through
+accent6 in order and repeat after six. The semantic accent passes through the
+effective colour map, concrete theme colour scheme, and ordered transform
+stack in `oxml-drawing`. The deliberately naive Word tint and shade helper is
+not part of this path.
+
+The labelled entry point computes linear scales from cached values and targets
 six ticks. The step is 1, 2, or 5 times a power of ten. Unpinned bounds expand
 to enclosing step multiples, while a `c:scaling` minimum or maximum remains
 exact. Ordinary bar and area value domains include zero. A 0 through 100 value
@@ -540,22 +550,34 @@ annotations. Individual
 `c:dLbl` delete, visibility, number-format, position, and separator overrides
 are projected privately by logical index from their namespace-resolved raw
 subtrees. Those subtrees remain byte-preserved as the only serialization source.
-A present legend shell emits
-one placeholder-colour swatch and shaped series name per row in the upper-right
-of the plot. Unsupported legend placement children remain preserved and do not
-change this default layout.
+A present legend shell emits one resolved series-colour swatch and shaped
+series name per row in the upper-right of the plot. Bars, line and radar
+strokes, pie and doughnut wedges, areas, scatter and line markers, and legend
+swatches all consume the same resolved series colour. Unsupported legend
+placement children remain preserved and do not change this default layout.
 
-F-127 replaces the placeholder palette with chart and theme colour resolution.
-F-128 resolves chart relationships into the render input, routes supported
-charts to native geometry, and owns preserved-chart fallback selection. Later
-binding work consumes the same concrete geometry contract without adding a
-backend-specific chart path. Series colours then come from the chart's own
-`c:spPr` when present, otherwise from the theme's accent cycle resolved through
-the same colour pipeline as everything else.
+Package assembly resolves chart relationships in separate slide, layout and
+master scopes and parses internal targets as `CT_ChartSpace`. The resolver
+passes supported charts, local frame bounds, the effective theme and colour map,
+and the caller's font manager to the native chart entry point. It freezes the
+returned group in `ResolvedContent`, so the ordinary presentation renderer can
+lower it without a chart-specific backend path.
 
-For a chart that was **preserved rather than authored**, draw the cached image
-fallback if the file carries one, otherwise a labelled placeholder rectangle
-with a diagnostic. This is the same fallback discipline used for SmartArt.
+For a chart that was **preserved rather than authored**, the resolver draws the
+immediate typed cached-picture fallback when the native projection is
+unsupported, the embedded image resolves in the same source scope, its bytes
+match the declared PNG or JPEG content type, encoded bytes and decoded scanline
+or pixel storage stay within 16 MiB caps, JPEG uses the 8-bit three-component
+layout shared by the raster and PDF backends, the stricter raster boundary
+visibly decodes it at native pixel bounds, and the resolver accepts that
+renderer content type. The corpus renderer and integration gates call the same
+crate-local package rendering function.
+Otherwise it emits a labelled placeholder rectangle. Both routes record the
+stable chart diagnostic. Missing previews, unsupported preview formats,
+malformed or invisible preview bytes, content-type mismatches, and missing,
+external, missing-target or malformed chart relationships keep their more
+specific source context. The preserved chart and alternate-content bytes remain
+the sole serialisation source.
 
 ## What is not in v1
 
