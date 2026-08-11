@@ -175,6 +175,10 @@ defended.
 | F-126 | S31 | L | 4 | 1 | 2026-08-10 | Nice-number axes, gridlines, labels, and legends |
 | F-127 | S32 | M | 2 | 1 | 2026-08-10 | Exact direct and theme-mapped chart series colours |
 | F-128 | S32 | S | 1 | 1 | 2026-08-10 | Source-scoped native charts and bounded preserved fallbacks |
+| F-047 | S32.1 | M | 2 | 1 | 2026-08-11 | Exact oxml-layout package inventory and archive-size gate |
+| F-048 | S32.1 | M | 2 | 1 | 2026-08-11 | Preparation-only stable and incubating cargo-release groups |
+| F-049 | S32.1 | M | 2 | 1 | 2026-08-11 | Exact split-family publication routing and verified local-source preflight |
+| F-050 | S32.1 | S | 1 | 1 | 2026-08-11 | No-default, wasm, prose, skill-sync, and binding-safe CI jobs |
 
 ## Velocity
 

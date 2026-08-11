@@ -4285,3 +4285,140 @@ full gate.
 **Notes for future sessions.** Treat cached chart previews as untrusted package
 media. Keep admission bounded and aligned with every backend before allowing a
 preview to suppress the visible labelled fallback.
+
+### F-047, Packaging include and size gate
+
+**Sprint.** S32.1
+**Completed.** 2026-08-11
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `oxml-layout` is now a publication candidate with an
+explicit package boundary containing its source, all 20 bundled TTFs, three
+family licence files, and the Caladea notice. CI packages the crate, verifies
+the archive, compares its exact inventory, and rejects archives above 10 MiB.
+
+**Non-obvious choices.** The gate compares the package list to an exact sorted
+inventory instead of checking only globs. This makes a missing legal file and
+an accidental extra asset equally visible.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/15-build-and-toolchain.md`, "Packaging"
+and "CI job matrix".
+
+**Tests.** `cargo package -p oxml-layout --list`, verified workspace packaging,
+the exact inventory assertion for 20 TTFs and four legal files, the 3,596,626
+byte archive-size assertion, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep `NOTICE-Caladea` beside the full Apache
+licence. The archive ceiling applies to the compressed `.crate`, while the
+inventory check proves the required uncompressed assets are present.
+
+### F-048, Automate split-family release preparation
+
+**Sprint.** S32.1
+**Completed.** 2026-08-11
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Cargo release metadata now prepares the inherited stable
+rdocx train and the explicit incubating shared and PowerPoint train as separate
+version groups with `v{{version}}` and `rpptx-v{{version}}` tag templates.
+Preparation consolidates each version change while publication, tags, pushes,
+and README replacements remain disabled.
+
+**Non-obvious choices.** Stable packages use cargo-release's effective
+`workspace` group because they inherit the root version. The 12 incubating
+packages use the named `incubating` group because their versions are explicit.
+
+**Deviations from the design plan.** Microscope pass 1 corrected the stable
+metadata to cargo-release's effective `workspace` group. The approved family
+boundary and external-action restrictions did not change.
+
+**Spec sections touched.** `docs/hld/15-build-and-toolchain.md`, "Release
+process".
+
+**Tests.** Cargo-release 1.1.3 configuration assertions, the workflow
+regression suite, a disposable stable preparation from 0.4.1 to 0.4.2, a
+disposable incubating preparation from 0.0.0 to 0.1.0, manifest and lockfile
+diff inspection, `cargo metadata --no-deps`, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** `/release` remains the sole authority for real
+release tags and publication. Cargo-release prepares reviewed version commits
+only.
+
+### F-049, Extend publish.yml to the extracted workspace
+
+**Sprint.** S32.1
+**Completed.** 2026-08-11
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The publication workflow now accepts stable `v*` and
+incubating `rpptx-v*` tags, preflights the exact 19-package publishable union,
+and routes each namespace to its own explicit dependency-ordered allowlist.
+The release command validates and creates only the requested family tag after
+the reviewed-SHA and separate final-approval gates.
+
+**Non-obvious choices.** The workspace dry run patches all 19 internal
+dependencies to reviewed local sources. Cargo otherwise rewrites packaged path
+dependencies to crates.io, where the reserved incubating 0.0.0 packages expose
+no API. The patches verify the source graph without entering any archive or
+weakening archive verification.
+
+**Deviations from the design plan.** Microscope pass 1 added the missing
+incubating `/release` authority and stronger exact workflow mutations. The
+integrated packaging gate then disproved Cargo's assumed automatic local
+staging, so the plan was corrected to require the exact local patch set and a
+third clean microscope pass.
+
+**Spec sections touched.** `docs/hld/11-migration-plan.md`, "Release tooling",
+and `docs/hld/15-build-and-toolchain.md`, "Publishing" and "Release process".
+
+**Tests.** Twenty-one workflow regression tests including swapped predicates,
+extra and missing packages, a missing local patch, `continue-on-error`, and
+successful fallback mutations. The locally patched
+`cargo publish --workspace --dry-run` verified all 19 candidates without an
+upload, every archive remained below 10 MiB, and the integrated full gate
+passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep local patches on the dry-run preflight
+only. Real dependency-ordered publish commands stay bare and wait for each
+registry layer before publishing its consumers.
+
+### F-050, CI matrix additions
+
+**Sprint.** S32.1
+**Completed.** 2026-08-11
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** CI now runs the `oxml-layout` no-default-features path, the
+supported `rdocx-wasm` target check, and separate prose and generated-skill
+drift checks. Every workspace all-feature test, lint, docs, and MSRV command
+excludes the two Python extension packages.
+
+**Non-obvious choices.** `rpptx-wasm` remains absent until F-138. The PyO3
+exclusions are carried on every all-feature job because extension-module test
+binaries cannot link against host Python symbols on Linux.
+
+**Deviations from the design plan.** Microscope pass 1 found missing binding
+exclusions on the clippy and docs jobs. The remediation made the exclusion
+contract uniform across all all-feature jobs.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`, "CI matrix", and
+`docs/hld/15-build-and-toolchain.md`, "CI job matrix".
+
+**Tests.** Current and MSRV workspace checks, exact CI command inspection,
+`cargo test -p oxml-layout --no-default-features`,
+`cargo check --target wasm32-unknown-unknown -p rdocx-wasm`, prose and skill
+sync checks, and the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Add `rpptx-wasm` to the target job only when
+F-138 creates that package. Keep the binding exclusions synchronized across
+every new all-feature job.
