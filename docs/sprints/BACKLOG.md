@@ -21,7 +21,7 @@ regenerated, never hand-edited.
 | M3, Media                                   | 6  | 4 | 2 | 0  |
 | M4, Layout primitives                       | 8  | 8 | 0 | 0  |
 | M5, PDF backend                             | 9  | 9 | 0 | 0  |
-| M6, Shared publication and rdocx cutover     | 6  | 4 | 0 | 2  |
+| M6, Shared publication and rdocx cutover     | 6  | 4 | 1 | 1  |
 | M7, DrawingML                               | 19 | 19 | 0 | 0  |
 | M8, PresentationML                          | 14 | 14 | 0 | 0  |
 | M9, Inheritance resolver                    | 8  | 8 | 0 | 0  |
@@ -30,7 +30,7 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 5  | 1 | 0 | 4  |
-| **Total** | **159** | **130** | **5** | **24** |
+| **Total** | **159** | **130** | **6** | **23** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -120,7 +120,7 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-M6 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-046 | rdocx layout and PDF cutover                 | S32.2 | M | pending |
+| F-046 | rdocx layout and PDF cutover                 | S32.2 | M | in-progress |
 | F-047 | Packaging include and size gate              | S32.1 | M | done |
 | F-048 | Automate split-family release preparation   | S32.1 | M | done |
 | F-049 | Extend publish.yml to the extracted workspace| S32.1 | M | done |
