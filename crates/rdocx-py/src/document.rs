@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
 use oxml_py_support::{PathSeg, RevisionCounter};
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use smallvec::smallvec;
 
 use crate::paragraph::{PyParagraph, PyParagraphCollection};
+use crate::rdocx_to_pyerr;
 
 #[pyclass(name = "Document")]
 pub struct PyDocument {
@@ -21,48 +21,46 @@ impl PyDocument {
             revisions: RevisionCounter::new(),
         }
     }
-
-    fn error(error: rdocx::Error) -> PyErr {
-        PyRuntimeError::new_err(error.to_string())
-    }
 }
 
 #[pymethods]
 impl PyDocument {
     #[new]
     #[pyo3(signature = (path = None))]
-    fn new(path: Option<PathBuf>) -> PyResult<Self> {
+    fn new(path: Option<PathBuf>, py: Python<'_>) -> PyResult<Self> {
         match path {
             Some(path) => rdocx::Document::open(path)
                 .map(Self::from_document)
-                .map_err(Self::error),
+                .map_err(|error| rdocx_to_pyerr(py, error)),
             None => Ok(Self::from_document(rdocx::Document::new())),
         }
     }
 
     #[staticmethod]
-    fn open(path: PathBuf) -> PyResult<Self> {
+    fn open(path: PathBuf, py: Python<'_>) -> PyResult<Self> {
         rdocx::Document::open(path)
             .map(Self::from_document)
-            .map_err(Self::error)
+            .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
     #[staticmethod]
-    fn from_bytes(bytes: &[u8]) -> PyResult<Self> {
+    fn from_bytes(bytes: &[u8], py: Python<'_>) -> PyResult<Self> {
         rdocx::Document::from_bytes(bytes)
             .map(Self::from_document)
-            .map_err(Self::error)
+            .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
-    fn save(&mut self, path: PathBuf) -> PyResult<()> {
-        self.inner.save(path).map_err(Self::error)
+    fn save(&mut self, path: PathBuf, py: Python<'_>) -> PyResult<()> {
+        self.inner
+            .save(path)
+            .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
     #[pyo3(name = "to_bytes")]
     fn serialize<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
         py.detach(|| self.inner.to_bytes())
             .map(|bytes| PyBytes::new(py, &bytes))
-            .map_err(Self::error)
+            .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
     #[getter]

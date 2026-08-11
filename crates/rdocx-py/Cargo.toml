@@ -30,3 +30,6 @@ oxml-py-support = { workspace = true }
 pyo3 = { workspace = true }
 rdocx = { workspace = true }
 smallvec = { workspace = true }
+
+[dev-dependencies]
+oxml-layout = { workspace = true }

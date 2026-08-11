@@ -136,16 +136,24 @@ doc.save_pdf("out.pdf")                        # documented as an rdocx extensio
   `False`.
 - `Length` is a pure-Python subclass of `int` and returns EMU, matching
   `docx.shared.Length`, with `.inches`, `.cm`, `.mm`, `.pt`, `.emu` and
-  `.twips`. Its extension helpers delegate conversion to
-  `oxml_py_support`, which delegates to the truncation-pinned
-  `oxml_core::Length`. This detail decides whether copy-pasted code works and
-  keeps native-base inheritance out of the Python 3.9 limited ABI.
-- Enums are pure-Python `IntEnum` shims so `WD_ALIGN_PARAGRAPH.CENTER == 1`
-  holds and they carry docstrings.
+  `.twips`. `Inches`, `Cm`, `Mm`, `Pt` and `Emu` are immutable subclasses, and
+  `RGBColor` is an immutable three-channel tuple. Float constructors use
+  `int(value * factor)`, preserving the truncation toward zero pinned by the
+  Rust `Length`. The types are available at the top level and from
+  `rdocx.shared`, while native-base inheritance stays outside the Python 3.9
+  limited ABI.
+- The bounded core enum inventory is pure-Python `IntEnum`:
+  `WD_ALIGN_PARAGRAPH` and `WD_UNDERLINE` in `rdocx.enum.text`, plus
+  `WD_TABLE_ALIGNMENT` and `WD_CELL_VERTICAL_ALIGNMENT` in
+  `rdocx.enum.table`. All four are also top-level exports. Their checked
+  integer literals cover the paragraph, run and table variants exposed by the
+  S33 facade, including `WD_ALIGN_PARAGRAPH.CENTER == 1`.
 - The package layer owns `RdocxError(Exception)` as the base, with
   `PackageError`, `XmlError`, `StaleElementError` and `LayoutError` beneath it.
-  It maps the shared stale-domain error rather than fixing a Python base class
-  inside `oxml-py-support`.
+  OPC, I/O and missing-part failures map to `PackageError`, OXML failures map
+  to `XmlError`, layout failures map to `LayoutError`, and the shared stale
+  domain error maps to `StaleElementError`. `oxml-py-support` therefore remains
+  independent of any Python base class.
 
 `rpptx` mirrors python-pptx the same way.
 

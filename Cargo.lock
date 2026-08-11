@@ -717,6 +717,7 @@ dependencies = [
 name = "rdocx-py"
 version = "0.4.1"
 dependencies = [
+ "oxml-layout",
  "oxml-py-support",
  "pyo3",
  "rdocx",

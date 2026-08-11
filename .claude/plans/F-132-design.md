@@ -1,6 +1,6 @@
 # F-132, Python enums, units and exceptions
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S33
 **Size**: M
 **Depends on**: F-129
@@ -85,6 +85,12 @@ real F-130 scaffolding dependency.
   negative truncation.
 - WASM or PyO3 bindings. Retain binding exclusions and run the existing rdocx
   WASM target check.
+- Crate dependency graph. Read `docs/hld/03-architecture.md`, "The dependency
+  rule" and "Why these seams". Inspect
+  `cargo tree -p rdocx-py --edges normal` and
+  `cargo tree -p rdocx-py --edges normal,dev`. Confirm the test-only
+  `rdocx-py -> oxml-layout` edge points inward, creates no format-family cycle,
+  and does not leak PyO3 into format-neutral crates.
 - New module or file. Obtain explicit approval for the package namespaces and
   one dedicated Python test file.
 
@@ -95,12 +101,12 @@ serialization or rendering.
 
 ## Implementation checklist
 
-- [ ] Add the pure-Python unit and RGB color types.
-- [ ] Add the bounded text and table `IntEnum` inventory.
-- [ ] Add the exception hierarchy and concrete binding mappings.
-- [ ] Export top-level and python-docx-shaped module paths.
-- [ ] Add unit, integration, and truncation regressions.
-- [ ] Run focused checks and every risk rider.
+- [x] Add the pure-Python unit and RGB color types.
+- [x] Add the bounded text and table `IntEnum` inventory.
+- [x] Add the exception hierarchy and concrete binding mappings.
+- [x] Export top-level and python-docx-shaped module paths.
+- [x] Add unit, integration, and truncation regressions.
+- [x] Run focused checks and every risk rider.
 
 ## Open questions
 

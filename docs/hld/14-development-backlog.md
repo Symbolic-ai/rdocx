@@ -1013,9 +1013,12 @@ Font and paragraph-format sub-handles, tri-state properties, tables.
 **Test gate**: `r.font.bold` returns `None` when unset, not `False`.
 
 ### F-132, Python enums, units and exceptions (M)
-The `IntEnum` shims, pure-Python `Length` subclassing `int`, the package
-exception hierarchy, and mapping from shared Rust binding errors.
-**Depends on**: F-129.
+The bounded `IntEnum` shims for paragraph alignment, table alignment, cell
+vertical alignment and underline, pure-Python `Length` and `RGBColor` values,
+the package exception hierarchy, and concrete mapping from Rust binding errors.
+The types are top-level exports and retain the `rdocx.shared`,
+`rdocx.enum.text` and `rdocx.enum.table` compatibility paths.
+**Depends on**: F-129, F-130.
 **Test gate**: `WD_ALIGN_PARAGRAPH.CENTER == 1` and `Inches(1) == 914400`.
 
 ### F-133, rdocx-py rendering with allow_threads (S)
