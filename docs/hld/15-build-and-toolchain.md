@@ -136,16 +136,18 @@ The binding crates are not published there, and the WASM packages use the npm
 publication path.
 
 All 12 implemented shared and PowerPoint packages are prepared as explicit
-publication candidates at the common incubating version 0.1.1. They are
+publication candidates at the common incubating version 0.1.2. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`,
 `rpptx-render`, and `rpptx`. Manifest eligibility does not authorize
-publication. Only the reviewed `/release rpptx-v0.1.1` path can activate their
+publication. Only the reviewed `/release rpptx-v0.1.2` path can activate their
 exact allowlist after its separate final approval.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
-real allowlist it reproduces the hash harness, runs the release-workflow unit
-suite to require non-empty package descriptions, and runs
+real allowlist it reproduces the hash harness, runs the self-contained
+incubating metadata regression to require the exact versions, pins, lockfile
+entries, and non-empty package descriptions without external development
+tools, and runs
 `cargo publish --workspace --dry-run` with an exact local source patch for each
 member of the 19-package publishable union. Cargo rewrites packaged path
 dependencies to the registry, so the patches keep verification on the reviewed
@@ -184,7 +186,7 @@ possible and never rewrite README prose by pattern.
 packages that inherit `[workspace.package].version` use cargo-release's
 effective `workspace` shared-version group and the `v{{version}}` tag template.
 The 12 implemented `oxml-*` and `rpptx*` packages are prepared at explicit
-version 0.1.1, use the named `incubating` group, and carry the
+version 0.1.2, use the named `incubating` group, and carry the
 `rpptx-v{{version}}` template.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag

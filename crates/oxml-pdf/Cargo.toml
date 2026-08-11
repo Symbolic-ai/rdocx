@@ -1,7 +1,7 @@
 [package]
 name = "oxml-pdf"
 description = "Format-neutral PDF renderer for staged OOXML layout output"
-version = "0.1.1"
+version = "0.1.2"
 publish = true
 edition.workspace = true
 license.workspace = true

@@ -109,11 +109,11 @@ and the style resolver. Slides do not paginate, so none of it transfers.
 ## Versioning
 
 The 12 implemented shared and PowerPoint publication candidates carry an
-explicit common incubating version of 0.1.1 in their manifests and workspace
+explicit common incubating version of 0.1.2 in their manifests and workspace
 pins. The released `rdocx-*` crates continue to use the separate workspace
 version. Version preparation and manifest eligibility do not authorize
 publication. Registry publication for this family is authorized only when
-`/release rpptx-v0.1.1` reaches its exact reviewed SHA and receives the
+`/release rpptx-v0.1.2` reaches its exact reviewed SHA and receives the
 separate final approval at the external mutation boundary.
 
 `rpptx-*` crates carry their own `keywords` and `categories`, because the
