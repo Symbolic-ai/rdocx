@@ -20,7 +20,37 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --all-features
+      - run: >-
+          cargo test --workspace --all-features
+          --exclude rdocx-py --exclude rpptx-py
+
+  no-default-features:
+    name: No default features
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p oxml-layout --no-default-features
+
+  wasm:
+    name: WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --target wasm32-unknown-unknown -p rdocx-wasm
+
+  prose:
+    name: Prose and generated skills
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: python3 scripts/prose_check.py
+      - run: python3 scripts/sync_agent_skills.py --check
 
   hash-harness:
     name: Output stability
@@ -70,7 +100,9 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: >-
+          cargo clippy --workspace --all-targets --all-features
+          --exclude rdocx-py --exclude rpptx-py -- -D warnings
 
   fmt:
     name: Rustfmt
@@ -91,7 +123,9 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo doc --workspace --no-deps --all-features
+      - run: >-
+          cargo doc --workspace --no-deps --all-features
+          --exclude rdocx-py --exclude rpptx-py
 
   package-oxml-layout:
     name: Package oxml-layout
@@ -175,7 +209,9 @@ jobs:
         with:
           toolchain: "1.93"
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --all-features
+      - run: >-
+          cargo test --workspace --all-features
+          --exclude rdocx-py --exclude rpptx-py
 
   supply-chain:
     name: Supply chain

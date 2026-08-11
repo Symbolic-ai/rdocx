@@ -226,8 +226,16 @@ the crates.io 10 MiB limit.
 interpreter, which is false for a test binary. On Linux this is an
 unresolved-symbol link failure that is easy to misdiagnose as something else.
 
-**A `wasm32-unknown-unknown` check job**, without which the binding crates drift
-again exactly as `rdocx-wasm` already has.
+**A dedicated no-default-features job.** It runs `cargo test -p oxml-layout
+--no-default-features`, which exercises the font-isolation path used by WASM.
+
+**A `wasm32-unknown-unknown` check job.** It installs the target and checks the
+existing `rdocx-wasm` crate. The future `rpptx-wasm` package remains deferred
+to F-138.
+
+**A prose and generated-skill job.** It runs `scripts/prose_check.py` and
+`scripts/sync_agent_skills.py --check` as separate steps, so voice-rule or
+adapter drift fails before integration.
 
 **A dedicated Presentation fidelity job** fetches the pinned 50-deck corpus,
 installs LibreOffice and Poppler, and runs `scripts/pptx_ssim_harness.py

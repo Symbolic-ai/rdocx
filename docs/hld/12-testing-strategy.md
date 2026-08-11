@@ -368,18 +368,19 @@ so hand-written stubs cannot drift.
 | Job | Command |
 |---|---|
 | test | `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` |
-| clippy | `--workspace --all-targets --all-features -- -D warnings` |
-| fmt | `cargo fmt --all -- --check` |
-| doc | `cargo doc --workspace --no-deps` with `RUSTDOCFLAGS=-D warnings` |
-| msrv | the pinned MSRV toolchain |
-| supply-chain | `cargo-deny check` |
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
-| wasm | `cargo check --target wasm32-unknown-unknown` plus `wasm-pack test --node` |
-| python | `maturin develop && pytest`, plus `mypy` and `stubtest` |
-| packaging | `cargo publish --dry-run` plus a `.crate` size assertion |
-| prose | the voice rules over tracked Markdown |
+| wasm | `cargo check --target wasm32-unknown-unknown -p rdocx-wasm` |
+| prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |
+| hash-harness | `python3 scripts/hash_harness.py --check` |
+| presentation-fidelity | Fetch the pinned corpus, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
+| clippy | `cargo clippy --workspace --all-targets --all-features --exclude rdocx-py --exclude rpptx-py -- -D warnings` |
+| fmt | `cargo fmt --all -- --check` |
+| doc | `cargo doc --workspace --no-deps --all-features --exclude rdocx-py --exclude rpptx-py` with `RUSTDOCFLAGS=-D warnings` |
+| package-oxml-layout | Verify the exact font and legal-file inventory, then build and size-check the verified archive |
+| msrv | `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 |
+| supply-chain | `cargo-deny check` |
 
-The `--exclude` on the binding crates is required, not cosmetic:
+The `--exclude` pair on every all-feature command is required, not cosmetic:
 `pyo3/extension-module` tells the linker that Python symbols come from the host
 interpreter, which is false for a test binary, and on Linux this is an
 unresolved-symbol link failure that is easy to misdiagnose.
@@ -389,7 +390,7 @@ unresolved-symbol link failure that is easy to misdiagnose.
 Stated plainly, because they are why two shipped defects went unnoticed:
 
 - **`rdocx-cli` has zero tests** despite being a published binary.
-- **`rdocx-wasm` has zero tests and no CI job**, which is exactly why its
-  part-dropping save path survived a release.
+- **`rdocx-wasm` has zero behavioural tests.** Its target check now catches
+  compile drift, but it does not prove package-preserving round trips.
 - **PDF and PNG output is only checked for non-emptiness**, so layout
   regressions are invisible. The hash harness closes this.

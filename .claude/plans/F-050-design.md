@@ -1,6 +1,6 @@
 # F-050, CI matrix additions
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S32.1
 **Size**: S
 **Depends on**: none
@@ -26,8 +26,8 @@ Add three focused jobs to the existing CI workflow. One runs
 `cargo test -p oxml-layout --no-default-features`, one installs the declared
 wasm target and runs `cargo check --target wasm32-unknown-unknown -p
 rdocx-wasm`, and one runs both the prose checker and generated-skill drift
-check. Correct the ordinary and MSRV all-feature test jobs to exclude
-`rdocx-py` and `rpptx-py`, matching the repository gate.
+check. Correct every all-feature CI command to exclude `rdocx-py` and
+`rpptx-py`, matching the repository gate.
 
 Do not add `rpptx-wasm`, which does not exist in the current workspace. The
 focused checks execute every new job command locally before integration.
@@ -60,7 +60,7 @@ The backlog test gate is every new CI job passing on a clean tree.
 ## Risk routing
 
 - WASM or PyO3 bindings. Run the exact wasm target check. Keep
-  `--exclude rdocx-py --exclude rpptx-py` on workspace all-feature test jobs as
+  `--exclude rdocx-py --exclude rpptx-py` on every workspace all-feature job as
   required by `docs/hld/10-bindings-spec.md`.
 
 ## Hash harness
@@ -70,11 +70,11 @@ rendered output.
 
 ## Implementation checklist
 
-- [ ] Correct all-feature test jobs to exclude both Python binding crates.
-- [ ] Add the `oxml-layout` no-default-features job.
-- [ ] Add the existing `rdocx-wasm` target check job.
-- [ ] Add prose and generated-skill drift checks.
-- [ ] Run every added command locally.
+- [x] Correct every all-feature CI command to exclude both Python binding crates.
+- [x] Add the `oxml-layout` no-default-features job.
+- [x] Add the existing `rdocx-wasm` target check job.
+- [x] Add prose and generated-skill drift checks.
+- [x] Run every added command locally.
 
 ## Open questions
 
