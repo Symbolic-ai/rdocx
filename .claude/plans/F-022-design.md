@@ -3,120 +3,113 @@
 **Status**: approved
 **Sprint**: S32.2
 **Size**: S
-**Depends on**: F-018
+**Depends on**: F-018, F-X005
 
 ## Problem
 
-After F-018 stages the format-neutral implementation, `rdocx-opc` would still
-own the public modules and types at `crates/rdocx-opc/src/lib.rs:9`, while the
-high-level error keeps wrapping `rdocx_opc::OpcError` at
-`crates/rdocx/src/error.rs:8`. Direct consumers also retain the old crate in
-`crates/rdocx/Cargo.toml:16`, `crates/rdocx-cli/Cargo.toml:25`, and
-`crates/rdocx-wasm/Cargo.toml:19`.
+`rdocx-opc` still owns duplicate public modules at
+`crates/rdocx-opc/src/lib.rs:9`, and `rdocx::Error::Opc` still wraps the old
+crate path at `crates/rdocx/src/error.rs:8`. The high-level library, CLI, and
+WASM packages also retain direct `rdocx-opc` dependencies and imports.
 
-The requested shim and consumer switch create a release-boundary conflict.
-`rdocx-opc`, `rdocx`, and `rdocx-cli` are published packages, while the real
-`oxml-opc` implementation must remain at 0.0.0 with `publish = false` until
-PowerPoint development is complete. Landing the switch would make those
-published packages depend on an unpublished implementation, and the mandatory
-package dry-runs could resolve only the dependency-free placeholder on
-crates.io.
+The exact re-export shim removes two Word-specific inherent constructors that
+cannot exist on the foreign shared type. Current callers of
+`OpcPackage::new_docx()` therefore need an explicit format-specific setup at
+the consumer boundary rather than a wrapper or a new shared constructor.
 
 ## Spec reference
 
-- `docs/hld/03-architecture.md`, "Three families, one workspace", "The
-  dependency rule", and "Versioning".
-- `docs/hld/10-bindings-spec.md`, "WASM" and "CLIs".
-- `docs/hld/11-migration-plan.md`, "Order of operations" and "What happens to
-  the published crates".
+- `docs/hld/03-architecture.md`, dependency direction and crate ownership.
+- `docs/hld/04-opc-and-packaging.md`, generic OPC construction and content
+  types.
+- `docs/hld/10-bindings-spec.md`, WASM package construction.
+- `docs/hld/11-migration-plan.md`, cutover order and deprecated crates.
 - `docs/hld/14-development-backlog.md`, "F-022, rdocx-opc deprecation shim".
-- `docs/hld/15-build-and-toolchain.md`, "Publishing" and "Release process".
+- `docs/hld/15-build-and-toolchain.md`, publication and release process.
 
 ## Approach
 
-Once the publication gate permits the dependency, reduce `rdocx-opc` to a
-deprecated `pub use oxml_opc::*` compatibility surface and set its package
-description to `deprecated: moved to oxml-opc`. Keep the legacy crate name as a
-type-identical path for downstream source compatibility.
+After F-X005 publishes `oxml-opc` 0.1.0, reduce `rdocx-opc` to crate docs and
+`pub use oxml_opc::*`. Set its package description exactly to
+`deprecated: moved to oxml-opc`, remove its four obsolete implementation files
+and direct implementation dependencies, and depend only on `oxml-opc`.
 
-Add the direct `oxml-opc` workspace dependency to `rdocx`, `rdocx-cli`, and
-`rdocx-wasm`, then replace their Rust imports and qualified paths with
-`oxml_opc`. Change `rdocx::Error::Opc` to wrap `oxml_opc::OpcError`. Remove
-their direct `rdocx-opc` dependencies only after an exhaustive path search is
-clean. Do not alter runtime package behavior or add a publication path for any
-development crate.
+Move `rdocx`, `rdocx-cli`, and `rdocx-wasm` manifests and Rust paths directly
+to `oxml-opc`. Change `rdocx::Error::Opc` to the shared error type. Replace the
+two `new_docx()` call sites with `OpcPackage::with_main_part` plus the Word main
+part content type and the styles override previously installed by
+`ContentTypes::new_docx()`. Keep that Word setup in the two existing consumer
+files. Do not add a Word constructor to `oxml-opc` and do not wrap its types.
 
-The underlying error type remains identical because `rdocx-opc` re-exports it.
-The planned semver effect is the intentional deprecation warning on the legacy
-crate surface, with existing `rdocx_opc::*` type paths remaining usable.
+The legacy crate path remains type-identical for retained APIs such as
+`rdocx_opc::OpcPackage`. The removed `new_docx` and `ContentTypes::new_docx`
+methods are an intentional breaking surface documented by F-051. Cargo exposes
+the package description and crate documentation as the whole-crate deprecation
+signal, not a compiler warning on every re-export.
 
 ## Rejected alternatives
 
-- Keep duplicate OPC implementations. They would drift and violate the
-  one-owner architecture.
-- Publish the real `oxml-opc` implementation to make the shim packageable now.
-  The user has prohibited `oxml-*` and `rpptx*` development-crate publication
-  until PowerPoint development is complete.
-- Land only the re-export and leave direct consumers on `rdocx-opc`. The story
-  explicitly requires the consumers and `rdocx::Error::Opc` to move to the new
-  type path.
-- Remove `rdocx-opc`. Existing downstream users need the compatibility path,
-  and the migration plan explicitly retains the deprecated crate.
+- Keep duplicate implementations. They would drift and violate one-owner
+  architecture.
+- Add `new_docx` to `oxml-opc`. A format-neutral leaf must not know Word setup.
+- Wrap `OpcPackage` in the shim. That would break type identity and create a
+  forwarding-only construct.
+- Leave direct consumers on `rdocx-opc`. The story requires them to use the
+  shared implementation directly.
 
 ## Test plan
 
 | Category | Test | Asserts |
 |---|---|---|
-| integration | `rdocx_error_opc_wraps_the_shared_error_type` | An `oxml_opc::OpcError` converts to `rdocx::Error::Opc` and the variant contains the shared type |
-| integration | workspace compile gate | `rdocx`, `rdocx-cli`, and `rdocx-wasm` compile after all direct imports move to `oxml_opc` |
-| regression | legacy shim compile assertion | A downstream-shaped use of `rdocx_opc::OpcPackage` still resolves to the shared implementation |
-| integration | package dry-runs and archive inspection | Every still-publishable rdocx package resolves the real dependency, and each archive remains below 10 MiB |
+| integration, gate | `rdocx_error_opc_wraps_the_shared_error_type` | An `oxml_opc::OpcError` converts to the high-level error and remains the shared type |
+| integration | new-document and WASM construction tests | Explicit generic OPC setup reproduces the Word main part, content types, relationships, and styles part |
+| regression | legacy shim compile assertion | A retained `rdocx_opc::OpcPackage` path is the shared type |
+| integration | workspace compile with binding exclusions | Every direct consumer compiles after the path switch |
+| WASM | `cargo check --target wasm32-unknown-unknown -p rdocx-wasm` | The consumer-side Word setup remains target-safe |
+| packaging | affected package dry-runs | Registry `oxml-opc` 0.1.0 resolves and every archive verifies below 10 MiB |
 
-The backlog test gate is that the workspace compiles and
-`rdocx::Error::Opc` wraps the new type.
+The backlog gate is a compiling workspace and an `rdocx::Error::Opc` variant
+that wraps the shared type.
 
 ## HLD impact
 
+- `docs/hld/10-bindings-spec.md`
 - `docs/hld/11-migration-plan.md`
 - `docs/hld/15-build-and-toolchain.md`
 
-The updates replace stale pre-0.5 shim timing and describe the point at which a
-published rdocx package may begin depending on the real shared implementation.
+Replace the stale `new_docx` WASM path and future publication wording with the
+explicit consumer setup and published 0.1.0 shared boundary.
 
 ## Risk routing
 
-- Crate dependency graph and new uses across families. Confirm every new edge
-  points from `rdocx-*` to `oxml-opc`, run `cargo tree -p oxml-opc`, and prove
-  no `oxml-*` crate depends on either format family.
-- Public API of published crates. State the intentional deprecation and
-  type-identity impact, run `cargo publish --dry-run` for every affected
-  publishable package, and assert every `.crate` archive remains below 10 MiB.
-- Version string and publication boundary. Inspect all manifest and lockfile
-  changes, confirm `oxml-opc` remains 0.0.0 with `publish = false`, and require
-  a clean full gate. Do not create a tag or start publication.
+- Crate dependency graph and cross-family uses. Confirm all edges point from
+  `rdocx-*` to `oxml-opc`, and that `oxml-opc` has no format-family dependency.
+- Parser and serializer ownership cutover. Run existing OPC relationship,
+  content-type, raw-preservation, and round-trip tests without changing shared
+  parser or serializer behavior.
+- Public API of published crates. Record the removed Word-specific constructors
+  as breaking, preserve retained type paths, and run affected package dry-runs.
+- WASM. Run the dedicated `rdocx-wasm` target check and the normal binding-safe
+  workspace gate.
+- Version strings and publication boundary. Verify every selected manifest
+  resolves registry version 0.1.0 and make no tag or publication mutation here.
 
 ## Hash harness
 
-Expected to remain unchanged. The shim and direct import switch must not change
-package bytes or rendered output.
+Expected unchanged. Generic constructor use must reproduce the same Word
+package bytes and renders.
 
 ## Implementation checklist
 
-- [ ] Wait for F-018 to establish the shared implementation.
-- [ ] Resolve the publication gate before changing any published package
-      dependency.
-- [ ] Convert `rdocx-opc` to the deprecated re-export surface and update its
-      package description.
-- [ ] Flip every direct consumer manifest and Rust path to `oxml-opc`.
-- [ ] Change `rdocx::Error::Opc` and prove the legacy and shared paths have the
-      same underlying error type.
-- [ ] Inspect the complete manifest and lockfile diff and run the mandatory
-      package dry-runs, archive-size checks, workspace gate, and hash harness.
-- [ ] Update exactly the listed HLD files to the approved publication timing.
+- [ ] Replace the duplicate crate with the exact shared re-export shim.
+- [ ] Remove four obsolete modules and implementation dependencies.
+- [ ] Move the library, CLI, and WASM consumers directly to `oxml-opc`.
+- [ ] Rebuild Word package setup from generic constructors in existing files.
+- [ ] Change and test the high-level OPC error type.
+- [ ] Prove retained legacy type identity and document removed constructors.
+- [ ] Run OPC, workspace, WASM, packaging, dependency, and hash gates.
+- [ ] Update exactly the three listed HLD files.
 
 ## Open questions
 
-None. Carry F-022 until the real `oxml-opc` implementation may be published
-after PowerPoint development is complete. The rdocx 0.5.0 boundary protects
-that release but does not make the required dependency available to later
-rdocx package dry-runs.
+None. F-X005 publishes `oxml-opc` 0.1.0 before this consumer cutover.

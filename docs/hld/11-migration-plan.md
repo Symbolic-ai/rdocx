@@ -29,8 +29,8 @@ to exercise the `--no-default-features` path.
 
 ## The facade trick
 
-`matches_local_name` has **323 call sites across 13 files** in `rdocx-oxml`.
-Migrating them individually would be a large, risky, reviewer-hostile diff.
+`matches_local_name` has hundreds of call sites across `rdocx-oxml`. Migrating
+them individually would be a large, risky, reviewer-hostile diff.
 
 Instead, `rdocx-oxml` becomes a facade over `oxml-core`, and **not one call site
 changes**:
@@ -118,9 +118,11 @@ The exception is behaviour that is a **defect**, which is fixed in M1 as its own
 commit with a reviewed hash delta: the image counter, the JPEG marker walk, and
 core-property resolution.
 
-One intentional delta is expected in M3: content types become sniffed from magic
-bytes, so a mislabelled `.png` that is really a JPEG now gets `image/jpeg`. The
-harness will flag it. Label the commit accordingly.
+One intentional package-structure change is expected in M3: content types become
+sniffed from magic bytes, so a mislabelled `.png` that is really a JPEG gets a
+`.jpeg` part and `image/jpeg`. Pin that behavior in a focused package regression.
+The 28-entry hash harness does not include content types or relationship targets,
+so it remains unchanged.
 
 ## What happens to the published crates
 

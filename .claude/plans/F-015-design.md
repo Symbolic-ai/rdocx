@@ -3,14 +3,15 @@
 **Status**: approved
 **Sprint**: S32.2
 **Size**: S
-**Depends on**: F-013
+**Depends on**: F-013, F-X005
 
 ## Problem
 
 After F-013 stages the shared implementation, `rdocx-oxml` still owns duplicate
 copies through the module declarations at `crates/rdocx-oxml/src/lib.rs:14`.
-Changing its 323 namespace-helper call sites would create broad churn with no
-behavioural value.
+Changing its hundreds of namespace-helper call sites would create broad churn
+with no behavioural value. F-X005 must first make the shared implementation
+resolvable from crates.io by released-package archive verification.
 
 ## Spec reference
 
@@ -54,14 +55,22 @@ workspace tests.
 
 ## HLD impact
 
-None. The architecture and migration documents already specify this facade.
+- `docs/hld/11-migration-plan.md`
+- `docs/hld/14-development-backlog.md`
+
+Remove the stale numeric call-site count and record the published shared-crate
+prerequisite while preserving the exact facade contract.
 
 ## Risk routing
 
 - Crate dependency graph. Confirm the edge is `rdocx-oxml -> oxml-core` and
   that `oxml-core` has no reverse dependency.
+- Parser and serializer ownership cutover. Run the existing namespace, raw XML,
+  child-order, and round-trip tests through the facade without changing parser
+  or serializer bodies.
 - Public API of a published crate. Confirm the existing paths remain source
-  compatible, run both package checks, and assert archives remain below 10 MiB.
+  compatible, resolve `oxml-core` 0.1.0 from the registry, run both package
+  checks, and assert archives remain below 10 MiB.
 - File move with no behaviour change. Assert zero call-site edits and an
   unchanged deterministic hash harness.
 
@@ -79,8 +88,4 @@ Expected to remain unchanged. Any output delta is a defect.
 
 ## Open questions
 
-None. The story remains approved but will be carried until PowerPoint
-development is complete and the real shared crates have an approved
-publication path. The rdocx 0.5.0 boundary protects that release but does not
-make unpublished `oxml-core` implementation code available to later package
-dry-runs.
+None. F-X005 publishes `oxml-core` 0.1.0 before this consumer cutover.

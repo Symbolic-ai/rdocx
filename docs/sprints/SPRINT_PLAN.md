@@ -112,9 +112,10 @@ naming without changing released rdocx dependencies.
 | F-025 | MediaNamer                                   | S |
 | F-026 | native_size with explicit DPI                | S |
 
-F-027 and F-028 move to S32.2. F-027 retains the one expected hash-harness
-delta of the whole extraction: content types become sniffed rather than
-trusted. Label that later cutover commit accordingly.
+F-027 and F-028 move to S32.2. F-027 retains a focused package regression for
+the intentional change from trusted extensions to sniffed content types. The
+existing hash harness remains unchanged because it does not collect package
+content types or media relationship targets.
 
 ### M4, Layout primitives
 
@@ -492,6 +493,7 @@ release plan, move released rdocx consumers onto them and document the cutover.
 
 | F-ID | Title | Size |
 |------|-------|------|
+| F-X005 | Tag rpptx-v0.1.0                           | S |
 | F-015 | rdocx-oxml becomes a facade                  | S |
 | F-016 | Length re-export                             | S |
 | F-022 | rdocx-opc deprecation shim                   | S |
@@ -502,7 +504,8 @@ release plan, move released rdocx consumers onto them and document the cutover.
 
 **This is the deferred M6 release gate.** The shared crates are real published
 dependencies, released rdocx packages pass archive verification, and the hash
-harness contains only the declared F-027 content-type delta.
+harness remains unchanged while a focused regression proves the F-027
+content-type change.
 
 ### M13, Bindings and tooling
 
