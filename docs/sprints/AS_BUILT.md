@@ -4643,6 +4643,9 @@ regression covers both inline and anchored images. Sprint review pass 5 then
 found repeated registry construction for each image occurrence. The final path
 builds the relationship and media maps once per layout and reuses them through
 paragraphs, tables, headers, footers, footnotes, shapes, and pagination.
+Sprint review pass 6 found that the lower-level public entry points could not
+share that private result. `MediaRegistry` is now their common public argument,
+so direct callers retain both collision-resolved IDs and their image bytes.
 
 **Spec sections touched.** `docs/hld/03-architecture.md`, "Rendering
 boundaries", `docs/hld/08-rendering-spec.md`, "Word conversion boundary",
@@ -4676,8 +4679,9 @@ artifact.
 
 **Deviations from the design plan.** Sprint review pass 4 found three retained
 `rdocx-layout` breaking changes missing from the migration notes. The completed
-table now documents the new `paginate_sections` media argument,
-`AnchoredContent::Image` media ID, and `ParagraphBlock::jc` alignment type.
+table now documents the shared `MediaRegistry` argument on lower-level layout
+and pagination, `AnchoredContent::Image` media ID, and `ParagraphBlock::jc`
+alignment type.
 
 **Spec sections touched.** None. The documentation reflects the completed HLD
 contract without changing system intent.

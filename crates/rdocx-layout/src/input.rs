@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 pub use oxml_layout::FontFile;
+use oxml_layout::MediaId;
 use rdocx_oxml::core_properties::CoreProperties;
 use rdocx_oxml::document::CT_Document;
 use rdocx_oxml::footnotes::CT_Footnotes;
@@ -18,6 +19,77 @@ pub struct ImageData {
     pub data: Vec<u8>,
     /// MIME content type (e.g., "image/png").
     pub content_type: String,
+}
+
+/// Collision-safe media lookup shared by layout and pagination.
+#[derive(Debug, Clone)]
+pub struct MediaRegistry {
+    relationship_ids: HashMap<String, MediaId>,
+    media: HashMap<MediaId, ImageData>,
+    missing_id: MediaId,
+}
+
+impl MediaRegistry {
+    /// Resolve relationship IDs and image bytes once for a layout operation.
+    pub fn new(images: &HashMap<String, ImageData>) -> Self {
+        Self::with_hasher(images, MediaId::from_bytes)
+    }
+
+    /// Resolve the renderer-local ID for one package relationship.
+    pub fn id_for_relationship(&self, relationship_id: &str) -> MediaId {
+        self.relationship_ids
+            .get(relationship_id)
+            .copied()
+            .unwrap_or(self.missing_id)
+    }
+
+    /// Return the image bytes and content types keyed by resolved media ID.
+    pub fn media(&self) -> &HashMap<MediaId, ImageData> {
+        &self.media
+    }
+
+    pub(crate) fn with_hasher<F>(images: &HashMap<String, ImageData>, media_id_for_bytes: F) -> Self
+    where
+        F: Fn(&[u8]) -> MediaId,
+    {
+        let missing_id = media_id_for_bytes(&[]);
+        let mut media = HashMap::from([(
+            missing_id,
+            ImageData {
+                data: Vec::new(),
+                content_type: String::new(),
+            },
+        )]);
+        let mut relationship_ids = HashMap::new();
+        let mut images = images.iter().collect::<Vec<_>>();
+        images.sort_unstable_by(|(left_id, left), (right_id, right)| {
+            left.data
+                .cmp(&right.data)
+                .then_with(|| left.content_type.cmp(&right.content_type))
+                .then_with(|| left_id.cmp(right_id))
+        });
+
+        for (relationship_id, image) in images {
+            let mut media_id = media_id_for_bytes(&image.data);
+            loop {
+                match media.get(&media_id) {
+                    Some(existing) if existing.data == image.data => break,
+                    Some(_) => media_id.0 = media_id.0.wrapping_add(1),
+                    None => {
+                        media.insert(media_id, image.clone());
+                        break;
+                    }
+                }
+            }
+            relationship_ids.insert(relationship_id.clone(), media_id);
+        }
+
+        Self {
+            relationship_ids,
+            media,
+            missing_id,
+        }
+    }
 }
 
 /// All inputs needed to lay out a DOCX document.

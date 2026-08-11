@@ -14,7 +14,7 @@ use oxml_layout::{
 use rdocx_oxml::drawing::{ST_RelativeFromH, ST_RelativeFromV};
 use rdocx_oxml::shared::ST_Border;
 
-use crate::input::ImageData;
+use crate::input::{ImageData, MediaRegistry};
 
 /// A resolved border edge: (thickness in pt, color, optional dash pattern as (dash, gap)).
 type BorderEdge = (f64, Color, Option<(f64, f64)>);
@@ -83,8 +83,9 @@ pub struct Section {
 pub fn paginate_sections(
     sections: &[Section],
     fm: &FontManager,
-    media: &HashMap<MediaId, ImageData>,
+    media: &MediaRegistry,
 ) -> (Vec<PageFrame>, Vec<OutlineEntry>) {
+    let media = media.media();
     if sections.is_empty() {
         return (
             vec![PageFrame::new(1, 612.0, 792.0, Vec::new())],
@@ -149,6 +150,7 @@ pub fn paginate(
     header_footer: Option<&HeaderFooterContent>,
     title_pg: bool,
     _fm: &FontManager,
+    media: &MediaRegistry,
 ) -> (Vec<PageFrame>, Vec<OutlineEntry>) {
     paginate_with_media(
         blocks,
@@ -156,7 +158,7 @@ pub fn paginate(
         header_footer,
         title_pg,
         _fm,
-        &HashMap::new(),
+        media.media(),
     )
 }
 
@@ -1366,6 +1368,10 @@ mod tests {
     use crate::block::ParagraphBlock;
     use oxml_layout::LayoutLine;
 
+    fn empty_media() -> MediaRegistry {
+        MediaRegistry::new(&HashMap::new())
+    }
+
     fn make_line(height: f64) -> LayoutLine {
         LayoutLine {
             items: vec![],
@@ -1409,7 +1415,7 @@ mod tests {
         let fm = FontManager::new();
         let blocks = vec![LayoutBlock::Paragraph(make_para(3, 14.0))];
         let geom = PageGeometry::default();
-        let (pages, _outlines) = paginate(&blocks, geom, None, false, &fm);
+        let (pages, _outlines) = paginate(&blocks, geom, None, false, &fm, &empty_media());
         assert_eq!(pages.len(), 1);
         assert_eq!(pages[0].page_number, 1);
     }
@@ -1420,7 +1426,7 @@ mod tests {
         // 648pt content height / 14pt per line ≈ 46 lines per page
         let blocks = vec![LayoutBlock::Paragraph(make_para(100, 14.0))];
         let geom = PageGeometry::default();
-        let (pages, _outlines) = paginate(&blocks, geom, None, false, &fm);
+        let (pages, _outlines) = paginate(&blocks, geom, None, false, &fm, &empty_media());
         assert!(pages.len() >= 2);
     }
 
@@ -1434,7 +1440,7 @@ mod tests {
             LayoutBlock::Paragraph(para2),
         ];
         let geom = PageGeometry::default();
-        let (pages, _outlines) = paginate(&blocks, geom, None, false, &fm);
+        let (pages, _outlines) = paginate(&blocks, geom, None, false, &fm, &empty_media());
         assert_eq!(pages.len(), 2);
     }
 
@@ -1443,7 +1449,7 @@ mod tests {
         let fm = FontManager::new();
         let blocks = vec![LayoutBlock::Paragraph(make_para(1, 14.0))];
         let geom = PageGeometry::default();
-        let (pages, _outlines) = paginate(&blocks, geom, None, false, &fm);
+        let (pages, _outlines) = paginate(&blocks, geom, None, false, &fm, &empty_media());
         assert!((pages[0].width - 612.0).abs() < 0.01);
         assert!((pages[0].height - 792.0).abs() < 0.01);
     }
@@ -1506,7 +1512,14 @@ mod tests {
             heading_text: None,
         };
         let blocks = vec![LayoutBlock::Paragraph(para)];
-        let (pages, _outlines) = paginate(&blocks, PageGeometry::default(), None, false, &fm);
+        let (pages, _outlines) = paginate(
+            &blocks,
+            PageGeometry::default(),
+            None,
+            false,
+            &fm,
+            &empty_media(),
+        );
         // Should have Text + Line (underline)
         let lines: Vec<_> = pages[0]
             .elements
@@ -1537,7 +1550,14 @@ mod tests {
             heading_text: None,
         };
         let blocks = vec![LayoutBlock::Paragraph(para)];
-        let (pages, _outlines) = paginate(&blocks, PageGeometry::default(), None, false, &fm);
+        let (pages, _outlines) = paginate(
+            &blocks,
+            PageGeometry::default(),
+            None,
+            false,
+            &fm,
+            &empty_media(),
+        );
         let lines: Vec<_> = pages[0]
             .elements
             .iter()
@@ -1606,7 +1626,14 @@ mod tests {
             heading_text: None,
         };
         let blocks = vec![LayoutBlock::Paragraph(para)];
-        let (pages, _outlines) = paginate(&blocks, PageGeometry::default(), None, false, &fm);
+        let (pages, _outlines) = paginate(
+            &blocks,
+            PageGeometry::default(),
+            None,
+            false,
+            &fm,
+            &empty_media(),
+        );
         let rects: Vec<_> = pages[0]
             .elements
             .iter()
@@ -1651,7 +1678,14 @@ mod tests {
             heading_text: None,
         };
         let blocks = vec![LayoutBlock::Paragraph(para)];
-        let (pages, _outlines) = paginate(&blocks, PageGeometry::default(), None, false, &fm);
+        let (pages, _outlines) = paginate(
+            &blocks,
+            PageGeometry::default(),
+            None,
+            false,
+            &fm,
+            &empty_media(),
+        );
         let lines: Vec<_> = pages[0]
             .elements
             .iter()
@@ -1686,7 +1720,14 @@ mod tests {
             heading_text: None,
         };
         let blocks = vec![LayoutBlock::Paragraph(para)];
-        let (pages, _outlines) = paginate(&blocks, PageGeometry::default(), None, false, &fm);
+        let (pages, _outlines) = paginate(
+            &blocks,
+            PageGeometry::default(),
+            None,
+            false,
+            &fm,
+            &empty_media(),
+        );
         let rects: Vec<_> = pages[0]
             .elements
             .iter()
@@ -1716,7 +1757,14 @@ mod tests {
             heading_text: None,
         };
         let blocks = vec![LayoutBlock::Paragraph(para)];
-        let (pages, _outlines) = paginate(&blocks, PageGeometry::default(), None, false, &fm);
+        let (pages, _outlines) = paginate(
+            &blocks,
+            PageGeometry::default(),
+            None,
+            false,
+            &fm,
+            &empty_media(),
+        );
         let lines: Vec<_> = pages[0]
             .elements
             .iter()
@@ -1817,7 +1865,14 @@ mod tests {
             heading_text: None,
         };
         let blocks = vec![LayoutBlock::Paragraph(para)];
-        let (pages, _outlines) = paginate(&blocks, PageGeometry::default(), None, false, &fm);
+        let (pages, _outlines) = paginate(
+            &blocks,
+            PageGeometry::default(),
+            None,
+            false,
+            &fm,
+            &empty_media(),
+        );
         let annotations: Vec<_> = pages[0]
             .elements
             .iter()
@@ -1855,7 +1910,14 @@ mod tests {
         };
 
         let blocks = vec![LayoutBlock::Paragraph(para)];
-        let (pages, _outlines) = paginate(&blocks, PageGeometry::default(), None, false, &fm);
+        let (pages, _outlines) = paginate(
+            &blocks,
+            PageGeometry::default(),
+            None,
+            false,
+            &fm,
+            &empty_media(),
+        );
 
         // The first line's text run should have widened advances
         let first_text = pages[0].elements.iter().find_map(|e| {
@@ -1900,7 +1962,14 @@ mod tests {
         };
 
         let blocks = vec![LayoutBlock::Paragraph(para)];
-        let (pages, _outlines) = paginate(&blocks, PageGeometry::default(), None, false, &fm);
+        let (pages, _outlines) = paginate(
+            &blocks,
+            PageGeometry::default(),
+            None,
+            false,
+            &fm,
+            &empty_media(),
+        );
 
         // Find the second text run (last line)
         let text_runs: Vec<_> = pages[0]
@@ -1950,7 +2019,14 @@ mod tests {
         };
 
         let blocks = vec![LayoutBlock::Paragraph(para)];
-        let (pages, _outlines) = paginate(&blocks, PageGeometry::default(), None, false, &fm);
+        let (pages, _outlines) = paginate(
+            &blocks,
+            PageGeometry::default(),
+            None,
+            false,
+            &fm,
+            &empty_media(),
+        );
 
         let first_text = pages[0].elements.iter().find_map(|e| {
             if let PositionedElement::Text(run) = e {

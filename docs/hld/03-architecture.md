@@ -113,7 +113,10 @@ so it is not migrated.
 and the style resolver. Slides do not paginate, so none of it transfers. The
 flow engine resolves Word relationship IDs to content-addressed `MediaId`
 values before pagination, and page output carries the resolved bytes and MIME
-type rather than a relationship-scoped placeholder.
+type rather than a relationship-scoped placeholder. One `MediaRegistry` per
+layout compares complete bytes, assigns deterministic alternate IDs when two
+compact keys collide, and is shared by the lower-level layout and pagination
+entry points.
 
 ## Versioning
 
