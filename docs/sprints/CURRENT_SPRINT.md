@@ -29,7 +29,7 @@ parallel work.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-129 | oxml-py-support | M | pending | - |
+| F-129 | oxml-py-support | M | in-progress | codex |
 | F-130 | rdocx-py core | L | pending | - |
 | F-132 | Python enums, units and exceptions | M | pending | - |
 | F-131 | rdocx-py formatting and tables | L | pending | - |

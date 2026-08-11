@@ -28,9 +28,9 @@ regenerated, never hand-edited.
 | M10, Renderer                               | 20 | 20 | 0 | 0  |
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
-| M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
+| M13, Bindings and tooling                   | 18 | 0 | 1 | 17 |
 | X, Cross-cutting (opportunistic)            | 5  | 1 | 0 | 4  |
-| **Total** | **159** | **137** | **0** | **22** |
+| **Total** | **159** | **137** | **1** | **21** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -260,7 +260,7 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-M13 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-129 | oxml-py-support                              | S33 | M | pending |
+| F-129 | oxml-py-support                              | S33 | M | in-progress |
 | F-130 | rdocx-py core                                | S33 | L | pending |
 | F-131 | rdocx-py formatting and tables               | S33 | L | pending |
 | F-132 | Python enums, units and exceptions           | S33 | M | pending |
