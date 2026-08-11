@@ -6,8 +6,9 @@ use std::sync::{Arc, Mutex};
 #[cfg(test)]
 use std::cell::Cell;
 
-use rdocx_opc::OpcPackage;
-use rdocx_opc::relationship::rel_types;
+use oxml_media::MediaNamer;
+use oxml_opc::OpcPackage;
+use oxml_opc::relationship::rel_types;
 use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
 use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, CT_Inline};
 use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef, HdrFtrType};
@@ -47,20 +48,22 @@ pub struct Document {
     styles_part_name: String,
     /// Part name for numbering definitions, resolved the same way.
     numbering_part_name: String,
-    /// Greatest numeric suffix among existing image media parts.
-    image_counter: usize,
+    /// Collision-free allocator for image media parts.
+    image_namer: MediaNamer,
     /// Footnotes: loaded from word/footnotes.xml on open, written back on save.
     footnotes: rdocx_oxml::footnotes::CT_Footnotes,
     /// Normal layout, including system font discovery, computed on first use.
-    layout_cache: Mutex<Option<Arc<rdocx_layout::LayoutResult>>>,
+    layout_cache: Mutex<Option<Arc<oxml_layout::LayoutResult>>>,
     /// Bundled-font-only layout used by deterministic rendering.
-    deterministic_layout_cache: Mutex<Option<Arc<rdocx_layout::LayoutResult>>>,
+    deterministic_layout_cache: Mutex<Option<Arc<oxml_layout::LayoutResult>>>,
 }
 
 /// Fallback part names used when a document does not already declare one.
 const DEFAULT_STYLES_PART: &str = "/word/styles.xml";
 const DEFAULT_NUMBERING_PART: &str = "/word/numbering.xml";
 const DEFAULT_CORE_PROPERTIES_PART: &str = "/docProps/core.xml";
+const DOCUMENT_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
 const STYLES_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml";
 const NUMBERING_CONTENT_TYPE: &str =
@@ -80,10 +83,18 @@ fn record_layout_invocation() {
     LAYOUT_INVOCATIONS.set(LAYOUT_INVOCATIONS.get() + 1);
 }
 
+fn new_word_package() -> OpcPackage {
+    let mut package = OpcPackage::with_main_part("word/document.xml", DOCUMENT_CONTENT_TYPE);
+    package
+        .content_types
+        .add_override(DEFAULT_STYLES_PART, STYLES_CONTENT_TYPE);
+    package
+}
+
 impl Document {
     /// Create a new, empty document with default page setup and styles.
     pub fn new() -> Self {
-        let mut package = OpcPackage::new_docx();
+        let mut package = new_word_package();
         let document = CT_Document::new();
         let styles = CT_Styles::new_default();
 
@@ -102,7 +113,7 @@ impl Document {
             doc_part_name: "/word/document.xml".to_string(),
             styles_part_name: DEFAULT_STYLES_PART.to_string(),
             numbering_part_name: DEFAULT_NUMBERING_PART.to_string(),
-            image_counter: 0,
+            image_namer: MediaNamer::scan("/word/media", "image", std::iter::empty()),
             footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
             layout_cache: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
@@ -167,12 +178,11 @@ impl Document {
             .and_then(|part| package.get_part(part))
             .and_then(|xml| CoreProperties::from_xml(xml).ok());
 
-        let image_counter = package
-            .parts
-            .keys()
-            .filter_map(|name| image_number_from_part_name(name))
-            .max()
-            .unwrap_or(0);
+        let image_namer = MediaNamer::scan(
+            "/word/media",
+            "image",
+            package.parts.keys().map(String::as_str),
+        );
 
         let footnotes = package
             .get_part_rels(&doc_part_name)
@@ -194,7 +204,7 @@ impl Document {
             styles_part_name: styles_part_name.unwrap_or_else(|| DEFAULT_STYLES_PART.to_string()),
             numbering_part_name: numbering_part_name
                 .unwrap_or_else(|| DEFAULT_NUMBERING_PART.to_string()),
-            image_counter,
+            image_namer,
             footnotes,
             layout_cache: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
@@ -214,7 +224,7 @@ impl Document {
     }
 
     /// Return the normal-font layout, computing it once after each mutation.
-    fn cached_layout(&self) -> Result<Arc<rdocx_layout::LayoutResult>> {
+    fn cached_layout(&self) -> Result<Arc<oxml_layout::LayoutResult>> {
         let mut cache = self
             .layout_cache
             .lock()
@@ -232,7 +242,7 @@ impl Document {
     }
 
     /// Return the bundled-font-only layout, computing it once after mutation.
-    fn cached_deterministic_layout(&self) -> Result<Arc<rdocx_layout::LayoutResult>> {
+    fn cached_deterministic_layout(&self) -> Result<Arc<oxml_layout::LayoutResult>> {
         let mut cache = self
             .deterministic_layout_cache
             .lock()
@@ -615,6 +625,29 @@ impl Document {
         }
     }
 
+    /// Add an inline image at its native size using 72 DPI when none is declared.
+    ///
+    /// Returns an error without changing the document when the image dimensions
+    /// cannot be determined.
+    pub fn add_picture_auto(
+        &mut self,
+        image_data: &[u8],
+        image_filename: &str,
+    ) -> Result<Paragraph<'_>> {
+        let native_size = oxml_media::probe(image_data)
+            .and_then(|info| info.native_size(72.0))
+            .ok_or_else(|| Error::UnavailableImageDimensions {
+                filename: image_filename.to_owned(),
+            })?;
+
+        Ok(self.add_picture(
+            image_data,
+            image_filename,
+            Length::emu(native_size.width_emu),
+            Length::emu(native_size.height_emu),
+        ))
+    }
+
     /// Add a full-page background image behind text.
     ///
     /// The image is placed at position (0,0) relative to the page with
@@ -701,22 +734,6 @@ impl Document {
         }
     }
 
-    /// Return the next unique image number and bump the counter.
-    fn next_image_number(&mut self) -> usize {
-        let mut candidate = self.image_counter.checked_add(1).unwrap_or(1);
-        while self
-            .package
-            .parts
-            .keys()
-            .filter_map(|name| image_number_from_part_name(name))
-            .any(|number| number == candidate)
-        {
-            candidate = candidate.checked_add(1).unwrap_or(1);
-        }
-        self.image_counter = candidate;
-        candidate
-    }
-
     /// Store image bytes as a new media part and declare its content type.
     ///
     /// Returns the relationship target to use when referencing it, e.g.
@@ -724,18 +741,28 @@ impl Document {
     /// from a header or footer must be related to *that* part, not the
     /// document, so the caller decides where it is attached.
     fn store_image_part(&mut self, image_data: &[u8], filename: &str) -> String {
-        let ext = image_extension(filename);
-        let image_num = self.next_image_number();
+        let format = oxml_media::resolve(image_data, filename);
+        let extension = format.extension();
+        let part_name = self.image_namer.next_part_name(extension);
 
-        self.package.set_part(
-            &format!("/word/media/image{image_num}.{ext}"),
-            image_data.to_vec(),
-        );
-        self.package
-            .content_types
-            .add_default(&ext, image_content_type(&ext));
+        self.package.set_part(&part_name, image_data.to_vec());
+        let content_type = format.content_type();
+        match self.package.content_types.content_type_for(&part_name) {
+            Some(existing) if existing == content_type => {}
+            Some(_) => self
+                .package
+                .content_types
+                .add_override(&part_name, content_type),
+            None => self
+                .package
+                .content_types
+                .add_default(extension, content_type),
+        }
 
-        format!("media/image{image_num}.{ext}")
+        part_name
+            .strip_prefix("/word/")
+            .unwrap_or(&part_name)
+            .to_owned()
     }
 
     /// Embed an image into the OPC package and return the relationship ID.
@@ -764,7 +791,7 @@ impl Document {
     /// new run in a hyperlink span.
     pub fn append_hyperlink(&mut self, text: &str, url: &str) {
         self.invalidate_layout();
-        use rdocx_opc::relationship::rel_types;
+        use oxml_opc::relationship::rel_types;
 
         let rel_id = {
             let rels = self.package.get_or_create_part_rels(&self.doc_part_name);
@@ -813,7 +840,7 @@ impl Document {
 
     /// Resolve a hyperlink relationship ID to its external URL.
     pub fn hyperlink_url(&self, rel_id: &str) -> Option<String> {
-        use rdocx_opc::relationship::rel_types;
+        use oxml_opc::relationship::rel_types;
         let rels = self.package.get_part_rels(&self.doc_part_name)?;
         rels.items
             .iter()
@@ -2152,7 +2179,7 @@ impl Document {
     /// 3. Bundled fonts (if `bundled-fonts` feature is enabled)
     pub fn to_pdf(&self) -> Result<Vec<u8>> {
         let layout = self.cached_layout()?;
-        Ok(rdocx_pdf::render_to_pdf(&layout))
+        Ok(oxml_pdf::render_to_pdf(&layout))
     }
 
     /// Render the document to PDF bytes using bundled fonts without system
@@ -2162,7 +2189,7 @@ impl Document {
     /// layout and is suitable for reproducible render baselines.
     pub fn to_pdf_deterministic(&self) -> Result<Vec<u8>> {
         let layout = self.cached_deterministic_layout()?;
-        Ok(rdocx_pdf::render_to_pdf(&layout))
+        Ok(oxml_pdf::render_to_pdf(&layout))
     }
 
     /// Render the document to PDF bytes with user-provided font files.
@@ -2188,7 +2215,7 @@ impl Document {
         #[cfg(test)]
         record_layout_invocation();
         let layout = rdocx_layout::layout_document(&input)?;
-        Ok(rdocx_pdf::render_to_pdf(&layout))
+        Ok(oxml_pdf::render_to_pdf(&layout))
     }
 
     /// Save the document as a PDF file.
@@ -2218,7 +2245,7 @@ impl Document {
 
     /// Build an HtmlInput from the document's current state.
     fn build_html_input(&self) -> rdocx_html::HtmlInput {
-        use rdocx_opc::relationship::rel_types;
+        use oxml_opc::relationship::rel_types;
         use std::collections::HashMap;
 
         let mut images: HashMap<String, rdocx_html::ImageData> = HashMap::new();
@@ -2231,7 +2258,9 @@ impl Document {
                         let part_name =
                             OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
                         if let Some(data) = self.package.get_part(&part_name) {
-                            let content_type = guess_image_content_type(&part_name);
+                            let content_type = oxml_media::resolve(data, &part_name)
+                                .content_type()
+                                .to_owned();
                             images.insert(
                                 rel.id.clone(),
                                 rdocx_html::ImageData {
@@ -2267,7 +2296,7 @@ impl Document {
     /// * `dpi` - Resolution (72 = 1:1, 150 = standard, 300 = high quality)
     pub fn render_page_to_png(&self, page_index: usize, dpi: f64) -> Result<Option<Vec<u8>>> {
         let layout = self.cached_layout()?;
-        Ok(rdocx_pdf::render_page_to_png(&layout, page_index, dpi))
+        Ok(oxml_pdf::render_page_to_png(&layout, page_index, dpi))
     }
 
     /// Render a single page to PNG using bundled fonts without system font
@@ -2282,27 +2311,27 @@ impl Document {
         dpi: f64,
     ) -> Result<Option<Vec<u8>>> {
         let layout = self.cached_deterministic_layout()?;
-        Ok(rdocx_pdf::render_page_to_png(&layout, page_index, dpi))
+        Ok(oxml_pdf::render_page_to_png(&layout, page_index, dpi))
     }
 
     /// Render all pages of the document to PNG bytes.
     pub fn render_all_pages(&self, dpi: f64) -> Result<Vec<Vec<u8>>> {
         let layout = self.cached_layout()?;
-        Ok(rdocx_pdf::render_all_pages(&layout, dpi))
+        Ok(oxml_pdf::render_all_pages(&layout, dpi))
     }
 
     /// Return a cloned positioned page from the cached normal-font layout.
     ///
     /// `page_index` is zero-based. An index beyond the document returns `None`.
-    pub fn layout_page(&self, page_index: usize) -> Result<Option<rdocx_layout::PageFrame>> {
+    pub fn layout_page(&self, page_index: usize) -> Result<Option<oxml_layout::PageFrame>> {
         let layout = self.cached_layout()?;
         Ok(layout.pages.get(page_index).cloned())
     }
 
     /// Build a LayoutInput from the document's current state.
     fn build_layout_input(&self) -> rdocx_layout::LayoutInput {
+        use oxml_opc::relationship::rel_types;
         use rdocx_layout::{ImageData, LayoutInput};
-        use rdocx_opc::relationship::rel_types;
         use std::collections::HashMap;
 
         let mut headers: HashMap<String, CT_HdrFtr> = HashMap::new();
@@ -2340,7 +2369,9 @@ impl Document {
                         let part_name =
                             OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
                         if let Some(data) = self.package.get_part(&part_name) {
-                            let content_type = guess_image_content_type(&part_name);
+                            let content_type = oxml_media::resolve(data, &part_name)
+                                .content_type()
+                                .to_owned();
                             images.insert(
                                 rel.id.clone(),
                                 ImageData {
@@ -2581,7 +2612,7 @@ impl Document {
     ///
     /// Resolves hyperlink relationship IDs to their target URLs where possible.
     pub fn links(&self) -> Vec<LinkInfo> {
-        use rdocx_opc::relationship::rel_types;
+        use oxml_opc::relationship::rel_types;
 
         // Build a map of hyperlink rel_id -> target URL
         let mut url_map = std::collections::HashMap::new();
@@ -2766,52 +2797,6 @@ fn relative_target(source_part: &str, target_part: &str) -> String {
         Some(rest) if !rest.contains('/') => rest.to_string(),
         _ => target_part.to_string(),
     }
-}
-
-/// The lower-cased file extension of `filename`, defaulting to `png`.
-fn image_number_from_part_name(name: &str) -> Option<usize> {
-    let suffix = name.strip_prefix("/word/media/image")?;
-    let digit_count = suffix
-        .bytes()
-        .take_while(|byte| byte.is_ascii_digit())
-        .count();
-    if digit_count == 0 {
-        return None;
-    }
-    suffix[..digit_count]
-        .parse::<usize>()
-        .ok()
-        .filter(|index| *index > 0)
-}
-
-fn image_extension(filename: &str) -> String {
-    match filename.rsplit_once('.') {
-        Some((_, ext)) if !ext.is_empty() => ext.to_lowercase(),
-        _ => "png".to_string(),
-    }
-}
-
-/// Map an image file extension to its MIME type.
-///
-/// This is the single place the mapping lives; header, footer, body and
-/// raw-XML image paths all go through it, so they cannot drift apart and
-/// start disagreeing about, say, whether GIF is supported.
-fn image_content_type(ext: &str) -> &'static str {
-    match ext {
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "bmp" => "image/bmp",
-        "tiff" | "tif" => "image/tiff",
-        "svg" => "image/svg+xml",
-        "webp" => "image/webp",
-        // PNG is both the common case and a safe default for unknown types.
-        _ => "image/png",
-    }
-}
-
-/// Guess image content type from the part name extension.
-fn guess_image_content_type(part_name: &str) -> String {
-    image_content_type(&image_extension(part_name)).to_string()
 }
 
 /// A node in the document outline tree.
@@ -3181,7 +3166,7 @@ mod tests {
         doc.render_page_to_png_deterministic(0, 1.0).unwrap();
         assert_eq!(layout_invocations(), 2);
 
-        let (family, font_data) = rdocx_layout::bundled_fonts::bundled_font_data()[0];
+        let (family, font_data) = oxml_layout::bundled_fonts::bundled_font_data()[0];
         doc.to_pdf_with_fonts(&[(family, font_data)]).unwrap();
         doc.to_pdf_with_fonts(&[(family, font_data)]).unwrap();
         assert_eq!(layout_invocations(), 4);
@@ -3194,6 +3179,31 @@ mod tests {
     }
 
     #[test]
+    fn html_and_layout_media_use_sniffed_content_type() {
+        let jpeg = [0xff, 0xd8, 0xff, 0xd9];
+        let mut document = Document::new();
+        document
+            .package
+            .set_part("/word/media/misleading.png", jpeg.to_vec());
+        let relationship_id = document
+            .package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(rel_types::IMAGE, "media/misleading.png");
+
+        let html_input = document.build_html_input();
+        let layout_input = document.build_layout_input();
+
+        assert_eq!(
+            html_input.images[&relationship_id].content_type,
+            "image/jpeg"
+        );
+        assert_eq!(
+            layout_input.images[&relationship_id].content_type,
+            "image/jpeg"
+        );
+    }
+
+    #[test]
     fn deterministic_render_is_independent_of_system_fonts() {
         let mut doc = Document::new();
         doc.add_paragraph("Deterministic rendering");
@@ -3201,7 +3211,7 @@ mod tests {
         let input = doc.build_layout_input();
         let layout = rdocx_layout::layout_document_deterministic(&input)
             .expect("deterministic layout should succeed");
-        let bundled_fonts = rdocx_layout::bundled_fonts::bundled_font_data();
+        let bundled_fonts = oxml_layout::bundled_fonts::bundled_font_data();
 
         assert!(!layout.fonts.is_empty());
         for font in &layout.fonts {
@@ -3215,7 +3225,7 @@ mod tests {
             );
         }
 
-        let inspected = rdocx_pdf::render_page_to_png(&layout, 0, 150.0)
+        let inspected = oxml_pdf::render_page_to_png(&layout, 0, 150.0)
             .expect("document should have a first page");
         let facade = doc
             .render_page_to_png_deterministic(0, 150.0)
@@ -3883,6 +3893,48 @@ mod tests {
         let rel = found.expect("no inline image found on read");
         let data = doc2.image_data(&rel).expect("image bytes missing");
         assert_eq!(data, png);
+    }
+
+    #[test]
+    fn layout_resolves_relationship_images_to_shared_media() {
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x9E, 0xDD, 0x22,
+            0x71, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        let mut document = Document::new();
+        document.add_picture(png, "first.png", Length::inches(1.0), Length::inches(1.0));
+        document.add_picture(png, "second.png", Length::inches(1.0), Length::inches(1.0));
+
+        let page = document
+            .layout_page(0)
+            .expect("layout should succeed")
+            .expect("document should have a first page");
+        let images = page
+            .elements
+            .iter()
+            .filter_map(|element| match element {
+                oxml_layout::PositionedElement::Image {
+                    data,
+                    content_type,
+                    media_id,
+                    ..
+                } => Some((data, content_type, media_id)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(images.len(), 2);
+        assert!(images.iter().all(|(data, _, _)| data.as_slice() == png));
+        assert!(
+            images
+                .iter()
+                .all(|(_, content_type, _)| *content_type == "image/png")
+        );
+        assert_eq!(*images[0].2, oxml_layout::MediaId::from_bytes(png));
+        assert_eq!(images[0].2, images[1].2);
     }
 }
 

@@ -1,18 +1,65 @@
 //! Integration tests for rdocx — end-to-end document creation and round-trip.
 
+use oxml_opc::OpcPackage;
+use oxml_opc::relationship::rel_types;
 use rdocx::Document;
 use rdocx::paragraph::Alignment;
 use rdocx::table::VerticalAlignment;
 use rdocx::{
     BorderStyle, Length, SectionBreak, StyleBuilder, TabAlignment, TabLeader, UnderlineStyle,
 };
-use rdocx_opc::OpcPackage;
-use rdocx_opc::relationship::rel_types;
 
 fn document_xml(document: &mut Document) -> Vec<u8> {
     let bytes = document.to_bytes().unwrap();
     let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
     package.get_part("/word/document.xml").unwrap().to_vec()
+}
+
+const PNG_2_BY_3: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x08, 0x02, 0x00, 0x00, 0x00, 0x36, 0x88, 0x49,
+    0xd6, 0x00, 0x00, 0x00, 0x10, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+    0x44, 0x0c, 0x28, 0x14, 0x00, 0x44, 0xd0, 0x05, 0xfb, 0xa4, 0xcf, 0xde, 0x80, 0x00, 0x00, 0x00,
+    0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+#[test]
+fn rdocx_error_opc_wraps_the_shared_error_type() {
+    let shared_error = oxml_opc::OpcError::PartNotFound("missing.xml".to_string());
+    let error: rdocx::Error = shared_error.into();
+
+    match error {
+        rdocx::Error::Opc(inner) => {
+            let _: oxml_opc::OpcError = inner;
+        }
+        other => panic!("expected shared OPC error, got {other}"),
+    }
+}
+
+#[test]
+fn new_document_uses_the_shared_word_package_setup() {
+    let mut document = Document::new();
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+
+    assert_eq!(
+        package.main_document_part().as_deref(),
+        Some("/word/document.xml")
+    );
+    assert_eq!(
+        package.content_types.content_type_for("/word/document.xml"),
+        Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml")
+    );
+    assert_eq!(
+        package.content_types.content_type_for("/word/styles.xml"),
+        Some("application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml")
+    );
+    assert!(package.get_part("/word/styles.xml").is_some());
+    let styles = package
+        .get_part_rels("/word/document.xml")
+        .and_then(|rels| rels.get_by_type(rel_types::STYLES))
+        .expect("new document must relate its styles part");
+    assert_eq!(styles.target, "styles.xml");
 }
 
 #[test]
@@ -649,6 +696,63 @@ fn inline_image_round_trip() {
     assert_eq!(doc2.paragraph_count(), 3);
     assert_eq!(doc2.paragraphs()[0].text(), "Before image");
     assert_eq!(doc2.paragraphs()[2].text(), "After image");
+}
+
+#[test]
+fn add_picture_auto_uses_native_size_at_72_dpi() {
+    let mut document = Document::new();
+    document
+        .add_picture_auto(PNG_2_BY_3, "two-by-three.png")
+        .expect("valid image dimensions");
+
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(xml.contains(r#"<wp:extent cx="25400" cy="38100"/>"#));
+
+    let mut reopened = Document::from_bytes(&bytes).unwrap();
+    let round_trip_xml = String::from_utf8(document_xml(&mut reopened)).unwrap();
+    assert!(round_trip_xml.contains(r#"<wp:extent cx="25400" cy="38100"/>"#));
+}
+
+#[test]
+fn add_picture_auto_rejects_unavailable_dimensions_without_mutation() {
+    let mut document = Document::new();
+    document.add_paragraph("unchanged");
+    let before = document.to_bytes().unwrap();
+
+    let error = match document.add_picture_auto(b"not an image", "broken.bin") {
+        Ok(_) => panic!("malformed image should fail"),
+        Err(error) => error,
+    };
+    match error {
+        rdocx::Error::UnavailableImageDimensions { filename } => {
+            assert_eq!(filename, "broken.bin");
+        }
+        other => panic!("expected unavailable image dimensions, got {other}"),
+    }
+
+    assert_eq!(document.content_count(), 1);
+    assert!(document.images().is_empty());
+    let after = document.to_bytes().unwrap();
+    assert_eq!(after, before);
+
+    let package = OpcPackage::from_reader(std::io::Cursor::new(after)).unwrap();
+    assert!(
+        package
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .get_all_by_type(rel_types::IMAGE)
+            .is_empty()
+    );
+    assert!(
+        !package
+            .parts
+            .keys()
+            .any(|name| name.starts_with("/word/media/"))
+    );
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(!xml.contains("<w:drawing>"));
 }
 
 #[test]

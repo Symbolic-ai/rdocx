@@ -4422,3 +4422,277 @@ sync checks, and the integrated full gate.
 **Notes for future sessions.** Add `rpptx-wasm` to the target job only when
 F-138 creates that package. Keep the binding exclusions synchronized across
 every new all-feature job.
+
+### F-X005, Tag rpptx-v0.1.2
+
+**Sprint.** S32.2
+**Completed.** 2026-08-11
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The complete 12-crate incubating family is published at
+0.1.2 under the `rpptx-v0.1.2` tag. Every selected manifest has non-empty
+release metadata, and the publication workflow runs a self-contained metadata
+regression before its archive checks and dependency-ordered crates.io uploads.
+The matching GitHub release targets the reviewed sprint commit.
+
+**Non-obvious choices.** The immutable `rpptx-v0.1.0` tag remains the partial
+publication that contains only `oxml-core` 0.1.0. The immutable
+`rpptx-v0.1.1` tag remains the CI-only failed recovery. A new 0.1.2 family was
+required because release tags and published registry versions are never moved
+or overwritten.
+
+**Deviations from the design plan.** None. The approved 0.1.2 recovery ran as
+designed after a fresh full verification, clean sprint review, and separate
+final approval.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "Version trains",
+`docs/hld/14-development-backlog.md`, "F-X005, Tag rpptx-v0.1.2", and
+`docs/hld/15-build-and-toolchain.md`, "Packaging" and "Release process".
+
+**Tests.** The targeted 0.1.2 metadata regression, all workflow regressions,
+`cargo metadata --no-deps`, the exact patched 19-package publication dry run,
+archive size and bundled asset assertions, supply-chain checks, the full
+workspace gate, and all 28 output hashes passed. GitHub Actions run 31496676517
+published all 12 packages and created the release. Independent `cargo info`
+and owner checks confirmed every 0.1.2 registry entry under `mantissaman`, and
+the annotated GitHub tag resolved to commit
+`27a8bb8aa494759568d40bf66c167c214e759500`.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Released rdocx consumers may now cut over to
+the 0.1.2 shared crates without local registry patches. The stable rdocx family
+was not published by this tag.
+
+### F-015, rdocx-oxml becomes a facade
+
+**Sprint.** S32.2
+**Completed.** 2026-08-11
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** `rdocx-oxml` now re-exports the shared `oxml-core` XML,
+raw XML, unit, and property implementations while preserving the established
+Word-facing module paths. Five duplicate source files were removed without
+call-site changes.
+
+**Non-obvious choices.** The namespace facade retains the Word-specific
+constants beside shared namespace helpers. This preserves the public surface
+without moving Word vocabulary into the format-neutral crate.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/11-migration-plan.md`, "Consumer
+cutovers", and `docs/hld/14-development-backlog.md`, "F-015".
+
+**Tests.** Focused `rdocx-oxml` tests, dependency direction and package checks,
+the integrated workspace gate, and all 28 output hashes passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Add format-neutral XML primitives to
+`oxml-core`. Keep Word namespace vocabulary in the facade.
+
+### F-016, Length re-export
+
+**Sprint.** S32.2
+**Completed.** 2026-08-11
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** `rdocx::Length` is now the shared `oxml_core::Length` type.
+The duplicate Word implementation was deleted, and every existing constructor,
+accessor, conversion, and caller continues through the retained public path.
+
+**Non-obvious choices.** The crate re-exports the type directly instead of
+wrapping it. This preserves type identity and keeps the conversion behavior in
+one implementation.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/11-migration-plan.md`, "Consumer
+cutovers".
+
+**Tests.** Shared unit conversion tests, focused rdocx checks, package
+verification, the integrated workspace gate, and all 28 output hashes passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Use `oxml_core::Length` internally and retain
+`rdocx::Length` as the compatibility import path.
+
+### F-022, rdocx-opc deprecation shim
+
+**Sprint.** S32.2
+**Completed.** 2026-08-11
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** `rdocx-opc` is now a deprecated exact re-export shim over
+`oxml-opc`. The rdocx library, CLI, and WASM consumer use the shared crate
+directly, construct Word packages explicitly, and expose the shared OPC error
+type through the high-level error surface.
+
+**Non-obvious choices.** Word-specific new-document setup remains in rdocx.
+The shared OPC crate owns generic package mechanics and does not gain a reverse
+dependency on a document format.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`, "WebAssembly",
+`docs/hld/11-migration-plan.md`, "Consumer cutovers", and
+`docs/hld/15-build-and-toolchain.md`, "Published crate graph".
+
+**Tests.** Shared error identity, new-document graph, CLI and WASM checks,
+package verification, dependency direction, the integrated workspace gate,
+and all 28 output hashes passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** New consumers should depend on `oxml-opc`.
+Retain `rdocx-opc` only for compatibility through the next stable transition.
+
+### F-027, rdocx adopts oxml-media
+
+**Sprint.** S32.2
+**Completed.** 2026-08-11
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** rdocx now uses `oxml-media` for byte-first image format
+detection, collision-safe media naming, MIME resolution, and downstream media
+extraction. Duplicate local media helpers were removed. Mislabelled JPEG bytes
+now produce a JPEG part, content type, and relationship target regardless of
+the supplied filename extension.
+
+**Non-obvious choices.** When loaded content-type defaults conflict with the
+sniffed bytes, rdocx writes a per-part override. This changes only the new media
+part and preserves the existing package default for other parts.
+
+**Deviations from the design plan.** Microscope pass 1 found that replacing a
+loaded package default could relabel unrelated existing parts. The remediation
+used a per-part override and added a loaded-package regression before pass 2
+returned clean.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "Crate boundaries",
+`docs/hld/04-opc-and-packaging.md`, "Media", `docs/hld/11-migration-plan.md`,
+"Consumer cutovers", and `docs/hld/14-development-backlog.md`, "F-027".
+
+**Tests.** The exact mislabelled-JPEG package regression, loaded-package
+content-type preservation, naming regressions, package verification,
+dependency direction, the integrated workspace gate, and all 28 output hashes
+passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match. The intentional
+metadata behavior is covered by the focused package regression because the
+harness does not inspect that part name or content type.
+
+**Notes for future sessions.** Resolve media metadata from bytes first. Treat
+caller extensions as hints and preserve unrelated loaded-package defaults.
+
+### F-028, add_picture_auto
+
+**Sprint.** S32.2
+**Completed.** 2026-08-11
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The rdocx write API now provides `add_picture_auto`, which
+probes image metadata and inserts the native EMU dimensions using a 72 DPI
+caller default. Invalid or unsupported image data returns a typed error before
+any document mutation.
+
+**Non-obvious choices.** The method computes dimensions first and delegates a
+successful insertion to the existing explicit-size path. This keeps numbering,
+relationships, and drawing construction in one implementation.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, "Native image
+sizing", and `docs/hld/14-development-backlog.md`, "F-028".
+
+**Tests.** Exact 72 DPI extent and round-trip checks, declared and fallback DPI
+cases, atomic failure coverage, explicit-size regressions, package verification,
+the integrated workspace gate, and all 28 output hashes passed.
+
+**Hash harness.** Unchanged. Existing samples continue to use explicit sizes.
+
+**Notes for future sessions.** Keep the convenience API additive and preserve
+the probe-before-mutation boundary.
+
+### F-046, rdocx layout and PDF cutover
+
+**Sprint.** S32.2
+**Completed.** 2026-08-11
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `rdocx-layout` retains the Word flow model while converting
+its result into shared `oxml-layout` pages, elements, fonts, media IDs, and
+diagnostics. `rdocx-pdf` is now an exact deprecated shim over `oxml-pdf`, and
+the high-level render path uses the shared backend. Duplicate neutral layout,
+font, media, and PDF backend sources and bundled font assets were removed.
+
+**Non-obvious choices.** A concrete conversion function is the only boundary
+between Word flow layout and shared output. It preserves the pre-cutover Word
+glyph slices and line-height behavior while using shared output types and
+renderers.
+
+**Deviations from the design plan.** Initial integration exposed four Word PNG
+deltas. The converter was corrected to preserve the established wrap and line
+height semantics, returning all 28 hashes to baseline. Microscope pass 1 then
+found an empty-image omission regression, which was restored before pass 2
+returned clean. Sprint review pass 4 found that distinct image bytes could
+overwrite each other when their compact `MediaId` values collided. Collision
+resolution now assigns deterministic alternate IDs, and a forced-collision
+regression covers both inline and anchored images. Sprint review pass 5 then
+found repeated registry construction for each image occurrence. The final path
+builds the relationship and media maps once per layout and reuses them through
+paragraphs, tables, headers, footers, footnotes, shapes, and pagination.
+Sprint review pass 6 found that the lower-level public entry points could not
+share that private result. `MediaRegistry` is now their common public argument,
+so direct callers retain both collision-resolved IDs and their image bytes.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "Rendering
+boundaries", `docs/hld/08-rendering-spec.md`, "Word conversion boundary",
+`docs/hld/11-migration-plan.md`, "Consumer cutovers", and
+`docs/hld/15-build-and-toolchain.md`, "Packaging".
+
+**Tests.** Exact conversion cases, layout and PDF suites, both no-default
+layout paths, WASM, dependency direction, archive inventory, the integrated
+workspace gate, and all 28 output hashes passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match after preserving
+the established Word conversion semantics.
+
+**Notes for future sessions.** Keep format-specific flow logic in
+`rdocx-layout`. Add neutral output and backend behavior to the shared crates.
+
+### F-051, CHANGELOG and migration notes
+
+**Sprint.** S32.2
+**Completed.** 2026-08-11
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** A root `CHANGELOG.md` now documents the Unreleased stable
+rdocx cutover, the published shared 0.1.2 family, retained facades, deprecated
+shims, breaking surfaces, and automatic picture sizing. The README crate table
+names the shared replacements and links the migration notes.
+
+**Non-obvious choices.** One migration table covers every moved or deprecated
+crate. This keeps version and compatibility guidance in a single durable
+artifact.
+
+**Deviations from the design plan.** Sprint review pass 4 found three retained
+`rdocx-layout` breaking changes missing from the migration notes. The completed
+table now documents the shared `MediaRegistry` argument on lower-level layout
+and pagination, `AnchoredContent::Image` media ID, and `ParagraphBlock::jc`
+alignment type. Sprint review pass 7 corrected those function references to
+their retained `engine`, `table`, and `paginator` module paths.
+
+**Spec sections touched.** None. The documentation reflects the completed HLD
+contract without changing system intent.
+
+**Tests.** Exact migration-path and version assertions, rustdoc with warnings
+denied, prose checks, the integrated workspace gate, and all 28 output hashes
+passed.
+
+**Hash harness.** Unchanged. Documentation does not affect generated output.
+
+**Notes for future sessions.** Keep the stable rdocx train under Unreleased
+until its own release workflow runs. Do not imply that `rpptx-v0.1.2` published
+the stable family.

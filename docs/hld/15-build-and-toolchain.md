@@ -19,14 +19,14 @@ developed with, `rust-version` says what it is guaranteed to compile with.
 
 ## Deterministic rendering
 
-`crates/rdocx-layout/src/font.rs:93` calls `db.load_system_fonts()`. System
-fonts differ between machines and between a developer's machine and a CI runner.
+Normal `oxml-layout` construction may load system fonts. System fonts differ
+between machines and between a developer's machine and a CI runner.
 
 **This makes any recorded render baseline unreproducible**, which would poison
 both the hash harness and the SSIM gate: a baseline recorded locally would
 mismatch CI in a way indistinguishable from a real regression.
 
-`rdocx-layout` provides an explicit deterministic mode:
+`oxml-layout` provides an explicit deterministic mode:
 
 ```rust
 impl FontManager {
@@ -36,17 +36,16 @@ impl FontManager {
 }
 ```
 
-The constructor starts with a fresh font database, loads only the checked-in
-bundled font bytes, and returns a layout error when `bundled-fonts` is disabled.
-It never calls system-font discovery. Document-embedded fonts remain explicit
-layout inputs, so they are deterministic too.
+The constructor starts with a fresh font database and loads only the checked-in
+bundled font bytes. It never calls system-font discovery. Document-embedded
+fonts remain explicit layout inputs, so they are deterministic too.
 
 `Engine::new_deterministic()` and `layout_document_deterministic()` carry that
 database through layout. The public facade exposes
 `Document::render_page_to_png_deterministic()` and
 `Document::to_pdf_deterministic()`. Both reuse the separate cached
 bundled-font-only layout. The PDF facade passes that layout directly to
-`rdocx_pdf::render_to_pdf`, which gives the golden-PNG gate deterministic PDF
+`oxml_pdf::render_to_pdf`, which gives the golden-PNG gate deterministic PDF
 input without changing the normal PDF API. Existing constructors and rendering
 methods still load system fonts for library users.
 
@@ -71,8 +70,7 @@ on CI runners as it always would have.
 
 | Crate | Feature | Default | Notes |
 |---|---|---|---|
-| `rdocx-layout` | `bundled-fonts` | on | The 20 bundled TTFs and the deterministic rendering path |
-| `oxml-layout` | `system-fonts` | on | **New.** Off for wasm, where `fontconfig` will not build |
+| `oxml-layout` | `system-fonts` | on | Off for wasm, where `fontconfig` will not build |
 | `rpptx` | `default-template` | on | The bundled `default.pptx` |
 | `rpptx` | `render` | on | Pulls in `rpptx-render` and `oxml-pdf` |
 | `rdocx-py`, `rpptx-py` | `extension-module` | off | Must stay off for `cargo test` |
@@ -99,8 +97,8 @@ The dedicated package CI job compares `cargo package -p oxml-layout --list`
 against all 20 TTFs, the three family licence files, and the Caladea notice. It
 then runs verified packaging without `--no-verify` and rejects a missing
 archive or one larger than the crates.io 10 MiB limit. `oxml-layout` is a
-publication candidate, while the release workflow remains the authority that
-decides whether it is published.
+published 0.1.2 package, while the release workflow remains the authority for
+every later publication.
 
 The same treatment applies to `crates/rpptx/assets/default.pptx`. **An asset
 must live under its own crate's directory**: a workspace-root `assets/` compiles
@@ -123,25 +121,31 @@ oxml-core -> oxml-opc -> oxml-media -> oxml-drawing -> oxml-layout -> oxml-pdf
   -> rpptx-oxml -> rpptx-layout -> rpptx-render -> rpptx-chart -> rpptx -> rpptx-cli
 ```
 
-The fourteen future crates.io names in this graph are reserved at version
-0.0.0 under the owner `mantissaman`: `oxml-core`, `oxml-opc`, `oxml-media`,
+The fourteen crates.io names in this graph are reserved under the owner
+`mantissaman`: `oxml-core`, `oxml-opc`, `oxml-media`,
 `oxml-drawing`, `oxml-layout`, `oxml-pdf`, `oxml-sml`, `oxml-cli-support`,
 `rpptx-oxml`, `rpptx-layout`, `rpptx-render`, `rpptx-chart`, `rpptx`, and
-`rpptx-cli`. Each placeholder is dependency-free and exposes no usable API.
+`rpptx-cli`. The unimplemented `oxml-cli-support` and `rpptx-cli` entries
+remain dependency-free 0.0.0 placeholders. The 12 implemented packages use
+the reviewed release path described below.
 
 `oxml-py-support`, `rpptx-py`, and `rpptx-wasm` are not reserved on crates.io.
 The binding crates are not published there, and the WASM packages use the npm
 publication path.
 
-All 12 implemented shared and PowerPoint packages are explicit publication
-candidates at their common incubating version. They are `oxml-core`,
-`oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`, `oxml-pdf`, `oxml-sml`,
-`rpptx-oxml`, `rpptx-chart`, `rpptx-layout`, `rpptx-render`, and `rpptx`.
-Manifest eligibility does not authorize publication. Only the reviewed
-incubating release path can activate their exact allowlist.
+All 12 implemented shared and PowerPoint packages are published at the common
+incubating version 0.1.2. They are
+`oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
+`oxml-pdf`, `oxml-sml`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`,
+`rpptx-render`, and `rpptx`. The reviewed `rpptx-v0.1.2` release activated that
+exact allowlist after its separate final approval. Manifest eligibility alone
+does not authorize any later publication.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
-real allowlist it reproduces the hash harness and runs
+real allowlist it reproduces the hash harness, runs the self-contained
+incubating metadata regression to require the exact versions, pins, lockfile
+entries, and non-empty package descriptions without external development
+tools, and runs
 `cargo publish --workspace --dry-run` with an exact local source patch for each
 member of the 19-package publishable union. Cargo rewrites packaged path
 dependencies to the registry, so the patches keep verification on the reviewed
@@ -179,8 +183,9 @@ possible and never rewrite README prose by pattern.
 `cargo-release` preparation is configured in Cargo metadata. The eight rdocx
 packages that inherit `[workspace.package].version` use cargo-release's
 effective `workspace` shared-version group and the `v{{version}}` tag template.
-The 12 implemented `oxml-*` and `rpptx*` packages have explicit versions, use
-the named `incubating` group, and carry the `rpptx-v{{version}}` template.
+The 12 implemented `oxml-*` and `rpptx*` packages are prepared at explicit
+version 0.1.2, use the named `incubating` group, and carry the
+`rpptx-v{{version}}` template.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.
@@ -203,11 +208,12 @@ requested tag. `/close-sprint` remains the only command allowed to merge
 `main` or create an `sNN` tag.
 
 The requested tag starts `publish.yml`. Its Linux runner reproduces the
-deterministic hash baseline and full workspace dry run before crates.io
-publication begins. Success requires every package in the selected family to
-report the requested version and expected owner, plus a matching GitHub release
-targeting the reviewed SHA. `rdocx-wasm` inherits the stable workspace version
-but stays `publish = false` because its distribution path is npm.
+deterministic hash baseline, release metadata check, and full workspace dry run
+before crates.io publication begins. Success requires every package in the
+selected family to report the requested version and expected owner, plus a
+matching GitHub release targeting the reviewed SHA. `rdocx-wasm` inherits the
+stable workspace version but stays `publish = false` because its distribution
+path is npm.
 
 The Python package version tracks the Rust train through a
 `pre-release-replacements` entry so the wheel version and the crate version

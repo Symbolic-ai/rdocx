@@ -1,9 +1,9 @@
 # F-016, Length re-export
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S32.2
 **Size**: S
-**Depends on**: F-013
+**Depends on**: F-013, F-X005
 
 ## Problem
 
@@ -25,7 +25,8 @@ incompatible Rust types with the same API.
 Add a direct `oxml-core` dependency to `rdocx`, delete
 `crates/rdocx/src/length.rs`, remove the private module declaration, and replace
 `pub use length::Length` with `pub use oxml_core::Length`. Keep the public
-`rdocx::Length` path and every call site unchanged.
+`rdocx::Length` path and every call site unchanged. F-X005 must first make
+`oxml-core` 0.1.2 available to released-package archive verification.
 
 ## Rejected alternatives
 
@@ -46,13 +47,16 @@ The backlog test gate is a compiling workspace with no call-site changes.
 
 ## HLD impact
 
-None. The migration plan already specifies this re-export.
+- `docs/hld/11-migration-plan.md`
+
+Record the completed consumer boundary after the implementation lands.
 
 ## Risk routing
 
 - Crate dependency graph. Confirm `rdocx -> oxml-core` and no reverse edge.
 - Public API of a published crate. Confirm `rdocx::Length` remains source
-  compatible, run package checks, and assert archive sizes.
+  compatible, resolve `oxml-core` 0.1.2 from the registry, run package checks,
+  and assert archive sizes.
 - File move with no behaviour change. Require zero caller edits and an
   unchanged deterministic hash harness.
 - Unit conversion. Run all moved truncation tests without changing casts.
@@ -63,15 +67,11 @@ Expected to remain unchanged. Any delta blocks integration.
 
 ## Implementation checklist
 
-- [ ] Add the direct workspace dependency.
-- [ ] Replace the module export with the shared type re-export.
-- [ ] Delete the duplicate implementation without editing callers.
-- [ ] Run focused rdocx, package, workspace, and hash checks.
+- [x] Add the direct workspace dependency.
+- [x] Replace the module export with the shared type re-export.
+- [x] Delete the duplicate implementation without editing callers.
+- [x] Run focused rdocx, package, workspace, and hash checks.
 
 ## Open questions
 
-None. The story remains approved but will be carried until PowerPoint
-development is complete and the real shared crates have an approved
-publication path. The rdocx 0.5.0 boundary protects that release but does not
-make unpublished `oxml-core` implementation code available to later package
-dry-runs.
+None. F-X005 publishes `oxml-core` 0.1.2 before this consumer cutover.

@@ -242,16 +242,31 @@ Java solutions carry the JVM's baseline overhead: 50-100 MB of RAM before a sing
 
 ## Crate Architecture
 
-| Crate | Purpose |
-|---|---|
-| `rdocx` | High-level Document API |
-| `rdocx-opc` | OPC/ZIP package I/O |
-| `rdocx-oxml` | OOXML types (CT_Document, CT_PPr, CT_RPr, CT_Tbl, ...) |
-| `rdocx-layout` | Layout engine (text shaping, line breaking, pagination) |
-| `rdocx-pdf` | PDF rendering with font subsetting |
-| `rdocx-html` | HTML and Markdown conversion |
-| `rdocx-cli` | CLI binary |
-| `rdocx-wasm` | WASM bindings (standalone, excluded from workspace) |
+Migration guidance for the shared crate cutover is in the
+[Unreleased CHANGELOG](CHANGELOG.md#unreleased).
+
+| Family | Crate | Purpose |
+|---|---|---|
+| Shared | `oxml-core` | Units, XML helpers, and document properties |
+| Shared | `oxml-opc` | OPC package, relationships, and content types |
+| Shared | `oxml-media` | Image detection, dimensions, and media naming |
+| Shared | `oxml-drawing` | DrawingML colors, geometry, fills, lines, effects, themes, and text bodies |
+| Shared | `oxml-layout` | Layout output types, fonts, and line breaking |
+| Shared | `oxml-pdf` | PDF and PNG rendering backends |
+| Shared | `oxml-sml` | Minimal SpreadsheetML writer for chart workbooks |
+| Word | `rdocx` | High-level Document API |
+| Word | `rdocx-opc` | Deprecated compatibility shim over `oxml-opc` |
+| Word | `rdocx-oxml` | WordprocessingML types and `oxml-core` compatibility re-exports |
+| Word | `rdocx-layout` | Word flow engine, pagination, blocks, tables, and style resolution |
+| Word | `rdocx-pdf` | Deprecated compatibility shim over `oxml-pdf` |
+| Word | `rdocx-html` | HTML and Markdown conversion |
+| Word | `rdocx-cli` | CLI binary |
+| Word | `rdocx-wasm` | WASM bindings |
+| PowerPoint | `rpptx` | High-level Presentation API |
+| PowerPoint | `rpptx-oxml` | PresentationML types |
+| PowerPoint | `rpptx-layout` | Inheritance resolver and flattener |
+| PowerPoint | `rpptx-render` | Slide renderer |
+| PowerPoint | `rpptx-chart` | ChartML model and renderer |
 
 ## Minimum Supported Rust Version
 

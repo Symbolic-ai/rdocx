@@ -415,7 +415,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "oxml-core"
-version = "0.0.0"
+version = "0.1.2"
 dependencies = [
  "quick-xml",
  "thiserror",
@@ -423,7 +423,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-drawing"
-version = "0.0.0"
+version = "0.1.2"
 dependencies = [
  "oxml-core",
  "oxml-opc",
@@ -433,7 +433,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-layout"
-version = "0.0.0"
+version = "0.1.2"
 dependencies = [
  "fontdb",
  "harfrust",
@@ -444,11 +444,11 @@ dependencies = [
 
 [[package]]
 name = "oxml-media"
-version = "0.0.0"
+version = "0.1.2"
 
 [[package]]
 name = "oxml-opc"
-version = "0.0.0"
+version = "0.1.2"
 dependencies = [
  "quick-xml",
  "thiserror",
@@ -457,7 +457,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-pdf"
-version = "0.0.0"
+version = "0.1.2"
 dependencies = [
  "miniz_oxide 0.9.1",
  "oxml-layout",
@@ -471,7 +471,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-sml"
-version = "0.0.0"
+version = "0.1.2"
 dependencies = [
  "oxml-opc",
  "quick-xml",
@@ -549,11 +549,14 @@ dependencies = [
 name = "rdocx"
 version = "0.4.1"
 dependencies = [
+ "oxml-core",
+ "oxml-layout",
+ "oxml-media",
+ "oxml-opc",
+ "oxml-pdf",
  "rdocx-html",
  "rdocx-layout",
- "rdocx-opc",
  "rdocx-oxml",
- "rdocx-pdf",
  "regex",
  "thiserror",
 ]
@@ -563,8 +566,8 @@ name = "rdocx-cli"
 version = "0.4.1"
 dependencies = [
  "clap",
+ "oxml-opc",
  "rdocx",
- "rdocx-opc",
  "rdocx-oxml",
  "serde_json",
 ]
@@ -580,11 +583,8 @@ dependencies = [
 name = "rdocx-layout"
 version = "0.4.1"
 dependencies = [
- "fontdb",
- "harfrust",
+ "oxml-layout",
  "rdocx-oxml",
- "thiserror",
- "ttf-parser",
  "unicode-linebreak",
 ]
 
@@ -592,9 +592,7 @@ dependencies = [
 name = "rdocx-opc"
 version = "0.4.1"
 dependencies = [
- "quick-xml",
- "thiserror",
- "zip",
+ "oxml-opc",
 ]
 
 [[package]]
@@ -602,6 +600,7 @@ name = "rdocx-oxml"
 version = "0.4.1"
 dependencies = [
  "itoa",
+ "oxml-core",
  "quick-xml",
  "regex",
  "thiserror",
@@ -611,12 +610,7 @@ dependencies = [
 name = "rdocx-pdf"
 version = "0.4.1"
 dependencies = [
- "miniz_oxide 0.9.1",
- "pdf-writer",
- "rdocx-layout",
- "subsetter",
- "tiny-skia",
- "ttf-parser",
+ "oxml-pdf",
 ]
 
 [[package]]
@@ -624,8 +618,8 @@ name = "rdocx-wasm"
 version = "0.4.1"
 dependencies = [
  "js-sys",
+ "oxml-opc",
  "rdocx-html",
- "rdocx-opc",
  "rdocx-oxml",
  "wasm-bindgen",
 ]
@@ -688,7 +682,7 @@ checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
 name = "rpptx"
-version = "0.0.0"
+version = "0.1.2"
 dependencies = [
  "miniz_oxide 0.9.1",
  "oxml-core",
@@ -707,7 +701,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-chart"
-version = "0.0.0"
+version = "0.1.2"
 dependencies = [
  "oxml-core",
  "oxml-drawing",
@@ -720,7 +714,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-layout"
-version = "0.0.0"
+version = "0.1.2"
 dependencies = [
  "oxml-drawing",
  "oxml-layout",
@@ -731,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-oxml"
-version = "0.0.0"
+version = "0.1.2"
 dependencies = [
  "oxml-core",
  "oxml-drawing",
@@ -741,7 +735,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-render"
-version = "0.0.0"
+version = "0.1.2"
 dependencies = [
  "oxml-drawing",
  "oxml-layout",

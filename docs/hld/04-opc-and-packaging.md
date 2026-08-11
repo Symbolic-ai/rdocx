@@ -98,13 +98,13 @@ the package.
 
 **Numeric suffixes are allocated after the greatest positive parsed suffix,
 never as `count + 1`.** Deleting slide 2 and then adding a slide must not
-collide with slide 3. The rdocx image counter parses the consecutive decimal
-digits after `/word/media/image`, including `usize::MAX`, and ignores missing,
+collide with slide 3. `MediaNamer` scans positive decimal suffixes in the
+requested directory and stem, including `usize::MAX`, and ignores missing,
 signed, zero, nonnumeric and unrelated suffixes. Ordinary packages allocate
 `1 + max(existing suffix)`. At the finite boundary, checked increment wraps
 from `usize::MAX` to 1 and skips every occupied parsed suffix until a free
-positive number is found. Allocation never creates `image0` or overwrites an
-existing numbered image part.
+positive number is found. Both facades use this allocator, so allocation never
+creates `image0` or overwrites an existing numbered image part.
 
 Canonical part layouts:
 
@@ -166,6 +166,13 @@ filename extension, so a `.png` that is really a JPEG receives the JPEG
 extension and content type. Unknown bytes fall back through a recognised
 filename extension and finally to PNG for compatibility.
 
+`rdocx::Document` scans existing `/word/media/imageN.ext` parts into a
+`MediaNamer` when it opens. Every body, header, footer, and raw-XML image path
+uses the allocator and registers the sniffed canonical extension and content
+type before adding its relationship. HTML and layout extraction resolve MIME
+from the stored bytes first, so a misleading package part name cannot override
+the actual image format.
+
 **`native_size` takes the DPI rather than baking one in**, because the right
 default differs by consumer: python-docx assumes 72 when a file declares none,
 while Word assumes 96. Each declared finite positive axis DPI takes precedence
@@ -177,6 +184,13 @@ positive, or if a converted dimension is outside the `i64` range.
 `NativeSize` keeps the result dependency-free and exposes explicit EMU fields.
 The PresentationML picture insertion path supplies 72 for python-pptx parity
 without adding an `oxml-core` edge to `oxml-media`.
+
+`rdocx::Document::add_picture_auto` is an additive convenience API that probes
+the image and calculates `native_size(72.0)` before changing document state.
+It converts the shared EMU result with `Length::emu` and delegates successful
+insertion to the existing explicit-size `add_picture` path. Unavailable
+dimensions return `rdocx::Error::UnavailableImageDimensions` with the supplied
+filename before a media part, relationship, drawing, or paragraph is added.
 
 `rpptx::Presentation` scans `/ppt/media/` into a content-hash `MediaStore` when
 it opens. Insertion compares the complete byte string inside each hash bucket,

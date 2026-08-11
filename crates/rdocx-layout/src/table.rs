@@ -4,10 +4,9 @@ use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Tbl, CT_TblBorders, CT_TblGrid, ST_VerticalJc, VMerge};
 
 use crate::block::ParagraphBlock;
-use crate::error::Result;
-use crate::font::FontManager;
-use crate::input::LayoutInput;
+use crate::input::{LayoutInput, MediaRegistry};
 use crate::style_resolver::NumberingState;
+use oxml_layout::{Color, FontManager, Result};
 
 /// A laid-out table.
 #[derive(Debug, Clone)]
@@ -67,7 +66,7 @@ pub struct TableCell {
     /// Cell-level borders.
     pub borders: Option<CT_TblBorders>,
     /// Cell background shading color.
-    pub shading: Option<crate::output::Color>,
+    pub shading: Option<Color>,
     /// Cell margin left in points.
     pub margin_left: f64,
     /// Cell margin top in points.
@@ -86,6 +85,7 @@ pub fn layout_table(
     available_width: f64,
     styles: &CT_Styles,
     input: &LayoutInput,
+    media: &MediaRegistry,
     fm: &mut FontManager,
     num_state: &mut NumberingState,
 ) -> Result<TableBlock> {
@@ -168,7 +168,7 @@ pub fn layout_table(
                 .and_then(|p| p.shading.as_ref())
                 .and_then(|shd| shd.fill.as_ref())
                 .filter(|f| f.as_str() != "auto")
-                .map(|f| crate::output::Color::from_hex(f));
+                .map(|f| Color::from_hex(f));
 
             // Calculate cell width from spanned columns
             let cell_width: f64 = (col_index..col_index + grid_span as usize)
@@ -181,7 +181,15 @@ pub fn layout_table(
             let paragraphs = if is_vmerge_continue {
                 Vec::new()
             } else {
-                layout_cell_content(&cell.content, content_width, styles, input, fm, num_state)?
+                layout_cell_content(
+                    &cell.content,
+                    content_width,
+                    styles,
+                    input,
+                    media,
+                    fm,
+                    num_state,
+                )?
             };
 
             let content_height: f64 = paragraphs.iter().map(|p| p.total_height()).sum::<f64>()
@@ -297,6 +305,7 @@ fn layout_cell_content(
     available_width: f64,
     styles: &CT_Styles,
     input: &LayoutInput,
+    media: &MediaRegistry,
     fm: &mut FontManager,
     num_state: &mut NumberingState,
 ) -> Result<Vec<ParagraphBlock>> {
@@ -307,13 +316,21 @@ fn layout_cell_content(
     for item in content {
         match item {
             CellContent::Paragraph(para) => {
-                let block =
-                    engine::layout_paragraph(para, available_width, styles, input, fm, num_state)?;
+                let block = engine::layout_paragraph(
+                    para,
+                    available_width,
+                    styles,
+                    input,
+                    media,
+                    fm,
+                    num_state,
+                )?;
                 blocks.push(block);
             }
             CellContent::Table(tbl) => {
                 // Recursively lay out the nested table
-                let _nested = layout_table(tbl, available_width, styles, input, fm, num_state)?;
+                let _nested =
+                    layout_table(tbl, available_width, styles, input, media, fm, num_state)?;
                 // For now, flatten: render nested table cell content as paragraph blocks
                 // (Full nested table rendering would require the paginator to handle tables within cells)
                 for row in &_nested.rows {
@@ -473,10 +490,19 @@ mod tests {
             fonts: Vec::new(),
         };
 
-        let mut fm = crate::font::FontManager::new();
+        let mut fm = FontManager::new();
         let mut num_state = crate::style_resolver::NumberingState::new();
+        let media = MediaRegistry::new(&input.images);
 
-        let result = layout_table(&outer, 234.0, &styles, &input, &mut fm, &mut num_state);
+        let result = layout_table(
+            &outer,
+            234.0,
+            &styles,
+            &input,
+            &media,
+            &mut fm,
+            &mut num_state,
+        );
         assert!(result.is_ok());
         let block = result.unwrap();
 

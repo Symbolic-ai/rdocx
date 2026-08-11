@@ -46,6 +46,7 @@ defended.
 | S31 | M12 | 3 | 3 | 0 | 12 | 3 | Added atomic editable chart authoring, backend-neutral chart geometry, and deterministic axes, gridlines, labels, and legends. Pinned PowerPoint accepted the generated chart without repair and exposed exact editable workbook values, all 50 pinned chart decks and 28 hashes passed unchanged, and no crate was published |
 | S32 | M12 | 2 | 2 | 0 | 3 | 2 | Completed M12 with exact theme-mapped chart colours and source-scoped native or preserved fallbacks. The SHA-bound authored chart opened in pinned PowerPoint without repair, Edit Data exposed exact workbook values, the production renderer emitted native geometry, all 28 hashes remained unchanged, and no crate was published |
 | S32.1 | M6 | 4 | 4 | 0 | 7 | 4 | Completed shared publication readiness with exact package inventory, split-family release preparation, stable and incubating tag routing, binding-safe CI gates, and verified local-source publication dry runs. Every generated archive remained below 10 MiB, all 28 hashes remained unchanged, and no crate was published |
+| S32.2 | M6 | 8 | 8 | 0 | 10 | 8 | Completed M6 by publishing the shared 0.1.2 family, cutting released rdocx consumers over to shared facades and backends, and documenting the migration. All package archives verified below 10 MiB and all 28 hashes remained unchanged |
 
 ## Completed features
 
@@ -180,6 +181,14 @@ defended.
 | F-048 | S32.1 | M | 2 | 1 | 2026-08-11 | Preparation-only stable and incubating cargo-release groups |
 | F-049 | S32.1 | M | 2 | 1 | 2026-08-11 | Exact split-family publication routing and verified local-source preflight |
 | F-050 | S32.1 | S | 1 | 1 | 2026-08-11 | No-default, wasm, prose, skill-sync, and binding-safe CI jobs |
+| F-X005 | S32.2 | S | 1 | 1 | 2026-08-11 | Published and verified the complete rpptx 0.1.2 family |
+| F-015 | S32.2 | S | 1 | 1 | 2026-08-11 | rdocx-oxml facade over published oxml-core |
+| F-016 | S32.2 | S | 1 | 1 | 2026-08-11 | Shared Length re-export with unchanged callers |
+| F-022 | S32.2 | S | 1 | 1 | 2026-08-11 | Deprecated rdocx-opc shim and direct shared OPC consumers |
+| F-027 | S32.2 | M | 2 | 1 | 2026-08-11 | Byte-first shared media naming and metadata |
+| F-028 | S32.2 | S | 1 | 1 | 2026-08-11 | Atomic automatic picture sizing at 72 DPI |
+| F-046 | S32.2 | M | 2 | 1 | 2026-08-11 | Shared layout and PDF cutover with unchanged output |
+| F-051 | S32.2 | S | 1 | 1 | 2026-08-11 | Root changelog and shared-crate migration guide |
 
 ## Velocity
 
@@ -226,6 +235,7 @@ five working days.
 | S31 | 3 | 3 | 5.00 |
 | S32 | 2 | 2 | 5.00 |
 | S32.1 | 4 | 4 | 5.00 |
+| S32.2 | 8 | 8 | 5.00 |
 
 ## Escalation record
 

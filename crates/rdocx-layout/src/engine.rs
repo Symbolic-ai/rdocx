@@ -8,17 +8,15 @@ use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::text::{BreakType, CT_P, FieldType, RunContent};
 
 use crate::block::{self, LayoutBlock, ParagraphBlock};
-use crate::error::Result;
-use crate::font::FontManager;
-use crate::input::LayoutInput;
-use crate::line::{self, InlineItem, LineBreakParams, LineItem, TextSegment};
-use crate::output::{
-    Color, DocumentMetadata, FieldKind, GlyphRun, LayoutResult, PageFrame, Point,
-    PositionedElement, Rect,
-};
+use crate::convert;
+use crate::input::{LayoutInput, MediaRegistry};
 use crate::paginator::{self, HeaderFooterContent, PageGeometry};
 use crate::style_resolver::{self, NumberingState};
 use crate::table;
+use oxml_layout::{
+    Color, DocumentMetadata, FieldKind, FontManager, GlyphRun, InlineItem, LayoutResult, LineItem,
+    PageFrame, Point, PositionedElement, Rect, Result, TextSegment, break_into_lines,
+};
 
 /// The layout engine.
 pub struct Engine {
@@ -54,6 +52,7 @@ impl Engine {
 
         let styles = &input.styles;
         let mut num_state = NumberingState::new();
+        let media = MediaRegistry::new(&input.images);
 
         // Get final section properties (body-level sectPr)
         let final_sect_pr = input
@@ -86,6 +85,7 @@ impl Engine {
                         geometry.content_width(),
                         styles,
                         input,
+                        &media,
                         &mut self.font_manager,
                         &mut num_state,
                     )?;
@@ -105,6 +105,7 @@ impl Engine {
                             &sect_pr,
                             input,
                             styles,
+                            &media,
                             &mut self.font_manager,
                             &mut num_state,
                         )?;
@@ -127,6 +128,7 @@ impl Engine {
                         geometry.content_width(),
                         styles,
                         input,
+                        &media,
                         &mut self.font_manager,
                         &mut num_state,
                     )?;
@@ -142,6 +144,7 @@ impl Engine {
             &final_sect_pr,
             input,
             styles,
+            &media,
             &mut self.font_manager,
             &mut num_state,
         )?;
@@ -154,7 +157,8 @@ impl Engine {
         });
 
         // Paginate across all sections
-        let (mut pages, outlines) = paginator::paginate_sections(&sections, &self.font_manager);
+        let (mut pages, outlines) =
+            paginator::paginate_sections(&sections, &self.font_manager, &media);
 
         // Post-pagination pass: substitute field placeholders
         let total_pages = pages.len();
@@ -171,9 +175,6 @@ impl Engine {
         // Post-pagination pass: apply page background color
         apply_page_background(&mut pages, input);
 
-        // Post-pagination pass: resolve inline image data
-        resolve_inline_images(&mut pages, input);
-
         // Post-pagination pass: render footnotes at page bottoms
         if input.footnotes.is_some() || input.endnotes.is_some() {
             render_page_footnotes(
@@ -181,6 +182,7 @@ impl Engine {
                 input,
                 styles,
                 &final_geometry,
+                &media,
                 &mut self.font_manager,
                 &mut num_state,
             )?;
@@ -198,12 +200,7 @@ impl Engine {
             creator: Some("rdocx".to_string()),
         });
 
-        Ok(LayoutResult {
-            pages,
-            fonts,
-            metadata,
-            outlines,
-        })
+        Ok(LayoutResult::new(pages, fonts, metadata, outlines))
     }
 }
 
@@ -256,35 +253,12 @@ fn extract_background_color(xml: &str) -> Option<Color> {
     None
 }
 
-/// Resolve inline image data from input.images by embed_id.
-///
-/// During pagination, inline images are created with empty data and an embed_id.
-/// This pass fills in the actual image bytes and content type.
-fn resolve_inline_images(pages: &mut [PageFrame], input: &LayoutInput) {
-    for page in pages.iter_mut() {
-        for element in &mut page.elements {
-            if let PositionedElement::Image {
-                data,
-                content_type,
-                embed_id: Some(eid),
-                ..
-            } = element
-                && data.is_empty()
-                && let Some(img) = input.images.get(eid.as_str())
-            {
-                *data = img.data.clone();
-                *content_type = img.content_type.clone();
-            }
-        }
-    }
-}
-
 /// Replace field placeholder GlyphRuns with actual values.
 fn substitute_fields(
     elements: &mut [PositionedElement],
     page_number: usize,
     total_pages: usize,
-    fm: &mut crate::font::FontManager,
+    fm: &mut FontManager,
 ) {
     for element in elements.iter_mut() {
         if let PositionedElement::Text(run) = element
@@ -313,6 +287,7 @@ fn render_page_footnotes(
     input: &LayoutInput,
     styles: &CT_Styles,
     geometry: &paginator::PageGeometry,
+    media: &MediaRegistry,
     fm: &mut FontManager,
     num_state: &mut NumberingState,
 ) -> Result<()> {
@@ -354,6 +329,7 @@ fn render_page_footnotes(
                         geometry.content_width(),
                         styles,
                         input,
+                        media,
                         fm,
                         num_state,
                     ) {
@@ -482,6 +458,7 @@ pub fn layout_paragraph(
     available_width: f64,
     styles: &CT_Styles,
     input: &LayoutInput,
+    media: &MediaRegistry,
     fm: &mut FontManager,
     num_state: &mut NumberingState,
 ) -> Result<ParagraphBlock> {
@@ -519,24 +496,11 @@ pub fn layout_paragraph(
     let space_after = effective_ppr.space_after.map(|t| t.to_pt()).unwrap_or(0.0);
     let ind_left = effective_ppr.ind_left.map(|t| t.to_pt()).unwrap_or(0.0);
     let ind_right = effective_ppr.ind_right.map(|t| t.to_pt()).unwrap_or(0.0);
-    let ind_first_line = effective_ppr
-        .ind_first_line
-        .map(|t| t.to_pt())
-        .unwrap_or(0.0);
-    let ind_hanging = effective_ppr.ind_hanging.map(|t| t.to_pt()).unwrap_or(0.0);
-
     let keep_next = effective_ppr.keep_next.unwrap_or(false);
     let keep_lines = effective_ppr.keep_lines.unwrap_or(false);
     let page_break_before = effective_ppr.page_break_before.unwrap_or(false);
     let widow_control = effective_ppr.widow_control.unwrap_or(true);
-    let jc = effective_ppr.jc;
-
-    // Collect tab stops
-    let tab_stops = effective_ppr
-        .tabs
-        .as_ref()
-        .map(|t| t.tabs.clone())
-        .unwrap_or_default();
+    let jc = convert::alignment(effective_ppr.jc);
 
     // Parse shading color
     let shading = effective_ppr
@@ -590,6 +554,7 @@ pub fn layout_paragraph(
                     width: shaped.width,
                     ascent: metrics.ascent,
                     descent: metrics.descent,
+                    line_gap: 0.0,
                     color,
                     bold: marker_bold,
                     italic: marker_italic,
@@ -653,7 +618,7 @@ pub fn layout_paragraph(
         let color = resolve_run_color(&effective_rpr, input.theme.as_ref());
 
         // Decoration properties
-        let underline = effective_rpr.underline;
+        let underline = convert::underline(effective_rpr.underline);
         let strike = effective_rpr.strike.unwrap_or(false);
         let dstrike = effective_rpr.dstrike.unwrap_or(false);
         let highlight = effective_rpr.highlight.and_then(highlight_to_color);
@@ -713,7 +678,7 @@ pub fn layout_paragraph(
                         shaped.width += extra * shaped.advances.len() as f64;
                     }
 
-                    inline_items.push(InlineItem::Text(TextSegment {
+                    inline_items.extend(convert::text_segments(TextSegment {
                         text,
                         font_id,
                         font_size,
@@ -722,6 +687,7 @@ pub fn layout_paragraph(
                         width: shaped.width,
                         ascent: metrics.ascent,
                         descent: metrics.descent,
+                        line_gap: 0.0,
                         color,
                         bold,
                         italic,
@@ -750,7 +716,7 @@ pub fn layout_paragraph(
                         inline_items.push(InlineItem::Image {
                             width,
                             height,
-                            embed_id: inline.embed_id.clone(),
+                            media_id: media.id_for_relationship(&inline.embed_id),
                         });
                     }
                 }
@@ -772,6 +738,7 @@ pub fn layout_paragraph(
                         width: shaped.width,
                         ascent: metrics.ascent,
                         descent: metrics.descent,
+                        line_gap: 0.0,
                         color,
                         bold,
                         italic,
@@ -801,6 +768,7 @@ pub fn layout_paragraph(
                         width: shaped.width,
                         ascent: sup_metrics.ascent,
                         descent: sup_metrics.descent,
+                        line_gap: 0.0,
                         color,
                         bold,
                         italic,
@@ -819,19 +787,10 @@ pub fn layout_paragraph(
     }
 
     // Line breaking
-    let line_params = LineBreakParams {
-        available_width,
-        ind_left,
-        ind_right,
-        ind_first_line,
-        ind_hanging,
-        tab_stops,
-        line_spacing: effective_ppr.line_spacing,
-        line_rule: effective_ppr.line_rule,
-        jc,
-    };
+    let line_params = convert::line_break_params(&effective_ppr, available_width);
 
-    let lines = line::break_into_lines(&inline_items, &line_params, fm)?;
+    let mut lines = break_into_lines(&inline_items, &line_params, fm)?;
+    convert::restore_word_line_heights(&mut lines, &effective_ppr);
 
     let mut result = block::build_paragraph_block(
         lines,
@@ -847,7 +806,7 @@ pub fn layout_paragraph(
         page_break_before,
         widow_control,
     );
-    result.anchored = collect_anchored_drawings(para, styles, input, fm, num_state)?;
+    result.anchored = collect_anchored_drawings(para, styles, input, media, fm, num_state)?;
     Ok(result)
 }
 
@@ -863,6 +822,7 @@ fn collect_anchored_drawings(
     para: &CT_P,
     styles: &CT_Styles,
     input: &LayoutInput,
+    media: &MediaRegistry,
     fm: &mut FontManager,
     num_state: &mut NumberingState,
 ) -> Result<Vec<block::AnchoredDrawing>> {
@@ -899,6 +859,7 @@ fn collect_anchored_drawings(
                             anchor.extent_cx.to_pt(),
                             styles,
                             input,
+                            media,
                             fm,
                             num_state,
                         )?);
@@ -909,8 +870,9 @@ fn collect_anchored_drawings(
                         text,
                     }
                 }
+                None if anchor.embed_id.is_empty() => continue,
                 None => block::AnchoredContent::Image {
-                    embed_id: anchor.embed_id.clone(),
+                    media_id: media.id_for_relationship(&anchor.embed_id),
                 },
             };
 
@@ -1007,6 +969,7 @@ fn layout_header_footer(
     sect_pr: &CT_SectPr,
     input: &LayoutInput,
     styles: &CT_Styles,
+    media: &MediaRegistry,
     fm: &mut FontManager,
     num_state: &mut NumberingState,
 ) -> Result<Option<HeaderFooterContent>> {
@@ -1027,7 +990,7 @@ fn layout_header_footer(
         };
         if let Some(hdr) = input.headers.get(&href.rel_id) {
             for para in &hdr.paragraphs {
-                let block = layout_paragraph(para, width, styles, input, fm, num_state)?;
+                let block = layout_paragraph(para, width, styles, input, media, fm, num_state)?;
                 target_blocks.push(block);
             }
             has_content = true;
@@ -1042,7 +1005,7 @@ fn layout_header_footer(
         };
         if let Some(ftr) = input.footers.get(&fref.rel_id) {
             for para in &ftr.paragraphs {
-                let block = layout_paragraph(para, width, styles, input, fm, num_state)?;
+                let block = layout_paragraph(para, width, styles, input, media, fm, num_state)?;
                 target_blocks.push(block);
             }
             has_content = true;
@@ -1221,6 +1184,8 @@ fn highlight_to_color(h: ST_HighlightColor) -> Option<Color> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::ImageData;
+    use oxml_layout::MediaId;
     use std::collections::HashMap;
 
     fn make_input_with_text(text: &str) -> LayoutInput {
@@ -1281,6 +1246,122 @@ mod tests {
         if let Ok(result) = result {
             assert_eq!(result.pages.len(), 1);
         }
+    }
+
+    #[test]
+    fn empty_shapeless_anchor_keeps_the_pre_cutover_omission() {
+        let input = make_input_with_text("");
+        let mut paragraph = CT_P::new();
+        paragraph.add_run("").content = vec![RunContent::Drawing(
+            rdocx_oxml::drawing::CT_Drawing::anchor(rdocx_oxml::drawing::CT_Anchor::background(
+                "", 914_400, 914_400,
+            )),
+        )];
+        let mut font_manager = FontManager::new();
+        let mut numbering_state = NumberingState::new();
+        let media = MediaRegistry::new(&input.images);
+
+        let anchored = collect_anchored_drawings(
+            &paragraph,
+            &input.styles,
+            &input,
+            &media,
+            &mut font_manager,
+            &mut numbering_state,
+        )
+        .expect("empty shapeless anchor collection should succeed");
+
+        assert!(anchored.is_empty());
+    }
+
+    #[test]
+    fn colliding_media_ids_keep_inline_and_anchored_image_bytes_distinct() {
+        let mut input = make_input_with_text("");
+        input.images.insert(
+            "rIdInline".to_string(),
+            ImageData {
+                data: vec![1, 2, 3],
+                content_type: "image/png".to_string(),
+            },
+        );
+        input.images.insert(
+            "rIdAnchor".to_string(),
+            ImageData {
+                data: vec![4, 5, 6],
+                content_type: "image/jpeg".to_string(),
+            },
+        );
+
+        let media = MediaRegistry::with_hasher(&input.images, |_| MediaId(7));
+        let inline_id = media.id_for_relationship("rIdInline");
+        let anchor_id = media.id_for_relationship("rIdAnchor");
+        assert_ne!(inline_id, anchor_id);
+
+        let line = oxml_layout::LayoutLine {
+            items: vec![LineItem::Image {
+                width: 12.0,
+                height: 10.0,
+                media_id: inline_id,
+            }],
+            width: 12.0,
+            ascent: 10.0,
+            descent: 0.0,
+            line_gap: 0.0,
+            height: 10.0,
+            indent_left: 0.0,
+            available_width: 468.0,
+            is_last: true,
+        };
+        let mut paragraph = block::build_paragraph_block(
+            vec![line],
+            0.0,
+            0.0,
+            None,
+            None,
+            0.0,
+            0.0,
+            None,
+            false,
+            false,
+            false,
+            true,
+        );
+        paragraph.anchored.push(block::AnchoredDrawing {
+            behind_doc: false,
+            rel_h: rdocx_oxml::drawing::ST_RelativeFromH::Page,
+            off_h: 20.0,
+            rel_v: rdocx_oxml::drawing::ST_RelativeFromV::Page,
+            off_v: 20.0,
+            width: 12.0,
+            height: 10.0,
+            content: block::AnchoredContent::Image {
+                media_id: anchor_id,
+            },
+        });
+        let sections = [paginator::Section {
+            blocks: vec![LayoutBlock::Paragraph(paragraph)],
+            geometry: PageGeometry::default(),
+            header_footer: None,
+            title_pg: false,
+        }];
+
+        let (pages, _) = paginator::paginate_sections(&sections, &FontManager::new(), &media);
+        let images = pages[0]
+            .elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Image {
+                    data,
+                    content_type,
+                    media_id,
+                    ..
+                } => Some((data.as_slice(), content_type.as_str(), *media_id)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(images.contains(&(b"\x01\x02\x03".as_slice(), "image/png", inline_id)));
+        assert!(images.contains(&(b"\x04\x05\x06".as_slice(), "image/jpeg", anchor_id)));
     }
 
     #[test]

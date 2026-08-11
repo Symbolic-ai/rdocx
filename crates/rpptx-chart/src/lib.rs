@@ -15058,7 +15058,7 @@ mod tests {
         let manifest = include_str!("../Cargo.toml");
         let workspace = include_str!("../../../Cargo.toml");
         assert!(manifest.contains("name = \"rpptx-chart\""));
-        assert!(manifest.contains("version = \"0.0.0\""));
+        assert!(manifest.contains("version = \"0.1.2\""));
         assert!(manifest.contains("publish = true"));
         for dependency in [
             "oxml-core.workspace",
@@ -15072,7 +15072,7 @@ mod tests {
         assert!(workspace.contains("\"crates/rpptx-chart\""));
         assert!(
             workspace
-                .contains("rpptx-chart = { path = \"crates/rpptx-chart\", version = \"0.0.0\" }")
+                .contains("rpptx-chart = { path = \"crates/rpptx-chart\", version = \"0.1.2\" }")
         );
     }
 

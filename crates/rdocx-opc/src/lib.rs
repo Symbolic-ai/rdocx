@@ -1,17 +1,21 @@
-//! Open Packaging Convention (OPC) reader/writer for OOXML packages.
+//! Deprecated compatibility shim for [`oxml_opc`].
 //!
-//! This crate handles the ZIP archive layer of .docx files, including:
-//! - Reading and writing ZIP-based OPC packages
-//! - Parsing `[Content_Types].xml`
-//! - Parsing `.rels` relationship files
-//! - Navigating parts by URI and resolving relationships
+//! Use `oxml-opc` directly for new code. Retained types are exact re-exports,
+//! so legacy type paths remain type-identical. The removed Word-specific
+//! `OpcPackage::new_docx` and `ContentTypes::new_docx` constructors have no
+//! shared equivalent. Word consumers should configure the generic constructors
+//! at their format boundary.
 
-mod content_types;
-mod error;
-mod package;
-pub mod relationship;
+pub use oxml_opc::*;
 
-pub use content_types::{ContentType, ContentTypes};
-pub use error::OpcError;
-pub use package::{OpcPackage, PackagePart};
-pub use relationship::{Relationship, Relationships};
+#[cfg(test)]
+mod tests {
+    use super::OpcPackage;
+
+    #[test]
+    fn legacy_shim_retains_shared_opc_package_type() {
+        fn accept_shared(_: oxml_opc::OpcPackage) {}
+
+        accept_shared(OpcPackage::new());
+    }
+}

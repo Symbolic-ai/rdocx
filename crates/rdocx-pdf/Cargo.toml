@@ -1,6 +1,6 @@
 [package]
 name = "rdocx-pdf"
-description = "PDF renderer for rdocx layout output"
+description = "deprecated: moved to oxml-pdf"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,9 +16,4 @@ shared-version = "workspace"
 tag-name = "v{{version}}"
 
 [dependencies]
-rdocx-layout = { workspace = true }
-pdf-writer = { workspace = true }
-subsetter = { workspace = true }
-ttf-parser = { workspace = true }
-miniz_oxide = { workspace = true }
-tiny-skia = { workspace = true }
+oxml-pdf = { workspace = true }

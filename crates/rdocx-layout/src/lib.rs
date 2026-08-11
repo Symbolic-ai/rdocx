@@ -8,22 +8,17 @@
 #![allow(clippy::too_many_arguments)]
 
 pub mod block;
-pub mod bundled_fonts;
+mod convert;
 pub mod engine;
-pub mod error;
-pub mod font;
 pub mod input;
-pub mod line;
-pub mod output;
 pub mod paginator;
 pub mod style_resolver;
 pub mod table;
 
-pub use error::{LayoutError, Result};
-pub use input::{FontFile, ImageData, LayoutInput};
-pub use output::{
-    Color, DocumentMetadata, FontData, FontId, GlyphRun, LayoutResult, PageFrame, Point,
-    PositionedElement, Rect,
+pub use input::{ImageData, LayoutInput, MediaRegistry};
+pub use oxml_layout::{
+    Color, DocumentMetadata, FontData, FontFile, FontId, GlyphRun, LayoutError, LayoutResult,
+    PageFrame, Point, PositionedElement, Rect, Result,
 };
 
 /// Lay out a complete DOCX document, producing positioned page frames.

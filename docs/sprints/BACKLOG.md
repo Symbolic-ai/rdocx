@@ -17,11 +17,11 @@ regenerated, never hand-edited.
 | Milestone | F-IDs | Done | In Progress | Pending |
 |-----------|-------|------|-------------|---------|
 | M1, Preparation and safety net              | 12 | 12 | 0 | 0  |
-| M2, Shared infrastructure extraction        | 10 | 7 | 0 | 3  |
-| M3, Media                                   | 6  | 4 | 0 | 2  |
+| M2, Shared infrastructure extraction        | 10 | 10 | 0 | 0  |
+| M3, Media                                   | 6  | 6 | 0 | 0  |
 | M4, Layout primitives                       | 8  | 8 | 0 | 0  |
 | M5, PDF backend                             | 9  | 9 | 0 | 0  |
-| M6, Shared publication and rdocx cutover     | 6  | 4 | 0 | 2  |
+| M6, Shared publication and rdocx cutover     | 6  | 6 | 0 | 0  |
 | M7, DrawingML                               | 19 | 19 | 0 | 0  |
 | M8, PresentationML                          | 14 | 14 | 0 | 0  |
 | M9, Inheritance resolver                    | 8  | 8 | 0 | 0  |
@@ -29,8 +29,8 @@ regenerated, never hand-edited.
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
-| X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **158** | **129** | **0** | **29** |
+| X, Cross-cutting (opportunistic)            | 5  | 1 | 0 | 4  |
+| **Total** | **159** | **137** | **0** | **22** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -61,14 +61,14 @@ regenerated, never hand-edited.
 |------|-------|--------|------|--------|
 | F-013 | Create oxml-core                             | S03 | M | done |
 | F-014 | New unit types                               | S03 | M | done |
-| F-015 | rdocx-oxml becomes a facade                  | S32.2 | S | pending |
-| F-016 | Length re-export                             | S32.2 | S | pending |
+| F-015 | rdocx-oxml becomes a facade                  | S32.2 | S | done |
+| F-016 | Length re-export                             | S32.2 | S | done |
 | F-017 | App and custom properties                    | S03 | M | done |
 | F-018 | Create oxml-opc                              | S04 | M | done |
 | F-019 | PresentationML relationship and content types| S04 | S | done |
 | F-020 | oxml-opc reads a pptx                        | S04 | M | done |
 | F-021 | Zip-slip hardening tests                     | S04 | S | done |
-| F-022 | rdocx-opc deprecation shim                   | S32.2 | S | pending |
+| F-022 | rdocx-opc deprecation shim                   | S32.2 | S | done |
 <!-- AUTOGEN:backlog-M2 END -->
 
 ### M3, Media
@@ -80,8 +80,8 @@ regenerated, never hand-edited.
 | F-024 | Image probing and DPI                        | S05 | L | done |
 | F-025 | MediaNamer                                   | S05 | S | done |
 | F-026 | native_size with explicit DPI                | S05 | S | done |
-| F-027 | rdocx adopts oxml-media                      | S32.2 | M | pending |
-| F-028 | add_picture_auto                             | S32.2 | S | pending |
+| F-027 | rdocx adopts oxml-media                      | S32.2 | M | done |
+| F-028 | add_picture_auto                             | S32.2 | S | done |
 <!-- AUTOGEN:backlog-M3 END -->
 
 ### M4, Layout primitives
@@ -120,12 +120,12 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-M6 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-046 | rdocx layout and PDF cutover                 | S32.2 | M | pending |
+| F-046 | rdocx layout and PDF cutover                 | S32.2 | M | done |
 | F-047 | Packaging include and size gate              | S32.1 | M | done |
 | F-048 | Automate split-family release preparation   | S32.1 | M | done |
 | F-049 | Extend publish.yml to the extracted workspace| S32.1 | M | done |
 | F-050 | CI matrix additions                          | S32.1 | S | done |
-| F-051 | CHANGELOG and migration notes                | S32.2 | S | pending |
+| F-051 | CHANGELOG and migration notes                | S32.2 | S | done |
 <!-- AUTOGEN:backlog-M6 END -->
 
 ### M7, DrawingML
@@ -289,4 +289,5 @@ regenerated, never hand-edited.
 | F-X002 | README example correctness                  | -   | S | pending |
 | F-X003 | Deduplicate the sample generators           | -   | S | pending |
 | F-X004 | Fix the shared temp path in the test suite  | -   | S | pending |
+| F-X005 | Tag rpptx-v0.1.2                            | S32.2 | S | done |
 <!-- AUTOGEN:backlog-MX END -->

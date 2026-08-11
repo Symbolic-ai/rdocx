@@ -185,7 +185,9 @@ survive, then the reverse. python-docx as a CI dev dependency is free.
 
 `rdocx-wasm` holds only `CT_Document` and `CT_Styles`. `from_bytes` stores
 `package_bytes` and immediately marks it `#[allow(dead_code)]`. `to_docx_bytes`
-discards it and calls `OpcPackage::new_docx()`.
+discards it and rebuilds a package through `oxml_opc::OpcPackage` with the Word
+main part, content-type overrides, styles part, and styles relationship
+configured at this consumer boundary.
 
 Round-tripping any real document through it **silently destroys** every image
 and its relationships, headers and footers, numbering, settings, the theme, the

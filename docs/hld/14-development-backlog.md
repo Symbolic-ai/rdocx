@@ -150,14 +150,16 @@ helpers in the staged crate.
 **Test gate**: round-trip assertions including `Angle::from_degrees(90.0).0 == 5_400_000`.
 
 ### F-015, rdocx-oxml becomes a facade (S)
-The three-line re-export block. Zero call-site changes across 323 uses.
-**Depends on**: F-013.
-**Test gate**: `git diff --stat` shows only `lib.rs`, `namespace.rs` and
-`Cargo.toml` modified plus five deletions, and the workspace tests pass.
+`rdocx-oxml` re-exports the shared modules, error surface and namespace helpers
+from published `oxml-core` 0.1.2. Existing public paths and all internal call
+sites remain source compatible. `Cargo.lock` records the one-way dependency.
+**Depends on**: F-013, F-X005.
+**Test gate**: the crate-local diff changes only `lib.rs`, `namespace.rs` and
+`Cargo.toml` plus five deletions. The workspace tests and hash harness pass.
 
 ### F-016, Length re-export (S)
 Delete `crates/rdocx/src/length.rs`, re-export from `oxml-core`.
-**Depends on**: F-013.
+**Depends on**: F-013, F-X005.
 **Test gate**: workspace compiles with no call-site changes.
 
 ### F-017, App and custom properties (M)
@@ -196,7 +198,7 @@ normalised.
 ### F-022, rdocx-opc deprecation shim (S)
 `pub use oxml_opc::*` with a deprecation note, description updated, consumers
 flipped to `oxml_opc` directly.
-**Depends on**: F-018.
+**Depends on**: F-018, F-X005.
 **Test gate**: workspace compiles, and `rdocx::Error::Opc` wraps the new type.
 
 ---
@@ -206,7 +208,8 @@ flipped to `oxml_opc` directly.
 **Goal**: one isolated staged crate owns everything about an image byte string.
 
 **End-of-milestone gate**: the staged crate passes its tests and the hash
-harness remains unchanged. The sniffed content-type delta waits for F-027.
+harness remains unchanged. F-027 later proves sniffed content types with a
+focused package regression.
 
 ### F-023, oxml-media format sniffing (M)
 `ImageFormat::sniff`, `from_extension`, `extension`, `content_type`, `resolve`.
@@ -234,18 +237,24 @@ Word's 96.
 **Test gate**: a 96 dpi PNG probed at `default_dpi = 72` yields the expected EMU.
 
 ### F-027, rdocx adopts oxml-media (M)
-Delete `image_extension`, `image_content_type`, `guess_image_content_type` and
-the `image_counter` field. Rewire `store_image_part`.
-**Depends on**: F-023, F-025.
-**Test gate**: the hash harness delta is exactly the sniffed content types, and
-each is individually justified in the commit message.
+`rdocx::Document` uses `MediaNamer` for scanned collision-free allocation and
+shared byte-first format resolution for package metadata, HTML, and layout
+inputs. The facade has no local image numbering, extension, or MIME helper.
+**Depends on**: F-023, F-025, F-X005.
+**Test gate**: a mislabelled image is stored with its sniffed extension and
+content type, naming remains collision-safe, and the hash harness is unchanged.
 
 ### F-028, add_picture_auto (S)
-A new method inferring intrinsic size, rather than changing `add_picture`'s
-signature which has call sites in five examples.
-**Depends on**: F-026.
-**Test gate**: a picture added with no explicit size matches the image's native
-dimensions at 72 dpi.
+`Document::add_picture_auto` probes and sizes image bytes at a 72 DPI caller
+default before mutation, converts the shared EMU dimensions with `Length::emu`,
+and delegates successful insertion to the existing `add_picture` path. This is
+an additive API, so the explicit-size signature and its existing callers stay
+unchanged. Unavailable dimensions return a typed error carrying the filename
+without adding a part, relationship, drawing, or paragraph.
+**Depends on**: F-026, F-027.
+**Test gate**: a picture added with no explicit size has exact 72 DPI EMU
+dimensions before and after round-trip, while unavailable dimensions fail
+atomically.
 
 ---
 
@@ -403,7 +412,7 @@ the `.crate` sizes are under the limit.
 Move `rdocx-layout` onto the published `oxml-layout` types through its retained
 flow-model facade, add the `rdocx-pdf` deprecation shim over published
 `oxml-pdf`, and install the rdocx-side conversion boundary deferred from F-030.
-**Depends on**: F-030, F-037, F-047 through F-050.
+**Depends on**: F-030, F-037, F-047 through F-050, F-X005.
 **Test gate**: the workspace compiles, `rdocx::Error::Layout` wraps the new
 type, and the hash harness is unchanged.
 
@@ -431,6 +440,7 @@ order.
 
 ### F-051, CHANGELOG and migration notes (S)
 Document the crate moves, the deprecations, and the eventual breaking cutover.
+**Depends on**: F-015, F-016, F-022, F-027, F-028, F-046, F-X005.
 **Test gate**: every renamed crate is named in the CHANGELOG with its replacement.
 
 ---
@@ -1100,3 +1110,13 @@ The read example uses `table.rows()` and `row.cells()`, neither of which exists.
 `integration_test.rs` writes to a fixed, non-unique temp path shared across
 concurrent runs.
 **Test gate**: two concurrent `cargo test` runs both pass.
+
+### F-X005, Tag rpptx-v0.1.2 (S)
+Retain complete registry metadata after the immutable partial 0.1.0
+publication, remove the CI-only tool dependency exposed by the 0.1.1 workflow,
+prepare the exact incubating family at 0.1.2, and publish it through a newly
+reviewed release tag before released rdocx consumers cut over.
+**Depends on**: F-047 through F-050.
+**Test gate**: all 12 incubating packages resolve from crates.io at 0.1.2 with
+the expected owner, and the GitHub release targets the newly reviewed sprint
+SHA.

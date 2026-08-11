@@ -65,18 +65,24 @@ alone, which matters for `rdocx-wasm`, which wants only `OpcPackage`.
 **`oxml-media` has no dependencies at all.** It owns byte sniffing, image header
 probing, and intrinsic EMU sizing through its local `NativeSize` value. It
 remains a leaf that anything can take cheaply without importing `oxml-core`.
+The `rdocx` facade depends on it directly for collision-free Word media names,
+sniffed package metadata, and byte-first HTML and layout MIME inputs.
 
 **`oxml-layout` is where the format boundary genuinely falls.** Its
-`output.rs` is already 100 percent docx-free: page frames, positioned elements,
-glyph runs, colours and fonts. Its sibling `input.rs` is 100 percent
-docx-specific and stays in `rdocx-layout`. That seam is the reason the PDF
-backend transfers for free.
+output, font, and line modules are 100 percent docx-free: page frames,
+positioned elements, glyph runs, colours, fonts, and owned line parameters.
+`rdocx-layout` keeps its Word-specific input and converts paragraph alignment,
+tabs, leaders, underlines, spacing, wrapping, and twips in `convert.rs`. The
+converter also preserves Word's established glyph slicing and automatic line
+height at this boundary. That seam is the reason the PDF backend transfers for
+free.
 
 **`oxml-pdf` consumes `LayoutResult` and shared image metadata.** It depends on
 `oxml-layout` for the rendering contract and on `oxml-media` for byte sniffing
 and header probing. It has no format-specific workspace dependency. A slide is
 a page with a fixed size, so the same crate serves both formats without knowing
-either exists.
+either exists. The `rdocx` facade renders through this crate directly, while
+`rdocx-pdf` remains an exact deprecated re-export shim.
 
 **`rpptx-layout` is separate from `rpptx-render`.** The inheritance resolver
 produces a `ResolvedSlide` in which every theme reference, colour transform and
@@ -104,15 +110,23 @@ and footers, footnotes, placeholder replacement, and `drawing.rs`. The
 so it is not migrated.
 
 `rdocx-layout` keeps the flow model: the engine, the paginator, blocks, tables
-and the style resolver. Slides do not paginate, so none of it transfers.
+and the style resolver. Slides do not paginate, so none of it transfers. The
+flow engine resolves Word relationship IDs to content-addressed `MediaId`
+values before pagination, and page output carries the resolved bytes and MIME
+type rather than a relationship-scoped placeholder. One `MediaRegistry` per
+layout compares complete bytes, assigns deterministic alternate IDs when two
+compact keys collide, and is shared by the lower-level layout and pagination
+entry points.
 
 ## Versioning
 
-During PowerPoint development, each implemented `oxml-*` and `rpptx-*` crate
-keeps its reserved `version = "0.0.0"` and sets `publish = false`. The released
-`rdocx-*` crates continue to use the workspace version. PowerPoint development
-crates remain unpublished until that implementation is complete and a separate
-reviewed publication plan receives explicit approval.
+The 12 implemented shared and PowerPoint publication candidates carry an
+explicit common incubating version of 0.1.2 in their manifests and workspace
+pins. The released `rdocx-*` crates continue to use the separate workspace
+version. Version preparation and manifest eligibility do not authorize
+publication. Registry publication for this family is authorized only when
+`/release rpptx-v0.1.2` reaches its exact reviewed SHA and receives the
+separate final approval at the external mutation boundary.
 
 `rpptx-*` crates carry their own `keywords` and `categories`, because the
 workspace values say `["docx", "word"]` which would be wrong on a presentation

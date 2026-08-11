@@ -1,6 +1,7 @@
 [package]
 name = "rpptx"
-version = "0.0.0"
+description = "Read, edit, create, and render PowerPoint-compatible presentations"
+version = "0.1.2"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

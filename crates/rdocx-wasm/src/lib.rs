@@ -5,7 +5,7 @@
 
 use wasm_bindgen::prelude::*;
 
-use rdocx_opc::OpcPackage;
+use oxml_opc::OpcPackage;
 use rdocx_oxml::document::{BodyContent, CT_Document};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::styles::CT_Styles;
@@ -13,6 +13,11 @@ use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R};
 
 use std::collections::HashMap;
+
+const DOCUMENT_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
+const STYLES_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml";
 
 /// A Word document (.docx) that can be created, modified, and exported.
 #[wasm_bindgen]
@@ -63,7 +68,7 @@ impl WasmDocument {
         let styles = package
             .get_part_rels(&doc_part)
             .and_then(|rels| {
-                rels.get_by_type(rdocx_opc::relationship::rel_types::STYLES)
+                rels.get_by_type(oxml_opc::relationship::rel_types::STYLES)
                     .map(|r| OpcPackage::resolve_rel_target(&doc_part, &r.target))
             })
             .and_then(|part_name| package.get_part(&part_name))
@@ -171,12 +176,15 @@ impl WasmDocument {
     #[wasm_bindgen(js_name = "toDocxBytes")]
     pub fn to_docx_bytes(&self) -> Result<Vec<u8>, JsValue> {
         // Build a minimal OPC package
-        let mut package = OpcPackage::new_docx();
+        let mut package = OpcPackage::with_main_part("word/document.xml", DOCUMENT_CONTENT_TYPE);
+        package
+            .content_types
+            .add_override("/word/styles.xml", STYLES_CONTENT_TYPE);
 
         // Add styles relationship
         package
             .get_or_create_part_rels("/word/document.xml")
-            .add(rdocx_opc::relationship::rel_types::STYLES, "styles.xml");
+            .add(oxml_opc::relationship::rel_types::STYLES, "styles.xml");
 
         // Serialize document
         let doc_xml = self
@@ -250,5 +258,36 @@ impl WasmDocument {
             images: HashMap::new(),
             hyperlink_urls: HashMap::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wasm_new_document_uses_the_shared_word_package_setup() {
+        let document = WasmDocument::new();
+        let bytes = document.to_docx_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+
+        assert_eq!(
+            package.main_document_part().as_deref(),
+            Some("/word/document.xml")
+        );
+        assert_eq!(
+            package.content_types.content_type_for("/word/document.xml"),
+            Some(DOCUMENT_CONTENT_TYPE)
+        );
+        assert_eq!(
+            package.content_types.content_type_for("/word/styles.xml"),
+            Some(STYLES_CONTENT_TYPE)
+        );
+        assert!(package.get_part("/word/styles.xml").is_some());
+        let styles = package
+            .get_part_rels("/word/document.xml")
+            .and_then(|rels| rels.get_by_type(oxml_opc::relationship::rel_types::STYLES))
+            .expect("WASM document must relate its styles part");
+        assert_eq!(styles.target, "styles.xml");
     }
 }

@@ -17,10 +17,13 @@ shared-version = "workspace"
 tag-name = "v{{version}}"
 
 [dependencies]
-rdocx-opc = { workspace = true }
+oxml-core = { workspace = true }
+oxml-layout = { workspace = true }
+oxml-media = { workspace = true }
+oxml-opc = { workspace = true }
+oxml-pdf = { workspace = true }
 rdocx-oxml = { workspace = true }
 rdocx-layout = { workspace = true }
-rdocx-pdf = { workspace = true }
 rdocx-html = { workspace = true }
 thiserror = { workspace = true }
 regex = { workspace = true }

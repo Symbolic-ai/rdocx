@@ -1,6 +1,7 @@
 [package]
 name = "rpptx-chart"
-version = "0.0.0"
+description = "ChartML modeling, editing, and rendering geometry for presentations"
+version = "0.1.2"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

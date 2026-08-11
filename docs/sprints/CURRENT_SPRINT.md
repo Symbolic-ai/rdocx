@@ -1,55 +1,69 @@
-# Current Sprint, S32.1
+# Current Sprint, S32.2
 
 **Milestone**: M6 Shared publication and rdocx cutover.
 
-**Goal**: Make the completed shared crates packageable, fully gated, and ready
-for an explicitly approved publication without publishing from this sprint.
-Prepare deterministic package contents, split-family release preparation, the
-expanded publication workflow, and the missing CI jobs as one reviewable wave.
+**Goal**: After the real shared crates are published through their approved
+release plan, move released rdocx consumers onto them and document the cutover.
+Preserve existing call sites through facades and shims, admit only the declared
+F-027 package metadata change, and prove released packages against registry
+versions.
 
 ## Spec references
 
-- `docs/hld/11-migration-plan.md`, for the deferred shared-crate publication
-  boundary, dependency-ordered release tooling, and later rdocx cutover.
-- `docs/hld/12-testing-strategy.md`, for the package dry-run, archive-size,
-  no-default-features, wasm, prose, and unchanged hash-harness gates.
-- `docs/hld/14-development-backlog.md`, for F-047 through F-050 dependencies,
-  focused test gates, and the M6 end-of-milestone gate.
-- `docs/hld/15-build-and-toolchain.md`, for package include contents, bundled
-  font licences, archive verification, dependency order, tag namespaces,
-  release preparation, and the CI job matrix.
+- `docs/hld/03-architecture.md`, for the final shared, WordprocessingML, and
+  rendering crate boundaries plus the permitted dependency directions.
+- `docs/hld/04-opc-and-packaging.md`, for shared OPC ownership, media naming,
+  byte-sniffed content types, image probing, and intrinsic EMU sizing.
+- `docs/hld/08-rendering-spec.md`, for the shared layout result and PDF backend
+  contract that F-046 installs behind the retained rdocx flow model.
+- `docs/hld/11-migration-plan.md`, for facade mechanics, cutover order,
+  deprecation shims, behaviour preservation, and the approved release boundary.
+- `docs/hld/12-testing-strategy.md`, for workspace, archive, deterministic
+  rendering, focused package regressions, and hash-harness evidence.
+- `docs/hld/14-development-backlog.md`, for F-015, F-016, F-022, F-027, F-028,
+  F-046, and F-051 dependencies and test gates.
+- `docs/hld/15-build-and-toolchain.md`, for registry publication order,
+  package verification, split release families, and CI enforcement.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-047 | Packaging include and size gate | M | done | - |
-| F-048 | Automate split-family release preparation | M | done | - |
-| F-050 | CI matrix additions | S | done | - |
-| F-049 | Extend publish.yml to the extracted workspace | M | done | - |
+| F-X005 | Tag rpptx-v0.1.2 | S | done | - |
+| F-015 | rdocx-oxml becomes a facade | S | done | - |
+| F-016 | Length re-export | S | done | - |
+| F-022 | rdocx-opc deprecation shim | S | done | - |
+| F-027 | rdocx adopts oxml-media | M | done | - |
+| F-028 | add_picture_auto | S | done | - |
+| F-046 | rdocx layout and PDF cutover | M | done | - |
+| F-051 | CHANGELOG and migration notes | S | done | - |
 
 ## Sequencing note
 
-Rows are listed in dependency order, not F-ID order. F-047 depends only on the
-completed F-037 package boundary, while F-048 and F-050 may also begin
-independently. F-049 starts after F-048 has established the stable and
-incubating release preparation contract, then extends publication over the
-full dependency graph using both tag namespaces.
+Rows are listed in dependency order, not F-ID order. F-X005 repairs the
+registry metadata rejected during the immutable partial 0.1.0 publication and
+the CI-only tool dependency exposed before upload by the immutable 0.1.1 run,
+then prepares and publishes the incubating family at 0.1.2. Its verified
+registry result is the common prerequisite for all consumer cutovers. F-028
+follows F-027, and the remaining cutovers are ordered by file overlap during
+implementation. F-051 follows the integrated cutovers so its migration notes
+describe the final released surface rather than an intermediate state.
 
 ## Definition of done for this sprint
 
-- `cargo package --list` includes every required `oxml-layout` TTF and licence
-  file, archive verification is enabled, and every candidate archive is under
-  the crates.io 10 MiB limit.
-- A dry-run release preparation updates `[workspace.package]`, every internal
-  `[workspace.dependencies]` version pin, and the lockfile without rewriting
-  README prose.
-- The publication workflow supports the stable and incubating tag namespaces
-  and dry-runs the expanded workspace graph in dependency order.
-- CI exercises `oxml-layout` without default features, checks the supported
-  wasm targets, and enforces the tracked Markdown prose rules on a clean tree.
-- The full workspace gate passes and all 28 deterministic hashes remain
-  unchanged unless a design plan declares and reviews a behavioural delta.
-- No crate is published during S32.1. S32.2 remains blocked until an explicitly
-  approved release places the shared versions in the registry and a clean
-  consumer resolves them.
+- The approved shared-crate versions exist in the registry, and a clean
+  consumer resolves them without local patches.
+- `rdocx-oxml` becomes the specified facade and `rdocx::Length` re-exports the
+  shared type without call-site churn.
+- `rdocx-opc` and `rdocx-pdf` are deprecated shims, direct consumers use the
+  shared crates, and public error variants wrap the shared types.
+- Released rdocx media handling uses `oxml-media`, and `add_picture_auto`
+  produces intrinsic dimensions at 72 dpi.
+- `rdocx-layout` retains its flow model while consuming shared layout types,
+  and the PDF path uses the published shared backend through the approved
+  conversion boundary.
+- CHANGELOG and migration notes name every moved or deprecated crate and the
+  breaking cutover surface.
+- Released rdocx packages pass archive verification, the F-027 package
+  regression proves sniffed media metadata, the full workspace gate passes,
+  and all 28 hash entries remain unchanged.

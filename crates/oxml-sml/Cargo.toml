@@ -1,6 +1,7 @@
 [package]
 name = "oxml-sml"
-version = "0.0.0"
+description = "SpreadsheetML workbook primitives for OOXML documents"
+version = "0.1.2"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

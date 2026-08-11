@@ -11,28 +11,26 @@
 #![allow(clippy::should_implement_trait)]
 
 pub mod borders;
-pub mod core_properties;
 pub mod document;
 pub mod drawing;
-pub mod error;
 pub mod footnotes;
 pub mod header_footer;
 pub mod namespace;
 pub mod numbering;
 pub mod placeholder;
 pub mod properties;
-pub mod raw_xml;
 pub mod shared;
 pub mod styles;
 pub mod table;
 pub mod text;
 pub mod theme;
-pub mod units;
-mod xml_text;
+
+pub use error::{OxmlError, Result};
+pub(crate) use oxml_core::xml_text;
+pub use oxml_core::{core_properties, error, raw_xml, units};
 
 pub use borders::{CT_BorderEdge, CT_PBdr, CT_TabStop, CT_Tabs};
 pub use document::{BodyContent, CT_Body, CT_Document, CT_SectPr};
-pub use error::{OxmlError, Result};
 pub use numbering::{CT_AbstractNum, CT_Lvl, CT_Num, CT_Numbering, ST_NumberFormat};
 pub use properties::{CT_PPr, CT_RPr};
 pub use shared::{

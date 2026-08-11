@@ -1,6 +1,7 @@
 [package]
 name = "oxml-opc"
-version = "0.0.0"
+description = "Open Packaging Conventions primitives for OOXML documents"
+version = "0.1.2"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

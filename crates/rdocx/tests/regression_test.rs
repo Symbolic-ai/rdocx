@@ -8,6 +8,46 @@ use std::collections::HashMap;
 use rdocx::{Document, Length};
 
 #[test]
+fn mislabelled_jpeg_uses_sniffed_package_metadata() {
+    let jpeg = [0xff, 0xd8, 0xff, 0xd9];
+    let mut seed = Document::new();
+    let seed_bytes = seed.to_bytes().unwrap();
+    let mut seed_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed_bytes)).unwrap();
+    seed_package
+        .content_types
+        .add_default("jpeg", "application/octet-stream");
+    let mut reopened_bytes = std::io::Cursor::new(Vec::new());
+    seed_package.write_to(&mut reopened_bytes).unwrap();
+    let mut document = Document::from_bytes(&reopened_bytes.into_inner()).unwrap();
+
+    document.add_picture(
+        &jpeg,
+        "mislabelled.png",
+        Length::inches(1.0),
+        Length::inches(1.0),
+    );
+
+    let bytes = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let part_name = "/word/media/image1.jpeg";
+
+    assert_eq!(package.get_part(part_name), Some(jpeg.as_slice()));
+    assert_eq!(
+        package.content_types.content_type_for(part_name),
+        Some("image/jpeg")
+    );
+
+    let image_relationship = package
+        .get_part_rels("/word/document.xml")
+        .and_then(|relationships| {
+            relationships.get_by_type(oxml_opc::relationship::rel_types::IMAGE)
+        })
+        .expect("document should relate the sniffed image part");
+    assert_eq!(image_relationship.target, "media/image1.jpeg");
+}
+
+#[test]
 fn next_image_name_uses_the_highest_existing_index_not_the_part_count() {
     let cases: &[(&[&str], &str)] = &[
         (
@@ -28,7 +68,7 @@ fn next_image_name_uses_the_highest_existing_index_not_the_part_count() {
         let mut seed = Document::new();
         let seed_bytes = seed.to_bytes().unwrap();
         let mut package =
-            rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(seed_bytes)).unwrap();
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed_bytes)).unwrap();
         for name in *existing_names {
             package.set_part(name, vec![0xAA]);
         }
@@ -44,8 +84,7 @@ fn next_image_name_uses_the_highest_existing_index_not_the_part_count() {
         );
 
         let saved = reopened.to_bytes().unwrap();
-        let saved_package =
-            rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+        let saved_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
         assert_eq!(
             saved_package.get_part(expected_name),
             Some([0x11, 0x22, 0x33].as_slice()),
@@ -58,7 +97,7 @@ fn next_image_name_uses_the_highest_existing_index_not_the_part_count() {
 fn malformed_media_names_do_not_change_the_highest_image_index() {
     let mut seed = Document::new();
     let seed_bytes = seed.to_bytes().unwrap();
-    let mut package = rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(seed_bytes)).unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed_bytes)).unwrap();
     for name in [
         "/word/media/image4.png",
         "/word/media/image.png",
@@ -82,7 +121,7 @@ fn malformed_media_names_do_not_change_the_highest_image_index() {
     );
 
     let saved = reopened.to_bytes().unwrap();
-    let saved_package = rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let saved_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
     assert_eq!(
         saved_package.get_part("/word/media/image5.png"),
         Some([0x44, 0x55, 0x66].as_slice())
@@ -93,7 +132,7 @@ fn malformed_media_names_do_not_change_the_highest_image_index() {
 fn occupied_max_image_suffix_wraps_to_a_free_low_number() {
     let mut document = Document::new();
     let bytes = document.to_bytes().unwrap();
-    let mut package = rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
     let lower_name = format!("/word/media/image{}.png", usize::MAX - 1);
     let max_name = format!("/word/media/image{}.png", usize::MAX);
 
@@ -112,7 +151,7 @@ fn occupied_max_image_suffix_wraps_to_a_free_low_number() {
     );
 
     let saved = reopened.to_bytes().unwrap();
-    let saved_package = rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let saved_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
 
     assert_eq!(
         saved_package.get_part("/word/media/image2.png"),
@@ -131,7 +170,7 @@ fn occupied_max_image_suffix_wraps_to_a_free_low_number() {
 fn max_minus_one_allocates_max_then_wraps_safely() {
     let mut document = Document::new();
     let bytes = document.to_bytes().unwrap();
-    let mut package = rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
     let lower_name = format!("/word/media/image{}.png", usize::MAX - 1);
     let max_name = format!("/word/media/image{}.png", usize::MAX);
 
@@ -154,7 +193,7 @@ fn max_minus_one_allocates_max_then_wraps_safely() {
     );
 
     let saved = reopened.to_bytes().unwrap();
-    let saved_package = rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let saved_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
 
     assert_eq!(saved_package.get_part(&lower_name), Some([0xaa].as_slice()));
     assert_eq!(
@@ -250,16 +289,15 @@ fn styles_part_is_reachable_after_save() {
     doc.add_paragraph("Body");
     let bytes = doc.to_bytes().unwrap();
 
-    let pkg = rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let pkg = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
 
     let rels = pkg
         .get_part_rels("/word/document.xml")
         .expect("document should have relationships");
     let styles_rel = rels
-        .get_by_type(rdocx_opc::relationship::rel_types::STYLES)
+        .get_by_type(oxml_opc::relationship::rel_types::STYLES)
         .expect("styles relationship must exist");
-    let target =
-        rdocx_opc::OpcPackage::resolve_rel_target("/word/document.xml", &styles_rel.target);
+    let target = oxml_opc::OpcPackage::resolve_rel_target("/word/document.xml", &styles_rel.target);
 
     assert!(
         pkg.get_part(&target).is_some(),
@@ -279,9 +317,9 @@ fn numbering_relationship_is_added_once() {
     doc.add_numbered_list_item("second", 0);
     let bytes = doc.to_bytes().unwrap();
 
-    let pkg = rdocx_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let pkg = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
     let rels = pkg.get_part_rels("/word/document.xml").unwrap();
-    let numbering_rels = rels.get_all_by_type(rdocx_opc::relationship::rel_types::NUMBERING);
+    let numbering_rels = rels.get_all_by_type(oxml_opc::relationship::rel_types::NUMBERING);
 
     assert_eq!(
         numbering_rels.len(),

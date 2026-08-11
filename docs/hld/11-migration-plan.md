@@ -2,10 +2,10 @@
 
 How the `oxml-*` crates are extracted without breaking a shipped library.
 
-Covers milestones M1 through M6. Shared implementations are staged in their new
-crate before a later facade step deletes the old files and installs re-exports.
-This keeps `cargo test --workspace` green at every independently revertible
-step. Git still recognises the final delete and add pairs as moves.
+Covers milestones M1 through M6. Shared implementations live in their neutral
+crates, while the released Word family retains only format-specific models and
+small compatibility shims. Each extraction step kept `cargo test --workspace`
+green and independently revertible.
 
 ## The safety net comes first
 
@@ -21,33 +21,36 @@ API. For each sample, record a digest of the flushed `document.xml`,
 every step, and treat any delta as a defect until it is explained.
 
 **Deterministic font mode is a prerequisite for that harness**, not an
-optimisation. `crates/rdocx-layout/src/font.rs:93` calls `load_system_fonts()`,
-and system fonts differ by platform, so a digest recorded on one machine would
-not match one recorded on another. The harness and the SSIM gate render from
-bundled fonts only, with system loading bypassed. This is also the first thing
-to exercise the `--no-default-features` path.
+optimisation. System fonts differ by platform, so a digest recorded on one
+machine would not match one recorded on another. The harness and the SSIM gate
+use `oxml_layout::FontManager::new_deterministic()` and render from bundled
+fonts only, with system loading bypassed. The shared layout
+`--no-default-features` path proves the same isolation used by WASM.
 
 ## The facade trick
 
-`matches_local_name` has **323 call sites across 13 files** in `rdocx-oxml`.
-Migrating them individually would be a large, risky, reviewer-hostile diff.
+The namespace helpers have call sites throughout `rdocx-oxml`. Migrating them
+individually would be a large, risky, reviewer-hostile diff.
 
-Instead, `rdocx-oxml` becomes a facade over `oxml-core`, and **not one call site
-changes**:
+`rdocx-oxml` is therefore a facade over the published `oxml-core` 0.1.2 crate,
+and **not one call site changes**:
 
 ```rust
 // crates/rdocx-oxml/src/lib.rs
-pub use oxml_core::{core_properties, raw_xml, units};
-pub use oxml_core::error::{OxmlError, Result};
+pub use oxml_core::{core_properties, error, raw_xml, units};
+pub use error::{OxmlError, Result};
 pub(crate) use oxml_core::xml_text;
 
 // crates/rdocx-oxml/src/namespace.rs keeps W_NS and W_PREFIX, and adds:
 pub use oxml_core::xml::{matches_local_name, R_NS, MC_NS};
 ```
 
-The acceptance check is mechanical: `git diff --stat` shows only `lib.rs`,
-`namespace.rs` and `Cargo.toml` modified, plus five deletions. The same pattern
-moves `Length` with zero churn.
+The shared implementation is consumed only after its exact 0.1.2 release is
+resolvable from crates.io. The acceptance check is mechanical: the crate-local
+diff shows only `lib.rs`, `namespace.rs` and `Cargo.toml` modified, plus five
+deletions. `Cargo.lock` records the one-way dependency edge. The `rdocx` facade
+uses the same pattern for `Length`: it directly depends on `oxml-core`,
+re-exports `oxml_core::Length`, and keeps every existing caller unchanged.
 
 This is what makes the bulk of the extraction low-risk, and it is worth stating
 plainly: most of this migration is a re-export block.
@@ -66,7 +69,7 @@ plainly: most of this migration is a re-export block.
 | 8 | PowerPoint implementation | Finish and review the shared-crate publication plan before any released rdocx package consumes real development code |
 | 9 | `rdocx-oxml` and `Length` cutover | Apply the re-export block above and delete the staged duplicates |
 | 10 | `rdocx-opc` cutover | Install the deprecated shim, flip direct consumers, and change `rdocx::Error::Opc` to the shared type |
-| 11 | Media and layout cutover | Move released rdocx consumers onto the published shared crates and delete their staged duplicates |
+| 11 | Media and layout cutover | Released rdocx media handling uses published `oxml-media`. The layout type cutover follows separately |
 | 12 | `rdocx-pdf` cutover | Install `pub use oxml_pdf::*` after the shared backend is publishable |
 
 Staging steps keep every released rdocx package on its published dependency
@@ -75,13 +78,13 @@ the real shared crates have an approved publication path. This preserves the
 full package dry-run gate without publishing development crates early, and
 each step remains independently revertable.
 
-## The one piece of real API design
+## The Word conversion boundary
 
-**`crates/rdocx-layout/src/line.rs` is the only file in the extraction that
-cannot move verbatim.** It imports `CT_TabStop`, `ST_Jc`, `ST_TabJc`,
-`ST_Underline` and `Twips` from `rdocx-oxml`.
+`oxml-layout` owns line breaking and its parameters. The concrete functions in
+`crates/rdocx-layout/src/convert.rs` translate the retained Word flow values at
+the engine boundary.
 
-| Today | In `oxml-layout` |
+| Word input | Shared layout value |
 |---|---|
 | `CT_TabStop` | `TabStop { pos_pt: f64, align: TabAlign, leader: Option<TabLeader> }` |
 | `ST_Jc` | `Align { Start, Center, End, Justify, Distribute }` |
@@ -93,10 +96,11 @@ Tab positions become points rather than twips, because the layout engine already
 works in points everywhere else. Replacing the stringly-typed `line_rule` with a
 proper enum is a strict improvement.
 
-A roughly 40-line `LineBreakParams::from_docx` in a new
-`crates/rdocx-layout/src/convert.rs` keeps the docx side intact. Budget 150 to
-250 changed lines across `engine.rs`, `paginator.rs`, `block.rs` and `table.rs`,
-plus rewriting `line.rs`'s 11 tests. **Gate hard on the hash harness.**
+The converter uses concrete functions rather than a trait. It also preserves
+the pre-cutover glyph slices at Unicode wrap opportunities and restores Word's
+automatic line-height formula after shared line breaking. Those compatibility
+steps keep the 28-entry hash harness byte-identical while slide text retains
+its shared point-size spacing semantics.
 
 ## Preserve behaviour, do not improve it
 
@@ -118,15 +122,19 @@ The exception is behaviour that is a **defect**, which is fixed in M1 as its own
 commit with a reviewed hash delta: the image counter, the JPEG marker walk, and
 core-property resolution.
 
-One intentional delta is expected in M3: content types become sniffed from magic
-bytes, so a mislabelled `.png` that is really a JPEG now gets `image/jpeg`. The
-harness will flag it. Label the commit accordingly.
+One intentional package-structure difference is isolated in M3: rdocx content
+types and media part extensions are sniffed from magic bytes, so a mislabelled
+`.png` that is really a JPEG gets a `.jpeg` part and `image/jpeg`. A focused
+package regression pins the part name, content type, and relationship target.
+The 28-entry hash harness does not include those fields, so it remains
+unchanged.
 
 ## What happens to the published crates
 
-All seven released rdocx crates are published at 0.4.1. The development-only
-`oxml-*` and `rpptx*` crates remain unpublished until PowerPoint development is
-complete and a separate release is explicitly approved.
+All seven released rdocx crates are published at 0.4.1. The 12 implemented
+`oxml-*` and `rpptx*` packages are published at the complete shared 0.1.2
+boundary. Released rdocx consumers may depend on those registry-backed shared
+crates as their individual cutover stories land.
 
 | Crate | Fate |
 |---|---|
@@ -139,9 +147,13 @@ complete and a separate release is explicitly approved.
 **Do not yank anything.** Yanking is for broken or insecure releases. It breaks
 fresh resolution for existing users and does not remove the crate.
 
-Set each deprecated crate's `description` to "deprecated: moved to `oxml-opc`".
-That string is what appears on crates.io search results and docs.rs, and it is
-the only whole-crate deprecation signal Cargo surfaces.
+The `rdocx-opc` shim re-exports `oxml_opc` exactly and carries the package
+description `deprecated: moved to oxml-opc`. That string is what appears on
+crates.io search results and docs.rs, and it is the only whole-crate
+deprecation signal Cargo surfaces. Retained paths such as
+`rdocx_opc::OpcPackage` are type-identical to the shared type. The removed
+Word-specific `OpcPackage::new_docx` and `ContentTypes::new_docx` constructors
+are an intentional breaking change.
 
 A shim is cheap insurance specifically for `rdocx-oxml`, because rdocx's public
 API currently **leaks** its types (`CT_PPr`, `CT_SectPr`, `VMerge`, `Twips`)
@@ -153,9 +165,10 @@ The repository keeps the name `tensorbee/rdocx`, so **no existing link is
 affected at all**. crates.io indexes by crate name, docs.rs builds from the
 uploaded tarball, and no redirect is involved.
 
-The eventual rdocx cutover is a breaking release regardless of its assigned
-version. `Error::Opc` and `Error::Layout` change their inner types, `line.rs` is
-a public module whose types change, and `PositionedElement` becomes
+The rdocx cutover is a breaking release regardless of its assigned version.
+`Error::Opc` wraps `oxml_opc::OpcError`, `Error::Layout` wraps
+`oxml_layout::LayoutError`, and the removed public `rdocx_layout::line` module
+is replaced by shared root types. `PositionedElement` is also
 `#[non_exhaustive]`.
 
 ## Release tooling

@@ -1,12 +1,9 @@
 //! Block-level layout: paragraphs and tables as positioned blocks.
 
+use crate::table::TableBlock;
+use oxml_layout::{Align, Color, LayoutLine, MediaId};
 use rdocx_oxml::borders::CT_PBdr;
 use rdocx_oxml::drawing::{ST_RelativeFromH, ST_RelativeFromV};
-use rdocx_oxml::shared::ST_Jc;
-
-use crate::line::LayoutLine;
-use crate::output::Color;
-use crate::table::TableBlock;
 
 /// A floating drawing anchored to a paragraph.
 ///
@@ -37,8 +34,8 @@ pub struct AnchoredDrawing {
 /// The drawable content of an anchored drawing.
 #[derive(Debug, Clone)]
 pub enum AnchoredContent {
-    /// A picture, identified by its relationship ID.
-    Image { embed_id: String },
+    /// A picture resolved to its content-addressed shared media identity.
+    Image { media_id: MediaId },
     /// A shape: preset geometry, an optional fill, and optional text.
     ///
     /// The text arrives already laid out, because breaking it into lines needs
@@ -167,7 +164,7 @@ pub struct ParagraphBlock {
     /// Right indent in points.
     pub indent_right: f64,
     /// Paragraph justification.
-    pub jc: Option<ST_Jc>,
+    pub jc: Option<Align>,
     /// Keep with next paragraph.
     pub keep_next: bool,
     /// Keep all lines together on one page.
@@ -208,7 +205,7 @@ pub fn build_paragraph_block(
     shading: Option<Color>,
     indent_left: f64,
     indent_right: f64,
-    jc: Option<ST_Jc>,
+    jc: Option<Align>,
     keep_next: bool,
     keep_lines: bool,
     page_break_before: bool,
@@ -247,6 +244,7 @@ mod tests {
                     width: 0.0,
                     ascent: 10.0,
                     descent: 3.0,
+                    line_gap: 0.0,
                     height: 13.0,
                     indent_left: 0.0,
                     available_width: 468.0,
@@ -257,6 +255,7 @@ mod tests {
                     width: 0.0,
                     ascent: 10.0,
                     descent: 3.0,
+                    line_gap: 0.0,
                     height: 13.0,
                     indent_left: 0.0,
                     available_width: 468.0,

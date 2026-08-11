@@ -26,6 +26,6 @@ doc = false
 [dependencies]
 rdocx = { workspace = true }
 rdocx-oxml = { workspace = true }
-rdocx-opc = { workspace = true }
+oxml-opc = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }
