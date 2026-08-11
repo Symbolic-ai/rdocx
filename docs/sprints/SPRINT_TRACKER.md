@@ -44,6 +44,7 @@ defended.
 | S29 | M12 | 3 | 3 | 0 | 12 | 3 | Established the chart data layer with a minimal editable workbook writer, schema-aware ChartML core types, and consistent formula references and caches. Excel and LibreOffice Calc accepted the generated workbook, all 50 pinned decks passed the chart corpus gates, all 28 hashes remained unchanged, and no crate was published |
 | S30 | M12 | 4 | 4 | 0 | 12 | 4 | Completed typed axes, data labels, number formats, and all seven v1 plot families with reciprocal axis validation, 50-deck structural gates, SHA-bound viewer evidence, all 28 hashes unchanged, and no crate published |
 | S31 | M12 | 3 | 3 | 0 | 12 | 3 | Added atomic editable chart authoring, backend-neutral chart geometry, and deterministic axes, gridlines, labels, and legends. Pinned PowerPoint accepted the generated chart without repair and exposed exact editable workbook values, all 50 pinned chart decks and 28 hashes passed unchanged, and no crate was published |
+| S32 | M12 | 2 | 2 | 0 | 3 | 2 | Completed M12 with exact theme-mapped chart colours and source-scoped native or preserved fallbacks. The SHA-bound authored chart opened in pinned PowerPoint without repair, Edit Data exposed exact workbook values, the production renderer emitted native geometry, all 28 hashes remained unchanged, and no crate was published |
 
 ## Completed features
 
@@ -218,6 +219,7 @@ five working days.
 | S29 | 3 | 3 | 5.00 |
 | S30 | 4 | 4 | 5.00 |
 | S31 | 3 | 3 | 5.00 |
+| S32 | 2 | 2 | 5.00 |
 
 ## Escalation record
 
@@ -253,3 +255,4 @@ was done about it. Empty is the expected state.
 | 2026-08-10 | Sprint estimate variance exceeded 30 percent | S29 | Record 3 actual days against 12 estimated and reforecast 42 pending stories at the observed five stories per active week to about 9 active weeks, retaining dependency-defined sprint boundaries |
 | 2026-08-10 | Sprint estimate variance exceeded 30 percent | S30 | Record 4 actual days against 12 estimated and reforecast 38 pending stories at the observed five stories per active week to about 8 active weeks, retaining dependency-defined sprint boundaries |
 | 2026-08-10 | Sprint estimate variance exceeded 30 percent | S31 | Record 3 actual days against 12 estimated and reforecast 35 pending stories at the observed five stories per active week to about 7 active weeks, retaining dependency-defined sprint boundaries |
+| 2026-08-11 | Sprint estimate variance exceeded 30 percent | S32 | Record 2 actual days against 3 estimated and reforecast 33 pending stories at the observed five stories per active week to about 7 active weeks, retaining dependency-defined sprint boundaries |
