@@ -29,7 +29,7 @@ the consumer boundary rather than a wrapper or a new shared constructor.
 
 ## Approach
 
-After F-X005 publishes `oxml-opc` 0.1.1, reduce `rdocx-opc` to crate docs and
+After F-X005 publishes `oxml-opc` 0.1.2, reduce `rdocx-opc` to crate docs and
 `pub use oxml_opc::*`. Set its package description exactly to
 `deprecated: moved to oxml-opc`, remove its four obsolete implementation files
 and direct implementation dependencies, and depend only on `oxml-opc`.
@@ -66,7 +66,7 @@ signal, not a compiler warning on every re-export.
 | regression | legacy shim compile assertion | A retained `rdocx_opc::OpcPackage` path is the shared type |
 | integration | workspace compile with binding exclusions | Every direct consumer compiles after the path switch |
 | WASM | `cargo check --target wasm32-unknown-unknown -p rdocx-wasm` | The consumer-side Word setup remains target-safe |
-| packaging | affected package dry-runs | Registry `oxml-opc` 0.1.1 resolves and every archive verifies below 10 MiB |
+| packaging | affected package dry-runs | Registry `oxml-opc` 0.1.2 resolves and every archive verifies below 10 MiB |
 
 The backlog gate is a compiling workspace and an `rdocx::Error::Opc` variant
 that wraps the shared type.
@@ -78,7 +78,7 @@ that wraps the shared type.
 - `docs/hld/15-build-and-toolchain.md`
 
 Replace the stale `new_docx` WASM path and future publication wording with the
-explicit consumer setup and published 0.1.1 shared boundary.
+explicit consumer setup and published 0.1.2 shared boundary.
 
 ## Risk routing
 
@@ -92,7 +92,7 @@ explicit consumer setup and published 0.1.1 shared boundary.
 - WASM. Run the dedicated `rdocx-wasm` target check and the normal binding-safe
   workspace gate.
 - Version strings and publication boundary. Verify every selected manifest
-  resolves registry version 0.1.1 and make no tag or publication mutation here.
+  resolves registry version 0.1.2 and make no tag or publication mutation here.
 
 ## Hash harness
 
@@ -112,4 +112,4 @@ package bytes and renders.
 
 ## Open questions
 
-None. F-X005 publishes `oxml-opc` 0.1.1 before this consumer cutover.
+None. F-X005 publishes `oxml-opc` 0.1.2 before this consumer cutover.

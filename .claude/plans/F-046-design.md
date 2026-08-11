@@ -30,7 +30,7 @@ changing pagination or rendered output.
 
 ## Approach
 
-After F-X005 publishes `oxml-layout` and `oxml-pdf` 0.1.1, make
+After F-X005 publishes `oxml-layout` and `oxml-pdf` 0.1.2, make
 `rdocx-layout` retain only the Word flow input, engine, paginator, blocks,
 tables, and style resolver. Replace its duplicate neutral modules and bundled
 font assets with direct `oxml-layout` types and font services. Re-export the
@@ -75,7 +75,7 @@ layout result and backend. Change `rdocx::Error::Layout` to wrap
 | regression | image and field rendering tests | Media IDs, bytes, links, fields, metadata, outlines, and draw order survive the boundary |
 | regression | deterministic PDF and PNG corpus | All existing Word sample hashes remain identical |
 | dependency | cargo-tree assertions | `rdocx-layout -> oxml-layout` and `rdocx-pdf -> oxml-pdf`, with no reverse format-family edge |
-| packaging | affected archive dry-runs | Registry 0.1.1 dependencies resolve, required assets remain present, and archives stay below 10 MiB |
+| packaging | affected archive dry-runs | Registry 0.1.2 dependencies resolve, required assets remain present, and archives stay below 10 MiB |
 | WASM | binding-safe target checks | Disabling system fonts continues to compile where required |
 
 The backlog gate is a compiling workspace, the shared layout error type, and

@@ -69,7 +69,7 @@ prerequisite while preserving the exact facade contract.
   child-order, and round-trip tests through the facade without changing parser
   or serializer bodies.
 - Public API of a published crate. Confirm the existing paths remain source
-  compatible, resolve `oxml-core` 0.1.1 from the registry, run both package
+  compatible, resolve `oxml-core` 0.1.2 from the registry, run both package
   checks, and assert archives remain below 10 MiB.
 - File move with no behaviour change. Assert zero call-site edits and an
   unchanged deterministic hash harness.
@@ -88,4 +88,4 @@ Expected to remain unchanged. Any output delta is a defect.
 
 ## Open questions
 
-None. F-X005 publishes `oxml-core` 0.1.1 before this consumer cutover.
+None. F-X005 publishes `oxml-core` 0.1.2 before this consumer cutover.

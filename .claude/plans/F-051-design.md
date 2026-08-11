@@ -72,7 +72,7 @@ without changing system intent.
 
 - Public API documentation. Compare every migration statement to the exact
   integrated Rust surface and package descriptions.
-- Version strings. Name the verified shared 0.1.1 release and leave the stable
+- Version strings. Name the verified shared 0.1.2 release and leave the stable
   rdocx train Unreleased. Do not tag or publish.
 - New file. F-051 explicitly authorizes the root CHANGELOG. Add no second
   migration artifact.
