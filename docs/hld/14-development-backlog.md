@@ -1103,9 +1103,11 @@ The read example uses `table.rows()` and `row.cells()`, neither of which exists.
 concurrent runs.
 **Test gate**: two concurrent `cargo test` runs both pass.
 
-### F-X005, Tag rpptx-v0.1.0 (S)
-Prepare the exact incubating family at 0.1.0, then publish it through the
-reviewed release workflow before released rdocx consumers cut over.
+### F-X005, Recover rpptx-v0.1.1 (S)
+Add complete registry metadata after the immutable partial 0.1.0 publication,
+prepare the exact incubating family at 0.1.1, and publish it through a newly
+reviewed release tag before released rdocx consumers cut over.
 **Depends on**: F-047 through F-050.
-**Test gate**: all 12 incubating packages resolve from crates.io at 0.1.0 with
-the expected owner, and the GitHub release targets the reviewed sprint SHA.
+**Test gate**: all 12 incubating packages resolve from crates.io at 0.1.1 with
+the expected owner, and the GitHub release targets the newly reviewed sprint
+SHA.

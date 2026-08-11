@@ -289,5 +289,5 @@ regenerated, never hand-edited.
 | F-X002 | README example correctness                  | -   | S | pending |
 | F-X003 | Deduplicate the sample generators           | -   | S | pending |
 | F-X004 | Fix the shared temp path in the test suite  | -   | S | pending |
-| F-X005 | Tag rpptx-v0.1.0                            | S32.2 | S | in-progress |
+| F-X005 | Recover rpptx-v0.1.1                        | S32.2 | S | in-progress |
 <!-- AUTOGEN:backlog-MX END -->

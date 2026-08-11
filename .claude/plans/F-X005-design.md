@@ -1,4 +1,4 @@
-# F-X005, Tag rpptx-v0.1.0
+# F-X005, Recover rpptx-v0.1.1
 
 **Status**: approved
 **Sprint**: S32.2
@@ -7,105 +7,104 @@
 
 ## Problem
 
-The 12 implemented shared and PowerPoint packages remain at the reserved
-placeholder version 0.0.0 in their manifests and workspace pins. S32.2's
-released rdocx consumers cannot pass registry-backed archive verification until
-the real shared implementations exist on crates.io. The sole release workflow
-also requires an in-progress F-ID named exactly for the requested tag.
+The immutable `rpptx-v0.1.0` workflow published `oxml-core` 0.1.0, then
+crates.io rejected `oxml-opc` because its package description was empty. Nine
+incubating manifests lack descriptions, and the local dry run did not enforce
+that registry requirement. The remaining family therefore cannot be published
+at 0.1.0, while all released rdocx consumer cutovers still require a complete
+registry-backed shared family.
 
 ## Spec reference
 
-- `docs/hld/03-architecture.md`, version families and dependency direction.
-- `docs/hld/11-migration-plan.md`, release tooling and package allowlists.
-- `docs/hld/14-development-backlog.md`, "F-X005, Tag rpptx-v0.1.0".
-- `docs/hld/15-build-and-toolchain.md`, publication candidates and release
-  process.
-- `.claude/commands/release.md`, exact incubating release contract.
+- `docs/hld/03-architecture.md`, "Version trains".
+- `docs/hld/14-development-backlog.md`, "F-X005, Recover rpptx-v0.1.1".
+- `docs/hld/15-build-and-toolchain.md`, "Packaging" and "Release process".
+- `.claude/commands/release.md`, "Incubating family", "Preconditions", and
+  "Release".
 
 ## Approach
 
-Use the configured `incubating` cargo-release group to prepare version 0.1.0
-for exactly `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`,
+Add a concise, non-empty package description to each of the nine affected
+manifests. Extend the existing release-workflow unit test to require a
+description for every incubating package, and run that test in `publish.yml`
+before any real upload.
+
+Prepare exactly `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`,
 `oxml-drawing`, `oxml-pdf`, `oxml-sml`, `rpptx-oxml`, `rpptx-chart`,
-`rpptx-layout`, `rpptx-render`, and `rpptx`. Update their corresponding root
-workspace dependency pins and `Cargo.lock`. Inspect the diff to prove no stable
-version, README prose, tag, push, or publication changes.
-
-Integrate the version preparation as the F-X005 commit, keep the feature
-reviewed and in progress, then run the full verification and clean sprint
-review at that exact clean HEAD. Invoke `/release rpptx-v0.1.0` only after its
-preconditions pass. Immediately before the first external mutation, report the
-exact SHA, tag, package set, version, remote, and workflow, then request the
-separate mandatory approval.
-
-After approval, let `/release` push the active sprint branch, create and push
-only the annotated requested tag, watch `publish.yml`, and verify all 12
-registry versions, expected ownership, and the GitHub release target SHA. Only
-then complete F-X005 and allow the released rdocx consumer cutovers to start.
+`rpptx-layout`, `rpptx-render`, and `rpptx` at 0.1.1, including their root
+workspace dependency pins and `Cargo.lock`. Preserve the public
+`rpptx-v0.1.0` tag at its reviewed SHA. After a fresh full verification and
+clean sprint review, invoke `/release rpptx-v0.1.1` and request its separate
+final approval.
 
 ## Rejected alternatives
 
-- Cut consumers over to local path dependencies first. Published archives must
-  resolve the real registry graph.
-- Publish a partial subset. The incubating workflow and lockstep version group
-  define exactly 12 packages.
-- Use the reserved 0.0.0 placeholders. They expose no usable API.
-- Create the tag before exact-SHA verification or reuse earlier approval. The
-  release command requires a new approval at the mutation boundary.
-- Publish from a local shell. Only the tagged GitHub workflow owns uploads.
+- Rerun the failed workflow. Its immutable tag still contains the missing
+  metadata and would first fail because `oxml-core` 0.1.0 already exists.
+- Move or delete `rpptx-v0.1.0`. Published release tags are immutable under the
+  release contract.
+- Publish the remaining packages manually. Only the tagged GitHub workflow
+  owns registry uploads.
+- Mix 0.1.0 and 0.1.1 in one release family. The incubating release contract
+  requires one exact lockstep version.
 
 ## Test plan
 
 | Category | Test | Asserts |
 |---|---|---|
-| version preparation | cargo-release incubating group | Exactly 12 manifests, 12 workspace pins, and `Cargo.lock` move to 0.1.0 |
-| regression | scoped preparation diff | No stable version, README, workflow allowlist, tag, push, or publication mutation occurs |
-| integration | `cargo metadata --no-deps` | The exact family is publishable at one version and internal pins agree |
-| release preflight | `/verify --full` and `/sprint-review S32.2` | The clean current HEAD satisfies every release precondition |
+| regression | `test_incubating_release_family_is_prepared_at_0_1_1` | Every selected manifest and workspace pin is 0.1.1, every package description is non-empty, and the lockfile agrees |
+| workflow | publish metadata step | The metadata regression runs before the first real upload |
+| integration | `cargo metadata --no-deps` | The exact 12-package family is publishable at 0.1.1 with consistent internal pins |
+| release preflight | `/verify --full` and `/sprint-review S32.2` | A clean current HEAD satisfies every release precondition |
 | publication | watched `publish.yml` run | All dependency-ordered uploads and the GitHub release succeed |
-| registry, gate | `cargo info` and ownership checks | All 12 packages resolve at 0.1.0 with the expected owner and release SHA |
+| registry, gate | `cargo info` and ownership checks | All 12 packages resolve at 0.1.1 with the expected owner and release SHA |
 
-The backlog gate is successful registry resolution for all 12 packages and a
-matching GitHub release at the reviewed SHA.
+The backlog test gate is that all 12 incubating packages resolve from crates.io
+at 0.1.1 with the expected owner, and the GitHub release targets the newly
+reviewed sprint SHA.
 
 ## HLD impact
 
 - `docs/hld/03-architecture.md`
+- `docs/hld/14-development-backlog.md`
 - `docs/hld/15-build-and-toolchain.md`
 
-Replace development-only 0.0.0 wording with the published 0.1.0 incubating
-family and retain the separate stable version train.
+Describe 0.1.1 as the complete incubating family, retain the separate stable
+version train, and require package descriptions in the publication preflight.
 
 ## Risk routing
 
-- Release scripting and version strings. Audit every manifest, pin, lockfile
-  entry, tag predicate, allowlist, and exact SHA before external mutation.
-- Crate dependency graph. Confirm the 12-package family and dependency order,
-  including the single documented Theme adapter exception.
-- Public API of newly published crates. Run the full locally patched workspace
-  dry-run, archive verification, and metadata inspection.
-- Bundled fonts and assets. Verify `oxml-layout` font and legal inventories,
-  the `rpptx` default template, and all archive sizes below 10 MiB.
-- External mutation. Stop for the separate `/release` approval immediately
-  before the branch push and requested tag creation.
+- Release scripting and version strings. Inspect every selected manifest,
+  workspace pin, lockfile entry, workflow predicate, publish allowlist, tag,
+  README version reference, and exact SHA. Require a clean full gate and the
+  separate final approval before tagging.
+- Crate dependency graph. Confirm the exact 12-package family and dependency
+  order, including the single documented Theme adapter exception.
+- Public API of published crates. State that this metadata-only patch has no
+  Rust API impact. Run the exact locally patched workspace dry run and archive
+  size assertion.
+- Bundled fonts and assets. Verify both layout font and legal inventories, the
+  `rpptx` default template, and all archive sizes below 10 MiB.
 
 ## Hash harness
 
-Expected unchanged across all 28 entries. Version preparation and publication
-must not change document or render behavior.
+Expected unchanged across all 28 entries. Package metadata, versions, and the
+workflow preflight must not change document or render behaviour.
 
 ## Implementation checklist
 
-- [x] Prepare exactly the incubating family and matching pins at 0.1.0.
-- [x] Inspect the complete manifest and lockfile diff.
-- [x] Run metadata, dependency, package, asset, archive, workspace, and hash gates.
+- [ ] Add descriptions to all nine affected manifests.
+- [ ] Add and observe the failing release-metadata regression.
+- [ ] Run that regression in `publish.yml` before uploads.
+- [ ] Prepare exactly the 12-package family and matching pins at 0.1.1.
+- [ ] Run metadata, dependency, package, asset, archive, workspace, and hash gates.
 - [ ] Reach a clean sprint review at the exact release HEAD.
 - [ ] Request the separate final release approval with exact mutation details.
-- [ ] Run `/release rpptx-v0.1.0` and watch publication to completion.
+- [ ] Run `/release rpptx-v0.1.1` and watch publication to completion.
 - [ ] Verify all registry owners, versions, and the GitHub release target SHA.
-- [ ] Update exactly the two listed HLD files and complete F-X005 only after verification.
+- [ ] Update exactly the three listed HLD files and complete F-X005 only after verification.
 
 ## Open questions
 
-None before the mandatory final release approval. That approval is deliberately
-deferred until every precondition passes at the exact reviewed SHA.
+None. The user selected the 0.1.1 recovery after the immutable partial 0.1.0
+publication.

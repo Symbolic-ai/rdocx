@@ -26,7 +26,7 @@ Add a direct `oxml-core` dependency to `rdocx`, delete
 `crates/rdocx/src/length.rs`, remove the private module declaration, and replace
 `pub use length::Length` with `pub use oxml_core::Length`. Keep the public
 `rdocx::Length` path and every call site unchanged. F-X005 must first make
-`oxml-core` 0.1.0 available to released-package archive verification.
+`oxml-core` 0.1.1 available to released-package archive verification.
 
 ## Rejected alternatives
 
@@ -55,7 +55,7 @@ Record the completed consumer boundary after the implementation lands.
 
 - Crate dependency graph. Confirm `rdocx -> oxml-core` and no reverse edge.
 - Public API of a published crate. Confirm `rdocx::Length` remains source
-  compatible, resolve `oxml-core` 0.1.0 from the registry, run package checks,
+  compatible, resolve `oxml-core` 0.1.1 from the registry, run package checks,
   and assert archive sizes.
 - File move with no behaviour change. Require zero caller edits and an
   unchanged deterministic hash harness.
@@ -74,4 +74,4 @@ Expected to remain unchanged. Any delta blocks integration.
 
 ## Open questions
 
-None. F-X005 publishes `oxml-core` 0.1.0 before this consumer cutover.
+None. F-X005 publishes `oxml-core` 0.1.1 before this consumer cutover.

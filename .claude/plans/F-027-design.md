@@ -29,7 +29,7 @@ the existing 28-entry harness remains unchanged.
 
 ## Approach
 
-After F-X005 publishes `oxml-media` 0.1.0, add it as a direct rdocx dependency.
+After F-X005 publishes `oxml-media` 0.1.1, add it as a direct rdocx dependency.
 Replace `image_counter` with `MediaNamer`, initialized by scanning existing
 `/word/media/imageN` parts. Delete the local numbering, extension, and MIME
 helpers.
@@ -64,7 +64,7 @@ Retain every existing collision and sparse-suffix regression.
 | regression | existing naming cases | Sparse suffixes, unrelated names, malformed suffixes, and loaded packages remain collision-safe |
 | integration | HTML and layout media extraction | MIME values come from bytes rather than misleading part names |
 | dependency | `cargo tree -p rdocx --edges normal` | The edge is `rdocx -> oxml-media` and the shared crate remains dependency-free |
-| packaging | affected released-package dry-runs | Registry 0.1.0 resolves and archives verify below 10 MiB |
+| packaging | affected released-package dry-runs | Registry 0.1.1 resolves and archives verify below 10 MiB |
 
 The backlog gate is the focused package-structure regression, collision-safe
 naming, and an unchanged hash harness.
@@ -85,7 +85,7 @@ delta claim with the exact package regression plus unchanged harness evidence.
   dependency-free `oxml-media` and no reverse edge exists.
 - Public behavior in a published crate. Isolate the sniffed metadata change in
   the F-027 commit and prove it with exact package assertions.
-- Public package verification. Resolve registry version 0.1.0, run affected
+- Public package verification. Resolve registry version 0.1.1, run affected
   dry-runs, and enforce archive-size limits.
 - File move and helper deletion. Account for every removed helper and retain
   all existing naming regressions.

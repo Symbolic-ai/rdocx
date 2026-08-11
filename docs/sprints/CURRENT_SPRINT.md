@@ -29,7 +29,7 @@ versions.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X005 | Tag rpptx-v0.1.0 | S | in-progress | codex |
+| F-X005 | Recover rpptx-v0.1.1 | S | in-progress | codex |
 | F-015 | rdocx-oxml becomes a facade | S | pending | - |
 | F-016 | Length re-export | S | pending | - |
 | F-022 | rdocx-opc deprecation shim | S | pending | - |
@@ -40,12 +40,13 @@ versions.
 
 ## Sequencing note
 
-Rows are listed in dependency order, not F-ID order. F-X005 prepares and
-publishes the incubating family first. Its verified registry result is the
-common prerequisite for all consumer cutovers. F-028 follows F-027, and the
-remaining cutovers are ordered by file overlap during implementation. F-051
-follows the integrated cutovers so its migration notes describe the final
-released surface rather than an intermediate state.
+Rows are listed in dependency order, not F-ID order. F-X005 repairs the
+registry metadata rejected during the immutable partial 0.1.0 publication,
+then prepares and publishes the incubating family at 0.1.1. Its verified
+registry result is the common prerequisite for all consumer cutovers. F-028
+follows F-027, and the remaining cutovers are ordered by file overlap during
+implementation. F-051 follows the integrated cutovers so its migration notes
+describe the final released surface rather than an intermediate state.
 
 ## Definition of done for this sprint
 
