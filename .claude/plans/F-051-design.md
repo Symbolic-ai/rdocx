@@ -1,6 +1,6 @@
 # F-051, CHANGELOG and migration notes
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S32.2
 **Size**: S
 **Depends on**: F-015, F-016, F-022, F-027, F-028, F-046, F-X005
@@ -83,12 +83,12 @@ Expected unchanged. Documentation does not alter package or rendering output.
 
 ## Implementation checklist
 
-- [ ] Create the root Unreleased CHANGELOG and migration table.
-- [ ] Name every deprecated shim and shared replacement.
-- [ ] Document retained facades and all intentional breaking surfaces.
-- [ ] Document the additive media sizing API and published shared version.
-- [ ] Refresh the README crate table and link the migration notes.
-- [ ] Run exact path, version, prose, package-doc, and hash checks.
+- [x] Create the root Unreleased CHANGELOG and migration table.
+- [x] Name every deprecated shim and shared replacement.
+- [x] Document retained facades and all intentional breaking surfaces.
+- [x] Document the additive media sizing API and published shared version.
+- [x] Refresh the README crate table and link the migration notes.
+- [x] Run exact path, version, prose, package-doc, and hash checks.
 
 ## Open questions
 
