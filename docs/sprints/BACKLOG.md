@@ -18,7 +18,7 @@ regenerated, never hand-edited.
 |-----------|-------|------|-------------|---------|
 | M1, Preparation and safety net              | 12 | 12 | 0 | 0  |
 | M2, Shared infrastructure extraction        | 10 | 7 | 3 | 0  |
-| M3, Media                                   | 6  | 4 | 0 | 2  |
+| M3, Media                                   | 6  | 4 | 1 | 1  |
 | M4, Layout primitives                       | 8  | 8 | 0 | 0  |
 | M5, PDF backend                             | 9  | 9 | 0 | 0  |
 | M6, Shared publication and rdocx cutover     | 6  | 4 | 0 | 2  |
@@ -30,7 +30,7 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 5  | 1 | 0 | 4  |
-| **Total** | **159** | **130** | **3** | **26** |
+| **Total** | **159** | **130** | **4** | **25** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -80,7 +80,7 @@ regenerated, never hand-edited.
 | F-024 | Image probing and DPI                        | S05 | L | done |
 | F-025 | MediaNamer                                   | S05 | S | done |
 | F-026 | native_size with explicit DPI                | S05 | S | done |
-| F-027 | rdocx adopts oxml-media                      | S32.2 | M | pending |
+| F-027 | rdocx adopts oxml-media                      | S32.2 | M | in-progress |
 | F-028 | add_picture_auto                             | S32.2 | S | pending |
 <!-- AUTOGEN:backlog-M3 END -->
 
