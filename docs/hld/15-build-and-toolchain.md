@@ -123,22 +123,25 @@ oxml-core -> oxml-opc -> oxml-media -> oxml-drawing -> oxml-layout -> oxml-pdf
   -> rpptx-oxml -> rpptx-layout -> rpptx-render -> rpptx-chart -> rpptx -> rpptx-cli
 ```
 
-The fourteen future crates.io names in this graph are reserved at version
-0.0.0 under the owner `mantissaman`: `oxml-core`, `oxml-opc`, `oxml-media`,
+The fourteen crates.io names in this graph are reserved under the owner
+`mantissaman`: `oxml-core`, `oxml-opc`, `oxml-media`,
 `oxml-drawing`, `oxml-layout`, `oxml-pdf`, `oxml-sml`, `oxml-cli-support`,
 `rpptx-oxml`, `rpptx-layout`, `rpptx-render`, `rpptx-chart`, `rpptx`, and
-`rpptx-cli`. Each placeholder is dependency-free and exposes no usable API.
+`rpptx-cli`. The unimplemented `oxml-cli-support` and `rpptx-cli` entries
+remain dependency-free 0.0.0 placeholders. The 12 implemented packages use
+the reviewed release path described below.
 
 `oxml-py-support`, `rpptx-py`, and `rpptx-wasm` are not reserved on crates.io.
 The binding crates are not published there, and the WASM packages use the npm
 publication path.
 
-All 12 implemented shared and PowerPoint packages are explicit publication
-candidates at their common incubating version. They are `oxml-core`,
-`oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`, `oxml-pdf`, `oxml-sml`,
-`rpptx-oxml`, `rpptx-chart`, `rpptx-layout`, `rpptx-render`, and `rpptx`.
-Manifest eligibility does not authorize publication. Only the reviewed
-incubating release path can activate their exact allowlist.
+All 12 implemented shared and PowerPoint packages are prepared as explicit
+publication candidates at the common incubating version 0.1.0. They are
+`oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
+`oxml-pdf`, `oxml-sml`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`,
+`rpptx-render`, and `rpptx`. Manifest eligibility does not authorize
+publication. Only the reviewed `/release rpptx-v0.1.0` path can activate their
+exact allowlist after its separate final approval.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs
@@ -179,8 +182,9 @@ possible and never rewrite README prose by pattern.
 `cargo-release` preparation is configured in Cargo metadata. The eight rdocx
 packages that inherit `[workspace.package].version` use cargo-release's
 effective `workspace` shared-version group and the `v{{version}}` tag template.
-The 12 implemented `oxml-*` and `rpptx*` packages have explicit versions, use
-the named `incubating` group, and carry the `rpptx-v{{version}}` template.
+The 12 implemented `oxml-*` and `rpptx*` packages are prepared at explicit
+version 0.1.0, use the named `incubating` group, and carry the
+`rpptx-v{{version}}` template.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.

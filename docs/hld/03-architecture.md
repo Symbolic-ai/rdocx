@@ -108,11 +108,13 @@ and the style resolver. Slides do not paginate, so none of it transfers.
 
 ## Versioning
 
-During PowerPoint development, each implemented `oxml-*` and `rpptx-*` crate
-keeps its reserved `version = "0.0.0"` and sets `publish = false`. The released
-`rdocx-*` crates continue to use the workspace version. PowerPoint development
-crates remain unpublished until that implementation is complete and a separate
-reviewed publication plan receives explicit approval.
+The 12 implemented shared and PowerPoint publication candidates carry an
+explicit common incubating version of 0.1.0 in their manifests and workspace
+pins. The released `rdocx-*` crates continue to use the separate workspace
+version. Version preparation and manifest eligibility do not authorize
+publication. Registry publication for this family is authorized only when
+`/release rpptx-v0.1.0` reaches its exact reviewed SHA and receives the
+separate final approval at the external mutation boundary.
 
 `rpptx-*` crates carry their own `keywords` and `categories`, because the
 workspace values say `["docx", "word"]` which would be wrong on a presentation

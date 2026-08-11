@@ -45,18 +45,18 @@ push = false
 
 [workspace.dependencies]
 # Internal crates
-oxml-core = { path = "crates/oxml-core", version = "0.0.0" }
-oxml-drawing = { path = "crates/oxml-drawing", version = "0.0.0" }
-oxml-layout = { path = "crates/oxml-layout", version = "0.0.0" }
-oxml-media = { path = "crates/oxml-media", version = "0.0.0" }
-oxml-opc = { path = "crates/oxml-opc", version = "0.0.0" }
-oxml-pdf = { path = "crates/oxml-pdf", version = "0.0.0" }
-oxml-sml = { path = "crates/oxml-sml", version = "0.0.0" }
-rpptx = { path = "crates/rpptx", version = "0.0.0" }
-rpptx-chart = { path = "crates/rpptx-chart", version = "0.0.0" }
-rpptx-layout = { path = "crates/rpptx-layout", version = "0.0.0" }
-rpptx-oxml = { path = "crates/rpptx-oxml", version = "0.0.0" }
-rpptx-render = { path = "crates/rpptx-render", version = "0.0.0" }
+oxml-core = { path = "crates/oxml-core", version = "0.1.0" }
+oxml-drawing = { path = "crates/oxml-drawing", version = "0.1.0" }
+oxml-layout = { path = "crates/oxml-layout", version = "0.1.0" }
+oxml-media = { path = "crates/oxml-media", version = "0.1.0" }
+oxml-opc = { path = "crates/oxml-opc", version = "0.1.0" }
+oxml-pdf = { path = "crates/oxml-pdf", version = "0.1.0" }
+oxml-sml = { path = "crates/oxml-sml", version = "0.1.0" }
+rpptx = { path = "crates/rpptx", version = "0.1.0" }
+rpptx-chart = { path = "crates/rpptx-chart", version = "0.1.0" }
+rpptx-layout = { path = "crates/rpptx-layout", version = "0.1.0" }
+rpptx-oxml = { path = "crates/rpptx-oxml", version = "0.1.0" }
+rpptx-render = { path = "crates/rpptx-render", version = "0.1.0" }
 rdocx-opc = { path = "crates/rdocx-opc", version = "0.4.1" }
 rdocx-oxml = { path = "crates/rdocx-oxml", version = "0.4.1" }
 rdocx = { path = "crates/rdocx", version = "0.4.1" }

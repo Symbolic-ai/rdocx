@@ -3702,9 +3702,9 @@ fn rpptx_is_an_explicit_publication_candidate() {
     let workspace = include_str!("../../../Cargo.toml");
     let manifest = include_str!("../Cargo.toml");
     assert!(workspace.contains("\"crates/rpptx\""));
-    assert!(workspace.contains("rpptx = { path = \"crates/rpptx\", version = \"0.0.0\" }"));
+    assert!(workspace.contains("rpptx = { path = \"crates/rpptx\", version = \"0.1.0\" }"));
     assert!(manifest.contains("name = \"rpptx\""));
-    assert!(manifest.contains("version = \"0.0.0\""));
+    assert!(manifest.contains("version = \"0.1.0\""));
     assert!(manifest.contains("publish = true"));
     assert!(manifest.contains("default = [\"default-template\"]"));
     assert!(manifest.contains("default-template = []"));

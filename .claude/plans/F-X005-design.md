@@ -96,9 +96,9 @@ must not change document or render behavior.
 
 ## Implementation checklist
 
-- [ ] Prepare exactly the incubating family and matching pins at 0.1.0.
-- [ ] Inspect the complete manifest and lockfile diff.
-- [ ] Run metadata, dependency, package, asset, archive, workspace, and hash gates.
+- [x] Prepare exactly the incubating family and matching pins at 0.1.0.
+- [x] Inspect the complete manifest and lockfile diff.
+- [x] Run metadata, dependency, package, asset, archive, workspace, and hash gates.
 - [ ] Reach a clean sprint review at the exact release HEAD.
 - [ ] Request the separate final release approval with exact mutation details.
 - [ ] Run `/release rpptx-v0.1.0` and watch publication to completion.
