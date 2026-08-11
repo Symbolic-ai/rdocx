@@ -31,7 +31,7 @@ parallel work.
 |------|-------|------|--------|-------|
 | F-129 | oxml-py-support | M | in-progress | codex |
 | F-130 | rdocx-py core | L | in-progress | codex |
-| F-132 | Python enums, units and exceptions | M | pending | - |
+| F-132 | Python enums, units and exceptions | M | in-progress | codex |
 | F-131 | rdocx-py formatting and tables | L | pending | - |
 | F-133 | rdocx-py rendering with allow_threads | S | pending | - |
 
