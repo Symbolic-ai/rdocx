@@ -82,18 +82,25 @@ useful on musl or Windows and must be gated per-target for wheel builds.
 
 ## Packaging
 
-`crates/rdocx-layout/fonts/` is **6.8 MB of TTFs outside `src/`**, published
-today only because `cargo publish --no-verify` skips the build-from-archive
-check, and there is no `include` or `exclude` in the manifest.
+`oxml-layout` packages its source and bundled font assets through an explicit
+manifest inventory:
 
 ```toml
 [package]
-include = ["src/**/*", "fonts/*.ttf", "fonts/LICENSE-*", "fonts/NOTICE-*", "README.md"]
+include = [
+    "src/**/*",
+    "fonts/*.ttf",
+    "fonts/LICENSE-*",
+    "fonts/NOTICE-*",
+]
 ```
 
-Drop `--no-verify`, and assert the resulting `.crate` size against the 10 MiB
-crates.io limit in CI. Roughly 3.5 to 4 MB compressed is expected, but measure
-rather than assume.
+The dedicated package CI job compares `cargo package -p oxml-layout --list`
+against all 20 TTFs, the three family licence files, and the Caladea notice. It
+then runs verified packaging without `--no-verify` and rejects a missing
+archive or one larger than the crates.io 10 MiB limit. `oxml-layout` is a
+publication candidate, while the release workflow remains the authority that
+decides whether it is published.
 
 The same treatment applies to `crates/rpptx/assets/default.pptx`. **An asset
 must live under its own crate's directory**: a workspace-root `assets/` compiles
@@ -137,10 +144,11 @@ development is complete. A normal `v*` release must not publish a later version
 of any package in those families. Their eventual publication requires its own
 reviewed release plan and explicit approval.
 
-Implemented development crates keep the reserved `version = "0.0.0"` and set
-`publish = false` in the workspace. The release workflow remains an explicit
-allowlist of the seven released rdocx packages, so adding implementation code
-does not turn a reserved name into a publication candidate.
+Except for the package-gated `oxml-layout` candidate, implemented development
+crates keep the reserved `version = "0.0.0"` and set `publish = false` in the
+workspace. The release workflow remains an explicit allowlist of the seven
+released rdocx packages. `oxml-layout` is absent from that allowlist, so its
+manifest eligibility alone cannot publish it.
 
 `oxml-sml` is an implemented development crate under that rule. It is a
 workspace member and workspace dependency at version 0.0.0 with
@@ -206,7 +214,12 @@ cannot diverge.
 
 ## CI job matrix
 
-Listed in `12-testing-strategy.md`. Two additions specific to this document:
+Listed in `12-testing-strategy.md`. The matrix carries these
+repository-specific gates:
+
+**A dedicated `oxml-layout` package job.** It checks the exact bundled font and
+legal-file inventory, builds and verifies the generated archive, and enforces
+the crates.io 10 MiB limit.
 
 **`--exclude rdocx-py --exclude rpptx-py` on every `--all-features` job.**
 `pyo3/extension-module` tells the linker the Python symbols come from the host

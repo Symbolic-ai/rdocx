@@ -1,6 +1,6 @@
 # F-047, Packaging include and size gate
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S32.1
 **Size**: M
 **Depends on**: F-037
@@ -70,11 +70,11 @@ output.
 
 ## Implementation checklist
 
-- [ ] Remove the `oxml-layout` publication guard without weakening its include
+- [x] Remove the `oxml-layout` publication guard without weakening its include
       list.
-- [ ] Add the exact package inventory check to the existing CI workflow.
-- [ ] Run verified packaging and enforce the 10 MiB limit in CI.
-- [ ] Run the focused inventory, packaging, and archive-size checks locally.
+- [x] Add the exact package inventory check to the existing CI workflow.
+- [x] Run verified packaging and enforce the 10 MiB limit in CI.
+- [x] Run the focused inventory, packaging, and archive-size checks locally.
 
 ## Open questions
 
