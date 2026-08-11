@@ -142,13 +142,16 @@ incubating release path can activate their exact allowlist.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs
-`cargo publish --workspace --dry-run`, which stages and verifies the exact
-19-package publishable union without uploading it. The stable path then
-publishes only the seven released rdocx packages in dependency order. The
-incubating path publishes only the 12 candidates above in dependency order.
-Every real command keeps archive verification enabled. Registry waits separate
-dependency layers, and authentication, network, compilation and
-duplicate-version failures fail the job.
+`cargo publish --workspace --dry-run` with an exact local source patch for each
+member of the 19-package publishable union. Cargo rewrites packaged path
+dependencies to the registry, so the patches keep verification on the reviewed
+workspace graph before those versions exist there. They do not enter generated
+archives and the dry run uploads nothing. The stable path then publishes only
+the seven released rdocx packages in dependency order. The incubating path
+publishes only the 12 candidates above in dependency order. Every real command
+keeps archive verification enabled. Registry waits separate dependency layers,
+and authentication, network, compilation and duplicate-version failures fail
+the job.
 
 The generated archives remain subject to the crates.io 10 MiB ceiling.
 `oxml-layout` contains all 20 bundled fonts and their required legal files, and
@@ -193,10 +196,11 @@ set.
 
 Both paths require a clean sprint branch, full verification and a clean sprint
 review recorded at the exact HEAD, a workspace dry run containing exactly the
-19-package union, archives below 10 MiB with required assets, an absent local
-and remote requested tag, and a separate final approval immediately before the
-first mutation. `/release` pushes only the requested tag. `/close-sprint`
-remains the only command allowed to merge `main` or create an `sNN` tag.
+19-package union and its exact local patch set, archives below 10 MiB with
+required assets, an absent local and remote requested tag, and a separate final
+approval immediately before the first mutation. `/release` pushes only the
+requested tag. `/close-sprint` remains the only command allowed to merge
+`main` or create an `sNN` tag.
 
 The requested tag starts `publish.yml`. Its Linux runner reproduces the
 deterministic hash baseline and full workspace dry run before crates.io

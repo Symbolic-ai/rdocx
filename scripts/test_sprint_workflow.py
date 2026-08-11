@@ -14,6 +14,44 @@ from scripts import sprint_workflow as workflow
 
 
 class SprintWorkflowTests(unittest.TestCase):
+    def assert_publish_preflight_contract(self, publish: str) -> None:
+        publishable_crates = (
+            "oxml-core",
+            "oxml-drawing",
+            "oxml-layout",
+            "oxml-media",
+            "oxml-opc",
+            "oxml-pdf",
+            "oxml-sml",
+            "rdocx",
+            "rdocx-cli",
+            "rdocx-html",
+            "rdocx-layout",
+            "rdocx-opc",
+            "rdocx-oxml",
+            "rdocx-pdf",
+            "rpptx",
+            "rpptx-chart",
+            "rpptx-layout",
+            "rpptx-oxml",
+            "rpptx-render",
+        )
+        marker = "      - name: Verify publication archives\n"
+        self.assertEqual(publish.count(marker), 1)
+        start = publish.index(marker)
+        end = publish.index("\n      - name:", start + len(marker))
+        block = publish[start:end]
+
+        self.assertEqual(block.count("cargo publish --workspace --dry-run"), 1)
+        for package in publishable_crates:
+            config = (
+                f"--config 'patch.crates-io.{package}.path=\"crates/{package}\"'"
+            )
+            self.assertEqual(block.count(config), 1, package)
+        self.assertEqual(block.count("--config 'patch.crates-io."), 19)
+        self.assertNotIn("--no-verify", block)
+        self.assertNotIn("continue-on-error", block)
+
     def assert_publish_workflow_contract(self, publish: str) -> None:
         stable_crates = (
             "rdocx-opc",
@@ -440,7 +478,7 @@ class SprintWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertEqual(publish.count("cargo publish --workspace --dry-run"), 1)
+        self.assert_publish_preflight_contract(publish)
         self.assertLess(
             publish.index("python3 scripts/hash_harness.py --check"),
             publish.index("cargo publish --workspace --dry-run"),
@@ -451,6 +489,19 @@ class SprintWorkflowTests(unittest.TestCase):
         )
         self.assertNotIn("--no-verify", publish)
         self.assertNotIn("continue-on-error", publish)
+
+    def test_publish_workflow_rejects_a_missing_local_patch(self) -> None:
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        mutated = publish.replace(
+            "            --config 'patch.crates-io.oxml-core.path=\"crates/oxml-core\"' \\\n",
+            "",
+            1,
+        )
+
+        with self.assertRaises(AssertionError):
+            self.assert_publish_preflight_contract(mutated)
 
     def test_review_and_verification_evidence_is_bound_to_head(self) -> None:
         data = {

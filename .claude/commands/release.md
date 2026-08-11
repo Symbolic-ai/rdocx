@@ -54,12 +54,14 @@ Refuse before any tag or push if one check fails:
    family, its versions, publication eligibility, and internal version pins.
    The other family's packages must not appear in the selected workflow
    allowlist.
-7. `cargo publish --workspace --dry-run` passes from the clean tree. A dry-run
-   uploads nothing. It must stage exactly the 19-package union of the two
-   family sets because all are publication candidates, and every archive must
-   remain below 10 MiB. The `rdocx-layout` and `oxml-layout` archives must
-   contain their complete bundled TTF and licence inventories. The `rpptx`
-   archive must contain `assets/default.pptx`.
+7. The exact locally patched `cargo publish --workspace --dry-run` command in
+   `/verify` step 10 passes from the clean tree. The 19 patches keep packaged
+   internal dependencies on this reviewed source graph instead of the reserved
+   registry placeholders, and they do not enter any archive. A dry run uploads
+   nothing. It must stage exactly the 19-package union of the two family sets,
+   and every archive must remain below 10 MiB. The `rdocx-layout` and
+   `oxml-layout` archives must contain their complete bundled TTF and licence
+   inventories. The `rpptx` archive must contain `assets/default.pptx`.
 8. `.github/workflows/publish.yml` binds the stable predicate to exactly the
    stable set and the incubating predicate to exactly the incubating set, each
    in dependency order. Every real publish command is the bare verified form

@@ -42,15 +42,18 @@ post-publication registry plus GitHub release verification. Regenerate the
 Codex skill adapters after changing the command.
 
 Before either real allowlist runs, reproduce the hash harness and run
-`cargo publish --workspace --dry-run`. Cargo's workspace dry-run stages the
-selected local packages together, so dependent archive verification uses the
-workspace candidates without uploading them. Keep every real `cargo publish`
-step verified, propagate all failures, and retain the registry wait between
-dependency layers. Extend the existing workflow tests to pin both allowlists,
-their order, tag routing, and the absence of `--no-verify` or swallowed errors.
-The tests isolate the two publish step blocks and compare each condition and
-bare command sequence exactly. Negative mutations swap predicates, add an
-extra package, set `continue-on-error`, and add successful fallback commands.
+`cargo publish --workspace --dry-run` with an exact local source patch for each
+of the 19 publication candidates. Cargo rewrites packaged path dependencies to
+the registry, where the incubating 0.0.0 reservations intentionally expose no
+API. The patches keep dependent archive verification on the reviewed workspace
+sources without entering the generated archives or uploading them. Keep every
+real `cargo publish` step verified, propagate all failures, and retain the
+registry wait between dependency layers. Extend the existing workflow tests to
+pin both allowlists, their order, tag routing, the exact local patch set, and
+the absence of `--no-verify` or swallowed errors. The tests isolate the publish
+step blocks and compare their conditions and command sequences exactly.
+Negative mutations swap predicates, omit a local patch, add an extra package,
+set `continue-on-error`, and add successful fallback commands.
 
 ## Rejected alternatives
 
@@ -58,7 +61,8 @@ extra package, set `continue-on-error`, and add successful fallback commands.
   A stable tag must not publish the incubating family, and an incubating tag
   must not republish the stable family.
 - Use `--no-verify` for unpublished dependency layers. Cargo's workspace
-  dry-run verifies the full candidate graph without weakening archive builds.
+  dry run with exact local patches verifies the full candidate graph without
+  weakening archive builds.
 - Publish during S32.1. This sprint prepares and verifies the workflow only.
 - Leave the incubating workflow trigger unreachable through `/release`. That
   would force a future publisher to bypass the repository's sole reviewed tag
@@ -68,7 +72,7 @@ extra package, set `continue-on-error`, and add successful fallback commands.
 
 | Category | Test | Asserts |
 |---|---|---|
-| integration | `cargo publish --workspace --dry-run` | Every publishable package stages and verifies together without an upload |
+| integration | locally patched `cargo publish --workspace --dry-run` | Every publishable package stages and verifies against the reviewed source graph without an upload |
 | unit | `python3 -m unittest scripts/test_sprint_workflow.py` | Parsed workflow steps bind each tag predicate to exactly its expected dependency-ordered package sequence |
 | regression | negative workflow mutations | Swapped predicates, extra packages, `continue-on-error`, and successful fallback commands are rejected |
 | regression | release authority assertions | `/release` validates and creates only the requested stable or incubating tag after the shared reviewed-SHA and final-approval gates |
@@ -108,11 +112,12 @@ change generated OOXML or rendering output.
 - [x] Route stable and incubating tags to separate ordered allowlists.
 - [x] Extend `/release` with namespace-aware version, package, tag, approval,
       and external verification rules without weakening the stable path.
-- [x] Run the hash harness and full workspace dry-run before real publish
-      steps.
+- [x] Run the hash harness and locally patched full workspace dry run before
+      real publish steps.
 - [x] Preserve verified archives, propagated failures, and registry waits.
-- [x] Parse and compare the exact workflow publish steps for both namespaces,
-      including negative routing, membership, and failure-propagation cases.
+- [x] Parse and compare the exact workflow preflight and publish steps,
+      including negative patch, routing, membership, and failure-propagation
+      cases.
 - [x] Regenerate and verify the Codex skill adapters after the release command
       changes.
 - [x] Run the full workspace publication dry-run without uploading anything.
