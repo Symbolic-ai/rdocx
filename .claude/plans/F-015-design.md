@@ -1,6 +1,6 @@
 # F-015, rdocx-oxml becomes a facade
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S32.2
 **Size**: S
 **Depends on**: F-013, F-X005
@@ -80,11 +80,11 @@ Expected to remain unchanged. Any output delta is a defect.
 
 ## Implementation checklist
 
-- [ ] Add the one-way `oxml-core` dependency.
-- [ ] Apply the exact facade and namespace re-exports.
-- [ ] Delete the five duplicate source files.
-- [ ] Assert the mechanical diff shape and zero call-site churn.
-- [ ] Run focused crate, package, workspace, and hash checks.
+- [x] Add the one-way `oxml-core` dependency.
+- [x] Apply the exact facade and namespace re-exports.
+- [x] Delete the five duplicate source files.
+- [x] Assert the mechanical diff shape and zero call-site churn.
+- [x] Run focused crate, package, workspace, and hash checks.
 
 ## Open questions
 

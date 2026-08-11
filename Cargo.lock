@@ -602,6 +602,7 @@ name = "rdocx-oxml"
 version = "0.4.1"
 dependencies = [
  "itoa",
+ "oxml-core",
  "quick-xml",
  "regex",
  "thiserror",

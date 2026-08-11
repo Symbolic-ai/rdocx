@@ -150,10 +150,12 @@ helpers in the staged crate.
 **Test gate**: round-trip assertions including `Angle::from_degrees(90.0).0 == 5_400_000`.
 
 ### F-015, rdocx-oxml becomes a facade (S)
-The three-line re-export block. Zero call-site changes across all existing uses.
+`rdocx-oxml` re-exports the shared modules, error surface and namespace helpers
+from published `oxml-core` 0.1.2. Existing public paths and all internal call
+sites remain source compatible. `Cargo.lock` records the one-way dependency.
 **Depends on**: F-013, F-X005.
-**Test gate**: `git diff --stat` shows only `lib.rs`, `namespace.rs` and
-`Cargo.toml` modified plus five deletions, and the workspace tests pass.
+**Test gate**: the crate-local diff changes only `lib.rs`, `namespace.rs` and
+`Cargo.toml` plus five deletions. The workspace tests and hash harness pass.
 
 ### F-016, Length re-export (S)
 Delete `crates/rdocx/src/length.rs`, re-export from `oxml-core`.

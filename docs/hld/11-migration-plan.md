@@ -29,24 +29,26 @@ to exercise the `--no-default-features` path.
 
 ## The facade trick
 
-`matches_local_name` has hundreds of call sites across `rdocx-oxml`. Migrating
-them individually would be a large, risky, reviewer-hostile diff.
+The namespace helpers have call sites throughout `rdocx-oxml`. Migrating them
+individually would be a large, risky, reviewer-hostile diff.
 
-Instead, `rdocx-oxml` becomes a facade over `oxml-core`, and **not one call site
-changes**:
+`rdocx-oxml` is therefore a facade over the published `oxml-core` 0.1.2 crate,
+and **not one call site changes**:
 
 ```rust
 // crates/rdocx-oxml/src/lib.rs
-pub use oxml_core::{core_properties, raw_xml, units};
-pub use oxml_core::error::{OxmlError, Result};
+pub use oxml_core::{core_properties, error, raw_xml, units};
+pub use error::{OxmlError, Result};
 pub(crate) use oxml_core::xml_text;
 
 // crates/rdocx-oxml/src/namespace.rs keeps W_NS and W_PREFIX, and adds:
 pub use oxml_core::xml::{matches_local_name, R_NS, MC_NS};
 ```
 
-The acceptance check is mechanical: `git diff --stat` shows only `lib.rs`,
-`namespace.rs` and `Cargo.toml` modified, plus five deletions. The same pattern
+The shared implementation is consumed only after its exact 0.1.2 release is
+resolvable from crates.io. The acceptance check is mechanical: the crate-local
+diff shows only `lib.rs`, `namespace.rs` and `Cargo.toml` modified, plus five
+deletions. `Cargo.lock` records the one-way dependency edge. The same pattern
 moves `Length` with zero churn.
 
 This is what makes the bulk of the extraction low-risk, and it is worth stating

@@ -16,6 +16,7 @@ shared-version = "workspace"
 tag-name = "v{{version}}"
 
 [dependencies]
+oxml-core = { workspace = true }
 quick-xml = { workspace = true }
 thiserror = { workspace = true }
 itoa = { workspace = true }
