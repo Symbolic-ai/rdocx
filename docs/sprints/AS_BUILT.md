@@ -4681,7 +4681,8 @@ artifact.
 `rdocx-layout` breaking changes missing from the migration notes. The completed
 table now documents the shared `MediaRegistry` argument on lower-level layout
 and pagination, `AnchoredContent::Image` media ID, and `ParagraphBlock::jc`
-alignment type.
+alignment type. Sprint review pass 7 corrected those function references to
+their retained `engine`, `table`, and `paginator` module paths.
 
 **Spec sections touched.** None. The documentation reflects the completed HLD
 contract without changing system intent.

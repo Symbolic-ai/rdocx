@@ -59,10 +59,13 @@ oxml-pdf = "0.1.2"    # PDF and PNG rendering backends
   `LayoutLine` adds `line_gap`. `LineBreakParams` replaces Word tab stops,
   alignment, and stringly typed line rules with `TabStop`, `Align`, and
   `LineSpacing`, and adds `wrap`.
-- `rdocx_layout::layout_paragraph(...)`, `layout_table(...)`, `paginate(...)`,
-  and `paginate_sections(...)` now take a shared `MediaRegistry`. Construct it
-  once from `LayoutInput::images` so relationship lookup and pagination use
-  the same collision-resolved IDs, bytes, and content types.
+- `rdocx_layout::engine::layout_paragraph(...)` and
+  `rdocx_layout::table::layout_table(...)`, plus
+  `rdocx_layout::paginator::paginate(...)` and
+  `rdocx_layout::paginator::paginate_sections(...)`, now take a shared
+  `MediaRegistry`. Construct it once from `LayoutInput::images` so relationship
+  lookup and pagination use the same collision-resolved IDs, bytes, and
+  content types.
 - `rdocx_layout::AnchoredContent::Image` replaces `embed_id: String` with
   `media_id: MediaId`.
 - `rdocx_layout::ParagraphBlock::jc` replaces `Option<ST_Jc>` with
