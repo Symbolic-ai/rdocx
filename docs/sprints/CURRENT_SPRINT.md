@@ -30,13 +30,13 @@ versions.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-X005 | Tag rpptx-v0.1.2 | S | done | - |
-| F-015 | rdocx-oxml becomes a facade | S | in-progress | codex |
-| F-016 | Length re-export | S | in-progress | codex |
-| F-022 | rdocx-opc deprecation shim | S | in-progress | codex |
-| F-027 | rdocx adopts oxml-media | M | in-progress | codex |
-| F-028 | add_picture_auto | S | in-progress | codex |
-| F-046 | rdocx layout and PDF cutover | M | in-progress | codex |
-| F-051 | CHANGELOG and migration notes | S | in-progress | codex |
+| F-015 | rdocx-oxml becomes a facade | S | done | - |
+| F-016 | Length re-export | S | done | - |
+| F-022 | rdocx-opc deprecation shim | S | done | - |
+| F-027 | rdocx adopts oxml-media | M | done | - |
+| F-028 | add_picture_auto | S | done | - |
+| F-046 | rdocx layout and PDF cutover | M | done | - |
+| F-051 | CHANGELOG and migration notes | S | done | - |
 
 ## Sequencing note
 
