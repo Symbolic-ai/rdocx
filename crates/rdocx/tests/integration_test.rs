@@ -1760,3 +1760,32 @@ fn non_consuming_setters_match_consuming_builders() {
 
     assert_eq!(document_xml(&mut setters), document_xml(&mut builders));
 }
+
+#[test]
+fn direct_facade_accessors_are_total() {
+    let mut doc = Document::new();
+    doc.add_paragraph("first").add_run(" run");
+
+    assert_eq!(doc.paragraph(0).unwrap().text(), "first run");
+    assert!(doc.paragraph(1).is_none());
+
+    let mut paragraph = doc.paragraph_mut(0).unwrap();
+    assert_eq!(paragraph.run_count(), 2);
+    assert_eq!(paragraph.run(1).unwrap().text(), " run");
+    assert!(paragraph.run(2).is_none());
+    paragraph.run_mut(1).unwrap().set_text(" changed");
+    assert!(paragraph.run_mut(2).is_none());
+
+    assert_eq!(doc.paragraph(0).unwrap().text(), "first changed");
+}
+
+#[test]
+fn immutable_run_accessors_are_total() {
+    let mut doc = Document::new();
+    doc.add_paragraph("first").add_run(" run");
+
+    let paragraph = doc.paragraph(0).unwrap();
+    assert_eq!(paragraph.run_count(), 2);
+    assert_eq!(paragraph.run(1).unwrap().text(), " run");
+    assert!(paragraph.run(2).is_none());
+}

@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "rdocx"
+version = "0.4.1"
+requires-python = ">=3.9"
+description = "Python bindings for rdocx"
+license = "MIT OR Apache-2.0"
+
+[tool.maturin]
+python-source = "python"
+module-name = "rdocx._rdocx"
+features = ["extension-module"]

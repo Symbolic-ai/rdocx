@@ -36,7 +36,11 @@ struct PyDocument { inner: rdocx::Document, revision: RevisionCounter }
 struct PyParagraph { doc: Py<PyDocument>, path: ContentPath }
 ```
 
-Zero change to the Rust API. No interior mutability leaking into the core.
+The Rust API adds only total, index-based paragraph and run accessors needed to
+re-resolve these handles. Read-only resolution stays on immutable paragraph
+handles so it cannot clear the layout caches. Run setters and structural
+mutations retain their required mutable resolution. No interior mutability
+leaks into the core.
 Aliasing is checked by PyO3's own `RefCell` on the pyclass, so a violation is a
 clean `RuntimeError`, never undefined behaviour. Resolution is a handful of
 vector index operations, negligible against FFI overhead.

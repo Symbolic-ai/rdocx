@@ -1,6 +1,6 @@
 # F-130, rdocx-py core
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S33
 **Size**: L
 **Depends on**: F-129, F-008
@@ -30,7 +30,14 @@ Create the unpublished mixed-layout `rdocx-py` crate. `PyDocument` owns an
 same lightweight state and implement length, integer and negative indexing,
 slices, and iteration without storing facade borrows.
 
-Expose the core constructor, open/from-bytes path, save/to-bytes path,
+Give the new unpublished workspace member the existing `workspace` release
+family metadata. Update the release-safety regression from nine to ten
+workspace-version packages and keep the exact seven-package published stable
+family unchanged.
+
+Expose the core constructor with an optional input path so both `Document()`
+and `Document("in.docx")` work, plus the explicit open/from-bytes path and
+save/to-bytes path,
 paragraph collection, add/remove content, paragraph text, run collection,
 add-run, and run text. Check the captured revision before every handle
 operation. Increment only after successful operations that add, remove, or
@@ -38,8 +45,16 @@ reorder path-addressed content.
 
 Add the smallest facade accessors required for direct re-resolution:
 `Document::paragraph`, `Paragraph::run_count`, `Paragraph::run`, and
-`Paragraph::run_mut`. Keep every existing method. These additive methods have
-an immediate second consumer in the new lazy paragraph and run handles.
+`Paragraph::run_mut`, plus immutable `ParagraphRef::run_count` and
+`ParagraphRef::run`. Read-only run resolution uses only the immutable facade
+and cannot clear layout caches. Within run handle and collection resolution,
+mutable resolution is reserved for the run setter. Structural mutations such
+as `add_run` retain their required mutable access. Keep every existing method.
+
+F-130 maps only the shared stale-domain error through a minimal temporary
+named `StaleElementError` bridge required by its gate. Serialized F-132
+replaces that bridge with the final pure-Python exception hierarchy and
+completes all package error mapping. F-130 and F-132 must not run in parallel.
 
 ## Rejected alternatives
 
@@ -60,6 +75,8 @@ an immediate second consumer in the new lazy paragraph and run handles.
 | integration | `lazy_collections_support_index_slice_and_iteration` | Paragraph and run collections are lazy and Python-index compatible |
 | integration | `failed_removal_does_not_stale_live_handles` | An out-of-range removal leaves the revision unchanged |
 | round-trip | `core_text_mutations_survive_bytes_round_trip` | Added paragraphs and runs survive save and reopen |
+| integration | `constructor_accepts_an_optional_input_path` | `Document()` creates a document and `Document(path)` opens one |
+| regression | `immutable_run_accessors_are_total` | Read-only run count and lookup use `ParagraphRef` and return `None` rather than panic |
 | regression | `direct_facade_accessors_are_total` | New Rust accessors return `None` rather than panic |
 
 The first integration test is the verbatim backlog gate. Focused commands are
@@ -70,9 +87,12 @@ module Rust check for `rdocx-py`, and the approved maturin plus pytest command.
 
 - `docs/hld/03-architecture.md`
 - `docs/hld/10-bindings-spec.md`
+- `docs/hld/15-build-and-toolchain.md`
 
 The current "zero change to the Rust API" statement must describe the small
-additive index accessors that make path re-resolution possible.
+additive index accessors that make path re-resolution possible. The build spec
+must count the new unpublished workspace-version package without changing the
+published stable family.
 
 ## Risk routing
 
@@ -86,6 +106,10 @@ additive index accessors that make path re-resolution possible.
   crate, class modules, package initializer, and one Python core test file.
 - Public API of published `rdocx`. State that the direct accessors are additive,
   run the workspace publication dry run, and enforce the archive size limit.
+- Release scripting and version strings. Add the existing `workspace` release
+  family metadata to `crates/rdocx-py/Cargo.toml`, update
+  `scripts/test_sprint_workflow.py` from nine to ten workspace-version
+  packages, and keep the seven-package published stable allowlist unchanged.
 
 ## Hash harness
 
@@ -94,12 +118,14 @@ facade accessors do not alter mutation or serialization behavior.
 
 ## Implementation checklist
 
-- [ ] Create the mixed-layout `rdocx-py` crate and package skeleton.
-- [ ] Add direct paragraph and run facade accessors with Rust regressions.
-- [ ] Implement owned document, path-only handles, and lazy collections.
-- [ ] Implement successful structural revision bumps and stale validation.
-- [ ] Map core errors into the approved Python exception surface.
-- [ ] Run focused checks and every risk rider.
+- [x] Create the mixed-layout `rdocx-py` crate and package skeleton.
+- [x] Add direct paragraph and run facade accessors with Rust regressions.
+- [x] Implement owned document, path-only handles, and lazy collections.
+- [x] Implement successful structural revision bumps and stale validation.
+- [x] Provide only the temporary named stale-error bridge required by F-130.
+- [x] Accept an optional input path in the Python `Document` constructor.
+- [x] Resolve every read-only run operation through immutable facade access.
+- [x] Run focused checks and every risk rider.
 
 ## Open questions
 

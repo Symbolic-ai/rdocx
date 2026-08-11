@@ -163,6 +163,13 @@ consuming builders for formatting so calls chain, `&mut self` methods for adding
 content that return a nested handle, and index-based `Option`-returning
 accessors that never panic.
 
+The `rdocx` facade also provides direct immutable paragraph lookup. Mutable
+and read-only paragraph handles each provide total run count and lookup, while
+only the mutable handle provides mutable run lookup. These accessors let the
+Python binding re-resolve lazy index paths without allocating paragraph
+snapshots, clearing layout caches for reads, or reaching through private OOXML
+fields.
+
 Every consuming formatting builder on `Paragraph`, `Run`, `Table`, `Row`, and
 `Cell` has a non-consuming `set_*` twin because a `mut self -> Self` builder
 cannot back a Python property setter. The 61 consuming builders delegate to

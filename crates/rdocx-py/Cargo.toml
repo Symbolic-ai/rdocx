@@ -1,0 +1,32 @@
+[package]
+name = "rdocx-py"
+description = "Python bindings for rdocx"
+version.workspace = true
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[package.metadata.release]
+shared-version = "workspace"
+tag-name = "v{{version}}"
+pre-release-replacements = [
+    { file = "pyproject.toml", search = 'version = "[^"]+"', replace = 'version = "{{version}}"', exactly = 1 },
+]
+
+[lib]
+name = "_rdocx"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+oxml-py-support = { workspace = true }
+pyo3 = { workspace = true }
+rdocx = { workspace = true }
+smallvec = { workspace = true }

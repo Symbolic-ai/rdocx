@@ -139,6 +139,21 @@ impl<'a> Paragraph<'a> {
         }
     }
 
+    /// Get the number of runs in this paragraph.
+    pub fn run_count(&self) -> usize {
+        self.inner.runs.len()
+    }
+
+    /// Get an immutable run by index.
+    pub fn run(&self, index: usize) -> Option<RunRef<'_>> {
+        self.inner.runs.get(index).map(|inner| RunRef { inner })
+    }
+
+    /// Get a mutable run by index.
+    pub fn run_mut(&mut self, index: usize) -> Option<Run<'_>> {
+        self.inner.runs.get_mut(index).map(|inner| Run { inner })
+    }
+
     /// Get an iterator over immutable run references.
     pub fn runs(&self) -> impl Iterator<Item = RunRef<'_>> {
         self.inner.runs.iter().map(|r| RunRef { inner: r })
@@ -527,6 +542,16 @@ impl<'a> ParagraphRef<'a> {
     /// Get the combined text of all runs.
     pub fn text(&self) -> String {
         self.inner.text()
+    }
+
+    /// Get the number of runs in this paragraph.
+    pub fn run_count(&self) -> usize {
+        self.inner.runs.len()
+    }
+
+    /// Get an immutable run by index.
+    pub fn run(&self, index: usize) -> Option<RunRef<'_>> {
+        self.inner.runs.get(index).map(|inner| RunRef { inner })
     }
 
     /// Get the paragraph style ID, if set.
