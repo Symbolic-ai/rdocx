@@ -17,7 +17,7 @@ regenerated, never hand-edited.
 | Milestone | F-IDs | Done | In Progress | Pending |
 |-----------|-------|------|-------------|---------|
 | M1, Preparation and safety net              | 12 | 12 | 0 | 0  |
-| M2, Shared infrastructure extraction        | 10 | 7 | 1 | 2  |
+| M2, Shared infrastructure extraction        | 10 | 7 | 2 | 1  |
 | M3, Media                                   | 6  | 4 | 0 | 2  |
 | M4, Layout primitives                       | 8  | 8 | 0 | 0  |
 | M5, PDF backend                             | 9  | 9 | 0 | 0  |
@@ -30,7 +30,7 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 5  | 1 | 0 | 4  |
-| **Total** | **159** | **130** | **1** | **28** |
+| **Total** | **159** | **130** | **2** | **27** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -62,7 +62,7 @@ regenerated, never hand-edited.
 | F-013 | Create oxml-core                             | S03 | M | done |
 | F-014 | New unit types                               | S03 | M | done |
 | F-015 | rdocx-oxml becomes a facade                  | S32.2 | S | in-progress |
-| F-016 | Length re-export                             | S32.2 | S | pending |
+| F-016 | Length re-export                             | S32.2 | S | in-progress |
 | F-017 | App and custom properties                    | S03 | M | done |
 | F-018 | Create oxml-opc                              | S04 | M | done |
 | F-019 | PresentationML relationship and content types| S04 | S | done |
