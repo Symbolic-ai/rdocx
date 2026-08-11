@@ -1,6 +1,6 @@
 # F-X005, Tag rpptx-v0.1.2
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S32.2
 **Size**: S
 **Depends on**: F-047, F-048, F-049, F-050
@@ -100,12 +100,12 @@ workflow preflight must not change document or render behaviour.
 - [x] Diagnose the 0.1.1 runner failure before any upload.
 - [x] Target the self-contained regression in `publish.yml` before uploads.
 - [x] Prepare exactly the 12-package family and matching pins at 0.1.2.
-- [ ] Run metadata, dependency, package, asset, archive, workspace, and hash gates.
-- [ ] Reach a clean sprint review at the exact release HEAD.
-- [ ] Request the separate final release approval with exact mutation details.
-- [ ] Run `/release rpptx-v0.1.2` and watch publication to completion.
-- [ ] Verify all registry owners, versions, and the GitHub release target SHA.
-- [ ] Update exactly the three listed HLD files and complete F-X005 only after verification.
+- [x] Run metadata, dependency, package, asset, archive, workspace, and hash gates.
+- [x] Reach a clean sprint review at the exact release HEAD.
+- [x] Request the separate final release approval with exact mutation details.
+- [x] Run `/release rpptx-v0.1.2` and watch publication to completion.
+- [x] Verify all registry owners, versions, and the GitHub release target SHA.
+- [x] Update exactly the three listed HLD files and complete F-X005 only after verification.
 
 ## Open questions
 

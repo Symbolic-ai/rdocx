@@ -180,6 +180,7 @@ defended.
 | F-048 | S32.1 | M | 2 | 1 | 2026-08-11 | Preparation-only stable and incubating cargo-release groups |
 | F-049 | S32.1 | M | 2 | 1 | 2026-08-11 | Exact split-family publication routing and verified local-source preflight |
 | F-050 | S32.1 | S | 1 | 1 | 2026-08-11 | No-default, wasm, prose, skill-sync, and binding-safe CI jobs |
+| F-X005 | S32.2 | S | 1 | 1 | 2026-08-11 | Published and verified the complete rpptx 0.1.2 family |
 
 ## Velocity
 

@@ -4422,3 +4422,44 @@ sync checks, and the integrated full gate.
 **Notes for future sessions.** Add `rpptx-wasm` to the target job only when
 F-138 creates that package. Keep the binding exclusions synchronized across
 every new all-feature job.
+
+### F-X005, Tag rpptx-v0.1.2
+
+**Sprint.** S32.2
+**Completed.** 2026-08-11
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The complete 12-crate incubating family is published at
+0.1.2 under the `rpptx-v0.1.2` tag. Every selected manifest has non-empty
+release metadata, and the publication workflow runs a self-contained metadata
+regression before its archive checks and dependency-ordered crates.io uploads.
+The matching GitHub release targets the reviewed sprint commit.
+
+**Non-obvious choices.** The immutable `rpptx-v0.1.0` tag remains the partial
+publication that contains only `oxml-core` 0.1.0. The immutable
+`rpptx-v0.1.1` tag remains the CI-only failed recovery. A new 0.1.2 family was
+required because release tags and published registry versions are never moved
+or overwritten.
+
+**Deviations from the design plan.** None. The approved 0.1.2 recovery ran as
+designed after a fresh full verification, clean sprint review, and separate
+final approval.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "Version trains",
+`docs/hld/14-development-backlog.md`, "F-X005, Tag rpptx-v0.1.2", and
+`docs/hld/15-build-and-toolchain.md`, "Packaging" and "Release process".
+
+**Tests.** The targeted 0.1.2 metadata regression, all workflow regressions,
+`cargo metadata --no-deps`, the exact patched 19-package publication dry run,
+archive size and bundled asset assertions, supply-chain checks, the full
+workspace gate, and all 28 output hashes passed. GitHub Actions run 31496676517
+published all 12 packages and created the release. Independent `cargo info`
+and owner checks confirmed every 0.1.2 registry entry under `mantissaman`, and
+the annotated GitHub tag resolved to commit
+`27a8bb8aa494759568d40bf66c167c214e759500`.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Released rdocx consumers may now cut over to
+the 0.1.2 shared crates without local registry patches. The stable rdocx family
+was not published by this tag.
