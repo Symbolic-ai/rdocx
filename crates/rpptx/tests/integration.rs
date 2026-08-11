@@ -3698,14 +3698,14 @@ fn facade_saved_corpus_reopens_with_the_same_read_surface() {
 }
 
 #[test]
-fn rpptx_is_an_unpublished_workspace_member() {
+fn rpptx_is_an_explicit_publication_candidate() {
     let workspace = include_str!("../../../Cargo.toml");
     let manifest = include_str!("../Cargo.toml");
     assert!(workspace.contains("\"crates/rpptx\""));
     assert!(workspace.contains("rpptx = { path = \"crates/rpptx\", version = \"0.0.0\" }"));
     assert!(manifest.contains("name = \"rpptx\""));
     assert!(manifest.contains("version = \"0.0.0\""));
-    assert!(manifest.contains("publish = false"));
+    assert!(manifest.contains("publish = true"));
     assert!(manifest.contains("default = [\"default-template\"]"));
     assert!(manifest.contains("default-template = []"));
 }

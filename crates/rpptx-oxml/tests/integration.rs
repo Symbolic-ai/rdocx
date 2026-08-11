@@ -275,11 +275,11 @@ fn verify_fetched_corpus() {
 }
 
 #[test]
-fn rpptx_oxml_is_an_unpublished_workspace_member() {
+fn rpptx_oxml_is_an_explicit_publication_candidate() {
     let manifest = include_str!("../Cargo.toml");
     assert!(manifest.contains("name = \"rpptx-oxml\""));
     assert!(manifest.contains("version = \"0.0.0\""));
-    assert!(manifest.contains("publish = false"));
+    assert!(manifest.contains("publish = true"));
     assert_eq!(
         P_NS,
         "http://schemas.openxmlformats.org/presentationml/2006/main"

@@ -2,7 +2,7 @@
 name = "oxml-pdf"
 description = "Format-neutral PDF renderer for staged OOXML layout output"
 version = "0.0.0"
-publish = false
+publish = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

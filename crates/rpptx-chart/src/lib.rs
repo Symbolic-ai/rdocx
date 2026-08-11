@@ -15054,12 +15054,12 @@ mod tests {
     }
 
     #[test]
-    fn rpptx_chart_is_an_unpublished_workspace_member() {
+    fn rpptx_chart_is_an_explicit_publication_candidate() {
         let manifest = include_str!("../Cargo.toml");
         let workspace = include_str!("../../../Cargo.toml");
         assert!(manifest.contains("name = \"rpptx-chart\""));
         assert!(manifest.contains("version = \"0.0.0\""));
-        assert!(manifest.contains("publish = false"));
+        assert!(manifest.contains("publish = true"));
         for dependency in [
             "oxml-core.workspace",
             "oxml-drawing.workspace",

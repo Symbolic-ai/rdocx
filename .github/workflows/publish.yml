@@ -2,7 +2,7 @@ name: Publish
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "rpptx-v*"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,44 +20,52 @@ jobs:
       - name: Verify output stability
         run: python3 scripts/hash_harness.py --check
 
-      - name: Publish rdocx-opc
-        run: cargo publish -p rdocx-opc
+      - name: Verify publication archives
+        run: cargo publish --workspace --dry-run
 
-      - name: Wait for registry index
-        run: sleep 60
+      - name: Publish stable allowlist
+        if: startsWith(github.ref_name, 'v')
+        run: |
+          cargo publish -p rdocx-opc
+          sleep 60
+          cargo publish -p rdocx-oxml
+          sleep 60
+          cargo publish -p rdocx-layout
+          sleep 60
+          cargo publish -p rdocx-html
+          sleep 60
+          cargo publish -p rdocx-pdf
+          sleep 60
+          cargo publish -p rdocx
+          sleep 60
+          cargo publish -p rdocx-cli
 
-      - name: Publish rdocx-oxml
-        run: cargo publish -p rdocx-oxml
-
-      - name: Wait for registry index
-        run: sleep 60
-
-      - name: Publish rdocx-layout
-        run: cargo publish -p rdocx-layout
-
-      - name: Wait for registry index
-        run: sleep 60
-
-      - name: Publish rdocx-html
-        run: cargo publish -p rdocx-html
-
-      - name: Wait for registry index
-        run: sleep 60
-
-      - name: Publish rdocx-pdf
-        run: cargo publish -p rdocx-pdf
-
-      - name: Wait for registry index
-        run: sleep 60
-
-      - name: Publish rdocx
-        run: cargo publish -p rdocx
-
-      - name: Wait for registry index
-        run: sleep 60
-
-      - name: Publish rdocx-cli
-        run: cargo publish -p rdocx-cli
+      - name: Publish incubating allowlist
+        if: startsWith(github.ref_name, 'rpptx-v')
+        run: |
+          cargo publish -p oxml-core
+          sleep 60
+          cargo publish -p oxml-opc
+          sleep 60
+          cargo publish -p oxml-media
+          sleep 60
+          cargo publish -p oxml-layout
+          sleep 60
+          cargo publish -p oxml-drawing
+          sleep 60
+          cargo publish -p oxml-pdf
+          sleep 60
+          cargo publish -p oxml-sml
+          sleep 60
+          cargo publish -p rpptx-oxml
+          sleep 60
+          cargo publish -p rpptx-chart
+          sleep 60
+          cargo publish -p rpptx-layout
+          sleep 60
+          cargo publish -p rpptx-render
+          sleep 60
+          cargo publish -p rpptx
 
   release:
     name: GitHub Release

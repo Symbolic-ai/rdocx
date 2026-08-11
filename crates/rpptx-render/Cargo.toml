@@ -9,7 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords = ["pptx", "powerpoint", "rendering", "presentation"]
 categories = ["parser-implementations", "text-processing"]
-publish = false
+publish = true
 
 [package.metadata.release]
 shared-version = "incubating"

@@ -14,6 +14,103 @@ from scripts import sprint_workflow as workflow
 
 
 class SprintWorkflowTests(unittest.TestCase):
+    def assert_publish_workflow_contract(self, publish: str) -> None:
+        stable_crates = (
+            "rdocx-opc",
+            "rdocx-oxml",
+            "rdocx-layout",
+            "rdocx-html",
+            "rdocx-pdf",
+            "rdocx",
+            "rdocx-cli",
+        )
+        incubating_crates = (
+            "oxml-core",
+            "oxml-opc",
+            "oxml-media",
+            "oxml-layout",
+            "oxml-drawing",
+            "oxml-pdf",
+            "oxml-sml",
+            "rpptx-oxml",
+            "rpptx-chart",
+            "rpptx-layout",
+            "rpptx-render",
+            "rpptx",
+        )
+
+        self.assertIn('tags: ["v*", "rpptx-v*"]', publish)
+        for step_name, condition, packages in (
+            (
+                "Publish stable allowlist",
+                "if: startsWith(github.ref_name, 'v')",
+                stable_crates,
+            ),
+            (
+                "Publish incubating allowlist",
+                "if: startsWith(github.ref_name, 'rpptx-v')",
+                incubating_crates,
+            ),
+        ):
+            marker = f"      - name: {step_name}\n"
+            self.assertEqual(publish.count(marker), 1)
+            start = publish.index(marker)
+            block_lines = []
+            for line in publish[start:].splitlines():
+                if block_lines and (
+                    line.startswith("      - ")
+                    or (line.strip() and len(line) - len(line.lstrip()) <= 4)
+                ):
+                    break
+                block_lines.append(line)
+            block = "\n".join(block_lines)
+
+            conditions = [line.strip() for line in block_lines if "if:" in line]
+            self.assertEqual(conditions, [condition])
+            self.assertNotIn("continue-on-error", block)
+            run_index = next(
+                index
+                for index, line in enumerate(block_lines)
+                if line.strip() == "run: |"
+            )
+            commands = [
+                line.strip()
+                for line in block_lines[run_index + 1 :]
+                if line.strip()
+            ]
+            expected_commands = []
+            for index, package in enumerate(packages):
+                expected_commands.append(f"cargo publish -p {package}")
+                if index + 1 < len(packages):
+                    expected_commands.append("sleep 60")
+            self.assertEqual(commands, expected_commands)
+
+            package_position = {name: index for index, name in enumerate(packages)}
+            for name in packages:
+                manifest = tomllib.loads(
+                    (workflow.REPO / f"crates/{name}/Cargo.toml").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                for dependency in manifest.get("dependencies", {}):
+                    if dependency in package_position:
+                        self.assertLess(
+                            package_position[dependency],
+                            package_position[name],
+                            f"{dependency} must publish before {name}",
+                        )
+
+        actual_publish_commands = [
+            line.strip()
+            for line in publish.splitlines()
+            if line.strip().startswith("cargo publish -p ")
+        ]
+        expected_publish_commands = [
+            f"cargo publish -p {package}"
+            for package in stable_crates + incubating_crates
+        ]
+        self.assertEqual(actual_publish_commands, expected_publish_commands)
+
     def test_preset_geometry_provenance_is_recorded(self) -> None:
         rendering = (workflow.REPO / "docs/hld/08-rendering-spec.md").read_text(
             encoding="utf-8"
@@ -212,40 +309,148 @@ class SprintWorkflowTests(unittest.TestCase):
         complete_feature = (
             workflow.REPO / ".claude/commands/complete-feature.md"
         ).read_text(encoding="utf-8")
+        normalized_release = " ".join(release.split())
 
         self.assertIn("only command", release)
-        self.assertIn("v*", release)
+        self.assertIn("# /release {vX.Y.Z | rpptx-vX.Y.Z}", release)
+        self.assertIn(
+            "The exact seven-package stable set is `rdocx-opc`, `rdocx-oxml`, "
+            "`rdocx-layout`, `rdocx-html`, `rdocx-pdf`, `rdocx`, and "
+            "`rdocx-cli`,",
+            normalized_release,
+        )
+        self.assertIn(
+            "The exact 12-package incubating set is `oxml-core`, `oxml-opc`, "
+            "`oxml-media`, `oxml-layout`, `oxml-drawing`, `oxml-pdf`, "
+            "`oxml-sml`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`, "
+            "`rpptx-render`, and `rpptx`.",
+            normalized_release,
+        )
+        self.assertIn("go or no-go immediately", normalized_release)
+        self.assertIn(
+            "Create one annotated tag for the requested argument",
+            normalized_release,
+        )
+        self.assertIn("Push only that requested tag", normalized_release)
         self.assertIn("/release", run_sprint)
         self.assertIn("Leave it\n`reviewed`", run_sprint)
         self.assertIn("/release", close_sprint)
         self.assertIn("deferred to /release", complete_feature)
 
-    def test_publish_workflow_verifies_and_propagates_failures(self) -> None:
+    def test_completed_shared_and_powerpoint_crates_are_publication_candidates(
+        self,
+    ) -> None:
+        incubating_packages = (
+            "oxml-core",
+            "oxml-opc",
+            "oxml-media",
+            "oxml-layout",
+            "oxml-drawing",
+            "oxml-pdf",
+            "oxml-sml",
+            "rpptx-oxml",
+            "rpptx-chart",
+            "rpptx-layout",
+            "rpptx-render",
+            "rpptx",
+        )
+
+        for name in incubating_packages:
+            manifest = tomllib.loads(
+                (workflow.REPO / f"crates/{name}/Cargo.toml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertIs(manifest["package"].get("publish"), True, name)
+
+    def test_publish_workflow_routes_exact_dependency_ordered_allowlists(self) -> None:
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_publish_workflow_contract(publish)
+
+    def test_publish_workflow_rejects_swapped_namespace_predicates(self) -> None:
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        mutated = publish.replace(
+            "if: startsWith(github.ref_name, 'v')",
+            "if: TEMPORARY_PREDICATE",
+            1,
+        )
+        mutated = mutated.replace(
+            "if: startsWith(github.ref_name, 'rpptx-v')",
+            "if: startsWith(github.ref_name, 'v')",
+            1,
+        ).replace(
+            "if: TEMPORARY_PREDICATE",
+            "if: startsWith(github.ref_name, 'rpptx-v')",
+            1,
+        )
+
+        with self.assertRaises(AssertionError):
+            self.assert_publish_workflow_contract(mutated)
+
+    def test_publish_workflow_rejects_an_extra_package(self) -> None:
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        mutated = publish.replace(
+            "\n  release:\n",
+            "\n      - name: Publish an extra package\n"
+            "        if: startsWith(github.ref_name, 'v')\n"
+            "        run: |\n"
+            "          cargo publish -p rdocx-wasm\n"
+            "\n  release:\n",
+            1,
+        )
+
+        with self.assertRaises(AssertionError):
+            self.assert_publish_workflow_contract(mutated)
+
+    def test_publish_workflow_rejects_continue_on_error(self) -> None:
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        mutated = publish.replace(
+            "      - name: Publish stable allowlist\n",
+            "      - name: Publish stable allowlist\n"
+            "        continue-on-error: true\n",
+            1,
+        )
+
+        with self.assertRaises(AssertionError):
+            self.assert_publish_workflow_contract(mutated)
+
+    def test_publish_workflow_rejects_successful_fallback_commands(self) -> None:
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        mutated = publish.replace(
+            "          cargo publish -p rdocx-opc\n",
+            "          cargo publish -p rdocx-opc || true\n",
+            1,
+        )
+
+        with self.assertRaises(AssertionError):
+            self.assert_publish_workflow_contract(mutated)
+
+    def test_publish_workflow_preflights_and_propagates_failures(self) -> None:
         publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
             encoding="utf-8"
         )
 
-        release_crates = (
-            "rdocx-opc",
-            "rdocx-oxml",
-            "rdocx-layout",
-            "rdocx-html",
-            "rdocx-pdf",
-            "rdocx",
-            "rdocx-cli",
-        )
-        for crate_name in release_crates:
-            self.assertEqual(publish.count(f"cargo publish -p {crate_name}\n"), 1)
-
-        self.assertNotIn("cargo publish --workspace", publish)
-        self.assertNotIn("cargo publish -p oxml-", publish)
-        self.assertNotIn("cargo publish -p rpptx", publish)
+        self.assertEqual(publish.count("cargo publish --workspace --dry-run"), 1)
         self.assertLess(
             publish.index("python3 scripts/hash_harness.py --check"),
+            publish.index("cargo publish --workspace --dry-run"),
+        )
+        self.assertLess(
+            publish.index("cargo publish --workspace --dry-run"),
             publish.index("cargo publish -p rdocx-opc"),
         )
         self.assertNotIn("--no-verify", publish)
-        self.assertNotIn("|| echo", publish)
+        self.assertNotIn("continue-on-error", publish)
 
     def test_review_and_verification_evidence_is_bound_to_head(self) -> None:
         data = {

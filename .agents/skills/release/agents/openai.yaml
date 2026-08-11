@@ -1,6 +1,6 @@
 interface:
   display_name: "Release"
-  short_description: "Release an already prepared and reviewed workspace version. T..."
+  short_description: "Release an already prepared and reviewed stable or incubating..."
   default_prompt: "Use $release to follow the repository workflow."
 policy:
   allow_implicit_invocation: false
