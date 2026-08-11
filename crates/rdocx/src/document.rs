@@ -625,6 +625,29 @@ impl Document {
         }
     }
 
+    /// Add an inline image at its native size using 72 DPI when none is declared.
+    ///
+    /// Returns an error without changing the document when the image dimensions
+    /// cannot be determined.
+    pub fn add_picture_auto(
+        &mut self,
+        image_data: &[u8],
+        image_filename: &str,
+    ) -> Result<Paragraph<'_>> {
+        let native_size = oxml_media::probe(image_data)
+            .and_then(|info| info.native_size(72.0))
+            .ok_or_else(|| Error::UnavailableImageDimensions {
+                filename: image_filename.to_owned(),
+            })?;
+
+        Ok(self.add_picture(
+            image_data,
+            image_filename,
+            Length::emu(native_size.width_emu),
+            Length::emu(native_size.height_emu),
+        ))
+    }
+
     /// Add a full-page background image behind text.
     ///
     /// The image is placed at position (0,0) relative to the page with

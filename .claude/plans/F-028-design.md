@@ -1,6 +1,6 @@
 # F-028, add_picture_auto
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S32.2
 **Size**: S
 **Depends on**: F-026, F-027
@@ -79,13 +79,13 @@ Expected unchanged. Existing samples continue calling the explicit-size API.
 
 ## Implementation checklist
 
-- [ ] Add the additive auto-size method.
-- [ ] Add one typed unavailable-dimensions error.
-- [ ] Probe and size before any document mutation.
-- [ ] Delegate successful calls to the existing picture path.
-- [ ] Add exact extent, round-trip, and atomic-failure coverage.
-- [ ] Run media, rdocx, packaging, workspace, and hash gates.
-- [ ] Update exactly the two listed HLD files.
+- [x] Add the additive auto-size method.
+- [x] Add one typed unavailable-dimensions error.
+- [x] Probe and size before any document mutation.
+- [x] Delegate successful calls to the existing picture path.
+- [x] Add exact extent, round-trip, and atomic-failure coverage.
+- [x] Run media, rdocx, packaging, workspace, and hash gates.
+- [x] Update exactly the two listed HLD files.
 
 ## Open questions
 

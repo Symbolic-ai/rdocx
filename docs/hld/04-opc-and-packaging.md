@@ -185,6 +185,13 @@ positive, or if a converted dimension is outside the `i64` range.
 The PresentationML picture insertion path supplies 72 for python-pptx parity
 without adding an `oxml-core` edge to `oxml-media`.
 
+`rdocx::Document::add_picture_auto` is an additive convenience API that probes
+the image and calculates `native_size(72.0)` before changing document state.
+It converts the shared EMU result with `Length::emu` and delegates successful
+insertion to the existing explicit-size `add_picture` path. Unavailable
+dimensions return `rdocx::Error::UnavailableImageDimensions` with the supplied
+filename before a media part, relationship, drawing, or paragraph is added.
+
 `rpptx::Presentation` scans `/ppt/media/` into a content-hash `MediaStore` when
 it opens. Insertion compares the complete byte string inside each hash bucket,
 reuses an equal package-wide media part, and otherwise allocates the next

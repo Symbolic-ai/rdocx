@@ -19,6 +19,9 @@ pub enum Error {
     #[error("document has no main document part")]
     NoDocumentPart,
 
+    #[error("image dimensions are unavailable for {filename}")]
+    UnavailableImageDimensions { filename: String },
+
     #[error("{0}")]
     Other(String),
 }

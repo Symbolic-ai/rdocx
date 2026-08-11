@@ -245,11 +245,16 @@ inputs. The facade has no local image numbering, extension, or MIME helper.
 content type, naming remains collision-safe, and the hash harness is unchanged.
 
 ### F-028, add_picture_auto (S)
-A new method inferring intrinsic size, rather than changing `add_picture`'s
-signature which has existing example call sites.
+`Document::add_picture_auto` probes and sizes image bytes at a 72 DPI caller
+default before mutation, converts the shared EMU dimensions with `Length::emu`,
+and delegates successful insertion to the existing `add_picture` path. This is
+an additive API, so the explicit-size signature and its existing callers stay
+unchanged. Unavailable dimensions return a typed error carrying the filename
+without adding a part, relationship, drawing, or paragraph.
 **Depends on**: F-026, F-027.
-**Test gate**: a picture added with no explicit size matches the image's native
-dimensions at 72 dpi.
+**Test gate**: a picture added with no explicit size has exact 72 DPI EMU
+dimensions before and after round-trip, while unavailable dimensions fail
+atomically.
 
 ---
 
