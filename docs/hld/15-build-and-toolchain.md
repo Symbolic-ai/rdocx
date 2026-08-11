@@ -176,6 +176,17 @@ edits to `[workspace.package]`, the internal pins in
 `[workspace.dependencies]`, and `Cargo.lock`. They are reviewed before a tag is
 possible and never rewrite README prose by pattern.
 
+`cargo-release` preparation is configured in Cargo metadata. The eight rdocx
+packages that inherit `[workspace.package].version` use cargo-release's
+effective `workspace` shared-version group and the `v{{version}}` tag template.
+The 12 implemented `oxml-*` and `rpptx*` packages have explicit versions, use
+the named `incubating` group, and carry the `rpptx-v{{version}}` template.
+Workspace settings consolidate the preparation commit, upgrade internal
+dependency requirements, and retain archive verification. Publishing, tag
+creation, and pushing are disabled, and no README replacement is configured.
+Preparation therefore changes only the selected manifests and `Cargo.lock`.
+External release actions remain owned by `/release`.
+
 `/release vX.Y.Z` is the only command allowed to create or push a `v*` release
 tag or start crates.io publication. It requires a clean sprint branch, a full
 verification and clean sprint review recorded at the exact HEAD, passing

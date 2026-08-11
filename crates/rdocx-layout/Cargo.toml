@@ -11,6 +11,10 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[package.metadata.release]
+shared-version = "workspace"
+tag-name = "v{{version}}"
+
 [features]
 default = ["bundled-fonts"]
 bundled-fonts = []

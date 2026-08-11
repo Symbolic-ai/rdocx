@@ -9,4 +9,8 @@ repository.workspace = true
 homepage.workspace = true
 publish = false
 
+[package.metadata.release]
+shared-version = "incubating"
+tag-name = "rpptx-v{{version}}"
+
 [dependencies]

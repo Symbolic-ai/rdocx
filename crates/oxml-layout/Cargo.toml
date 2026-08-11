@@ -16,6 +16,10 @@ include = [
     "fonts/NOTICE-*",
 ]
 
+[package.metadata.release]
+shared-version = "incubating"
+tag-name = "rpptx-v{{version}}"
+
 [features]
 default = ["system-fonts"]
 system-fonts = ["fontdb/fs", "fontdb/fontconfig"]

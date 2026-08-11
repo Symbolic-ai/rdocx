@@ -11,6 +11,10 @@ keywords = ["pptx", "powerpoint", "ooxml", "chart"]
 categories = ["parser-implementations", "text-processing"]
 publish = false
 
+[package.metadata.release]
+shared-version = "incubating"
+tag-name = "rpptx-v{{version}}"
+
 [dependencies]
 oxml-core.workspace = true
 oxml-drawing.workspace = true

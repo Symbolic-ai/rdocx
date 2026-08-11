@@ -1,6 +1,6 @@
 # F-048, Automate split-family release preparation
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S32.1
 **Size**: M
 **Depends on**: none
@@ -23,13 +23,14 @@ update one family and all of its dependency requirements mechanically.
 
 ## Approach
 
-Configure `cargo-release` through existing Cargo metadata. Use named
-`shared-version` groups for the stable rdocx train and the incubating shared
-and PowerPoint train. The stable group uses `v{{version}}`, and the incubating
-group uses `rpptx-v{{version}}`. Common workspace settings consolidate the
-preparation commit, upgrade internal dependency requirements, retain archive
-verification, and disable publishing, tagging, and pushing because `/release`
-owns those external actions.
+Configure `cargo-release` through existing Cargo metadata. The stable rdocx
+train uses cargo-release's effective `workspace` shared-version group because
+its packages inherit `[workspace.package].version`. The incubating shared and
+PowerPoint train uses the named `incubating` group. The stable group uses
+`v{{version}}`, and the incubating group uses `rpptx-v{{version}}`. Common
+workspace settings consolidate the preparation commit, upgrade internal
+dependency requirements, retain archive verification, and disable publishing,
+tagging, and pushing because `/release` owns those external actions.
 
 The stable preparation selects the released rdocx packages and updates
 `[workspace.package]` plus every stable `[workspace.dependencies]` pin. The
@@ -80,13 +81,14 @@ alter document or rendering behavior.
 
 ## Implementation checklist
 
-- [ ] Add common preparation-only `cargo-release` workspace metadata.
-- [ ] Assign every package to the stable or incubating named version group.
-- [ ] Pin the stable and incubating tag-name templates without granting tag
+- [x] Add common preparation-only `cargo-release` workspace metadata.
+- [x] Assign every package to the stable `workspace` or named `incubating`
+      version group.
+- [x] Pin the stable and incubating tag-name templates without granting tag
       authority to `cargo-release`.
-- [ ] Extend the existing workflow tests with split-family configuration
+- [x] Extend the existing workflow tests with split-family configuration
       invariants.
-- [ ] Run and inspect both temporary preparation dry-runs.
+- [x] Run and inspect both temporary preparation dry-runs.
 
 ## Open questions
 

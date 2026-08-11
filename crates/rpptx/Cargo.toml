@@ -11,6 +11,10 @@ keywords = ["pptx", "powerpoint", "ooxml", "presentation"]
 categories = ["parser-implementations", "text-processing"]
 publish = false
 
+[package.metadata.release]
+shared-version = "incubating"
+tag-name = "rpptx-v{{version}}"
+
 [features]
 default = ["default-template"]
 default-template = []

@@ -34,6 +34,15 @@ homepage = "https://github.com/tensorbee/rdocx"
 keywords = ["docx", "word", "pdf", "ooxml", "document"]
 categories = ["parser-implementations", "text-processing"]
 
+[workspace.metadata.release]
+consolidate-commits = true
+dependent-version = "upgrade"
+pre-release-commit-message = "Prepare release {{version}}"
+verify = true
+publish = false
+tag = false
+push = false
+
 [workspace.dependencies]
 # Internal crates
 oxml-core = { path = "crates/oxml-core", version = "0.0.0" }

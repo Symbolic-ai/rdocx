@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import tempfile
 import tomllib
 import unittest
@@ -114,6 +116,88 @@ class SprintWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(wasm["package"]["version"], {"workspace": True})
         self.assertFalse(wasm["package"]["publish"])
+
+    def test_stable_release_family_has_lockstep_preparation_metadata(self) -> None:
+        stable_packages = (
+            "rdocx-opc",
+            "rdocx-oxml",
+            "rdocx-layout",
+            "rdocx-html",
+            "rdocx-pdf",
+            "rdocx",
+            "rdocx-cli",
+            "rdocx-wasm",
+        )
+
+        for name in stable_packages:
+            binary = os.environ.get("CARGO_RELEASE_BIN")
+            command = [binary] if binary else ["cargo"]
+            command.extend(
+                (
+                    "release",
+                    "config",
+                    "--manifest-path",
+                    str(workflow.REPO / f"crates/{name}/Cargo.toml"),
+                )
+            )
+            result = subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            release = tomllib.loads(result.stdout)
+            self.assertEqual(release["shared-version"], "workspace")
+            self.assertEqual(release["tag-name"], "v{{version}}")
+
+    def test_incubating_release_family_has_lockstep_preparation_metadata(self) -> None:
+        incubating_packages = (
+            "oxml-core",
+            "oxml-drawing",
+            "oxml-layout",
+            "oxml-media",
+            "oxml-opc",
+            "oxml-pdf",
+            "oxml-sml",
+            "rpptx-oxml",
+            "rpptx-layout",
+            "rpptx-render",
+            "rpptx-chart",
+            "rpptx",
+        )
+
+        for name in incubating_packages:
+            manifest = tomllib.loads(
+                (workflow.REPO / f"crates/{name}/Cargo.toml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            release = manifest["package"]["metadata"]["release"]
+            self.assertEqual(release["shared-version"], "incubating")
+            self.assertEqual(release["tag-name"], "rpptx-v{{version}}")
+
+    def test_release_preparation_metadata_cannot_mutate_external_state(self) -> None:
+        root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
+        release = root["workspace"]["metadata"]["release"]
+
+        self.assertTrue(release["consolidate-commits"])
+        self.assertEqual(release["dependent-version"], "upgrade")
+        self.assertTrue(release["verify"])
+        self.assertFalse(release["publish"])
+        self.assertFalse(release["tag"])
+        self.assertFalse(release["push"])
+        self.assertNotIn("pre-release-replacements", release)
+
+        family_counts = {"workspace": 0, "incubating": 0}
+        for member in root["workspace"]["members"]:
+            manifest = tomllib.loads(
+                (workflow.REPO / member / "Cargo.toml").read_text(encoding="utf-8")
+            )
+            family = manifest["package"]["metadata"]["release"]["shared-version"]
+            self.assertIn(family, family_counts)
+            family_counts[family] += 1
+
+        self.assertEqual(family_counts, {"workspace": 8, "incubating": 12})
 
     def test_release_command_is_the_only_release_tag_authority(self) -> None:
         release = (workflow.REPO / ".claude/commands/release.md").read_text(
