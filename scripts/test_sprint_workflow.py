@@ -311,7 +311,7 @@ class SprintWorkflowTests(unittest.TestCase):
             self.assertEqual(release["shared-version"], "incubating")
             self.assertEqual(release["tag-name"], "rpptx-v{{version}}")
 
-    def test_incubating_release_family_is_prepared_at_0_1_0(self) -> None:
+    def test_incubating_release_family_is_prepared_at_0_1_1(self) -> None:
         incubating_packages = (
             "oxml-core",
             "oxml-opc",
@@ -326,7 +326,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "rpptx-render",
             "rpptx",
         )
-        expected_version = "0.1.0"
+        expected_version = "0.1.1"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
         dependencies = root["workspace"]["dependencies"]
         lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
@@ -344,6 +344,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 )
             )
             self.assertEqual(manifest["package"]["version"], expected_version, name)
+            self.assertTrue(manifest["package"].get("description", "").strip(), name)
             self.assertEqual(dependencies[name]["version"], expected_version, name)
             self.assertEqual(lock_versions[name], expected_version, name)
 
@@ -513,10 +514,16 @@ class SprintWorkflowTests(unittest.TestCase):
         publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
             encoding="utf-8"
         )
+        metadata_check = "python3 -m unittest scripts/test_sprint_workflow.py"
 
         self.assert_publish_preflight_contract(publish)
+        self.assertEqual(publish.count(metadata_check), 1)
         self.assertLess(
             publish.index("python3 scripts/hash_harness.py --check"),
+            publish.index(metadata_check),
+        )
+        self.assertLess(
+            publish.index(metadata_check),
             publish.index("cargo publish --workspace --dry-run"),
         )
         self.assertLess(

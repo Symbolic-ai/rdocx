@@ -29,7 +29,7 @@ versions.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X005 | Recover rpptx-v0.1.1 | S | in-progress | codex |
+| F-X005 | Tag rpptx-v0.1.1 | S | in-progress | codex |
 | F-015 | rdocx-oxml becomes a facade | S | pending | - |
 | F-016 | Length re-export | S | pending | - |
 | F-022 | rdocx-opc deprecation shim | S | pending | - |

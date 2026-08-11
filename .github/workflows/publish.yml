@@ -20,6 +20,9 @@ jobs:
       - name: Verify output stability
         run: python3 scripts/hash_harness.py --check
 
+      - name: Verify release metadata
+        run: python3 -m unittest scripts/test_sprint_workflow.py
+
       - name: Verify publication archives
         run: |
           cargo publish --workspace --dry-run \

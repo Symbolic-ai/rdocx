@@ -1103,7 +1103,7 @@ The read example uses `table.rows()` and `row.cells()`, neither of which exists.
 concurrent runs.
 **Test gate**: two concurrent `cargo test` runs both pass.
 
-### F-X005, Recover rpptx-v0.1.1 (S)
+### F-X005, Tag rpptx-v0.1.1 (S)
 Add complete registry metadata after the immutable partial 0.1.0 publication,
 prepare the exact incubating family at 0.1.1, and publish it through a newly
 reviewed release tag before released rdocx consumers cut over.

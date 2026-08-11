@@ -1,4 +1,4 @@
-# F-X005, Recover rpptx-v0.1.1
+# F-X005, Tag rpptx-v0.1.1
 
 **Status**: approved
 **Sprint**: S32.2
@@ -17,7 +17,7 @@ registry-backed shared family.
 ## Spec reference
 
 - `docs/hld/03-architecture.md`, "Version trains".
-- `docs/hld/14-development-backlog.md`, "F-X005, Recover rpptx-v0.1.1".
+- `docs/hld/14-development-backlog.md`, "F-X005, Tag rpptx-v0.1.1".
 - `docs/hld/15-build-and-toolchain.md`, "Packaging" and "Release process".
 - `.claude/commands/release.md`, "Incubating family", "Preconditions", and
   "Release".
@@ -93,10 +93,10 @@ workflow preflight must not change document or render behaviour.
 
 ## Implementation checklist
 
-- [ ] Add descriptions to all nine affected manifests.
-- [ ] Add and observe the failing release-metadata regression.
-- [ ] Run that regression in `publish.yml` before uploads.
-- [ ] Prepare exactly the 12-package family and matching pins at 0.1.1.
+- [x] Add descriptions to all nine affected manifests.
+- [x] Add and observe the failing release-metadata regression.
+- [x] Run that regression in `publish.yml` before uploads.
+- [x] Prepare exactly the 12-package family and matching pins at 0.1.1.
 - [ ] Run metadata, dependency, package, asset, archive, workspace, and hash gates.
 - [ ] Reach a clean sprint review at the exact release HEAD.
 - [ ] Request the separate final release approval with exact mutation details.

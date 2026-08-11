@@ -493,7 +493,7 @@ release plan, move released rdocx consumers onto them and document the cutover.
 
 | F-ID | Title | Size |
 |------|-------|------|
-| F-X005 | Recover rpptx-v0.1.1                       | S |
+| F-X005 | Tag rpptx-v0.1.1                           | S |
 | F-015 | rdocx-oxml becomes a facade                  | S |
 | F-016 | Length re-export                             | S |
 | F-022 | rdocx-opc deprecation shim                   | S |
