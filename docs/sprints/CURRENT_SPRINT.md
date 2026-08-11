@@ -36,7 +36,7 @@ versions.
 | F-027 | rdocx adopts oxml-media | M | in-progress | codex |
 | F-028 | add_picture_auto | S | in-progress | codex |
 | F-046 | rdocx layout and PDF cutover | M | in-progress | codex |
-| F-051 | CHANGELOG and migration notes | S | pending | - |
+| F-051 | CHANGELOG and migration notes | S | in-progress | codex |
 
 ## Sequencing note
 
