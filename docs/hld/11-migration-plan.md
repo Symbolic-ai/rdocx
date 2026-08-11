@@ -48,8 +48,9 @@ pub use oxml_core::xml::{matches_local_name, R_NS, MC_NS};
 The shared implementation is consumed only after its exact 0.1.2 release is
 resolvable from crates.io. The acceptance check is mechanical: the crate-local
 diff shows only `lib.rs`, `namespace.rs` and `Cargo.toml` modified, plus five
-deletions. `Cargo.lock` records the one-way dependency edge. The same pattern
-moves `Length` with zero churn.
+deletions. `Cargo.lock` records the one-way dependency edge. The `rdocx` facade
+uses the same pattern for `Length`: it directly depends on `oxml-core`,
+re-exports `oxml_core::Length`, and keeps every existing caller unchanged.
 
 This is what makes the bulk of the extraction low-risk, and it is worth stating
 plainly: most of this migration is a re-export block.

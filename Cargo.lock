@@ -549,6 +549,7 @@ dependencies = [
 name = "rdocx"
 version = "0.4.1"
 dependencies = [
+ "oxml-core",
  "rdocx-html",
  "rdocx-layout",
  "rdocx-opc",

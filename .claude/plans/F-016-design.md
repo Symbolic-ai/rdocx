@@ -1,6 +1,6 @@
 # F-016, Length re-export
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S32.2
 **Size**: S
 **Depends on**: F-013, F-X005
@@ -67,10 +67,10 @@ Expected to remain unchanged. Any delta blocks integration.
 
 ## Implementation checklist
 
-- [ ] Add the direct workspace dependency.
-- [ ] Replace the module export with the shared type re-export.
-- [ ] Delete the duplicate implementation without editing callers.
-- [ ] Run focused rdocx, package, workspace, and hash checks.
+- [x] Add the direct workspace dependency.
+- [x] Replace the module export with the shared type re-export.
+- [x] Delete the duplicate implementation without editing callers.
+- [x] Run focused rdocx, package, workspace, and hash checks.
 
 ## Open questions
 

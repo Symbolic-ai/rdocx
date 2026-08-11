@@ -17,6 +17,7 @@ shared-version = "workspace"
 tag-name = "v{{version}}"
 
 [dependencies]
+oxml-core = { workspace = true }
 rdocx-opc = { workspace = true }
 rdocx-oxml = { workspace = true }
 rdocx-layout = { workspace = true }
