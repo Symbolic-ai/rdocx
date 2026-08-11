@@ -30,7 +30,7 @@ versions.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-X005 | Tag rpptx-v0.1.2 | S | done | - |
-| F-015 | rdocx-oxml becomes a facade | S | pending | - |
+| F-015 | rdocx-oxml becomes a facade | S | in-progress | codex |
 | F-016 | Length re-export | S | pending | - |
 | F-022 | rdocx-opc deprecation shim | S | pending | - |
 | F-027 | rdocx adopts oxml-media | M | pending | - |
