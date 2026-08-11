@@ -7,7 +7,11 @@ rust-version.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-publish = false
+publish = true
+
+[package.metadata.release]
+shared-version = "incubating"
+tag-name = "rpptx-v{{version}}"
 
 [dependencies]
 oxml-opc.workspace = true

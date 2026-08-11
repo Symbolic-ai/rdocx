@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import tempfile
 import tomllib
 import unittest
@@ -12,6 +14,141 @@ from scripts import sprint_workflow as workflow
 
 
 class SprintWorkflowTests(unittest.TestCase):
+    def assert_publish_preflight_contract(self, publish: str) -> None:
+        publishable_crates = (
+            "oxml-core",
+            "oxml-drawing",
+            "oxml-layout",
+            "oxml-media",
+            "oxml-opc",
+            "oxml-pdf",
+            "oxml-sml",
+            "rdocx",
+            "rdocx-cli",
+            "rdocx-html",
+            "rdocx-layout",
+            "rdocx-opc",
+            "rdocx-oxml",
+            "rdocx-pdf",
+            "rpptx",
+            "rpptx-chart",
+            "rpptx-layout",
+            "rpptx-oxml",
+            "rpptx-render",
+        )
+        marker = "      - name: Verify publication archives\n"
+        self.assertEqual(publish.count(marker), 1)
+        start = publish.index(marker)
+        end = publish.index("\n      - name:", start + len(marker))
+        block = publish[start:end]
+
+        self.assertEqual(block.count("cargo publish --workspace --dry-run"), 1)
+        for package in publishable_crates:
+            config = (
+                f"--config 'patch.crates-io.{package}.path=\"crates/{package}\"'"
+            )
+            self.assertEqual(block.count(config), 1, package)
+        self.assertEqual(block.count("--config 'patch.crates-io."), 19)
+        self.assertNotIn("--no-verify", block)
+        self.assertNotIn("continue-on-error", block)
+
+    def assert_publish_workflow_contract(self, publish: str) -> None:
+        stable_crates = (
+            "rdocx-opc",
+            "rdocx-oxml",
+            "rdocx-layout",
+            "rdocx-html",
+            "rdocx-pdf",
+            "rdocx",
+            "rdocx-cli",
+        )
+        incubating_crates = (
+            "oxml-core",
+            "oxml-opc",
+            "oxml-media",
+            "oxml-layout",
+            "oxml-drawing",
+            "oxml-pdf",
+            "oxml-sml",
+            "rpptx-oxml",
+            "rpptx-chart",
+            "rpptx-layout",
+            "rpptx-render",
+            "rpptx",
+        )
+
+        self.assertIn('tags: ["v*", "rpptx-v*"]', publish)
+        for step_name, condition, packages in (
+            (
+                "Publish stable allowlist",
+                "if: startsWith(github.ref_name, 'v')",
+                stable_crates,
+            ),
+            (
+                "Publish incubating allowlist",
+                "if: startsWith(github.ref_name, 'rpptx-v')",
+                incubating_crates,
+            ),
+        ):
+            marker = f"      - name: {step_name}\n"
+            self.assertEqual(publish.count(marker), 1)
+            start = publish.index(marker)
+            block_lines = []
+            for line in publish[start:].splitlines():
+                if block_lines and (
+                    line.startswith("      - ")
+                    or (line.strip() and len(line) - len(line.lstrip()) <= 4)
+                ):
+                    break
+                block_lines.append(line)
+            block = "\n".join(block_lines)
+
+            conditions = [line.strip() for line in block_lines if "if:" in line]
+            self.assertEqual(conditions, [condition])
+            self.assertNotIn("continue-on-error", block)
+            run_index = next(
+                index
+                for index, line in enumerate(block_lines)
+                if line.strip() == "run: |"
+            )
+            commands = [
+                line.strip()
+                for line in block_lines[run_index + 1 :]
+                if line.strip()
+            ]
+            expected_commands = []
+            for index, package in enumerate(packages):
+                expected_commands.append(f"cargo publish -p {package}")
+                if index + 1 < len(packages):
+                    expected_commands.append("sleep 60")
+            self.assertEqual(commands, expected_commands)
+
+            package_position = {name: index for index, name in enumerate(packages)}
+            for name in packages:
+                manifest = tomllib.loads(
+                    (workflow.REPO / f"crates/{name}/Cargo.toml").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                for dependency in manifest.get("dependencies", {}):
+                    if dependency in package_position:
+                        self.assertLess(
+                            package_position[dependency],
+                            package_position[name],
+                            f"{dependency} must publish before {name}",
+                        )
+
+        actual_publish_commands = [
+            line.strip()
+            for line in publish.splitlines()
+            if line.strip().startswith("cargo publish -p ")
+        ]
+        expected_publish_commands = [
+            f"cargo publish -p {package}"
+            for package in stable_crates + incubating_crates
+        ]
+        self.assertEqual(actual_publish_commands, expected_publish_commands)
+
     def test_preset_geometry_provenance_is_recorded(self) -> None:
         rendering = (workflow.REPO / "docs/hld/08-rendering-spec.md").read_text(
             encoding="utf-8"
@@ -115,6 +252,88 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(wasm["package"]["version"], {"workspace": True})
         self.assertFalse(wasm["package"]["publish"])
 
+    def test_stable_release_family_has_lockstep_preparation_metadata(self) -> None:
+        stable_packages = (
+            "rdocx-opc",
+            "rdocx-oxml",
+            "rdocx-layout",
+            "rdocx-html",
+            "rdocx-pdf",
+            "rdocx",
+            "rdocx-cli",
+            "rdocx-wasm",
+        )
+
+        for name in stable_packages:
+            binary = os.environ.get("CARGO_RELEASE_BIN")
+            command = [binary] if binary else ["cargo"]
+            command.extend(
+                (
+                    "release",
+                    "config",
+                    "--manifest-path",
+                    str(workflow.REPO / f"crates/{name}/Cargo.toml"),
+                )
+            )
+            result = subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            release = tomllib.loads(result.stdout)
+            self.assertEqual(release["shared-version"], "workspace")
+            self.assertEqual(release["tag-name"], "v{{version}}")
+
+    def test_incubating_release_family_has_lockstep_preparation_metadata(self) -> None:
+        incubating_packages = (
+            "oxml-core",
+            "oxml-drawing",
+            "oxml-layout",
+            "oxml-media",
+            "oxml-opc",
+            "oxml-pdf",
+            "oxml-sml",
+            "rpptx-oxml",
+            "rpptx-layout",
+            "rpptx-render",
+            "rpptx-chart",
+            "rpptx",
+        )
+
+        for name in incubating_packages:
+            manifest = tomllib.loads(
+                (workflow.REPO / f"crates/{name}/Cargo.toml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            release = manifest["package"]["metadata"]["release"]
+            self.assertEqual(release["shared-version"], "incubating")
+            self.assertEqual(release["tag-name"], "rpptx-v{{version}}")
+
+    def test_release_preparation_metadata_cannot_mutate_external_state(self) -> None:
+        root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
+        release = root["workspace"]["metadata"]["release"]
+
+        self.assertTrue(release["consolidate-commits"])
+        self.assertEqual(release["dependent-version"], "upgrade")
+        self.assertTrue(release["verify"])
+        self.assertFalse(release["publish"])
+        self.assertFalse(release["tag"])
+        self.assertFalse(release["push"])
+        self.assertNotIn("pre-release-replacements", release)
+
+        family_counts = {"workspace": 0, "incubating": 0}
+        for member in root["workspace"]["members"]:
+            manifest = tomllib.loads(
+                (workflow.REPO / member / "Cargo.toml").read_text(encoding="utf-8")
+            )
+            family = manifest["package"]["metadata"]["release"]["shared-version"]
+            self.assertIn(family, family_counts)
+            family_counts[family] += 1
+
+        self.assertEqual(family_counts, {"workspace": 8, "incubating": 12})
+
     def test_release_command_is_the_only_release_tag_authority(self) -> None:
         release = (workflow.REPO / ".claude/commands/release.md").read_text(
             encoding="utf-8"
@@ -128,40 +347,161 @@ class SprintWorkflowTests(unittest.TestCase):
         complete_feature = (
             workflow.REPO / ".claude/commands/complete-feature.md"
         ).read_text(encoding="utf-8")
+        normalized_release = " ".join(release.split())
 
         self.assertIn("only command", release)
-        self.assertIn("v*", release)
+        self.assertIn("# /release {vX.Y.Z | rpptx-vX.Y.Z}", release)
+        self.assertIn(
+            "The exact seven-package stable set is `rdocx-opc`, `rdocx-oxml`, "
+            "`rdocx-layout`, `rdocx-html`, `rdocx-pdf`, `rdocx`, and "
+            "`rdocx-cli`,",
+            normalized_release,
+        )
+        self.assertIn(
+            "The exact 12-package incubating set is `oxml-core`, `oxml-opc`, "
+            "`oxml-media`, `oxml-layout`, `oxml-drawing`, `oxml-pdf`, "
+            "`oxml-sml`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`, "
+            "`rpptx-render`, and `rpptx`.",
+            normalized_release,
+        )
+        self.assertIn("go or no-go immediately", normalized_release)
+        self.assertIn(
+            "Create one annotated tag for the requested argument",
+            normalized_release,
+        )
+        self.assertIn("Push only that requested tag", normalized_release)
         self.assertIn("/release", run_sprint)
         self.assertIn("Leave it\n`reviewed`", run_sprint)
         self.assertIn("/release", close_sprint)
         self.assertIn("deferred to /release", complete_feature)
 
-    def test_publish_workflow_verifies_and_propagates_failures(self) -> None:
+    def test_completed_shared_and_powerpoint_crates_are_publication_candidates(
+        self,
+    ) -> None:
+        incubating_packages = (
+            "oxml-core",
+            "oxml-opc",
+            "oxml-media",
+            "oxml-layout",
+            "oxml-drawing",
+            "oxml-pdf",
+            "oxml-sml",
+            "rpptx-oxml",
+            "rpptx-chart",
+            "rpptx-layout",
+            "rpptx-render",
+            "rpptx",
+        )
+
+        for name in incubating_packages:
+            manifest = tomllib.loads(
+                (workflow.REPO / f"crates/{name}/Cargo.toml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertIs(manifest["package"].get("publish"), True, name)
+
+    def test_publish_workflow_routes_exact_dependency_ordered_allowlists(self) -> None:
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_publish_workflow_contract(publish)
+
+    def test_publish_workflow_rejects_swapped_namespace_predicates(self) -> None:
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        mutated = publish.replace(
+            "if: startsWith(github.ref_name, 'v')",
+            "if: TEMPORARY_PREDICATE",
+            1,
+        )
+        mutated = mutated.replace(
+            "if: startsWith(github.ref_name, 'rpptx-v')",
+            "if: startsWith(github.ref_name, 'v')",
+            1,
+        ).replace(
+            "if: TEMPORARY_PREDICATE",
+            "if: startsWith(github.ref_name, 'rpptx-v')",
+            1,
+        )
+
+        with self.assertRaises(AssertionError):
+            self.assert_publish_workflow_contract(mutated)
+
+    def test_publish_workflow_rejects_an_extra_package(self) -> None:
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        mutated = publish.replace(
+            "\n  release:\n",
+            "\n      - name: Publish an extra package\n"
+            "        if: startsWith(github.ref_name, 'v')\n"
+            "        run: |\n"
+            "          cargo publish -p rdocx-wasm\n"
+            "\n  release:\n",
+            1,
+        )
+
+        with self.assertRaises(AssertionError):
+            self.assert_publish_workflow_contract(mutated)
+
+    def test_publish_workflow_rejects_continue_on_error(self) -> None:
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        mutated = publish.replace(
+            "      - name: Publish stable allowlist\n",
+            "      - name: Publish stable allowlist\n"
+            "        continue-on-error: true\n",
+            1,
+        )
+
+        with self.assertRaises(AssertionError):
+            self.assert_publish_workflow_contract(mutated)
+
+    def test_publish_workflow_rejects_successful_fallback_commands(self) -> None:
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        mutated = publish.replace(
+            "          cargo publish -p rdocx-opc\n",
+            "          cargo publish -p rdocx-opc || true\n",
+            1,
+        )
+
+        with self.assertRaises(AssertionError):
+            self.assert_publish_workflow_contract(mutated)
+
+    def test_publish_workflow_preflights_and_propagates_failures(self) -> None:
         publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
             encoding="utf-8"
         )
 
-        release_crates = (
-            "rdocx-opc",
-            "rdocx-oxml",
-            "rdocx-layout",
-            "rdocx-html",
-            "rdocx-pdf",
-            "rdocx",
-            "rdocx-cli",
-        )
-        for crate_name in release_crates:
-            self.assertEqual(publish.count(f"cargo publish -p {crate_name}\n"), 1)
-
-        self.assertNotIn("cargo publish --workspace", publish)
-        self.assertNotIn("cargo publish -p oxml-", publish)
-        self.assertNotIn("cargo publish -p rpptx", publish)
+        self.assert_publish_preflight_contract(publish)
         self.assertLess(
             publish.index("python3 scripts/hash_harness.py --check"),
+            publish.index("cargo publish --workspace --dry-run"),
+        )
+        self.assertLess(
+            publish.index("cargo publish --workspace --dry-run"),
             publish.index("cargo publish -p rdocx-opc"),
         )
         self.assertNotIn("--no-verify", publish)
-        self.assertNotIn("|| echo", publish)
+        self.assertNotIn("continue-on-error", publish)
+
+    def test_publish_workflow_rejects_a_missing_local_patch(self) -> None:
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        mutated = publish.replace(
+            "            --config 'patch.crates-io.oxml-core.path=\"crates/oxml-core\"' \\\n",
+            "",
+            1,
+        )
+
+        with self.assertRaises(AssertionError):
+            self.assert_publish_preflight_contract(mutated)
 
     def test_review_and_verification_evidence_is_bound_to_head(self) -> None:
         data = {

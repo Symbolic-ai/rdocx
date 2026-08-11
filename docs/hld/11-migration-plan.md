@@ -163,11 +163,23 @@ a public module whose types change, and `PositionedElement` becomes
 The unsafe `scripts/release.sh` is gone. Version changes are prepared as
 reviewable F-ID commits with targeted manifest and lockfile edits. `/release`
 then tags the exact fully verified commit after a separate final approval. It
-owns the `v*` release namespace, while `/close-sprint` owns `sNN` tags and
-`/spec-bump` owns local `spec-v*` tags.
+accepts exactly one stable `vX.Y.Z` or incubating `rpptx-vX.Y.Z` release and is
+the sole authority for both namespaces and crates.io publication.
+`/close-sprint` owns `sNN` tags and `/spec-bump` owns local `spec-v*` tags.
 
-Today `publish.yml` names the seven released rdocx packages explicitly in
-dependency order. F-049 expands that allowlist to the completed shared and
-PowerPoint crates only after PowerPoint development and separate publication
-approval. The workflow propagates authentication, network, compilation and
-duplicate-version failures without relabelling them.
+`publish.yml` routes the namespaces to disjoint dependency-ordered allowlists.
+A stable tag publishes exactly `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`,
+`rdocx-html`, `rdocx-pdf`, `rdocx`, and `rdocx-cli`. An incubating tag publishes
+exactly `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
+`oxml-pdf`, `oxml-sml`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`,
+`rpptx-render`, and `rpptx`.
+
+Before either real allowlist, the workflow reproduces the deterministic hash
+baseline and verifies the full publishable workspace with a dry run. Each real
+publish command keeps archive verification enabled, propagates authentication,
+network, compilation and duplicate-version failures, and waits for the registry
+between dependency layers. `/release` validates the requested family's exact
+package and version set at the clean reviewed SHA, requires full verification
+and a clean sprint review, obtains a separate final approval, pushes only the
+requested tag, and verifies crates.io ownership plus the matching GitHub
+release.

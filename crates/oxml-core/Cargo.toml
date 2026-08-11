@@ -2,13 +2,17 @@
 name = "oxml-core"
 description = "Format-neutral OOXML units, XML helpers, and document properties"
 version = "0.0.0"
-publish = false
+publish = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+
+[package.metadata.release]
+shared-version = "incubating"
+tag-name = "rpptx-v{{version}}"
 
 [dependencies]
 quick-xml = { workspace = true }

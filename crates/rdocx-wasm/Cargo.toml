@@ -12,6 +12,10 @@ keywords.workspace = true
 categories.workspace = true
 publish = false
 
+[package.metadata.release]
+shared-version = "workspace"
+tag-name = "v{{version}}"
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 

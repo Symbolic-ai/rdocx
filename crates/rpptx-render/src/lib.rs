@@ -3521,6 +3521,6 @@ mod tests {
             assert!(!oxml_manifest.contains("rpptx-render"));
         }
         assert!(manifest.contains("version = \"0.0.0\""));
-        assert!(manifest.contains("publish = false"));
+        assert!(manifest.contains("publish = true"));
     }
 }

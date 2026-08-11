@@ -21,7 +21,7 @@ regenerated, never hand-edited.
 | M3, Media                                   | 6  | 4 | 0 | 2  |
 | M4, Layout primitives                       | 8  | 8 | 0 | 0  |
 | M5, PDF backend                             | 9  | 9 | 0 | 0  |
-| M6, Shared publication and rdocx cutover     | 6  | 0 | 0 | 6  |
+| M6, Shared publication and rdocx cutover     | 6  | 4 | 0 | 2  |
 | M7, DrawingML                               | 19 | 19 | 0 | 0  |
 | M8, PresentationML                          | 14 | 14 | 0 | 0  |
 | M9, Inheritance resolver                    | 8  | 8 | 0 | 0  |
@@ -30,7 +30,7 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
 | X, Cross-cutting (opportunistic)            | 4  | 0 | 0 | 4  |
-| **Total** | **158** | **125** | **0** | **33** |
+| **Total** | **158** | **129** | **0** | **29** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -121,10 +121,10 @@ regenerated, never hand-edited.
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
 | F-046 | rdocx layout and PDF cutover                 | S32.2 | M | pending |
-| F-047 | Packaging include and size gate              | S32.1 | M | pending |
-| F-048 | Automate split-family release preparation   | S32.1 | M | pending |
-| F-049 | Extend publish.yml to the extracted workspace| S32.1 | M | pending |
-| F-050 | CI matrix additions                          | S32.1 | S | pending |
+| F-047 | Packaging include and size gate              | S32.1 | M | done |
+| F-048 | Automate split-family release preparation   | S32.1 | M | done |
+| F-049 | Extend publish.yml to the extracted workspace| S32.1 | M | done |
+| F-050 | CI matrix additions                          | S32.1 | S | done |
 | F-051 | CHANGELOG and migration notes                | S32.2 | S | pending |
 <!-- AUTOGEN:backlog-M6 END -->
 

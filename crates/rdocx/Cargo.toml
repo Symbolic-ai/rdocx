@@ -12,6 +12,10 @@ keywords.workspace = true
 categories.workspace = true
 readme = "../../README.md"
 
+[package.metadata.release]
+shared-version = "workspace"
+tag-name = "v{{version}}"
+
 [dependencies]
 rdocx-opc = { workspace = true }
 rdocx-oxml = { workspace = true }

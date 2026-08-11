@@ -50,8 +50,37 @@ the workspace, which is what `/close-sprint` requires.
 9. **Docs.** `cargo doc --workspace --no-deps` with `RUSTDOCFLAGS=-D warnings`.
    Skipped by `--fast`.
 
-10. **Packaging.** Run `cargo publish --workspace --dry-run`, then assert every
-    generated archive is below the crates.io 10 MiB limit:
+10. **Packaging.** Run the workspace dry run with every publishable internal
+    crate patched to its reviewed local source:
+
+    ```bash
+    cargo publish --workspace --dry-run \
+      --config 'patch.crates-io.oxml-core.path="crates/oxml-core"' \
+      --config 'patch.crates-io.oxml-drawing.path="crates/oxml-drawing"' \
+      --config 'patch.crates-io.oxml-layout.path="crates/oxml-layout"' \
+      --config 'patch.crates-io.oxml-media.path="crates/oxml-media"' \
+      --config 'patch.crates-io.oxml-opc.path="crates/oxml-opc"' \
+      --config 'patch.crates-io.oxml-pdf.path="crates/oxml-pdf"' \
+      --config 'patch.crates-io.oxml-sml.path="crates/oxml-sml"' \
+      --config 'patch.crates-io.rdocx.path="crates/rdocx"' \
+      --config 'patch.crates-io.rdocx-cli.path="crates/rdocx-cli"' \
+      --config 'patch.crates-io.rdocx-html.path="crates/rdocx-html"' \
+      --config 'patch.crates-io.rdocx-layout.path="crates/rdocx-layout"' \
+      --config 'patch.crates-io.rdocx-opc.path="crates/rdocx-opc"' \
+      --config 'patch.crates-io.rdocx-oxml.path="crates/rdocx-oxml"' \
+      --config 'patch.crates-io.rdocx-pdf.path="crates/rdocx-pdf"' \
+      --config 'patch.crates-io.rpptx.path="crates/rpptx"' \
+      --config 'patch.crates-io.rpptx-chart.path="crates/rpptx-chart"' \
+      --config 'patch.crates-io.rpptx-layout.path="crates/rpptx-layout"' \
+      --config 'patch.crates-io.rpptx-oxml.path="crates/rpptx-oxml"' \
+      --config 'patch.crates-io.rpptx-render.path="crates/rpptx-render"'
+    ```
+
+    Cargo rewrites packaged path dependencies to the registry. The local
+    patches keep archive verification on this exact reviewed source graph,
+    including versions that have not yet been published. They do not enter
+    any generated archive. Then assert every generated archive is below the
+    crates.io 10 MiB limit:
 
     ```bash
     oversized=$(find target/package -name '*.crate' -size +10485760c -print)

@@ -82,18 +82,25 @@ useful on musl or Windows and must be gated per-target for wheel builds.
 
 ## Packaging
 
-`crates/rdocx-layout/fonts/` is **6.8 MB of TTFs outside `src/`**, published
-today only because `cargo publish --no-verify` skips the build-from-archive
-check, and there is no `include` or `exclude` in the manifest.
+`oxml-layout` packages its source and bundled font assets through an explicit
+manifest inventory:
 
 ```toml
 [package]
-include = ["src/**/*", "fonts/*.ttf", "fonts/LICENSE-*", "fonts/NOTICE-*", "README.md"]
+include = [
+    "src/**/*",
+    "fonts/*.ttf",
+    "fonts/LICENSE-*",
+    "fonts/NOTICE-*",
+]
 ```
 
-Drop `--no-verify`, and assert the resulting `.crate` size against the 10 MiB
-crates.io limit in CI. Roughly 3.5 to 4 MB compressed is expected, but measure
-rather than assume.
+The dedicated package CI job compares `cargo package -p oxml-layout --list`
+against all 20 TTFs, the three family licence files, and the Caladea notice. It
+then runs verified packaging without `--no-verify` and rejects a missing
+archive or one larger than the crates.io 10 MiB limit. `oxml-layout` is a
+publication candidate, while the release workflow remains the authority that
+decides whether it is published.
 
 The same treatment applies to `crates/rpptx/assets/default.pptx`. **An asset
 must live under its own crate's directory**: a workspace-root `assets/` compiles
@@ -126,44 +133,37 @@ The fourteen future crates.io names in this graph are reserved at version
 The binding crates are not published there, and the WASM packages use the npm
 publication path.
 
-`publish.yml` explicitly publishes the seven released rdocx packages in
-dependency order. It does not use workspace-wide publication. Archive
-verification is not skipped. Authentication, network, compilation and
-duplicate-version failures all fail the job instead of being relabelled as
-success.
+All 12 implemented shared and PowerPoint packages are explicit publication
+candidates at their common incubating version. They are `oxml-core`,
+`oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`, `oxml-pdf`, `oxml-sml`,
+`rpptx-oxml`, `rpptx-chart`, `rpptx-layout`, `rpptx-render`, and `rpptx`.
+Manifest eligibility does not authorize publication. Only the reviewed
+incubating release path can activate their exact allowlist.
 
-The `oxml-*` and `rpptx*` placeholders remain at 0.0.0 until PowerPoint
-development is complete. A normal `v*` release must not publish a later version
-of any package in those families. Their eventual publication requires its own
-reviewed release plan and explicit approval.
+`publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
+real allowlist it reproduces the hash harness and runs
+`cargo publish --workspace --dry-run` with an exact local source patch for each
+member of the 19-package publishable union. Cargo rewrites packaged path
+dependencies to the registry, so the patches keep verification on the reviewed
+workspace graph before those versions exist there. They do not enter generated
+archives and the dry run uploads nothing. The stable path then publishes only
+the seven released rdocx packages in dependency order. The incubating path
+publishes only the 12 candidates above in dependency order. Every real command
+keeps archive verification enabled. Registry waits separate dependency layers,
+and authentication, network, compilation and duplicate-version failures fail
+the job.
 
-Implemented development crates keep the reserved `version = "0.0.0"` and set
-`publish = false` in the workspace. The release workflow remains an explicit
-allowlist of the seven released rdocx packages, so adding implementation code
-does not turn a reserved name into a publication candidate.
-
-`oxml-sml` is an implemented development crate under that rule. It is a
-workspace member and workspace dependency at version 0.0.0 with
-`publish = false`. Its normal graph contains only `oxml-opc`, `quick-xml`, and
-`thiserror`, and its package contains only the generated Cargo metadata,
-lockfile, manifest, README, and single source file. It is not present in the
-release allowlist.
-
-`rpptx-chart` is also an implemented development crate under that rule. It is
-a workspace member and workspace dependency at version 0.0.0 with
-`publish = false`. Its direct normal dependencies are only `oxml-core`,
-`oxml-drawing`, and `quick-xml`. It has no facade dependency, and no `oxml-*`
-dependency gains an edge back to the `rdocx-*` or `rpptx-*` families. Its
-archive contains five files: Cargo's VCS metadata, lockfile, normalized and
-original manifests, and the single source file. It remains below the crates.io
-10 MiB limit and is not present in the release allowlist.
+The generated archives remain subject to the crates.io 10 MiB ceiling.
+`oxml-layout` contains all 20 bundled fonts and their required legal files, and
+`rpptx` contains `assets/default.pptx`. No binding or WASM package is in either
+crates.io allowlist.
 
 Two tag namespaces:
 
 | Tag | Workflow | Publishes |
 |---|---|---|
-| `v*` | `publish.yml` | crates.io, the lockstep family |
-| `rpptx-v*` | none until development is complete | no publication |
+| `v*` | `publish.yml` | crates.io, the exact seven-package stable family |
+| `rpptx-v*` | `publish.yml` | crates.io, the exact 12-package incubating family |
 | `py-v*` | `wheels.yml` | PyPI via OIDC trusted publishing |
 
 Wheels are separate so a Rust patch release does not rebuild twelve wheels, and
@@ -176,18 +176,38 @@ edits to `[workspace.package]`, the internal pins in
 `[workspace.dependencies]`, and `Cargo.lock`. They are reviewed before a tag is
 possible and never rewrite README prose by pattern.
 
-`/release vX.Y.Z` is the only command allowed to create or push a `v*` release
-tag or start crates.io publication. It requires a clean sprint branch, a full
-verification and clean sprint review recorded at the exact HEAD, passing
-package dry-runs, an absent local and remote tag, and a separate final approval
-immediately before the push. `/close-sprint` remains the only command allowed
-to merge `main` or create an `sNN` tag.
+`cargo-release` preparation is configured in Cargo metadata. The eight rdocx
+packages that inherit `[workspace.package].version` use cargo-release's
+effective `workspace` shared-version group and the `v{{version}}` tag template.
+The 12 implemented `oxml-*` and `rpptx*` packages have explicit versions, use
+the named `incubating` group, and carry the `rpptx-v{{version}}` template.
+Workspace settings consolidate the preparation commit, upgrade internal
+dependency requirements, and retain archive verification. Publishing, tag
+creation, and pushing are disabled, and no README replacement is configured.
+Preparation therefore changes only the selected manifests and `Cargo.lock`.
+External release actions remain owned by `/release`.
 
-The tag starts `publish.yml`. Its Linux runner reproduces the deterministic hash
-baseline before crates.io publication begins. Publication succeeds only after
-all seven current crates and the GitHub release are externally verified.
-`rdocx-wasm` inherits the workspace version but stays `publish = false` because
-its distribution path is npm.
+`/release {vX.Y.Z | rpptx-vX.Y.Z}` is the only command allowed to create or push
+either crates.io release tag or start crates.io publication. It selects exactly
+one namespace. The stable path validates the workspace version, its internal
+pins, and the exact seven-package stable set. The incubating path validates the
+common explicit version, workspace pins, and the exact 12-package incubating
+set.
+
+Both paths require a clean sprint branch, full verification and a clean sprint
+review recorded at the exact HEAD, a workspace dry run containing exactly the
+19-package union and its exact local patch set, archives below 10 MiB with
+required assets, an absent local and remote requested tag, and a separate final
+approval immediately before the first mutation. `/release` pushes only the
+requested tag. `/close-sprint` remains the only command allowed to merge
+`main` or create an `sNN` tag.
+
+The requested tag starts `publish.yml`. Its Linux runner reproduces the
+deterministic hash baseline and full workspace dry run before crates.io
+publication begins. Success requires every package in the selected family to
+report the requested version and expected owner, plus a matching GitHub release
+targeting the reviewed SHA. `rdocx-wasm` inherits the stable workspace version
+but stays `publish = false` because its distribution path is npm.
 
 The Python package version tracks the Rust train through a
 `pre-release-replacements` entry so the wheel version and the crate version
@@ -195,15 +215,28 @@ cannot diverge.
 
 ## CI job matrix
 
-Listed in `12-testing-strategy.md`. Two additions specific to this document:
+Listed in `12-testing-strategy.md`. The matrix carries these
+repository-specific gates:
+
+**A dedicated `oxml-layout` package job.** It checks the exact bundled font and
+legal-file inventory, builds and verifies the generated archive, and enforces
+the crates.io 10 MiB limit.
 
 **`--exclude rdocx-py --exclude rpptx-py` on every `--all-features` job.**
 `pyo3/extension-module` tells the linker the Python symbols come from the host
 interpreter, which is false for a test binary. On Linux this is an
 unresolved-symbol link failure that is easy to misdiagnose as something else.
 
-**A `wasm32-unknown-unknown` check job**, without which the binding crates drift
-again exactly as `rdocx-wasm` already has.
+**A dedicated no-default-features job.** It runs `cargo test -p oxml-layout
+--no-default-features`, which exercises the font-isolation path used by WASM.
+
+**A `wasm32-unknown-unknown` check job.** It installs the target and checks the
+existing `rdocx-wasm` crate. The future `rpptx-wasm` package remains deferred
+to F-138.
+
+**A prose and generated-skill job.** It runs `scripts/prose_check.py` and
+`scripts/sync_agent_skills.py --check` as separate steps, so voice-rule or
+adapter drift fails before integration.
 
 **A dedicated Presentation fidelity job** fetches the pinned 50-deck corpus,
 installs LibreOffice and Poppler, and runs `scripts/pptx_ssim_harness.py
