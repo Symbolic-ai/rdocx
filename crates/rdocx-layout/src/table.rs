@@ -1,12 +1,14 @@
 //! Table layout: column widths, cell content, merge handling.
 
+use std::collections::HashMap;
+
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Tbl, CT_TblBorders, CT_TblGrid, ST_VerticalJc, VMerge};
 
 use crate::block::ParagraphBlock;
 use crate::input::LayoutInput;
 use crate::style_resolver::NumberingState;
-use oxml_layout::{Color, FontManager, Result};
+use oxml_layout::{Color, FontManager, MediaId, Result};
 
 /// A laid-out table.
 #[derive(Debug, Clone)]
@@ -85,6 +87,27 @@ pub fn layout_table(
     available_width: f64,
     styles: &CT_Styles,
     input: &LayoutInput,
+    fm: &mut FontManager,
+    num_state: &mut NumberingState,
+) -> Result<TableBlock> {
+    let (media_ids, _) = crate::engine::media_registry(input);
+    layout_table_with_media_ids(
+        tbl,
+        available_width,
+        styles,
+        input,
+        &media_ids,
+        fm,
+        num_state,
+    )
+}
+
+pub(crate) fn layout_table_with_media_ids(
+    tbl: &CT_Tbl,
+    available_width: f64,
+    styles: &CT_Styles,
+    input: &LayoutInput,
+    media_ids: &HashMap<String, MediaId>,
     fm: &mut FontManager,
     num_state: &mut NumberingState,
 ) -> Result<TableBlock> {
@@ -180,7 +203,15 @@ pub fn layout_table(
             let paragraphs = if is_vmerge_continue {
                 Vec::new()
             } else {
-                layout_cell_content(&cell.content, content_width, styles, input, fm, num_state)?
+                layout_cell_content(
+                    &cell.content,
+                    content_width,
+                    styles,
+                    input,
+                    media_ids,
+                    fm,
+                    num_state,
+                )?
             };
 
             let content_height: f64 = paragraphs.iter().map(|p| p.total_height()).sum::<f64>()
@@ -296,6 +327,7 @@ fn layout_cell_content(
     available_width: f64,
     styles: &CT_Styles,
     input: &LayoutInput,
+    media_ids: &HashMap<String, MediaId>,
     fm: &mut FontManager,
     num_state: &mut NumberingState,
 ) -> Result<Vec<ParagraphBlock>> {
@@ -306,13 +338,28 @@ fn layout_cell_content(
     for item in content {
         match item {
             CellContent::Paragraph(para) => {
-                let block =
-                    engine::layout_paragraph(para, available_width, styles, input, fm, num_state)?;
+                let block = engine::layout_paragraph_with_media_ids(
+                    para,
+                    available_width,
+                    styles,
+                    input,
+                    media_ids,
+                    fm,
+                    num_state,
+                )?;
                 blocks.push(block);
             }
             CellContent::Table(tbl) => {
                 // Recursively lay out the nested table
-                let _nested = layout_table(tbl, available_width, styles, input, fm, num_state)?;
+                let _nested = layout_table_with_media_ids(
+                    tbl,
+                    available_width,
+                    styles,
+                    input,
+                    media_ids,
+                    fm,
+                    num_state,
+                )?;
                 // For now, flatten: render nested table cell content as paragraph blocks
                 // (Full nested table rendering would require the paginator to handle tables within cells)
                 for row in &_nested.rows {

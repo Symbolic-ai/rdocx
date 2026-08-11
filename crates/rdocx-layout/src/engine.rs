@@ -1,5 +1,7 @@
 //! Layout engine orchestrator: ties all phases together.
 
+use std::collections::HashMap;
+
 use rdocx_oxml::document::{BodyContent, CT_SectPr};
 use rdocx_oxml::header_footer::HdrFtrType;
 use rdocx_oxml::properties::CT_PPr;
@@ -52,6 +54,7 @@ impl Engine {
 
         let styles = &input.styles;
         let mut num_state = NumberingState::new();
+        let (media_ids, media) = media_registry(input);
 
         // Get final section properties (body-level sectPr)
         let final_sect_pr = input
@@ -79,11 +82,12 @@ impl Engine {
                         .unwrap_or(&final_sect_pr);
                     let geometry = sect_pr_to_geometry(sect_pr_for_layout);
 
-                    let mut para_block = layout_paragraph(
+                    let mut para_block = layout_paragraph_with_media_ids(
                         para,
                         geometry.content_width(),
                         styles,
                         input,
+                        &media_ids,
                         &mut self.font_manager,
                         &mut num_state,
                     )?;
@@ -103,6 +107,7 @@ impl Engine {
                             &sect_pr,
                             input,
                             styles,
+                            &media_ids,
                             &mut self.font_manager,
                             &mut num_state,
                         )?;
@@ -120,11 +125,12 @@ impl Engine {
                     let sect_pr_for_layout = current_sect_pr.as_ref().unwrap_or(&final_sect_pr);
                     let geometry = sect_pr_to_geometry(sect_pr_for_layout);
 
-                    let table_block = table::layout_table(
+                    let table_block = table::layout_table_with_media_ids(
                         tbl,
                         geometry.content_width(),
                         styles,
                         input,
+                        &media_ids,
                         &mut self.font_manager,
                         &mut num_state,
                     )?;
@@ -140,6 +146,7 @@ impl Engine {
             &final_sect_pr,
             input,
             styles,
+            &media_ids,
             &mut self.font_manager,
             &mut num_state,
         )?;
@@ -150,8 +157,6 @@ impl Engine {
             header_footer: final_hf,
             title_pg: final_title_pg,
         });
-
-        let (_, media) = media_registry(input);
 
         // Paginate across all sections
         let (mut pages, outlines) =
@@ -179,6 +184,7 @@ impl Engine {
                 input,
                 styles,
                 &final_geometry,
+                &media_ids,
                 &mut self.font_manager,
                 &mut num_state,
             )?;
@@ -283,6 +289,7 @@ fn render_page_footnotes(
     input: &LayoutInput,
     styles: &CT_Styles,
     geometry: &paginator::PageGeometry,
+    media_ids: &HashMap<String, MediaId>,
     fm: &mut FontManager,
     num_state: &mut NumberingState,
 ) -> Result<()> {
@@ -319,11 +326,12 @@ fn render_page_footnotes(
             if let Some(footnote) = paragraphs {
                 let mut fn_blocks = Vec::new();
                 for para in &footnote.paragraphs {
-                    if let Ok(pb) = layout_paragraph(
+                    if let Ok(pb) = layout_paragraph_with_media_ids(
                         para,
                         geometry.content_width(),
                         styles,
                         input,
+                        media_ids,
                         fm,
                         num_state,
                     ) {
@@ -452,6 +460,27 @@ pub fn layout_paragraph(
     available_width: f64,
     styles: &CT_Styles,
     input: &LayoutInput,
+    fm: &mut FontManager,
+    num_state: &mut NumberingState,
+) -> Result<ParagraphBlock> {
+    let (media_ids, _) = media_registry(input);
+    layout_paragraph_with_media_ids(
+        para,
+        available_width,
+        styles,
+        input,
+        &media_ids,
+        fm,
+        num_state,
+    )
+}
+
+pub(crate) fn layout_paragraph_with_media_ids(
+    para: &CT_P,
+    available_width: f64,
+    styles: &CT_Styles,
+    input: &LayoutInput,
+    media_ids: &HashMap<String, MediaId>,
     fm: &mut FontManager,
     num_state: &mut NumberingState,
 ) -> Result<ParagraphBlock> {
@@ -709,7 +738,7 @@ pub fn layout_paragraph(
                         inline_items.push(InlineItem::Image {
                             width,
                             height,
-                            media_id: media_id_for_relationship(input, &inline.embed_id),
+                            media_id: media_id_for_relationship(media_ids, &inline.embed_id),
                         });
                     }
                 }
@@ -799,7 +828,7 @@ pub fn layout_paragraph(
         page_break_before,
         widow_control,
     );
-    result.anchored = collect_anchored_drawings(para, styles, input, fm, num_state)?;
+    result.anchored = collect_anchored_drawings(para, styles, input, media_ids, fm, num_state)?;
     Ok(result)
 }
 
@@ -815,6 +844,7 @@ fn collect_anchored_drawings(
     para: &CT_P,
     styles: &CT_Styles,
     input: &LayoutInput,
+    media_ids: &HashMap<String, MediaId>,
     fm: &mut FontManager,
     num_state: &mut NumberingState,
 ) -> Result<Vec<block::AnchoredDrawing>> {
@@ -846,11 +876,12 @@ fn collect_anchored_drawings(
                     // A shape's text box wraps at the shape width.
                     let mut text = Vec::new();
                     for p in &shape.text {
-                        text.push(layout_paragraph(
+                        text.push(layout_paragraph_with_media_ids(
                             p,
                             anchor.extent_cx.to_pt(),
                             styles,
                             input,
+                            media_ids,
                             fm,
                             num_state,
                         )?);
@@ -863,7 +894,7 @@ fn collect_anchored_drawings(
                 }
                 None if anchor.embed_id.is_empty() => continue,
                 None => block::AnchoredContent::Image {
-                    media_id: media_id_for_relationship(input, &anchor.embed_id),
+                    media_id: media_id_for_relationship(media_ids, &anchor.embed_id),
                 },
             };
 
@@ -882,42 +913,38 @@ fn collect_anchored_drawings(
     Ok(out)
 }
 
-fn media_id_for_relationship(input: &LayoutInput, relationship_id: &str) -> MediaId {
-    let (relationships, _) = media_registry(input);
+fn media_id_for_relationship(
+    relationships: &HashMap<String, MediaId>,
+    relationship_id: &str,
+) -> MediaId {
     relationships
         .get(relationship_id)
         .copied()
         .unwrap_or_else(|| MediaId::from_bytes(&[]))
 }
 
-fn media_registry(
+pub(crate) fn media_registry(
     input: &LayoutInput,
-) -> (
-    std::collections::HashMap<String, MediaId>,
-    std::collections::HashMap<MediaId, ImageData>,
-) {
+) -> (HashMap<String, MediaId>, HashMap<MediaId, ImageData>) {
     media_registry_with(input, MediaId::from_bytes)
 }
 
 fn media_registry_with<F>(
     input: &LayoutInput,
     media_id_for_bytes: F,
-) -> (
-    std::collections::HashMap<String, MediaId>,
-    std::collections::HashMap<MediaId, ImageData>,
-)
+) -> (HashMap<String, MediaId>, HashMap<MediaId, ImageData>)
 where
     F: Fn(&[u8]) -> MediaId,
 {
     let missing_id = media_id_for_bytes(&[]);
-    let mut media = std::collections::HashMap::from([(
+    let mut media = HashMap::from([(
         missing_id,
         ImageData {
             data: Vec::new(),
             content_type: String::new(),
         },
     )]);
-    let mut relationships = std::collections::HashMap::new();
+    let mut relationships = HashMap::new();
     let mut images = input.images.iter().collect::<Vec<_>>();
     images.sort_unstable_by(|(left_id, left), (right_id, right)| {
         left.data
@@ -1022,6 +1049,7 @@ fn layout_header_footer(
     sect_pr: &CT_SectPr,
     input: &LayoutInput,
     styles: &CT_Styles,
+    media_ids: &HashMap<String, MediaId>,
     fm: &mut FontManager,
     num_state: &mut NumberingState,
 ) -> Result<Option<HeaderFooterContent>> {
@@ -1042,7 +1070,9 @@ fn layout_header_footer(
         };
         if let Some(hdr) = input.headers.get(&href.rel_id) {
             for para in &hdr.paragraphs {
-                let block = layout_paragraph(para, width, styles, input, fm, num_state)?;
+                let block = layout_paragraph_with_media_ids(
+                    para, width, styles, input, media_ids, fm, num_state,
+                )?;
                 target_blocks.push(block);
             }
             has_content = true;
@@ -1057,7 +1087,9 @@ fn layout_header_footer(
         };
         if let Some(ftr) = input.footers.get(&fref.rel_id) {
             for para in &ftr.paragraphs {
-                let block = layout_paragraph(para, width, styles, input, fm, num_state)?;
+                let block = layout_paragraph_with_media_ids(
+                    para, width, styles, input, media_ids, fm, num_state,
+                )?;
                 target_blocks.push(block);
             }
             has_content = true;
@@ -1309,11 +1341,13 @@ mod tests {
         )];
         let mut font_manager = FontManager::new();
         let mut numbering_state = NumberingState::new();
+        let (media_ids, _) = media_registry(&input);
 
         let anchored = collect_anchored_drawings(
             &paragraph,
             &input.styles,
             &input,
+            &media_ids,
             &mut font_manager,
             &mut numbering_state,
         )

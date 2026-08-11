@@ -4639,7 +4639,10 @@ found an empty-image omission regression, which was restored before pass 2
 returned clean. Sprint review pass 4 found that distinct image bytes could
 overwrite each other when their compact `MediaId` values collided. Collision
 resolution now assigns deterministic alternate IDs, and a forced-collision
-regression covers both inline and anchored images.
+regression covers both inline and anchored images. Sprint review pass 5 then
+found repeated registry construction for each image occurrence. The final path
+builds the relationship and media maps once per layout and reuses them through
+paragraphs, tables, headers, footers, footnotes, shapes, and pagination.
 
 **Spec sections touched.** `docs/hld/03-architecture.md`, "Rendering
 boundaries", `docs/hld/08-rendering-spec.md`, "Word conversion boundary",
