@@ -4636,7 +4636,10 @@ renderers.
 deltas. The converter was corrected to preserve the established wrap and line
 height semantics, returning all 28 hashes to baseline. Microscope pass 1 then
 found an empty-image omission regression, which was restored before pass 2
-returned clean.
+returned clean. Sprint review pass 4 found that distinct image bytes could
+overwrite each other when their compact `MediaId` values collided. Collision
+resolution now assigns deterministic alternate IDs, and a forced-collision
+regression covers both inline and anchored images.
 
 **Spec sections touched.** `docs/hld/03-architecture.md`, "Rendering
 boundaries", `docs/hld/08-rendering-spec.md`, "Word conversion boundary",
@@ -4668,7 +4671,10 @@ names the shared replacements and links the migration notes.
 crate. This keeps version and compatibility guidance in a single durable
 artifact.
 
-**Deviations from the design plan.** None.
+**Deviations from the design plan.** Sprint review pass 4 found three retained
+`rdocx-layout` breaking changes missing from the migration notes. The completed
+table now documents the new `paginate_sections` media argument,
+`AnchoredContent::Image` media ID, and `ParagraphBlock::jc` alignment type.
 
 **Spec sections touched.** None. The documentation reflects the completed HLD
 contract without changing system intent.

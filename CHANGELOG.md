@@ -59,6 +59,13 @@ oxml-pdf = "0.1.2"    # PDF and PNG rendering backends
   `LayoutLine` adds `line_gap`. `LineBreakParams` replaces Word tab stops,
   alignment, and stringly typed line rules with `TabStop`, `Align`, and
   `LineSpacing`, and adds `wrap`.
+- `rdocx_layout::paginate_sections(...)` now requires a final media map keyed
+  by `MediaId`. Pass the image bytes and content types used by inline and
+  anchored layout elements.
+- `rdocx_layout::AnchoredContent::Image` replaces `embed_id: String` with
+  `media_id: MediaId`.
+- `rdocx_layout::ParagraphBlock::jc` replaces `Option<ST_Jc>` with
+  `Option<oxml_layout::Align>`.
 - `PositionedElement` is non-exhaustive, replaces the optional image
   `embed_id` with `MediaId`, and adds `Path` and `Group` variants. External
   matches must include a wildcard arm.

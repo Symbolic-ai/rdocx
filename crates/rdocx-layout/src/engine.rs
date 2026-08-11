@@ -151,15 +151,7 @@ impl Engine {
             title_pg: final_title_pg,
         });
 
-        let mut media = input
-            .images
-            .values()
-            .map(|image| (MediaId::from_bytes(&image.data), image.clone()))
-            .collect::<std::collections::HashMap<_, _>>();
-        media.entry(MediaId::from_bytes(&[])).or_insert(ImageData {
-            data: Vec::new(),
-            content_type: String::new(),
-        });
+        let (_, media) = media_registry(input);
 
         // Paginate across all sections
         let (mut pages, outlines) =
@@ -891,10 +883,65 @@ fn collect_anchored_drawings(
 }
 
 fn media_id_for_relationship(input: &LayoutInput, relationship_id: &str) -> MediaId {
-    input.images.get(relationship_id).map_or_else(
-        || MediaId::from_bytes(&[]),
-        |image| MediaId::from_bytes(&image.data),
-    )
+    let (relationships, _) = media_registry(input);
+    relationships
+        .get(relationship_id)
+        .copied()
+        .unwrap_or_else(|| MediaId::from_bytes(&[]))
+}
+
+fn media_registry(
+    input: &LayoutInput,
+) -> (
+    std::collections::HashMap<String, MediaId>,
+    std::collections::HashMap<MediaId, ImageData>,
+) {
+    media_registry_with(input, MediaId::from_bytes)
+}
+
+fn media_registry_with<F>(
+    input: &LayoutInput,
+    media_id_for_bytes: F,
+) -> (
+    std::collections::HashMap<String, MediaId>,
+    std::collections::HashMap<MediaId, ImageData>,
+)
+where
+    F: Fn(&[u8]) -> MediaId,
+{
+    let missing_id = media_id_for_bytes(&[]);
+    let mut media = std::collections::HashMap::from([(
+        missing_id,
+        ImageData {
+            data: Vec::new(),
+            content_type: String::new(),
+        },
+    )]);
+    let mut relationships = std::collections::HashMap::new();
+    let mut images = input.images.iter().collect::<Vec<_>>();
+    images.sort_unstable_by(|(left_id, left), (right_id, right)| {
+        left.data
+            .cmp(&right.data)
+            .then_with(|| left.content_type.cmp(&right.content_type))
+            .then_with(|| left_id.cmp(right_id))
+    });
+
+    for (relationship_id, image) in images {
+        let mut media_id = media_id_for_bytes(&image.data);
+        loop {
+            match media.get(&media_id) {
+                Some(existing) if existing.data == image.data => break,
+                Some(_) => media_id.0 = media_id.0.wrapping_add(1),
+                None => {
+                    media.insert(media_id, image.clone());
+                    break;
+                }
+            }
+        }
+        relationships.insert(relationship_id.clone(), media_id);
+    }
+
+    (relationships, media)
 }
 
 /// Merge direct paragraph properties (only fields explicitly set in the XML).
@@ -1273,6 +1320,96 @@ mod tests {
         .expect("empty shapeless anchor collection should succeed");
 
         assert!(anchored.is_empty());
+    }
+
+    #[test]
+    fn colliding_media_ids_keep_inline_and_anchored_image_bytes_distinct() {
+        let mut input = make_input_with_text("");
+        input.images.insert(
+            "rIdInline".to_string(),
+            ImageData {
+                data: vec![1, 2, 3],
+                content_type: "image/png".to_string(),
+            },
+        );
+        input.images.insert(
+            "rIdAnchor".to_string(),
+            ImageData {
+                data: vec![4, 5, 6],
+                content_type: "image/jpeg".to_string(),
+            },
+        );
+
+        let (relationships, media) = media_registry_with(&input, |_| MediaId(7));
+        let inline_id = relationships["rIdInline"];
+        let anchor_id = relationships["rIdAnchor"];
+        assert_ne!(inline_id, anchor_id);
+
+        let line = oxml_layout::LayoutLine {
+            items: vec![LineItem::Image {
+                width: 12.0,
+                height: 10.0,
+                media_id: inline_id,
+            }],
+            width: 12.0,
+            ascent: 10.0,
+            descent: 0.0,
+            line_gap: 0.0,
+            height: 10.0,
+            indent_left: 0.0,
+            available_width: 468.0,
+            is_last: true,
+        };
+        let mut paragraph = block::build_paragraph_block(
+            vec![line],
+            0.0,
+            0.0,
+            None,
+            None,
+            0.0,
+            0.0,
+            None,
+            false,
+            false,
+            false,
+            true,
+        );
+        paragraph.anchored.push(block::AnchoredDrawing {
+            behind_doc: false,
+            rel_h: rdocx_oxml::drawing::ST_RelativeFromH::Page,
+            off_h: 20.0,
+            rel_v: rdocx_oxml::drawing::ST_RelativeFromV::Page,
+            off_v: 20.0,
+            width: 12.0,
+            height: 10.0,
+            content: block::AnchoredContent::Image {
+                media_id: anchor_id,
+            },
+        });
+        let sections = [paginator::Section {
+            blocks: vec![LayoutBlock::Paragraph(paragraph)],
+            geometry: PageGeometry::default(),
+            header_footer: None,
+            title_pg: false,
+        }];
+
+        let (pages, _) = paginator::paginate_sections(&sections, &FontManager::new(), &media);
+        let images = pages[0]
+            .elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Image {
+                    data,
+                    content_type,
+                    media_id,
+                    ..
+                } => Some((data.as_slice(), content_type.as_str(), *media_id)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(images.contains(&(b"\x01\x02\x03".as_slice(), "image/png", inline_id)));
+        assert!(images.contains(&(b"\x04\x05\x06".as_slice(), "image/jpeg", anchor_id)));
     }
 
     #[test]
