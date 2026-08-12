@@ -28,9 +28,9 @@ regenerated, never hand-edited.
 | M10, Renderer                               | 20 | 20 | 0 | 0  |
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
-| M13, Bindings and tooling                   | 18 | 5 | 3 | 10 |
+| M13, Bindings and tooling                   | 18 | 5 | 4 | 9  |
 | X, Cross-cutting (opportunistic)            | 5  | 1 | 0 | 4  |
-| **Total** | **159** | **142** | **3** | **14** |
+| **Total** | **159** | **142** | **4** | **13** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -268,7 +268,7 @@ regenerated, never hand-edited.
 | F-134 | Type stubs and py.typed                      | S34 | M | in-progress |
 | F-135 | python-docx parity suite                     | S34 | M | in-progress |
 | F-136 | rpptx-py                                     | S34 | L | in-progress |
-| F-137 | wheels.yml                                   | S34 | M | pending |
+| F-137 | wheels.yml                                   | S34 | M | in-progress |
 | F-138 | PR-time Python job                           | S34 | S | pending |
 | F-139 | Rewrite rdocx-wasm                           | S35 | L | pending |
 | F-140 | wasm CI job                                  | S35 | S | pending |
