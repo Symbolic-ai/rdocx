@@ -28,9 +28,9 @@ regenerated, never hand-edited.
 | M10, Renderer                               | 20 | 20 | 0 | 0  |
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
-| M13, Bindings and tooling                   | 18 | 0 | 0 | 18 |
+| M13, Bindings and tooling                   | 18 | 5 | 0 | 13 |
 | X, Cross-cutting (opportunistic)            | 5  | 1 | 0 | 4  |
-| **Total** | **159** | **137** | **0** | **22** |
+| **Total** | **159** | **142** | **0** | **17** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -260,11 +260,11 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-M13 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-129 | oxml-py-support                              | S33 | M | pending |
-| F-130 | rdocx-py core                                | S33 | L | pending |
-| F-131 | rdocx-py formatting and tables               | S33 | L | pending |
-| F-132 | Python enums, units and exceptions           | S33 | M | pending |
-| F-133 | rdocx-py rendering with allow_threads        | S33 | S | pending |
+| F-129 | oxml-py-support                              | S33 | M | done |
+| F-130 | rdocx-py core                                | S33 | L | done |
+| F-131 | rdocx-py formatting and tables               | S33 | L | done |
+| F-132 | Python enums, units and exceptions           | S33 | M | done |
+| F-133 | rdocx-py rendering with allow_threads        | S33 | S | done |
 | F-134 | Type stubs and py.typed                      | S34 | M | pending |
 | F-135 | python-docx parity suite                     | S34 | M | pending |
 | F-136 | rpptx-py                                     | S34 | L | pending |

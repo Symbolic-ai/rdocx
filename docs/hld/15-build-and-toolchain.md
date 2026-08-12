@@ -180,9 +180,11 @@ edits to `[workspace.package]`, the internal pins in
 `[workspace.dependencies]`, and `Cargo.lock`. They are reviewed before a tag is
 possible and never rewrite README prose by pattern.
 
-`cargo-release` preparation is configured in Cargo metadata. The eight rdocx
-packages that inherit `[workspace.package].version` use cargo-release's
+`cargo-release` preparation is configured in Cargo metadata. The ten packages
+that inherit `[workspace.package].version`, including the unpublished
+`rdocx-wasm`, `rdocx-py`, and `oxml-py-support` packages, use cargo-release's
 effective `workspace` shared-version group and the `v{{version}}` tag template.
+The exact published stable family remains the seven packages listed above.
 The 12 implemented `oxml-*` and `rpptx*` packages are prepared at explicit
 version 0.1.2, use the named `incubating` group, and carry the
 `rpptx-v{{version}}` template.

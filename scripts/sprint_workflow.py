@@ -206,7 +206,7 @@ def completed_record_problems(sprint: str, fid: str) -> list[str]:
                 f"{fid} is completed in run state but "
                 f"'{feature['tracker_status']}' in CURRENT_SPRINT.md"
             )
-        if feature["owner"] != "-":
+        if feature["owner"] not in ("", "-"):
             problems.append(
                 f"{fid} is completed but CURRENT_SPRINT.md owner is "
                 f"'{feature['owner']}'"
@@ -233,6 +233,15 @@ def completed_record_problems(sprint: str, fid: str) -> list[str]:
     ):
         problems.append(f"{fid} has no {sprint} row in SPRINT_TRACKER.md")
     return problems
+
+
+def completed_owner_problems(data: dict) -> list[str]:
+    """Return completed features whose run-state owner was not cleared."""
+    return [
+        f"{fid} is completed but run-state owner is '{feature['owner']}'"
+        for fid, feature in data["features"].items()
+        if feature["state"] == "completed" and feature.get("owner") is not None
+    ]
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -508,6 +517,7 @@ def cmd_close_preflight(args: argparse.Namespace) -> int:
         problems.append(
             "features neither completed nor carried: " + ", ".join(sorted(incomplete))
         )
+    problems.extend(completed_owner_problems(data))
 
     problems.extend(closure_evidence_problems(data, head))
 

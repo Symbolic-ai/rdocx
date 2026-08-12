@@ -139,6 +139,21 @@ impl<'a> Paragraph<'a> {
         }
     }
 
+    /// Get the number of runs in this paragraph.
+    pub fn run_count(&self) -> usize {
+        self.inner.runs.len()
+    }
+
+    /// Get an immutable run by index.
+    pub fn run(&self, index: usize) -> Option<RunRef<'_>> {
+        self.inner.runs.get(index).map(|inner| RunRef { inner })
+    }
+
+    /// Get a mutable run by index.
+    pub fn run_mut(&mut self, index: usize) -> Option<Run<'_>> {
+        self.inner.runs.get_mut(index).map(|inner| Run { inner })
+    }
+
     /// Get an iterator over immutable run references.
     pub fn runs(&self) -> impl Iterator<Item = RunRef<'_>> {
         self.inner.runs.iter().map(|r| RunRef { inner: r })
@@ -152,7 +167,15 @@ impl<'a> Paragraph<'a> {
 
     /// Set the paragraph alignment in place.
     pub fn set_alignment(&mut self, align: Alignment) {
-        self.ensure_ppr().jc = Some(align.to_st_jc());
+        self.set_alignment_value(Some(align));
+    }
+
+    /// Set or clear direct paragraph alignment.
+    pub fn set_alignment_value(&mut self, align: Option<Alignment>) {
+        if align.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().jc = align.map(Alignment::to_st_jc);
     }
 
     /// Set the paragraph style by ID.
@@ -174,7 +197,15 @@ impl<'a> Paragraph<'a> {
 
     /// Set space before the paragraph in place.
     pub fn set_space_before(&mut self, length: Length) {
-        self.ensure_ppr().space_before = Some(length.as_twips());
+        self.set_space_before_value(Some(length));
+    }
+
+    /// Set or clear direct space before the paragraph.
+    pub fn set_space_before_value(&mut self, length: Option<Length>) {
+        if length.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().space_before = length.map(Length::as_twips);
     }
 
     /// Set space after the paragraph.
@@ -185,7 +216,15 @@ impl<'a> Paragraph<'a> {
 
     /// Set space after the paragraph in place.
     pub fn set_space_after(&mut self, length: Length) {
-        self.ensure_ppr().space_after = Some(length.as_twips());
+        self.set_space_after_value(Some(length));
+    }
+
+    /// Set or clear direct space after the paragraph.
+    pub fn set_space_after_value(&mut self, length: Option<Length>) {
+        if length.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().space_after = length.map(Length::as_twips);
     }
 
     /// Set left indentation.
@@ -196,7 +235,15 @@ impl<'a> Paragraph<'a> {
 
     /// Set left indentation in place.
     pub fn set_indent_left(&mut self, length: Length) {
-        self.ensure_ppr().ind_left = Some(length.as_twips());
+        self.set_indent_left_value(Some(length));
+    }
+
+    /// Set or clear direct left indentation.
+    pub fn set_indent_left_value(&mut self, length: Option<Length>) {
+        if length.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().ind_left = length.map(Length::as_twips);
     }
 
     /// Set right indentation.
@@ -207,7 +254,15 @@ impl<'a> Paragraph<'a> {
 
     /// Set right indentation in place.
     pub fn set_indent_right(&mut self, length: Length) {
-        self.ensure_ppr().ind_right = Some(length.as_twips());
+        self.set_indent_right_value(Some(length));
+    }
+
+    /// Set or clear direct right indentation.
+    pub fn set_indent_right_value(&mut self, length: Option<Length>) {
+        if length.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().ind_right = length.map(Length::as_twips);
     }
 
     /// Set first line indent.
@@ -219,6 +274,30 @@ impl<'a> Paragraph<'a> {
     /// Set first line indent in place.
     pub fn set_first_line_indent(&mut self, length: Length) {
         self.ensure_ppr().ind_first_line = Some(length.as_twips());
+    }
+
+    /// Set or clear the signed first-line indentation.
+    ///
+    /// Negative values are stored as a positive hanging indentation.
+    pub fn set_signed_first_line_indent_value(&mut self, length: Option<Length>) {
+        if length.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        let ppr = self.ensure_ppr();
+        match length.map(Length::to_twips) {
+            Some(twips) if twips < 0 => {
+                ppr.ind_first_line = None;
+                ppr.ind_hanging = Some(Twips(twips.saturating_abs()));
+            }
+            Some(twips) => {
+                ppr.ind_first_line = Some(Twips(twips));
+                ppr.ind_hanging = None;
+            }
+            None => {
+                ppr.ind_first_line = None;
+                ppr.ind_hanging = None;
+            }
+        }
     }
 
     /// Set hanging indent.
@@ -240,7 +319,15 @@ impl<'a> Paragraph<'a> {
 
     /// Set keep with next paragraph in place.
     pub fn set_keep_with_next(&mut self, val: bool) {
-        self.ensure_ppr().keep_next = Some(val);
+        self.set_keep_with_next_value(Some(val));
+    }
+
+    /// Set or clear direct keep-with-next formatting.
+    pub fn set_keep_with_next_value(&mut self, val: Option<bool>) {
+        if val.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().keep_next = val;
     }
 
     /// Set keep lines together.
@@ -251,7 +338,15 @@ impl<'a> Paragraph<'a> {
 
     /// Set keep lines together in place.
     pub fn set_keep_together(&mut self, val: bool) {
-        self.ensure_ppr().keep_lines = Some(val);
+        self.set_keep_together_value(Some(val));
+    }
+
+    /// Set or clear direct keep-together formatting.
+    pub fn set_keep_together_value(&mut self, val: Option<bool>) {
+        if val.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().keep_lines = val;
     }
 
     /// Set page break before.
@@ -262,7 +357,15 @@ impl<'a> Paragraph<'a> {
 
     /// Set page break before in place.
     pub fn set_page_break_before(&mut self, val: bool) {
-        self.ensure_ppr().page_break_before = Some(val);
+        self.set_page_break_before_value(Some(val));
+    }
+
+    /// Set or clear direct page-break-before formatting.
+    pub fn set_page_break_before_value(&mut self, val: Option<bool>) {
+        if val.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().page_break_before = val;
     }
 
     /// Set widow/orphan control.
@@ -273,7 +376,15 @@ impl<'a> Paragraph<'a> {
 
     /// Set widow/orphan control in place.
     pub fn set_widow_control(&mut self, val: bool) {
-        self.ensure_ppr().widow_control = Some(val);
+        self.set_widow_control_value(Some(val));
+    }
+
+    /// Set or clear direct widow-control formatting.
+    pub fn set_widow_control_value(&mut self, val: Option<bool>) {
+        if val.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_ppr().widow_control = val;
     }
 
     /// Set line spacing in points with "exact" rule.
@@ -287,6 +398,14 @@ impl<'a> Paragraph<'a> {
         let ppr = self.ensure_ppr();
         ppr.line_spacing = Some(Twips::from_pt(pt));
         ppr.line_rule = Some("exact".to_string());
+    }
+
+    /// Clear direct line spacing.
+    pub fn clear_line_spacing(&mut self) {
+        if let Some(ppr) = self.inner.properties.as_mut() {
+            ppr.line_spacing = None;
+            ppr.line_rule = None;
+        }
     }
 
     /// Set line spacing with a multiplier (1.0 = single, 1.5, 2.0 = double, etc.).
@@ -529,6 +648,16 @@ impl<'a> ParagraphRef<'a> {
         self.inner.text()
     }
 
+    /// Get the number of runs in this paragraph.
+    pub fn run_count(&self) -> usize {
+        self.inner.runs.len()
+    }
+
+    /// Get an immutable run by index.
+    pub fn run(&self, index: usize) -> Option<RunRef<'_>> {
+        self.inner.runs.get(index).map(|inner| RunRef { inner })
+    }
+
     /// Get the paragraph style ID, if set.
     pub fn style_id(&self) -> Option<&str> {
         self.inner
@@ -537,14 +666,38 @@ impl<'a> ParagraphRef<'a> {
             .and_then(|ppr| ppr.style_id.as_deref())
     }
 
-    /// Get the alignment, if set.
     /// Check if a page break is set before this paragraph.
     pub fn is_page_break_before(&self) -> bool {
+        self.page_break_before_value().unwrap_or(false)
+    }
+
+    /// Get direct keep-with-next formatting without collapsing inheritance.
+    pub fn keep_with_next_value(&self) -> Option<bool> {
+        self.inner.properties.as_ref().and_then(|ppr| ppr.keep_next)
+    }
+
+    /// Get direct keep-together formatting without collapsing inheritance.
+    pub fn keep_together_value(&self) -> Option<bool> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|ppr| ppr.keep_lines)
+    }
+
+    /// Get direct page-break-before formatting without collapsing inheritance.
+    pub fn page_break_before_value(&self) -> Option<bool> {
         self.inner
             .properties
             .as_ref()
             .and_then(|ppr| ppr.page_break_before)
-            .unwrap_or(false)
+    }
+
+    /// Get direct widow-control formatting without collapsing inheritance.
+    pub fn widow_control_value(&self) -> Option<bool> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|ppr| ppr.widow_control)
     }
 
     /// Line spacing as a multiplier of single spacing (1.0, 1.5, 2.0…)
@@ -556,6 +709,16 @@ impl<'a> ParagraphRef<'a> {
         let line = ppr.line_spacing?;
         match ppr.line_rule.as_deref() {
             None | Some("auto") => Some(line.0 as f64 / 240.0),
+            _ => None,
+        }
+    }
+
+    /// Get exact or at-least line spacing as a length.
+    pub fn line_spacing(&self) -> Option<Length> {
+        let ppr = self.inner.properties.as_ref()?;
+        let line = ppr.line_spacing?;
+        match ppr.line_rule.as_deref() {
+            Some("exact") | Some("atLeast") => Some(Length::twips(line.0)),
             _ => None,
         }
     }
@@ -577,12 +740,59 @@ impl<'a> ParagraphRef<'a> {
         Some((ppr.num_id?, ppr.num_ilvl.unwrap_or(0)))
     }
 
+    /// Get the alignment, if set.
     pub fn alignment(&self) -> Option<Alignment> {
         self.inner
             .properties
             .as_ref()
             .and_then(|ppr| ppr.jc)
             .map(Alignment::from_st_jc)
+    }
+
+    /// Get direct space before the paragraph.
+    pub fn space_before(&self) -> Option<Length> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|ppr| ppr.space_before)
+            .map(|twips| Length::twips(twips.0))
+    }
+
+    /// Get direct space after the paragraph.
+    pub fn space_after(&self) -> Option<Length> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|ppr| ppr.space_after)
+            .map(|twips| Length::twips(twips.0))
+    }
+
+    /// Get direct left indentation.
+    pub fn indent_left(&self) -> Option<Length> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|ppr| ppr.ind_left)
+            .map(|twips| Length::twips(twips.0))
+    }
+
+    /// Get direct right indentation.
+    pub fn indent_right(&self) -> Option<Length> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|ppr| ppr.ind_right)
+            .map(|twips| Length::twips(twips.0))
+    }
+
+    /// Get signed first-line indentation, negative for hanging indentation.
+    pub fn first_line_indent(&self) -> Option<Length> {
+        let ppr = self.inner.properties.as_ref()?;
+        if let Some(twips) = ppr.ind_first_line {
+            return Some(Length::twips(twips.0));
+        }
+        ppr.ind_hanging
+            .map(|twips| Length::twips(twips.0.saturating_neg()))
     }
 
     /// Get an iterator over immutable run references.

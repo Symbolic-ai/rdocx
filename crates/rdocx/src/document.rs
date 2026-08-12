@@ -380,6 +380,15 @@ impl Document {
             .collect()
     }
 
+    /// Get an immutable reference to a paragraph by index (among paragraphs only).
+    pub fn paragraph(&self, index: usize) -> Option<ParagraphRef<'_>> {
+        self.document
+            .body
+            .paragraphs()
+            .nth(index)
+            .map(|p| ParagraphRef { inner: p })
+    }
+
     /// All footnotes as (id, plain text), in file order.
     pub fn footnotes(&self) -> Vec<(i32, String)> {
         self.footnotes
@@ -458,6 +467,25 @@ impl Document {
             .tables()
             .map(|t| TableRef { inner: t })
             .collect()
+    }
+
+    /// Get an immutable table by index among tables only.
+    pub fn table(&self, index: usize) -> Option<TableRef<'_>> {
+        self.document
+            .body
+            .tables()
+            .nth(index)
+            .map(|inner| TableRef { inner })
+    }
+
+    /// Get a mutable table by index among tables only.
+    pub fn table_mut(&mut self, index: usize) -> Option<Table<'_>> {
+        self.invalidate_layout();
+        self.document
+            .body
+            .tables_mut()
+            .nth(index)
+            .map(|inner| Table { inner })
     }
 
     /// Add a table with the specified number of rows and columns.
@@ -3142,6 +3170,28 @@ mod tests {
         doc.render_page_to_png_deterministic(0, 1.0).unwrap();
         doc.render_page_to_png_deterministic(0, 1.0).unwrap();
         assert_eq!(layout_invocations(), 3);
+    }
+
+    #[test]
+    fn immutable_run_accessors_preserve_cached_layout() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Before immutable access")
+            .add_run(" remains cached");
+
+        reset_layout_invocations();
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        assert_eq!(layout_invocations(), 1);
+
+        let paragraph = doc.paragraph(0).expect("paragraph should exist");
+        assert_eq!(paragraph.run_count(), 2);
+        assert_eq!(
+            paragraph.run(1).expect("run should exist").text(),
+            " remains cached"
+        );
+        assert!(paragraph.run(2).is_none());
+
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        assert_eq!(layout_invocations(), 1);
     }
 
     #[test]

@@ -353,6 +353,28 @@ impl<'a> Cell<'a> {
             .map(|p| ParagraphRef { inner: p })
     }
 
+    /// Get the number of paragraphs in the cell.
+    pub fn paragraph_count(&self) -> usize {
+        self.inner.paragraphs().len()
+    }
+
+    /// Get an immutable paragraph by index.
+    pub fn paragraph(&self, index: usize) -> Option<ParagraphRef<'_>> {
+        self.inner
+            .paragraphs()
+            .get(index)
+            .map(|inner| ParagraphRef { inner })
+    }
+
+    /// Get a mutable paragraph by index.
+    pub fn paragraph_mut(&mut self, index: usize) -> Option<Paragraph<'_>> {
+        self.inner
+            .paragraphs_mut()
+            .into_iter()
+            .nth(index)
+            .map(|inner| Paragraph { inner })
+    }
+
     /// Set cell width.
     pub fn width(mut self, length: Length) -> Self {
         self.set_width(length);
@@ -521,6 +543,27 @@ impl<'a> TableRef<'a> {
             .as_ref()
             .and_then(|pr| pr.style_id.as_deref())
     }
+
+    /// Get table alignment, if set.
+    pub fn alignment(&self) -> Option<crate::paragraph::Alignment> {
+        use crate::paragraph::Alignment;
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|pr| pr.jc)
+            .map(|value| match value {
+                ST_Jc::Center => Alignment::Center,
+                ST_Jc::Right | ST_Jc::End => Alignment::Right,
+                ST_Jc::Both | ST_Jc::Distribute => Alignment::Justify,
+                _ => Alignment::Left,
+            })
+    }
+
+    /// Get the table width when stored as twips.
+    pub fn width(&self) -> Option<Length> {
+        let width = self.inner.properties.as_ref()?.width.as_ref()?;
+        (width.width_type == "dxa").then(|| Length::twips(width.w))
+    }
 }
 
 /// An immutable reference to a table row.
@@ -566,6 +609,25 @@ impl<'a> CellRef<'a> {
             .paragraphs()
             .into_iter()
             .map(|p| ParagraphRef { inner: p })
+    }
+
+    /// Get the number of paragraphs in the cell.
+    pub fn paragraph_count(&self) -> usize {
+        self.inner.paragraphs().len()
+    }
+
+    /// Get an immutable paragraph by index.
+    pub fn paragraph(&self, index: usize) -> Option<ParagraphRef<'_>> {
+        self.inner
+            .paragraphs()
+            .get(index)
+            .map(|inner| ParagraphRef { inner })
+    }
+
+    /// Get the cell width when stored as twips.
+    pub fn width(&self) -> Option<Length> {
+        let width = self.inner.properties.as_ref()?.width.as_ref()?;
+        (width.width_type == "dxa").then(|| Length::twips(width.w))
     }
 
     /// Get the grid span, if set.

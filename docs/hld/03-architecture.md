@@ -15,7 +15,8 @@ crates/
   oxml-pdf           PDF writer and tiny-skia rasteriser
   oxml-sml           minimal SpreadsheetML writer, chart workbooks only
   oxml-cli-support   range parsing, JSON envelope, output-path defaulting
-  oxml-py-support    content paths, stale-element errors, the Length pyclass
+  oxml-py-support    content paths, revision checks, stale-domain errors,
+                     Length conversion helpers
 
   # WordprocessingML
   rdocx-opc          deprecated shim over oxml-opc
@@ -161,6 +162,22 @@ Both facades use the same borrow-handle idiom rdocx already has: a mutable
 consuming builders for formatting so calls chain, `&mut self` methods for adding
 content that return a nested handle, and index-based `Option`-returning
 accessors that never panic.
+
+The `rdocx` facade also provides direct immutable paragraph lookup. Mutable
+and read-only paragraph handles each provide total run count and lookup, while
+only the mutable handle provides mutable run lookup. These accessors let the
+Python binding re-resolve lazy index paths without allocating paragraph
+snapshots, clearing layout caches for reads, or reaching through private OOXML
+fields.
+
+The same direct lookup rule covers document tables and paragraphs nested in
+table cells. `Document::table` and `Document::table_mut` are total, and cell
+handles provide paragraph counts plus immutable and mutable lookup. Run and
+paragraph formatting expose direct `Option<bool>` values and clear-capable
+setters, preserving the distinction between inherited, explicitly false, and
+explicitly true formatting without bypassing the facade.
+The binding-only underline variants travel through a bounded integer-code
+accessor so the published exhaustive Rust `UnderlineStyle` enum stays stable.
 
 Every consuming formatting builder on `Paragraph`, `Run`, `Table`, `Row`, and
 `Cell` has a non-consuming `set_*` twin because a `mut self -> Self` builder

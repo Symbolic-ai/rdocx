@@ -995,8 +995,9 @@ Cached image if present, else a labelled placeholder with a diagnostic.
 target platform.
 
 ### F-129, oxml-py-support (M)
-`ContentPath`, `PathSeg`, the revision counter, `StaleElementError`, the `Length`
-pyclass, error mapping.
+Word `ContentPath` and `PathSeg` values, the revision counter, the Rust
+`StaleElementError`, and canonical `Length` conversion helpers. Presentation
+path variants wait for F-136.
 **Test gate**: a stale path raises the named error with both revisions in the
 message.
 
@@ -1007,13 +1008,20 @@ message.
 `StaleElementError` rather than reading the wrong paragraph.
 
 ### F-131, rdocx-py formatting and tables (L)
-Font and paragraph-format sub-handles, tri-state properties, tables.
-**Depends on**: F-130.
+Path-only font and paragraph-format sub-handles expose the bounded S33
+formatting inventory with tri-state clearing. Lazy table, row, cell and nested
+paragraph handles cover table style, alignment and width, plus cell text,
+width and vertical alignment. Public facade accessors re-resolve every path.
+**Depends on**: F-130, F-132.
 **Test gate**: `r.font.bold` returns `None` when unset, not `False`.
 
 ### F-132, Python enums, units and exceptions (M)
-The `IntEnum` shims, `Length` subclassing `int`, the exception hierarchy.
-**Depends on**: F-129.
+The bounded `IntEnum` shims for paragraph alignment, table alignment, cell
+vertical alignment and underline, pure-Python `Length` and `RGBColor` values,
+the package exception hierarchy, and concrete mapping from Rust binding errors.
+The types are top-level exports and retain the `rdocx.shared`,
+`rdocx.enum.text` and `rdocx.enum.table` compatibility paths.
+**Depends on**: F-129, F-130.
 **Test gate**: `WD_ALIGN_PARAGRAPH.CENTER == 1` and `Inches(1) == 914400`.
 
 ### F-133, rdocx-py rendering with allow_threads (S)

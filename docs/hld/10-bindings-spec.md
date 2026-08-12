@@ -25,23 +25,29 @@ References are out, categorically. Four options were weighed:
 
 ```rust
 pub enum PathSeg { Body(usize), Row(usize), Cell(usize),
-                   Para(usize), Run(usize), Slide(usize), Shape(usize) }
+                   Para(usize), Run(usize) }
 pub struct ContentPath { pub segs: SmallVec<[PathSeg; 5]>, pub revision: u64 }
+pub struct RevisionCounter { current: u64 }
 
 #[pyclass(name = "Document")]
-struct PyDocument { inner: rdocx::Document, revision: u64 }
+struct PyDocument { inner: rdocx::Document, revision: RevisionCounter }
 
 #[pyclass(name = "Paragraph")]
 struct PyParagraph { doc: Py<PyDocument>, path: ContentPath }
 ```
 
-Zero change to the Rust API. No interior mutability leaking into the core.
+The Rust API adds only total, index-based paragraph and run accessors needed to
+re-resolve these handles. Read-only resolution stays on immutable paragraph
+handles so it cannot clear the layout caches. Run setters and structural
+mutations retain their required mutable resolution. No interior mutability
+leaks into the core.
 Aliasing is checked by PyO3's own `RefCell` on the pyclass, so a violation is a
 clean `RuntimeError`, never undefined behaviour. Resolution is a handful of
 vector index operations, negligible against FFI overhead.
 
-`Shape(usize)` repeats for nesting into groups, so
-`shape.text_frame.paragraphs[i].runs[j]` is one path.
+The shared crate starts with only the Word path variants consumed by the rdocx
+binding. The rpptx binding adds `Slide(usize)` and repeatable `Shape(usize)`
+variants when its existing F-136 consumer is implemented.
 
 ### The invalidation problem, handled loudly
 
@@ -50,9 +56,11 @@ An index path addresses a **position**, not an object. After
 to be paragraph 4. python-docx does not have this problem because it holds an
 lxml element pointer that follows the element.
 
-v0.1 therefore carries a **document revision counter**, bumped by every
-structural mutation and captured by every handle at construction. A mismatch
-raises:
+v0.1 therefore carries a **document revision counter**, bumped after every
+successful structural mutation and captured by every handle at construction.
+Failed and value-only mutations do not bump it. The shared crate reports a
+concrete Rust `StaleElementError` on mismatch. The package binding maps that
+domain error to its Python exception with the same revisions and message:
 
 ```
 rdocx.StaleElementError: paragraph handle was created at document revision 4,
@@ -122,17 +130,43 @@ doc.save_pdf("out.pdf")                        # documented as an rdocx extensio
 ```
 
 - `font` and `paragraph_format` are themselves handles, so `r.font.bold = True`
-  writes through the chain.
+  writes through the chain. They store only a document reference and content
+  path, re-resolve on every operation, and become stale after a structural
+  mutation.
 - **Tri-state properties return `None` for inherit**, `True` or `False` when
   explicit. rdocx's `Option<bool>` already matches. Never collapse `None` to
   `False`.
-- `Length` subclasses `int` and returns EMU, matching `docx.shared.Length`, with
-  `.inches`, `.cm`, `.mm`, `.pt`, `.emu` and `.twips`. This detail decides
-  whether copy-pasted code works.
-- Enums are pure-Python `IntEnum` shims so `WD_ALIGN_PARAGRAPH.CENTER == 1`
-  holds and they carry docstrings.
-- `RdocxError(Exception)` is the base, with `PackageError`, `XmlError`,
-  `StaleElementError` and `LayoutError` beneath it.
+- `Length` is a pure-Python subclass of `int` and returns EMU, matching
+  `docx.shared.Length`, with `.inches`, `.cm`, `.mm`, `.pt`, `.emu` and
+  `.twips`. `Inches`, `Cm`, `Mm`, `Pt` and `Emu` are immutable subclasses, and
+  `RGBColor` is an immutable three-channel tuple. Float constructors use
+  `int(value * factor)`, preserving the truncation toward zero pinned by the
+  Rust `Length`. The types are available at the top level and from
+  `rdocx.shared`, while native-base inheritance stays outside the Python 3.9
+  limited ABI.
+- The bounded core enum inventory is pure-Python `IntEnum`:
+  `WD_ALIGN_PARAGRAPH` and `WD_UNDERLINE` in `rdocx.enum.text`, plus
+  `WD_TABLE_ALIGNMENT` and `WD_CELL_VERTICAL_ALIGNMENT` in
+  `rdocx.enum.table`. All four are also top-level exports. Their checked
+  integer literals cover the paragraph, run and table variants exposed by the
+  S33 facade, including `WD_ALIGN_PARAGRAPH.CENTER == 1`. Underline codes use a
+  total binding-oriented facade value accessor rather than expanding the
+  published exhaustive Rust `UnderlineStyle` enum.
+- The package layer owns `RdocxError(Exception)` as the base, with
+  `PackageError`, `XmlError`, `StaleElementError` and `LayoutError` beneath it.
+  OPC, I/O and missing-part failures map to `PackageError`, OXML failures map
+  to `XmlError`, layout failures map to `LayoutError`, and the shared stale
+  domain error maps to `StaleElementError`. `oxml-py-support` therefore remains
+  independent of any Python base class.
+
+The S33 formatting inventory is intentionally bounded to font name, size,
+colour, bold, italic, underline and strike, plus paragraph alignment, spacing,
+indentation, keep-with-next, keep-together, page-break-before and widow
+control. Assigning `None` clears direct tri-state formatting. The S33 table
+inventory is lazy table, row, cell and nested paragraph lookup, table style,
+alignment and width, plus cell text, width and vertical alignment. These
+handles use `Body`, `Row`, `Cell`, `Para` and `Run` path segments and reach the
+document only through the public `rdocx` facade.
 
 `rpptx` mirrors python-pptx the same way.
 

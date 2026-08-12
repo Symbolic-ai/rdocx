@@ -47,6 +47,7 @@ defended.
 | S32 | M12 | 2 | 2 | 0 | 3 | 2 | Completed M12 with exact theme-mapped chart colours and source-scoped native or preserved fallbacks. The SHA-bound authored chart opened in pinned PowerPoint without repair, Edit Data exposed exact workbook values, the production renderer emitted native geometry, all 28 hashes remained unchanged, and no crate was published |
 | S32.1 | M6 | 4 | 4 | 0 | 7 | 4 | Completed shared publication readiness with exact package inventory, split-family release preparation, stable and incubating tag routing, binding-safe CI gates, and verified local-source publication dry runs. Every generated archive remained below 10 MiB, all 28 hashes remained unchanged, and no crate was published |
 | S32.2 | M6 | 8 | 8 | 0 | 10 | 8 | Completed M6 by publishing the shared 0.1.2 family, cutting released rdocx consumers over to shared facades and backends, and documenting the migration. All package archives verified below 10 MiB and all 28 hashes remained unchanged |
+| S33 | M13 | 5 | 5 | 0 | 13 | 5 | Established shared Python path and revision support, lazy rdocx handles, formatting, tables, Python-compatible values and errors, and GIL-detached rendering. The cp39-abi3 wheel passed 31 tests, all 28 hashes remained unchanged, and no package was published |
 
 ## Completed features
 
@@ -189,6 +190,11 @@ defended.
 | F-028 | S32.2 | S | 1 | 1 | 2026-08-11 | Atomic automatic picture sizing at 72 DPI |
 | F-046 | S32.2 | M | 2 | 1 | 2026-08-11 | Shared layout and PDF cutover with unchanged output |
 | F-051 | S32.2 | S | 1 | 1 | 2026-08-11 | Root changelog and shared-crate migration guide |
+| F-129 | S33 | M | 2 | 1 | 2026-08-12 | Shared Python content paths, revisions, stale errors, and Length conversion |
+| F-130 | S33 | L | 4 | 1 | 2026-08-12 | Lazy rdocx Python document, paragraph, and run handles |
+| F-131 | S33 | L | 4 | 1 | 2026-08-12 | Tri-state formatting and lazy table handles |
+| F-132 | S33 | M | 2 | 1 | 2026-08-12 | Python-compatible units, enums, and exception mapping |
+| F-133 | S33 | S | 1 | 1 | 2026-08-12 | GIL-detached rendering with concurrency and Poppler gates |
 
 ## Velocity
 
@@ -236,6 +242,7 @@ five working days.
 | S32 | 2 | 2 | 5.00 |
 | S32.1 | 4 | 4 | 5.00 |
 | S32.2 | 8 | 8 | 5.00 |
+| S33 | 5 | 5 | 5.00 |
 
 ## Escalation record
 
@@ -273,3 +280,4 @@ was done about it. Empty is the expected state.
 | 2026-08-10 | Sprint estimate variance exceeded 30 percent | S31 | Record 3 actual days against 12 estimated and reforecast 35 pending stories at the observed five stories per active week to about 7 active weeks, retaining dependency-defined sprint boundaries |
 | 2026-08-11 | Sprint estimate variance exceeded 30 percent | S32 | Record 2 actual days against 3 estimated and reforecast 33 pending stories at the observed five stories per active week to about 7 active weeks, retaining dependency-defined sprint boundaries |
 | 2026-08-11 | Sprint estimate variance exceeded 30 percent | S32.1 | Record 4 actual days against 7 estimated and reforecast 29 pending stories at the observed five stories per active week to about 6 active weeks, retaining dependency-defined sprint boundaries |
+| 2026-08-12 | Sprint estimate variance exceeded 30 percent | S33 | Record 5 actual days against 13 estimated and reforecast 17 pending stories at the observed five stories per active week to about 4 active weeks, retaining dependency-defined sprint boundaries |
