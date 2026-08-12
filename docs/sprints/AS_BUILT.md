@@ -4696,3 +4696,202 @@ passed.
 **Notes for future sessions.** Keep the stable rdocx train under Unreleased
 until its own release workflow runs. Do not imply that `rpptx-v0.1.2` published
 the stable family.
+
+### F-129, oxml-py-support
+
+**Sprint.** S33
+**Completed.** 2026-08-12
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** A new unpublished `oxml-py-support` crate provides ordered
+Word `ContentPath` and `PathSeg` values, `RevisionCounter`, a concrete Rust
+`StaleElementError`, and canonical positive and negative `Length` conversions
+delegated to `oxml-core`.
+
+**Non-obvious choices.** The shared crate owns stale-domain classification but
+accepts caller-supplied recovery guidance. Package-specific wording and Python
+exception inheritance remain in the consuming binding. Presentation path
+variants remain deferred until F-136 has a concrete consumer.
+
+**Deviations from the design plan.** The approved plan was revised to include
+`docs/hld/03-architecture.md` after its crate summary assigned the `Length`
+pyclass incorrectly. Microscope pass 1 added caller-owned recovery guidance.
+Pass 2 added `docs/hld/15-build-and-toolchain.md`, release metadata, and the
+updated workspace-version package count.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "Three families, one
+workspace", `docs/hld/10-bindings-spec.md`, "The chosen design", "The
+invalidation problem, handled loudly", and "Python API shape",
+`docs/hld/14-development-backlog.md`, "F-129, oxml-py-support" and "F-132,
+Python enums, units and exceptions", and `docs/hld/15-build-and-toolchain.md`,
+"Release process".
+
+**Tests.** `stale_path_reports_both_revisions`, current-revision acceptance,
+revision bumping, ordered Word paths, positive and negative Length truncation,
+release-family metadata, focused crate checks, and the integrated full gate
+passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep this crate format-neutral. Package bindings
+own recovery paths and Python exception classes. Add presentation path variants
+only with F-136's concrete consumer.
+
+### F-130, rdocx-py core
+
+**Sprint.** S33
+**Completed.** 2026-08-12
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** A new unpublished mixed `rdocx-py` package exposes
+`Document()`, `Document(path)`, lazy paragraph and run collections, path-only
+handles, Python indexing, slicing and iteration, structural mutation, byte
+round trips, and named stale-handle failures.
+
+**Non-obvious choices.** `PyDocument` owns the Rust document while every child
+handle stores only a Python document reference and an F-129 content path.
+Immutable run reads use total facade accessors and preserve both layout caches.
+Revision counters advance only after successful structural mutations.
+
+**Deviations from the design plan.** The approved plan was revised to include
+release-family metadata, its count regression, and
+`docs/hld/15-build-and-toolchain.md`. Microscope pass 1 added the documented
+optional path constructor and immutable cache-preserving run accessors. F-130
+kept only the temporary stale exception bridge required by its gate, and F-132
+replaced it with the final hierarchy. The consolidated gate upgraded PyO3 to
+the first fixed 0.29.0 release after two RustSec advisories blocked completion.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "Facade conventions",
+`docs/hld/10-bindings-spec.md`, "The chosen design" and "The invalidation
+problem, handled loudly", and `docs/hld/15-build-and-toolchain.md`, "Release
+process".
+
+**Tests.** `stale_paragraph_after_structural_removal_raises_named_error`,
+`constructor_accepts_an_optional_input_path`,
+`immutable_run_accessors_preserve_cached_layout`, lazy collection coverage,
+total facade accessors, byte round trips, 31 installed-package tests, and the
+integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep lazy handles path-only and re-resolve them
+on every operation. Read-only binding access must stay on immutable facade
+methods so it cannot invalidate layout caches.
+
+### F-131, rdocx-py formatting and tables
+
+**Sprint.** S33
+**Completed.** 2026-08-12
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Path-only font and paragraph-format subhandles expose the
+bounded S33 formatting inventory with tri-state clearing. Lazy table, row,
+cell, and nested paragraph handles expose table and cell formatting through
+total public facade accessors.
+
+**Non-obvious choices.** Binding-only underline variants use a bounded
+integer-code facade API so the published exhaustive Rust `UnderlineStyle` enum
+remains compatible. Signed Python indentation clearing is separate from the
+established Rust helper. Cell text replacement invalidates nested handles with
+exactly one revision bump.
+
+**Deviations from the design plan.** There was no approved scope or HLD
+deviation. Microscope remediation restored exhaustive underline and legacy
+indent semantics, added single-bump cell invalidation and full tri-state
+clearing coverage, made unrepresentable table justification and automatic font
+colour read as `None`, proved rejected underline values do not mutate state,
+and supplied complete recovery paths for stale nested paragraphs.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "Facade conventions",
+`docs/hld/10-bindings-spec.md`, "Python API shape", and
+`docs/hld/14-development-backlog.md`, "F-131, rdocx-py formatting and tables".
+
+**Tests.** `unset_run_bold_is_none`, `none_clears_direct_formatting`,
+`facade_table_and_tristate_accessors_are_total`,
+`established_underline_enum_and_first_line_indent_remain_compatible`,
+`cell_text_replacement_invalidates_nested_run_and_font`, table reopen tests,
+the installed binding suite, and the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Preserve public exhaustive enums and use checked
+binding-only integer accessors for a wider Python literal set. Structural
+replacement must bump the revision exactly once, and nested stale errors must
+name the complete recovery path.
+
+### F-132, Python enums, units and exceptions
+
+**Sprint.** S33
+**Completed.** 2026-08-12
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Pure-Python immutable `Length` integer subclasses,
+`RGBColor`, four bounded `IntEnum` families, compatibility import paths,
+top-level exports, and the public `RdocxError` hierarchy now ship in the mixed
+package. Rust package, XML, stale, and layout failures map to their exact
+concrete Python classes.
+
+**Non-obvious choices.** Pure-Python value types preserve the Python 3.9
+limited ABI while native conversion helpers retain truncation toward zero. A
+direct `oxml-layout` dependency exists only under dev dependencies so a private
+Rust test can construct the concrete layout failure and prove exact mapping.
+
+**Deviations from the design plan.** There was no product or HLD scope
+deviation. Microscope remediation added exact `LayoutError` mapping sensitivity
+and its inward, test-only `oxml-layout` dependency, then documented the added
+dependency-graph rider in the plan.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`, "Python API shape",
+and `docs/hld/14-development-backlog.md`, "F-132, Python enums, units and
+exceptions".
+
+**Tests.** `alignment_center_and_inches_match_python_contract`,
+`length_is_an_int_with_unit_properties`, fractional truncation, exact enum
+values and docs, exception hierarchy,
+`layout_error_maps_to_the_exact_public_layout_error_class`, installed abi3
+package tests, dependency-direction checks, and the integrated full gate
+passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep Python value and enum types outside the
+native ABI boundary. Preserve the direct `oxml-layout` edge as dev-only unless
+a separately designed production dependency requires it.
+
+### F-133, rdocx-py rendering with allow_threads
+
+**Sprint.** S33
+**Completed.** 2026-08-12
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** `Document.to_pdf`, `to_bytes`, `render_page_to_png`, and
+`render_all_pages` convert Python arguments before releasing the GIL, perform
+only Rust-owned work while detached, then rebuild Python bytes, lists, and
+mapped exceptions after reattachment.
+
+**Non-obvious choices.** The concurrency gate uses independent uncached
+nontrivial documents and compares equivalent serial and parallel work. It
+validates complete PDFs and extracted semantics through exactly pinned Poppler
+26.01.0 instead of treating cache timing or byte identity as the oracle.
+
+**Deviations from the design plan.** An approved plan revision added the
+pinned Poppler differential-test oracle without changing implementation or HLD
+scope. Review remediation added semantic equivalence and completeness checks,
+progress-sensitive GIL gates for all four methods, exact version parsing for
+both Poppler tools, and rejection of suffixed unreviewed versions.
+
+**Spec sections touched.** None. The implementation fulfills the existing
+binding threading contract without changing architectural intent.
+
+**Tests.** `four_concurrent_to_pdf_calls_are_faster_than_serial`,
+`poppler_pdf_oracle_is_available_at_reviewed_version`,
+`poppler_version_pin_rejects_unreviewed_suffix`, the additional
+`releases_gil_for_python_worker` gates, result and error mapping tests, 31
+installed binding tests, and the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Every blocking native Python method needs a
+progress-sensitive GIL-release regression. Keep correctness comparisons
+outside timing assertions, require complete outputs, and pin external semantic
+oracles to an exact reviewed version.

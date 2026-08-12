@@ -29,11 +29,11 @@ parallel work.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-129 | oxml-py-support | M | in-progress | codex |
-| F-130 | rdocx-py core | L | in-progress | codex |
-| F-132 | Python enums, units and exceptions | M | in-progress | codex |
-| F-131 | rdocx-py formatting and tables | L | in-progress | codex |
-| F-133 | rdocx-py rendering with allow_threads | S | in-progress | codex |
+| F-129 | oxml-py-support | M | done | |
+| F-130 | rdocx-py core | L | done | |
+| F-132 | Python enums, units and exceptions | M | done | |
+| F-131 | rdocx-py formatting and tables | L | done | |
+| F-133 | rdocx-py rendering with allow_threads | S | done | |
 
 ## Sequencing note
 

@@ -189,6 +189,11 @@ defended.
 | F-028 | S32.2 | S | 1 | 1 | 2026-08-11 | Atomic automatic picture sizing at 72 DPI |
 | F-046 | S32.2 | M | 2 | 1 | 2026-08-11 | Shared layout and PDF cutover with unchanged output |
 | F-051 | S32.2 | S | 1 | 1 | 2026-08-11 | Root changelog and shared-crate migration guide |
+| F-129 | S33 | M | 2 | 1 | 2026-08-12 | Shared Python content paths, revisions, stale errors, and Length conversion |
+| F-130 | S33 | L | 4 | 1 | 2026-08-12 | Lazy rdocx Python document, paragraph, and run handles |
+| F-131 | S33 | L | 4 | 1 | 2026-08-12 | Tri-state formatting and lazy table handles |
+| F-132 | S33 | M | 2 | 1 | 2026-08-12 | Python-compatible units, enums, and exception mapping |
+| F-133 | S33 | S | 1 | 1 | 2026-08-12 | GIL-detached rendering with concurrency and Poppler gates |
 
 ## Velocity
 
