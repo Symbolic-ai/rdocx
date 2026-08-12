@@ -33,7 +33,7 @@ parallel work.
 | F-130 | rdocx-py core | L | in-progress | codex |
 | F-132 | Python enums, units and exceptions | M | in-progress | codex |
 | F-131 | rdocx-py formatting and tables | L | in-progress | codex |
-| F-133 | rdocx-py rendering with allow_threads | S | pending | - |
+| F-133 | rdocx-py rendering with allow_threads | S | in-progress | codex |
 
 ## Sequencing note
 
