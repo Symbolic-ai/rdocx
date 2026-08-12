@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -671,10 +673,93 @@ class SprintWorkflowTests(unittest.TestCase):
                 PLANS=plans,
             ):
                 self.assertEqual(workflow.completed_record_problems("S01", "F-001"), [])
+                current.write_text(
+                    "# Current Sprint, S01\n\n"
+                    "| F-ID | Title | Size | Status | Owner |\n"
+                    "|---|---|---|---|---|\n"
+                    "| F-001 | Example | S | done | |\n",
+                    encoding="utf-8",
+                )
+                self.assertEqual(workflow.completed_record_problems("S01", "F-001"), [])
+                current.write_text(
+                    "# Current Sprint, S01\n\n"
+                    "| F-ID | Title | Size | Status | Owner |\n"
+                    "|---|---|---|---|---|\n"
+                    "| F-001 | Example | S | done | codex |\n",
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    workflow.completed_record_problems("S01", "F-001"),
+                    ["F-001 is completed but CURRENT_SPRINT.md owner is 'codex'"],
+                )
                 tracker.write_text("", encoding="utf-8")
+                current.write_text(
+                    "# Current Sprint, S01\n\n"
+                    "| F-ID | Title | Size | Status | Owner |\n"
+                    "|---|---|---|---|---|\n"
+                    "| F-001 | Example | S | done | |\n",
+                    encoding="utf-8",
+                )
                 self.assertEqual(
                     workflow.completed_record_problems("S01", "F-001"),
                     ["F-001 has no S01 row in SPRINT_TRACKER.md"],
+                )
+
+    def test_completed_run_state_requires_a_cleared_owner(self) -> None:
+        data = {
+            "features": {
+                "F-001": {"state": "completed", "owner": None},
+                "F-002": {"state": "completed", "owner": "codex"},
+                "F-003": {"state": "carried", "owner": "claude"},
+            }
+        }
+
+        self.assertEqual(
+            workflow.completed_owner_problems(data),
+            ["F-002 is completed but run-state owner is 'codex'"],
+        )
+
+    def test_close_preflight_rejects_a_completed_run_state_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            reviews = Path(directory)
+            (reviews / "S01-sprint-review-pass-1.md").write_text(
+                "**Verdict**: 0 blocking, 0 should-fix, 0 nice-to-have\n",
+                encoding="utf-8",
+            )
+            data = {
+                "phase": "review",
+                "features": {
+                    "F-001": {"state": "completed", "owner": "codex"},
+                    "F-002": {"state": "carried", "owner": "claude"},
+                },
+                "reviews": [{"pass": 1, "blocking": 0, "head": "current"}],
+                "verifications": [
+                    {
+                        "scope": "full",
+                        "passed": True,
+                        "harness": "unchanged",
+                        "head": "current",
+                    }
+                ],
+            }
+
+            with (
+                patch.object(workflow, "load", return_value=data),
+                patch.object(workflow, "git_head", return_value="current"),
+                patch.object(workflow, "HANDOFFS", reviews / "handoffs"),
+                patch.object(workflow, "REVIEWS", reviews),
+                patch.object(workflow, "backlog_statuses", return_value={"F-001": "done"}),
+                patch.object(workflow, "completed_record_problems", return_value=[]),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(
+                    workflow.cmd_close_preflight(argparse.Namespace(sprint="S01")),
+                    1,
+                )
+                data["features"]["F-001"]["owner"] = None
+                self.assertEqual(
+                    workflow.cmd_close_preflight(argparse.Namespace(sprint="S01")),
+                    0,
                 )
 
 
