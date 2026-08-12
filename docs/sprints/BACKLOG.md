@@ -28,9 +28,9 @@ regenerated, never hand-edited.
 | M10, Renderer                               | 20 | 20 | 0 | 0  |
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
-| M13, Bindings and tooling                   | 18 | 5 | 2 | 11 |
+| M13, Bindings and tooling                   | 18 | 5 | 3 | 10 |
 | X, Cross-cutting (opportunistic)            | 5  | 1 | 0 | 4  |
-| **Total** | **159** | **142** | **2** | **15** |
+| **Total** | **159** | **142** | **3** | **14** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -266,7 +266,7 @@ regenerated, never hand-edited.
 | F-132 | Python enums, units and exceptions           | S33 | M | done |
 | F-133 | rdocx-py rendering with allow_threads        | S33 | S | done |
 | F-134 | Type stubs and py.typed                      | S34 | M | in-progress |
-| F-135 | python-docx parity suite                     | S34 | M | pending |
+| F-135 | python-docx parity suite                     | S34 | M | in-progress |
 | F-136 | rpptx-py                                     | S34 | L | in-progress |
 | F-137 | wheels.yml                                   | S34 | M | pending |
 | F-138 | PR-time Python job                           | S34 | S | pending |

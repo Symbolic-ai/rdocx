@@ -28,7 +28,7 @@ then make wheel and PR automation enforce the resulting package contract.
 |------|-------|------|--------|-------|
 | F-136 | rpptx-py | L | in-progress | codex |
 | F-134 | Type stubs and py.typed | M | in-progress | codex |
-| F-135 | python-docx parity suite | M | pending | - |
+| F-135 | python-docx parity suite | M | in-progress | codex |
 | F-137 | wheels.yml | M | pending | - |
 | F-138 | PR-time Python job | S | pending | - |
 
