@@ -1039,9 +1039,14 @@ than serial execution.
 round-trips through python-docx preserve content.
 
 ### F-136, rpptx-py (L)
-The same machinery over `Presentation`.
+An unpublished abi3-py39 mixed-layout binding over `Presentation`, using lazy
+path-only slide, shape, text and table handles. The bounded surface includes
+pure-Python presentation units and required shape enum values.
 **Depends on**: F-129, F-116.
-**Test gate**: the python-pptx documented examples run unchanged.
+**Test gate**: the seven python-pptx 1.0.2 Getting Started workflows run with
+the package namespace changed and minimal public re-fetches after structural
+writes. Both readers agree on each writer, and normalized structures from the
+two writers agree directly with that exact oracle version.
 
 ### F-137, wheels.yml (M)
 maturin, abi3-py39, the platform matrix, OIDC trusted publishing, the `py-v*`

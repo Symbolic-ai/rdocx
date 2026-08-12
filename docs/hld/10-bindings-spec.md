@@ -24,8 +24,8 @@ References are out, categorically. Four options were weighed:
 ### The chosen design
 
 ```rust
-pub enum PathSeg { Body(usize), Row(usize), Cell(usize),
-                   Para(usize), Run(usize) }
+pub enum PathSeg { Slide(usize), Shape(usize), Body(usize), Row(usize),
+                   Cell(usize), Para(usize), Run(usize) }
 pub struct ContentPath { pub segs: SmallVec<[PathSeg; 5]>, pub revision: u64 }
 pub struct RevisionCounter { current: u64 }
 
@@ -45,9 +45,9 @@ Aliasing is checked by PyO3's own `RefCell` on the pyclass, so a violation is a
 clean `RuntimeError`, never undefined behaviour. Resolution is a handful of
 vector index operations, negligible against FFI overhead.
 
-The shared crate starts with only the Word path variants consumed by the rdocx
-binding. The rpptx binding adds `Slide(usize)` and repeatable `Shape(usize)`
-variants when its existing F-136 consumer is implemented.
+The shared crate carries the Word path variants consumed by the rdocx binding
+and the `Slide(usize)` plus repeatable `Shape(usize)` variants consumed by the
+rpptx binding.
 
 ### The invalidation problem, handled loudly
 
@@ -168,13 +168,23 @@ alignment and width, plus cell text, width and vertical alignment. These
 handles use `Body`, `Row`, `Cell`, `Para` and `Run` path segments and reach the
 document only through the public `rdocx` facade.
 
-`rpptx` mirrors python-pptx the same way.
+`rpptx` mirrors python-pptx through an unpublished mixed-layout `rpptx-py`
+crate. `Presentation` owns the Rust facade and one revision counter. Lazy
+layouts, slides, shapes, placeholders, text frames, paragraphs, runs, columns
+and cells store only a presentation reference and `ContentPath`. The bounded
+source-compatibility surface is the seven python-pptx 1.0.2 Getting Started
+workflows. They change the import namespace and re-fetch through the public
+path after each structural write, because strict global revision invalidation
+intentionally stales every pre-write handle and collection. Pure-Python
+`Length`, `Inches`, `Pt` and the required `MSO_SHAPE` members keep native
+inheritance outside the limited ABI.
 
 ## Packaging
 
 **maturin, mixed Rust and Python layout**, so type stubs and enum shims have a
 home. `python-source = "python"`, `module-name = "rdocx._rdocx"`,
-`features = ["pyo3/extension-module"]`.
+`features = ["pyo3/extension-module"]`. The rpptx package uses the parallel
+`rpptx._rpptx` module name.
 
 **abi3-py39.** One wheel per platform rather than one per interpreter version,
 so roughly 6 wheels instead of 48. The cost is marginally slower attribute

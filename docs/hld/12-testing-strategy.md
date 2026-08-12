@@ -358,6 +358,14 @@ because the whole value proposition is compatibility:
   and tables survive. Then the reverse.
 - The same for `rpptx` and `python-pptx`.
 
+The rpptx binding gate executes the seven python-pptx 1.0.2 Getting Started
+workflows with the import namespace changed from `pptx` to `rpptx` and the
+minimal public re-fetches required after structural writes. Its differential
+rider asserts the exact oracle version, compares each writer through both
+readers, and directly compares the normalized rpptx-authored and
+python-pptx-authored records. It never compares package bytes and the oracle is
+not a runtime dependency.
+
 Both libraries are free CI dev dependencies.
 
 Plus `mypy --strict` over a typing smoke file and `stubtest` against the stubs,

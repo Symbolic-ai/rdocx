@@ -77,6 +77,12 @@ slide order. A slide exposes its producer id, optional `p:cSld` name, immediate
 z-order shapes, recursive visible text, and optional speaker-note text. Indexed
 access returns `Option` and does not panic.
 
+The public facade also exposes total title and placeholder lookup and immutable
+text-frame, paragraph and regular-run handles. Repeatable shape lookup covers
+group children. Mutable shape, text and table handles have consuming nested
+accessors so a path-based binding can retain one facade borrow across the
+resolved operation without reaching into `rpptx-oxml`.
+
 The owning facade edits the ordered slide collection through three atomic
 methods:
 

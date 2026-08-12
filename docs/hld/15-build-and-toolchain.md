@@ -129,9 +129,9 @@ The fourteen crates.io names in this graph are reserved under the owner
 remain dependency-free 0.0.0 placeholders. The 12 implemented packages use
 the reviewed release path described below.
 
-`oxml-py-support`, `rpptx-py`, and `rpptx-wasm` are not reserved on crates.io.
-The binding crates are not published there, and the WASM packages use the npm
-publication path.
+`oxml-py-support` and `rpptx-py` are not reserved on crates.io. The binding
+crates are not published there. `rpptx-wasm` remains deferred to F-142 and its
+later npm publication path.
 
 All 12 implemented shared and PowerPoint packages are published at the common
 incubating version 0.1.2. They are
@@ -180,10 +180,11 @@ edits to `[workspace.package]`, the internal pins in
 `[workspace.dependencies]`, and `Cargo.lock`. They are reviewed before a tag is
 possible and never rewrite README prose by pattern.
 
-`cargo-release` preparation is configured in Cargo metadata. The ten packages
+`cargo-release` preparation is configured in Cargo metadata. The eleven packages
 that inherit `[workspace.package].version`, including the unpublished
-`rdocx-wasm`, `rdocx-py`, and `oxml-py-support` packages, use cargo-release's
-effective `workspace` shared-version group and the `v{{version}}` tag template.
+`rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
+cargo-release's effective `workspace` shared-version group and the
+`v{{version}}` tag template.
 The exact published stable family remains the seven packages listed above.
 The 12 implemented `oxml-*` and `rpptx*` packages are prepared at explicit
 version 0.1.2, use the named `incubating` group, and carry the

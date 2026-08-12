@@ -1,6 +1,6 @@
 # F-136, rpptx-py
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S34
 **Size**: L
 **Depends on**: F-129, F-116
@@ -33,14 +33,17 @@ repeatable `Shape(usize)`. Successful structural mutations bump exactly once,
 failed mutations and scalar writes do not, and stale errors report captured and
 current revisions with a complete recovery path.
 
-Implement exactly the seven python-pptx 1.0.2 Getting Started examples: Hello
-World, bullet slide, textbox, picture, preset shapes, table, and extract all
-text. Preserve each example body after the sole `pptx` to `rpptx` namespace
-substitution. Provide lazy layouts, slides, shapes, placeholders, text frames,
-paragraphs, runs, columns, and cells. Provide pure-Python `Length`, `Inches`,
-`Pt`, and the required `MSO_SHAPE` members. Mirror the package-specific error
-hierarchy. Generate the tiny PNG input in code and compare normalized public
-structure against pinned `python-pptx==1.0.2`, never package bytes.
+Implement the seven python-pptx 1.0.2 Getting Started examples: Hello World,
+bullet slide, textbox, picture, preset shapes, table, and extract all text.
+Preserve each example body after the `pptx` to `rpptx` namespace substitution
+and the minimal public re-fetches required after structural writes by the
+global revision contract. Provide lazy layouts, slides, shapes, placeholders,
+text frames, paragraphs, runs, columns, and cells. Provide pure-Python
+`Length`, `Inches`, `Pt`, and the required `MSO_SHAPE` members. Mirror the
+package-specific error hierarchy. Generate the tiny PNG input in code and
+compare normalized public structure against pinned `python-pptx==1.0.2`, never
+package bytes. Compare the normalized rpptx-authored and python-pptx-authored
+records directly so writer-only drift fails the gate.
 
 Keep each behavior-bearing class family in its owning source file. Add no
 resolver trait, generic abstraction, binary fixture, forwarding-only module, or
@@ -60,13 +63,14 @@ runtime dependency on either Python oracle package.
 
 | Category | Test | Asserts |
 |---|---|---|
-| integration, gate | `python_pptx_getting_started_examples_run_with_namespace_substitution` | All seven documented bodies execute through `rpptx` |
-| integration | lazy collection and stale-handle suite | Index, slice, iteration, revision, and recovery behavior is loud and total |
-| differential | two-reader normalized example records | rpptx and python-pptx 1.0.2 agree structurally |
+| integration, gate | `python_pptx_getting_started_examples_run_with_global_revision_refetches` | All seven documented workflows execute through `rpptx` with only namespace substitution and required post-structural-write re-fetches |
+| integration | lazy collection and stale-handle suite | Index, slice, iteration, global revision, and exact recovery behavior is loud and total |
+| differential | two-reader and two-writer normalized example records | rpptx and python-pptx 1.0.2 agree structurally, including direct cross-writer equivalence |
 | regression | facade totality and immutable resolution | Binding reads do not mutate and every path can re-resolve |
 
-The test gate is the seven pinned python-pptx Getting Started examples with
-only the package namespace changed.
+The test gate is the seven pinned python-pptx Getting Started workflows with
+the package namespace changed and the minimal re-fetches required after
+structural writes by strict global revision invalidation.
 
 ## HLD impact
 
@@ -87,7 +91,10 @@ only the package namespace changed.
   publication dry run, and assert archive sizes.
 - WASM or PyO3 bindings and a new feature. Keep `extension-module` off by
   default, name maturin as its consumer, retain binding exclusions, run both
-  WASM checks, and run the layout no-default-features gate.
+  existing WASM and binding-isolation checks, and run the layout
+  no-default-features gate. `rpptx-wasm` remains deferred to F-142, so this
+  story runs the existing `rdocx-wasm` target plus inverse dependency proof
+  that PyO3 does not leak into format crates.
 - New crate, modules, and files. Obtain explicit approval for the exact crate
   tree listed in the open questions.
 - External oracle comparison. Pin `python-pptx==1.0.2`, assert the version, and
@@ -102,15 +109,15 @@ the existing sample generators.
 
 ## Implementation checklist
 
-- [ ] Add `Slide` and repeatable `Shape` path segments with stale tests.
-- [ ] Add only the total additive rpptx facade accessors required by the seven examples.
-- [ ] Create the mixed-layout crate and path-only Python handle graph.
-- [ ] Add pure-Python units, shape enums, errors, and top-level exports.
-- [ ] Execute all seven examples and both-reader structural checks.
-- [ ] Run every dependency, PyO3, WASM, publication, and hash rider.
+- [x] Add `Slide` and repeatable `Shape` path segments with stale tests.
+- [x] Add only the total additive rpptx facade accessors required by the seven examples.
+- [x] Create the mixed-layout crate and path-only Python handle graph.
+- [x] Add pure-Python units, shape enums, errors, and top-level exports.
+- [x] Execute all seven examples and both-reader structural checks.
+- [x] Run every dependency, PyO3, WASM, publication, and hash rider.
 
 ## Open questions
 
-None. The seven-example inventory, sole namespace substitution, mirrored error
-names, additive facade surface, and exact new crate tree are explicitly
-approved.
+None. The seven-example inventory, namespace substitution plus required global
+revision re-fetches, mirrored error names, additive facade surface, and exact
+new crate tree are explicitly approved.
