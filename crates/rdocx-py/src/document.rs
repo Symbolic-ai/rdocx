@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use oxml_py_support::{PathSeg, RevisionCounter};
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
+use pyo3::types::{PyBytes, PyList};
 use smallvec::smallvec;
 
 use crate::paragraph::{PyParagraph, PyParagraphCollection};
@@ -62,6 +62,32 @@ impl PyDocument {
         py.detach(|| self.inner.to_bytes())
             .map(|bytes| PyBytes::new(py, &bytes))
             .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    fn to_pdf<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        py.detach(|| self.inner.to_pdf())
+            .map(|bytes| PyBytes::new(py, &bytes))
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    #[pyo3(signature = (page_index, dpi = 150.0))]
+    fn render_page_to_png<'py>(
+        &self,
+        py: Python<'py>,
+        page_index: usize,
+        dpi: f64,
+    ) -> PyResult<Option<Bound<'py, PyBytes>>> {
+        py.detach(|| self.inner.render_page_to_png(page_index, dpi))
+            .map(|bytes| bytes.map(|bytes| PyBytes::new(py, &bytes)))
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    #[pyo3(signature = (dpi = 150.0))]
+    fn render_all_pages<'py>(&self, py: Python<'py>, dpi: f64) -> PyResult<Bound<'py, PyList>> {
+        let pages = py
+            .detach(|| self.inner.render_all_pages(dpi))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        PyList::new(py, pages.iter().map(|page| PyBytes::new(py, page)))
     }
 
     #[getter]

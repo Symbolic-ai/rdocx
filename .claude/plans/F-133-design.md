@@ -1,6 +1,6 @@
 # F-133, rdocx-py rendering with allow_threads
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S33
 **Size**: S
 **Depends on**: F-130
@@ -32,7 +32,10 @@ Keep the Rust `Document`, caches, and rendering backends unchanged. The timing
 gate uses four independent, nontrivial uncached documents. It warms global font
 discovery with a sacrificial document, compares repeated serial and parallel
 medians, and requires the parallel median to be lower on the sprint's supported
-multi-core test environment.
+multi-core test environment. Outside timed intervals, validate every complete
+serial and parallel PDF through pinned Poppler 26.01.0 `pdfinfo` and
+`pdftotext`, comparing page counts and full extracted text. The test fails
+clearly unless both tools exist and each reports the reviewed exact version.
 
 ## Rejected alternatives
 
@@ -48,10 +51,11 @@ multi-core test environment.
 
 | Category | Test | Asserts |
 |---|---|---|
-| integration, gate | `four_concurrent_to_pdf_calls_are_faster_than_serial` | Four independent uncached renders have a lower parallel median |
+| integration, gate | `four_concurrent_to_pdf_calls_are_faster_than_serial` | Equivalent independent uncached renders have a lower parallel median, complete structure, and equal full Poppler semantics |
 | integration | `to_pdf_returns_pdf_bytes` | The detached call returns a PDF signature |
 | integration | `render_methods_return_png_bytes_and_page_lists` | Page and all-page results keep their Python shapes and signatures |
 | integration | `render_errors_reacquire_and_map_cleanly` | Rust errors become the approved Python exceptions after reattachment |
+| integration | `poppler_pdf_oracle_is_available_at_reviewed_version` | Both required tools exist and report Poppler 26.01.0 exactly |
 | regression | existing `Document: Send + Sync` compile gate | Core thread safety remains intact |
 
 The timing test is the verbatim backlog gate. Focused checks use the
@@ -72,6 +76,9 @@ the intended behavior.
   existing rdocx WASM target check.
 - New file. Obtain explicit approval for one dedicated Python rendering-thread
   integration test file. Add no forwarding-only Rust module.
+- External oracle comparison. Follow `.claude/skills/differential-testing.md`.
+  Require `pdfinfo` and `pdftotext`, assert that both report Poppler 26.01.0,
+  then compare complete serial and parallel PDF semantics outside timing.
 
 ## Hash harness
 
@@ -80,11 +87,11 @@ do not change core layout or output.
 
 ## Implementation checklist
 
-- [ ] Add detached PDF, bytes, page, and all-page methods to `PyDocument`.
-- [ ] Reattach only for Python result construction and error mapping.
-- [ ] Add functional PDF and PNG integration tests.
-- [ ] Add the independent-document serial versus parallel timing gate.
-- [ ] Run focused checks and every risk rider.
+- [x] Add detached PDF, bytes, page, and all-page methods to `PyDocument`.
+- [x] Reattach only for Python result construction and error mapping.
+- [x] Add functional PDF and PNG integration tests.
+- [x] Add the independent-document serial versus parallel timing gate.
+- [x] Run focused checks and every risk rider.
 
 ## Open questions
 
