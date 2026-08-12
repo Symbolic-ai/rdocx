@@ -205,6 +205,103 @@ fn run_color_and_font_round_trip() {
     assert_eq!(runs[0].size(), Some(16.0));
 }
 
+#[test]
+fn facade_table_and_tristate_accessors_are_total() {
+    let mut document = Document::new();
+    document.add_paragraph("").add_run("value");
+
+    let paragraph = document.paragraph(0).unwrap();
+    let run = paragraph.run(0).unwrap();
+    assert_eq!(run.bold_value(), None);
+    assert_eq!(run.italic_value(), None);
+    assert_eq!(run.strike_value(), None);
+
+    {
+        let mut paragraph = document.paragraph_mut(0).unwrap();
+        let mut run = paragraph.run_mut(0).unwrap();
+        run.set_bold_value(Some(false));
+        run.set_italic_value(Some(true));
+        run.set_strike_value(Some(false));
+        assert!(run.set_underline_code_value(Some(9)));
+        assert!(!run.set_underline_code_value(Some(5)));
+    }
+    assert_eq!(
+        document
+            .paragraph(0)
+            .unwrap()
+            .run(0)
+            .unwrap()
+            .underline_code_value(),
+        Some(9)
+    );
+    {
+        let mut paragraph = document.paragraph_mut(0).unwrap();
+        let mut run = paragraph.run_mut(0).unwrap();
+        assert!(run.set_underline_code_value(Some(10)));
+    }
+
+    assert_eq!(document.table_count(), 0);
+    assert!(document.table(0).is_none());
+    assert!(document.table_mut(0).is_none());
+
+    document.add_table(1, 1);
+    assert_eq!(document.table_count(), 1);
+    assert_eq!(document.table(0).unwrap().row_count(), 1);
+    assert_eq!(
+        document
+            .table(0)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .paragraph_count(),
+        1
+    );
+    assert!(
+        document
+            .table_mut(0)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .paragraph_mut(0)
+            .is_some()
+    );
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let run = paragraph.run(0).unwrap();
+    assert_eq!(run.bold_value(), Some(false));
+    assert_eq!(run.italic_value(), Some(true));
+    assert_eq!(run.strike_value(), Some(false));
+    assert_eq!(run.underline_code_value(), Some(10));
+}
+
+#[test]
+fn established_underline_enum_and_first_line_indent_remain_compatible() {
+    fn established_underline_code(style: UnderlineStyle) -> i32 {
+        match style {
+            UnderlineStyle::None => 0,
+            UnderlineStyle::Single => 1,
+            UnderlineStyle::Double => 3,
+            UnderlineStyle::Thick => 6,
+            UnderlineStyle::Dotted => 4,
+            UnderlineStyle::Dash => 7,
+            UnderlineStyle::Wave => 11,
+            UnderlineStyle::Words => 2,
+        }
+    }
+
+    assert_eq!(established_underline_code(UnderlineStyle::Wave), 11);
+
+    let mut document = Document::new();
+    document
+        .add_paragraph("legacy")
+        .set_first_line_indent(Length::inches(-0.25));
+    let xml = String::from_utf8(document_xml(&mut document)).unwrap();
+    assert!(xml.contains("w:firstLine=\"-360\""));
+    assert!(!xml.contains("w:hanging=\"360\""));
+}
+
 // ---- Phase 2 Integration Tests ----
 
 #[test]

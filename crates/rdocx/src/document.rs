@@ -469,6 +469,25 @@ impl Document {
             .collect()
     }
 
+    /// Get an immutable table by index among tables only.
+    pub fn table(&self, index: usize) -> Option<TableRef<'_>> {
+        self.document
+            .body
+            .tables()
+            .nth(index)
+            .map(|inner| TableRef { inner })
+    }
+
+    /// Get a mutable table by index among tables only.
+    pub fn table_mut(&mut self, index: usize) -> Option<Table<'_>> {
+        self.invalidate_layout();
+        self.document
+            .body
+            .tables_mut()
+            .nth(index)
+            .map(|inner| Table { inner })
+    }
+
     /// Add a table with the specified number of rows and columns.
     /// Returns a mutable reference for further configuration.
     pub fn add_table(&mut self, rows: usize, cols: usize) -> Table<'_> {

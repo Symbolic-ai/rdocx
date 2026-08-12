@@ -1,6 +1,6 @@
 # F-131, rdocx-py formatting and tables
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S33
 **Size**: L
 **Depends on**: F-130
@@ -97,12 +97,12 @@ and new clearing behavior is reached only through the new binding surface.
 
 ## Implementation checklist
 
-- [ ] Add facade tri-state readers and clear-capable setters.
-- [ ] Add direct document table and cell paragraph accessors.
-- [ ] Implement path-only font and paragraph-format subhandles.
-- [ ] Implement lazy table, row, cell, and nested paragraph handles.
-- [ ] Wire the approved F-132 enum and unit inventory.
-- [ ] Add Rust and Python integration regressions and run all riders.
+- [x] Add facade tri-state readers and clear-capable setters.
+- [x] Add direct document table and cell paragraph accessors.
+- [x] Implement path-only font and paragraph-format subhandles.
+- [x] Implement lazy table, row, cell, and nested paragraph handles.
+- [x] Wire the approved F-132 enum and unit inventory.
+- [x] Add Rust and Python integration regressions and run all riders.
 
 ## Open questions
 

@@ -1,8 +1,10 @@
 //! Python bindings for the rdocx facade.
 
 mod document;
+mod formatting;
 mod paragraph;
 mod run;
+mod table;
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -11,8 +13,13 @@ use pyo3::types::PyType;
 use oxml_py_support::StaleElementError;
 
 use document::PyDocument;
+use formatting::{PyFont, PyParagraphFormat};
 use paragraph::{PyParagraph, PyParagraphCollection};
 use run::{PyRun, PyRunCollection};
+use table::{
+    PyCell, PyCellCollection, PyCellParagraphCollection, PyRow, PyRowCollection, PyTable,
+    PyTableCollection,
+};
 
 fn public_error(py: Python<'_>, class_name: &str, message: String) -> PyErr {
     let exception_type = py
@@ -50,6 +57,15 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyParagraphCollection>()?;
     module.add_class::<PyRun>()?;
     module.add_class::<PyRunCollection>()?;
+    module.add_class::<PyFont>()?;
+    module.add_class::<PyParagraphFormat>()?;
+    module.add_class::<PyTable>()?;
+    module.add_class::<PyTableCollection>()?;
+    module.add_class::<PyRow>()?;
+    module.add_class::<PyRowCollection>()?;
+    module.add_class::<PyCell>()?;
+    module.add_class::<PyCellCollection>()?;
+    module.add_class::<PyCellParagraphCollection>()?;
     Ok(())
 }
 

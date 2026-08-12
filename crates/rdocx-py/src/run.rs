@@ -2,34 +2,19 @@ use oxml_py_support::{ContentPath, PathSeg};
 use pyo3::exceptions::{PyIndexError, PyRuntimeError, PyTypeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyList, PySlice};
-use smallvec::smallvec;
 
 use crate::document::PyDocument;
+use crate::paragraph::{ParagraphLocation, paragraph_location};
 use crate::stale_to_pyerr;
 
-fn path_indices(path: &ContentPath) -> PyResult<(usize, usize)> {
-    let paragraph = path.segs.iter().find_map(|segment| match segment {
-        PathSeg::Para(index) => Some(*index),
-        _ => None,
-    });
+fn path_indices(path: &ContentPath) -> PyResult<(ParagraphLocation, usize)> {
     let run = path.segs.iter().find_map(|segment| match segment {
         PathSeg::Run(index) => Some(*index),
         _ => None,
     });
-    match (paragraph, run) {
-        (Some(paragraph), Some(run)) => Ok((paragraph, run)),
-        _ => Err(PyRuntimeError::new_err("run path is incomplete")),
-    }
-}
-
-fn paragraph_index(path: &ContentPath) -> PyResult<usize> {
-    path.segs
-        .iter()
-        .find_map(|segment| match segment {
-            PathSeg::Para(index) => Some(*index),
-            _ => None,
-        })
-        .ok_or_else(|| PyRuntimeError::new_err("run collection path has no paragraph index"))
+    run.map(|run| paragraph_location(path).map(|paragraph| (paragraph, run)))
+        .transpose()?
+        .ok_or_else(|| PyRuntimeError::new_err("run path is incomplete"))
 }
 
 fn normalize_index(index: isize, len: usize) -> PyResult<usize> {
@@ -55,7 +40,7 @@ impl PyRun {
         Self { document, path }
     }
 
-    fn validate(&self, py: Python<'_>) -> PyResult<(usize, usize)> {
+    pub(crate) fn validate(&self, py: Python<'_>) -> PyResult<(ParagraphLocation, usize)> {
         let document = self.document.borrow(py);
         self.path
             .validate_revision(
@@ -72,31 +57,73 @@ impl PyRun {
 impl PyRun {
     #[getter]
     fn text(&self, py: Python<'_>) -> PyResult<String> {
-        let (paragraph_index, run_index) = self.validate(py)?;
+        let (location, run_index) = self.validate(py)?;
         let document = self.document.borrow(py);
-        let paragraph = document
-            .inner
-            .paragraph(paragraph_index)
-            .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-        paragraph
-            .run(run_index)
-            .map(|run| run.text())
-            .ok_or_else(|| PyIndexError::new_err("run index out of range"))
+        match location {
+            ParagraphLocation::Body(index) => document
+                .inner
+                .paragraph(index)
+                .and_then(|paragraph| paragraph.run(run_index).map(|run| run.text())),
+            ParagraphLocation::Cell {
+                table,
+                row,
+                cell,
+                paragraph,
+            } => document.inner.table(table).and_then(|table| {
+                let cell = table.cell(row, cell)?;
+                let paragraph = cell.paragraph(paragraph)?;
+                paragraph.run(run_index).map(|run| run.text())
+            }),
+        }
+        .ok_or_else(|| PyIndexError::new_err("run index out of range"))
     }
 
     #[setter]
     fn set_text(&self, py: Python<'_>, text: &str) -> PyResult<()> {
-        let (paragraph_index, run_index) = self.validate(py)?;
+        let (location, run_index) = self.validate(py)?;
         let mut document = self.document.borrow_mut(py);
-        let mut paragraph = document
-            .inner
-            .paragraph_mut(paragraph_index)
-            .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-        paragraph
-            .run_mut(run_index)
-            .ok_or_else(|| PyIndexError::new_err("run index out of range"))?
-            .set_text(text);
+        match location {
+            ParagraphLocation::Body(index) => {
+                let mut paragraph = document
+                    .inner
+                    .paragraph_mut(index)
+                    .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
+                paragraph
+                    .run_mut(run_index)
+                    .map(|mut run| run.set_text(text))
+            }
+            ParagraphLocation::Cell {
+                table,
+                row,
+                cell,
+                paragraph,
+            } => {
+                let mut table = document
+                    .inner
+                    .table_mut(table)
+                    .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+                let mut cell = table
+                    .cell(row, cell)
+                    .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
+                let mut paragraph = cell
+                    .paragraph_mut(paragraph)
+                    .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
+                paragraph
+                    .run_mut(run_index)
+                    .map(|mut run| run.set_text(text))
+            }
+        }
+        .ok_or_else(|| PyIndexError::new_err("run index out of range"))?;
         Ok(())
+    }
+
+    #[getter]
+    fn font(&self, py: Python<'_>) -> PyResult<Py<crate::formatting::PyFont>> {
+        self.validate(py)?;
+        Py::new(
+            py,
+            crate::formatting::PyFont::new(self.document.clone_ref(py), self.path.clone()),
+        )
     }
 }
 
@@ -114,7 +141,7 @@ impl PyRunCollection {
         }
     }
 
-    fn validate(&self, py: Python<'_>) -> PyResult<usize> {
+    fn validate(&self, py: Python<'_>) -> PyResult<ParagraphLocation> {
         let document = self.document.borrow(py);
         self.paragraph_path
             .validate_revision(
@@ -123,28 +150,38 @@ impl PyRunCollection {
                 "Re-fetch it with paragraph.runs.",
             )
             .map_err(|error| stale_to_pyerr(py, error))?;
-        paragraph_index(&self.paragraph_path)
+        paragraph_location(&self.paragraph_path)
     }
 
     fn len(&self, py: Python<'_>) -> PyResult<usize> {
-        let paragraph_index = self.validate(py)?;
-        self.document
-            .borrow(py)
-            .inner
-            .paragraph(paragraph_index)
-            .map(|paragraph| paragraph.run_count())
-            .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
+        let location = self.validate(py)?;
+        let document = self.document.borrow(py);
+        match location {
+            ParagraphLocation::Body(index) => document
+                .inner
+                .paragraph(index)
+                .map(|paragraph| paragraph.run_count()),
+            ParagraphLocation::Cell {
+                table,
+                row,
+                cell,
+                paragraph,
+            } => document.inner.table(table).and_then(|table| {
+                let cell = table.cell(row, cell)?;
+                cell.paragraph(paragraph)
+                    .map(|paragraph| paragraph.run_count())
+            }),
+        }
+        .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
     }
 
     fn item(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyRun>> {
-        let paragraph_index = self.validate(py)?;
+        self.validate(py)?;
         let path = {
             let document = self.document.borrow(py);
-            document.revisions.capture(smallvec![
-                PathSeg::Body(0),
-                PathSeg::Para(paragraph_index),
-                PathSeg::Run(index),
-            ])
+            let mut segments = self.paragraph_path.segs.clone();
+            segments.push(PathSeg::Run(index));
+            document.revisions.capture(segments)
         };
         Py::new(py, PyRun::new(self.document.clone_ref(py), path))
     }

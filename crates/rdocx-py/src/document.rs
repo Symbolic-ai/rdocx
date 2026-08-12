@@ -7,6 +7,7 @@ use smallvec::smallvec;
 
 use crate::paragraph::{PyParagraph, PyParagraphCollection};
 use crate::rdocx_to_pyerr;
+use crate::table::{PyTable, PyTableCollection};
 
 #[pyclass(name = "Document")]
 pub struct PyDocument {
@@ -68,6 +69,11 @@ impl PyDocument {
         Py::new(py, PyParagraphCollection::new(slf))
     }
 
+    #[getter]
+    fn tables(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PyTableCollection>> {
+        Py::new(py, PyTableCollection::new(slf))
+    }
+
     fn add_paragraph(slf: Py<Self>, py: Python<'_>, text: &str) -> PyResult<Py<PyParagraph>> {
         let (index, path) = {
             let mut document = slf.borrow_mut(py);
@@ -81,6 +87,20 @@ impl PyDocument {
         };
         debug_assert!(matches!(path.segs.last(), Some(PathSeg::Para(i)) if *i == index));
         Py::new(py, PyParagraph::new(slf, path))
+    }
+
+    #[pyo3(signature = (rows, cols))]
+    fn add_table(slf: Py<Self>, py: Python<'_>, rows: usize, cols: usize) -> PyResult<Py<PyTable>> {
+        let (index, path) = {
+            let mut document = slf.borrow_mut(py);
+            let index = document.inner.table_count();
+            document.inner.add_table(rows, cols);
+            document.revisions.bump();
+            let path = document.revisions.capture(smallvec![PathSeg::Body(index)]);
+            (index, path)
+        };
+        debug_assert!(matches!(path.segs.last(), Some(PathSeg::Body(i)) if *i == index));
+        Py::new(py, PyTable::new(slf, path))
     }
 
     fn remove_content(&mut self, index: usize) -> bool {

@@ -130,7 +130,9 @@ doc.save_pdf("out.pdf")                        # documented as an rdocx extensio
 ```
 
 - `font` and `paragraph_format` are themselves handles, so `r.font.bold = True`
-  writes through the chain.
+  writes through the chain. They store only a document reference and content
+  path, re-resolve on every operation, and become stale after a structural
+  mutation.
 - **Tri-state properties return `None` for inherit**, `True` or `False` when
   explicit. rdocx's `Option<bool>` already matches. Never collapse `None` to
   `False`.
@@ -147,13 +149,24 @@ doc.save_pdf("out.pdf")                        # documented as an rdocx extensio
   `WD_TABLE_ALIGNMENT` and `WD_CELL_VERTICAL_ALIGNMENT` in
   `rdocx.enum.table`. All four are also top-level exports. Their checked
   integer literals cover the paragraph, run and table variants exposed by the
-  S33 facade, including `WD_ALIGN_PARAGRAPH.CENTER == 1`.
+  S33 facade, including `WD_ALIGN_PARAGRAPH.CENTER == 1`. Underline codes use a
+  total binding-oriented facade value accessor rather than expanding the
+  published exhaustive Rust `UnderlineStyle` enum.
 - The package layer owns `RdocxError(Exception)` as the base, with
   `PackageError`, `XmlError`, `StaleElementError` and `LayoutError` beneath it.
   OPC, I/O and missing-part failures map to `PackageError`, OXML failures map
   to `XmlError`, layout failures map to `LayoutError`, and the shared stale
   domain error maps to `StaleElementError`. `oxml-py-support` therefore remains
   independent of any Python base class.
+
+The S33 formatting inventory is intentionally bounded to font name, size,
+colour, bold, italic, underline and strike, plus paragraph alignment, spacing,
+indentation, keep-with-next, keep-together, page-break-before and widow
+control. Assigning `None` clears direct tri-state formatting. The S33 table
+inventory is lazy table, row, cell and nested paragraph lookup, table style,
+alignment and width, plus cell text, width and vertical alignment. These
+handles use `Body`, `Row`, `Cell`, `Para` and `Run` path segments and reach the
+document only through the public `rdocx` facade.
 
 `rpptx` mirrors python-pptx the same way.
 

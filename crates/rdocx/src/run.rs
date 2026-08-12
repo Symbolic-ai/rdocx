@@ -21,17 +21,48 @@ pub enum UnderlineStyle {
 }
 
 impl UnderlineStyle {
-    fn to_st(self) -> ST_Underline {
+    fn to_code(self) -> i32 {
         match self {
-            Self::None => ST_Underline::None,
-            Self::Single => ST_Underline::Single,
-            Self::Double => ST_Underline::Double,
-            Self::Thick => ST_Underline::Thick,
-            Self::Dotted => ST_Underline::Dotted,
-            Self::Dash => ST_Underline::Dash,
-            Self::Wave => ST_Underline::Wave,
-            Self::Words => ST_Underline::Words,
+            Self::None => 0,
+            Self::Single => 1,
+            Self::Words => 2,
+            Self::Double => 3,
+            Self::Dotted => 4,
+            Self::Thick => 6,
+            Self::Dash => 7,
+            Self::Wave => 11,
         }
+    }
+}
+
+fn underline_from_code(code: i32) -> Option<ST_Underline> {
+    match code {
+        0 => Some(ST_Underline::None),
+        1 => Some(ST_Underline::Single),
+        2 => Some(ST_Underline::Words),
+        3 => Some(ST_Underline::Double),
+        4 => Some(ST_Underline::Dotted),
+        6 => Some(ST_Underline::Thick),
+        7 => Some(ST_Underline::Dash),
+        9 => Some(ST_Underline::DotDash),
+        10 => Some(ST_Underline::DotDotDash),
+        11 => Some(ST_Underline::Wave),
+        _ => None,
+    }
+}
+
+fn underline_to_code(value: ST_Underline) -> i32 {
+    match value {
+        ST_Underline::None => 0,
+        ST_Underline::Single => 1,
+        ST_Underline::Words => 2,
+        ST_Underline::Double => 3,
+        ST_Underline::Dotted => 4,
+        ST_Underline::Thick => 6,
+        ST_Underline::Dash => 7,
+        ST_Underline::DotDash => 9,
+        ST_Underline::DotDotDash => 10,
+        ST_Underline::Wave => 11,
     }
 }
 
@@ -68,9 +99,17 @@ impl<'a> Run<'a> {
 
     /// Set bold formatting in place.
     pub fn set_bold(&mut self, val: bool) {
+        self.set_bold_value(Some(val));
+    }
+
+    /// Set or clear direct bold formatting in place.
+    pub fn set_bold_value(&mut self, val: Option<bool>) {
+        if val.is_none() && self.inner.properties.is_none() {
+            return;
+        }
         let rpr = self.ensure_rpr();
-        rpr.bold = Some(val);
-        rpr.bold_cs = Some(val);
+        rpr.bold = val;
+        rpr.bold_cs = val;
     }
 
     /// Set italic formatting.
@@ -81,9 +120,17 @@ impl<'a> Run<'a> {
 
     /// Set italic formatting in place.
     pub fn set_italic(&mut self, val: bool) {
+        self.set_italic_value(Some(val));
+    }
+
+    /// Set or clear direct italic formatting in place.
+    pub fn set_italic_value(&mut self, val: Option<bool>) {
+        if val.is_none() && self.inner.properties.is_none() {
+            return;
+        }
         let rpr = self.ensure_rpr();
-        rpr.italic = Some(val);
-        rpr.italic_cs = Some(val);
+        rpr.italic = val;
+        rpr.italic_cs = val;
     }
 
     /// Set underline formatting (simple on/off).
@@ -94,11 +141,11 @@ impl<'a> Run<'a> {
 
     /// Set underline formatting in place.
     pub fn set_underline(&mut self, val: bool) {
-        self.ensure_rpr().underline = Some(if val {
-            ST_Underline::Single
+        self.set_underline_style_value(Some(if val {
+            UnderlineStyle::Single
         } else {
-            ST_Underline::None
-        });
+            UnderlineStyle::None
+        }));
     }
 
     /// Set underline with a specific style.
@@ -109,7 +156,32 @@ impl<'a> Run<'a> {
 
     /// Set an underline style in place.
     pub fn set_underline_style(&mut self, style: UnderlineStyle) {
-        self.ensure_rpr().underline = Some(style.to_st());
+        self.set_underline_style_value(Some(style));
+    }
+
+    /// Set or clear direct underline formatting in place.
+    pub fn set_underline_style_value(&mut self, style: Option<UnderlineStyle>) {
+        let applied = self.set_underline_code_value(style.map(UnderlineStyle::to_code));
+        debug_assert!(applied);
+    }
+
+    /// Set or clear a direct underline code used by language bindings.
+    ///
+    /// Returns false without mutation when `code` is not in the bounded public
+    /// Python underline inventory.
+    pub fn set_underline_code_value(&mut self, code: Option<i32>) -> bool {
+        let underline = match code {
+            Some(code) => match underline_from_code(code) {
+                Some(underline) => Some(underline),
+                None => return false,
+            },
+            None => None,
+        };
+        if underline.is_none() && self.inner.properties.is_none() {
+            return true;
+        }
+        self.ensure_rpr().underline = underline;
+        true
     }
 
     /// Set font size in points.
@@ -120,10 +192,18 @@ impl<'a> Run<'a> {
 
     /// Set font size in place.
     pub fn set_size(&mut self, pt: f64) {
-        let hp = HalfPoint::from_pt(pt);
+        self.set_size_value(Some(pt));
+    }
+
+    /// Set or clear the direct font size in points.
+    pub fn set_size_value(&mut self, pt: Option<f64>) {
+        if pt.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        let hp = pt.map(HalfPoint::from_pt);
         let rpr = self.ensure_rpr();
-        rpr.sz = Some(hp);
-        rpr.sz_cs = Some(hp);
+        rpr.sz = hp;
+        rpr.sz_cs = hp;
     }
 
     /// Set the font name.
@@ -134,11 +214,19 @@ impl<'a> Run<'a> {
 
     /// Set the font name in place.
     pub fn set_font(&mut self, name: &str) {
+        self.set_font_value(Some(name));
+    }
+
+    /// Set or clear the direct font name.
+    pub fn set_font_value(&mut self, name: Option<&str>) {
+        if name.is_none() && self.inner.properties.is_none() {
+            return;
+        }
         let rpr = self.ensure_rpr();
-        rpr.font_ascii = Some(name.to_string());
-        rpr.font_hansi = Some(name.to_string());
-        rpr.font_east_asia = Some(name.to_string());
-        rpr.font_cs = Some(name.to_string());
+        rpr.font_ascii = name.map(str::to_owned);
+        rpr.font_hansi = name.map(str::to_owned);
+        rpr.font_east_asia = name.map(str::to_owned);
+        rpr.font_cs = name.map(str::to_owned);
     }
 
     /// Set text color as a hex string (e.g., "FF0000" for red).
@@ -149,7 +237,15 @@ impl<'a> Run<'a> {
 
     /// Set text color in place.
     pub fn set_color(&mut self, hex: &str) {
-        self.ensure_rpr().color = Some(hex.to_string());
+        self.set_color_value(Some(hex));
+    }
+
+    /// Set or clear the direct text color.
+    pub fn set_color_value(&mut self, hex: Option<&str>) {
+        if hex.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_rpr().color = hex.map(str::to_owned);
     }
 
     /// Set highlight color as a hex fill value.
@@ -175,7 +271,15 @@ impl<'a> Run<'a> {
 
     /// Set strikethrough formatting in place.
     pub fn set_strike(&mut self, val: bool) {
-        self.ensure_rpr().strike = Some(val);
+        self.set_strike_value(Some(val));
+    }
+
+    /// Set or clear direct strikethrough formatting in place.
+    pub fn set_strike_value(&mut self, val: Option<bool>) {
+        if val.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_rpr().strike = val;
     }
 
     /// Set double strikethrough.
@@ -316,38 +420,46 @@ impl<'a> RunRef<'a> {
 
     /// Check if bold.
     pub fn is_bold(&self) -> bool {
-        self.inner
-            .properties
-            .as_ref()
-            .and_then(|rpr| rpr.bold)
-            .unwrap_or(false)
+        self.bold_value().unwrap_or(false)
+    }
+
+    /// Get direct bold formatting without collapsing inheritance.
+    pub fn bold_value(&self) -> Option<bool> {
+        self.inner.properties.as_ref().and_then(|rpr| rpr.bold)
     }
 
     /// Check if italic.
     pub fn is_italic(&self) -> bool {
-        self.inner
-            .properties
-            .as_ref()
-            .and_then(|rpr| rpr.italic)
-            .unwrap_or(false)
+        self.italic_value().unwrap_or(false)
+    }
+
+    /// Get direct italic formatting without collapsing inheritance.
+    pub fn italic_value(&self) -> Option<bool> {
+        self.inner.properties.as_ref().and_then(|rpr| rpr.italic)
     }
 
     /// Check if strikethrough.
     pub fn is_strike(&self) -> bool {
-        self.inner
-            .properties
-            .as_ref()
-            .and_then(|rpr| rpr.strike)
-            .unwrap_or(false)
+        self.strike_value().unwrap_or(false)
+    }
+
+    /// Get direct strikethrough formatting without collapsing inheritance.
+    pub fn strike_value(&self) -> Option<bool> {
+        self.inner.properties.as_ref().and_then(|rpr| rpr.strike)
     }
 
     /// Check if underlined (any underline style other than none).
     pub fn is_underline(&self) -> bool {
+        self.underline_code_value().is_some_and(|code| code != 0)
+    }
+
+    /// Get the direct underline code used by language bindings.
+    pub fn underline_code_value(&self) -> Option<i32> {
         self.inner
             .properties
             .as_ref()
-            .and_then(|rpr| rpr.underline.as_ref())
-            .is_some_and(|u| !matches!(u, ST_Underline::None))
+            .and_then(|rpr| rpr.underline)
+            .map(underline_to_code)
     }
 
     /// Get font size in points, if set.

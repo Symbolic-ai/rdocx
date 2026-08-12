@@ -25,12 +25,31 @@ class LayoutError(RdocxError):
     """Document layout or rendering failed."""
 
 
-from ._rdocx import Document, Paragraph, ParagraphCollection, Run, RunCollection
+from ._rdocx import (
+    Cell,
+    CellCollection,
+    CellParagraphCollection,
+    Document,
+    Font,
+    Paragraph,
+    ParagraphCollection,
+    ParagraphFormat,
+    Row,
+    RowCollection,
+    Run,
+    RunCollection,
+    Table,
+    TableCollection,
+)
 
 __all__ = [
     "Cm",
+    "Cell",
+    "CellCollection",
+    "CellParagraphCollection",
     "Document",
     "Emu",
+    "Font",
     "Inches",
     "LayoutError",
     "Length",
@@ -38,12 +57,17 @@ __all__ = [
     "PackageError",
     "Paragraph",
     "ParagraphCollection",
+    "ParagraphFormat",
     "Pt",
     "RGBColor",
     "RdocxError",
+    "Row",
+    "RowCollection",
     "Run",
     "RunCollection",
     "StaleElementError",
+    "Table",
+    "TableCollection",
     "WD_ALIGN_PARAGRAPH",
     "WD_CELL_VERTICAL_ALIGNMENT",
     "WD_TABLE_ALIGNMENT",

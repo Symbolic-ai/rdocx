@@ -1008,8 +1008,11 @@ message.
 `StaleElementError` rather than reading the wrong paragraph.
 
 ### F-131, rdocx-py formatting and tables (L)
-Font and paragraph-format sub-handles, tri-state properties, tables.
-**Depends on**: F-130.
+Path-only font and paragraph-format sub-handles expose the bounded S33
+formatting inventory with tri-state clearing. Lazy table, row, cell and nested
+paragraph handles cover table style, alignment and width, plus cell text,
+width and vertical alignment. Public facade accessors re-resolve every path.
+**Depends on**: F-130, F-132.
 **Test gate**: `r.font.bold` returns `None` when unset, not `False`.
 
 ### F-132, Python enums, units and exceptions (M)

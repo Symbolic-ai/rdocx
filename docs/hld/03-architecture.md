@@ -170,6 +170,15 @@ Python binding re-resolve lazy index paths without allocating paragraph
 snapshots, clearing layout caches for reads, or reaching through private OOXML
 fields.
 
+The same direct lookup rule covers document tables and paragraphs nested in
+table cells. `Document::table` and `Document::table_mut` are total, and cell
+handles provide paragraph counts plus immutable and mutable lookup. Run and
+paragraph formatting expose direct `Option<bool>` values and clear-capable
+setters, preserving the distinction between inherited, explicitly false, and
+explicitly true formatting without bypassing the facade.
+The binding-only underline variants travel through a bounded integer-code
+accessor so the published exhaustive Rust `UnderlineStyle` enum stays stable.
+
 Every consuming formatting builder on `Paragraph`, `Run`, `Table`, `Row`, and
 `Cell` has a non-consuming `set_*` twin because a `mut self -> Self` builder
 cannot back a Python property setter. The 61 consuming builders delegate to
