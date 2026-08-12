@@ -3,7 +3,7 @@
 **Status**: completed
 **Sprint**: S33
 **Size**: L
-**Depends on**: F-130
+**Depends on**: F-130, F-132
 
 ## Problem
 
@@ -36,8 +36,7 @@ Add direct total accessors for document tables and cell paragraphs. Implement
 lazy table, row, cell, and nested paragraph handles using F-129 path segments.
 All successful structural additions or removals bump the document revision.
 Use F-132 values for enum and `Length` properties instead of exposing Rust
-enums as pyclasses. The sprint wave therefore sequences this work after F-132
-even though the backlog currently names only F-130 as a formal dependency.
+enums as pyclasses. The sprint wave therefore sequences this work after F-132.
 
 The approved S33 surface is limited to facade-backed properties used by the
 documented examples and table API: run font name, size, color, bold, italic,

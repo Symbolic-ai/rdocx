@@ -3,7 +3,7 @@
 **Status**: completed
 **Sprint**: S33
 **Size**: M
-**Depends on**: F-129
+**Depends on**: F-129, F-130
 
 ## Problem
 
@@ -43,8 +43,7 @@ registered classes through concrete mapping code. Keep all enum values as
 checked literals. Do not add python-docx as a runtime dependency or an
 unversioned test oracle.
 
-The sprint wave records F-130 as a scaffolding prerequisite even though the
-backlog currently names only F-129 as the formal dependency.
+The sprint wave records F-130 as the scaffolding prerequisite.
 
 ## Rejected alternatives
 

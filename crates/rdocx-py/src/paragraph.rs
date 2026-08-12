@@ -6,7 +6,7 @@ use smallvec::smallvec;
 
 use crate::document::PyDocument;
 use crate::run::{PyRun, PyRunCollection};
-use crate::stale_to_pyerr;
+use crate::{normalize_index, stale_to_pyerr};
 
 #[derive(Clone, Copy)]
 pub(crate) enum ParagraphLocation {
@@ -51,18 +51,6 @@ pub(crate) fn paragraph_location(path: &ContentPath) -> PyResult<ParagraphLocati
         (_, None, None) => Ok(ParagraphLocation::Body(paragraph)),
         _ => Err(PyRuntimeError::new_err("paragraph path is incomplete")),
     }
-}
-
-fn normalize_index(index: isize, len: usize) -> PyResult<usize> {
-    let normalized = if index < 0 {
-        len as isize + index
-    } else {
-        index
-    };
-    if normalized < 0 || normalized >= len as isize {
-        return Err(PyIndexError::new_err("paragraph index out of range"));
-    }
-    Ok(normalized as usize)
 }
 
 #[pyclass(name = "Paragraph")]
@@ -152,7 +140,7 @@ impl PyParagraph {
         };
         alignment
             .map(|value| {
-                crate::formatting::enum_object(
+                crate::enum_object(
                     py,
                     "WD_ALIGN_PARAGRAPH",
                     crate::formatting::alignment_to_int(value),
@@ -284,7 +272,9 @@ impl PyParagraphCollection {
     fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         let len = self.__len__(py);
         if let Ok(index) = key.extract::<isize>() {
-            return Ok(self.item(py, normalize_index(index, len)?)?.into_any());
+            return Ok(self
+                .item(py, normalize_index(index, len, "paragraph")?)?
+                .into_any());
         }
         if key.is_instance_of::<PySlice>() {
             let (start, stop, step): (isize, isize, isize) =

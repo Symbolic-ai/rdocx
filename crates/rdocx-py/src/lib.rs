@@ -6,9 +6,9 @@ mod paragraph;
 mod run;
 mod table;
 
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyIndexError, PyRuntimeError};
 use pyo3::prelude::*;
-use pyo3::types::PyType;
+use pyo3::types::{PyAny, PyType};
 
 use oxml_py_support::StaleElementError;
 
@@ -20,6 +20,32 @@ use table::{
     PyCell, PyCellCollection, PyCellParagraphCollection, PyRow, PyRowCollection, PyTable,
     PyTableCollection,
 };
+
+pub(crate) fn normalize_index(index: isize, len: usize, kind: &str) -> PyResult<usize> {
+    let normalized = if index < 0 {
+        len as isize + index
+    } else {
+        index
+    };
+    if normalized < 0 || normalized >= len as isize {
+        return Err(PyIndexError::new_err(format!("{kind} index out of range")));
+    }
+    Ok(normalized as usize)
+}
+
+pub(crate) fn length_object(py: Python<'_>, value: rdocx::Length) -> PyResult<Py<PyAny>> {
+    py.import("rdocx")?
+        .getattr("Length")?
+        .call1((value.to_emu(),))
+        .map(Bound::unbind)
+}
+
+pub(crate) fn enum_object(py: Python<'_>, name: &str, value: i32) -> PyResult<Py<PyAny>> {
+    py.import("rdocx")?
+        .getattr(name)?
+        .call1((value,))
+        .map(Bound::unbind)
+}
 
 fn public_error(py: Python<'_>, class_name: &str, message: String) -> PyErr {
     let exception_type = py

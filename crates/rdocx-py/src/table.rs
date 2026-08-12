@@ -6,19 +6,7 @@ use smallvec::smallvec;
 
 use crate::document::PyDocument;
 use crate::paragraph::PyParagraph;
-use crate::stale_to_pyerr;
-
-fn normalize_index(index: isize, len: usize, kind: &str) -> PyResult<usize> {
-    let normalized = if index < 0 {
-        len as isize + index
-    } else {
-        index
-    };
-    if normalized < 0 || normalized >= len as isize {
-        return Err(PyIndexError::new_err(format!("{kind} index out of range")));
-    }
-    Ok(normalized as usize)
-}
+use crate::{enum_object, length_object, normalize_index, stale_to_pyerr};
 
 fn path_index(
     path: &ContentPath,
@@ -98,20 +86,6 @@ fn vertical_to_int(value: rdocx::VerticalAlignment) -> i32 {
         rdocx::VerticalAlignment::Center => 1,
         rdocx::VerticalAlignment::Bottom => 3,
     }
-}
-
-fn length_object(py: Python<'_>, value: rdocx::Length) -> PyResult<Py<PyAny>> {
-    py.import("rdocx")?
-        .getattr("Length")?
-        .call1((value.to_emu(),))
-        .map(Bound::unbind)
-}
-
-fn enum_object(py: Python<'_>, name: &str, value: i32) -> PyResult<Py<PyAny>> {
-    py.import("rdocx")?
-        .getattr(name)?
-        .call1((value,))
-        .map(Bound::unbind)
 }
 
 #[pyclass(name = "TableCollection")]

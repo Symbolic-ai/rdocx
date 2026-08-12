@@ -5,21 +5,7 @@ use pyo3::types::PyAny;
 
 use crate::document::PyDocument;
 use crate::paragraph::{ParagraphLocation, paragraph_location};
-use crate::stale_to_pyerr;
-
-fn length_object(py: Python<'_>, value: rdocx::Length) -> PyResult<Py<PyAny>> {
-    py.import("rdocx")?
-        .getattr("Length")?
-        .call1((value.to_emu(),))
-        .map(Bound::unbind)
-}
-
-pub(crate) fn enum_object(py: Python<'_>, name: &str, value: i32) -> PyResult<Py<PyAny>> {
-    py.import("rdocx")?
-        .getattr(name)?
-        .call1((value,))
-        .map(Bound::unbind)
-}
+use crate::{enum_object, length_object, stale_to_pyerr};
 
 pub(crate) fn alignment_from_int(value: i32) -> PyResult<rdocx::Alignment> {
     match value {

@@ -38,11 +38,11 @@ parallel work.
 ## Sequencing note
 
 Rows are listed in dependency order, not by F-ID. F-129 establishes the shared
-path, revision, error, and `Length` machinery. F-130 and F-132 can follow it
-independently if their approved designs are conflict-free. F-131 and F-133 both
-depend on the core document binding from F-130 and can then proceed in parallel
-if they do not share binding or integration-test files. F-008 is already done,
-so it does not block F-130.
+path, revision, error, and `Length` machinery. F-130 then establishes the mixed
+package and core handles. F-132 builds the Python values and final exception
+hierarchy on that package, and F-131 consumes both the core handles and those
+values. F-133 depends only on F-130. F-008 is already done, so it does not block
+F-130.
 
 ## Definition of done for this sprint
 

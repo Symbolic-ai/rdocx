@@ -5,7 +5,7 @@ use pyo3::types::{PyAny, PyList, PySlice};
 
 use crate::document::PyDocument;
 use crate::paragraph::{ParagraphLocation, paragraph_location};
-use crate::stale_to_pyerr;
+use crate::{normalize_index, stale_to_pyerr};
 
 fn path_indices(path: &ContentPath) -> PyResult<(ParagraphLocation, usize)> {
     let run = path.segs.iter().find_map(|segment| match segment {
@@ -15,18 +15,6 @@ fn path_indices(path: &ContentPath) -> PyResult<(ParagraphLocation, usize)> {
     run.map(|run| paragraph_location(path).map(|paragraph| (paragraph, run)))
         .transpose()?
         .ok_or_else(|| PyRuntimeError::new_err("run path is incomplete"))
-}
-
-fn normalize_index(index: isize, len: usize) -> PyResult<usize> {
-    let normalized = if index < 0 {
-        len as isize + index
-    } else {
-        index
-    };
-    if normalized < 0 || normalized >= len as isize {
-        return Err(PyIndexError::new_err("run index out of range"));
-    }
-    Ok(normalized as usize)
 }
 
 #[pyclass(name = "Run")]
@@ -196,7 +184,9 @@ impl PyRunCollection {
     fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         let len = self.len(py)?;
         if let Ok(index) = key.extract::<isize>() {
-            return Ok(self.item(py, normalize_index(index, len)?)?.into_any());
+            return Ok(self
+                .item(py, normalize_index(index, len, "run")?)?
+                .into_any());
         }
         if key.is_instance_of::<PySlice>() {
             let (start, stop, step): (isize, isize, isize) =
