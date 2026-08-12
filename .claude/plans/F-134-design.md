@@ -1,6 +1,6 @@
 # F-134, Type stubs and py.typed
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S34
 **Size**: M
 **Depends on**: F-131, F-136
@@ -71,11 +71,11 @@ Expected unchanged. Typing metadata and tests do not affect OOXML or rendering.
 
 ## Implementation checklist
 
-- [ ] Add complete native stubs for `rdocx._rdocx` and `rpptx._rpptx`.
-- [ ] Add `py.typed` to both installed mixed packages.
-- [ ] Add one strict typing smoke program per package.
-- [ ] Prove installed-wheel inventory, strict mypy, and stubtest behavior.
-- [ ] Prove the gate fails under representative stub drift.
+- [x] Add complete native stubs for `rdocx._rdocx` and `rpptx._rpptx`.
+- [x] Add `py.typed` to both installed mixed packages.
+- [x] Add one strict typing smoke program per package.
+- [x] Prove installed-wheel inventory, strict mypy, and stubtest behavior.
+- [x] Prove the gate fails under representative stub drift.
 
 ## Open questions
 

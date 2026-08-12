@@ -368,8 +368,13 @@ not a runtime dependency.
 
 Both libraries are free CI dev dependencies.
 
-Plus `mypy --strict` over a typing smoke file and `stubtest` against the stubs,
-so hand-written stubs cannot drift.
+Each package has a strict typing smoke program that consumes its installed
+public surface. Fresh cp39-abi3 wheels must contain the native-extension stub
+and `py.typed` marker, pass exact `mypy==2.3.0 --strict`, and pass `stubtest`
+against both installed packages. Strict mypy also checks every inline-typed
+pure-Python source in each installed wheel. Representative enum-input,
+return-type, inline-source, constructor, and member mutations must make those
+gates fail, so hand-written stubs cannot drift.
 
 ## What CI runs
 

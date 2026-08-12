@@ -1030,8 +1030,15 @@ The types are top-level exports and retain the `rdocx.shared`,
 than serial execution.
 
 ### F-134, Type stubs and py.typed (M)
-**Depends on**: F-131.
-**Test gate**: `mypy --strict` and `stubtest` both pass.
+Both mixed packages ship hand-written native-extension stubs and `py.typed`
+markers. Strict installed-wheel smoke programs cover concrete handles,
+collections, overloads, iterators, path-like inputs, byte outputs, and optional
+values without duplicating inline-typed pure-Python modules. Bounded enums and
+Length returns retain their semantic types, and factory-only native handles
+remain non-constructible at type-check time.
+**Depends on**: F-131, F-136.
+**Test gate**: exact `mypy==2.3.0 --strict` and `stubtest` both pass against
+freshly installed cp39-abi3 wheels.
 
 ### F-135, python-docx parity suite (M)
 **Depends on**: F-131.

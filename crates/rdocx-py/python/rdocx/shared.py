@@ -89,7 +89,7 @@ class Emu(Length):
         return super().__new__(cls, int(emu))
 
 
-class RGBColor(tuple):
+class RGBColor(tuple[int, int, int]):
     """An immutable red, green, blue color triple."""
 
     def __new__(cls, r: int, g: int, b: int) -> "RGBColor":

@@ -203,8 +203,16 @@ Two traps specific to this workspace:
   would be the single most common support question. Roughly 4 MB per wheel is a
   fair trade.
 
-Type stubs are hand-written with a `py.typed` marker, kept honest by a CI job
-running `mypy --strict` and `stubtest`. Do not auto-generate them from PyO3.
+Each mixed package ships a hand-written native-extension stub beside its
+extension module and a `py.typed` marker at package root. The stubs describe
+concrete lazy handle and collection types, integer and slice overloads, typed
+iteration, path-like inputs, byte outputs, optional values, bounded enum inputs,
+and concrete Length returns. Native handles and collections are factory-only,
+so their stubs reject direct construction just as the extension types do. The
+pure-Python units, enums, and exception hierarchies remain inline typed rather
+than duplicated in package-level stubs. Exact `mypy==2.3.0 --strict` smoke
+checks and `stubtest` against freshly installed wheels keep the declarations
+honest. Do not auto-generate them from PyO3.
 
 **Distribution names `rdocx` and `rpptx`**, import names identical. The binding
 crates are `publish = false`, because a cdylib has no business on crates.io.
