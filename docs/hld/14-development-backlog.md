@@ -1042,8 +1042,18 @@ freshly installed cp39-abi3 wheels.
 
 ### F-135, python-docx parity suite (M)
 **Depends on**: F-131.
-**Test gate**: every documented python-docx example runs unchanged, and
-round-trips through python-docx preserve content.
+Pin and assert python-docx 1.2.0. Execute an explicit manifest of all executable
+documentation examples inside the completed S33 surface from stable v1.2.0
+tagged sources. Sixteen examples change only the import namespace. The exact
+Quickstart held-row example uses the minimal public row re-fetch required by
+strict global revision before its second cell assignment. Author the approved
+structure with both writers, read both outputs with both libraries, and compare
+normalized public records rather than package bytes. Preserve relative float
+line spacing separately from absolute lengths and compare explicit table style
+after save and reopen.
+**Test gate**: `documented_s33_examples_run_with_declared_transformations`
+passes for the exact seventeen-entry manifest, and the two-way normalized
+differential agrees.
 
 ### F-136, rpptx-py (L)
 An unpublished abi3-py39 mixed-layout binding over `Presentation`, using lazy

@@ -109,9 +109,17 @@ of production code reaches through `._p`, `._r`, `doc.element.body`, `qn()` and
 `OxmlElement`. Promising drop-in means promising an lxml-shaped shadow API that
 can never be delivered, and every gap then reads as a bug.
 
-What is promised: *if your code uses only the documented python-docx API, it
-works unchanged.* Backed by a compatibility suite built from python-docx's own
-documentation examples, and by making a touch of `._p` raise a clear
+The compatibility promise is the completed binding surface, not every public
+python-docx method. Its executable gate is an explicit seventeen-example
+manifest from the python-docx 1.2.0 Working with Documents, Quickstart, and
+Working with Text pages. Each entry records a stable v1.2.0 tagged source URL,
+heading, exact source statements, declared transformation, and normalized
+structural assertion. Sixteen entries use only the `docx` to `rdocx` import
+substitution. The Quickstart held-row example additionally re-fetches
+`document.tables[0].rows[1]` before its second cell assignment because the
+first cell text replacement advances the global revision and stales the held
+row. This is the minimal public compatibility adaptation and does not weaken
+strict revision validation. A touch of `._p` raises a clear
 `NotImplementedError` naming the attribute and its equivalent rather than an
 `AttributeError` five frames away.
 
@@ -227,9 +235,14 @@ via OIDC, with no long-lived token in secrets.
 **A PR-time job that builds the wheel and runs pytest is mandatory.** The
 absence of exactly this job for wasm is why `rdocx-wasm` rotted.
 
-The parity suite is worth more than any number of Rust-side assertions: write a
-document with rdocx, open it with python-docx, assert text, styles and tables
-survive, then the reverse. python-docx as a CI dev dependency is free.
+The rdocx parity suite pins and asserts `python-docx==1.2.0` before comparison.
+It writes the approved S33 content and direct formatting with each producer,
+opens both outputs with both readers, and directly compares normalized public
+paragraph, run, table, cell, unit and enum records. It compares no ZIP or XML
+bytes. Relative float line spacing remains distinct from absolute `Length`
+spacing in those records. An explicit table style is checked after each saved
+output is reopened by both readers. The suite commits no binary fixture and
+keeps python-docx out of runtime package dependencies.
 
 ## WASM
 

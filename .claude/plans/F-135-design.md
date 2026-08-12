@@ -1,6 +1,6 @@
 # F-135, python-docx parity suite
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S34
 **Size**: M
 **Depends on**: F-131
@@ -23,19 +23,32 @@ that are not part of F-131.
 ## Approach
 
 Pin `python-docx==1.2.0` and assert the resolved distribution version before
-any comparison. Define an explicit manifest inside one parity test module for
-every executable python-docx 1.2.0 documentation example whose API is in the
-approved S33 surface. Record the upstream page and heading, the sole namespace
-substitution from `docx` to `rdocx`, and the normalized structural assertions.
-Keep the example body unchanged after that import substitution.
+any comparison. Define an explicit seventeen-entry manifest inside one parity
+test module for every executable python-docx 1.2.0 documentation example whose
+API is in the approved S33 surface. Pin each source URL to the upstream v1.2.0
+tag and record the exact local source statements, heading, transformation, and
+normalized structural assertions.
+
+Sixteen entries change only the import namespace from `docx` to `rdocx`. The
+Quickstart held-row example is the documented exception. Its first cell text
+replacement advances the strict global revision and intentionally stales the
+held row. Preserve the exact upstream body in the manifest, then make the
+minimal public adaptation by re-fetching `document.tables[0].rows[1]` before
+the second cell assignment. This keeps strict path and revision semantics while
+making the documented operation usable. The line-spacing entry preserves the
+tagged source statements without inventing a local import. Its setup supplies
+the `Pt` name established earlier in the upstream page.
 
 Cover document construction, open and save, paragraphs, runs, tables, the
 approved formatting inventory, units, and enums. Test both producer directions.
 Open rdocx output with python-docx, then open python-docx output with rdocx.
 Compare public paragraph, run, direct-formatting, table, cell, unit, and enum
-records. Do not compare ZIP or XML bytes. Pin the exact manifest ID set so an
-example cannot disappear silently. Build inputs in code and commit no binary
-fixtures.
+records. Preserve relative float line spacing as a distinct normalized value
+from absolute `Length` spacing, and author both forms in each producer
+direction. Set an explicit table style in both producer directions and compare
+it after each saved package is reopened by both readers. Do not compare ZIP or
+XML bytes. Pin the exact manifest ID set so an example cannot disappear
+silently. Build inputs in code and commit no binary fixtures.
 
 ## Rejected alternatives
 
@@ -52,9 +65,9 @@ fixtures.
 
 | Category | Test | Asserts |
 |---|---|---|
-| differential, gate | `documented_s33_examples_run_with_only_namespace_substitution` | Every pinned in-scope example body runs and the manifest is complete |
-| differential | `rdocx_and_python_docx_round_trip_the_same_normalized_content` | Both producer directions preserve the approved public structure |
-| regression | oracle version and manifest ID mutations | An oracle upgrade or missing example fails before comparison |
+| differential, gate | `documented_s33_examples_run_with_declared_transformations` | Every pinned in-scope example runs, the manifest is complete, sixteen bodies use only namespace substitution, and the held-row body uses exactly one public re-fetch |
+| differential | `rdocx_and_python_docx_round_trip_the_same_normalized_content` | Both producer directions preserve the approved public structure, distinct relative and absolute line spacing, and table style after save and reopen |
+| regression | oracle, source, manifest, re-fetch, line-spacing, and table-style mutations | An oracle upgrade, source drift, missing example, removed held-row re-fetch, collapsed spacing kind, changed relative value, or dropped table style fails before acceptance |
 
 The test gate is the bounded backlog contract above, with structural two-way
 round trips through pinned python-docx 1.2.0.
@@ -81,13 +94,18 @@ document writer.
 
 ## Implementation checklist
 
-- [ ] Add the pinned in-scope documentation example manifest.
-- [ ] Add both normalized producer directions.
-- [ ] Assert the exact oracle version and exact manifest ID set.
-- [ ] Run the parity module with the existing binding suite.
-- [ ] Prove the gate fails under oracle, manifest, and value mutations.
+- [x] Expand the pinned manifest to seventeen entries with stable v1.2.0
+  sources and the exact held-row compatibility adaptation.
+- [x] Preserve relative and absolute line spacing distinctly in both producer
+  directions.
+- [x] Set and compare table style through both saved writers and both readers.
+- [x] Assert the exact oracle version and exact manifest ID set.
+- [x] Run the parity module with the existing binding suite.
+- [x] Prove the gate fails under source, manifest, re-fetch, spacing-kind,
+  spacing-value, and table-style mutations.
 
 ## Open questions
 
-None. The bounded pinned manifest, sole namespace substitution, new parity
-test, and exact test-only oracle pin are explicitly approved.
+None. The bounded pinned manifest, sixteen namespace-only substitutions, one
+held-row public re-fetch adaptation, new parity test, and exact test-only
+oracle pin are explicitly approved.

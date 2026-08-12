@@ -354,8 +354,17 @@ cover the cases that matter now.
 The parity suites are worth more than any number of Rust-side assertions,
 because the whole value proposition is compatibility:
 
-- Write a document with `rdocx`, open it with `python-docx`, assert text, styles
-  and tables survive. Then the reverse.
+- The rdocx gate asserts exact `python-docx==1.2.0`, then executes the explicit
+  seventeen-example S33 documentation manifest from stable v1.2.0 tagged
+  sources. Sixteen bodies change only the import namespace. The exact
+  Quickstart held-row body uses one declared public row re-fetch before its
+  second cell assignment to respect strict global revision invalidation. Each
+  manifest entry pins its source URL, heading, exact source statements,
+  transformation and normalized structural assertion. The two-way
+  differential authors the same paragraphs, runs, direct formatting, tables
+  and cells with each writer, reads both files through both libraries, and
+  directly compares normalized public records including distinct relative and
+  absolute line spacing, units, enums, and saved table style.
 - The same for `rpptx` and `python-pptx`.
 
 The rpptx binding gate executes the seven python-pptx 1.0.2 Getting Started
@@ -366,7 +375,9 @@ readers, and directly compares the normalized rpptx-authored and
 python-pptx-authored records. It never compares package bytes and the oracle is
 not a runtime dependency.
 
-Both libraries are free CI dev dependencies.
+Both libraries are test-only CI dependencies. Neither oracle is a runtime or
+published-crate dependency, and neither differential compares package bytes or
+commits binary fixtures.
 
 Each package has a strict typing smoke program that consumes its installed
 public surface. Fresh cp39-abi3 wheels must contain the native-extension stub
