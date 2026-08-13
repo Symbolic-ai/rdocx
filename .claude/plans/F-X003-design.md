@@ -1,6 +1,6 @@
 # F-X003, Deduplicate the sample generators
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S36
 **Size**: S
 **Depends on**: none
@@ -66,11 +66,11 @@ Expected unchanged. This story removes only an unused duplicate executable.
 
 ## Implementation checklist
 
-- [ ] Delete the obsolete `generate_samples.rs` example.
-- [ ] Confirm no tracked code or documentation still invokes it.
-- [ ] Run the hash and golden-PNG gates from the sole generator.
-- [ ] Prove the missing-sample sensitivity and byte-identical restoration.
-- [ ] Run format, prose, skill-drift, and diff checks.
+- [x] Delete the obsolete `generate_samples.rs` example.
+- [x] Confirm no tracked code or documentation still invokes it.
+- [x] Run the hash and golden-PNG gates from the sole generator.
+- [x] Prove the missing-sample sensitivity and byte-identical restoration.
+- [x] Run format, prose, skill-drift, and diff checks.
 
 ## Open questions
 
