@@ -1,6 +1,6 @@
 # F-X004, Fix the shared temp path in the test suite
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S36
 **Size**: S
 **Depends on**: none
@@ -63,11 +63,11 @@ Expected unchanged. The modified test does not generate baseline samples.
 
 ## Implementation checklist
 
-- [ ] Make the existing save-and-load test path process-unique.
-- [ ] Assert the exercised path includes the current process identifier.
-- [ ] Run the exact test twice concurrently and require both exits to pass.
-- [ ] Prove the fixed-name mutation fails and restore byte-identically.
-- [ ] Run the full rdocx suite, hash harness, format, prose, and diff checks.
+- [x] Make the existing save-and-load test path process-unique.
+- [x] Assert the exercised path includes the current process identifier.
+- [x] Run the exact test twice concurrently and require both exits to pass.
+- [x] Prove the fixed-name mutation fails and restore byte-identically.
+- [x] Run the full rdocx suite, hash harness, format, prose, and diff checks.
 
 ## Open questions
 
