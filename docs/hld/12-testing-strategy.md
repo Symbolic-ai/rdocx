@@ -402,6 +402,7 @@ gates fail, so hand-written stubs cannot drift.
 | doc | `cargo doc --workspace --no-deps --all-features --exclude rdocx-py --exclude rpptx-py` with `RUSTDOCFLAGS=-D warnings` |
 | package-oxml-layout | Verify the exact font and legal-file inventory, then build and size-check the verified archive |
 | msrv | `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 |
+| python-bindings | On pull requests, build each Python package with `maturin develop --locked` in its own Python 3.12.9 environment, then run its complete pytest directory |
 | supply-chain | `cargo-deny check` |
 | python-wheels | On manual dispatch or a `py-v*` tag, build six cp39-abi3 wheels for each Python package and one source distribution per package, then install and test every compatible artifact in a fresh environment |
 
@@ -419,6 +420,22 @@ musllinux cell proves a clean Python 3.9 Alpine import. Repository unit tests
 parse the exact two-package, six-target product and use negative mutations to
 prove that package, target, clean-install, artifact dependency, and tag-only
 OIDC requirements are sensitive before the hosted matrix runs.
+
+The pull-request binding job has one matrix row for `rdocx` and one for
+`rpptx`. It uses Python 3.12.9 with exact `maturin==1.13.3` and
+`pytest==9.1.1`, installs `python-docx==1.2.0` or `python-pptx==1.0.2` for the
+applicable row, and installs the Poppler toolchain required by the full rdocx
+rendering suite. Each row creates a fresh environment, builds the extension,
+then runs every test in that package's binding test directory. The build and
+pytest commands are separate ordinary steps with no successful fallback or
+`continue-on-error`, so either failure makes the pull-request check fail.
+The operative top-level `pull_request` trigger schedules the job without a job
+condition. Neither the job nor its pytest step has an environment or condition
+that can suppress execution. Root permissions are exactly `contents: read`,
+with no `id-token: write` grant anywhere in the workflow. Checkout v6.0.2,
+setup-python v6.2.0, rust-cache v2.9.1, and the selected stable rust-toolchain
+revision are bound to full reviewed commit SHAs. Their operative input maps are
+exact and cannot be satisfied by comments.
 
 ## Gaps being closed
 

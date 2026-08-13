@@ -1,6 +1,6 @@
 # F-138, PR-time Python job
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S34
 **Size**: S
 **Depends on**: F-137
@@ -23,14 +23,19 @@ therefore regress while the pull request remains green.
 Add one visible Python bindings job to the existing PR workflow. Use an exact
 Python version supported by the installed tooling. For each package, create an
 isolated environment, run `maturin develop`, then run its complete pytest
-suite. Install exact oracle and typing dependencies from the package's tracked
-development group. Preserve both binding exclusions on every Rust all-feature
-job and keep publication permissions absent.
+suite. Install exact dependencies from the package test contract: Python
+3.12.9, `maturin==1.13.3`, `pytest==9.1.1`, and the
+applicable pinned oracle. Preserve both binding exclusions on every Rust
+all-feature job. The operative top-level pull-request trigger schedules the
+job without a job condition. Root permissions are exactly `contents: read`,
+with no OIDC authority. Pin the job's checkout, Rust toolchain, cache, and
+Python setup actions to reviewed immutable revisions with exact input maps.
 
 Extend the existing workflow regression suite to require both package cells,
-the build-before-test order, and ordinary failure propagation. A deliberate
-mutation that makes one binding test fail must make the exact job command and
-the workflow contract regression fail.
+the operative pull-request trigger, least-privilege permissions, immutable
+critical actions, the build-before-test order, and ordinary failure
+propagation. A deliberate mutation that makes one binding test fail must make
+the exact job command and the workflow contract regression fail.
 
 ## Rejected alternatives
 
@@ -58,8 +63,9 @@ fails.
 
 ## Risk routing
 
-- WASM or PyO3 bindings. Retain both binding exclusions and run both WASM
-  checks alongside installed binding suites.
+- WASM or PyO3 bindings. Retain both binding exclusions, run the existing
+  rdocx-wasm check, and prove by dependency tree that PyO3 remains outside the
+  WASM graph. The rpptx-wasm package remains deferred to F-142.
 
 ## Hash harness
 
@@ -67,11 +73,13 @@ Expected unchanged. CI coverage does not change the libraries.
 
 ## Implementation checklist
 
-- [ ] Add the two-package Python job to `.github/workflows/ci.yml`.
-- [ ] Install tracked exact development dependencies per package.
-- [ ] Build each extension before running its full pytest suite.
-- [ ] Add positive and mutation-sensitive workflow regressions.
-- [ ] Prove a real binding failure propagates from the exact local command.
+- [x] Add the two-package Python job to `.github/workflows/ci.yml`.
+- [x] Install the exact build, test, and oracle dependencies per package.
+- [x] Build each extension before running its full pytest suite.
+- [x] Add positive and mutation-sensitive workflow regressions.
+- [x] Prove a real binding failure propagates from the exact local command.
+- [x] Bind operative PR scheduling and exact least-privilege permissions.
+- [x] Pin every critical job action and constrain its exact input map.
 
 ## Open questions
 

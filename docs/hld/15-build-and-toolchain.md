@@ -258,6 +258,19 @@ stubtest gates. The musllinux cell performs a fresh Alpine install and import.
 The Poppler-versioned binding render gate stays in its pinned environment
 rather than running on generic wheel hosts.
 
+**A pull-request Python bindings job.** It runs on macOS 26 with one matrix row
+for each Python package. Every row creates an isolated Python 3.12.9 environment,
+installs exact maturin, pytest, and package-oracle versions, builds the current
+extension with `maturin develop --locked`, and runs the package's complete
+pytest directory. The Poppler installation supplies the reviewed 26.01.0 tools
+asserted by the rdocx rendering suite. Build and test failures propagate
+directly, with no failure-tolerant condition, inherited pytest override, or
+fallback. The top-level pull-request trigger is operative and the job has no
+condition. Workflow permissions are exactly repository content read, with no
+OIDC token grant. Checkout v6.0.2, setup-python v6.2.0, rust-cache v2.9.1, and
+the selected stable rust-toolchain revision use reviewed full commit SHAs and
+exact input maps.
+
 **A prose and generated-skill job.** It runs `scripts/prose_check.py` and
 `scripts/sync_agent_skills.py --check` as separate steps, so voice-rule or
 adapter drift fails before integration.

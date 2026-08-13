@@ -108,6 +108,367 @@ class SprintWorkflowTests(unittest.TestCase):
                     line,
                 )
 
+    def assert_python_pr_job_contract(self, ci: str) -> None:
+        triggers = self.yaml_block(ci, "on:")
+        trigger_keys = tuple(
+            line.split(":", 1)[0]
+            for line in self.yaml_direct_lines(triggers, 2)
+        )
+        self.assertEqual(trigger_keys, ("push", "pull_request", "schedule"))
+        pull_request = self.yaml_block(triggers, "  pull_request:")
+        self.assertEqual(self.yaml_direct_lines(pull_request, 4), ())
+
+        root_permissions = self.yaml_block(ci, "permissions:")
+        self.assertEqual(
+            self.yaml_direct_lines(root_permissions, 2),
+            ("contents: read",),
+        )
+        operative_ci = self.operative_lines(ci)
+        self.assertFalse(any("id-token:" in line for line in operative_ci))
+        self.assertFalse(any("write-all" in line for line in operative_ci))
+        self.assertFalse(any("PYTEST_ADDOPTS" in line for line in operative_ci))
+
+        job = self.yaml_block(ci, "  python-bindings:")
+        direct = self.yaml_direct_lines(job, 4)
+        self.assertEqual(
+            direct,
+            (
+                "name: Python bindings (${{ matrix.package.distribution }})",
+                "runs-on: macos-26",
+                "strategy:",
+                "steps:",
+            ),
+        )
+        self.assertFalse(
+            any("continue-on-error:" in line for line in self.operative_lines(job))
+        )
+
+        strategy = self.yaml_block(job, "    strategy:")
+        self.assertEqual(
+            self.yaml_direct_lines(strategy, 6),
+            ("fail-fast: false", "matrix:"),
+        )
+        matrix = self.yaml_block(strategy, "      matrix:")
+        self.assertEqual(self.yaml_direct_lines(matrix, 8), ("package:",))
+        package = self.yaml_block(matrix, "        package:")
+        self.assertEqual(
+            self.yaml_direct_lines(package, 10),
+            (
+                "- { distribution: rdocx, crate: rdocx-py, "
+                'oracle: "python-docx==1.2.0" }',
+                "- { distribution: rpptx, crate: rpptx-py, "
+                'oracle: "python-pptx==1.0.2" }',
+            ),
+        )
+
+        steps = self.yaml_steps(job)
+        identities = tuple(
+            self.yaml_step_identity(step, position)
+            for position, step in enumerate(steps)
+        )
+        required_order = (
+            "step:0",
+            "step:1",
+            "step:2",
+            "Set up Python 3.12",
+            "Install pinned Poppler",
+            "Create isolated binding environment",
+            "Build Python extension",
+            "Run full Python binding suite",
+        )
+        self.assertEqual(identities, required_order)
+
+        action_contract = (
+            (
+                steps[0],
+                "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+            ),
+            (
+                steps[1],
+                "dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c",
+            ),
+            (
+                steps[2],
+                "Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4",
+            ),
+        )
+        for action_step, expected_action in action_contract:
+            self.assertEqual(self.yaml_step_actions(action_step), (expected_action,))
+            self.assertEqual(self.yaml_direct_lines(action_step, 8), ())
+
+        setup = self.yaml_step(job, "Set up Python 3.12")
+        self.assertEqual(
+            self.yaml_step_actions(setup),
+            ("actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405",),
+        )
+        self.assertEqual(
+            self.yaml_direct_lines(setup, 8),
+            (
+                "uses: actions/setup-python@"
+                "a309ff8b426b58ec0e2a45f0f869d46889d02405",
+                "with:",
+            ),
+        )
+        setup_with = self.yaml_block(setup, "        with:")
+        self.assertEqual(
+            self.yaml_direct_lines(setup_with, 10),
+            ('python-version: "3.12.9"',),
+        )
+
+        poppler = self.yaml_step(job, "Install pinned Poppler")
+        self.assertEqual(self.yaml_run_lines(poppler), ("brew install poppler",))
+
+        environment = self.yaml_step(job, "Create isolated binding environment")
+        self.assertEqual(
+            self.yaml_run_lines(environment),
+            (
+                'binding_venv="${RUNNER_TEMP}/${{ matrix.package.distribution }}-venv"',
+                'python -m venv "$binding_venv"',
+                'binding_python="$binding_venv/bin/python"',
+                '"$binding_python" -m pip install \\',
+                'maturin==1.13.3 \\',
+                'pytest==9.1.1 \\',
+                '"${{ matrix.package.oracle }}"',
+            ),
+        )
+
+        build = self.yaml_step(job, "Build Python extension")
+        build_lines = self.yaml_run_lines(build)
+        self.assertEqual(
+            build_lines,
+            (
+                'binding_venv="${RUNNER_TEMP}/${{ matrix.package.distribution }}-venv"',
+                'binding_python="$binding_venv/bin/python"',
+                'VIRTUAL_ENV="$binding_venv" \\',
+                '"$binding_python" -m maturin develop --locked \\',
+                '--manifest-path "crates/${{ matrix.package.crate }}/Cargo.toml"',
+            ),
+        )
+
+        tests = self.yaml_step(job, "Run full Python binding suite")
+        self.assertEqual(
+            self.yaml_direct_lines(tests, 8),
+            ("shell: bash", "run: |"),
+        )
+        test_lines = self.yaml_run_lines(tests)
+        self.assertEqual(
+            test_lines,
+            (
+                'binding_venv="${RUNNER_TEMP}/${{ matrix.package.distribution }}-venv"',
+                'binding_python="$binding_venv/bin/python"',
+                '"$binding_python" -m pytest "crates/${{ matrix.package.crate }}/tests"',
+            ),
+        )
+        self.assert_no_success_short_circuit(build_lines + test_lines)
+        self.assertNotIn("|| true", job)
+        self.assertNotIn("set +e", job)
+
+        for rust_job_name in ("test", "clippy", "doc", "msrv"):
+            rust_job = self.yaml_block(ci, f"  {rust_job_name}:")
+            self.assertIn("--all-features", rust_job, rust_job_name)
+            self.assertIn("--exclude rdocx-py", rust_job, rust_job_name)
+            self.assertIn("--exclude rpptx-py", rust_job, rust_job_name)
+
+    def test_python_pr_job_builds_both_extensions_before_pytest(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_python_pr_job_contract(ci)
+
+    def test_python_pr_job_rejects_failure_swallowing_and_incomplete_cells(
+        self,
+    ) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_python_pr_job_contract(ci)
+        mutations = {
+            "missing-pull-request-trigger": ci.replace(
+                "  pull_request:\n", "", 1
+            ),
+            "commented-pull-request-trigger": ci.replace(
+                "  pull_request:\n", "  # pull_request:\n", 1
+            ),
+            "root-contents-write": ci.replace(
+                "  contents: read\n", "  contents: write\n", 1
+            ),
+            "root-contents-write-with-required-comment": ci.replace(
+                "  contents: read\n",
+                "  contents: write # contents: read\n",
+                1,
+            ),
+            "root-id-token-write": ci.replace(
+                "  contents: read\n",
+                "  contents: read\n  id-token: write\n",
+                1,
+            ),
+            "job-if-false": ci.replace(
+                "    name: Python bindings (${{ matrix.package.distribution }})\n",
+                "    name: Python bindings (${{ matrix.package.distribution }})\n"
+                "    if: false\n",
+                1,
+            ),
+            "job-if-true": ci.replace(
+                "    name: Python bindings (${{ matrix.package.distribution }})\n",
+                "    name: Python bindings (${{ matrix.package.distribution }})\n"
+                "    if: true\n",
+                1,
+            ),
+            "job-pytest-collect-only-environment": ci.replace(
+                "    runs-on: macos-26\n",
+                "    runs-on: macos-26\n"
+                "    env:\n"
+                "      PYTEST_ADDOPTS: --collect-only\n",
+                1,
+            ),
+            "root-pytest-collect-only-environment": ci.replace(
+                "env:\n  CARGO_TERM_COLOR: always\n",
+                "env:\n"
+                "  CARGO_TERM_COLOR: always\n"
+                "  PYTEST_ADDOPTS: --collect-only\n",
+                1,
+            ),
+            "missing-rpptx-cell": ci.replace(
+                '          - { distribution: rpptx, crate: rpptx-py, oracle: "python-pptx==1.0.2" }\n',
+                "",
+                1,
+            ),
+            "cancel-other-package-on-failure": ci.replace(
+                "fail-fast: false", "fail-fast: true", 1
+            ),
+            "unversioned-pytest": ci.replace("pytest==9.1.1", "pytest", 1),
+            "wrong-python-version": ci.replace(
+                'python-version: "3.12.9"', 'python-version: "3.13"', 1
+            ),
+            "wrong-rdocx-oracle": ci.replace(
+                "python-docx==1.2.0", "python-docx==1.1.2", 1
+            ),
+            "missing-develop": ci.replace(
+                "maturin develop --locked", "maturin --version", 1
+            ),
+            "single-test-file": ci.replace(
+                '"crates/${{ matrix.package.crate }}/tests"',
+                '"crates/${{ matrix.package.crate }}/tests/test_core.py"',
+                1,
+            ),
+            "continue-on-error": ci.replace(
+                "      - name: Run full Python binding suite\n",
+                "      - name: Run full Python binding suite\n        continue-on-error: true\n",
+                1,
+            ),
+            "continue-on-error-false": ci.replace(
+                "      - name: Run full Python binding suite\n",
+                "      - name: Run full Python binding suite\n"
+                "        continue-on-error: false\n",
+                1,
+            ),
+            "pytest-if-false": ci.replace(
+                "      - name: Run full Python binding suite\n",
+                "      - name: Run full Python binding suite\n"
+                "        if: false\n",
+                1,
+            ),
+            "pytest-if-true": ci.replace(
+                "      - name: Run full Python binding suite\n",
+                "      - name: Run full Python binding suite\n"
+                "        if: true\n",
+                1,
+            ),
+            "pytest-step-environment": ci.replace(
+                "      - name: Run full Python binding suite\n",
+                "      - name: Run full Python binding suite\n"
+                "        env:\n"
+                "          PYTEST_ADDOPTS: --collect-only\n",
+                1,
+            ),
+            "successful-pytest-fallback": ci.replace(
+                '"$binding_python" -m pytest "crates/${{ matrix.package.crate }}/tests"',
+                '"$binding_python" -m pytest "crates/${{ matrix.package.crate }}/tests" || true',
+                1,
+            ),
+            "wrong-checkout-sha": ci.replace(
+                "de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+                "0000000000000000000000000000000000000000",
+                1,
+            ),
+            "wrong-checkout-sha-with-required-comment": ci.replace(
+                "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2",
+                "actions/checkout@0000000000000000000000000000000000000000 "
+                "# v6.0.2 de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+                1,
+            ),
+            "checkout-ref-input": ci.replace(
+                "      - uses: actions/checkout@"
+                "de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n",
+                "      - uses: actions/checkout@"
+                "de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n"
+                "        with:\n"
+                "          ref: main\n",
+                1,
+            ),
+            "wrong-rust-toolchain-sha": ci.replace(
+                "4360b52568e2003a75bf9bc1d59f33a8e3fc893c",
+                "0000000000000000000000000000000000000000",
+                1,
+            ),
+            "rust-toolchain-input": ci.replace(
+                "      - uses: dtolnay/rust-toolchain@"
+                "4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable\n",
+                "      - uses: dtolnay/rust-toolchain@"
+                "4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable\n"
+                "        with:\n"
+                "          toolchain: nightly\n",
+                1,
+            ),
+            "wrong-rust-cache-sha": ci.replace(
+                "c19371144df3bb44fab255c43d04cbc2ab54d1c4",
+                "0000000000000000000000000000000000000000",
+                1,
+            ),
+            "rust-cache-input": ci.replace(
+                "      - uses: Swatinem/rust-cache@"
+                "c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1\n",
+                "      - uses: Swatinem/rust-cache@"
+                "c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1\n"
+                "        with:\n"
+                "          workspaces: crates/rdocx-py\n",
+                1,
+            ),
+            "wrong-setup-python-sha": ci.replace(
+                "a309ff8b426b58ec0e2a45f0f869d46889d02405",
+                "0000000000000000000000000000000000000000",
+                1,
+            ),
+            "wrong-setup-python-sha-with-required-comment": ci.replace(
+                "actions/setup-python@"
+                "a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0",
+                "actions/setup-python@"
+                "0000000000000000000000000000000000000000 "
+                "# v6.2.0 a309ff8b426b58ec0e2a45f0f869d46889d02405",
+                1,
+            ),
+            "setup-python-extra-input": ci.replace(
+                '          python-version: "3.12.9"\n',
+                '          python-version: "3.12.9"\n'
+                '          architecture: "x64"\n',
+                1,
+            ),
+            "setup-python-comment-smuggled-version": ci.replace(
+                '          python-version: "3.12.9"\n',
+                '          python-version: "3.13" # python-version: "3.12.9"\n',
+                1,
+            ),
+            "missing-rpptx-exclusion": ci.replace(
+                "--exclude rdocx-py --exclude rpptx-py",
+                "--exclude rdocx-py",
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, ci, name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_python_pr_job_contract(mutated)
+
     def assert_wheels_workflow_contract(self, workflow_bytes: bytes) -> None:
         self.assertEqual(
             hashlib.sha256(workflow_bytes).hexdigest(),
