@@ -29,8 +29,8 @@ regenerated, never hand-edited.
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 14 | 4 | 0  |
-| X, Cross-cutting (opportunistic)            | 5  | 1 | 2 | 2  |
-| **Total** | **159** | **151** | **6** | **2** |
+| X, Cross-cutting (opportunistic)            | 5  | 1 | 3 | 1  |
+| **Total** | **159** | **151** | **7** | **1** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -285,7 +285,7 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-MX START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-X001 | rdocx-cli tests                             | S36 | M | pending |
+| F-X001 | rdocx-cli tests                             | S36 | M | in-progress |
 | F-X002 | README example correctness                  | S36 | S | pending |
 | F-X003 | Deduplicate the sample generators           | S36 | S | in-progress |
 | F-X004 | Fix the shared temp path in the test suite  | S36 | S | in-progress |

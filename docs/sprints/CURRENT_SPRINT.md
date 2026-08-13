@@ -33,7 +33,7 @@ sample-generator, and concurrent-test hardening work.
 |------|-------|------|--------|-------|
 | F-143 | oxml-cli-support | S | in-progress | codex |
 | F-146 | npm publication | S | in-progress | codex |
-| F-X001 | rdocx-cli tests | M | pending | - |
+| F-X001 | rdocx-cli tests | M | in-progress | codex |
 | F-X002 | README example correctness | S | pending | - |
 | F-X003 | Deduplicate the sample generators | S | in-progress | codex |
 | F-X004 | Fix the shared temp path in the test suite | S | in-progress | codex |
