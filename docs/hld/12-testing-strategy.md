@@ -403,11 +403,22 @@ gates fail, so hand-written stubs cannot drift.
 | package-oxml-layout | Verify the exact font and legal-file inventory, then build and size-check the verified archive |
 | msrv | `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 |
 | supply-chain | `cargo-deny check` |
+| python-wheels | On manual dispatch or a `py-v*` tag, build six cp39-abi3 wheels for each Python package and one source distribution per package, then install and test every compatible artifact in a fresh environment |
 
 The `--exclude` pair on every all-feature command is required, not cosmetic:
 `pyo3/extension-module` tells the linker that Python symbols come from the host
 interpreter, which is false for a test binary, and on Linux this is an
 unresolved-symbol link failure that is easy to misdiagnose.
+
+The wheel workflow runs the installed `rdocx` suites except the
+Poppler-versioned rendering gate, which belongs to its pinned render job. It
+runs the installed `rpptx` documented-example and differential suite. Native
+cells also check the inline Python sources with exact `mypy==2.3.0 --strict`
+and run `stubtest` across every public and native-extension module. The
+musllinux cell proves a clean Python 3.9 Alpine import. Repository unit tests
+parse the exact two-package, six-target product and use negative mutations to
+prove that package, target, clean-install, artifact dependency, and tag-only
+OIDC requirements are sensitive before the hosted matrix runs.
 
 ## Gaps being closed
 

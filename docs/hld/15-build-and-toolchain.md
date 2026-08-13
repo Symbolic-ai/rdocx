@@ -171,7 +171,13 @@ Two tag namespaces:
 | `py-v*` | `wheels.yml` | PyPI via OIDC trusted publishing |
 
 Wheels are separate so a Rust patch release does not rebuild twelve wheels, and
-a binding-only fix does not force a crates.io release.
+a binding-only fix does not force a crates.io release. `wheels.yml` builds and
+uploads each of the twelve cp39-abi3 wheels and both source distributions
+without publication authority. Its separate publish job depends on the whole
+artifact graph, checks the exact artifact counts, binds to the `pypi`
+environment, and receives `id-token: write` only for a `py-v*` tag event.
+Manual dispatch exercises the build graph without publishing. All actions and
+the maturin version are pinned, and no long-lived PyPI secret is present.
 
 ## Release process
 
@@ -241,7 +247,16 @@ unresolved-symbol link failure that is easy to misdiagnose as something else.
 
 **A `wasm32-unknown-unknown` check job.** It installs the target and checks the
 existing `rdocx-wasm` crate. The future `rpptx-wasm` package remains deferred
-to F-138.
+to F-142.
+
+**A dedicated Python artifact workflow.** Its product matrix is the Cartesian
+product of `rdocx` and `rpptx` with manylinux_2_28 x86_64 and aarch64,
+musllinux_1_2 x86_64, macOS x86_64 and arm64, and Windows x86_64. A second
+two-package job builds the source distributions. Native cells install wheels
+into fresh environments and run the compatible pytest, exact mypy, and
+stubtest gates. The musllinux cell performs a fresh Alpine install and import.
+The Poppler-versioned binding render gate stays in its pinned environment
+rather than running on generic wheel hosts.
 
 **A prose and generated-skill job.** It runs `scripts/prose_check.py` and
 `scripts/sync_agent_skills.py --check` as separate steps, so voice-rule or

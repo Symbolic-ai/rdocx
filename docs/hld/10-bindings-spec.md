@@ -230,7 +230,19 @@ crates are `publish = false`, because a cdylib has no business on crates.io.
 `wheels.yml` on a **`py-v*` tag namespace**, separate from `publish.yml` on
 `v*`, so a Rust patch release does not rebuild twelve wheels and a binding-only
 fix does not force a crates.io release. Publishing uses PyPI trusted publishing
-via OIDC, with no long-lived token in secrets.
+via OIDC, with no long-lived token in secrets. The workflow builds `rdocx` and
+`rpptx` across the six declared targets, produces one source distribution per
+package, and uploads each matrix product independently. Every native wheel is
+installed into a fresh environment for its compatible pytest, exact
+`mypy==2.3.0 --strict`, and `stubtest` gates. The musllinux wheel is installed
+and imported in a fresh Python 3.9 Alpine environment.
+
+The build jobs have only repository read permission. A separate publish job
+depends on all wheel and source-distribution jobs, requires exactly twelve
+wheels and two source distributions, and receives `id-token: write` only for a
+`py-v*` tag event in the `pypi` environment. Manual dispatch builds and tests
+artifacts but cannot publish them. Every external action and the maturin tool
+version are pinned to reviewed immutable versions.
 
 **A PR-time job that builds the wheel and runs pytest is mandatory.** The
 absence of exactly this job for wasm is why `rdocx-wasm` rotted.

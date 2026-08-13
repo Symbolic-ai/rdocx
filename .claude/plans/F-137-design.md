@@ -1,6 +1,6 @@
 # F-137, wheels.yml
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S34
 **Size**: M
 **Depends on**: F-134, F-136
@@ -42,6 +42,14 @@ complete artifact dependency graph, and require tag-only OIDC publication.
 Negative mutations remove a target, package, install step, artifact dependency,
 or tag predicate and must fail the same contract test.
 
+Read `.github/workflows/wheels.yml` as raw bytes and attest those exact reviewed
+bytes with SHA-256 at the start of the positive contract. Decode strict UTF-8
+only after the raw digest passes, then apply the structural semantic assertions.
+This is an intentional supply-chain fail-closed boundary for the publication
+workflow. It complements rather than replaces the semantic assertions, which
+continue to explain the reviewed matrix, installation, artifact, and
+publication contract.
+
 ## Rejected alternatives
 
 - Build only rdocx. HLD10 defines both distribution names and one shared wheel
@@ -57,6 +65,7 @@ or tag predicate and must fail the same contract test.
 |---|---|---|
 | regression, gate | `wheels_workflow_covers_every_package_target_and_clean_install` | The exact 12-wheel matrix and two source distributions are complete |
 | regression | workflow security mutations | OIDC stays tag-only and isolated from build jobs |
+| regression, supply chain | reviewed workflow SHA-256 | Any byte change to the reviewed publication workflow fails before semantic validation |
 | integration | native maturin wheel build and clean install | The current host wheel has cp39-abi3 metadata and imports from a fresh environment |
 
 The backlog gate is represented locally by exact workflow contract tests and a
@@ -85,11 +94,11 @@ Expected unchanged. Packaging automation does not alter document output.
 
 ## Implementation checklist
 
-- [ ] Add the exact two-package, six-target abi3 wheel matrix and two sdists.
-- [ ] Install and validate every produced artifact on its compatible runner.
-- [ ] Separate artifact collection and tag-only OIDC publication.
-- [ ] Add exact positive and negative workflow contract tests.
-- [ ] Build and install both native wheels locally.
+- [x] Add the exact two-package, six-target abi3 wheel matrix and two sdists.
+- [x] Install and validate every produced artifact on its compatible runner.
+- [x] Separate artifact collection and tag-only OIDC publication.
+- [x] Add exact positive and negative workflow contract tests.
+- [x] Build and install both native wheels locally.
 
 ## Open questions
 

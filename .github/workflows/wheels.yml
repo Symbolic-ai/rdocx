@@ -1,0 +1,176 @@
+name: Python wheels
+
+on:
+  push:
+    tags: ["py-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-wheels:
+    name: ${{ matrix.package.distribution }} ${{ matrix.platform.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - { distribution: rdocx, crate: rdocx-py, module: rdocx }
+          - { distribution: rpptx, crate: rpptx-py, module: rpptx }
+        platform:
+          - { label: manylinux_2_28-x86_64, runner: ubuntu-24.04, target: x86_64-unknown-linux-gnu, manylinux: 2_28, install: native }
+          - { label: manylinux_2_28-aarch64, runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, manylinux: 2_28, install: native }
+          - { label: musllinux_1_2-x86_64, runner: ubuntu-24.04, target: x86_64-unknown-linux-musl, manylinux: musllinux_1_2, install: musl }
+          - { label: macos-x86_64, runner: macos-15-intel, target: x86_64-apple-darwin, manylinux: off, install: native }
+          - { label: macos-arm64, runner: macos-14, target: aarch64-apple-darwin, manylinux: off, install: native }
+          - { label: windows-x86_64, runner: windows-2025, target: x86_64-pc-windows-msvc, manylinux: off, install: native }
+    runs-on: ${{ matrix.platform.runner }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: cp39
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.9"
+      - name: Build cp39-abi3 wheel
+        uses: PyO3/maturin-action@86b9d133d34bc1b40018696f782949dac11bd380 # v1.49.4
+        with:
+          command: build
+          maturin-version: v1.13.3
+          target: ${{ matrix.platform.target }}
+          manylinux: ${{ matrix.platform.manylinux }}
+          working-directory: crates/${{ matrix.package.crate }}
+          args: --release --locked --compatibility pypi --out ../../dist
+      - name: Validate wheel metadata
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+
+          wheel = next(Path("dist").glob("${{ matrix.package.distribution }}-*.whl"))
+          with zipfile.ZipFile(wheel) as archive:
+              wheel_metadata = next(
+                  name for name in archive.namelist() if name.endswith(".dist-info/WHEEL")
+              )
+              metadata = archive.read(wheel_metadata).decode()
+          assert "Tag: cp39-abi3-" in metadata, metadata
+          PY
+      - name: Install and test native wheel
+        if: matrix.platform.install == 'native'
+        shell: bash
+        run: |
+          "${{ steps.cp39.outputs.python-path }}" -m venv .wheel-venv
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            venv_python=.wheel-venv/Scripts/python
+          else
+            venv_python=.wheel-venv/bin/python
+          fi
+          "$venv_python" -m pip install --upgrade pip
+          "$venv_python" -m pip install dist/${{ matrix.package.distribution }}-*.whl pytest python-docx==1.2.0 python-pptx==1.0.2
+          "$venv_python" -c "import ${{ matrix.package.module }}"
+          if [[ "${{ matrix.package.distribution }}" == "rdocx" ]]; then
+            "$venv_python" -m pytest \
+              crates/rdocx-py/tests/test_core.py \
+              crates/rdocx-py/tests/test_formatting_tables.py \
+              crates/rdocx-py/tests/test_shared.py \
+              crates/rdocx-py/tests/test_python_docx_parity.py
+          else
+            "$venv_python" -m pytest crates/rpptx-py/tests/test_documented_examples.py
+          fi
+      - id: cp312
+        if: matrix.platform.install == 'native'
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Validate installed typing surface
+        if: matrix.platform.install == 'native'
+        shell: bash
+        run: |
+          "${{ steps.cp312.outputs.python-path }}" -m venv .typing-venv
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            typing_python=.typing-venv/Scripts/python
+          else
+            typing_python=.typing-venv/bin/python
+          fi
+          "$typing_python" -m pip install --upgrade pip
+          "$typing_python" -m pip install dist/${{ matrix.package.distribution }}-*.whl mypy==2.3.0
+          "$typing_python" -m mypy --strict \
+            crates/${{ matrix.package.crate }}/tests/typing_smoke.py \
+            crates/${{ matrix.package.crate }}/python/${{ matrix.package.module }}
+          if [[ "${{ matrix.package.distribution }}" == "rdocx" ]]; then
+            "$typing_python" -m mypy.stubtest rdocx
+          else
+            "$typing_python" -m mypy.stubtest rpptx
+          fi
+      - name: Install musllinux wheel
+        if: matrix.platform.install == 'musl'
+        shell: bash
+        run: |
+          docker run --rm -v "$PWD/dist:/dist:ro" python:3.9-alpine \
+            sh -c "python -m venv /tmp/wheel-venv && /tmp/wheel-venv/bin/pip install /dist/${{ matrix.package.distribution }}-*.whl && /tmp/wheel-venv/bin/python -c 'import ${{ matrix.package.module }}'"
+      - name: Upload wheel
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: artifact-wheel-${{ matrix.package.distribution }}-${{ matrix.platform.label }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  build-sdists:
+    name: ${{ matrix.package.distribution }} sdist
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - { distribution: rdocx, crate: rdocx-py, module: rdocx }
+          - { distribution: rpptx, crate: rpptx-py, module: rpptx }
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.9"
+      - name: Build source distribution
+        uses: PyO3/maturin-action@86b9d133d34bc1b40018696f782949dac11bd380 # v1.49.4
+        with:
+          command: sdist
+          maturin-version: v1.13.3
+          working-directory: crates/${{ matrix.package.crate }}
+          args: --out ../../dist
+      - name: Upload source distribution
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: artifact-sdist-${{ matrix.package.distribution }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish Python distributions
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/py-v')
+    needs: [build-wheels, build-sdists]
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download all distributions
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          pattern: artifact-*
+          merge-multiple: true
+      - name: Validate complete publication set
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          wheels = list(Path("dist").glob("*.whl"))
+          sdists = list(Path("dist").glob("*.tar.gz"))
+          assert len(wheels) == 12, wheels
+          assert len(sdists) == 2, sdists
+          PY
+      - name: Publish to PyPI with trusted publishing
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        with:
+          packages-dir: dist

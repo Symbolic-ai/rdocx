@@ -1066,10 +1066,18 @@ writes. Both readers agree on each writer, and normalized structures from the
 two writers agree directly with that exact oracle version.
 
 ### F-137, wheels.yml (M)
-maturin, abi3-py39, the platform matrix, OIDC trusted publishing, the `py-v*`
-namespace.
-**Depends on**: F-134.
-**Test gate**: wheels build for every target and install into a clean venv.
+Build `rdocx` and `rpptx` with maturin as abi3-py39 wheels for
+manylinux_2_28 x86_64 and aarch64, musllinux_1_2 x86_64, macOS x86_64 and
+arm64, and Windows x86_64. Build one source distribution per package. Every
+compatible wheel is installed and tested in a fresh environment. A separate
+job collects the exact twelve wheels and two source distributions and receives
+PyPI OIDC authority only for the `py-v*` tag namespace. Manual dispatch never
+publishes.
+**Depends on**: F-134, F-136.
+**Test gate**: the local exact-product contract and its negative mutations
+pass, both native wheels and source distributions build, and both native wheels
+install and pass their compatible package, typing, and stub gates. The first
+reviewed hosted dispatch supplies cross-platform execution evidence.
 
 ### F-138, PR-time Python job (S)
 `maturin develop && pytest`.
