@@ -1149,8 +1149,10 @@ bundled-font deterministic output.
 validation, and deterministic-render sensitivity mutations fail.
 
 ### F-X002, README example correctness (S)
-The read example uses `table.rows()` and `row.cells()`, neither of which exists.
-**Test gate**: README examples compile as doctests.
+All six root README Rust examples use `rust,no_run` and compile against the
+current `rdocx` rlib without executing filesystem writes. The read example uses
+the total indexed `row_count`, `row`, `cell_count`, and `cell` APIs.
+**Test gate**: `python3 scripts/readme_doctests.py` compiles all six examples.
 
 ### F-X003, Deduplicate the sample generators (S)
 `generate_all_samples.rs` and `generate_samples.rs` overlap substantially.

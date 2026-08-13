@@ -266,6 +266,13 @@ unresolved-symbol link failure that is easy to misdiagnose as something else.
 **A dedicated no-default-features job.** It runs `cargo test -p oxml-layout
 --no-default-features`, which exercises the font-isolation path used by WASM.
 
+**README examples in the docs job.** The root README is the sole source for six
+`rust,no_run` examples. After the workspace documentation build,
+`scripts/readme_doctests.py` discovers the current `rdocx` rlib from Cargo JSON
+messages and passes it directly to rustdoc with the repository edition,
+dependency search path, exact external crate binding, and warnings denied. The
+same runner is part of canonical non-fast verification.
+
 **A WASM target and Node job.** It installs the `wasm32-unknown-unknown` target,
 uses exact Node 24.11.1 and wasm-pack 0.15.0, and checks both facade-backed WASM
 crates with the locked workspace graph. It then runs both packages' inline Node

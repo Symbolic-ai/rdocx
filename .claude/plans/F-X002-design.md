@@ -1,6 +1,6 @@
 # F-X002, README example correctness
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S36
 **Size**: S
 **Depends on**: none
@@ -73,11 +73,11 @@ Expected unchanged. README compilation does not generate baseline samples.
 
 ## Implementation checklist
 
-- [ ] Fix the six README fences and indexed table example.
-- [ ] Add the approved direct README rustdoc runner.
-- [ ] Wire the runner into existing CI and full verify.
-- [ ] Prove the bad iterator mutation fails without worktree output.
-- [ ] Run docs, prose, skill sync, and hash gates.
+- [x] Fix the six README fences and indexed table example.
+- [x] Add the approved direct README rustdoc runner.
+- [x] Wire the runner into existing CI and full verify.
+- [x] Prove the bad iterator mutation fails without worktree output.
+- [x] Run docs, prose, skill sync, and hash gates.
 
 ## Open questions
 

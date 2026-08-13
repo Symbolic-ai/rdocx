@@ -47,8 +47,8 @@ the workspace, which is what `/close-sprint` requires.
    `cargo check --target wasm32-unknown-unknown -p rdocx-wasm`. Add
    `-p rpptx-wasm` in F-138 when that crate lands. Skipped by `--fast`.
 
-9. **Docs.** `cargo doc --workspace --no-deps` with `RUSTDOCFLAGS=-D warnings`.
-   Skipped by `--fast`.
+9. **Docs.** `cargo doc --workspace --no-deps` with `RUSTDOCFLAGS=-D warnings`,
+   then `python3 scripts/readme_doctests.py`. Skipped by `--fast`.
 
 10. **Packaging.** Run the workspace dry run with every publishable internal
     crate patched to its reviewed local source:

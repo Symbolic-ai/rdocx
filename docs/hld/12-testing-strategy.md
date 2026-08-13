@@ -425,6 +425,14 @@ stdout, exit-status verdicts, output validity, replacement persistence,
 document-order text, and bundled-font deterministic render bytes. Process ID
 and an atomic counter isolate temporary workspaces across concurrent runs.
 
+The root README is the sole source for its six Rust examples. Every fence is
+`rust,no_run`, so rustdoc compiles the examples without executing their
+filesystem writes. `scripts/readme_doctests.py` builds the current `rdocx`
+library with locked dependencies and Cargo JSON messages, locates the emitted
+rlib, and invokes rustdoc with the 2024 edition, warnings denied, its dependency
+search path, and the exact `--extern rdocx` artifact. The docs job and canonical
+non-fast verification call this same runner.
+
 ## What CI runs
 
 | Job | Command |
@@ -437,7 +445,7 @@ and an atomic counter isolate temporary workspaces across concurrent runs.
 | presentation-fidelity | Fetch the pinned corpus, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
 | clippy | `cargo clippy --workspace --all-targets --all-features --exclude rdocx-py --exclude rpptx-py -- -D warnings` |
 | fmt | `cargo fmt --all -- --check` |
-| doc | `cargo doc --workspace --no-deps --all-features --exclude rdocx-py --exclude rpptx-py` with `RUSTDOCFLAGS=-D warnings` |
+| doc | `cargo doc --workspace --no-deps --all-features --exclude rdocx-py --exclude rpptx-py` with `RUSTDOCFLAGS=-D warnings`, then `python3 scripts/readme_doctests.py` |
 | package-oxml-layout | Verify the exact font and legal-file inventory, then build and size-check the verified archive |
 | msrv | Fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 |
 | python-bindings | On pull requests, build each Python package with `maturin develop --locked` in its own Python 3.12.9 environment, then run its complete pytest directory |
