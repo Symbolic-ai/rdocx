@@ -13,8 +13,8 @@ six earlier reviews, progress evidence, and all pass-6 remediation
 
 The revised helper rejects the three named success shortcuts and requires the
 critical proof lines in order, but arbitrary shell control flow may still make
-those lines unreachable. Wrapping the wheel metadata heredoc in `if false;
-then ... fi` passed `assert_wheels_workflow_contract`. The same wrapper around
+those lines unreachable. Wrapping the wheel metadata heredoc in a false shell
+condition passed `assert_wheels_workflow_contract`. The same wrapper around
 the native install and pytest body passed, as did a wrapper around the
 publication validator. Separately, prepending `set +e` to metadata validation
 and adding a final `:` also passed, which makes a failed assertion non-fatal
