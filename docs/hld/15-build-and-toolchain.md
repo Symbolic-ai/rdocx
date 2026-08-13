@@ -71,12 +71,21 @@ on CI runners as it always would have.
 | Crate | Feature | Default | Notes |
 |---|---|---|---|
 | `oxml-layout` | `system-fonts` | on | Off for wasm, where `fontconfig` will not build |
+| `rdocx-layout` | `system-fonts` | on | Forwards host discovery to `oxml-layout` |
+| `rdocx` | `system-fonts` | on | Forwards through the complete native layout graph |
+| `rpptx-render` | `system-fonts` | on | Preserves host discovery for normal presentation rendering |
+| `rpptx` | `system-fonts` | on | Preserves native presentation font resolution |
 | `rpptx` | `default-template` | on | The bundled `default.pptx` |
 | `rpptx` | `render` | on | Pulls in `rpptx-render` and `oxml-pdf` |
 | `rdocx-py`, `rpptx-py` | `extension-module` | off | Must stay off for `cargo test` |
 
-`fontdb`'s `fontconfig` feature is enabled workspace-wide today. It does nothing
-useful on musl or Windows and must be gated per-target for wheel builds.
+The workspace dependency entries for `oxml-layout`, `oxml-pdf`,
+`rdocx-layout`, and `rdocx` are default-off so a member can select the exact
+graph. Direct native `rdocx` and `rdocx-layout` builds retain default-on system
+fonts. The CLI and Python binding opt in explicitly, while `rdocx-wasm` does
+not. Native `rpptx`, `rpptx-render`, and the presentation Python binding retain
+system fonts through the same explicit forwarding pattern. Bundled font bytes
+remain available in both modes.
 
 ## Packaging
 
@@ -246,8 +255,9 @@ unresolved-symbol link failure that is easy to misdiagnose as something else.
 --no-default-features`, which exercises the font-isolation path used by WASM.
 
 **A `wasm32-unknown-unknown` check job.** It installs the target and checks the
-existing `rdocx-wasm` crate. The future `rpptx-wasm` package remains deferred
-to F-142.
+facade-backed `rdocx-wasm` crate. The crate also carries an inline Node
+package-preservation regression, but this job does not execute it. The future
+`rpptx-wasm` package remains deferred to F-142.
 
 **A dedicated Python artifact workflow.** Its product matrix is the Cartesian
 product of `rdocx` and `rpptx` with manylinux_2_28 x86_64 and aarch64,

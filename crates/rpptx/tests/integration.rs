@@ -3731,8 +3731,9 @@ fn rpptx_is_an_explicit_publication_candidate() {
     assert!(manifest.contains("name = \"rpptx\""));
     assert!(manifest.contains("version = \"0.1.2\""));
     assert!(manifest.contains("publish = true"));
-    assert!(manifest.contains("default = [\"default-template\"]"));
+    assert!(manifest.contains("default = [\"default-template\", \"system-fonts\"]"));
     assert!(manifest.contains("default-template = []"));
+    assert!(manifest.contains("system-fonts = [\"oxml-layout/system-fonts\"]"));
 }
 
 #[test]

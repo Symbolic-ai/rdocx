@@ -258,44 +258,37 @@ keeps python-docx out of runtime package dependencies.
 
 ## WASM
 
-### The existing crate is a fork, not a binding
-
-`rdocx-wasm` holds only `CT_Document` and `CT_Styles`. `from_bytes` stores
-`package_bytes` and immediately marks it `#[allow(dead_code)]`. `to_docx_bytes`
-discards it and rebuilds a package through `oxml_opc::OpcPackage` with the Word
-main part, content-type overrides, styles part, and styles relationship
-configured at this consumer boundary.
-
-Round-tripping any real document through it **silently destroys** every image
-and its relationships, headers and footers, numbering, settings, the theme, the
-font table, footnotes and endnotes, core and app properties, every content-type
-override, and every relationship except the styles one it re-adds. It has no
-tests, no CI job, and `publish = false`, so nothing has ever caught it.
-
-### The fix
+### The rdocx wrapper
 
 ```rust
 #[wasm_bindgen]
 pub struct WasmDocument { inner: rdocx::Document }
 ```
 
-Everything round-trips immediately, because `to_bytes` flushes into the
-**original** package. Three blockers and their answers:
+`fromBytes` delegates to `Document::from_bytes`, and `toDocxBytes` delegates to
+`Document::to_bytes`. The facade therefore flushes modeled changes into the
+original package. Images, headers, footers, numbering, settings, themes, font
+tables, notes, properties, content types, relationships, and opaque parts stay
+in the package rather than being reconstructed by the binding.
 
-- `Document::open` uses `std::fs`, so expose only `fromBytes` and `toBytes`.
-  `save()` is meaningless in a browser anyway.
-- `FontManager::new()` loads system fonts and `fontconfig` will not build for
-  `wasm32-unknown-unknown`. Add a `system-fonts` feature, default on, off for
-  wasm, with `bundled-fonts` on instead. **Then `to_pdf()` works in the
-  browser**, which is a genuinely compelling capability that is absent today.
-- Watch `getrandom` creep. The workspace already trims `zip` features to avoid
-  it.
+The constructor, `fromBytes`, `addParagraph`, `addHeading`,
+`addBoldParagraph`, `addTable`, `getText`, `paragraphCount`, `toDocxBytes`,
+`toHtml`, `toHtmlFragment`, `toMarkdown`, and `replacePlaceholder` names remain
+stable. `Document::open` and `save` stay absent because browser callers supply
+and receive bytes. Browser PDF export is not part of this surface yet.
 
-Keep the existing JS method names so current users do not break. The semantics
-only become correct.
+The `system-fonts` feature is default-on in `rdocx-layout` and `rdocx`, which
+preserves native behavior. `rdocx-wasm` disables `rdocx` defaults, while the
+bundled font data remains unconditional. The wasm32 graph therefore excludes
+host font discovery without inventing a second bundled-font feature.
 
-**The actual fix is the CI job**: `cargo check --target wasm32-unknown-unknown`
-plus `wasm-pack test --node`. The code drifted because nothing was watching.
+The R-class regression constructs a document with an image, header, and
+numbering, then checks the complete part, relationship, and content-type graph
+through `fromBytes` and `toDocxBytes`. The same contract is an inline
+`wasm-bindgen-test` for Node. The Node test reflectively calls those generated
+JavaScript members and crosses the `Uint8Array` boundary in both directions.
+CI currently target-checks the wrapper, while the Node test remains locally
+executable.
 
 `rpptx-wasm` wraps the real facade from day one, never a mini-model, in two
 profiles: a default without rendering at roughly 600 KB gzipped, and a `render`

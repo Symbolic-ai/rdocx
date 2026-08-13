@@ -1085,8 +1085,11 @@ reviewed hosted dispatch supplies cross-platform execution evidence.
 **Test gate**: the job fails when a binding test fails.
 
 ### F-139, Rewrite rdocx-wasm (L)
-Wrap `rdocx::Document`. Keep the JS method names. Add the `system-fonts`
-feature.
+Wrap `rdocx::Document` and keep the existing JavaScript method names. The
+default-on `system-fonts` feature is forwarded through `rdocx-layout` and
+`rdocx`, while `rdocx-wasm` disables it and retains unconditional bundled font
+data. An inline Node regression exercises the same package-preserving contract
+as the native gate.
 **Depends on**: F-029.
 **Test gate**: a document with images, headers and numbering round-trips through
 `fromBytes` and `toDocxBytes` with every part intact. This is the R-class

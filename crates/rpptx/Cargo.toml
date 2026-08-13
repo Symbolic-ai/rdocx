@@ -17,13 +17,14 @@ shared-version = "incubating"
 tag-name = "rpptx-v{{version}}"
 
 [features]
-default = ["default-template"]
+default = ["default-template", "system-fonts"]
 default-template = []
+system-fonts = ["oxml-layout/system-fonts"]
 
 [dependencies]
 oxml-core.workspace = true
 oxml-drawing.workspace = true
-oxml-layout.workspace = true
+oxml-layout = { workspace = true, default-features = false }
 oxml-media.workspace = true
 oxml-opc.workspace = true
 oxml-sml.workspace = true
@@ -37,4 +38,4 @@ oxml-drawing.workspace = true
 oxml-layout.workspace = true
 oxml-pdf.workspace = true
 rpptx-layout.workspace = true
-rpptx-render.workspace = true
+rpptx-render = { workspace = true, features = ["system-fonts"] }

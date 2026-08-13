@@ -16,7 +16,7 @@ use rdocx_oxml::numbering::CT_Numbering;
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::shared::{ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::CT_Styles;
-use rdocx_oxml::table::CT_Tbl;
+use rdocx_oxml::table::{CT_Tbl, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R, RunContent};
 
 use rdocx_oxml::core_properties::CoreProperties;
@@ -446,6 +446,34 @@ impl Document {
     /// Get the number of paragraphs.
     pub fn paragraph_count(&self) -> usize {
         self.document.body.paragraphs().count()
+    }
+
+    /// Get the plain text of body paragraphs and table cells in document order.
+    pub fn text(&self) -> String {
+        let mut result = String::new();
+        for content in &self.document.body.content {
+            match content {
+                BodyContent::Paragraph(paragraph) => {
+                    result.push_str(&paragraph.text());
+                    result.push('\n');
+                }
+                BodyContent::Table(table) => {
+                    for row in &table.rows {
+                        for cell in &row.cells {
+                            for content in &cell.content {
+                                if let CellContent::Paragraph(paragraph) = content {
+                                    result.push_str(&paragraph.text());
+                                    result.push('\t');
+                                }
+                            }
+                        }
+                        result.push('\n');
+                    }
+                }
+                BodyContent::RawXml(_) => {}
+            }
+        }
+        result
     }
 
     /// Get a mutable reference to a paragraph by index (among paragraphs only).
@@ -3321,6 +3349,18 @@ mod tests {
         let paras = doc.paragraphs();
         assert_eq!(paras[0].text(), "First paragraph");
         assert_eq!(paras[1].text(), "Second paragraph");
+    }
+
+    #[test]
+    fn document_text_preserves_body_and_table_order() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Before");
+        let mut table = doc.add_table(1, 2);
+        table.cell(0, 0).unwrap().set_text("Left");
+        table.cell(0, 1).unwrap().set_text("Right");
+        doc.add_paragraph("After");
+
+        assert_eq!(doc.text(), "Before\nLeft\tRight\t\nAfter\n");
     }
 
     #[test]

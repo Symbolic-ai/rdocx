@@ -442,7 +442,9 @@ exact and cannot be satisfied by comments.
 Stated plainly, because they are why two shipped defects went unnoticed:
 
 - **`rdocx-cli` has zero tests** despite being a published binary.
-- **`rdocx-wasm` has zero behavioural tests.** Its target check now catches
-  compile drift, but it does not prove package-preserving round trips.
+- **The `rdocx-wasm` Node test is not yet run by CI.** Native and inline Node
+  regressions prove package-preserving round trips, and the target check catches
+  compile drift. The Node test remains a local gate until the workflow invokes
+  it.
 - **PDF and PNG output is only checked for non-emptiness**, so layout
   regressions are invisible. The hash harness closes this.

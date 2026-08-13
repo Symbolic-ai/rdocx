@@ -1,6 +1,6 @@
 # F-139, Rewrite rdocx-wasm
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S35
 **Size**: L
 **Depends on**: F-029
@@ -43,6 +43,12 @@ and `rdocx`, with their `oxml-layout` dependencies disabling defaults locally.
 `rdocx-wasm` depends on `rdocx` with defaults off. Bundled fonts remain
 unconditional, so no speculative `bundled-fonts` feature is added.
 
+The workspace-level defaults-off `oxml-layout` edge also requires explicit
+default-on forwarding through native `rpptx` and `rpptx-render`. Their native
+binding and development consumers opt in explicitly. This preserves the
+existing presentation system-font behavior without adding presentation code to
+the Word WASM graph.
+
 Add exact workspace `wasm-bindgen-test = "=0.3.76"` infrastructure and a
 crate-root Node round-trip test so F-140's future `wasm-pack test --node` gate
 is non-vacuous. Remove the obsolete nested `crates/rdocx-wasm/Cargo.lock`,
@@ -65,8 +71,8 @@ member.
 |---|---|---|
 | regression, gate | `document_with_images_headers_and_numbering_round_trips_every_part_intact` | WASM facade round-trip retains parts, content types, relationships, opaque bytes, and reopenable semantics |
 | unit | `document_text_preserves_body_and_table_order` | The additive facade getter preserves the existing `getText` order |
-| integration | `wasm_round_trip_preserves_the_complete_package_in_node` | The actual exported wrapper executes under wasm-bindgen-test without losing package content |
-| regression | feature-tree assertions | Native defaults include system fonts and the WASM graph excludes `fontdb/fs` and `fontconfig` |
+| integration | `wasm_round_trip_preserves_the_complete_package_in_node` | The generated `fromBytes` and `toDocxBytes` JavaScript members cross the `Uint8Array` boundary under Node without losing package content |
+| regression | feature-tree and manifest assertions | Native Word and presentation defaults include system fonts and the WASM graph excludes `fontdb/fs` and `fontconfig` |
 
 The test gate is the backlog requirement that a document with images, headers,
 and numbering round-trips through `fromBytes` and `toDocxBytes` with every part
@@ -108,12 +114,12 @@ package-preservation fix does not alter native sample generation.
 
 ## Implementation checklist
 
-- [ ] Add the bounded `Document::text` facade API and regression.
-- [ ] Forward `system-fonts` through the native facade graph with defaults unchanged.
-- [ ] Replace the WASM mini-model with `rdocx::Document` delegation.
-- [ ] Add the exact wasm-bindgen-test dependency and Node round-trip gate inline.
-- [ ] Delete the obsolete nested lock and update the workspace lock.
-- [ ] Run package, dependency, no-default, WASM, publication, and hash riders.
+- [x] Add the bounded `Document::text` facade API and regression.
+- [x] Forward `system-fonts` through the native facade graph with defaults unchanged.
+- [x] Replace the WASM mini-model with `rdocx::Document` delegation.
+- [x] Add the exact wasm-bindgen-test dependency and Node round-trip gate inline.
+- [x] Delete the obsolete nested lock and update the workspace lock.
+- [x] Run package, dependency, no-default, WASM, publication, and hash riders.
 
 ## Open questions
 

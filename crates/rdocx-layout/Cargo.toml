@@ -15,7 +15,11 @@ categories.workspace = true
 shared-version = "workspace"
 tag-name = "v{{version}}"
 
+[features]
+default = ["system-fonts"]
+system-fonts = ["oxml-layout/system-fonts"]
+
 [dependencies]
-oxml-layout = { workspace = true }
+oxml-layout = { workspace = true, default-features = false }
 rdocx-oxml = { workspace = true }
 unicode-linebreak = { workspace = true }

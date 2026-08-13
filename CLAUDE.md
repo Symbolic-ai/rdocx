@@ -166,6 +166,4 @@ Each has a story in M1. Do not rediscover them:
 - `crates/rdocx/src/document.rs:135-138` counts media parts instead of parsing
   the maximum suffix, so a package with `image1` and `image4` overwrites
   `image3`.
-- `crates/rdocx-wasm`'s `to_docx_bytes` rebuilds a minimal package, silently
-  discarding every part except `document.xml` and `styles.xml`.
 - `Document::render_page_to_png` re-lays out the whole document per call.
