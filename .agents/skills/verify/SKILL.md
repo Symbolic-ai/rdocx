@@ -7,6 +7,6 @@ description: "The gate. Runs formatting, lints, tests, the hash harness and the 
 
 Canonical source: `.claude/commands/verify.md`.
 
-Source SHA-256: `156d78a809935cd41e3918aaecebcc342f23a8ffb3014b5aa45ad1301e77e011`.
+Source SHA-256: `f7bbbb6cc9e473c7315ae32a04823d561a6e27751fdb77430d9ef7f5286be11d`.
 
 Read the canonical source in full before acting, and follow it with whatever tools this host provides. Treat any invocation arguments as arguments to that workflow. Where it names another slash command, follow the repository skill of the same name. Where it says to ask with `AskUserQuestion`, ask through this host's own question mechanism. `.claude/WORKFLOW.md` wins on any process question. Do not edit this generated adapter.

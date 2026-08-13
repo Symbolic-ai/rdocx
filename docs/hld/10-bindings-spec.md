@@ -318,6 +318,14 @@ which is ideal for LLM ingestion and is a genuine differentiator.
 `validate` is the highest-value command and pays for itself in the test suite by
 running across the corpus in CI.
 
-Shared plumbing, range parsing, output-path defaulting and the JSON envelope,
-lives in `oxml-cli-support` rather than being copy-pasted. **Version the JSON
-envelope from the first release**: `{"schema": 1, ...}`.
+Shared range parsing, output-path defaulting, and JSON envelope rules live in
+`oxml-cli-support`. Ranges are positive, one-based, comma-separated values and
+inclusive ranges. Parsing sorts and deduplicates the result, and rejects more
+than 100,000 requested values before expansion. The output helper replaces or
+adds only the requested extension. The envelope accepts an object without a
+caller-supplied `schema` field and adds the reserved top-level
+`{"schema": 1, ...}` contract.
+
+`rdocx-cli` uses the shared envelope for inspect JSON and the shared path helper
+for convert defaults. Its flags and zero-based `render --page` compatibility
+contract do not change.

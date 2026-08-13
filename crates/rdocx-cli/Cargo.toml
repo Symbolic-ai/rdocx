@@ -27,5 +27,6 @@ doc = false
 rdocx = { workspace = true, features = ["system-fonts"] }
 rdocx-oxml = { workspace = true }
 oxml-opc = { workspace = true }
+oxml-cli-support = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }

@@ -2423,6 +2423,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-opc",
             "oxml-pdf",
             "oxml-sml",
+            "oxml-cli-support",
             "rdocx",
             "rdocx-cli",
             "rdocx-html",
@@ -2448,7 +2449,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 f"--config 'patch.crates-io.{package}.path=\"crates/{package}\"'"
             )
             self.assertEqual(block.count(config), 1, package)
-        self.assertEqual(block.count("--config 'patch.crates-io."), 19)
+        self.assertEqual(block.count("--config 'patch.crates-io."), 20)
         self.assertNotIn("--no-verify", block)
         self.assertNotIn("continue-on-error", block)
 
@@ -2470,6 +2471,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-drawing",
             "oxml-pdf",
             "oxml-sml",
+            "oxml-cli-support",
             "rpptx-oxml",
             "rpptx-chart",
             "rpptx-layout",
@@ -2694,6 +2696,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-opc",
             "oxml-pdf",
             "oxml-sml",
+            "oxml-cli-support",
             "rpptx-oxml",
             "rpptx-layout",
             "rpptx-render",
@@ -2720,6 +2723,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-drawing",
             "oxml-pdf",
             "oxml-sml",
+            "oxml-cli-support",
             "rpptx-oxml",
             "rpptx-chart",
             "rpptx-layout",
@@ -2802,6 +2806,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 "crates/oxml-opc",
                 "crates/oxml-pdf",
                 "crates/oxml-sml",
+                "crates/oxml-cli-support",
                 "crates/rpptx",
                 "crates/rpptx-chart",
                 "crates/rpptx-layout",
@@ -2814,7 +2819,7 @@ class SprintWorkflowTests(unittest.TestCase):
         family_counts = {
             family: len(members) for family, members in family_members.items()
         }
-        self.assertEqual(family_counts, {"workspace": 11, "incubating": 13})
+        self.assertEqual(family_counts, {"workspace": 11, "incubating": 14})
 
         wasm_package = manifests["crates/rpptx-wasm"]["package"]
         self.assertEqual(wasm_package["name"], "rpptx-wasm")
@@ -2906,9 +2911,9 @@ class SprintWorkflowTests(unittest.TestCase):
             normalized_release,
         )
         self.assertIn(
-            "The exact 12-package incubating set is `oxml-core`, `oxml-opc`, "
+            "The exact 13-package incubating set is `oxml-core`, `oxml-opc`, "
             "`oxml-media`, `oxml-layout`, `oxml-drawing`, `oxml-pdf`, "
-            "`oxml-sml`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`, "
+            "`oxml-sml`, `oxml-cli-support`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`, "
             "`rpptx-render`, and `rpptx`.",
             normalized_release,
         )
@@ -2934,6 +2939,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-drawing",
             "oxml-pdf",
             "oxml-sml",
+            "oxml-cli-support",
             "rpptx-oxml",
             "rpptx-chart",
             "rpptx-layout",

@@ -1,6 +1,6 @@
 # F-143, oxml-cli-support
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S36
 **Size**: S
 **Depends on**: none
@@ -90,11 +90,11 @@ rendering.
 
 ## Implementation checklist
 
-- [ ] Create the approved shared crate and wire workspace metadata.
-- [ ] Implement range, output-path, and JSON-envelope helpers.
-- [ ] Migrate only the existing rdocx inspect JSON and convert output default.
-- [ ] Add focused compatibility and mutation-sensitive regressions.
-- [ ] Run dependency, publication, workflow, and hash riders.
+- [x] Create the approved shared crate and wire workspace metadata.
+- [x] Implement range, output-path, and JSON-envelope helpers.
+- [x] Migrate only the existing rdocx inspect JSON and convert output default.
+- [x] Add focused compatibility and mutation-sensitive regressions.
+- [x] Run dependency, publication, workflow, and hash riders.
 
 ## Open questions
 
