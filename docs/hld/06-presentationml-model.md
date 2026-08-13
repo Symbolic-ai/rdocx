@@ -131,7 +131,9 @@ typed model continue to use the normal preservation path.
 group members and the selected `mc:Fallback` view are exposed through child
 iteration. Ordinary shapes return their text-body text. Table frames return
 row-major cell text with tabs between cells and newlines between rows. Other
-shape kinds have no direct text.
+shape kinds have no direct text. `ShapeRef` equality is node identity. Two
+handles compare equal only when they borrow the same underlying shape-tree
+child, rather than when separate shapes happen to contain equal XML.
 
 `slide_mut(index)` exposes a borrowed `SlideMut` handle. Its `shape(index)`
 method retains read access, while `shape_mut(index)` returns a `ShapeMut` for an

@@ -1122,8 +1122,9 @@ corpus.
 
 ### F-145, rpptx-cli thumbnail and outline (M)
 **Depends on**: F-144.
-**Test gate**: `thumbnail` produces a PNG of slide one, and `outline` prints the
-title and bullet tree.
+**Test gate**: `thumbnail` produces a proportional 320-pixel-wide PNG of slide
+one, and `outline` prints each title once followed by the recursive paragraph
+tree with stable level indentation.
 
 ### F-146, npm publication (S)
 `@tensorbee/rdocx-wasm` and `@tensorbee/rpptx-wasm`, which have no publish path

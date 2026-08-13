@@ -306,10 +306,9 @@ graph and runs its package-preserving inline test in Node.
 
 ## CLIs
 
-`rpptx-cli` mirrors the seven-command `rdocx-cli` surface with `inspect`,
-`text`, `convert`, `diff`, `replace`, `validate`, and `render`. It uses clap
-derive and `serde_json` for `--json`. Thumbnail and outline are not part of
-this surface.
+`rpptx-cli` extends the seven-command `rdocx-cli` surface with `inspect`,
+`text`, `convert`, `diff`, `replace`, `validate`, `render`, `thumbnail`, and
+`outline`. It uses clap derive and `serde_json` for `--json`.
 
 `inspect` reports the file, slide and layout counts, slide size, core metadata,
 and each slide's identity, hidden state, and shape count. Its JSON form uses the
@@ -326,6 +325,13 @@ PNG rendering is limited to eight million pixels per slide for both `convert`
 and `render`. A zero-slide PNG conversion fails without creating output.
 The exact validation gate corrupts one relationship and requires a nonzero exit,
 then requires every verified pinned corpus deck to exit zero without skips.
+
+`thumbnail` renders slide one with deterministic fonts at exactly 320 pixels
+wide and preserves the rendered page aspect ratio. Its output defaults through
+the shared extension helper. `outline` prints each slide title once, followed
+by non-title text paragraphs in recursive shape z-order. Tables use row-major
+cell order, paragraph levels add two spaces of indentation, empty text is
+omitted, and embedded paragraph breaks become spaces.
 
 Shared range parsing, output-path defaulting, and JSON envelope rules live in
 `oxml-cli-support`. Ranges are positive, one-based, comma-separated values and

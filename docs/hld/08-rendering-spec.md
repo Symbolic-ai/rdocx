@@ -449,6 +449,9 @@ font files already present in `RenderInput` before lowering every slide.
 The `rpptx` facade assembles a presentation package into this input through its
 deterministic render boundary. It rejects a source-to-resolved shape-count
 difference and verifies that page count matches slide count before returning.
+The CLI thumbnail path uses this same boundary for slide one. It derives DPI
+from the rendered page width so the PNG is exactly 320 pixels wide while its
+height remains proportional, then applies the normal per-slide pixel bound.
 The corpus driver in `crates/rpptx/examples/render_deck.rs` calls that boundary
 for all 50 pinned decks, renders every page at 150 dpi, and writes one TSV row
 per slide. Each row records the positive-extent source leaf count, resolved

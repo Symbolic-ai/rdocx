@@ -52,10 +52,233 @@ fn write_deck(path: &Path, texts: &[&str]) {
     presentation.save(path).expect("write fixture deck");
 }
 
+fn png_dimensions(bytes: &[u8]) -> (u32, u32) {
+    assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert_eq!(&bytes[12..16], b"IHDR");
+    (
+        u32::from_be_bytes(bytes[16..20].try_into().unwrap()),
+        u32::from_be_bytes(bytes[20..24].try_into().unwrap()),
+    )
+}
+
+fn write_outline_deck(path: &Path) {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(0).expect("add title slide");
+    let title_placeholder = presentation
+        .slide(0)
+        .unwrap()
+        .title()
+        .expect("title layout supplies title")
+        .placeholder_idx();
+    let title_index = presentation
+        .slide(0)
+        .unwrap()
+        .shapes()
+        .position(|shape| shape.placeholder_idx() == title_placeholder)
+        .expect("locate title shape");
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(title_index)
+        .unwrap()
+        .set_text("Roadmap")
+        .unwrap();
+
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_textbox(Emu(100_000), Emu(1_000_000), Emu(4_000_000), Emu(1_500_000))
+            .unwrap();
+        shape.set_text("First item").unwrap();
+        let mut frame = shape.text_frame().unwrap();
+        let mut nested = frame.add_paragraph();
+        nested.set_text("Nested item");
+        assert!(nested.set_level(2));
+        frame.add_paragraph().set_text("");
+        slide.add_group_shape().unwrap();
+        slide
+            .add_textbox(Emu(200_000), Emu(200_000), Emu(2_000_000), Emu(500_000))
+            .unwrap()
+            .set_text("Grouped item")
+            .unwrap();
+    }
+    presentation.save(path).expect("write outline fixture");
+
+    let mut package = OpcPackage::open(path).expect("open outline package");
+    let slide_part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part, content_type)| {
+            (content_type
+                == "application/vnd.openxmlformats-officedocument.presentationml.slide+xml")
+                .then_some(part.clone())
+        })
+        .expect("outline slide part");
+    let xml = String::from_utf8(package.get_part(&slide_part).unwrap().to_vec()).unwrap();
+    let marker = xml.find("Grouped item").expect("grouped marker");
+    let shape_start = xml[..marker].rfind("<p:sp>").expect("grouped shape start");
+    let shape_end = marker + xml[marker..].find("</p:sp>").expect("grouped shape end") + 7;
+    let shape = xml[shape_start..shape_end].to_owned();
+    let without_shape = format!("{}{}", &xml[..shape_start], &xml[shape_end..]);
+    let group_end = without_shape.rfind("</p:grpSp>").expect("empty group end");
+    let grouped = format!(
+        "{}{}{}",
+        &without_shape[..group_end],
+        shape,
+        &without_shape[group_end..]
+    );
+    let first_marker = grouped.find("First item").expect("body marker");
+    let first_start = grouped[..first_marker]
+        .rfind("<p:sp>")
+        .expect("body shape start");
+    let first_end = first_marker
+        + grouped[first_marker..]
+            .find("</p:sp>")
+            .expect("body shape end")
+        + 7;
+    let mut body_shape = grouped[first_start..first_end].to_owned();
+    body_shape = body_shape.replacen("<p:nvPr/>", "<p:nvPr><p:ph type=\"body\"/></p:nvPr>", 1);
+    assert!(body_shape.contains("<p:ph type=\"body\"/>"));
+    let without_body = format!("{}{}", &grouped[..first_start], &grouped[first_end..]);
+    let title_marker = without_body.find("Roadmap").expect("title marker");
+    let title_start = without_body[..title_marker]
+        .rfind("<p:sp>")
+        .expect("title shape start");
+    let reordered = format!(
+        "{}{}{}",
+        &without_body[..title_start],
+        body_shape,
+        &without_body[title_start..]
+    );
+    let broken = reordered.replacen(
+        "<a:t>Grouped item</a:t>",
+        "<a:t>Grouped</a:t></a:r><a:br/><a:r><a:t>item</a:t>",
+        1,
+    );
+    assert_ne!(broken, reordered);
+    package.set_part(&slide_part, broken.into_bytes());
+    package.save(path).expect("write grouped outline fixture");
+}
+
+fn make_title_field_only(path: &Path) {
+    let mut package = OpcPackage::open(path).expect("open outline package");
+    let slide_part = package
+        .content_types
+        .overrides
+        .iter()
+        .find_map(|(part, content_type)| {
+            (content_type
+                == "application/vnd.openxmlformats-officedocument.presentationml.slide+xml")
+                .then_some(part.clone())
+        })
+        .expect("outline slide part");
+    let xml = String::from_utf8(package.get_part(&slide_part).unwrap().to_vec()).unwrap();
+    let field = r#"<a:fld id="{00000000-0000-0000-0000-000000000145}" type="title"><a:t>Roadmap</a:t></a:fld>"#;
+    let xml = xml.replacen("<a:r><a:t>Roadmap</a:t></a:r>", field, 1);
+    assert!(xml.contains(field));
+    package.set_part(&slide_part, xml.into_bytes());
+    package.save(path).expect("write field-only title fixture");
+}
+
 fn corpus_dir() -> PathBuf {
     std::env::var_os("RDOCX_PPTX_CORPUS_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/pptx"))
+}
+
+#[test]
+fn thumbnail_and_outline_match_the_presentation_contract() {
+    let temp = TempWorkspace::new("thumbnail-outline");
+    let deck = temp.path.join("roadmap.pptx");
+    write_outline_deck(&deck);
+
+    let thumbnail = temp.path.join("thumb.png");
+    let output = cli(&[
+        "thumbnail",
+        deck.to_str().unwrap(),
+        "--output",
+        thumbnail.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "thumbnail failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let dimensions = png_dimensions(&fs::read(&thumbnail).unwrap());
+    assert_eq!(dimensions.0, 320);
+
+    let output = cli(&["outline", deck.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "outline failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "Slide 1: Roadmap\n- First item\n    - Nested item\n- Grouped item\n"
+    );
+}
+
+#[test]
+fn outline_emits_a_field_only_title_once() {
+    let temp = TempWorkspace::new("outline-field-title");
+    let deck = temp.path.join("field-title.pptx");
+    write_outline_deck(&deck);
+    make_title_field_only(&deck);
+
+    let output = cli(&["outline", deck.to_str().unwrap()]);
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "Slide 1: Roadmap\n- First item\n    - Nested item\n- Grouped item\n"
+    );
+}
+
+#[test]
+fn thumbnail_preserves_a_nonstandard_slide_aspect_ratio() {
+    let temp = TempWorkspace::new("thumbnail-aspect");
+    let deck = temp.path.join("portrait.pptx");
+    let thumbnail = temp.path.join("portrait.png");
+    let mut presentation = Presentation::new().unwrap();
+    presentation
+        .set_slide_size(Emu(4_000_000), Emu(8_000_000))
+        .unwrap();
+    presentation.add_slide(6).unwrap();
+    presentation.save(&deck).unwrap();
+
+    let output = cli(&[
+        "thumbnail",
+        deck.to_str().unwrap(),
+        "--output",
+        thumbnail.to_str().unwrap(),
+    ]);
+    assert!(output.status.success());
+    assert_eq!(png_dimensions(&fs::read(thumbnail).unwrap()), (320, 640));
+}
+
+#[test]
+fn thumbnail_uses_shared_default_output_and_explicit_output_wins() {
+    let temp = TempWorkspace::new("thumbnail-output");
+    let deck = temp.path.join("deck.pptx");
+    write_deck(&deck, &["thumbnail"]);
+
+    let defaulted = cli(&["thumbnail", deck.to_str().unwrap()]);
+    assert!(defaulted.status.success());
+    let default_path = temp.path.join("deck.png");
+    assert_eq!(png_dimensions(&fs::read(&default_path).unwrap()).0, 320);
+
+    fs::remove_file(&default_path).unwrap();
+    let explicit = temp.path.join("chosen.png");
+    let selected = cli(&[
+        "thumbnail",
+        deck.to_str().unwrap(),
+        "--output",
+        explicit.to_str().unwrap(),
+    ]);
+    assert!(selected.status.success());
+    assert_eq!(png_dimensions(&fs::read(explicit).unwrap()).0, 320);
+    assert!(!default_path.exists());
 }
 
 #[test]
@@ -164,12 +387,18 @@ fn inspect_and_text_report_presentation_order() {
     assert!(help.status.success());
     let help = String::from_utf8(help.stdout).unwrap();
     for command in [
-        "inspect", "text", "convert", "diff", "replace", "validate", "render",
+        "inspect",
+        "text",
+        "convert",
+        "diff",
+        "replace",
+        "validate",
+        "render",
+        "thumbnail",
+        "outline",
     ] {
         assert!(help.contains(command), "missing command {command}");
     }
-    assert!(!help.contains("thumbnail"));
-    assert!(!help.contains("outline"));
 }
 
 #[test]

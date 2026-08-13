@@ -411,6 +411,11 @@ with a zero exit and never skips a missing corpus. The primary workspace-test
 job and the MSRV job fetch and verify the pinned corpus before running Cargo
 tests. Command regressions also prove bounded DPI, bounded diff work,
 zero-slide PNG failure without output, and one-slide-at-a-time PNG conversion.
+The thumbnail and outline gate requires an exactly 320-pixel-wide proportional
+slide-one PNG and recursive paragraph output with stable level indentation.
+Regressions cover nonstandard aspect ratios, shared output defaulting, grouped
+text order, embedded paragraph-break normalization, and field-only title
+identity so the title appears exactly once.
 
 ## What CI runs
 

@@ -58,6 +58,14 @@ enum Command {
         #[arg(long)]
         slide: Option<String>,
     },
+    /// Render slide one as a proportional 320-pixel-wide PNG
+    Thumbnail {
+        file: PathBuf,
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+    },
+    /// Print each slide title and recursive paragraph outline
+    Outline { file: PathBuf },
 }
 
 fn main() {
@@ -96,6 +104,8 @@ fn main() {
             dpi,
             slide,
         } => commands::render(&file, output.as_deref(), dpi, slide.as_deref()),
+        Command::Thumbnail { file, output } => commands::thumbnail(&file, output.as_deref()),
+        Command::Outline { file } => commands::outline(&file),
     };
     if let Err(error) = result {
         eprintln!("Error: {error}");

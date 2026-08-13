@@ -3,13 +3,14 @@
 use std::path::Path;
 
 use oxml_cli_support::{default_output_path, json_envelope, parse_range};
-use rpptx::Presentation;
+use rpptx::{Presentation, ShapeRef};
 use serde_json::json;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const MAX_RASTER_PIXELS: u64 = 8_000_000;
 const MAX_LCS_CELLS: usize = 1_000_000;
+const THUMBNAIL_WIDTH: f64 = 320.0;
 
 pub fn inspect(file: &Path, as_json: bool) -> Result<()> {
     let presentation = Presentation::open(file)?;
@@ -304,6 +305,95 @@ pub fn render(file: &Path, output: Option<&Path>, dpi: f64, range: Option<&str>)
         println!("Slide {one_based} -> {}", path.display());
     }
     Ok(())
+}
+
+pub fn thumbnail(file: &Path, output: Option<&Path>) -> Result<()> {
+    let presentation = Presentation::open(file)?;
+    if presentation.is_empty() {
+        return Err("cannot thumbnail a presentation with no slides".into());
+    }
+    let (_, layout) = presentation.render_deterministic()?;
+    let page = layout
+        .pages
+        .first()
+        .ok_or("slide one has no rendered page")?;
+    if !page.width.is_finite() || page.width <= 0.0 {
+        return Err("slide one has an invalid rendered width".into());
+    }
+    let dpi = (THUMBNAIL_WIDTH - 1e-9) * 72.0 / page.width;
+    validate_raster_dimensions(page.width, page.height, dpi)?;
+    let png = oxml_pdf::render_page_to_png(&layout, 0, dpi)
+        .ok_or("slide one did not rasterize for thumbnail")?;
+    let output = output
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| default_output_path(file, "png"));
+    std::fs::write(&output, png)?;
+    println!("Written to {}", output.display());
+    Ok(())
+}
+
+pub fn outline(file: &Path) -> Result<()> {
+    let presentation = Presentation::open(file)?;
+    for (index, slide) in presentation.slides().enumerate() {
+        let title_shape = slide.title();
+        let title = normalize_outline_text(
+            &title_shape
+                .and_then(|shape| shape.text())
+                .unwrap_or_default(),
+        );
+        if title.is_empty() {
+            println!("Slide {}", index + 1);
+        } else {
+            println!("Slide {}: {title}", index + 1);
+        }
+        for shape in slide.shapes() {
+            if title_shape == Some(shape) {
+                continue;
+            }
+            print_shape_outline(shape);
+        }
+    }
+    Ok(())
+}
+
+fn print_shape_outline(shape: ShapeRef<'_>) {
+    if let Some(frame) = shape.text_frame() {
+        print_frame_outline(frame);
+    }
+    if let Some(table) = shape.table() {
+        for row in 0..table.row_count() {
+            for column in 0..table.column_count() {
+                let Some(cell) = table.cell(row, column) else {
+                    continue;
+                };
+                if cell.is_spanned() {
+                    continue;
+                }
+                if let Some(frame) = cell.text_frame() {
+                    print_frame_outline(frame);
+                }
+            }
+        }
+    }
+    for child in shape.children() {
+        print_shape_outline(child);
+    }
+}
+
+fn print_frame_outline(frame: rpptx::TextFrameRef<'_>) {
+    for index in 0..frame.paragraph_count() {
+        let Some(paragraph) = frame.paragraph(index) else {
+            continue;
+        };
+        let text = normalize_outline_text(&paragraph.text());
+        if !text.is_empty() {
+            println!("{}- {text}", "  ".repeat(paragraph.level() as usize));
+        }
+    }
+}
+
+fn normalize_outline_text(text: &str) -> String {
+    text.trim().replace(['\r', '\n', '\u{000b}'], " ")
 }
 
 fn validate_dpi(dpi: f64) -> Result<()> {

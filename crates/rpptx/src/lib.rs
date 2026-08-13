@@ -2466,6 +2466,14 @@ pub struct ShapeRef<'a> {
     child: &'a ShapeTreeChild,
 }
 
+impl PartialEq for ShapeRef<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.child, other.child)
+    }
+}
+
+impl Eq for ShapeRef<'_> {}
+
 fn shape_ref(child: &ShapeTreeChild) -> ShapeRef<'_> {
     ShapeRef { child }
 }

@@ -116,6 +116,12 @@ The same treatment applies to `crates/rpptx/assets/default.pptx`. **An asset
 must live under its own crate's directory**: a workspace-root `assets/` compiles
 locally but is not collected into the published tarball.
 
+The publishable `rpptx-cli` binary contains nine commands. Its `thumbnail`
+command uses the deterministic presentation renderer, and its `outline`
+command depends only on facade traversal. The package dry run and archive-size
+gate therefore cover the complete command surface without adding runtime
+assets to the CLI crate.
+
 Every bundled font family has its licence under the crate's `fonts/` directory.
 Caladea ships with the full Apache License 2.0 text in `LICENSE-Caladea` and its
 copyright, trademark and designer attribution in `NOTICE-Caladea`. The
