@@ -148,8 +148,9 @@ described below at the common explicit version 0.1.2.
 
 `oxml-py-support`, `rpptx-py`, and `rpptx-wasm` are not reserved on crates.io.
 The binding crates are not published there. `rpptx-wasm` is an implemented
-workspace crate with no crates.io publication path. Its npm publication remains
-deferred to F-146.
+workspace crate with no crates.io publication path. Its reviewed npm surface is
+the local `@tensorbee/rpptx-wasm` bundler tarball. Registry publication remains
+unconfigured and unauthorized.
 
 The exact incubating crates.io allowlist contains 14 implemented shared and
 PowerPoint packages at the common version 0.1.2. They are
@@ -268,10 +269,22 @@ unresolved-symbol link failure that is easy to misdiagnose as something else.
 **A WASM target and Node job.** It installs the `wasm32-unknown-unknown` target,
 uses exact Node 24.11.1 and wasm-pack 0.15.0, and checks both facade-backed WASM
 crates with the locked workspace graph. It then runs both packages' inline Node
-regressions. The document suite also requires generated `toPdf` to return a
-complete PDF with an embedded bundled Carlito font. Checkout, setup-node, the
-Rust toolchain, and the Rust cache use reviewed full commit SHAs. The
-presentation render-profile and optimized-size gates remain local.
+regressions. It installs the official Binaryen version 125 Linux archive after
+checking exact SHA-256
+`7c3bc16599c8274a04d34a504fe4be2047884f900e0e2da2f6fb9cd667183be4`,
+places its `wasm-opt` on `PATH`, and verifies the exact version.
+
+Both WASM manifests use release optimization arguments `-Oz`,
+`--enable-bulk-memory`, and `--enable-nontrapping-float-to-int`. The job builds
+the exact scoped release bundler packages with locked dependencies, packs each
+one locally, installs it into a separate fresh consumer with an isolated cache
+and scripts disabled, and checks exact identity, WASM, JavaScript glue, public
+TypeScript declarations, and imports. The package gate grants no registry
+authentication, token, OIDC, publication, release, or tag authority. The
+document suite also requires generated `toPdf` to return a complete PDF with an
+embedded bundled Carlito font. Checkout, setup-node, the Rust toolchain, and the
+Rust cache use reviewed full commit SHAs. The presentation render-profile and
+optimized-size gates remain local.
 
 **A dedicated Python artifact workflow.** Its product matrix is the Cartesian
 product of `rdocx` and `rpptx` with manylinux_2_28 x86_64 and aarch64,

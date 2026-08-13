@@ -1,6 +1,6 @@
 # F-146, npm publication
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S36
 **Size**: S
 **Depends on**: F-140, F-142
@@ -12,9 +12,11 @@ tarball that a clean consumer can install. The sprint contract intentionally
 stops at local packaging. It does not authorize registry publication, tags,
 credentials, OIDC, or any other external mutation.
 
-The current wasm-pack optimizer also lacks the bulk-memory flag required by
-these generated modules. A release package needs the same reviewed
-`-Oz --enable-bulk-memory` optimization already used by the F-142 size gate.
+The current wasm-pack optimizer also lacks the WebAssembly feature flags
+required by these generated modules. A release package needs the reviewed
+`-Oz --enable-bulk-memory --enable-nontrapping-float-to-int` optimization.
+The third flag is required because Rust 1.93 and later emit nontrapping
+float-to-int operations in the linked standard library.
 
 ## Spec reference
 
@@ -25,10 +27,12 @@ these generated modules. A release package needs the same reviewed
 
 ## Approach
 
-Add identical wasm-pack release metadata to both WASM manifests so wasm-opt 125
-runs `-Oz --enable-bulk-memory`. Extend the existing CI WASM job, retaining
-exact Node 24.11.1 and wasm-pack 0.15.0, to build both crates with target
-`bundler`, scope `tensorbee`, release mode, and locked Cargo dependencies.
+Add identical wasm-pack release metadata to both WASM manifests. Exact wasm-opt
+125 runs `-Oz`, `--enable-bulk-memory`, and
+`--enable-nontrapping-float-to-int`. Extend the existing CI WASM job, retaining
+exact Node 24.11.1 and wasm-pack 0.15.0, to install the checksum-pinned optimizer
+and build both crates with target `bundler`, scope `tensorbee`, release mode,
+and locked Cargo dependencies.
 
 For each generated exact scoped package, run `npm pack` into an isolated
 temporary directory. Install its tarball into a fresh temporary consumer with
@@ -56,9 +60,10 @@ publish command, registry authentication, token, OIDC grant, or release tag.
 | integration | fresh local consumer install | Package metadata, WASM, JavaScript glue, declarations, and imports survive clean installation |
 | regression | structured CI contract | Exact pins, scope, target, optimization, package set, and install steps hold, with no publication authority |
 
-Sensitivity removes one package, changes scope or target, omits clean install,
-and adds a publish or authentication step. The same structured contract must
-reject every mutation before byte-identical restoration.
+Sensitivity removes either optimizer feature flag, removes one package,
+changes scope or target, omits clean install, and adds a publish or
+authentication step. The same structured contract must reject every mutation
+before byte-identical restoration.
 
 ## HLD impact
 
@@ -81,14 +86,16 @@ Expected unchanged. npm packaging does not affect native sample generation.
 
 ## Implementation checklist
 
-- [ ] Add the reviewed optimizer metadata to both WASM manifests.
-- [ ] Add exact two-package bundler pack/install steps to existing CI.
-- [ ] Add structured positive and mutation-sensitive workflow regressions.
-- [ ] Run local tarball installation, WASM, dependency, and hash riders.
-- [ ] Confirm no publication authority or generated package artifact remains.
+- [x] Add the reviewed optimizer metadata to both WASM manifests.
+- [x] Add exact two-package bundler pack/install steps to existing CI.
+- [x] Add structured positive and mutation-sensitive workflow regressions.
+- [x] Run local tarball installation, WASM, dependency, and hash riders.
+- [x] Confirm no publication authority or generated package artifact remains.
 
 ## Open questions
 
-None. `bundler` is approved as the npm target, with identical wasm-opt
-`-Oz --enable-bulk-memory` release metadata in both existing manifests. No npm
-publication authority is granted.
+None. `bundler` is approved as the npm target, with identical exact wasm-opt
+`-Oz --enable-bulk-memory --enable-nontrapping-float-to-int` release metadata
+in both existing manifests. The third flag is approved from real Rust 1.93 and
+1.97 toolchain evidence after the two-flag optimizer rejected the generated
+`rdocx-wasm` module. No npm publication authority is granted.

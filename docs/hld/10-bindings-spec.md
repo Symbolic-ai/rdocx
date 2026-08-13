@@ -304,6 +304,16 @@ artifact must remain below 1,000,000 bytes after deterministic gzip.
 Pull-request CI target-checks the default wrapper with the locked workspace
 graph and runs its package-preserving inline test in Node.
 
+The npm package names are `@tensorbee/rdocx-wasm` and
+`@tensorbee/rpptx-wasm`. Both use the bundler target, their Rust package
+versions, and release output optimized by exact wasm-opt 125 with `-Oz`,
+`--enable-bulk-memory`, and `--enable-nontrapping-float-to-int`. Pull-request
+CI creates local tarballs with `npm pack`, installs each tarball into a separate
+fresh consumer, and checks the installed WASM, JavaScript glue, public
+TypeScript declaration, and module import. This is an installation gate only.
+The job has no npm publication, registry authentication, token, OIDC, release,
+or tag authority.
+
 ## CLIs
 
 `rpptx-cli` extends the seven-command `rdocx-cli` surface with `inspect`,

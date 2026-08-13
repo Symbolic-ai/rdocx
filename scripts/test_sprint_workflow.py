@@ -531,8 +531,10 @@ class SprintWorkflowTests(unittest.TestCase):
                 "step:2",
                 "Set up Node 24.11.1",
                 "Install wasm-pack 0.15.0",
+                "Install wasm-opt 125",
                 "Check WASM targets",
                 "Run WASM Node tests",
+                "Build and install local WASM packages",
             ),
         )
 
@@ -584,19 +586,41 @@ class SprintWorkflowTests(unittest.TestCase):
         )
 
         install = self.yaml_step(job, "Install wasm-pack 0.15.0")
+        install_optimizer = self.yaml_step(job, "Install wasm-opt 125")
         checks = self.yaml_step(job, "Check WASM targets")
         node_tests = self.yaml_step(job, "Run WASM Node tests")
-        for command_step in (install, checks, node_tests):
+        packages = self.yaml_step(job, "Build and install local WASM packages")
+        for command_step in (install, install_optimizer, checks, node_tests, packages):
             self.assertEqual(
                 self.yaml_direct_lines(command_step, 8),
                 ("shell: bash", "run: |"),
             )
         install_lines = self.yaml_run_lines(install)
+        optimizer_lines = self.yaml_run_lines(install_optimizer)
         check_lines = self.yaml_run_lines(checks)
         node_test_lines = self.yaml_run_lines(node_tests)
         self.assertEqual(
             install_lines,
             ("cargo install wasm-pack --version 0.15.0 --locked",),
+        )
+        self.assertEqual(
+            optimizer_lines,
+            (
+                'binaryen_archive="${RUNNER_TEMP}/binaryen-version_125-x86_64-linux.tar.gz"',
+                'binaryen_root="${RUNNER_TEMP}/binaryen-version_125"',
+                "curl --fail --location --silent --show-error "
+                '"https://github.com/WebAssembly/binaryen/releases/download/'
+                'version_125/binaryen-version_125-x86_64-linux.tar.gz" '
+                '--output "$binaryen_archive"',
+                'echo "7c3bc16599c8274a04d34a504fe4be2047884f900e0e2da2f6fb9cd667183be4  '
+                '$binaryen_archive" | sha256sum --check',
+                'mkdir -p "$binaryen_root"',
+                'tar --extract --gzip --file "$binaryen_archive" --directory '
+                '"$binaryen_root" --strip-components=1',
+                'echo "$binaryen_root/bin" >> "$GITHUB_PATH"',
+                '"$binaryen_root/bin/wasm-opt" --version | grep --fixed-strings '
+                '--line-regexp "wasm-opt version 125"',
+            ),
         )
         self.assertEqual(
             check_lines,
@@ -613,16 +637,127 @@ class SprintWorkflowTests(unittest.TestCase):
             ),
         )
         self.assert_no_success_short_circuit(
-            install_lines + check_lines + node_test_lines
+            install_lines + optimizer_lines + check_lines + node_test_lines
         )
+        package_lines = self.yaml_run_lines(packages)
+        for expected in (
+            'package_root="${RUNNER_TEMP}/wasm-packages"',
+            'tarball_root="${RUNNER_TEMP}/wasm-tarballs"',
+            'npm_cache="${RUNNER_TEMP}/npm-cache"',
+            "wasm-pack build --target bundler --scope tensorbee --release "
+            '--out-dir "$package_root/rdocx-wasm" crates/rdocx-wasm --locked',
+            "wasm-pack build --target bundler --scope tensorbee --release "
+            '--out-dir "$package_root/rpptx-wasm" crates/rpptx-wasm --locked',
+            'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
+            '"0.4.1" "rdocx_wasm"',
+            'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
+            '"0.1.2" "rpptx_wasm"',
+            "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
+            "--ignore-scripts --no-audit --no-fund --package-lock=false "
+            '"$tarball_root/$tarball"',
+        ):
+            self.assertEqual(package_lines.count(expected), 1, expected)
+        self.assertIn(
+            'npm pack "$package_dir" --cache "$npm_cache" --ignore-scripts '
+            '--pack-destination "$tarball_root"',
+            packages,
+        )
+        self.assertIn('import(\\"$expected_name\\")', packages)
+        self.assertIn('consumer_root="$(mktemp -d ', packages)
+        self.assertIn('manifest.name !== expectedName', packages)
+        self.assertIn('manifest.version !== expectedVersion', packages)
+        self.assertIn('${stem}_bg.wasm', packages)
+        self.assertIn('${stem}.js', packages)
+        self.assertIn('${stem}.d.ts', packages)
+        forbidden = (
+            "npm publish",
+            "npm login",
+            "npm adduser",
+            "npm token",
+            "wasm-pack publish",
+            "NODE_AUTH_TOKEN",
+            "NPM_TOKEN",
+            "--registry",
+            "id-token:",
+            "git tag",
+            "gh release",
+        )
+        operative_job = "\n".join(self.operative_lines(job))
+        for command in forbidden:
+            self.assertNotIn(command, operative_job)
+        self.assert_no_success_short_circuit(package_lines)
         self.assertNotIn("|| true", job)
         self.assertNotIn("set +e", job)
+
+    def assert_wasm_optimizer_metadata_contract(
+        self, manifest_overrides: dict[str, str] | None = None
+    ) -> None:
+        manifest_overrides = manifest_overrides or {}
+        expected = {
+            "wasm-opt": [
+                "-Oz",
+                "--enable-bulk-memory",
+                "--enable-nontrapping-float-to-int",
+            ]
+        }
+        for member in ("crates/rdocx-wasm", "crates/rpptx-wasm"):
+            manifest = tomllib.loads(
+                manifest_overrides.get(
+                    member,
+                    (workflow.REPO / member / "Cargo.toml").read_text(
+                        encoding="utf-8"
+                    ),
+                )
+            )
+            wasm_pack = manifest["package"].get("metadata", {}).get("wasm-pack", {})
+            release = wasm_pack.get("profile", {}).get("release")
+            self.assertEqual(
+                release,
+                expected,
+                member,
+            )
 
     def test_wasm_pr_job_checks_both_targets_and_runs_node_tests(self) -> None:
         ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
             encoding="utf-8"
         )
         self.assert_wasm_pr_job_contract(ci)
+
+    def test_wasm_packages_use_the_reviewed_release_optimizer(self) -> None:
+        self.assert_wasm_optimizer_metadata_contract()
+
+    def test_wasm_package_contract_rejects_optimizer_mutations(self) -> None:
+        for member in ("crates/rdocx-wasm", "crates/rpptx-wasm"):
+            manifest = (workflow.REPO / member / "Cargo.toml").read_text(
+                encoding="utf-8"
+            )
+            mutations = {
+                "missing-bulk-memory": manifest.replace(
+                    '["-Oz", "--enable-bulk-memory", '
+                    '"--enable-nontrapping-float-to-int"]',
+                    '["-Oz", "--enable-nontrapping-float-to-int"]',
+                    1,
+                ),
+                "missing-nontrapping-float-to-int": manifest.replace(
+                    '["-Oz", "--enable-bulk-memory", '
+                    '"--enable-nontrapping-float-to-int"]',
+                    '["-Oz", "--enable-bulk-memory"]',
+                    1,
+                ),
+                "wrong-size-level": manifest.replace(
+                    '["-Oz", "--enable-bulk-memory", '
+                    '"--enable-nontrapping-float-to-int"]',
+                    '["-Os", "--enable-bulk-memory", '
+                    '"--enable-nontrapping-float-to-int"]',
+                    1,
+                ),
+            }
+            for name, mutated in mutations.items():
+                self.assertNotEqual(mutated, manifest, f"{member}:{name}")
+                with self.subTest(member=member, name=name), self.assertRaises(
+                    AssertionError
+                ):
+                    self.assert_wasm_optimizer_metadata_contract({member: mutated})
 
     def assert_wasm_setup_node_provenance_contract(
         self, ci: str, testing_hld: str
@@ -724,6 +859,19 @@ class SprintWorkflowTests(unittest.TestCase):
                 "cargo install wasm-pack --version 0.15.0 --locked",
                 "cargo install wasm-pack --locked",
             ),
+            "wrong-wasm-opt-version": mutate_job(
+                "binaryen-version_125-x86_64-linux.tar.gz",
+                "binaryen-version_124-x86_64-linux.tar.gz",
+            ),
+            "wrong-wasm-opt-checksum": mutate_job(
+                "7c3bc16599c8274a04d34a504fe4be2047884f900e0e2da2f6fb9cd667183be4",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            ),
+            "missing-wasm-opt-version-check": mutate_job(
+                "          \"$binaryen_root/bin/wasm-opt\" --version | grep "
+                "--fixed-strings --line-regexp \"wasm-opt version 125\"\n",
+                "",
+            ),
             "unlocked-target-check": mutate_job(
                 "cargo check --locked --target wasm32-unknown-unknown -p rdocx-wasm",
                 "cargo check --target wasm32-unknown-unknown -p rdocx-wasm",
@@ -773,6 +921,49 @@ class SprintWorkflowTests(unittest.TestCase):
                 "        run: |\n"
                 "          exit 0\n"
                 "          wasm-pack test --node crates/rdocx-wasm",
+            ),
+            "missing-rdocx-package": mutate_job(
+                "          wasm-pack build --target bundler --scope tensorbee "
+                "--release --out-dir \"$package_root/rdocx-wasm\" "
+                "crates/rdocx-wasm --locked\n",
+                "",
+            ),
+            "wrong-package-target": mutate_job(
+                "wasm-pack build --target bundler",
+                "wasm-pack build --target nodejs",
+            ),
+            "wrong-package-scope": mutate_job(
+                "--scope tensorbee --release",
+                "--scope other --release",
+            ),
+            "unlocked-package-build": mutate_job(
+                "crates/rdocx-wasm --locked",
+                "crates/rdocx-wasm",
+            ),
+            "missing-clean-install": mutate_job(
+                "          npm install --prefix \"$consumer_root\" --cache "
+                "\"$npm_cache\" --ignore-scripts --no-audit --no-fund "
+                "--package-lock=false \"$tarball_root/$tarball\"\n",
+                "",
+            ),
+            "registry-authentication": mutate_job(
+                "      - name: Build and install local WASM packages\n",
+                "      - name: Build and install local WASM packages\n"
+                "        env:\n"
+                "          NPM_TOKEN: forbidden\n",
+            ),
+            "npm-publish-authority": mutate_job(
+                '          assert_inventory "$package_dir" "$expected_name" '
+                '"$expected_version" "$stem"\n',
+                '          assert_inventory "$package_dir" "$expected_name" '
+                '"$expected_version" "$stem"\n'
+                '          npm publish "$package_dir"\n',
+            ),
+            "release-tag-authority": mutate_job(
+                "      - name: Build and install local WASM packages\n",
+                "      - name: Build and install local WASM packages\n"
+                "        env:\n"
+                "          RELEASE_COMMAND: git tag v0.0.0\n",
             ),
         }
         for name, mutated in mutations.items():

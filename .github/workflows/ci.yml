@@ -101,6 +101,17 @@ jobs:
         shell: bash
         run: |
           cargo install wasm-pack --version 0.15.0 --locked
+      - name: Install wasm-opt 125
+        shell: bash
+        run: |
+          binaryen_archive="${RUNNER_TEMP}/binaryen-version_125-x86_64-linux.tar.gz"
+          binaryen_root="${RUNNER_TEMP}/binaryen-version_125"
+          curl --fail --location --silent --show-error "https://github.com/WebAssembly/binaryen/releases/download/version_125/binaryen-version_125-x86_64-linux.tar.gz" --output "$binaryen_archive"
+          echo "7c3bc16599c8274a04d34a504fe4be2047884f900e0e2da2f6fb9cd667183be4  $binaryen_archive" | sha256sum --check
+          mkdir -p "$binaryen_root"
+          tar --extract --gzip --file "$binaryen_archive" --directory "$binaryen_root" --strip-components=1
+          echo "$binaryen_root/bin" >> "$GITHUB_PATH"
+          "$binaryen_root/bin/wasm-opt" --version | grep --fixed-strings --line-regexp "wasm-opt version 125"
       - name: Check WASM targets
         shell: bash
         run: |
@@ -111,6 +122,63 @@ jobs:
         run: |
           wasm-pack test --node crates/rdocx-wasm
           wasm-pack test --node crates/rpptx-wasm
+      - name: Build and install local WASM packages
+        shell: bash
+        run: |
+          package_root="${RUNNER_TEMP}/wasm-packages"
+          tarball_root="${RUNNER_TEMP}/wasm-tarballs"
+          npm_cache="${RUNNER_TEMP}/npm-cache"
+          mkdir -p "$package_root" "$tarball_root" "$npm_cache"
+          wasm-pack build --target bundler --scope tensorbee --release --out-dir "$package_root/rdocx-wasm" crates/rdocx-wasm --locked
+          wasm-pack build --target bundler --scope tensorbee --release --out-dir "$package_root/rpptx-wasm" crates/rpptx-wasm --locked
+
+          assert_inventory() {
+            local inventory_root="$1"
+            local expected_name="$2"
+            local expected_version="$3"
+            local stem="$4"
+            node --input-type=module - "$inventory_root" "$expected_name" "$expected_version" "$stem" <<'NODE'
+          import { existsSync, readFileSync } from "node:fs";
+
+          const [inventoryRoot, expectedName, expectedVersion, stem] = process.argv.slice(2);
+          const manifest = JSON.parse(readFileSync(`${inventoryRoot}/package.json`, "utf8"));
+          if (manifest.name !== expectedName || manifest.version !== expectedVersion) {
+            throw new Error(`unexpected package identity ${manifest.name}@${manifest.version}`);
+          }
+          for (const file of [
+            `${stem}_bg.wasm`,
+            `${stem}.js`,
+            `${stem}.d.ts`,
+          ]) {
+            if (!existsSync(`${inventoryRoot}/${file}`)) {
+              throw new Error(`missing package file ${file}`);
+            }
+          }
+          NODE
+          }
+
+          verify_package() {
+            local package_dir="$1"
+            local expected_name="$2"
+            local expected_version="$3"
+            local stem="$4"
+            local tarball
+            local consumer_root
+            local installed_root
+            assert_inventory "$package_dir" "$expected_name" "$expected_version" "$stem"
+            tarball="$(npm pack "$package_dir" --cache "$npm_cache" --ignore-scripts --pack-destination "$tarball_root")"
+            consumer_root="$(mktemp -d "${RUNNER_TEMP}/${stem}-consumer.XXXXXX")"
+            npm install --prefix "$consumer_root" --cache "$npm_cache" --ignore-scripts --no-audit --no-fund --package-lock=false "$tarball_root/$tarball"
+            installed_root="$consumer_root/node_modules/$expected_name"
+            assert_inventory "$installed_root" "$expected_name" "$expected_version" "$stem"
+            (
+              cd "$consumer_root"
+              node --experimental-wasm-modules --input-type=module --eval "import(\"$expected_name\")"
+            )
+          }
+
+          verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" "0.4.1" "rdocx_wasm"
+          verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" "0.1.2" "rpptx_wasm"
 
   prose:
     name: Prose and generated skills

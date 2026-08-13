@@ -1127,10 +1127,14 @@ one, and `outline` prints each title once followed by the recursive paragraph
 tree with stable level indentation.
 
 ### F-146, npm publication (S)
-`@tensorbee/rdocx-wasm` and `@tensorbee/rpptx-wasm`, which have no publish path
-today.
+`@tensorbee/rdocx-wasm` and `@tensorbee/rpptx-wasm` build as release bundler
+packages under exact checksum-pinned wasm-opt 125. Pull-request CI packs and
+installs both tarballs locally without registry credentials or publication
+authority.
 **Depends on**: F-140, F-142.
-**Test gate**: `npm pack` produces an installable tarball for each.
+**Test gate**: `npm pack` produces an installable tarball for each, and both
+installed packages retain their exact metadata, WASM, JavaScript glue,
+TypeScript declaration, and import.
 
 ---
 

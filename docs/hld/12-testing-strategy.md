@@ -423,7 +423,7 @@ identity so the title appears exactly once.
 |---|---|
 | test | Fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` |
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
-| wasm | Locked `wasm32-unknown-unknown` checks and `wasm-pack test --node` for `rdocx-wasm` and `rpptx-wasm` |
+| wasm | Locked `wasm32-unknown-unknown` checks, `wasm-pack test --node`, and local bundler pack and fresh-install gates for `rdocx-wasm` and `rpptx-wasm` |
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |
 | hash-harness | `python3 scripts/hash_harness.py --check` |
 | presentation-fidelity | Fetch the pinned corpus, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
@@ -469,11 +469,27 @@ revision are bound to full reviewed commit SHAs. Their operative input maps are
 exact and cannot be satisfied by comments.
 
 The pull-request WASM job uses exact Node 24.11.1 and wasm-pack 0.15.0. It
-target-checks both WASM packages with `--locked`, then runs both inline suites
-through `wasm-pack test --node`. The steps are unconditional and propagate an
-ordinary non-zero command status. Checkout v6.0.2, setup-node v6.5.0,
-rust-cache v2.9.1, and the selected stable rust-toolchain revision are bound to
-full reviewed commit SHAs.
+installs the official Binaryen version 125 Linux archive only after verifying
+its pinned SHA-256, places that optimizer on `PATH`, and requires the exact
+version string. It target-checks both WASM packages with `--locked`, then runs
+both inline suites through `wasm-pack test --node`.
+
+Both manifests bind release optimization to `-Oz`,
+`--enable-bulk-memory`, and `--enable-nontrapping-float-to-int`. The last flag
+is required by nontrapping conversion operations emitted by the Rust 1.93
+standard library. CI builds the exact `@tensorbee/rdocx-wasm` and
+`@tensorbee/rpptx-wasm` release bundler packages with locked dependencies. Each
+package is packed locally, installed into a separate fresh consumer through an
+isolated npm cache with scripts disabled, and checked for its exact name,
+version, WASM, JavaScript glue, public declaration, and import. The steps are
+unconditional and propagate ordinary non-zero command status. Structured
+regressions reject optimizer, checksum, package, target, scope, locking,
+installation, authentication, publication, and tag mutations.
+
+The job retains root `contents: read` permission and has no npm publication,
+registry authentication, token, OIDC, release, or tag authority. Checkout
+v6.0.2, setup-node v6.5.0, rust-cache v2.9.1, and the selected stable
+rust-toolchain revision are bound to full reviewed commit SHAs.
 
 ## Gaps being closed
 
