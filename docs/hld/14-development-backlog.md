@@ -1030,24 +1030,54 @@ The types are top-level exports and retain the `rdocx.shared`,
 than serial execution.
 
 ### F-134, Type stubs and py.typed (M)
-**Depends on**: F-131.
-**Test gate**: `mypy --strict` and `stubtest` both pass.
+Both mixed packages ship hand-written native-extension stubs and `py.typed`
+markers. Strict installed-wheel smoke programs cover concrete handles,
+collections, overloads, iterators, path-like inputs, byte outputs, and optional
+values without duplicating inline-typed pure-Python modules. Bounded enums and
+Length returns retain their semantic types, and factory-only native handles
+remain non-constructible at type-check time.
+**Depends on**: F-131, F-136.
+**Test gate**: exact `mypy==2.3.0 --strict` and `stubtest` both pass against
+freshly installed cp39-abi3 wheels.
 
 ### F-135, python-docx parity suite (M)
 **Depends on**: F-131.
-**Test gate**: every documented python-docx example runs unchanged, and
-round-trips through python-docx preserve content.
+Pin and assert python-docx 1.2.0. Execute an explicit manifest of all executable
+documentation examples inside the completed S33 surface from stable v1.2.0
+tagged sources. Sixteen examples change only the import namespace. The exact
+Quickstart held-row example uses the minimal public row re-fetch required by
+strict global revision before its second cell assignment. Author the approved
+structure with both writers, read both outputs with both libraries, and compare
+normalized public records rather than package bytes. Preserve relative float
+line spacing separately from absolute lengths and compare explicit table style
+after save and reopen.
+**Test gate**: `documented_s33_examples_run_with_declared_transformations`
+passes for the exact seventeen-entry manifest, and the two-way normalized
+differential agrees.
 
 ### F-136, rpptx-py (L)
-The same machinery over `Presentation`.
+An unpublished abi3-py39 mixed-layout binding over `Presentation`, using lazy
+path-only slide, shape, text and table handles. The bounded surface includes
+pure-Python presentation units and required shape enum values.
 **Depends on**: F-129, F-116.
-**Test gate**: the python-pptx documented examples run unchanged.
+**Test gate**: the seven python-pptx 1.0.2 Getting Started workflows run with
+the package namespace changed and minimal public re-fetches after structural
+writes. Both readers agree on each writer, and normalized structures from the
+two writers agree directly with that exact oracle version.
 
 ### F-137, wheels.yml (M)
-maturin, abi3-py39, the platform matrix, OIDC trusted publishing, the `py-v*`
-namespace.
-**Depends on**: F-134.
-**Test gate**: wheels build for every target and install into a clean venv.
+Build `rdocx` and `rpptx` with maturin as abi3-py39 wheels for
+manylinux_2_28 x86_64 and aarch64, musllinux_1_2 x86_64, macOS x86_64 and
+arm64, and Windows x86_64. Build one source distribution per package. Every
+compatible wheel is installed and tested in a fresh environment. A separate
+job collects the exact twelve wheels and two source distributions and receives
+PyPI OIDC authority only for the `py-v*` tag namespace. Manual dispatch never
+publishes.
+**Depends on**: F-134, F-136.
+**Test gate**: the local exact-product contract and its negative mutations
+pass, both native wheels and source distributions build, and both native wheels
+install and pass their compatible package, typing, and stub gates. The first
+reviewed hosted dispatch supplies cross-platform execution evidence.
 
 ### F-138, PR-time Python job (S)
 `maturin develop && pytest`.

@@ -1,60 +1,57 @@
-# Current Sprint, S33
+# Current Sprint, S34
 
 **Milestone**: M13 Bindings and tooling.
 
-**Goal**: Validate the Python handle design against the settled rdocx API before
-the same machinery is reused for rpptx. Build the shared path and revision
-support, expose the documented rdocx surface through lazy handles, preserve
-Python enum and unit behaviour, and prove rendering releases the GIL for real
-parallel work.
+**Goal**: Make the Python packages ready for typed use, parity validation,
+cross-platform wheel production, and continuous integration. Complete the
+rdocx compatibility evidence, reuse the validated path machinery for rpptx,
+then make wheel and PR automation enforce the resulting package contract.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for the `oxml-py-support` ownership boundary,
-  dependency direction, facade handle conventions, and non-consuming setter
-  twins used by Python properties.
-- `docs/hld/10-bindings-spec.md`, for path-based PyO3 handles, revision
-  invalidation, lazy collections, tri-state properties, Python API shape,
-  exception hierarchy, units, enums, and `allow_threads` rendering.
-- `docs/hld/12-testing-strategy.md`, for Python differential coverage, binding
-  test placement, and the required exclusions for workspace all-feature gates.
+- `docs/hld/03-architecture.md`, for the shared Python-support boundary and the
+  permitted `rdocx-py` and `rpptx-py` dependency directions.
+- `docs/hld/10-bindings-spec.md`, for the hand-written stubs, `py.typed`, mixed
+  package layout, parity suite, wheel matrix, tag namespace, and PR-time job.
+- `docs/hld/12-testing-strategy.md`, for Python parity coverage and the binding
+  exclusions required by workspace Rust gates.
 - `docs/hld/13-risks-and-open-questions.md`, for the index-path aliasing risk
-  and its revision-counter, lazy-collection, and stale-error mitigations.
-- `docs/hld/14-development-backlog.md`, for F-129 through F-133 dependencies
-  and their named test gates.
-- `docs/hld/15-build-and-toolchain.md`, for binding version alignment and the
-  PyO3 link constraints that shape CI commands.
+  that the reused presentation handles must preserve.
+- `docs/hld/14-development-backlog.md`, for F-134 through F-138 dependencies
+  and their named acceptance gates.
+- `docs/hld/15-build-and-toolchain.md`, for abi3-py39, mixed-package version
+  alignment, PyPI OIDC publication, and binding-safe CI behavior.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-129 | oxml-py-support | M | done | |
-| F-130 | rdocx-py core | L | done | |
-| F-132 | Python enums, units and exceptions | M | done | |
-| F-131 | rdocx-py formatting and tables | L | done | |
-| F-133 | rdocx-py rendering with allow_threads | S | done | |
+| F-136 | rpptx-py | L | done | - |
+| F-134 | Type stubs and py.typed | M | done | - |
+| F-135 | python-docx parity suite | M | done | - |
+| F-137 | wheels.yml | M | done | - |
+| F-138 | PR-time Python job | S | done | - |
 
 ## Sequencing note
 
-Rows are listed in dependency order, not by F-ID. F-129 establishes the shared
-path, revision, error, and `Length` machinery. F-130 then establishes the mixed
-package and core handles. F-132 builds the Python values and final exception
-hierarchy on that package, and F-131 consumes both the core handles and those
-values. F-133 depends only on F-130. F-008 is already done, so it does not block
-F-130.
+Rows are listed in dependency order, not by F-ID. F-136 first reuses completed
+F-129 and F-116. F-134 follows F-136 so both Python packages receive one typed
+contract. F-135 then validates the settled rdocx surface without changing it.
+F-137 follows F-134 and F-136 so both typed packages enter the wheel matrix.
+F-138 follows F-137 and exercises the same build paths on pull requests.
 
 ## Definition of done for this sprint
 
-- A stale content path raises `StaleElementError` and reports both the captured
-  and current document revisions.
-- `PyDocument`, lazy paragraph and run collections, and nested formatting and
-  table handles mutate the settled facade without storing Rust borrows across
-  Python calls.
-- Tri-state formatting preserves `None` when inherited, Python enums retain
-  their documented integer values, and one inch equals 914400 EMU.
-- Rendering methods release the GIL through `allow_threads`, and four
-  independent `to_pdf` calls complete faster in a thread pool than serially.
-- Focused Rust and Python binding tests pass, the workspace gate uses the
-  required binding-crate exclusions, and no existing document or rendering
-  output regresses.
+- `mypy --strict` and `stubtest` pass against installed packages carrying
+  `py.typed`.
+- Every pinned python-docx 1.2.0 example inside the approved S33 surface runs
+  with only the package namespace changed, and two-way round trips preserve
+  normalized content.
+- The seven pinned python-pptx 1.0.2 Getting Started examples run with only the
+  package namespace changed through path-based `rpptx-py` handles.
+- `wheels.yml` builds and installs the abi3-py39 target matrix through the
+  `py-v*` OIDC publication path.
+- The PR-time Python job builds the extension and runs pytest, and a binding
+  test failure makes the job fail.
+- Binding-focused gates pass with the required Rust workspace exclusions, and
+  existing deterministic document and rendering outputs do not regress.

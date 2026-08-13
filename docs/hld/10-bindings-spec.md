@@ -24,8 +24,8 @@ References are out, categorically. Four options were weighed:
 ### The chosen design
 
 ```rust
-pub enum PathSeg { Body(usize), Row(usize), Cell(usize),
-                   Para(usize), Run(usize) }
+pub enum PathSeg { Slide(usize), Shape(usize), Body(usize), Row(usize),
+                   Cell(usize), Para(usize), Run(usize) }
 pub struct ContentPath { pub segs: SmallVec<[PathSeg; 5]>, pub revision: u64 }
 pub struct RevisionCounter { current: u64 }
 
@@ -45,9 +45,9 @@ Aliasing is checked by PyO3's own `RefCell` on the pyclass, so a violation is a
 clean `RuntimeError`, never undefined behaviour. Resolution is a handful of
 vector index operations, negligible against FFI overhead.
 
-The shared crate starts with only the Word path variants consumed by the rdocx
-binding. The rpptx binding adds `Slide(usize)` and repeatable `Shape(usize)`
-variants when its existing F-136 consumer is implemented.
+The shared crate carries the Word path variants consumed by the rdocx binding
+and the `Slide(usize)` plus repeatable `Shape(usize)` variants consumed by the
+rpptx binding.
 
 ### The invalidation problem, handled loudly
 
@@ -109,9 +109,17 @@ of production code reaches through `._p`, `._r`, `doc.element.body`, `qn()` and
 `OxmlElement`. Promising drop-in means promising an lxml-shaped shadow API that
 can never be delivered, and every gap then reads as a bug.
 
-What is promised: *if your code uses only the documented python-docx API, it
-works unchanged.* Backed by a compatibility suite built from python-docx's own
-documentation examples, and by making a touch of `._p` raise a clear
+The compatibility promise is the completed binding surface, not every public
+python-docx method. Its executable gate is an explicit seventeen-example
+manifest from the python-docx 1.2.0 Working with Documents, Quickstart, and
+Working with Text pages. Each entry records a stable v1.2.0 tagged source URL,
+heading, exact source statements, declared transformation, and normalized
+structural assertion. Sixteen entries use only the `docx` to `rdocx` import
+substitution. The Quickstart held-row example additionally re-fetches
+`document.tables[0].rows[1]` before its second cell assignment because the
+first cell text replacement advances the global revision and stales the held
+row. This is the minimal public compatibility adaptation and does not weaken
+strict revision validation. A touch of `._p` raises a clear
 `NotImplementedError` naming the attribute and its equivalent rather than an
 `AttributeError` five frames away.
 
@@ -168,13 +176,23 @@ alignment and width, plus cell text, width and vertical alignment. These
 handles use `Body`, `Row`, `Cell`, `Para` and `Run` path segments and reach the
 document only through the public `rdocx` facade.
 
-`rpptx` mirrors python-pptx the same way.
+`rpptx` mirrors python-pptx through an unpublished mixed-layout `rpptx-py`
+crate. `Presentation` owns the Rust facade and one revision counter. Lazy
+layouts, slides, shapes, placeholders, text frames, paragraphs, runs, columns
+and cells store only a presentation reference and `ContentPath`. The bounded
+source-compatibility surface is the seven python-pptx 1.0.2 Getting Started
+workflows. They change the import namespace and re-fetch through the public
+path after each structural write, because strict global revision invalidation
+intentionally stales every pre-write handle and collection. Pure-Python
+`Length`, `Inches`, `Pt` and the required `MSO_SHAPE` members keep native
+inheritance outside the limited ABI.
 
 ## Packaging
 
 **maturin, mixed Rust and Python layout**, so type stubs and enum shims have a
 home. `python-source = "python"`, `module-name = "rdocx._rdocx"`,
-`features = ["pyo3/extension-module"]`.
+`features = ["pyo3/extension-module"]`. The rpptx package uses the parallel
+`rpptx._rpptx` module name.
 
 **abi3-py39.** One wheel per platform rather than one per interpreter version,
 so roughly 6 wheels instead of 48. The cost is marginally slower attribute
@@ -193,8 +211,16 @@ Two traps specific to this workspace:
   would be the single most common support question. Roughly 4 MB per wheel is a
   fair trade.
 
-Type stubs are hand-written with a `py.typed` marker, kept honest by a CI job
-running `mypy --strict` and `stubtest`. Do not auto-generate them from PyO3.
+Each mixed package ships a hand-written native-extension stub beside its
+extension module and a `py.typed` marker at package root. The stubs describe
+concrete lazy handle and collection types, integer and slice overloads, typed
+iteration, path-like inputs, byte outputs, optional values, bounded enum inputs,
+and concrete Length returns. Native handles and collections are factory-only,
+so their stubs reject direct construction just as the extension types do. The
+pure-Python units, enums, and exception hierarchies remain inline typed rather
+than duplicated in package-level stubs. Exact `mypy==2.3.0 --strict` smoke
+checks and `stubtest` against freshly installed wheels keep the declarations
+honest. Do not auto-generate them from PyO3.
 
 **Distribution names `rdocx` and `rpptx`**, import names identical. The binding
 crates are `publish = false`, because a cdylib has no business on crates.io.
@@ -204,14 +230,31 @@ crates are `publish = false`, because a cdylib has no business on crates.io.
 `wheels.yml` on a **`py-v*` tag namespace**, separate from `publish.yml` on
 `v*`, so a Rust patch release does not rebuild twelve wheels and a binding-only
 fix does not force a crates.io release. Publishing uses PyPI trusted publishing
-via OIDC, with no long-lived token in secrets.
+via OIDC, with no long-lived token in secrets. The workflow builds `rdocx` and
+`rpptx` across the six declared targets, produces one source distribution per
+package, and uploads each matrix product independently. Every native wheel is
+installed into a fresh environment for its compatible pytest, exact
+`mypy==2.3.0 --strict`, and `stubtest` gates. The musllinux wheel is installed
+and imported in a fresh Python 3.9 Alpine environment.
+
+The build jobs have only repository read permission. A separate publish job
+depends on all wheel and source-distribution jobs, requires exactly twelve
+wheels and two source distributions, and receives `id-token: write` only for a
+`py-v*` tag event in the `pypi` environment. Manual dispatch builds and tests
+artifacts but cannot publish them. Every external action and the maturin tool
+version are pinned to reviewed immutable versions.
 
 **A PR-time job that builds the wheel and runs pytest is mandatory.** The
 absence of exactly this job for wasm is why `rdocx-wasm` rotted.
 
-The parity suite is worth more than any number of Rust-side assertions: write a
-document with rdocx, open it with python-docx, assert text, styles and tables
-survive, then the reverse. python-docx as a CI dev dependency is free.
+The rdocx parity suite pins and asserts `python-docx==1.2.0` before comparison.
+It writes the approved S33 content and direct formatting with each producer,
+opens both outputs with both readers, and directly compares normalized public
+paragraph, run, table, cell, unit and enum records. It compares no ZIP or XML
+bytes. Relative float line spacing remains distinct from absolute `Length`
+spacing in those records. An explicit table style is checked after each saved
+output is reopened by both readers. The suite commits no binary fixture and
+keeps python-docx out of runtime package dependencies.
 
 ## WASM
 

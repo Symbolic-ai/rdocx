@@ -354,14 +354,38 @@ cover the cases that matter now.
 The parity suites are worth more than any number of Rust-side assertions,
 because the whole value proposition is compatibility:
 
-- Write a document with `rdocx`, open it with `python-docx`, assert text, styles
-  and tables survive. Then the reverse.
+- The rdocx gate asserts exact `python-docx==1.2.0`, then executes the explicit
+  seventeen-example S33 documentation manifest from stable v1.2.0 tagged
+  sources. Sixteen bodies change only the import namespace. The exact
+  Quickstart held-row body uses one declared public row re-fetch before its
+  second cell assignment to respect strict global revision invalidation. Each
+  manifest entry pins its source URL, heading, exact source statements,
+  transformation and normalized structural assertion. The two-way
+  differential authors the same paragraphs, runs, direct formatting, tables
+  and cells with each writer, reads both files through both libraries, and
+  directly compares normalized public records including distinct relative and
+  absolute line spacing, units, enums, and saved table style.
 - The same for `rpptx` and `python-pptx`.
 
-Both libraries are free CI dev dependencies.
+The rpptx binding gate executes the seven python-pptx 1.0.2 Getting Started
+workflows with the import namespace changed from `pptx` to `rpptx` and the
+minimal public re-fetches required after structural writes. Its differential
+rider asserts the exact oracle version, compares each writer through both
+readers, and directly compares the normalized rpptx-authored and
+python-pptx-authored records. It never compares package bytes and the oracle is
+not a runtime dependency.
 
-Plus `mypy --strict` over a typing smoke file and `stubtest` against the stubs,
-so hand-written stubs cannot drift.
+Both libraries are test-only CI dependencies. Neither oracle is a runtime or
+published-crate dependency, and neither differential compares package bytes or
+commits binary fixtures.
+
+Each package has a strict typing smoke program that consumes its installed
+public surface. Fresh cp39-abi3 wheels must contain the native-extension stub
+and `py.typed` marker, pass exact `mypy==2.3.0 --strict`, and pass `stubtest`
+against both installed packages. Strict mypy also checks every inline-typed
+pure-Python source in each installed wheel. Representative enum-input,
+return-type, inline-source, constructor, and member mutations must make those
+gates fail, so hand-written stubs cannot drift.
 
 ## What CI runs
 
@@ -378,12 +402,40 @@ so hand-written stubs cannot drift.
 | doc | `cargo doc --workspace --no-deps --all-features --exclude rdocx-py --exclude rpptx-py` with `RUSTDOCFLAGS=-D warnings` |
 | package-oxml-layout | Verify the exact font and legal-file inventory, then build and size-check the verified archive |
 | msrv | `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 |
+| python-bindings | On pull requests, build each Python package with `maturin develop --locked` in its own Python 3.12.9 environment, then run its complete pytest directory |
 | supply-chain | `cargo-deny check` |
+| python-wheels | On manual dispatch or a `py-v*` tag, build six cp39-abi3 wheels for each Python package and one source distribution per package, then install and test every compatible artifact in a fresh environment |
 
 The `--exclude` pair on every all-feature command is required, not cosmetic:
 `pyo3/extension-module` tells the linker that Python symbols come from the host
 interpreter, which is false for a test binary, and on Linux this is an
 unresolved-symbol link failure that is easy to misdiagnose.
+
+The wheel workflow runs the installed `rdocx` suites except the
+Poppler-versioned rendering gate, which belongs to its pinned render job. It
+runs the installed `rpptx` documented-example and differential suite. Native
+cells also check the inline Python sources with exact `mypy==2.3.0 --strict`
+and run `stubtest` across every public and native-extension module. The
+musllinux cell proves a clean Python 3.9 Alpine import. Repository unit tests
+parse the exact two-package, six-target product and use negative mutations to
+prove that package, target, clean-install, artifact dependency, and tag-only
+OIDC requirements are sensitive before the hosted matrix runs.
+
+The pull-request binding job has one matrix row for `rdocx` and one for
+`rpptx`. It uses Python 3.12.9 with exact `maturin==1.13.3` and
+`pytest==9.1.1`, installs `python-docx==1.2.0` or `python-pptx==1.0.2` for the
+applicable row, and installs the Poppler toolchain required by the full rdocx
+rendering suite. Each row creates a fresh environment, builds the extension,
+then runs every test in that package's binding test directory. The build and
+pytest commands are separate ordinary steps with no successful fallback or
+`continue-on-error`, so either failure makes the pull-request check fail.
+The operative top-level `pull_request` trigger schedules the job without a job
+condition. Neither the job nor its pytest step has an environment or condition
+that can suppress execution. Root permissions are exactly `contents: read`,
+with no `id-token: write` grant anywhere in the workflow. Checkout v6.0.2,
+setup-python v6.2.0, rust-cache v2.9.1, and the selected stable rust-toolchain
+revision are bound to full reviewed commit SHAs. Their operative input maps are
+exact and cannot be satisfied by comments.
 
 ## Gaps being closed
 

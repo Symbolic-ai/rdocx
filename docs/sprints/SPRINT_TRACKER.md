@@ -48,6 +48,7 @@ defended.
 | S32.1 | M6 | 4 | 4 | 0 | 7 | 4 | Completed shared publication readiness with exact package inventory, split-family release preparation, stable and incubating tag routing, binding-safe CI gates, and verified local-source publication dry runs. Every generated archive remained below 10 MiB, all 28 hashes remained unchanged, and no crate was published |
 | S32.2 | M6 | 8 | 8 | 0 | 10 | 8 | Completed M6 by publishing the shared 0.1.2 family, cutting released rdocx consumers over to shared facades and backends, and documenting the migration. All package archives verified below 10 MiB and all 28 hashes remained unchanged |
 | S33 | M13 | 5 | 5 | 0 | 13 | 5 | Established shared Python path and revision support, lazy rdocx handles, formatting, tables, Python-compatible values and errors, and GIL-detached rendering. The cp39-abi3 wheel passed 31 tests, all 28 hashes remained unchanged, and no package was published |
+| S34 | M13 | 5 | 5 | 0 | 11 | 5 | Completed typed Python packages, bidirectional python-docx and python-pptx parity, six-target wheel automation, and pull-request binding CI. The hosted every-platform M13 gate remains for later M13 work, all 28 hashes remained unchanged, and no package was published |
 
 ## Completed features
 
@@ -195,6 +196,11 @@ defended.
 | F-131 | S33 | L | 4 | 1 | 2026-08-12 | Tri-state formatting and lazy table handles |
 | F-132 | S33 | M | 2 | 1 | 2026-08-12 | Python-compatible units, enums, and exception mapping |
 | F-133 | S33 | S | 1 | 1 | 2026-08-12 | GIL-detached rendering with concurrency and Poppler gates |
+| F-134 | S34 | M | 2 | 1 | 2026-08-13 | Typed rdocx and rpptx packages with strict live stub validation |
+| F-135 | S34 | M | 2 | 1 | 2026-08-13 | Pinned two-way python-docx parity suite |
+| F-136 | S34 | L | 4 | 1 | 2026-08-13 | Lazy rpptx bindings with strict global stale-handle semantics |
+| F-137 | S34 | M | 2 | 1 | 2026-08-13 | Two-package abi3 wheel matrix and tag-only trusted publication workflow |
+| F-138 | S34 | S | 1 | 1 | 2026-08-13 | Pull-request Python binding build and test job |
 
 ## Velocity
 
@@ -243,6 +249,7 @@ five working days.
 | S32.1 | 4 | 4 | 5.00 |
 | S32.2 | 8 | 8 | 5.00 |
 | S33 | 5 | 5 | 5.00 |
+| S34 | 5 | 5 | 5.00 |
 
 ## Escalation record
 
@@ -281,3 +288,4 @@ was done about it. Empty is the expected state.
 | 2026-08-11 | Sprint estimate variance exceeded 30 percent | S32 | Record 2 actual days against 3 estimated and reforecast 33 pending stories at the observed five stories per active week to about 7 active weeks, retaining dependency-defined sprint boundaries |
 | 2026-08-11 | Sprint estimate variance exceeded 30 percent | S32.1 | Record 4 actual days against 7 estimated and reforecast 29 pending stories at the observed five stories per active week to about 6 active weeks, retaining dependency-defined sprint boundaries |
 | 2026-08-12 | Sprint estimate variance exceeded 30 percent | S33 | Record 5 actual days against 13 estimated and reforecast 17 pending stories at the observed five stories per active week to about 4 active weeks, retaining dependency-defined sprint boundaries |
+| 2026-08-13 | Sprint estimate variance exceeded 30 percent | S34 | Record 5 actual days against 11 estimated and reforecast 12 pending stories at the observed five stories per active week to about 3 active weeks, retaining dependency-defined sprint boundaries |

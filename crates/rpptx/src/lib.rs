@@ -16,7 +16,7 @@ pub use oxml_drawing::fill::Fill;
 pub use oxml_drawing::line::CT_LineProperties;
 use oxml_drawing::shape_props::CT_ShapeProperties;
 use oxml_drawing::table::{CT_Table, CT_TableCell, CT_TableCellProperties, CT_TableProperties};
-use oxml_drawing::text::{CT_RegularTextRun, CT_TextBody, CT_TextParagraph};
+use oxml_drawing::text::{CT_RegularTextRun, CT_TextBody, CT_TextParagraph, TextRun};
 pub use oxml_drawing::text::{
     CT_TextCharacterProperties, CT_TextParagraphProperties, TextBullet, TextBulletCharacter,
     TextBulletChoice, TextFont,
@@ -2088,7 +2088,7 @@ fn slide_mut(record: &mut SlideRecord) -> SlideMut<'_> {
     SlideMut { record }
 }
 
-impl SlideMut<'_> {
+impl<'a> SlideMut<'a> {
     /// Sets whether the slide is hidden from the slideshow.
     pub fn set_hidden(&mut self, hidden: bool) {
         self.record.slide.set_hidden(hidden);
@@ -2231,6 +2231,17 @@ impl SlideMut<'_> {
             .get_mut(index)
             .map(shape_mut)
     }
+
+    /// Consumes this handle and returns one immediate z-order child for mutation.
+    pub fn into_shape_mut(self, index: usize) -> Option<ShapeMut<'a>> {
+        self.record
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .get_mut(index)
+            .map(shape_mut)
+    }
 }
 
 /// The geometry family of a free-standing connector.
@@ -2302,7 +2313,7 @@ fn invalid_table_mutation(operation: &'static str, message: String) -> Error {
     Error::InvalidTableMutation { operation, message }
 }
 
-impl SlideRef<'_> {
+impl<'a> SlideRef<'a> {
     /// Returns the producer-assigned slide id.
     pub fn id(&self) -> u32 {
         self.record.id
@@ -2324,7 +2335,7 @@ impl SlideRef<'_> {
     }
 
     /// Returns one immediate z-order child by zero-based index.
-    pub fn shape(&self, index: usize) -> Option<ShapeRef<'_>> {
+    pub fn shape(&self, index: usize) -> Option<ShapeRef<'a>> {
         self.record
             .slide
             .common_slide_data
@@ -2334,8 +2345,26 @@ impl SlideRef<'_> {
             .map(shape_ref)
     }
 
+    /// Returns the first title or centered-title placeholder on the slide.
+    pub fn title(&self) -> Option<ShapeRef<'_>> {
+        self.shapes().find(|shape| {
+            matches!(
+                shape_placeholder(shape.child).and_then(|placeholder| placeholder.ph_type.as_ref()),
+                Some(PhType::Title | PhType::CenteredTitle)
+            )
+        })
+    }
+
+    /// Returns the placeholder whose OOXML placeholder index equals `index`.
+    pub fn placeholder(&self, index: u32) -> Option<ShapeRef<'_>> {
+        self.shapes().find(|shape| {
+            shape_placeholder(shape.child).map(|placeholder| placeholder.idx.unwrap_or(0))
+                == Some(index)
+        })
+    }
+
     /// Iterates the immediate shape tree in z-order.
-    pub fn shapes(&self) -> impl ExactSizeIterator<Item = ShapeRef<'_>> {
+    pub fn shapes(&self) -> impl ExactSizeIterator<Item = ShapeRef<'a>> + 'a {
         self.record
             .slide
             .common_slide_data
@@ -2394,7 +2423,7 @@ fn shape_mut(child: &mut ShapeTreeChild) -> ShapeMut<'_> {
     ShapeMut { child }
 }
 
-impl ShapeMut<'_> {
+impl<'a> ShapeMut<'a> {
     /// Returns the child's normalized structural kind.
     pub fn kind(&self) -> ShapeKind {
         shape_kind(self.child)
@@ -2404,6 +2433,14 @@ impl ShapeMut<'_> {
     ///
     /// `mc:AlternateContent` fallback children remain a read-only projection.
     pub fn child_mut(&mut self, index: usize) -> Option<ShapeMut<'_>> {
+        match self.child {
+            ShapeTreeChild::GroupShape(group) => group.children.get_mut(index).map(shape_mut),
+            _ => None,
+        }
+    }
+
+    /// Consumes this handle and returns one immediate group child for mutation.
+    pub fn into_child_mut(self, index: usize) -> Option<ShapeMut<'a>> {
         match self.child {
             ShapeTreeChild::GroupShape(group) => group.children.get_mut(index).map(shape_mut),
             _ => None,
@@ -2510,8 +2547,28 @@ impl ShapeMut<'_> {
         }
     }
 
+    /// Consumes this handle and returns its ordinary-shape text body for mutation.
+    pub fn into_text_frame(self) -> Option<TextFrame<'a>> {
+        match self.child {
+            ShapeTreeChild::Shape(shape) => shape.text_body.as_mut().map(|body| TextFrame { body }),
+            _ => None,
+        }
+    }
+
     /// Returns a behavior-bearing mutable handle for a table graphic frame.
     pub fn table_mut(&mut self) -> Option<TableMut<'_>> {
+        let ShapeTreeChild::GraphicFrame(frame) = self.child else {
+            return None;
+        };
+        let table = frame.graphic_data.table_mut()?;
+        Some(TableMut {
+            table,
+            transform: &mut frame.transform,
+        })
+    }
+
+    /// Consumes this handle and returns its table for mutation.
+    pub fn into_table_mut(self) -> Option<TableMut<'a>> {
         let ShapeTreeChild::GraphicFrame(frame) = self.child else {
             return None;
         };
@@ -2564,13 +2621,31 @@ pub struct TextFrame<'a> {
     body: &'a mut CT_TextBody,
 }
 
+/// A borrowed ordinary-shape text body.
+#[derive(Clone, Copy)]
+pub struct TextFrameRef<'a> {
+    body: &'a CT_TextBody,
+}
+
+/// A borrowed DrawingML text paragraph.
+#[derive(Clone, Copy)]
+pub struct TextParagraphRef<'a> {
+    paragraph: &'a CT_TextParagraph,
+}
+
+/// A borrowed regular DrawingML text run.
+#[derive(Clone, Copy)]
+pub struct TextRunRef<'a> {
+    run: &'a CT_RegularTextRun,
+}
+
 /// A borrowed DrawingML table.
 #[derive(Clone, Copy)]
 pub struct TableRef<'a> {
     table: &'a CT_Table,
 }
 
-impl TableRef<'_> {
+impl<'a> TableRef<'a> {
     /// Returns the number of explicit table rows.
     pub fn row_count(&self) -> usize {
         self.table.rows.len()
@@ -2582,7 +2657,7 @@ impl TableRef<'_> {
     }
 
     /// Returns one explicit grid cell by zero-based row and column.
-    pub fn cell(&self, row: usize, column: usize) -> Option<TableCellRef<'_>> {
+    pub fn cell(&self, row: usize, column: usize) -> Option<TableCellRef<'a>> {
         table_cell(self.table, row, column).map(|cell| TableCellRef { cell })
     }
 
@@ -2646,7 +2721,7 @@ pub struct TableMut<'a> {
     transform: &'a mut CT_Transform2D,
 }
 
-impl TableMut<'_> {
+impl<'a> TableMut<'a> {
     /// Returns the number of explicit table rows.
     pub fn row_count(&self) -> usize {
         self.table.rows.len()
@@ -2664,6 +2739,16 @@ impl TableMut<'_> {
 
     /// Returns one explicit grid cell for in-place mutation.
     pub fn cell_mut(&mut self, row: usize, column: usize) -> Option<TableCellMut<'_>> {
+        table_cell(self.table, row, column)?;
+        Some(TableCellMut {
+            table: self.table,
+            row,
+            column,
+        })
+    }
+
+    /// Consumes this handle and returns one explicit cell for mutation.
+    pub fn into_cell_mut(self, row: usize, column: usize) -> Option<TableCellMut<'a>> {
         table_cell(self.table, row, column)?;
         Some(TableCellMut {
             table: self.table,
@@ -2833,6 +2918,14 @@ impl TableCellRef<'_> {
             .text_body
             .as_ref()
             .map_or_else(String::new, CT_TextBody::plain_text)
+    }
+
+    /// Returns the cell text body when present.
+    pub fn text_frame(&self) -> Option<TextFrameRef<'_>> {
+        self.cell
+            .text_body
+            .as_ref()
+            .map(|body| TextFrameRef { body })
     }
 
     /// Returns whether this cell is the top-left origin of a merge.
@@ -3155,7 +3248,7 @@ fn split_cell(table: &mut CT_Table, row: usize, column: usize) -> std::result::R
     Ok(())
 }
 
-impl TextFrame<'_> {
+impl<'a> TextFrame<'a> {
     /// Returns plain text in paragraph and ordered text-choice order.
     pub fn text(&self) -> String {
         self.body.plain_text()
@@ -3171,8 +3264,23 @@ impl TextFrame<'_> {
         self.body.paragraph_count()
     }
 
+    /// Returns one paragraph without mutating the text body.
+    pub fn paragraph(&self, index: usize) -> Option<TextParagraphRef<'_>> {
+        self.body
+            .paragraphs()
+            .get(index)
+            .map(|paragraph| TextParagraphRef { paragraph })
+    }
+
     /// Returns one paragraph for in-place mutation.
     pub fn paragraph_mut(&mut self, index: usize) -> Option<TextParagraphMut<'_>> {
+        self.body
+            .paragraph_mut(index)
+            .map(|paragraph| TextParagraphMut { paragraph })
+    }
+
+    /// Consumes this handle and returns one paragraph for mutation.
+    pub fn into_paragraph_mut(self, index: usize) -> Option<TextParagraphMut<'a>> {
         self.body
             .paragraph_mut(index)
             .map(|paragraph| TextParagraphMut { paragraph })
@@ -3183,6 +3291,91 @@ impl TextFrame<'_> {
         TextParagraphMut {
             paragraph: self.body.add_paragraph(),
         }
+    }
+}
+
+impl<'a> TextFrameRef<'a> {
+    /// Returns plain text in paragraph and ordered text-choice order.
+    pub fn text(&self) -> String {
+        self.body.plain_text()
+    }
+
+    /// Returns the number of paragraphs in the text body.
+    pub fn paragraph_count(&self) -> usize {
+        self.body.paragraph_count()
+    }
+
+    /// Returns one paragraph by zero-based index.
+    pub fn paragraph(&self, index: usize) -> Option<TextParagraphRef<'a>> {
+        self.body
+            .paragraphs()
+            .get(index)
+            .map(|paragraph| TextParagraphRef { paragraph })
+    }
+}
+
+impl<'a> TextParagraphRef<'a> {
+    /// Returns visible text in ordered run, break, and field order.
+    pub fn text(&self) -> String {
+        self.paragraph
+            .runs
+            .iter()
+            .map(|run| match run {
+                TextRun::Run(run) => run.text.value.as_str(),
+                TextRun::Break(_) => "\u{000b}",
+                TextRun::Field(field) => field.text.as_ref().map_or("", |text| text.value.as_str()),
+            })
+            .collect()
+    }
+
+    /// Returns the direct paragraph level, defaulting to zero.
+    pub fn level(&self) -> u8 {
+        self.paragraph
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.level)
+            .unwrap_or(0)
+    }
+
+    /// Returns direct default-run character properties when present.
+    pub fn default_run_properties(&self) -> Option<&'a CT_TextCharacterProperties> {
+        self.paragraph
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.default_run_properties.as_ref())
+    }
+
+    /// Returns the number of regular runs, excluding breaks and fields.
+    pub fn run_count(&self) -> usize {
+        self.paragraph
+            .runs
+            .iter()
+            .filter(|run| matches!(run, TextRun::Run(_)))
+            .count()
+    }
+
+    /// Returns one regular run by zero-based regular-run index.
+    pub fn run(&self, index: usize) -> Option<TextRunRef<'a>> {
+        self.paragraph
+            .runs
+            .iter()
+            .filter_map(|run| match run {
+                TextRun::Run(run) => Some(TextRunRef { run }),
+                TextRun::Break(_) | TextRun::Field(_) => None,
+            })
+            .nth(index)
+    }
+}
+
+impl TextRunRef<'_> {
+    /// Returns the run text.
+    pub fn text(&self) -> &str {
+        &self.run.text.value
+    }
+
+    /// Returns direct character properties when present.
+    pub fn properties(&self) -> Option<&CT_TextCharacterProperties> {
+        self.run.properties.as_ref()
     }
 }
 
@@ -3202,6 +3395,35 @@ impl TextParagraphMut<'_> {
         TextRunMut {
             run: self.paragraph.add_run(text),
         }
+    }
+
+    /// Returns one regular run for in-place mutation.
+    pub fn run_mut(&mut self, index: usize) -> Option<TextRunMut<'_>> {
+        self.paragraph
+            .runs
+            .iter_mut()
+            .filter_map(|run| match run {
+                TextRun::Run(run) => Some(TextRunMut { run }),
+                TextRun::Break(_) | TextRun::Field(_) => None,
+            })
+            .nth(index)
+    }
+
+    /// Sets the direct paragraph level.
+    pub fn set_level(&mut self, level: u8) -> bool {
+        if level > 8 {
+            return false;
+        }
+        self.paragraph.properties_mut().level = Some(level);
+        true
+    }
+
+    /// Returns mutable direct default-run character properties.
+    pub fn default_run_properties_mut(&mut self) -> &mut CT_TextCharacterProperties {
+        self.paragraph
+            .properties_mut()
+            .default_run_properties
+            .get_or_insert_with(CT_TextCharacterProperties::default)
     }
 
     /// Replaces the paragraph's direct typed properties.
@@ -3293,6 +3515,21 @@ impl<'a> ShapeRef<'a> {
         }
     }
 
+    /// Returns the ordinary shape text body without mutating it.
+    pub fn text_frame(&self) -> Option<TextFrameRef<'a>> {
+        match self.child {
+            ShapeTreeChild::Shape(shape) => {
+                shape.text_body.as_ref().map(|body| TextFrameRef { body })
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns the OOXML placeholder index when this child is a placeholder.
+    pub fn placeholder_idx(&self) -> Option<u32> {
+        shape_placeholder(self.child).map(|placeholder| placeholder.idx.unwrap_or(0))
+    }
+
     /// Returns the typed table carried by this graphic frame, when present.
     pub fn table(&self) -> Option<TableRef<'a>> {
         let ShapeTreeChild::GraphicFrame(frame) = self.child else {
@@ -3327,6 +3564,14 @@ impl<'a> ShapeRef<'a> {
             }
             _ => &[],
         }
+    }
+}
+
+fn shape_placeholder(child: &ShapeTreeChild) -> Option<&CT_Placeholder> {
+    match child {
+        ShapeTreeChild::Shape(shape) => shape.placeholder.as_ref(),
+        ShapeTreeChild::Picture(picture) => picture.placeholder.as_ref(),
+        _ => None,
     }
 }
 

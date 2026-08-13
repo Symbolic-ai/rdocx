@@ -823,6 +823,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rpptx-py"
+version = "0.4.1"
+dependencies = [
+ "oxml-py-support",
+ "pyo3",
+ "rpptx",
+ "smallvec",
+]
+
+[[package]]
 name = "rpptx-render"
 version = "0.1.2"
 dependencies = [

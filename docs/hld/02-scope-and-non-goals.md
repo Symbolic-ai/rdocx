@@ -116,10 +116,15 @@ into one without a separate decision.
 
 **Drop-in `python-docx` and `python-pptx` compatibility is not promised.** Those
 libraries' real-world surface is inseparable from lxml, and a large fraction of
-production code reaches through `._p`, `._r` and `qn()`. What is promised is
-*source compatibility for the documented API*. Touching a private lxml-shaped
-attribute raises a clear error naming the equivalent, rather than failing five
-frames away.
+production code reaches through `._p`, `._r` and `qn()`. Source compatibility
+is bounded to the completed public binding surface. The rdocx gate pins the
+seventeen executable python-docx 1.2.0 documentation examples that fit the S33
+API to stable tagged sources. Sixteen change only their import namespace. The
+Quickstart held-row example re-fetches the row through the public document path
+before its second cell assignment because the first structural text replacement
+intentionally stales every pre-write handle under strict global revision.
+Touching a private lxml-shaped attribute raises a clear error naming the
+equivalent, rather than failing five frames away.
 
 **Not a PowerPoint clone.** The renderer targets business decks built from
 stock or corporate templates. Decks that lean on 3-D, heavy effects or WordArt

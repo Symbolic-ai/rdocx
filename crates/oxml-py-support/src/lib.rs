@@ -5,9 +5,13 @@ use thiserror::Error;
 
 use oxml_core::Length;
 
-/// One index step in a Word content handle.
+/// One index step in a Word or PowerPoint content handle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PathSeg {
+    /// A slide in a presentation.
+    Slide(usize),
+    /// A shape in a slide or group shape.
+    Shape(usize),
     /// An item in the document body's block content.
     Body(usize),
     /// A row in a table.
@@ -204,6 +208,21 @@ mod tests {
             PathSeg::Cell(2),
             PathSeg::Para(3),
             PathSeg::Run(4),
+        ];
+
+        let path = ContentPath::new(segments.clone(), 7);
+
+        assert_eq!(path.segs, segments);
+    }
+
+    #[test]
+    fn presentation_path_segments_preserve_repeatable_shape_order() {
+        let segments = smallvec![
+            PathSeg::Slide(1),
+            PathSeg::Shape(2),
+            PathSeg::Shape(3),
+            PathSeg::Para(4),
+            PathSeg::Run(5),
         ];
 
         let path = ContentPath::new(segments.clone(), 7);

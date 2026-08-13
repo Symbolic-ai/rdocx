@@ -28,9 +28,9 @@ regenerated, never hand-edited.
 | M10, Renderer                               | 20 | 20 | 0 | 0  |
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
-| M13, Bindings and tooling                   | 18 | 5 | 0 | 13 |
+| M13, Bindings and tooling                   | 18 | 10 | 0 | 8  |
 | X, Cross-cutting (opportunistic)            | 5  | 1 | 0 | 4  |
-| **Total** | **159** | **142** | **0** | **17** |
+| **Total** | **159** | **147** | **0** | **12** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -265,11 +265,11 @@ regenerated, never hand-edited.
 | F-131 | rdocx-py formatting and tables               | S33 | L | done |
 | F-132 | Python enums, units and exceptions           | S33 | M | done |
 | F-133 | rdocx-py rendering with allow_threads        | S33 | S | done |
-| F-134 | Type stubs and py.typed                      | S34 | M | pending |
-| F-135 | python-docx parity suite                     | S34 | M | pending |
-| F-136 | rpptx-py                                     | S34 | L | pending |
-| F-137 | wheels.yml                                   | S34 | M | pending |
-| F-138 | PR-time Python job                           | S34 | S | pending |
+| F-134 | Type stubs and py.typed                      | S34 | M | done |
+| F-135 | python-docx parity suite                     | S34 | M | done |
+| F-136 | rpptx-py                                     | S34 | L | done |
+| F-137 | wheels.yml                                   | S34 | M | done |
+| F-138 | PR-time Python job                           | S34 | S | done |
 | F-139 | Rewrite rdocx-wasm                           | S35 | L | pending |
 | F-140 | wasm CI job                                  | S35 | S | pending |
 | F-141 | to_pdf in the browser                        | S35 | M | pending |

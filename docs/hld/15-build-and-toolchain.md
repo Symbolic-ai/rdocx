@@ -129,9 +129,9 @@ The fourteen crates.io names in this graph are reserved under the owner
 remain dependency-free 0.0.0 placeholders. The 12 implemented packages use
 the reviewed release path described below.
 
-`oxml-py-support`, `rpptx-py`, and `rpptx-wasm` are not reserved on crates.io.
-The binding crates are not published there, and the WASM packages use the npm
-publication path.
+`oxml-py-support` and `rpptx-py` are not reserved on crates.io. The binding
+crates are not published there. `rpptx-wasm` remains deferred to F-142 and its
+later npm publication path.
 
 All 12 implemented shared and PowerPoint packages are published at the common
 incubating version 0.1.2. They are
@@ -171,7 +171,13 @@ Two tag namespaces:
 | `py-v*` | `wheels.yml` | PyPI via OIDC trusted publishing |
 
 Wheels are separate so a Rust patch release does not rebuild twelve wheels, and
-a binding-only fix does not force a crates.io release.
+a binding-only fix does not force a crates.io release. `wheels.yml` builds and
+uploads each of the twelve cp39-abi3 wheels and both source distributions
+without publication authority. Its separate publish job depends on the whole
+artifact graph, checks the exact artifact counts, binds to the `pypi`
+environment, and receives `id-token: write` only for a `py-v*` tag event.
+Manual dispatch exercises the build graph without publishing. All actions and
+the maturin version are pinned, and no long-lived PyPI secret is present.
 
 ## Release process
 
@@ -180,10 +186,11 @@ edits to `[workspace.package]`, the internal pins in
 `[workspace.dependencies]`, and `Cargo.lock`. They are reviewed before a tag is
 possible and never rewrite README prose by pattern.
 
-`cargo-release` preparation is configured in Cargo metadata. The ten packages
+`cargo-release` preparation is configured in Cargo metadata. The eleven packages
 that inherit `[workspace.package].version`, including the unpublished
-`rdocx-wasm`, `rdocx-py`, and `oxml-py-support` packages, use cargo-release's
-effective `workspace` shared-version group and the `v{{version}}` tag template.
+`rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
+cargo-release's effective `workspace` shared-version group and the
+`v{{version}}` tag template.
 The exact published stable family remains the seven packages listed above.
 The 12 implemented `oxml-*` and `rpptx*` packages are prepared at explicit
 version 0.1.2, use the named `incubating` group, and carry the
@@ -240,7 +247,29 @@ unresolved-symbol link failure that is easy to misdiagnose as something else.
 
 **A `wasm32-unknown-unknown` check job.** It installs the target and checks the
 existing `rdocx-wasm` crate. The future `rpptx-wasm` package remains deferred
-to F-138.
+to F-142.
+
+**A dedicated Python artifact workflow.** Its product matrix is the Cartesian
+product of `rdocx` and `rpptx` with manylinux_2_28 x86_64 and aarch64,
+musllinux_1_2 x86_64, macOS x86_64 and arm64, and Windows x86_64. A second
+two-package job builds the source distributions. Native cells install wheels
+into fresh environments and run the compatible pytest, exact mypy, and
+stubtest gates. The musllinux cell performs a fresh Alpine install and import.
+The Poppler-versioned binding render gate stays in its pinned environment
+rather than running on generic wheel hosts.
+
+**A pull-request Python bindings job.** It runs on macOS 26 with one matrix row
+for each Python package. Every row creates an isolated Python 3.12.9 environment,
+installs exact maturin, pytest, and package-oracle versions, builds the current
+extension with `maturin develop --locked`, and runs the package's complete
+pytest directory. The Poppler installation supplies the reviewed 26.01.0 tools
+asserted by the rdocx rendering suite. Build and test failures propagate
+directly, with no failure-tolerant condition, inherited pytest override, or
+fallback. The top-level pull-request trigger is operative and the job has no
+condition. Workflow permissions are exactly repository content read, with no
+OIDC token grant. Checkout v6.0.2, setup-python v6.2.0, rust-cache v2.9.1, and
+the selected stable rust-toolchain revision use reviewed full commit SHAs and
+exact input maps.
 
 **A prose and generated-skill job.** It runs `scripts/prose_check.py` and
 `scripts/sync_agent_skills.py --check` as separate steps, so voice-rule or

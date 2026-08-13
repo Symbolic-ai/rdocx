@@ -81,6 +81,31 @@ fn f124_chart_data() -> ChartData {
     }
 }
 
+#[test]
+fn python_binding_facade_accessors_are_total_and_immutable() {
+    let mut presentation = Presentation::new().expect("create presentation");
+    presentation.add_slide(6).expect("add blank slide");
+    presentation
+        .slide_mut(0)
+        .expect("new slide")
+        .add_textbox(Emu(914_400), Emu(914_400), Emu(2 * 914_400), Emu(914_400))
+        .expect("add textbox")
+        .set_text("hello")
+        .expect("set text");
+
+    let slide = presentation.slide(0).expect("slide by index");
+    assert!(slide.title().is_none());
+    assert!(slide.placeholder(0).is_none());
+    let shape = slide.shape(0).expect("shape by index");
+    let frame = shape.text_frame().expect("immutable text frame");
+    assert_eq!(frame.paragraph_count(), 1);
+    let paragraph = frame.paragraph(0).expect("paragraph by index");
+    assert_eq!(paragraph.text(), "hello");
+    assert_eq!(paragraph.run_count(), 1);
+    assert_eq!(paragraph.run(0).expect("run by index").text(), "hello");
+    assert!(frame.paragraph(1).is_none());
+}
+
 fn presentation_with_authored_chart() -> Presentation {
     let mut presentation = Presentation::new().expect("open bundled template");
     presentation.add_slide(0).expect("add chart slide");
