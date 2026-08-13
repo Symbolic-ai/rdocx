@@ -137,22 +137,21 @@ The fourteen crates.io names in this graph are reserved under the owner
 `mantissaman`: `oxml-core`, `oxml-opc`, `oxml-media`,
 `oxml-drawing`, `oxml-layout`, `oxml-pdf`, `oxml-sml`, `oxml-cli-support`,
 `rpptx-oxml`, `rpptx-layout`, `rpptx-render`, `rpptx-chart`, `rpptx`, and
-`rpptx-cli`. The unimplemented `rpptx-cli` entry remains a dependency-free
-0.0.0 placeholder. The 13 implemented packages use the reviewed release path
-described below.
+`rpptx-cli`. All 14 implemented packages use the reviewed release path
+described below at the common explicit version 0.1.2.
 
 `oxml-py-support`, `rpptx-py`, and `rpptx-wasm` are not reserved on crates.io.
 The binding crates are not published there. `rpptx-wasm` is an implemented
 workspace crate with no crates.io publication path. Its npm publication remains
 deferred to F-146.
 
-The exact incubating crates.io allowlist contains 13 implemented shared and
+The exact incubating crates.io allowlist contains 14 implemented shared and
 PowerPoint packages at the common version 0.1.2. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `rpptx-oxml`, `rpptx-chart`,
-`rpptx-layout`, `rpptx-render`, and `rpptx`. Manifest eligibility and allowlist
-membership do not authorize publication without a separately approved
-`/release` invocation at the exact reviewed SHA.
+`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. Manifest eligibility
+and allowlist membership do not authorize publication without a separately
+approved `/release` invocation at the exact reviewed SHA.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness, runs the self-contained
@@ -160,12 +159,12 @@ incubating metadata regression to require the exact versions, pins, lockfile
 entries, and non-empty package descriptions without external development
 tools, and runs
 `cargo publish --workspace --dry-run` with an exact local source patch for each
-member of the 20-package publishable union. Cargo rewrites packaged path
+member of the 21-package publishable union. Cargo rewrites packaged path
 dependencies to the registry, so the patches keep verification on the reviewed
 workspace graph before those versions exist there. They do not enter generated
 archives and the dry run uploads nothing. The stable path then publishes only
 the seven released rdocx packages in dependency order. The incubating path
-publishes only the 13 candidates above in dependency order. Every real command
+publishes only the 14 candidates above in dependency order. Every real command
 keeps archive verification enabled. Registry waits separate dependency layers,
 and authentication, network, compilation and duplicate-version failures fail
 the job.
@@ -180,7 +179,7 @@ Two tag namespaces:
 | Tag | Workflow | Publishes |
 |---|---|---|
 | `v*` | `publish.yml` | crates.io, the exact seven-package stable family |
-| `rpptx-v*` | `publish.yml` | crates.io, the exact 13-package incubating family |
+| `rpptx-v*` | `publish.yml` | crates.io, the exact 14-package incubating family |
 | `py-v*` | `wheels.yml` | PyPI via OIDC trusted publishing |
 
 Wheels are separate so a Rust patch release does not rebuild twelve wheels, and
@@ -205,11 +204,11 @@ that inherit `[workspace.package].version`, including the unpublished
 cargo-release's effective `workspace` shared-version group and the
 `v{{version}}` tag template.
 The exact published stable family remains the seven packages listed above.
-The 14 implemented `oxml-*` and `rpptx*` package manifests are prepared at
+The 15 implemented `oxml-*` and `rpptx*` package manifests are prepared at
 explicit version 0.1.2, use the named `incubating` group, and carry the
-`rpptx-v{{version}}` template. That preparation group is the exact 13-package
+`rpptx-v{{version}}` template. That preparation group is the exact 14-package
 published family listed above plus unpublished `rpptx-wasm`. The crates.io
-allowlist remains exactly 13 packages.
+allowlist remains exactly 14 packages.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.
@@ -220,12 +219,12 @@ External release actions remain owned by `/release`.
 either crates.io release tag or start crates.io publication. It selects exactly
 one namespace. The stable path validates the workspace version, its internal
 pins, and the exact seven-package stable set. The incubating path validates the
-common explicit version, workspace pins, and the exact 13-package incubating
+common explicit version, workspace pins, and the exact 14-package incubating
 set.
 
 Both paths require a clean sprint branch, full verification and a clean sprint
 review recorded at the exact HEAD, a workspace dry run containing exactly the
-20-package union and its exact local patch set, archives below 10 MiB with
+21-package union and its exact local patch set, archives below 10 MiB with
 required assets, an absent local and remote requested tag, and a separate final
 approval immediately before the first mutation. `/release` pushes only the
 requested tag. `/close-sprint` remains the only command allowed to merge

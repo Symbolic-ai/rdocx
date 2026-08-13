@@ -122,7 +122,7 @@ entry points.
 
 ## Versioning
 
-The 13 implemented shared and PowerPoint publication candidates carry an
+The 14 implemented shared and PowerPoint publication candidates carry an
 explicit common incubating version of 0.1.2 in their manifests and workspace
 pins. The released `rdocx-*` crates continue to use the separate workspace
 version. Version preparation and manifest eligibility do not authorize
@@ -132,6 +132,12 @@ separate final approval at the external mutation boundary. `oxml-cli-support`
 is the format-neutral owner of range parsing, JSON envelope, and output-path
 contracts. It has no dependency on either document family, while CLI binaries
 depend inward on it.
+
+The `rpptx` facade owns formatting-preserving presentation text replacement.
+`Presentation::replace_text` applies literal, non-recursive replacement across
+contiguous regular runs in ordinary shapes, nested groups, and table cells.
+Fields, breaks, and selected alternate-content fallbacks remain traversal
+boundaries so the facade preserves their unmodelled or separately typed XML.
 
 `rpptx-*` crates carry their own `keywords` and `categories`, because the
 workspace values say `["docx", "word"]` which would be wrong on a presentation

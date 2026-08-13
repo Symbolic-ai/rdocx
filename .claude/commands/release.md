@@ -29,11 +29,11 @@ workspace inheritance and matching `[workspace.dependencies]` pins.
 ### Incubating family
 
 For `rpptx-vX.Y.Z`, every selected package manifest and its corresponding
-`[workspace.dependencies]` pin must be exactly `X.Y.Z`. The exact 13-package
+`[workspace.dependencies]` pin must be exactly `X.Y.Z`. The exact 14-package
 incubating set is `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`,
 `oxml-drawing`, `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `rpptx-oxml`, `rpptx-chart`,
-`rpptx-layout`, `rpptx-render`, and `rpptx`. Stable packages are not in this
-set. Binding, WASM, and unimplemented CLI crates remain outside it.
+`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. Stable packages are
+not in this set. Binding, WASM, and unimplemented CLI crates remain outside it.
 
 ## Preconditions
 
@@ -55,10 +55,10 @@ Refuse before any tag or push if one check fails:
    The other family's packages must not appear in the selected workflow
    allowlist.
 7. The exact locally patched `cargo publish --workspace --dry-run` command in
-   `/verify` step 10 passes from the clean tree. The 20 patches keep packaged
+   `/verify` step 10 passes from the clean tree. The 21 patches keep packaged
    internal dependencies on this reviewed source graph instead of the reserved
    registry placeholders, and they do not enter any archive. A dry run uploads
-   nothing. It must stage exactly the 20-package union of the two family sets,
+   nothing. It must stage exactly the 21-package union of the two family sets,
    and every archive must remain below 10 MiB. The `rdocx-layout` and
    `oxml-layout` archives must contain their complete bundled TTF and licence
    inventories. The `rpptx` archive must contain `assets/default.pptx`.

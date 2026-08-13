@@ -71,6 +71,7 @@ the workspace, which is what `/close-sprint` requires.
       --config 'patch.crates-io.rdocx-oxml.path="crates/rdocx-oxml"' \
       --config 'patch.crates-io.rdocx-pdf.path="crates/rdocx-pdf"' \
       --config 'patch.crates-io.rpptx.path="crates/rpptx"' \
+      --config 'patch.crates-io.rpptx-cli.path="crates/rpptx-cli"' \
       --config 'patch.crates-io.rpptx-chart.path="crates/rpptx-chart"' \
       --config 'patch.crates-io.rpptx-layout.path="crates/rpptx-layout"' \
       --config 'patch.crates-io.rpptx-oxml.path="crates/rpptx-oxml"' \

@@ -275,6 +275,27 @@ class SprintWorkflowTests(unittest.TestCase):
         )
         self.assert_python_pr_job_contract(ci)
 
+    def test_workspace_test_jobs_fetch_the_pinned_presentation_corpus(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        for job_name in ("test", "msrv"):
+            with self.subTest(job=job_name):
+                job = self.yaml_block(ci, f"  {job_name}:")
+                fetch = self.yaml_step(job, "Fetch pinned presentation corpus")
+                self.assertEqual(
+                    self.yaml_direct_lines(fetch, 8),
+                    ("run: python3 scripts/fetch_pptx_corpus.py",),
+                )
+                test_steps = tuple(
+                    step
+                    for step in self.yaml_steps(job)
+                    if "cargo test --workspace" in step
+                )
+                self.assertEqual(len(test_steps), 1)
+                self.assertLess(job.index(fetch), job.index(test_steps[0]))
+                self.assertNotIn("continue-on-error", fetch)
+
     def test_python_pr_job_rejects_failure_swallowing_and_incomplete_cells(
         self,
     ) -> None:
@@ -2432,6 +2453,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "rdocx-oxml",
             "rdocx-pdf",
             "rpptx",
+            "rpptx-cli",
             "rpptx-chart",
             "rpptx-layout",
             "rpptx-oxml",
@@ -2449,7 +2471,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 f"--config 'patch.crates-io.{package}.path=\"crates/{package}\"'"
             )
             self.assertEqual(block.count(config), 1, package)
-        self.assertEqual(block.count("--config 'patch.crates-io."), 20)
+        self.assertEqual(block.count("--config 'patch.crates-io."), 21)
         self.assertNotIn("--no-verify", block)
         self.assertNotIn("continue-on-error", block)
 
@@ -2477,6 +2499,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "rpptx-layout",
             "rpptx-render",
             "rpptx",
+            "rpptx-cli",
         )
 
         self.assertIn('tags: ["v*", "rpptx-v*"]', publish)
@@ -2702,6 +2725,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "rpptx-render",
             "rpptx-chart",
             "rpptx",
+            "rpptx-cli",
         )
 
         for name in incubating_packages:
@@ -2729,6 +2753,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "rpptx-layout",
             "rpptx-render",
             "rpptx",
+            "rpptx-cli",
         )
         expected_version = "0.1.2"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
@@ -2808,6 +2833,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 "crates/oxml-sml",
                 "crates/oxml-cli-support",
                 "crates/rpptx",
+                "crates/rpptx-cli",
                 "crates/rpptx-chart",
                 "crates/rpptx-layout",
                 "crates/rpptx-oxml",
@@ -2819,7 +2845,7 @@ class SprintWorkflowTests(unittest.TestCase):
         family_counts = {
             family: len(members) for family, members in family_members.items()
         }
-        self.assertEqual(family_counts, {"workspace": 11, "incubating": 14})
+        self.assertEqual(family_counts, {"workspace": 11, "incubating": 15})
 
         wasm_package = manifests["crates/rpptx-wasm"]["package"]
         self.assertEqual(wasm_package["name"], "rpptx-wasm")
@@ -2911,10 +2937,10 @@ class SprintWorkflowTests(unittest.TestCase):
             normalized_release,
         )
         self.assertIn(
-            "The exact 13-package incubating set is `oxml-core`, `oxml-opc`, "
+            "The exact 14-package incubating set is `oxml-core`, `oxml-opc`, "
             "`oxml-media`, `oxml-layout`, `oxml-drawing`, `oxml-pdf`, "
             "`oxml-sml`, `oxml-cli-support`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`, "
-            "`rpptx-render`, and `rpptx`.",
+            "`rpptx-render`, `rpptx`, and `rpptx-cli`.",
             normalized_release,
         )
         self.assertIn("go or no-go immediately", normalized_release)

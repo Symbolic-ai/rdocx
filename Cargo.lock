@@ -870,6 +870,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rpptx-cli"
+version = "0.1.2"
+dependencies = [
+ "clap",
+ "oxml-cli-support",
+ "oxml-opc",
+ "oxml-pdf",
+ "rpptx",
+ "serde_json",
+]
+
+[[package]]
 name = "rpptx-layout"
 version = "0.1.2"
 dependencies = [

@@ -1,6 +1,6 @@
 # F-144, rpptx-cli
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S36
 **Size**: L
 **Depends on**: F-143, F-116, F-104
@@ -101,11 +101,11 @@ alter the canonical sample generator or rendering defaults.
 
 ## Implementation checklist
 
-- [ ] Create the approved CLI crate and workspace/release wiring.
-- [ ] Add the formatting-preserving facade replacement seam.
-- [ ] Implement the seven bounded commands through public facades.
-- [ ] Add the single integration entrypoint and complete command matrix.
-- [ ] Run corpus, deterministic render, dependency, publication, and hash riders.
+- [x] Create the approved CLI crate and workspace/release wiring.
+- [x] Add the formatting-preserving facade replacement seam.
+- [x] Implement the seven bounded commands through public facades.
+- [x] Add the single integration entrypoint and complete command matrix.
+- [x] Run corpus, deterministic render, dependency, publication, and hash riders.
 
 ## Open questions
 

@@ -405,11 +405,18 @@ defaults while its facade dependency selects the bundled template explicitly.
 A padded artifact or render-enabled default must make the exact named size gate
 fail.
 
+The `rpptx` CLI integration gate corrupts a relationship and requires
+`validate` to exit nonzero. It then requires all 50 manifest decks to validate
+with a zero exit and never skips a missing corpus. The primary workspace-test
+job and the MSRV job fetch and verify the pinned corpus before running Cargo
+tests. Command regressions also prove bounded DPI, bounded diff work,
+zero-slide PNG failure without output, and one-slide-at-a-time PNG conversion.
+
 ## What CI runs
 
 | Job | Command |
 |---|---|
-| test | `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` |
+| test | Fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` |
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
 | wasm | Locked `wasm32-unknown-unknown` checks and `wasm-pack test --node` for `rdocx-wasm` and `rpptx-wasm` |
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |
@@ -419,7 +426,7 @@ fail.
 | fmt | `cargo fmt --all -- --check` |
 | doc | `cargo doc --workspace --no-deps --all-features --exclude rdocx-py --exclude rpptx-py` with `RUSTDOCFLAGS=-D warnings` |
 | package-oxml-layout | Verify the exact font and legal-file inventory, then build and size-check the verified archive |
-| msrv | `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 |
+| msrv | Fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 |
 | python-bindings | On pull requests, build each Python package with `maturin develop --locked` in its own Python 3.12.9 environment, then run its complete pytest directory |
 | supply-chain | `cargo-deny check` |
 | python-wheels | On manual dispatch or a `py-v*` tag, build six cp39-abi3 wheels for each Python package and one source distribution per package, then install and test every compatible artifact in a fresh environment |

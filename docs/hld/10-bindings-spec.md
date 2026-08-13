@@ -306,17 +306,26 @@ graph and runs its package-preserving inline test in Node.
 
 ## CLIs
 
-`rpptx-cli` mirrors `rdocx-cli`: `inspect`, `text`, `convert`, `diff`,
-`replace`, `validate`, `render`, using clap derive and `serde_json` for
-`--json`, including the pattern of dispatching `validate` separately so its exit
-code carries the verdict.
+`rpptx-cli` mirrors the seven-command `rdocx-cli` surface with `inspect`,
+`text`, `convert`, `diff`, `replace`, `validate`, and `render`. It uses clap
+derive and `serde_json` for `--json`. Thumbnail and outline are not part of
+this surface.
 
-Two presentation-specific additions: **`thumbnail`**, slide one at a fixed size,
-which is what every CMS wants, and **`outline`**, the title and bullet tree,
-which is ideal for LLM ingestion and is a genuine differentiator.
+`inspect` reports the file, slide and layout counts, slide size, core metadata,
+and each slide's identity, hidden state, and shape count. Its JSON form uses the
+shared schema-1 envelope. `text` emits slide text in presentation order.
+`convert` produces deterministic PDF or PNG output. Multi-slide PNG output uses
+one-based filename suffixes and renders one slide at a time. `diff` compares
+slide text with longest-common-subsequence semantics and rejects matrices above
+one million cells. `replace` delegates to the facade's literal,
+formatting-preserving text replacement. `validate` is dispatched separately so
+its exit status carries the verdict. `render` uses deterministic fonts and the
+shared one-based range grammar.
 
-`validate` is the highest-value command and pays for itself in the test suite by
-running across the corpus in CI.
+PNG rendering is limited to eight million pixels per slide for both `convert`
+and `render`. A zero-slide PNG conversion fails without creating output.
+The exact validation gate corrupts one relationship and requires a nonzero exit,
+then requires every verified pinned corpus deck to exit zero without skips.
 
 Shared range parsing, output-path defaulting, and JSON envelope rules live in
 `oxml-cli-support`. Ranges are positive, one-based, comma-separated values and

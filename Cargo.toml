@@ -11,6 +11,7 @@ members = [
     "crates/oxml-sml",
     "crates/oxml-cli-support",
     "crates/rpptx",
+    "crates/rpptx-cli",
     "crates/rpptx-chart",
     "crates/rpptx-layout",
     "crates/rpptx-oxml",
@@ -60,6 +61,7 @@ oxml-pdf = { path = "crates/oxml-pdf", version = "0.1.2", default-features = fal
 oxml-sml = { path = "crates/oxml-sml", version = "0.1.2" }
 oxml-cli-support = { path = "crates/oxml-cli-support", version = "0.1.2" }
 rpptx = { path = "crates/rpptx", version = "0.1.2", default-features = false }
+rpptx-cli = { path = "crates/rpptx-cli", version = "0.1.2" }
 rpptx-chart = { path = "crates/rpptx-chart", version = "0.1.2" }
 rpptx-layout = { path = "crates/rpptx-layout", version = "0.1.2" }
 rpptx-oxml = { path = "crates/rpptx-oxml", version = "0.1.2" }
