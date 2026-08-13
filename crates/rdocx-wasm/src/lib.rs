@@ -79,6 +79,12 @@ impl WasmDocument {
         self.inner.to_bytes().map_err(to_js_error)
     }
 
+    /// Render the document as PDF bytes.
+    #[wasm_bindgen(js_name = "toPdf")]
+    pub fn to_pdf(&self) -> Result<Vec<u8>, JsValue> {
+        self.inner.to_pdf().map_err(to_js_error)
+    }
+
     /// Convert to a complete HTML document string.
     #[wasm_bindgen(js_name = "toHtml")]
     pub fn to_html(&self) -> String {
@@ -239,6 +245,39 @@ mod tests {
         let output = Uint8Array::new(&output).to_vec();
 
         assert_complete_package_round_trip(&source, &output);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen_test::wasm_bindgen_test]
+    fn to_pdf_in_node_returns_a_complete_pdf_with_an_embedded_bundled_font() {
+        use js_sys::{Function, Reflect, Uint8Array};
+        use wasm_bindgen::JsCast;
+
+        let document = JsValue::from(WasmDocument::new());
+        let add_paragraph: Function = Reflect::get(&document, &JsValue::from_str("addParagraph"))
+            .expect("generated addParagraph should be visible")
+            .dyn_into()
+            .expect("addParagraph should be callable");
+        add_paragraph
+            .call1(
+                &document,
+                &JsValue::from_str("Bundled font PDF from WebAssembly"),
+            )
+            .expect("addParagraph should accept text");
+        let to_pdf: Function = Reflect::get(&document, &JsValue::from_str("toPdf"))
+            .expect("generated toPdf should be visible")
+            .dyn_into()
+            .expect("toPdf should be callable");
+        let pdf = to_pdf.call0(&document).expect("toPdf should return bytes");
+        assert!(pdf.is_instance_of::<Uint8Array>());
+        let pdf = Uint8Array::new(&pdf).to_vec();
+        let pdf_text = String::from_utf8_lossy(&pdf);
+
+        assert!(pdf.starts_with(b"%PDF-"));
+        assert!(pdf.ends_with(b"%%EOF"));
+        assert!(pdf_text.contains("/Subtype /Type0"));
+        assert!(pdf_text.contains("/FontFile2"));
+        assert!(pdf_text.contains("/BaseFont /Carlito"));
     }
 
     #[test]

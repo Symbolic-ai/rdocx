@@ -387,6 +387,13 @@ pure-Python source in each installed wheel. Representative enum-input,
 return-type, inline-source, constructor, and member mutations must make those
 gates fail, so hand-written stubs cannot drift.
 
+The document WASM wrapper has a package-preservation Node gate and a PDF gate
+in its single defaults-off profile. The PDF gate calls generated `toPdf`
+through reflection and requires `%PDF-` through `%%EOF`, a Type 0 font, a
+`FontFile2` stream, and the bundled Carlito base font. This proves the public
+JavaScript name, complete output, and embedded fallback font at the generated
+boundary.
+
 The presentation WASM wrapper has one Node round-trip gate in its default
 profile and a second Node gate with `render` enabled. The first crosses the
 generated JavaScript `Uint8Array` boundary and proves that facade-owned slide

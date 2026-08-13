@@ -84,9 +84,11 @@ The workspace dependency entries for `oxml-layout`, `oxml-pdf`,
 `rdocx-layout`, and `rdocx` are default-off so a member can select the exact
 graph. Direct native `rdocx` and `rdocx-layout` builds retain default-on system
 fonts. The CLI and Python binding opt in explicitly, while `rdocx-wasm` does
-not. Native `rpptx`, `rpptx-render`, and the presentation Python binding retain
-system fonts through the same explicit forwarding pattern. Bundled font bytes
-remain available in both modes.
+not. Its generated `toPdf` method calls the normal `Document::to_pdf` facade,
+which therefore uses document-embedded and bundled fonts without host font
+discovery in that graph. Native `rpptx`, `rpptx-render`, and the presentation
+Python binding retain system fonts through the same explicit forwarding
+pattern. Bundled font bytes remain available in both modes.
 
 ## Packaging
 
@@ -261,9 +263,10 @@ unresolved-symbol link failure that is easy to misdiagnose as something else.
 **A WASM target and Node job.** It installs the `wasm32-unknown-unknown` target,
 uses exact Node 24.11.1 and wasm-pack 0.15.0, and checks both facade-backed WASM
 crates with the locked workspace graph. It then runs both packages' inline Node
-package-preservation regressions. Checkout, setup-node, the Rust toolchain, and
-the Rust cache use reviewed full commit SHAs. The presentation render-profile
-and optimized-size gates remain local.
+regressions. The document suite also requires generated `toPdf` to return a
+complete PDF with an embedded bundled Carlito font. Checkout, setup-node, the
+Rust toolchain, and the Rust cache use reviewed full commit SHAs. The
+presentation render-profile and optimized-size gates remain local.
 
 **A dedicated Python artifact workflow.** Its product matrix is the Cartesian
 product of `rdocx` and `rpptx` with manylinux_2_28 x86_64 and aarch64,

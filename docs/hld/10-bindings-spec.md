@@ -273,9 +273,11 @@ in the package rather than being reconstructed by the binding.
 
 The constructor, `fromBytes`, `addParagraph`, `addHeading`,
 `addBoldParagraph`, `addTable`, `getText`, `paragraphCount`, `toDocxBytes`,
-`toHtml`, `toHtmlFragment`, `toMarkdown`, and `replacePlaceholder` names remain
-stable. `Document::open` and `save` stay absent because browser callers supply
-and receive bytes. Browser PDF export is not part of this surface yet.
+`toPdf`, `toHtml`, `toHtmlFragment`, `toMarkdown`, and `replacePlaceholder`
+names remain stable. `toPdf` delegates to the normal `Document::to_pdf` facade
+and returns its bytes directly. `Document::open`, `save`, and a second
+deterministic PDF alias stay absent because browser callers supply and receive
+bytes and the WASM profile already excludes host font discovery.
 
 The `system-fonts` feature is default-on in `rdocx-layout` and `rdocx`, which
 preserves native behavior. `rdocx-wasm` disables `rdocx` defaults, while the
@@ -287,8 +289,10 @@ numbering, then checks the complete part, relationship, and content-type graph
 through `fromBytes` and `toDocxBytes`. The same contract is an inline
 `wasm-bindgen-test` for Node. The Node test reflectively calls those generated
 JavaScript members and crosses the `Uint8Array` boundary in both directions.
-Pull-request CI target-checks the wrapper with the locked workspace graph and
-runs the inline test in Node.
+A second inline Node test calls generated `addParagraph` and `toPdf` members,
+then requires a complete PDF with a Type 0 font, an embedded TrueType stream,
+and the bundled Carlito base font. Pull-request CI target-checks the wrapper
+with the locked workspace graph and runs both tests in Node.
 
 `rpptx-wasm` owns one `rpptx::Presentation`, never a mini-model. Its default
 profile exposes the constructor, `fromBytes`, `toBytes`, `slideCount`, and

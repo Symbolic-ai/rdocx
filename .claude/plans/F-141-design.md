@@ -1,6 +1,6 @@
 # F-141, to_pdf in the browser
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S35
 **Size**: M
 **Depends on**: F-139, F-001
@@ -77,10 +77,10 @@ the existing renderer.
 
 ## Implementation checklist
 
-- [ ] Add the byte-returning `toPdf` facade delegation.
-- [ ] Add the reflective Node PDF and embedded-font regression inline.
-- [ ] Prove the system-font feature is absent from the WASM graph.
-- [ ] Run font, rendering, WASM, and hash riders.
+- [x] Add the byte-returning `toPdf` facade delegation.
+- [x] Add the reflective Node PDF and embedded-font regression inline.
+- [x] Prove the system-font feature is absent from the WASM graph.
+- [x] Run font, rendering, WASM, and hash riders.
 
 ## Open questions
 
