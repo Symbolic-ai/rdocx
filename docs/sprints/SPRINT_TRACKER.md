@@ -201,6 +201,10 @@ defended.
 | F-136 | S34 | L | 4 | 1 | 2026-08-13 | Lazy rpptx bindings with strict global stale-handle semantics |
 | F-137 | S34 | M | 2 | 1 | 2026-08-13 | Two-package abi3 wheel matrix and tag-only trusted publication workflow |
 | F-138 | S34 | S | 1 | 1 | 2026-08-13 | Pull-request Python binding build and test job |
+| F-139 | S35 | L | 4 | 1 | 2026-08-13 | Facade-backed rdocx WASM with complete package preservation |
+| F-140 | S35 | S | 1 | 1 | 2026-08-13 | Two-package locked WASM target and Node CI gates |
+| F-141 | S35 | M | 2 | 1 | 2026-08-13 | Browser PDF export with embedded bundled fonts |
+| F-142 | S35 | M | 2 | 1 | 2026-08-13 | Bounded facade-backed rpptx WASM profiles |
 
 ## Velocity
 
