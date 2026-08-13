@@ -38,7 +38,7 @@ sample-generator, and concurrent-test hardening work.
 | F-X003 | Deduplicate the sample generators | S | in-progress | codex |
 | F-X004 | Fix the shared temp path in the test suite | S | in-progress | codex |
 | F-144 | rpptx-cli | L | in-progress | codex |
-| F-145 | rpptx-cli thumbnail and outline | M | pending | - |
+| F-145 | rpptx-cli thumbnail and outline | M | in-progress | codex |
 
 ## Sequencing note
 
