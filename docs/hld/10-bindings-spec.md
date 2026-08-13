@@ -234,8 +234,9 @@ via OIDC, with no long-lived token in secrets. The workflow builds `rdocx` and
 `rpptx` across the six declared targets, produces one source distribution per
 package, and uploads each matrix product independently. Every native wheel is
 installed into a fresh environment for its compatible pytest, exact
-`mypy==2.3.0 --strict`, and `stubtest` gates. The musllinux wheel is installed
-and imported in a fresh Python 3.9 Alpine environment.
+`mypy==2.3.0 --strict`, and `stubtest` gates. Each musllinux wheel is installed
+in a fresh Python 3.9 Alpine environment and runs the same package parity suite
+as the native cells.
 
 The build jobs have only repository read permission. A separate publish job
 depends on all wheel and source-distribution jobs, requires exactly twelve

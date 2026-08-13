@@ -273,7 +273,8 @@ product of `rdocx` and `rpptx` with manylinux_2_28 x86_64 and aarch64,
 musllinux_1_2 x86_64, macOS x86_64 and arm64, and Windows x86_64. A second
 two-package job builds the source distributions. Native cells install wheels
 into fresh environments and run the compatible pytest, exact mypy, and
-stubtest gates. The musllinux cell performs a fresh Alpine install and import.
+stubtest gates. Each musllinux cell performs a fresh Alpine install and runs
+the applicable package parity suite.
 The Poppler-versioned binding render gate stays in its pinned environment
 rather than running on generic wheel hosts.
 

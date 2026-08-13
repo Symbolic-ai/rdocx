@@ -762,7 +762,7 @@ class SprintWorkflowTests(unittest.TestCase):
     def assert_wheels_workflow_contract(self, workflow_bytes: bytes) -> None:
         self.assertEqual(
             hashlib.sha256(workflow_bytes).hexdigest(),
-            "db89119b10d04baee6011f21513f9e7a191e39bb8b2f7715857a52217f6325ac",
+            "56491248b4ffa7ea40abe75b04a16fcfd5c24744d16ccb9a8c6f7110d39be35a",
         )
         wheels = workflow_bytes.decode("utf-8", errors="strict")
         expected_packages = (
@@ -980,7 +980,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 ("if: matrix.platform.install == 'native'",),
             )
         musllinux_install = self.yaml_step(
-            build_wheels, "Install musllinux wheel"
+            build_wheels, "Install and test musllinux wheel"
         )
         musllinux_conditions = tuple(
             line
@@ -1069,12 +1069,33 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(
             musllinux_run,
             (
-                'docker run --rm -v "$PWD/dist:/dist:ro" python:3.9-alpine \\',
-                'sh -c "python -m venv /tmp/wheel-venv && '
-                "/tmp/wheel-venv/bin/pip install "
-                "/dist/${{ matrix.package.distribution }}-*.whl && "
-                "/tmp/wheel-venv/bin/python -c 'import "
-                '${{ matrix.package.module }}\'"',
+                "docker run --rm " + chr(92),
+                '-v "$PWD:/workspace:ro" ' + chr(92),
+                '-v "$PWD/dist:/dist:ro" ' + chr(92),
+                "-w /workspace " + chr(92),
+                '-e PACKAGE_DISTRIBUTION="${{ matrix.package.distribution }}" '
+                + chr(92),
+                '-e PACKAGE_MODULE="${{ matrix.package.module }}" ' + chr(92),
+                "python:3.9-alpine " + chr(92),
+                "sh -euxc '",
+                "python -m venv /tmp/wheel-venv",
+                "venv_python=/tmp/wheel-venv/bin/python",
+                '"$venv_python" -m pip install --upgrade pip',
+                '"$venv_python" -m pip install '
+                "/dist/${PACKAGE_DISTRIBUTION}-*.whl pytest "
+                "python-docx==1.2.0 python-pptx==1.0.2",
+                '"$venv_python" -c "import ${PACKAGE_MODULE}"',
+                'if [ "$PACKAGE_DISTRIBUTION" = rdocx ]; then',
+                '"$venv_python" -m pytest ' + chr(92),
+                "crates/rdocx-py/tests/test_core.py " + chr(92),
+                "crates/rdocx-py/tests/test_formatting_tables.py " + chr(92),
+                "crates/rdocx-py/tests/test_shared.py " + chr(92),
+                "crates/rdocx-py/tests/test_python_docx_parity.py",
+                "else",
+                '"$venv_python" -m pytest '
+                "crates/rpptx-py/tests/test_documented_examples.py",
+                "fi",
+                "'",
             ),
         )
 
@@ -1085,6 +1106,17 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertIn("crates/rdocx-py/tests/test_python_docx_parity.py", native_install)
         self.assertIn(
             "crates/rpptx-py/tests/test_documented_examples.py", native_install
+        )
+        self.assertIn(
+            'if [ "$PACKAGE_DISTRIBUTION" = rdocx ]; then', musllinux_install
+        )
+        self.assertIn(
+            "crates/rdocx-py/tests/test_python_docx_parity.py",
+            musllinux_install,
+        )
+        self.assertIn(
+            "crates/rpptx-py/tests/test_documented_examples.py",
+            musllinux_install,
         )
         self.assertEqual(typing.count(distribution_branch), 1)
         self.assertIn('"$typing_python" -m mypy.stubtest rdocx\n', typing)
@@ -1413,8 +1445,21 @@ class SprintWorkflowTests(unittest.TestCase):
             "Validate wheel metadata",
             "Install and test native wheel",
             "Validate installed typing surface",
-            "Install musllinux wheel",
+            "Install and test musllinux wheel",
             "Validate complete publication set",
+        )
+        musllinux_step = self.yaml_step(
+            wheels, "Install and test musllinux wheel"
+        )
+        musllinux_parity_start = musllinux_step.index(
+            '              if [ "$PACKAGE_DISTRIBUTION" = rdocx ]; then\n'
+        )
+        musllinux_parity_end = musllinux_step.index(
+            "            '\n", musllinux_parity_start
+        )
+        musllinux_import_only_step = (
+            musllinux_step[:musllinux_parity_start]
+            + musllinux_step[musllinux_parity_end:]
         )
         early_success_mutations = tuple(
             (
@@ -1863,6 +1908,12 @@ class SprintWorkflowTests(unittest.TestCase):
                 "musllinux-if-false",
                 wheels.replace(
                     "if: matrix.platform.install == 'musl'", "if: false", 1
+                ),
+            ),
+            (
+                "musllinux-import-only",
+                wheels.replace(
+                    musllinux_step, musllinux_import_only_step, 1
                 ),
             ),
             (

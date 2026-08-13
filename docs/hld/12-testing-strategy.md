@@ -434,10 +434,11 @@ Poppler-versioned rendering gate, which belongs to its pinned render job. It
 runs the installed `rpptx` documented-example and differential suite. Native
 cells also check the inline Python sources with exact `mypy==2.3.0 --strict`
 and run `stubtest` across every public and native-extension module. The
-musllinux cell proves a clean Python 3.9 Alpine import. Repository unit tests
+musllinux cells install into clean Python 3.9 Alpine environments and run the
+same package parity suites. Repository unit tests
 parse the exact two-package, six-target product and use negative mutations to
-prove that package, target, clean-install, artifact dependency, and tag-only
-OIDC requirements are sensitive before the hosted matrix runs.
+prove that package, target, clean-install, parity, artifact dependency, and
+tag-only OIDC requirements are sensitive before the hosted matrix runs.
 
 The pull-request binding job has one matrix row for `rdocx` and one for
 `rpptx`. It uses Python 3.12.9 with exact `maturin==1.13.3` and
