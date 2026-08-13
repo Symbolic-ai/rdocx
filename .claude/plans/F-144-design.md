@@ -27,9 +27,9 @@ the CLI would discard run formatting and create package logic outside `rpptx`.
 
 ## Approach
 
-Create published `rpptx-cli` 0.1.2 with one binary and one integration-test
-entrypoint. Implement exactly `inspect`, `text`, `convert`, `diff`, `replace`,
-`validate`, and `render`.
+Create publishable, currently unpublished `rpptx-cli` 0.1.2 with one binary
+and one integration-test entrypoint. Implement exactly `inspect`, `text`,
+`convert`, `diff`, `replace`, `validate`, and `render`.
 
 - `inspect [--json]` reports file, slide and layout counts, slide size, core
   metadata, and per-slide identity, hidden state, and shape count. JSON uses

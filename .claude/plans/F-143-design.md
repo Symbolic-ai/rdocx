@@ -26,7 +26,8 @@ zero-based `render --page` option.
 
 ## Approach
 
-Create published `oxml-cli-support` 0.1.2 with three concrete helpers:
+Create publishable, currently unpublished `oxml-cli-support` 0.1.2 with three
+concrete helpers:
 
 - `parse_range(&str) -> Result<Vec<usize>>` accepts positive one-based
   comma-separated values and inclusive ranges, then sorts and deduplicates.
