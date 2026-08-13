@@ -195,6 +195,11 @@ defended.
 | F-131 | S33 | L | 4 | 1 | 2026-08-12 | Tri-state formatting and lazy table handles |
 | F-132 | S33 | M | 2 | 1 | 2026-08-12 | Python-compatible units, enums, and exception mapping |
 | F-133 | S33 | S | 1 | 1 | 2026-08-12 | GIL-detached rendering with concurrency and Poppler gates |
+| F-134 | S34 | M | 2 | 1 | 2026-08-13 | Typed rdocx and rpptx packages with strict live stub validation |
+| F-135 | S34 | M | 2 | 1 | 2026-08-13 | Pinned two-way python-docx parity suite |
+| F-136 | S34 | L | 4 | 1 | 2026-08-13 | Lazy rpptx bindings with strict global stale-handle semantics |
+| F-137 | S34 | M | 2 | 1 | 2026-08-13 | Two-package abi3 wheel matrix and tag-only trusted publication workflow |
+| F-138 | S34 | S | 1 | 1 | 2026-08-13 | Pull-request Python binding build and test job |
 
 ## Velocity
 

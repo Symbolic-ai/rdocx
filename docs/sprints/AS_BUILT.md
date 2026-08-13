@@ -4895,3 +4895,175 @@ installed binding tests, and the integrated full gate passed.
 progress-sensitive GIL-release regression. Keep correctness comparisons
 outside timing assertions, require complete outputs, and pin external semantic
 oracles to an exact reviewed version.
+
+### F-134, Type stubs and py.typed
+
+**Sprint.** S34
+**Completed.** 2026-08-13
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Both mixed Python packages now ship hand-written native
+extension stubs and zero-byte `py.typed` markers. Strict consumer programs and
+live `stubtest` coverage describe lazy handles, collections, units, enums,
+optional values, and factory-only construction exactly.
+
+**Non-obvious choices.** Python 3.12 runs exact `mypy==2.3.0` because that mypy
+release no longer supports Python 3.9. The generated extensions retain the
+cp39-abi3 floor and were installed separately before the typing gates.
+
+**Deviations from the design plan.** Review remediation narrowed rpptx shape
+and length types, included every inline-typed module in strict checking, and
+made all non-root native handles statically non-constructible.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`, Packaging,
+`docs/hld/12-testing-strategy.md`, Python bindings, and
+`docs/hld/14-development-backlog.md`, F-134.
+
+**Tests.** Fresh rdocx and rpptx wheels contained the expected stubs and
+markers. Strict mypy passed seven rdocx and six rpptx sources. Stubtest passed
+six rdocx and five rpptx modules. The integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Change a native signature and its hand-written
+stub in the same story, then run both strict installed-wheel checks and live
+stubtest.
+
+### F-135, python-docx parity suite
+
+**Sprint.** S34
+**Completed.** 2026-08-13
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** A tagged `python-docx==1.2.0` parity suite covers seventeen
+documented examples within the delivered rdocx surface. Both libraries author
+documents, both libraries read both outputs, and normalized paragraphs, runs,
+formatting, tables, cells, units, and enums must agree.
+
+**Non-obvious choices.** The held-row Quickstart example performs one declared
+public re-fetch after a structural cell write. This preserves strict global
+revision invalidation while keeping the remaining sixteen example bodies as
+namespace-only substitutions.
+
+**Deviations from the design plan.** Review expanded the manifest from sixteen
+to seventeen tagged examples, distinguished relative line spacing from length
+spacing, and moved table-style coverage into both saved writer paths.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** The documented-example gate, bidirectional saved round trip, oracle
+pin, manifest, line-spacing, and table-style mutation gates passed against a
+fresh installed cp39-abi3 wheel. The integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep the parity manifest bounded and tied to a
+tagged upstream source. Compare public structure, never package bytes or XML.
+
+### F-136, rpptx-py
+
+**Sprint.** S34
+**Completed.** 2026-08-13
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The unpublished `rpptx-py` mixed package exposes lazy
+presentation, slide, shape, text, and table handles over the Rust facade. It
+ships Python-compatible lengths, the bounded shape enum, mirrored exceptions,
+and seven Getting Started examples with two-way `python-pptx==1.0.2`
+structural comparison.
+
+**Non-obvious choices.** Every handle and collection is path-only and carries
+one captured global revision. Successful structural mutation invalidates all
+previous views, including the mutating receiver. Recovery messages are derived
+from the concrete repeated-shape path.
+
+**Deviations from the design plan.** The documented examples gained the
+minimal required public re-fetches after structural writes. Review also fixed
+the omitted placeholder-index default, shape value 51 compatibility, complete
+writer-drift sensitivity, and nested recovery paths.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/06-presentationml-model.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Ten installed binding tests, six shared path tests, 103 rpptx tests,
+the seven-example bidirectional differential, exhaustive stale-view probes,
+WASM isolation, dependency trees, and the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Do not add owner references or revision
+bypasses to preserve source compatibility. Re-fetch explicitly after every
+structural write.
+
+### F-137, wheels.yml
+
+**Sprint.** S34
+**Completed.** 2026-08-13
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** A pinned GitHub Actions workflow builds both distributions
+as cp39-abi3 wheels for six approved platform targets, plus one source
+distribution per package. It validates compatible wheels in fresh
+environments and reserves PyPI trusted publication for successful `py-v*` tag
+runs in the `pypi` environment.
+
+**Non-obvious choices.** Only the final publication job receives
+`id-token: write`. The reviewed workflow has a raw-byte SHA-256 attestation in
+addition to structural semantic tests, so any unreviewed workflow-byte change
+fails closed before its release graph can be trusted.
+
+**Deviations from the design plan.** Review hardened the workflow contract
+against 155 non-vacuous matrix, execution, permission, action-pin, artifact,
+trigger, and publication mutations. Native wheels and source distributions
+were built locally, while the first real hosted cross-platform run remains
+future GitHub evidence as planned.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Workflow contract and mutation tests, two native wheels, two source
+distributions, clean imports, strict typing, stubtest, archive inventory, and
+the integrated full gate passed. No tag, dispatch, or publication occurred.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Any intentional workflow edit must update the
+semantic contract and its reviewed raw-byte digest in the same reviewed story.
+
+### F-138, PR-time Python job
+
+**Sprint.** S34
+**Completed.** 2026-08-13
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Pull requests now run one fail-fast-disabled two-package
+matrix that creates a fresh environment, builds each extension with maturin,
+installs exact test and oracle dependencies, and runs the complete package
+pytest directory.
+
+**Non-obvious choices.** The job uses exact immutable action commits, root
+`contents: read` permission, no OIDC authority, and direct failure propagation.
+Its Python 3.12.9 runtime supports the exact pytest 9.1.1 pin while exercising
+the cp39-abi3 extensions.
+
+**Deviations from the design plan.** Review added structural trigger,
+permission, action-input, step-order, and failure-suppression checks. An
+inherited prose violation in an F-137 review artifact was fixed separately
+before the integrated gate.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`, Python bindings,
+and `docs/hld/15-build-and-toolchain.md`, CI job matrix.
+
+**Tests.** Twenty-eight workflow regressions, thirty-three installed rdocx
+tests, ten installed rpptx tests, a real failing-test propagation mutation,
+WASM and dependency isolation, and the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep the pull-request job least privilege and
+make any new package test failure propagate without a conditional or fallback.
