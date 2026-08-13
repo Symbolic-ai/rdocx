@@ -28,9 +28,9 @@ regenerated, never hand-edited.
 | M10, Renderer                               | 20 | 20 | 0 | 0  |
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
-| M13, Bindings and tooling                   | 18 | 14 | 0 | 4  |
+| M13, Bindings and tooling                   | 18 | 14 | 1 | 3  |
 | X, Cross-cutting (opportunistic)            | 5  | 1 | 0 | 4  |
-| **Total** | **159** | **151** | **0** | **8** |
+| **Total** | **159** | **151** | **1** | **7** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -274,7 +274,7 @@ regenerated, never hand-edited.
 | F-140 | wasm CI job                                  | S35 | S | done |
 | F-141 | to_pdf in the browser                        | S35 | M | done |
 | F-142 | rpptx-wasm                                   | S35 | M | done |
-| F-143 | oxml-cli-support                             | S36 | S | pending |
+| F-143 | oxml-cli-support                             | S36 | S | in-progress |
 | F-144 | rpptx-cli                                    | S36 | L | pending |
 | F-145 | rpptx-cli thumbnail and outline              | S36 | M | pending |
 | F-146 | npm publication                              | S36 | S | pending |
