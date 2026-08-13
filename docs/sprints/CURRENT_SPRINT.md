@@ -30,7 +30,7 @@ then make wheel and PR automation enforce the resulting package contract.
 | F-134 | Type stubs and py.typed | M | in-progress | codex |
 | F-135 | python-docx parity suite | M | in-progress | codex |
 | F-137 | wheels.yml | M | in-progress | codex |
-| F-138 | PR-time Python job | S | pending | - |
+| F-138 | PR-time Python job | S | in-progress | codex |
 
 ## Sequencing note
 
