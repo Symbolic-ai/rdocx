@@ -469,10 +469,300 @@ class SprintWorkflowTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(AssertionError):
                 self.assert_python_pr_job_contract(mutated)
 
+    def assert_wasm_pr_job_contract(self, ci: str) -> None:
+        triggers = self.yaml_block(ci, "on:")
+        trigger_keys = tuple(
+            line.split(":", 1)[0]
+            for line in self.yaml_direct_lines(triggers, 2)
+        )
+        self.assertEqual(trigger_keys, ("push", "pull_request", "schedule"))
+        pull_request = self.yaml_block(triggers, "  pull_request:")
+        self.assertEqual(self.yaml_direct_lines(pull_request, 4), ())
+
+        root_permissions = self.yaml_block(ci, "permissions:")
+        self.assertEqual(
+            self.yaml_direct_lines(root_permissions, 2),
+            ("contents: read",),
+        )
+        operative_ci = self.operative_lines(ci)
+        self.assertFalse(any("id-token:" in line for line in operative_ci))
+        self.assertFalse(any("write-all" in line for line in operative_ci))
+
+        job = self.yaml_block(ci, "  wasm:")
+        self.assertEqual(
+            self.yaml_direct_lines(job, 4),
+            ("name: WASM", "runs-on: ubuntu-latest", "steps:"),
+        )
+        self.assertFalse(
+            any("continue-on-error:" in line for line in self.operative_lines(job))
+        )
+
+        steps = self.yaml_steps(job)
+        identities = tuple(
+            self.yaml_step_identity(step, position)
+            for position, step in enumerate(steps)
+        )
+        self.assertEqual(
+            identities,
+            (
+                "step:0",
+                "step:1",
+                "step:2",
+                "Set up Node 24.11.1",
+                "Install wasm-pack 0.15.0",
+                "Check WASM targets",
+                "Run WASM Node tests",
+            ),
+        )
+
+        action_contract = (
+            (
+                steps[0],
+                "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+            ),
+            (
+                steps[1],
+                "dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c",
+            ),
+            (
+                steps[2],
+                "Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4",
+            ),
+        )
+        for action_step, expected_action in action_contract:
+            self.assertEqual(self.yaml_step_actions(action_step), (expected_action,))
+
+        rust_inputs = self.yaml_block(steps[1], "        with:")
+        self.assertEqual(
+            self.yaml_direct_lines(rust_inputs, 10),
+            ("targets: wasm32-unknown-unknown",),
+        )
+        self.assertEqual(self.yaml_direct_lines(steps[0], 8), ())
+        self.assertEqual(self.yaml_direct_lines(steps[2], 8), ())
+
+        node = self.yaml_step(job, "Set up Node 24.11.1")
+        self.assertEqual(
+            self.yaml_step_actions(node),
+            (
+                "actions/setup-node@"
+                "249970729cb0ef3589644e2896645e5dc5ba9c38",
+            ),
+        )
+        self.assertEqual(
+            self.yaml_direct_lines(node, 8),
+            (
+                "uses: actions/setup-node@"
+                "249970729cb0ef3589644e2896645e5dc5ba9c38",
+                "with:",
+            ),
+        )
+        node_inputs = self.yaml_block(node, "        with:")
+        self.assertEqual(
+            self.yaml_direct_lines(node_inputs, 10),
+            ('node-version: "24.11.1"',),
+        )
+
+        install = self.yaml_step(job, "Install wasm-pack 0.15.0")
+        checks = self.yaml_step(job, "Check WASM targets")
+        node_tests = self.yaml_step(job, "Run WASM Node tests")
+        for command_step in (install, checks, node_tests):
+            self.assertEqual(
+                self.yaml_direct_lines(command_step, 8),
+                ("shell: bash", "run: |"),
+            )
+        install_lines = self.yaml_run_lines(install)
+        check_lines = self.yaml_run_lines(checks)
+        node_test_lines = self.yaml_run_lines(node_tests)
+        self.assertEqual(
+            install_lines,
+            ("cargo install wasm-pack --version 0.15.0 --locked",),
+        )
+        self.assertEqual(
+            check_lines,
+            (
+                "cargo check --locked --target wasm32-unknown-unknown -p rdocx-wasm",
+                "cargo check --locked --target wasm32-unknown-unknown -p rpptx-wasm",
+            ),
+        )
+        self.assertEqual(
+            node_test_lines,
+            (
+                "wasm-pack test --node crates/rdocx-wasm",
+                "wasm-pack test --node crates/rpptx-wasm",
+            ),
+        )
+        self.assert_no_success_short_circuit(
+            install_lines + check_lines + node_test_lines
+        )
+        self.assertNotIn("|| true", job)
+        self.assertNotIn("set +e", job)
+
+    def test_wasm_pr_job_checks_both_targets_and_runs_node_tests(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_wasm_pr_job_contract(ci)
+
+    def assert_wasm_setup_node_provenance_contract(
+        self, ci: str, testing_hld: str
+    ) -> None:
+        reviewed_sha = "249970729cb0ef3589644e2896645e5dc5ba9c38"
+        reviewed_tag = "v6.5.0"
+        job = self.yaml_block(ci, "  wasm:")
+        provenance_line = (
+            f"        uses: actions/setup-node@{reviewed_sha} # {reviewed_tag}"
+        )
+        self.assertEqual(job.count(provenance_line), 1)
+        self.assertIn(f"setup-node {reviewed_tag}", testing_hld)
+        self.assertNotIn("setup-node v6.1.0", testing_hld)
+
+    def test_wasm_setup_node_provenance_matches_the_testing_hld(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        testing_hld = (workflow.REPO / "docs/hld/12-testing-strategy.md").read_text(
+            encoding="utf-8"
+        )
+        self.assert_wasm_setup_node_provenance_contract(ci, testing_hld)
+
+        mutations = {
+            "stale-workflow-comment": (
+                ci.replace(
+                    "249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0",
+                    "249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.1.0",
+                    1,
+                ),
+                testing_hld,
+            ),
+            "stale-hld-label": (
+                ci,
+                testing_hld.replace("setup-node v6.5.0", "setup-node v6.1.0", 1),
+            ),
+        }
+        for name, (mutated_ci, mutated_hld) in mutations.items():
+            self.assertTrue(
+                mutated_ci != ci or mutated_hld != testing_hld,
+                name,
+            )
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_wasm_setup_node_provenance_contract(
+                    mutated_ci, mutated_hld
+                )
+
+    def test_wasm_pr_job_rejects_skipped_or_weakened_gates(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_wasm_pr_job_contract(ci)
+        wasm_job = self.yaml_block(ci, "  wasm:")
+
+        def mutate_job(old: str, new: str) -> str:
+            self.assertIn(old, wasm_job)
+            return ci.replace(wasm_job, wasm_job.replace(old, new, 1), 1)
+
+        mutations = {
+            "missing-pull-request-trigger": ci.replace(
+                "  pull_request:\n", "", 1
+            ),
+            "commented-pull-request-trigger": ci.replace(
+                "  pull_request:\n", "  # pull_request:\n", 1
+            ),
+            "root-contents-write": ci.replace(
+                "  contents: read\n", "  contents: write\n", 1
+            ),
+            "root-id-token-write": ci.replace(
+                "  contents: read\n",
+                "  contents: read\n  id-token: write\n",
+                1,
+            ),
+            "job-condition": mutate_job(
+                "    name: WASM\n", "    name: WASM\n    if: true\n"
+            ),
+            "wrong-checkout-sha": mutate_job(
+                "de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+                "0000000000000000000000000000000000000000",
+            ),
+            "wrong-rust-toolchain-sha": mutate_job(
+                "4360b52568e2003a75bf9bc1d59f33a8e3fc893c",
+                "0000000000000000000000000000000000000000",
+            ),
+            "wrong-rust-cache-sha": mutate_job(
+                "c19371144df3bb44fab255c43d04cbc2ab54d1c4",
+                "0000000000000000000000000000000000000000",
+            ),
+            "wrong-setup-node-sha": mutate_job(
+                "249970729cb0ef3589644e2896645e5dc5ba9c38",
+                "0000000000000000000000000000000000000000",
+            ),
+            "wrong-node-version": mutate_job("24.11.1", "24"),
+            "unlocked-wasm-pack-install": mutate_job(
+                "cargo install wasm-pack --version 0.15.0 --locked",
+                "cargo install wasm-pack --version 0.15.0",
+            ),
+            "floating-wasm-pack-version": mutate_job(
+                "cargo install wasm-pack --version 0.15.0 --locked",
+                "cargo install wasm-pack --locked",
+            ),
+            "unlocked-target-check": mutate_job(
+                "cargo check --locked --target wasm32-unknown-unknown -p rdocx-wasm",
+                "cargo check --target wasm32-unknown-unknown -p rdocx-wasm",
+            ),
+            "missing-rdocx-target-check": mutate_job(
+                "          cargo check --locked --target wasm32-unknown-unknown -p rdocx-wasm\n",
+                "",
+            ),
+            "missing-rpptx-target-check": mutate_job(
+                "          cargo check --locked --target wasm32-unknown-unknown -p rpptx-wasm\n",
+                "",
+            ),
+            "missing-rdocx-node-test": mutate_job(
+                "          wasm-pack test --node crates/rdocx-wasm\n", ""
+            ),
+            "missing-rpptx-node-test": mutate_job(
+                "          wasm-pack test --node crates/rpptx-wasm\n", ""
+            ),
+            "missing-node-runner": mutate_job(
+                "wasm-pack test --node crates/rdocx-wasm",
+                "wasm-pack test crates/rdocx-wasm",
+            ),
+            "listing-only-node-test": mutate_job(
+                "wasm-pack test --node crates/rdocx-wasm",
+                "wasm-pack test --node crates/rdocx-wasm -- --list",
+            ),
+            "check-condition": mutate_job(
+                "      - name: Check WASM targets\n",
+                "      - name: Check WASM targets\n        if: true\n",
+            ),
+            "node-test-condition": mutate_job(
+                "      - name: Run WASM Node tests\n",
+                "      - name: Run WASM Node tests\n        if: true\n",
+            ),
+            "continue-on-error": mutate_job(
+                "      - name: Run WASM Node tests\n",
+                "      - name: Run WASM Node tests\n"
+                "        continue-on-error: true\n",
+            ),
+            "successful-fallback": mutate_job(
+                "wasm-pack test --node crates/rdocx-wasm",
+                "wasm-pack test --node crates/rdocx-wasm || true",
+            ),
+            "early-success": mutate_job(
+                "        run: |\n"
+                "          wasm-pack test --node crates/rdocx-wasm",
+                "        run: |\n"
+                "          exit 0\n"
+                "          wasm-pack test --node crates/rdocx-wasm",
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, ci, name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_wasm_pr_job_contract(mutated)
+
     def assert_wheels_workflow_contract(self, workflow_bytes: bytes) -> None:
         self.assertEqual(
             hashlib.sha256(workflow_bytes).hexdigest(),
-            "db89119b10d04baee6011f21513f9e7a191e39bb8b2f7715857a52217f6325ac",
+            "56491248b4ffa7ea40abe75b04a16fcfd5c24744d16ccb9a8c6f7110d39be35a",
         )
         wheels = workflow_bytes.decode("utf-8", errors="strict")
         expected_packages = (
@@ -690,7 +980,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 ("if: matrix.platform.install == 'native'",),
             )
         musllinux_install = self.yaml_step(
-            build_wheels, "Install musllinux wheel"
+            build_wheels, "Install and test musllinux wheel"
         )
         musllinux_conditions = tuple(
             line
@@ -779,12 +1069,33 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(
             musllinux_run,
             (
-                'docker run --rm -v "$PWD/dist:/dist:ro" python:3.9-alpine \\',
-                'sh -c "python -m venv /tmp/wheel-venv && '
-                "/tmp/wheel-venv/bin/pip install "
-                "/dist/${{ matrix.package.distribution }}-*.whl && "
-                "/tmp/wheel-venv/bin/python -c 'import "
-                '${{ matrix.package.module }}\'"',
+                "docker run --rm " + chr(92),
+                '-v "$PWD:/workspace:ro" ' + chr(92),
+                '-v "$PWD/dist:/dist:ro" ' + chr(92),
+                "-w /workspace " + chr(92),
+                '-e PACKAGE_DISTRIBUTION="${{ matrix.package.distribution }}" '
+                + chr(92),
+                '-e PACKAGE_MODULE="${{ matrix.package.module }}" ' + chr(92),
+                "python:3.9-alpine " + chr(92),
+                "sh -euxc '",
+                "python -m venv /tmp/wheel-venv",
+                "venv_python=/tmp/wheel-venv/bin/python",
+                '"$venv_python" -m pip install --upgrade pip',
+                '"$venv_python" -m pip install '
+                "/dist/${PACKAGE_DISTRIBUTION}-*.whl pytest "
+                "python-docx==1.2.0 python-pptx==1.0.2",
+                '"$venv_python" -c "import ${PACKAGE_MODULE}"',
+                'if [ "$PACKAGE_DISTRIBUTION" = rdocx ]; then',
+                '"$venv_python" -m pytest ' + chr(92),
+                "crates/rdocx-py/tests/test_core.py " + chr(92),
+                "crates/rdocx-py/tests/test_formatting_tables.py " + chr(92),
+                "crates/rdocx-py/tests/test_shared.py " + chr(92),
+                "crates/rdocx-py/tests/test_python_docx_parity.py",
+                "else",
+                '"$venv_python" -m pytest '
+                "crates/rpptx-py/tests/test_documented_examples.py",
+                "fi",
+                "'",
             ),
         )
 
@@ -795,6 +1106,17 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertIn("crates/rdocx-py/tests/test_python_docx_parity.py", native_install)
         self.assertIn(
             "crates/rpptx-py/tests/test_documented_examples.py", native_install
+        )
+        self.assertIn(
+            'if [ "$PACKAGE_DISTRIBUTION" = rdocx ]; then', musllinux_install
+        )
+        self.assertIn(
+            "crates/rdocx-py/tests/test_python_docx_parity.py",
+            musllinux_install,
+        )
+        self.assertIn(
+            "crates/rpptx-py/tests/test_documented_examples.py",
+            musllinux_install,
         )
         self.assertEqual(typing.count(distribution_branch), 1)
         self.assertIn('"$typing_python" -m mypy.stubtest rdocx\n', typing)
@@ -1123,8 +1445,21 @@ class SprintWorkflowTests(unittest.TestCase):
             "Validate wheel metadata",
             "Install and test native wheel",
             "Validate installed typing surface",
-            "Install musllinux wheel",
+            "Install and test musllinux wheel",
             "Validate complete publication set",
+        )
+        musllinux_step = self.yaml_step(
+            wheels, "Install and test musllinux wheel"
+        )
+        musllinux_parity_start = musllinux_step.index(
+            '              if [ "$PACKAGE_DISTRIBUTION" = rdocx ]; then\n'
+        )
+        musllinux_parity_end = musllinux_step.index(
+            "            '\n", musllinux_parity_start
+        )
+        musllinux_import_only_step = (
+            musllinux_step[:musllinux_parity_start]
+            + musllinux_step[musllinux_parity_end:]
         )
         early_success_mutations = tuple(
             (
@@ -1573,6 +1908,12 @@ class SprintWorkflowTests(unittest.TestCase):
                 "musllinux-if-false",
                 wheels.replace(
                     "if: matrix.platform.install == 'musl'", "if: false", 1
+                ),
+            ),
+            (
+                "musllinux-import-only",
+                wheels.replace(
+                    musllinux_step, musllinux_import_only_step, 1
                 ),
             ),
             (
@@ -2407,7 +2748,10 @@ class SprintWorkflowTests(unittest.TestCase):
             self.assertEqual(dependencies[name]["version"], expected_version, name)
             self.assertEqual(lock_versions[name], expected_version, name)
 
-    def test_release_preparation_metadata_cannot_mutate_external_state(self) -> None:
+    def assert_release_preparation_metadata_contract(
+        self, manifest_overrides: dict[str, str] | None = None
+    ) -> None:
+        manifest_overrides = manifest_overrides or {}
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
         release = root["workspace"]["metadata"]["release"]
 
@@ -2419,16 +2763,124 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertFalse(release["push"])
         self.assertNotIn("pre-release-replacements", release)
 
-        family_counts = {"workspace": 0, "incubating": 0}
+        family_members = {"workspace": [], "incubating": []}
+        manifests = {}
         for member in root["workspace"]["members"]:
-            manifest = tomllib.loads(
-                (workflow.REPO / member / "Cargo.toml").read_text(encoding="utf-8")
+            manifest_text = manifest_overrides.get(
+                member,
+                (workflow.REPO / member / "Cargo.toml").read_text(encoding="utf-8"),
             )
+            manifest = tomllib.loads(manifest_text)
+            manifests[member] = manifest
             family = manifest["package"]["metadata"]["release"]["shared-version"]
-            self.assertIn(family, family_counts)
-            family_counts[family] += 1
+            self.assertIn(family, family_members)
+            family_members[family].append(member)
 
-        self.assertEqual(family_counts, {"workspace": 11, "incubating": 12})
+        self.assertEqual(
+            tuple(family_members["workspace"]),
+            (
+                "crates/oxml-py-support",
+                "crates/rpptx-py",
+                "crates/rdocx-opc",
+                "crates/rdocx-oxml",
+                "crates/rdocx",
+                "crates/rdocx-layout",
+                "crates/rdocx-pdf",
+                "crates/rdocx-html",
+                "crates/rdocx-py",
+                "crates/rdocx-cli",
+                "crates/rdocx-wasm",
+            ),
+        )
+        self.assertEqual(
+            tuple(family_members["incubating"]),
+            (
+                "crates/oxml-core",
+                "crates/oxml-drawing",
+                "crates/oxml-layout",
+                "crates/oxml-media",
+                "crates/oxml-opc",
+                "crates/oxml-pdf",
+                "crates/oxml-sml",
+                "crates/rpptx",
+                "crates/rpptx-chart",
+                "crates/rpptx-layout",
+                "crates/rpptx-oxml",
+                "crates/rpptx-render",
+                "crates/rpptx-wasm",
+            ),
+        )
+
+        family_counts = {
+            family: len(members) for family, members in family_members.items()
+        }
+        self.assertEqual(family_counts, {"workspace": 11, "incubating": 13})
+
+        wasm_package = manifests["crates/rpptx-wasm"]["package"]
+        self.assertEqual(wasm_package["name"], "rpptx-wasm")
+        self.assertEqual(wasm_package["version"], "0.1.2")
+        self.assertTrue(wasm_package.get("description", "").strip())
+        self.assertFalse(wasm_package["publish"])
+        self.assertEqual(
+            wasm_package["metadata"]["release"],
+            {
+                "shared-version": "incubating",
+                "tag-name": "rpptx-v{{version}}",
+            },
+        )
+
+        dependencies = root["workspace"]["dependencies"]
+        self.assertNotIn("rpptx-wasm", dependencies)
+        lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
+        wasm_lock_versions = tuple(
+            package["version"]
+            for package in lock["package"]
+            if package["name"] == "rpptx-wasm"
+        )
+        self.assertEqual(wasm_lock_versions, ("0.1.2",))
+
+    def test_release_preparation_metadata_cannot_mutate_external_state(self) -> None:
+        self.assert_release_preparation_metadata_contract()
+
+    def test_release_preparation_metadata_rejects_a_wasm_family_mutation(
+        self,
+    ) -> None:
+        member = "crates/rpptx-wasm"
+        manifest = (workflow.REPO / member / "Cargo.toml").read_text(
+            encoding="utf-8"
+        )
+        mutated = manifest.replace(
+            'shared-version = "incubating"',
+            'shared-version = "workspace"',
+            1,
+        )
+        self.assertNotEqual(mutated, manifest)
+        with self.assertRaises(AssertionError):
+            self.assert_release_preparation_metadata_contract({member: mutated})
+
+    def test_release_preparation_metadata_rejects_wasm_tag_and_version_mutations(
+        self,
+    ) -> None:
+        member = "crates/rpptx-wasm"
+        manifest = (workflow.REPO / member / "Cargo.toml").read_text(
+            encoding="utf-8"
+        )
+        mutations = {
+            "stable-tag-template": manifest.replace(
+                'tag-name = "rpptx-v{{version}}"',
+                'tag-name = "v{{version}}"',
+                1,
+            ),
+            "workspace-version": manifest.replace(
+                'version = "0.1.2"',
+                "version.workspace = true",
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, manifest, name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_release_preparation_metadata_contract({member: mutated})
 
     def test_release_command_is_the_only_release_tag_authority(self) -> None:
         release = (workflow.REPO / ".claude/commands/release.md").read_text(

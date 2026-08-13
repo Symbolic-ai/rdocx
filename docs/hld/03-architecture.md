@@ -61,7 +61,8 @@ churn. The edge runs `oxml-drawing → rdocx-oxml`, never the reverse.
 
 **`oxml-opc` does not depend on `oxml-core`.** It has its own small local-name
 handling. Staying independent means it is publishable first and consumable
-alone, which matters for `rdocx-wasm`, which wants only `OpcPackage`.
+alone. `rdocx-wasm` consumes the complete `rdocx` facade rather than using this
+lower-level seam as a second document model.
 
 **`oxml-media` has no dependencies at all.** It owns byte sniffing, image header
 probing, and intrinsic EMU sizing through its local `NativeSize` value. It
@@ -170,6 +171,11 @@ Python binding re-resolve lazy index paths without allocating paragraph
 snapshots, clearing layout caches for reads, or reaching through private OOXML
 fields.
 
+`Document::text` traverses body paragraphs and table cells in document order.
+The WASM binding uses that additive facade accessor for its existing `getText`
+method and otherwise owns one complete `Document`. It never reaches into
+`rdocx-oxml` or maintains a second package representation.
+
 The same direct lookup rule covers document tables and paragraphs nested in
 table cells. `Document::table` and `Document::table_mut` are total, and cell
 handles provide paragraph counts plus immutable and mutable lookup. Run and
@@ -184,6 +190,12 @@ shape trees, placeholders, text frames, paragraphs, regular runs, tables and
 cells. Consuming mutable accessors transfer a facade borrow into its nested
 handle, which lets the Python binding re-resolve a path without exposing
 PresentationML internals or storing a Rust borrow in a pyclass.
+
+The facade also owns package-to-render-input assembly. Its deterministic render
+entry points resolve the current package once and return either the shared
+render input and layout or a complete PDF. The corpus example and
+`rpptx-wasm` call that boundary, so neither binding nor development tooling
+maintains a second PresentationML package interpretation path.
 
 Every consuming formatting builder on `Paragraph`, `Run`, `Table`, `Row`, and
 `Cell` has a non-consuming `set_*` twin because a `mut self -> Self` builder

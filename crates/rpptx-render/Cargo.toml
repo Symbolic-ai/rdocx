@@ -16,9 +16,13 @@ publish = true
 shared-version = "incubating"
 tag-name = "rpptx-v{{version}}"
 
+[features]
+default = ["system-fonts"]
+system-fonts = ["oxml-layout/system-fonts"]
+
 [dependencies]
 oxml-drawing.workspace = true
-oxml-layout.workspace = true
+oxml-layout = { workspace = true, default-features = false }
 oxml-media.workspace = true
 rpptx-layout.workspace = true
 rpptx-oxml.workspace = true

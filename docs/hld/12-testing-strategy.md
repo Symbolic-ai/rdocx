@@ -387,13 +387,31 @@ pure-Python source in each installed wheel. Representative enum-input,
 return-type, inline-source, constructor, and member mutations must make those
 gates fail, so hand-written stubs cannot drift.
 
+The document WASM wrapper has a package-preservation Node gate and a PDF gate
+in its single defaults-off profile. The PDF gate calls generated `toPdf`
+through reflection and requires `%PDF-` through `%%EOF`, a Type 0 font, a
+`FontFile2` stream, and the bundled Carlito base font. This proves the public
+JavaScript name, complete output, and embedded fallback font at the generated
+boundary.
+
+The presentation WASM wrapper has one Node round-trip gate in its default
+profile and a second Node gate with `render` enabled. The first crosses the
+generated JavaScript `Uint8Array` boundary and proves that facade-owned slide
+mutation preserves the complete package. The second produces a complete PDF.
+The final normal-default artifact is built with exact wasm-pack 0.15.0,
+optimized with reviewed wasm-opt 125, compressed with `gzip -n -9`, and
+rejected at 1,000,000 decimal bytes. The wrapper manifest keeps render out of
+defaults while its facade dependency selects the bundled template explicitly.
+A padded artifact or render-enabled default must make the exact named size gate
+fail.
+
 ## What CI runs
 
 | Job | Command |
 |---|---|
 | test | `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` |
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
-| wasm | `cargo check --target wasm32-unknown-unknown -p rdocx-wasm` |
+| wasm | Locked `wasm32-unknown-unknown` checks and `wasm-pack test --node` for `rdocx-wasm` and `rpptx-wasm` |
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |
 | hash-harness | `python3 scripts/hash_harness.py --check` |
 | presentation-fidelity | Fetch the pinned corpus, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
@@ -416,10 +434,11 @@ Poppler-versioned rendering gate, which belongs to its pinned render job. It
 runs the installed `rpptx` documented-example and differential suite. Native
 cells also check the inline Python sources with exact `mypy==2.3.0 --strict`
 and run `stubtest` across every public and native-extension module. The
-musllinux cell proves a clean Python 3.9 Alpine import. Repository unit tests
+musllinux cells install into clean Python 3.9 Alpine environments and run the
+same package parity suites. Repository unit tests
 parse the exact two-package, six-target product and use negative mutations to
-prove that package, target, clean-install, artifact dependency, and tag-only
-OIDC requirements are sensitive before the hosted matrix runs.
+prove that package, target, clean-install, parity, artifact dependency, and
+tag-only OIDC requirements are sensitive before the hosted matrix runs.
 
 The pull-request binding job has one matrix row for `rdocx` and one for
 `rpptx`. It uses Python 3.12.9 with exact `maturin==1.13.3` and
@@ -437,12 +456,17 @@ setup-python v6.2.0, rust-cache v2.9.1, and the selected stable rust-toolchain
 revision are bound to full reviewed commit SHAs. Their operative input maps are
 exact and cannot be satisfied by comments.
 
+The pull-request WASM job uses exact Node 24.11.1 and wasm-pack 0.15.0. It
+target-checks both WASM packages with `--locked`, then runs both inline suites
+through `wasm-pack test --node`. The steps are unconditional and propagate an
+ordinary non-zero command status. Checkout v6.0.2, setup-node v6.5.0,
+rust-cache v2.9.1, and the selected stable rust-toolchain revision are bound to
+full reviewed commit SHAs.
+
 ## Gaps being closed
 
 Stated plainly, because they are why two shipped defects went unnoticed:
 
 - **`rdocx-cli` has zero tests** despite being a published binary.
-- **`rdocx-wasm` has zero behavioural tests.** Its target check now catches
-  compile drift, but it does not prove package-preserving round trips.
 - **PDF and PNG output is only checked for non-emptiness**, so layout
   regressions are invisible. The hash harness closes this.

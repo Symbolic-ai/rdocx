@@ -1,57 +1,58 @@
-# Current Sprint, S34
+# Current Sprint, S35
 
 **Milestone**: M13 Bindings and tooling.
 
-**Goal**: Make the Python packages ready for typed use, parity validation,
-cross-platform wheel production, and continuous integration. Complete the
-rdocx compatibility evidence, reuse the validated path machinery for rpptx,
-then make wheel and PR automation enforce the resulting package contract.
+**Goal**: Make both WASM packages thin wrappers around the real Rust facades
+and keep them continuously exercised by CI. Replace the destructive rdocx
+mini-model, add browser PDF output with bundled fonts, and introduce rpptx WASM
+profiles with a bounded default package.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for the shared Python-support boundary and the
-  permitted `rdocx-py` and `rpptx-py` dependency directions.
-- `docs/hld/10-bindings-spec.md`, for the hand-written stubs, `py.typed`, mixed
-  package layout, parity suite, wheel matrix, tag namespace, and PR-time job.
-- `docs/hld/12-testing-strategy.md`, for Python parity coverage and the binding
-  exclusions required by workspace Rust gates.
-- `docs/hld/13-risks-and-open-questions.md`, for the index-path aliasing risk
-  that the reused presentation handles must preserve.
-- `docs/hld/14-development-backlog.md`, for F-134 through F-138 dependencies
+- `docs/hld/02-scope-and-non-goals.md`, for the requirement that both libraries
+  ship supported WASM modules alongside their Rust, CLI, and Python surfaces.
+- `docs/hld/03-architecture.md`, for facade ownership and the dependency
+  direction that keeps the WASM packages as consumers of the real libraries.
+- `docs/hld/08-rendering-spec.md`, for the shared document-to-PDF rendering path
+  that browser PDF output must reuse.
+- `docs/hld/10-bindings-spec.md`, for the destructive current rdocx behavior,
+  preserved JavaScript method names, bundled-font browser rendering, CI gate,
+  and two rpptx feature profiles.
+- `docs/hld/12-testing-strategy.md`, for package-preserving behavioral tests,
+  wasm target checks, and the regression gap this sprint closes.
+- `docs/hld/13-risks-and-open-questions.md`, for the carried rdocx-wasm save-path
+  defect that discards package parts.
+- `docs/hld/14-development-backlog.md`, for F-139 through F-142 dependencies
   and their named acceptance gates.
-- `docs/hld/15-build-and-toolchain.md`, for abi3-py39, mixed-package version
-  alignment, PyPI OIDC publication, and binding-safe CI behavior.
+- `docs/hld/15-build-and-toolchain.md`, for the `system-fonts` isolation,
+  bundled-font WASM path, target checks, and unpublished package boundary.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-136 | rpptx-py | L | done | - |
-| F-134 | Type stubs and py.typed | M | done | - |
-| F-135 | python-docx parity suite | M | done | - |
-| F-137 | wheels.yml | M | done | - |
-| F-138 | PR-time Python job | S | done | - |
+| F-139 | Rewrite rdocx-wasm | L | done | |
+| F-142 | rpptx-wasm | M | done | |
+| F-140 | wasm CI job | S | done | |
+| F-141 | to_pdf in the browser | M | done | |
 
 ## Sequencing note
 
-Rows are listed in dependency order, not by F-ID. F-136 first reuses completed
-F-129 and F-116. F-134 follows F-136 so both Python packages receive one typed
-contract. F-135 then validates the settled rdocx surface without changing it.
-F-137 follows F-134 and F-136 so both typed packages enter the wheel matrix.
-F-138 follows F-137 and exercises the same build paths on pull requests.
+Rows are listed in dependency order, not by F-ID. F-139 and F-142 can start
+independently because their dependencies F-029 and F-116 are complete. F-140
+and F-141 both follow F-139 so the CI and browser-rendering gates exercise the
+rewritten facade wrapper rather than the destructive mini-model.
 
 ## Definition of done for this sprint
 
-- `mypy --strict` and `stubtest` pass against installed packages carrying
-  `py.typed`.
-- Every pinned python-docx 1.2.0 example inside the approved S33 surface runs
-  with only the package namespace changed, and two-way round trips preserve
-  normalized content.
-- The seven pinned python-pptx 1.0.2 Getting Started examples run with only the
-  package namespace changed through path-based `rpptx-py` handles.
-- `wheels.yml` builds and installs the abi3-py39 target matrix through the
-  `py-v*` OIDC publication path.
-- The PR-time Python job builds the extension and runs pytest, and a binding
-  test failure makes the job fail.
-- Binding-focused gates pass with the required Rust workspace exclusions, and
-  existing deterministic document and rendering outputs do not regress.
+- An rdocx document with images, headers, and numbering round-trips through
+  `fromBytes` and `toDocxBytes` with every package part intact.
+- Pull requests run both the `wasm32-unknown-unknown` target check and
+  `wasm-pack test --node`.
+- A Node WASM test produces a non-empty PDF with embedded bundled fonts.
+- The default rpptx WASM profile is under 1 MiB gzipped and round-trips a deck,
+  while the render profile uses the real facade and rendering stack.
+- The reviewed hosted wheel run demonstrates that both Python wheels install
+  and pass their parity suites on every target platform in the M13 matrix.
+- WASM-focused gates pass without regressing the 28 deterministic document
+  hashes or introducing forbidden dependency edges.

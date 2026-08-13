@@ -1085,17 +1085,20 @@ reviewed hosted dispatch supplies cross-platform execution evidence.
 **Test gate**: the job fails when a binding test fails.
 
 ### F-139, Rewrite rdocx-wasm (L)
-Wrap `rdocx::Document`. Keep the JS method names. Add the `system-fonts`
-feature.
+Wrap `rdocx::Document` and keep the existing JavaScript method names. The
+default-on `system-fonts` feature is forwarded through `rdocx-layout` and
+`rdocx`, while `rdocx-wasm` disables it and retains unconditional bundled font
+data. An inline Node regression exercises the same package-preserving contract
+as the native gate.
 **Depends on**: F-029.
 **Test gate**: a document with images, headers and numbering round-trips through
 `fromBytes` and `toDocxBytes` with every part intact. This is the R-class
 regression gate.
 
 ### F-140, wasm CI job (S)
-**Depends on**: F-139.
-**Test gate**: `cargo check --target wasm32-unknown-unknown` and
-`wasm-pack test --node` both run on PRs.
+**Depends on**: F-139, F-142.
+**Test gate**: locked `cargo check --target wasm32-unknown-unknown` and
+`wasm-pack test --node` run for both WASM packages on PRs.
 
 ### F-141, to_pdf in the browser (M)
 **Depends on**: F-139, F-001.

@@ -17,18 +17,24 @@ shared-version = "incubating"
 tag-name = "rpptx-v{{version}}"
 
 [features]
-default = ["default-template"]
+default = ["default-template", "render", "system-fonts"]
 default-template = []
+render = ["dep:miniz_oxide", "dep:oxml-pdf", "dep:rpptx-layout", "dep:rpptx-render"]
+system-fonts = ["oxml-layout/system-fonts", "rpptx-render?/system-fonts"]
 
 [dependencies]
 oxml-core.workspace = true
 oxml-drawing.workspace = true
-oxml-layout.workspace = true
+oxml-layout = { workspace = true, default-features = false }
 oxml-media.workspace = true
 oxml-opc.workspace = true
+oxml-pdf = { workspace = true, optional = true }
 oxml-sml.workspace = true
+miniz_oxide = { workspace = true, optional = true }
 rpptx-chart.workspace = true
+rpptx-layout = { workspace = true, optional = true }
 rpptx-oxml.workspace = true
+rpptx-render = { workspace = true, default-features = false, optional = true }
 thiserror.workspace = true
 
 [dev-dependencies]
@@ -37,4 +43,8 @@ oxml-drawing.workspace = true
 oxml-layout.workspace = true
 oxml-pdf.workspace = true
 rpptx-layout.workspace = true
-rpptx-render.workspace = true
+rpptx-render = { workspace = true, features = ["system-fonts"] }
+
+[[example]]
+name = "render_deck"
+required-features = ["default-template", "render"]

@@ -71,12 +71,24 @@ on CI runners as it always would have.
 | Crate | Feature | Default | Notes |
 |---|---|---|---|
 | `oxml-layout` | `system-fonts` | on | Off for wasm, where `fontconfig` will not build |
+| `rdocx-layout` | `system-fonts` | on | Forwards host discovery to `oxml-layout` |
+| `rdocx` | `system-fonts` | on | Forwards through the complete native layout graph |
+| `rpptx-render` | `system-fonts` | on | Preserves host discovery for normal presentation rendering |
+| `rpptx` | `system-fonts` | on | Preserves native presentation font resolution |
 | `rpptx` | `default-template` | on | The bundled `default.pptx` |
 | `rpptx` | `render` | on | Pulls in `rpptx-render` and `oxml-pdf` |
+| `rpptx-wasm` | `render` | off | Adds `toPdf` through the deterministic facade renderer |
 | `rdocx-py`, `rpptx-py` | `extension-module` | off | Must stay off for `cargo test` |
 
-`fontdb`'s `fontconfig` feature is enabled workspace-wide today. It does nothing
-useful on musl or Windows and must be gated per-target for wheel builds.
+The workspace dependency entries for `oxml-layout`, `oxml-pdf`,
+`rdocx-layout`, and `rdocx` are default-off so a member can select the exact
+graph. Direct native `rdocx` and `rdocx-layout` builds retain default-on system
+fonts. The CLI and Python binding opt in explicitly, while `rdocx-wasm` does
+not. Its generated `toPdf` method calls the normal `Document::to_pdf` facade,
+which therefore uses document-embedded and bundled fonts without host font
+discovery in that graph. Native `rpptx`, `rpptx-render`, and the presentation
+Python binding retain system fonts through the same explicit forwarding
+pattern. Bundled font bytes remain available in both modes.
 
 ## Packaging
 
@@ -129,9 +141,10 @@ The fourteen crates.io names in this graph are reserved under the owner
 remain dependency-free 0.0.0 placeholders. The 12 implemented packages use
 the reviewed release path described below.
 
-`oxml-py-support` and `rpptx-py` are not reserved on crates.io. The binding
-crates are not published there. `rpptx-wasm` remains deferred to F-142 and its
-later npm publication path.
+`oxml-py-support`, `rpptx-py`, and `rpptx-wasm` are not reserved on crates.io.
+The binding crates are not published there. `rpptx-wasm` is an implemented
+workspace crate with no crates.io publication path. Its npm publication remains
+deferred to F-146.
 
 All 12 implemented shared and PowerPoint packages are published at the common
 incubating version 0.1.2. They are
@@ -192,9 +205,11 @@ that inherit `[workspace.package].version`, including the unpublished
 cargo-release's effective `workspace` shared-version group and the
 `v{{version}}` tag template.
 The exact published stable family remains the seven packages listed above.
-The 12 implemented `oxml-*` and `rpptx*` packages are prepared at explicit
-version 0.1.2, use the named `incubating` group, and carry the
-`rpptx-v{{version}}` template.
+The 13 implemented `oxml-*` and `rpptx*` package manifests are prepared at
+explicit version 0.1.2, use the named `incubating` group, and carry the
+`rpptx-v{{version}}` template. That preparation group is the exact 12-package
+published family listed above plus unpublished `rpptx-wasm`. The crates.io
+allowlist remains exactly 12 packages.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.
@@ -245,16 +260,21 @@ unresolved-symbol link failure that is easy to misdiagnose as something else.
 **A dedicated no-default-features job.** It runs `cargo test -p oxml-layout
 --no-default-features`, which exercises the font-isolation path used by WASM.
 
-**A `wasm32-unknown-unknown` check job.** It installs the target and checks the
-existing `rdocx-wasm` crate. The future `rpptx-wasm` package remains deferred
-to F-142.
+**A WASM target and Node job.** It installs the `wasm32-unknown-unknown` target,
+uses exact Node 24.11.1 and wasm-pack 0.15.0, and checks both facade-backed WASM
+crates with the locked workspace graph. It then runs both packages' inline Node
+regressions. The document suite also requires generated `toPdf` to return a
+complete PDF with an embedded bundled Carlito font. Checkout, setup-node, the
+Rust toolchain, and the Rust cache use reviewed full commit SHAs. The
+presentation render-profile and optimized-size gates remain local.
 
 **A dedicated Python artifact workflow.** Its product matrix is the Cartesian
 product of `rdocx` and `rpptx` with manylinux_2_28 x86_64 and aarch64,
 musllinux_1_2 x86_64, macOS x86_64 and arm64, and Windows x86_64. A second
 two-package job builds the source distributions. Native cells install wheels
 into fresh environments and run the compatible pytest, exact mypy, and
-stubtest gates. The musllinux cell performs a fresh Alpine install and import.
+stubtest gates. Each musllinux cell performs a fresh Alpine install and runs
+the applicable package parity suite.
 The Poppler-versioned binding render gate stays in its pinned environment
 rather than running on generic wheel hosts.
 

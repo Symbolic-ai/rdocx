@@ -14,6 +14,7 @@ members = [
     "crates/rpptx-layout",
     "crates/rpptx-oxml",
     "crates/rpptx-render",
+    "crates/rpptx-wasm",
     "crates/rpptx-py",
     "crates/rdocx-opc",
     "crates/rdocx-oxml",
@@ -51,21 +52,21 @@ push = false
 oxml-core = { path = "crates/oxml-core", version = "0.1.2" }
 oxml-py-support = { path = "crates/oxml-py-support", version = "0.4.1" }
 oxml-drawing = { path = "crates/oxml-drawing", version = "0.1.2" }
-oxml-layout = { path = "crates/oxml-layout", version = "0.1.2" }
+oxml-layout = { path = "crates/oxml-layout", version = "0.1.2", default-features = false }
 oxml-media = { path = "crates/oxml-media", version = "0.1.2" }
 oxml-opc = { path = "crates/oxml-opc", version = "0.1.2" }
-oxml-pdf = { path = "crates/oxml-pdf", version = "0.1.2" }
+oxml-pdf = { path = "crates/oxml-pdf", version = "0.1.2", default-features = false }
 oxml-sml = { path = "crates/oxml-sml", version = "0.1.2" }
-rpptx = { path = "crates/rpptx", version = "0.1.2" }
+rpptx = { path = "crates/rpptx", version = "0.1.2", default-features = false }
 rpptx-chart = { path = "crates/rpptx-chart", version = "0.1.2" }
 rpptx-layout = { path = "crates/rpptx-layout", version = "0.1.2" }
 rpptx-oxml = { path = "crates/rpptx-oxml", version = "0.1.2" }
-rpptx-render = { path = "crates/rpptx-render", version = "0.1.2" }
+rpptx-render = { path = "crates/rpptx-render", version = "0.1.2", default-features = false }
 rpptx-py = { path = "crates/rpptx-py", version = "0.4.1" }
 rdocx-opc = { path = "crates/rdocx-opc", version = "0.4.1" }
 rdocx-oxml = { path = "crates/rdocx-oxml", version = "0.4.1" }
-rdocx = { path = "crates/rdocx", version = "0.4.1" }
-rdocx-layout = { path = "crates/rdocx-layout", version = "0.4.1" }
+rdocx = { path = "crates/rdocx", version = "0.4.1", default-features = false }
+rdocx-layout = { path = "crates/rdocx-layout", version = "0.4.1", default-features = false }
 rdocx-pdf = { path = "crates/rdocx-pdf", version = "0.4.1" }
 rdocx-html = { path = "crates/rdocx-html", version = "0.4.1" }
 rdocx-py = { path = "crates/rdocx-py", version = "0.4.1" }
@@ -101,6 +102,7 @@ miniz_oxide = "0.9"
 tiny-skia = "0.12"
 zune-jpeg = { version = "=0.5.15", default-features = false, features = ["std"] }
 wasm-bindgen = "0.2.126"
+wasm-bindgen-test = "=0.3.76"
 js-sys = "0.3.103"
 pyo3 = { version = "=0.29.0", features = ["abi3-py39"] }
 

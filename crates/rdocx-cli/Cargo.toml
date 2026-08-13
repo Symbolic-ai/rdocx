@@ -24,7 +24,7 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-rdocx = { workspace = true }
+rdocx = { workspace = true, features = ["system-fonts"] }
 rdocx-oxml = { workspace = true }
 oxml-opc = { workspace = true }
 clap = { workspace = true }

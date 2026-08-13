@@ -5067,3 +5067,161 @@ WASM and dependency isolation, and the integrated full gate passed.
 
 **Notes for future sessions.** Keep the pull-request job least privilege and
 make any new package test failure propagate without a conditional or fallback.
+
+### F-139, Rewrite rdocx-wasm
+
+**Sprint.** S35
+**Completed.** 2026-08-13
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `WasmDocument` now owns one real `rdocx::Document` and
+delegates its established JavaScript surface to the facade. DOCX byte round
+trips retain the complete package, ordered text comes through the additive
+facade getter, and generated Node tests exercise the actual JavaScript byte
+boundary. The native Word and presentation paths retain system-font discovery
+through explicit feature forwarding, while the WASM graph disables it and
+keeps bundled fonts available.
+
+**Non-obvious choices.** Workspace rendering dependencies are defaults-off so
+each concrete consumer selects its graph. Native consumers opt into
+`system-fonts`, while `rdocx-wasm` does not. The wrapper keeps the existing
+JavaScript names, maps concrete facade errors to string-valued `JsValue`s, and
+does not maintain a second package model or add byte aliases.
+
+**Deviations from the design plan.** Microscope remediation added exact
+generated-JavaScript reflection, restored presentation system-font defaults,
+and strengthened the root workspace manifest sensitivity. The approved facade
+ownership, public surface, and HLD impact did not change.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `document_with_images_headers_and_numbering_round_trips_every_part_intact`,
+`document_text_preserves_body_and_table_order`,
+`wasm_round_trip_preserves_the_complete_package_in_node`, native and WASM
+feature-contract mutations, no-default gates, package and publication checks,
+and the integrated full gate at `fecfd0a` passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep the WASM package as a facade consumer.
+Feature isolation depends on defaults-off workspace edges and explicit native
+opt-ins, while bundled font bytes remain unconditional.
+
+### F-140, wasm CI job
+
+**Sprint.** S35
+**Completed.** 2026-08-13
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The pull-request WASM job now target-checks both facade
+wrappers with the locked graph and runs both inline Node suites. It installs
+exact Node 24.11.1 and wasm-pack 0.15.0, and a structured workflow contract
+enforces package coverage, step order, immutable action pins, least privilege,
+and ordinary failure propagation.
+
+**Non-obvious choices.** The operative setup-node pin is the reviewed v6.5.0
+commit. Both Node suites run as separate commands without conditions,
+`continue-on-error`, fallback success, or listing-only substitutions. The
+incubating cargo-release preparation group includes unpublished `rpptx-wasm`,
+while the crates.io allowlist remains limited to published packages.
+
+**Deviations from the design plan.** Microscope remediation corrected the
+setup-node release label in the testing HLD and added independent provenance
+sensitivity. The approved two-package workflow and HLD scope did not change.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `test_wasm_pr_job_checks_both_targets_and_runs_node_tests`,
+`test_wasm_pr_job_rejects_skipped_or_weakened_gates`, setup-node provenance
+and release-family mutations, locked wasm32 checks, both complete Node suites,
+a real propagated Node failure, and the integrated full gate at `fecfd0a`
+passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep action annotations aligned with their
+immutable commits. Any new WASM package must receive an executable Node gate,
+not only a target check.
+
+### F-141, to_pdf in the browser
+
+**Sprint.** S35
+**Completed.** 2026-08-13
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `WasmDocument.toPdf` now returns bytes directly from the
+normal `rdocx::Document::to_pdf` facade. A generated-JavaScript Node regression
+adds text through the public binding, calls `toPdf` reflectively, and requires
+a complete PDF with a Type 0 font, an embedded TrueType stream, and bundled
+Carlito.
+
+**Non-obvious choices.** There is no deterministic alias or WASM-only renderer.
+The wrapper's defaults-off graph makes the normal facade path browser-safe by
+excluding host discovery while retaining unconditional bundled fonts.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `to_pdf_in_node_returns_a_complete_pdf_with_an_embedded_bundled_font`
+proved the generated `toPdf` name, `Uint8Array` boundary, `%PDF-` through
+`%%EOF`, `/Subtype /Type0`, `/FontFile2`, and Carlito. The two-test Node suite,
+feature-isolation contract, font and rendering riders, mutation sensitivity,
+and the integrated full gate at `fecfd0a` passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Browser PDF behavior belongs to the normal
+facade method under the WASM feature graph. Do not fork layout or PDF assembly
+inside the binding.
+
+### F-142, rpptx-wasm
+
+**Sprint.** S35
+**Completed.** 2026-08-13
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The workspace now contains an unpublished `rpptx-wasm`
+package backed by one real `rpptx::Presentation`. Its bounded default profile
+constructs, opens, serializes, counts, and mutates presentations without the
+renderer. The opt-in `render` profile adds only `toPdf`. Package-to-render
+assembly moved from the corpus example into the owning facade, and the example
+now delegates to that single deterministic path.
+
+**Non-obvious choices.** Native `rpptx` defaults retain template, rendering,
+and system fonts, while the wrapper selects a bundled-template-only facade and
+adds deterministic rendering explicitly. The exact optimized normal-default
+artifact is 519,060 decimal gzip bytes, below the 1,000,000-byte gate. The
+size check binds reviewed wasm-pack, wasm-opt, and deterministic gzip arguments
+to the freshly built artifact.
+
+**Deviations from the design plan.** Microscope remediation bound the size gate
+to the current artifact, hardened normal-default and render feature contracts,
+and strengthened facade-to-example parity and rendering completeness. The
+approved profiles, facade boundary, and HLD impact did not change.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `default_profile_is_under_one_megabyte_and_round_trips_a_deck`,
+`wasm_presentation_uses_the_real_facade_in_node`,
+`render_profile_returns_a_complete_pdf`, facade-to-example render parity,
+default and render dependency graphs, exact 519,060-byte size and mutation
+sensitivity, publication riders, and the integrated full gate at `fecfd0a`
+passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep rendering optional for the wrapper and
+package interpretation in the facade. Re-run the exact optimized size gate
+whenever the normal-default dependency graph changes.

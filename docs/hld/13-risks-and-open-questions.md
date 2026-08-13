@@ -136,15 +136,6 @@ PresentationML is enormous and there is no natural stopping point.
 not model it.** Stated as a rule in `06-presentationml-model.md` and enforced in
 review.
 
-## Known defects being carried
-
-Found during the audit that produced this plan, and each has a story in M1.
-
-### The `rdocx-wasm` save path
-
-`to_docx_bytes` rebuilds a minimal package, silently discarding every part
-except `document.xml` and `styles.xml`. Detailed in `10-bindings-spec.md`.
-
 ## Assumptions that would invalidate the plan if wrong
 
 - **That a slide is a page.** The entire rendering reuse argument rests on it.
