@@ -304,20 +304,57 @@ artifact must remain below 1,000,000 bytes after deterministic gzip.
 Pull-request CI target-checks the default wrapper with the locked workspace
 graph and runs its package-preserving inline test in Node.
 
+The npm package names are `@tensorbee/rdocx-wasm` and
+`@tensorbee/rpptx-wasm`. Both use the bundler target, their Rust package
+versions, and release output optimized by exact wasm-opt 125 with `-Oz`,
+`--enable-bulk-memory`, and `--enable-nontrapping-float-to-int`. Pull-request
+CI creates local tarballs with `npm pack`, installs each tarball into a separate
+fresh consumer, and checks the installed WASM, JavaScript glue, public
+TypeScript declaration, and module import. This is an installation gate only.
+The job has no npm publication, registry authentication, token, OIDC, release,
+or tag authority.
+
 ## CLIs
 
-`rpptx-cli` mirrors `rdocx-cli`: `inspect`, `text`, `convert`, `diff`,
-`replace`, `validate`, `render`, using clap derive and `serde_json` for
-`--json`, including the pattern of dispatching `validate` separately so its exit
-code carries the verdict.
+`rpptx-cli` extends the seven-command `rdocx-cli` surface with `inspect`,
+`text`, `convert`, `diff`, `replace`, `validate`, `render`, `thumbnail`, and
+`outline`. It uses clap derive and `serde_json` for `--json`.
 
-Two presentation-specific additions: **`thumbnail`**, slide one at a fixed size,
-which is what every CMS wants, and **`outline`**, the title and bullet tree,
-which is ideal for LLM ingestion and is a genuine differentiator.
+`inspect` reports the file, slide and layout counts, slide size, core metadata,
+and each slide's identity, hidden state, and shape count. Its JSON form uses the
+shared schema-1 envelope. `text` emits slide text in presentation order.
+`convert` produces deterministic PDF or PNG output. Multi-slide PNG output uses
+one-based filename suffixes and renders one slide at a time. `diff` compares
+slide text with longest-common-subsequence semantics and rejects matrices above
+one million cells. `replace` delegates to the facade's literal,
+formatting-preserving text replacement. `validate` is dispatched separately so
+its exit status carries the verdict. `render` uses deterministic fonts and the
+shared one-based range grammar.
 
-`validate` is the highest-value command and pays for itself in the test suite by
-running across the corpus in CI.
+PNG rendering is limited to eight million pixels per slide for both `convert`
+and `render`. A zero-slide PNG conversion fails without creating output.
+The exact validation gate corrupts one relationship and requires a nonzero exit,
+then requires every verified pinned corpus deck to exit zero without skips.
 
-Shared plumbing, range parsing, output-path defaulting and the JSON envelope,
-lives in `oxml-cli-support` rather than being copy-pasted. **Version the JSON
-envelope from the first release**: `{"schema": 1, ...}`.
+`thumbnail` renders slide one with deterministic fonts at exactly 320 pixels
+wide and preserves the rendered page aspect ratio. Its output defaults through
+the shared extension helper. `outline` prints each slide title once, followed
+by non-title text paragraphs in recursive shape z-order. Tables use row-major
+cell order, paragraph levels add two spaces of indentation, empty text is
+omitted, and embedded paragraph breaks become spaces.
+
+Shared range parsing, output-path defaulting, and JSON envelope rules live in
+`oxml-cli-support`. Ranges are positive, one-based, comma-separated values and
+inclusive ranges. Parsing sorts and deduplicates the result, and rejects more
+than 100,000 requested values before expansion. The output helper replaces or
+adds only the requested extension. The envelope accepts an object without a
+caller-supplied `schema` field and adds the reserved top-level
+`{"schema": 1, ...}` contract.
+
+`rdocx-cli` uses the shared envelope for inspect JSON and the shared path helper
+for convert defaults. Its flags and zero-based `render --page` compatibility
+contract do not change. The `text` command emits paragraphs and table cells in
+document order through the facade plain-text representation. Both the selected
+page and all-page `render` paths use the bundled-font deterministic facade.
+The compiled seven-command surface is covered by one integration binary, with
+fixtures constructed in code and no command-only test dependency.

@@ -275,6 +275,27 @@ class SprintWorkflowTests(unittest.TestCase):
         )
         self.assert_python_pr_job_contract(ci)
 
+    def test_workspace_test_jobs_fetch_the_pinned_presentation_corpus(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        for job_name in ("test", "msrv"):
+            with self.subTest(job=job_name):
+                job = self.yaml_block(ci, f"  {job_name}:")
+                fetch = self.yaml_step(job, "Fetch pinned presentation corpus")
+                self.assertEqual(
+                    self.yaml_direct_lines(fetch, 8),
+                    ("run: python3 scripts/fetch_pptx_corpus.py",),
+                )
+                test_steps = tuple(
+                    step
+                    for step in self.yaml_steps(job)
+                    if "cargo test --workspace" in step
+                )
+                self.assertEqual(len(test_steps), 1)
+                self.assertLess(job.index(fetch), job.index(test_steps[0]))
+                self.assertNotIn("continue-on-error", fetch)
+
     def test_python_pr_job_rejects_failure_swallowing_and_incomplete_cells(
         self,
     ) -> None:
@@ -510,8 +531,10 @@ class SprintWorkflowTests(unittest.TestCase):
                 "step:2",
                 "Set up Node 24.11.1",
                 "Install wasm-pack 0.15.0",
+                "Install wasm-opt 125",
                 "Check WASM targets",
                 "Run WASM Node tests",
+                "Build and install local WASM packages",
             ),
         )
 
@@ -563,19 +586,41 @@ class SprintWorkflowTests(unittest.TestCase):
         )
 
         install = self.yaml_step(job, "Install wasm-pack 0.15.0")
+        install_optimizer = self.yaml_step(job, "Install wasm-opt 125")
         checks = self.yaml_step(job, "Check WASM targets")
         node_tests = self.yaml_step(job, "Run WASM Node tests")
-        for command_step in (install, checks, node_tests):
+        packages = self.yaml_step(job, "Build and install local WASM packages")
+        for command_step in (install, install_optimizer, checks, node_tests, packages):
             self.assertEqual(
                 self.yaml_direct_lines(command_step, 8),
                 ("shell: bash", "run: |"),
             )
         install_lines = self.yaml_run_lines(install)
+        optimizer_lines = self.yaml_run_lines(install_optimizer)
         check_lines = self.yaml_run_lines(checks)
         node_test_lines = self.yaml_run_lines(node_tests)
         self.assertEqual(
             install_lines,
             ("cargo install wasm-pack --version 0.15.0 --locked",),
+        )
+        self.assertEqual(
+            optimizer_lines,
+            (
+                'binaryen_archive="${RUNNER_TEMP}/binaryen-version_125-x86_64-linux.tar.gz"',
+                'binaryen_root="${RUNNER_TEMP}/binaryen-version_125"',
+                "curl --fail --location --silent --show-error "
+                '"https://github.com/WebAssembly/binaryen/releases/download/'
+                'version_125/binaryen-version_125-x86_64-linux.tar.gz" '
+                '--output "$binaryen_archive"',
+                'echo "7c3bc16599c8274a04d34a504fe4be2047884f900e0e2da2f6fb9cd667183be4  '
+                '$binaryen_archive" | sha256sum --check',
+                'mkdir -p "$binaryen_root"',
+                'tar --extract --gzip --file "$binaryen_archive" --directory '
+                '"$binaryen_root" --strip-components=1',
+                'echo "$binaryen_root/bin" >> "$GITHUB_PATH"',
+                '"$binaryen_root/bin/wasm-opt" --version | grep --fixed-strings '
+                '--line-regexp "wasm-opt version 125"',
+            ),
         )
         self.assertEqual(
             check_lines,
@@ -592,16 +637,127 @@ class SprintWorkflowTests(unittest.TestCase):
             ),
         )
         self.assert_no_success_short_circuit(
-            install_lines + check_lines + node_test_lines
+            install_lines + optimizer_lines + check_lines + node_test_lines
         )
+        package_lines = self.yaml_run_lines(packages)
+        for expected in (
+            'package_root="${RUNNER_TEMP}/wasm-packages"',
+            'tarball_root="${RUNNER_TEMP}/wasm-tarballs"',
+            'npm_cache="${RUNNER_TEMP}/npm-cache"',
+            "wasm-pack build --target bundler --scope tensorbee --release "
+            '--out-dir "$package_root/rdocx-wasm" crates/rdocx-wasm --locked',
+            "wasm-pack build --target bundler --scope tensorbee --release "
+            '--out-dir "$package_root/rpptx-wasm" crates/rpptx-wasm --locked',
+            'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
+            '"0.4.1" "rdocx_wasm"',
+            'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
+            '"0.1.2" "rpptx_wasm"',
+            "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
+            "--ignore-scripts --no-audit --no-fund --package-lock=false "
+            '"$tarball_root/$tarball"',
+        ):
+            self.assertEqual(package_lines.count(expected), 1, expected)
+        self.assertIn(
+            'npm pack "$package_dir" --cache "$npm_cache" --ignore-scripts '
+            '--pack-destination "$tarball_root"',
+            packages,
+        )
+        self.assertIn('import(\\"$expected_name\\")', packages)
+        self.assertIn('consumer_root="$(mktemp -d ', packages)
+        self.assertIn('manifest.name !== expectedName', packages)
+        self.assertIn('manifest.version !== expectedVersion', packages)
+        self.assertIn('${stem}_bg.wasm', packages)
+        self.assertIn('${stem}.js', packages)
+        self.assertIn('${stem}.d.ts', packages)
+        forbidden = (
+            "npm publish",
+            "npm login",
+            "npm adduser",
+            "npm token",
+            "wasm-pack publish",
+            "NODE_AUTH_TOKEN",
+            "NPM_TOKEN",
+            "--registry",
+            "id-token:",
+            "git tag",
+            "gh release",
+        )
+        operative_job = "\n".join(self.operative_lines(job))
+        for command in forbidden:
+            self.assertNotIn(command, operative_job)
+        self.assert_no_success_short_circuit(package_lines)
         self.assertNotIn("|| true", job)
         self.assertNotIn("set +e", job)
+
+    def assert_wasm_optimizer_metadata_contract(
+        self, manifest_overrides: dict[str, str] | None = None
+    ) -> None:
+        manifest_overrides = manifest_overrides or {}
+        expected = {
+            "wasm-opt": [
+                "-Oz",
+                "--enable-bulk-memory",
+                "--enable-nontrapping-float-to-int",
+            ]
+        }
+        for member in ("crates/rdocx-wasm", "crates/rpptx-wasm"):
+            manifest = tomllib.loads(
+                manifest_overrides.get(
+                    member,
+                    (workflow.REPO / member / "Cargo.toml").read_text(
+                        encoding="utf-8"
+                    ),
+                )
+            )
+            wasm_pack = manifest["package"].get("metadata", {}).get("wasm-pack", {})
+            release = wasm_pack.get("profile", {}).get("release")
+            self.assertEqual(
+                release,
+                expected,
+                member,
+            )
 
     def test_wasm_pr_job_checks_both_targets_and_runs_node_tests(self) -> None:
         ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
             encoding="utf-8"
         )
         self.assert_wasm_pr_job_contract(ci)
+
+    def test_wasm_packages_use_the_reviewed_release_optimizer(self) -> None:
+        self.assert_wasm_optimizer_metadata_contract()
+
+    def test_wasm_package_contract_rejects_optimizer_mutations(self) -> None:
+        for member in ("crates/rdocx-wasm", "crates/rpptx-wasm"):
+            manifest = (workflow.REPO / member / "Cargo.toml").read_text(
+                encoding="utf-8"
+            )
+            mutations = {
+                "missing-bulk-memory": manifest.replace(
+                    '["-Oz", "--enable-bulk-memory", '
+                    '"--enable-nontrapping-float-to-int"]',
+                    '["-Oz", "--enable-nontrapping-float-to-int"]',
+                    1,
+                ),
+                "missing-nontrapping-float-to-int": manifest.replace(
+                    '["-Oz", "--enable-bulk-memory", '
+                    '"--enable-nontrapping-float-to-int"]',
+                    '["-Oz", "--enable-bulk-memory"]',
+                    1,
+                ),
+                "wrong-size-level": manifest.replace(
+                    '["-Oz", "--enable-bulk-memory", '
+                    '"--enable-nontrapping-float-to-int"]',
+                    '["-Os", "--enable-bulk-memory", '
+                    '"--enable-nontrapping-float-to-int"]',
+                    1,
+                ),
+            }
+            for name, mutated in mutations.items():
+                self.assertNotEqual(mutated, manifest, f"{member}:{name}")
+                with self.subTest(member=member, name=name), self.assertRaises(
+                    AssertionError
+                ):
+                    self.assert_wasm_optimizer_metadata_contract({member: mutated})
 
     def assert_wasm_setup_node_provenance_contract(
         self, ci: str, testing_hld: str
@@ -703,6 +859,19 @@ class SprintWorkflowTests(unittest.TestCase):
                 "cargo install wasm-pack --version 0.15.0 --locked",
                 "cargo install wasm-pack --locked",
             ),
+            "wrong-wasm-opt-version": mutate_job(
+                "binaryen-version_125-x86_64-linux.tar.gz",
+                "binaryen-version_124-x86_64-linux.tar.gz",
+            ),
+            "wrong-wasm-opt-checksum": mutate_job(
+                "7c3bc16599c8274a04d34a504fe4be2047884f900e0e2da2f6fb9cd667183be4",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            ),
+            "missing-wasm-opt-version-check": mutate_job(
+                "          \"$binaryen_root/bin/wasm-opt\" --version | grep "
+                "--fixed-strings --line-regexp \"wasm-opt version 125\"\n",
+                "",
+            ),
             "unlocked-target-check": mutate_job(
                 "cargo check --locked --target wasm32-unknown-unknown -p rdocx-wasm",
                 "cargo check --target wasm32-unknown-unknown -p rdocx-wasm",
@@ -752,6 +921,49 @@ class SprintWorkflowTests(unittest.TestCase):
                 "        run: |\n"
                 "          exit 0\n"
                 "          wasm-pack test --node crates/rdocx-wasm",
+            ),
+            "missing-rdocx-package": mutate_job(
+                "          wasm-pack build --target bundler --scope tensorbee "
+                "--release --out-dir \"$package_root/rdocx-wasm\" "
+                "crates/rdocx-wasm --locked\n",
+                "",
+            ),
+            "wrong-package-target": mutate_job(
+                "wasm-pack build --target bundler",
+                "wasm-pack build --target nodejs",
+            ),
+            "wrong-package-scope": mutate_job(
+                "--scope tensorbee --release",
+                "--scope other --release",
+            ),
+            "unlocked-package-build": mutate_job(
+                "crates/rdocx-wasm --locked",
+                "crates/rdocx-wasm",
+            ),
+            "missing-clean-install": mutate_job(
+                "          npm install --prefix \"$consumer_root\" --cache "
+                "\"$npm_cache\" --ignore-scripts --no-audit --no-fund "
+                "--package-lock=false \"$tarball_root/$tarball\"\n",
+                "",
+            ),
+            "registry-authentication": mutate_job(
+                "      - name: Build and install local WASM packages\n",
+                "      - name: Build and install local WASM packages\n"
+                "        env:\n"
+                "          NPM_TOKEN: forbidden\n",
+            ),
+            "npm-publish-authority": mutate_job(
+                '          assert_inventory "$package_dir" "$expected_name" '
+                '"$expected_version" "$stem"\n',
+                '          assert_inventory "$package_dir" "$expected_name" '
+                '"$expected_version" "$stem"\n'
+                '          npm publish "$package_dir"\n',
+            ),
+            "release-tag-authority": mutate_job(
+                "      - name: Build and install local WASM packages\n",
+                "      - name: Build and install local WASM packages\n"
+                "        env:\n"
+                "          RELEASE_COMMAND: git tag v0.0.0\n",
             ),
         }
         for name, mutated in mutations.items():
@@ -2423,6 +2635,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-opc",
             "oxml-pdf",
             "oxml-sml",
+            "oxml-cli-support",
             "rdocx",
             "rdocx-cli",
             "rdocx-html",
@@ -2431,6 +2644,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "rdocx-oxml",
             "rdocx-pdf",
             "rpptx",
+            "rpptx-cli",
             "rpptx-chart",
             "rpptx-layout",
             "rpptx-oxml",
@@ -2448,7 +2662,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 f"--config 'patch.crates-io.{package}.path=\"crates/{package}\"'"
             )
             self.assertEqual(block.count(config), 1, package)
-        self.assertEqual(block.count("--config 'patch.crates-io."), 19)
+        self.assertEqual(block.count("--config 'patch.crates-io."), 21)
         self.assertNotIn("--no-verify", block)
         self.assertNotIn("continue-on-error", block)
 
@@ -2470,11 +2684,13 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-drawing",
             "oxml-pdf",
             "oxml-sml",
+            "oxml-cli-support",
             "rpptx-oxml",
             "rpptx-chart",
             "rpptx-layout",
             "rpptx-render",
             "rpptx",
+            "rpptx-cli",
         )
 
         self.assertIn('tags: ["v*", "rpptx-v*"]', publish)
@@ -2694,11 +2910,13 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-opc",
             "oxml-pdf",
             "oxml-sml",
+            "oxml-cli-support",
             "rpptx-oxml",
             "rpptx-layout",
             "rpptx-render",
             "rpptx-chart",
             "rpptx",
+            "rpptx-cli",
         )
 
         for name in incubating_packages:
@@ -2720,11 +2938,13 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-drawing",
             "oxml-pdf",
             "oxml-sml",
+            "oxml-cli-support",
             "rpptx-oxml",
             "rpptx-chart",
             "rpptx-layout",
             "rpptx-render",
             "rpptx",
+            "rpptx-cli",
         )
         expected_version = "0.1.2"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
@@ -2802,7 +3022,9 @@ class SprintWorkflowTests(unittest.TestCase):
                 "crates/oxml-opc",
                 "crates/oxml-pdf",
                 "crates/oxml-sml",
+                "crates/oxml-cli-support",
                 "crates/rpptx",
+                "crates/rpptx-cli",
                 "crates/rpptx-chart",
                 "crates/rpptx-layout",
                 "crates/rpptx-oxml",
@@ -2814,7 +3036,7 @@ class SprintWorkflowTests(unittest.TestCase):
         family_counts = {
             family: len(members) for family, members in family_members.items()
         }
-        self.assertEqual(family_counts, {"workspace": 11, "incubating": 13})
+        self.assertEqual(family_counts, {"workspace": 11, "incubating": 15})
 
         wasm_package = manifests["crates/rpptx-wasm"]["package"]
         self.assertEqual(wasm_package["name"], "rpptx-wasm")
@@ -2906,10 +3128,10 @@ class SprintWorkflowTests(unittest.TestCase):
             normalized_release,
         )
         self.assertIn(
-            "The exact 12-package incubating set is `oxml-core`, `oxml-opc`, "
+            "The exact 14-package incubating set is `oxml-core`, `oxml-opc`, "
             "`oxml-media`, `oxml-layout`, `oxml-drawing`, `oxml-pdf`, "
-            "`oxml-sml`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`, "
-            "`rpptx-render`, and `rpptx`.",
+            "`oxml-sml`, `oxml-cli-support`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`, "
+            "`rpptx-render`, `rpptx`, and `rpptx-cli`.",
             normalized_release,
         )
         self.assertIn("go or no-go immediately", normalized_release)
@@ -2934,6 +3156,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-drawing",
             "oxml-pdf",
             "oxml-sml",
+            "oxml-cli-support",
             "rpptx-oxml",
             "rpptx-chart",
             "rpptx-layout",

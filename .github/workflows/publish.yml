@@ -33,6 +33,7 @@ jobs:
             --config 'patch.crates-io.oxml-opc.path="crates/oxml-opc"' \
             --config 'patch.crates-io.oxml-pdf.path="crates/oxml-pdf"' \
             --config 'patch.crates-io.oxml-sml.path="crates/oxml-sml"' \
+            --config 'patch.crates-io.oxml-cli-support.path="crates/oxml-cli-support"' \
             --config 'patch.crates-io.rdocx.path="crates/rdocx"' \
             --config 'patch.crates-io.rdocx-cli.path="crates/rdocx-cli"' \
             --config 'patch.crates-io.rdocx-html.path="crates/rdocx-html"' \
@@ -41,6 +42,7 @@ jobs:
             --config 'patch.crates-io.rdocx-oxml.path="crates/rdocx-oxml"' \
             --config 'patch.crates-io.rdocx-pdf.path="crates/rdocx-pdf"' \
             --config 'patch.crates-io.rpptx.path="crates/rpptx"' \
+            --config 'patch.crates-io.rpptx-cli.path="crates/rpptx-cli"' \
             --config 'patch.crates-io.rpptx-chart.path="crates/rpptx-chart"' \
             --config 'patch.crates-io.rpptx-layout.path="crates/rpptx-layout"' \
             --config 'patch.crates-io.rpptx-oxml.path="crates/rpptx-oxml"' \
@@ -80,6 +82,8 @@ jobs:
           sleep 60
           cargo publish -p oxml-sml
           sleep 60
+          cargo publish -p oxml-cli-support
+          sleep 60
           cargo publish -p rpptx-oxml
           sleep 60
           cargo publish -p rpptx-chart
@@ -89,6 +93,8 @@ jobs:
           cargo publish -p rpptx-render
           sleep 60
           cargo publish -p rpptx
+          sleep 60
+          cargo publish -p rpptx-cli
 
   release:
     name: GitHub Release

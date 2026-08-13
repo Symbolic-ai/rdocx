@@ -144,7 +144,14 @@ fn round_trip_preserves_styles() {
 #[test]
 fn save_and_load_file() {
     let dir = std::env::temp_dir();
-    let path = dir.join("rdocx_test_output.docx");
+    let process_id = std::process::id().to_string();
+    let path = dir.join(format!("rdocx_test_output_{process_id}.docx"));
+    assert!(
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains(&process_id)),
+        "temporary output path must contain the test process ID"
+    );
 
     // Create and save
     let mut doc = Document::new();

@@ -857,6 +857,28 @@ impl Presentation {
         self.slides.iter().map(slide_ref)
     }
 
+    /// Replaces literal text across regular DrawingML runs in every editable shape.
+    ///
+    /// Replacement text retains the formatting and opaque run content of the
+    /// first matched run. Unmatched prefixes and suffixes stay in their
+    /// original runs. Groups and table cells are traversed recursively, while
+    /// preserved alternate-content branches remain untouched.
+    pub fn replace_text(&mut self, placeholder: &str, value: &str) -> usize {
+        if placeholder.is_empty() {
+            return 0;
+        }
+        self.slides
+            .iter_mut()
+            .map(|record| {
+                replace_text_in_children(
+                    &mut record.slide.common_slide_data.shape_tree.children,
+                    placeholder,
+                    value,
+                )
+            })
+            .sum()
+    }
+
     /// Returns the optional slide dimensions in EMUs.
     pub fn slide_size(&self) -> Option<(Emu, Emu)> {
         self.presentation
@@ -2444,6 +2466,14 @@ pub struct ShapeRef<'a> {
     child: &'a ShapeTreeChild,
 }
 
+impl PartialEq for ShapeRef<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.child, other.child)
+    }
+}
+
+impl Eq for ShapeRef<'_> {}
+
 fn shape_ref(child: &ShapeTreeChild) -> ShapeRef<'_> {
     ShapeRef { child }
 }
@@ -3619,6 +3649,140 @@ fn collect_text(children: &[ShapeTreeChild], output: &mut Vec<String>) {
         }
         collect_text(shape.child_slice(), output);
     }
+}
+
+fn replace_text_in_children(
+    children: &mut [ShapeTreeChild],
+    placeholder: &str,
+    value: &str,
+) -> usize {
+    let mut count = 0;
+    for child in children {
+        match child {
+            ShapeTreeChild::Shape(shape) => {
+                if let Some(body) = &mut shape.text_body {
+                    count += replace_text_in_body(body, placeholder, value);
+                }
+            }
+            ShapeTreeChild::GraphicFrame(frame) => {
+                if let Some(table) = frame.graphic_data.table_mut() {
+                    for row in &mut table.rows {
+                        for cell in &mut row.cells {
+                            if let Some(body) = &mut cell.text_body {
+                                count += replace_text_in_body(body, placeholder, value);
+                            }
+                        }
+                    }
+                }
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                count += replace_text_in_children(&mut group.children, placeholder, value);
+            }
+            ShapeTreeChild::Picture(_)
+            | ShapeTreeChild::Connector(_)
+            | ShapeTreeChild::AlternateContent(_) => {}
+        }
+    }
+    count
+}
+
+fn replace_text_in_body(body: &mut CT_TextBody, placeholder: &str, value: &str) -> usize {
+    let mut count = 0;
+    for index in 0..body.paragraph_count() {
+        if let Some(paragraph) = body.paragraph_mut(index) {
+            count += replace_text_in_paragraph(paragraph, placeholder, value);
+        }
+    }
+    count
+}
+
+fn replace_text_in_paragraph(
+    paragraph: &mut CT_TextParagraph,
+    placeholder: &str,
+    value: &str,
+) -> usize {
+    let mut count = 0;
+    let mut segment_start = 0;
+    while segment_start < paragraph.runs.len() {
+        while segment_start < paragraph.runs.len()
+            && !matches!(paragraph.runs[segment_start], TextRun::Run(_))
+        {
+            segment_start += 1;
+        }
+        let mut segment_end = segment_start;
+        while segment_end < paragraph.runs.len()
+            && matches!(paragraph.runs[segment_end], TextRun::Run(_))
+        {
+            segment_end += 1;
+        }
+        count += replace_text_in_run_segment(
+            &mut paragraph.runs[segment_start..segment_end],
+            placeholder,
+            value,
+        );
+        segment_start = segment_end.saturating_add(1);
+    }
+    count
+}
+
+fn replace_text_in_run_segment(runs: &mut [TextRun], placeholder: &str, value: &str) -> usize {
+    let mut text = String::new();
+    let mut ranges = Vec::with_capacity(runs.len());
+    for run in runs.iter() {
+        let TextRun::Run(run) = run else {
+            unreachable!("run segments contain only regular runs")
+        };
+        let start = text.len();
+        text.push_str(&run.text.value);
+        ranges.push((start, text.len()));
+    }
+    let matches = text
+        .match_indices(placeholder)
+        .map(|(start, _)| (start, start + placeholder.len()))
+        .collect::<Vec<_>>();
+
+    for &(match_start, match_end) in matches.iter().rev() {
+        let start_run = ranges
+            .iter()
+            .position(|&(_, end)| match_start < end)
+            .expect("non-empty match has a starting run");
+        let end_run = ranges
+            .iter()
+            .position(|&(start, end)| match_end > start && match_end <= end)
+            .expect("non-empty match has an ending run");
+        let start_offset = match_start - ranges[start_run].0;
+        let end_offset = match_end - ranges[end_run].0;
+
+        if start_run == end_run {
+            let TextRun::Run(run) = &mut runs[start_run] else {
+                unreachable!("run segments contain only regular runs")
+            };
+            run.text
+                .value
+                .replace_range(start_offset..end_offset, value);
+            continue;
+        }
+
+        let TextRun::Run(first) = &mut runs[start_run] else {
+            unreachable!("run segments contain only regular runs")
+        };
+        let first_len = first.text.value.len();
+        first
+            .text
+            .value
+            .replace_range(start_offset..first_len, value);
+        for run in &mut runs[start_run + 1..end_run] {
+            let TextRun::Run(run) = run else {
+                unreachable!("run segments contain only regular runs")
+            };
+            run.set_text("");
+        }
+        let TextRun::Run(last) = &mut runs[end_run] else {
+            unreachable!("run segments contain only regular runs")
+        };
+        last.text.value.replace_range(..end_offset, "");
+    }
+    matches.len()
 }
 
 #[cfg(feature = "render")]

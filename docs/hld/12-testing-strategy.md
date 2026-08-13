@@ -405,21 +405,49 @@ defaults while its facade dependency selects the bundled template explicitly.
 A padded artifact or render-enabled default must make the exact named size gate
 fail.
 
+The `rpptx` CLI integration gate corrupts a relationship and requires
+`validate` to exit nonzero. It then requires all 50 manifest decks to validate
+with a zero exit and never skips a missing corpus. The primary workspace-test
+job and the MSRV job fetch and verify the pinned corpus before running Cargo
+tests. Command regressions also prove bounded DPI, bounded diff work,
+zero-slide PNG failure without output, and one-slide-at-a-time PNG conversion.
+The thumbnail and outline gate requires an exactly 320-pixel-wide proportional
+slide-one PNG and recursive paragraph output with stable level indentation.
+Regressions cover nonstandard aspect ratios, shared output defaulting, grouped
+text order, embedded paragraph-break normalization, and field-only title
+identity so the title appears exactly once.
+
+The `rdocx` CLI has one integration binary that invokes the compiled executable
+through `CARGO_BIN_EXE_rdocx`. Its seven tests cover `inspect`, `text`,
+`convert`, `diff`, `replace`, `validate`, and `render` with in-code DOCX and
+corrupt-package fixtures. The assertions bind schema 1, default paths, exact
+stdout, exit-status verdicts, output validity, replacement persistence,
+document-order text, and bundled-font deterministic render bytes. Process ID
+and an atomic counter isolate temporary workspaces across concurrent runs.
+
+The root README is the sole source for its six Rust examples. Every fence is
+`rust,no_run`, so rustdoc compiles the examples without executing their
+filesystem writes. `scripts/readme_doctests.py` builds the current `rdocx`
+library with locked dependencies and Cargo JSON messages, locates the emitted
+rlib, and invokes rustdoc with the 2024 edition, warnings denied, its dependency
+search path, and the exact `--extern rdocx` artifact. The docs job and canonical
+non-fast verification call this same runner.
+
 ## What CI runs
 
 | Job | Command |
 |---|---|
-| test | `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` |
+| test | Fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` |
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
-| wasm | Locked `wasm32-unknown-unknown` checks and `wasm-pack test --node` for `rdocx-wasm` and `rpptx-wasm` |
+| wasm | Locked `wasm32-unknown-unknown` checks, `wasm-pack test --node`, and local bundler pack and fresh-install gates for `rdocx-wasm` and `rpptx-wasm` |
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |
 | hash-harness | `python3 scripts/hash_harness.py --check` |
 | presentation-fidelity | Fetch the pinned corpus, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
 | clippy | `cargo clippy --workspace --all-targets --all-features --exclude rdocx-py --exclude rpptx-py -- -D warnings` |
 | fmt | `cargo fmt --all -- --check` |
-| doc | `cargo doc --workspace --no-deps --all-features --exclude rdocx-py --exclude rpptx-py` with `RUSTDOCFLAGS=-D warnings` |
+| doc | `cargo doc --workspace --no-deps --all-features --exclude rdocx-py --exclude rpptx-py` with `RUSTDOCFLAGS=-D warnings`, then `python3 scripts/readme_doctests.py` |
 | package-oxml-layout | Verify the exact font and legal-file inventory, then build and size-check the verified archive |
-| msrv | `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 |
+| msrv | Fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 |
 | python-bindings | On pull requests, build each Python package with `maturin develop --locked` in its own Python 3.12.9 environment, then run its complete pytest directory |
 | supply-chain | `cargo-deny check` |
 | python-wheels | On manual dispatch or a `py-v*` tag, build six cp39-abi3 wheels for each Python package and one source distribution per package, then install and test every compatible artifact in a fresh environment |
@@ -457,16 +485,34 @@ revision are bound to full reviewed commit SHAs. Their operative input maps are
 exact and cannot be satisfied by comments.
 
 The pull-request WASM job uses exact Node 24.11.1 and wasm-pack 0.15.0. It
-target-checks both WASM packages with `--locked`, then runs both inline suites
-through `wasm-pack test --node`. The steps are unconditional and propagate an
-ordinary non-zero command status. Checkout v6.0.2, setup-node v6.5.0,
-rust-cache v2.9.1, and the selected stable rust-toolchain revision are bound to
-full reviewed commit SHAs.
+installs the official Binaryen version 125 Linux archive only after verifying
+its pinned SHA-256, places that optimizer on `PATH`, and requires the exact
+version string. It target-checks both WASM packages with `--locked`, then runs
+both inline suites through `wasm-pack test --node`.
+
+Both manifests bind release optimization to `-Oz`,
+`--enable-bulk-memory`, and `--enable-nontrapping-float-to-int`. The last flag
+is required by nontrapping conversion operations emitted by the Rust 1.93
+standard library. CI builds the exact `@tensorbee/rdocx-wasm` and
+`@tensorbee/rpptx-wasm` release bundler packages with locked dependencies. Each
+package is packed locally, installed into a separate fresh consumer through an
+isolated npm cache with scripts disabled, and checked for its exact name,
+version, WASM, JavaScript glue, public declaration, and import. The steps are
+unconditional and propagate ordinary non-zero command status. Structured
+regressions reject optimizer, checksum, package, target, scope, locking,
+installation, authentication, publication, and tag mutations.
+
+The job retains root `contents: read` permission and has no npm publication,
+registry authentication, token, OIDC, release, or tag authority. Checkout
+v6.0.2, setup-node v6.5.0, rust-cache v2.9.1, and the selected stable
+rust-toolchain revision are bound to full reviewed commit SHAs.
 
 ## Gaps being closed
 
 Stated plainly, because they are why two shipped defects went unnoticed:
 
-- **`rdocx-cli` has zero tests** despite being a published binary.
+- **Command-level output contracts need explicit coverage.** The published
+  `rdocx-cli` surface has one compiled-binary integration test for each of its
+  seven commands.
 - **PDF and PNG output is only checked for non-emptiness**, so layout
   regressions are invisible. The hash harness closes this.

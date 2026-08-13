@@ -479,6 +479,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
+name = "oxml-cli-support"
+version = "0.1.2"
+dependencies = [
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "oxml-core"
 version = "0.1.2"
 dependencies = [
@@ -703,6 +711,7 @@ name = "rdocx-cli"
 version = "0.4.1"
 dependencies = [
  "clap",
+ "oxml-cli-support",
  "oxml-opc",
  "rdocx",
  "rdocx-oxml",
@@ -858,6 +867,18 @@ dependencies = [
  "oxml-pdf",
  "quick-xml",
  "tiny-skia",
+]
+
+[[package]]
+name = "rpptx-cli"
+version = "0.1.2"
+dependencies = [
+ "clap",
+ "oxml-cli-support",
+ "oxml-opc",
+ "oxml-pdf",
+ "rpptx",
+ "serde_json",
 ]
 
 [[package]]

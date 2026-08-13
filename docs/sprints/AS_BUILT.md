@@ -5225,3 +5225,262 @@ passed.
 **Notes for future sessions.** Keep rendering optional for the wrapper and
 package interpretation in the facade. Re-run the exact optimized size gate
 whenever the normal-default dependency graph changes.
+
+### F-143, oxml-cli-support
+
+**Sprint.** S36
+**Completed.** 2026-08-13
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The publishable, currently unpublished
+`oxml-cli-support` crate owns bounded
+one-based range parsing, default output-path construction, and the schema-one
+JSON envelope shared by both command-line tools. `rdocx-cli` now uses the
+shared output-path and JSON helpers without changing its command surface.
+
+**Non-obvious choices.** Range parsing charges requested expansion work before
+deduplication and accepts exactly 100,000 requested values. This prevents large
+or overlapping ranges from amplifying memory or CPU work while retaining
+sorted and deduplicated results.
+
+**Deviations from the design plan.** Review added the explicit materialization
+and cumulative-work bounds, the exact accepted boundary, and full compatibility
+coverage for every existing rdocx inspect field and default conversion path.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Seven shared helper tests, two rdocx-cli compatibility tests,
+oversized and overlapping range mutations, the 21-package publication dry run,
+dependency-direction checks, and the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep format-neutral command plumbing in this
+crate and charge range work before materializing user input.
+
+### F-144, rpptx-cli
+
+**Sprint.** S36
+**Completed.** 2026-08-13
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The publishable, currently unpublished `rpptx-cli` binary
+provides `inspect`,
+`text`, `convert`, `diff`, `replace`, `validate`, and `render`. It consumes the
+real presentation facade and shared CLI support, preserves package content and
+run formatting during replacement, and uses deterministic rendering for PDF
+and PNG output.
+
+**Non-obvious choices.** Raster commands reject more than 8,000,000 pixels per
+page. PNG conversion preflights every page and then renders, writes, and drops
+one encoded page at a time. Text diff retains its established LCS behavior but
+rejects matrices above 1,000,000 cells before allocation.
+
+**Deviations from the design plan.** Review added complete core metadata to
+plain inspect output, zero-slide PNG failure, bounded DPI and diff resources,
+streaming multi-slide PNG output, and verified corpus provision for both clean
+CI jobs.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/06-presentationml-model.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Fourteen command integrations, all 50 pinned corpus decks, the
+same-run, cross-run, grouped, and table replacement matrix, resource-boundary
+mutations, deterministic rendering checks, workflow regressions, and the
+integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep OOXML ownership in the facade. New CLI
+operations must remain bounded before allocating or collecting output.
+
+### F-145, rpptx-cli thumbnail and outline
+
+**Sprint.** S36
+**Completed.** 2026-08-13
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `rpptx thumbnail` renders slide one to a deterministic PNG
+at exactly 320 pixels wide with proportional height. `rpptx outline` prints
+each slide title once and recursively emits textual paragraphs in shape order
+with two spaces per paragraph level.
+
+**Non-obvious choices.** Outline title suppression compares the actual
+`ShapeRef` node identity through additive `PartialEq` and `Eq` implementations.
+This remains total for field-only titles and does not depend on collapsed
+placeholder indexes. Paragraph line breaks normalize to printable spaces.
+
+**Deviations from the design plan.** Review exposed unindexed placeholder and
+field-only title cases. The user approved the bounded equality trait addition,
+and the owning facade HLD was added to the exact work list before completion.
+
+**Spec sections touched.** `docs/hld/06-presentationml-model.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Fourteen CLI integrations cover portrait aspect ratio, output-path
+precedence, grouped text, paragraph levels, embedded breaks, unindexed
+placeholders, field-only titles, all 50 corpus decks, targeted mutations, and
+the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Compare facade handles by their defined node
+identity when exact shape suppression is required. Do not infer identity from
+placeholder indexes or text.
+
+### F-146, npm publication
+
+**Sprint.** S36
+**Completed.** 2026-08-13
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The CI WASM job can build local bundler packages, run
+`npm pack`, and install `@tensorbee/rdocx-wasm` and
+`@tensorbee/rpptx-wasm` into separate fresh consumers. The packages contain
+their scoped metadata, WebAssembly binary, JavaScript glue, and public type
+declarations. No registry publication path or authority was added.
+
+**Non-obvious choices.** Both manifests use wasm-opt 125 with `-Oz`,
+`--enable-bulk-memory`, and `--enable-nontrapping-float-to-int`. CI downloads
+the reviewed official Binaryen asset and verifies its SHA-256 before use.
+Fresh installs disable scripts, audits, and funding calls.
+
+**Deviations from the design plan.** Actual Rust output required the approved
+third wasm-opt feature flag. The user also approved installing exact wasm-opt
+125 because wasm-pack otherwise falls back to a different bundled version.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Local bundler builds, two scoped tarballs, separate fresh installs,
+package inventories, installed imports, both locked WASM checks, both Node
+suites, 36 workflow regressions, dependency isolation, and the integrated full
+gate passed. No package was published.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Treat real npm publication as a separate
+reviewed story with explicit authority. Keep this path local and install-only.
+
+### F-X001, rdocx-cli tests
+
+**Sprint.** S36
+**Completed.** 2026-08-13
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** One integration binary invokes all seven `rdocx-cli`
+commands through `std::process::Command` with isolated in-code fixtures. The
+text command now uses facade document-order text, and both render branches use
+the bundled-font deterministic facade.
+
+**Non-obvious choices.** The tests bind visible font output byte-for-byte to
+the deterministic renderer for both selected-page and all-page paths. Their
+temporary workspaces combine process identity with a local counter.
+
+**Deviations from the design plan.** Review exposed interleaved body-order and
+system-font rendering defects in the product. The approved plan was revised to
+include those bounded command fixes and exactly three HLD files.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** Seven command integrations, misspelled-command and false-validation
+mutations, interleaved paragraph and table text, deterministic selected and
+all-page rendering mutations, golden PNG checks, and the integrated full gate
+passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep one command integration entrypoint and
+bind rendering tests to the deterministic facade rather than host coincidence.
+
+### F-X002, README example correctness
+
+**Sprint.** S36
+**Completed.** 2026-08-13
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** All six root README Rust examples compile as `no_run`
+rustdoc tests. The table example uses the real indexed row and cell APIs. One
+canonical Python runner obtains the exact locked rdocx rlib through Cargo JSON
+and invokes rustdoc with warnings denied.
+
+**Non-obvious choices.** README remains the only snippet source. The CI docs
+job and canonical full verification call the same runner, which prevents drift
+without duplicating examples into crate documentation.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The runner compiled six examples, a disposable `rows()` and
+`cells()` mutation failed with E0599, output scans remained clean, CI and
+generated-adapter contracts passed, and the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep README as the snippet source and discover
+the actual locked rlib rather than assuming a target filename.
+
+### F-X003, Deduplicate the sample generators
+
+**Sprint.** S36
+**Completed.** 2026-08-13
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The obsolete `generate_samples` example was deleted.
+`generate_all_samples` is now the single source for every document and output
+consumed by the hash and golden-image harnesses.
+
+**Non-obvious choices.** This is a behavior-neutral deletion. The surviving
+generator was not rewritten, and no baseline was recorded or moved.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** None.
+
+**Tests.** All 28 deterministic hashes, all seven golden PNG buffers, every
+example compile, the canonical seven-sample inventory, a missing-contract
+mutation, repository invocation search, and the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Add sample artifacts only through
+`generate_all_samples` and prove the full deterministic inventory.
+
+### F-X004, Fix the shared temp path in the test suite
+
+**Sprint.** S36
+**Completed.** 2026-08-13
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The rdocx file round-trip integration uses an output name
+containing the test process ID, so concurrent test processes do not share one
+fixed path.
+
+**Non-obvious choices.** The regression asserts the exact process identity in
+the filename. No production helper or new dependency was introduced for a
+single test-isolation correction.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** None.
+
+**Tests.** The exact test failed under the former fixed-name mutation, two
+concurrent invocations passed, the complete rdocx suite passed, and the
+integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Test files that can be created concurrently
+must include process identity or use an isolated workspace.

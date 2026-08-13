@@ -116,6 +116,12 @@ The same treatment applies to `crates/rpptx/assets/default.pptx`. **An asset
 must live under its own crate's directory**: a workspace-root `assets/` compiles
 locally but is not collected into the published tarball.
 
+The publishable `rpptx-cli` binary contains nine commands. Its `thumbnail`
+command uses the deterministic presentation renderer, and its `outline`
+command depends only on facade traversal. The package dry run and archive-size
+gate therefore cover the complete command surface without adding runtime
+assets to the CLI crate.
+
 Every bundled font family has its licence under the crate's `fonts/` directory.
 Caladea ships with the full Apache License 2.0 text in `LICENSE-Caladea` and its
 copyright, trademark and designer attribution in `NOTICE-Caladea`. The
@@ -137,22 +143,25 @@ The fourteen crates.io names in this graph are reserved under the owner
 `mantissaman`: `oxml-core`, `oxml-opc`, `oxml-media`,
 `oxml-drawing`, `oxml-layout`, `oxml-pdf`, `oxml-sml`, `oxml-cli-support`,
 `rpptx-oxml`, `rpptx-layout`, `rpptx-render`, `rpptx-chart`, `rpptx`, and
-`rpptx-cli`. The unimplemented `oxml-cli-support` and `rpptx-cli` entries
-remain dependency-free 0.0.0 placeholders. The 12 implemented packages use
-the reviewed release path described below.
+`rpptx-cli`. All 14 implemented packages use the reviewed release path
+described below. The earlier 12-package family is published at 0.1.2.
+`oxml-cli-support` and `rpptx-cli` are publishable but remain unpublished at
+that version. F-X006 must prepare a fresh common version before the complete
+14-package family can be released.
 
 `oxml-py-support`, `rpptx-py`, and `rpptx-wasm` are not reserved on crates.io.
 The binding crates are not published there. `rpptx-wasm` is an implemented
-workspace crate with no crates.io publication path. Its npm publication remains
-deferred to F-146.
+workspace crate with no crates.io publication path. Its reviewed npm surface is
+the local `@tensorbee/rpptx-wasm` bundler tarball. Registry publication remains
+unconfigured and unauthorized.
 
-All 12 implemented shared and PowerPoint packages are published at the common
-incubating version 0.1.2. They are
+The exact incubating crates.io allowlist contains 14 implemented shared and
+PowerPoint packages at the common version 0.1.2. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
-`oxml-pdf`, `oxml-sml`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`,
-`rpptx-render`, and `rpptx`. The reviewed `rpptx-v0.1.2` release activated that
-exact allowlist after its separate final approval. Manifest eligibility alone
-does not authorize any later publication.
+`oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `rpptx-oxml`, `rpptx-chart`,
+`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. Manifest eligibility
+and allowlist membership do not authorize publication without a separately
+approved `/release` invocation at the exact reviewed SHA.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness, runs the self-contained
@@ -160,12 +169,12 @@ incubating metadata regression to require the exact versions, pins, lockfile
 entries, and non-empty package descriptions without external development
 tools, and runs
 `cargo publish --workspace --dry-run` with an exact local source patch for each
-member of the 19-package publishable union. Cargo rewrites packaged path
+member of the 21-package publishable union. Cargo rewrites packaged path
 dependencies to the registry, so the patches keep verification on the reviewed
 workspace graph before those versions exist there. They do not enter generated
 archives and the dry run uploads nothing. The stable path then publishes only
 the seven released rdocx packages in dependency order. The incubating path
-publishes only the 12 candidates above in dependency order. Every real command
+publishes only the 14 candidates above in dependency order. Every real command
 keeps archive verification enabled. Registry waits separate dependency layers,
 and authentication, network, compilation and duplicate-version failures fail
 the job.
@@ -180,7 +189,7 @@ Two tag namespaces:
 | Tag | Workflow | Publishes |
 |---|---|---|
 | `v*` | `publish.yml` | crates.io, the exact seven-package stable family |
-| `rpptx-v*` | `publish.yml` | crates.io, the exact 12-package incubating family |
+| `rpptx-v*` | `publish.yml` | crates.io, the exact 14-package incubating family |
 | `py-v*` | `wheels.yml` | PyPI via OIDC trusted publishing |
 
 Wheels are separate so a Rust patch release does not rebuild twelve wheels, and
@@ -205,11 +214,11 @@ that inherit `[workspace.package].version`, including the unpublished
 cargo-release's effective `workspace` shared-version group and the
 `v{{version}}` tag template.
 The exact published stable family remains the seven packages listed above.
-The 13 implemented `oxml-*` and `rpptx*` package manifests are prepared at
+The 15 implemented `oxml-*` and `rpptx*` package manifests are prepared at
 explicit version 0.1.2, use the named `incubating` group, and carry the
-`rpptx-v{{version}}` template. That preparation group is the exact 12-package
+`rpptx-v{{version}}` template. That preparation group is the exact 14-package
 published family listed above plus unpublished `rpptx-wasm`. The crates.io
-allowlist remains exactly 12 packages.
+allowlist remains exactly 14 packages.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.
@@ -220,12 +229,12 @@ External release actions remain owned by `/release`.
 either crates.io release tag or start crates.io publication. It selects exactly
 one namespace. The stable path validates the workspace version, its internal
 pins, and the exact seven-package stable set. The incubating path validates the
-common explicit version, workspace pins, and the exact 12-package incubating
+common explicit version, workspace pins, and the exact 14-package incubating
 set.
 
 Both paths require a clean sprint branch, full verification and a clean sprint
 review recorded at the exact HEAD, a workspace dry run containing exactly the
-19-package union and its exact local patch set, archives below 10 MiB with
+21-package union and its exact local patch set, archives below 10 MiB with
 required assets, an absent local and remote requested tag, and a separate final
 approval immediately before the first mutation. `/release` pushes only the
 requested tag. `/close-sprint` remains the only command allowed to merge
@@ -260,13 +269,32 @@ unresolved-symbol link failure that is easy to misdiagnose as something else.
 **A dedicated no-default-features job.** It runs `cargo test -p oxml-layout
 --no-default-features`, which exercises the font-isolation path used by WASM.
 
+**README examples in the docs job.** The root README is the sole source for six
+`rust,no_run` examples. After the workspace documentation build,
+`scripts/readme_doctests.py` discovers the current `rdocx` rlib from Cargo JSON
+messages and passes it directly to rustdoc with the repository edition,
+dependency search path, exact external crate binding, and warnings denied. The
+same runner is part of canonical non-fast verification.
+
 **A WASM target and Node job.** It installs the `wasm32-unknown-unknown` target,
 uses exact Node 24.11.1 and wasm-pack 0.15.0, and checks both facade-backed WASM
 crates with the locked workspace graph. It then runs both packages' inline Node
-regressions. The document suite also requires generated `toPdf` to return a
-complete PDF with an embedded bundled Carlito font. Checkout, setup-node, the
-Rust toolchain, and the Rust cache use reviewed full commit SHAs. The
-presentation render-profile and optimized-size gates remain local.
+regressions. It installs the official Binaryen version 125 Linux archive after
+checking exact SHA-256
+`7c3bc16599c8274a04d34a504fe4be2047884f900e0e2da2f6fb9cd667183be4`,
+places its `wasm-opt` on `PATH`, and verifies the exact version.
+
+Both WASM manifests use release optimization arguments `-Oz`,
+`--enable-bulk-memory`, and `--enable-nontrapping-float-to-int`. The job builds
+the exact scoped release bundler packages with locked dependencies, packs each
+one locally, installs it into a separate fresh consumer with an isolated cache
+and scripts disabled, and checks exact identity, WASM, JavaScript glue, public
+TypeScript declarations, and imports. The package gate grants no registry
+authentication, token, OIDC, publication, release, or tag authority. The
+document suite also requires generated `toPdf` to return a complete PDF with an
+embedded bundled Carlito font. Checkout, setup-node, the Rust toolchain, and the
+Rust cache use reviewed full commit SHAs. The presentation render-profile and
+optimized-size gates remain local.
 
 **A dedicated Python artifact workflow.** Its product matrix is the Cartesian
 product of `rdocx` and `rpptx` with manylinux_2_28 x86_64 and aarch64,

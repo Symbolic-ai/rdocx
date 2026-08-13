@@ -1122,26 +1122,37 @@ corpus.
 
 ### F-145, rpptx-cli thumbnail and outline (M)
 **Depends on**: F-144.
-**Test gate**: `thumbnail` produces a PNG of slide one, and `outline` prints the
-title and bullet tree.
+**Test gate**: `thumbnail` produces a proportional 320-pixel-wide PNG of slide
+one, and `outline` prints each title once followed by the recursive paragraph
+tree with stable level indentation.
 
 ### F-146, npm publication (S)
-`@tensorbee/rdocx-wasm` and `@tensorbee/rpptx-wasm`, which have no publish path
-today.
+`@tensorbee/rdocx-wasm` and `@tensorbee/rpptx-wasm` build as release bundler
+packages under exact checksum-pinned wasm-opt 125. Pull-request CI packs and
+installs both tarballs locally without registry credentials or publication
+authority.
 **Depends on**: F-140, F-142.
-**Test gate**: `npm pack` produces an installable tarball for each.
+**Test gate**: `npm pack` produces an installable tarball for each, and both
+installed packages retain their exact metadata, WASM, JavaScript glue,
+TypeScript declaration, and import.
 
 ---
 
 ## Cross-cutting
 
 ### F-X001, rdocx-cli tests (M)
-The binary is published and has zero tests.
-**Test gate**: one integration test per subcommand.
+The published binary has one compiled-executable integration test for each of
+its seven subcommands in a single test binary. Fixtures are constructed in
+code. Text extraction preserves document order, and both render branches use
+bundled-font deterministic output.
+**Test gate**: all seven named command integration tests pass, and the text,
+validation, and deterministic-render sensitivity mutations fail.
 
 ### F-X002, README example correctness (S)
-The read example uses `table.rows()` and `row.cells()`, neither of which exists.
-**Test gate**: README examples compile as doctests.
+All six root README Rust examples use `rust,no_run` and compile against the
+current `rdocx` rlib without executing filesystem writes. The read example uses
+the total indexed `row_count`, `row`, `cell_count`, and `cell` APIs.
+**Test gate**: `python3 scripts/readme_doctests.py` compiles all six examples.
 
 ### F-X003, Deduplicate the sample generators (S)
 `generate_all_samples.rs` and `generate_samples.rs` overlap substantially.
@@ -1161,3 +1172,14 @@ reviewed release tag before released rdocx consumers cut over.
 **Test gate**: all 12 incubating packages resolve from crates.io at 0.1.2 with
 the expected owner, and the GitHub release targets the newly reviewed sprint
 SHA.
+
+### F-X006, Tag the expanded rpptx family (S)
+Prepare the complete 14-package incubating family at one fresh version above
+0.1.2, including `oxml-cli-support` and `rpptx-cli`, then publish it only
+through `/release rpptx-vX.Y.Z` after the command's separate final approval.
+The immutable `rpptx-v0.1.2` tag and its 12 published packages remain
+unchanged.
+**Depends on**: F-143, F-144, F-145.
+**Test gate**: all 14 incubating packages resolve from crates.io at the fresh
+version with the expected owner, and the GitHub release targets the reviewed
+sprint SHA.

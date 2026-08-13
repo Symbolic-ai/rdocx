@@ -28,9 +28,9 @@ regenerated, never hand-edited.
 | M10, Renderer                               | 20 | 20 | 0 | 0  |
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
-| M13, Bindings and tooling                   | 18 | 14 | 0 | 4  |
-| X, Cross-cutting (opportunistic)            | 5  | 1 | 0 | 4  |
-| **Total** | **159** | **151** | **0** | **8** |
+| M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
+| X, Cross-cutting (opportunistic)            | 6  | 5 | 0 | 1  |
+| **Total** | **160** | **159** | **0** | **1** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -274,10 +274,10 @@ regenerated, never hand-edited.
 | F-140 | wasm CI job                                  | S35 | S | done |
 | F-141 | to_pdf in the browser                        | S35 | M | done |
 | F-142 | rpptx-wasm                                   | S35 | M | done |
-| F-143 | oxml-cli-support                             | S36 | S | pending |
-| F-144 | rpptx-cli                                    | S36 | L | pending |
-| F-145 | rpptx-cli thumbnail and outline              | S36 | M | pending |
-| F-146 | npm publication                              | S36 | S | pending |
+| F-143 | oxml-cli-support                             | S36 | S | done |
+| F-144 | rpptx-cli                                    | S36 | L | done |
+| F-145 | rpptx-cli thumbnail and outline              | S36 | M | done |
+| F-146 | npm publication                              | S36 | S | done |
 <!-- AUTOGEN:backlog-M13 END -->
 
 ### X, Cross-cutting
@@ -285,9 +285,10 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-MX START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-X001 | rdocx-cli tests                             | -   | M | pending |
-| F-X002 | README example correctness                  | -   | S | pending |
-| F-X003 | Deduplicate the sample generators           | -   | S | pending |
-| F-X004 | Fix the shared temp path in the test suite  | -   | S | pending |
+| F-X001 | rdocx-cli tests                             | S36 | M | done |
+| F-X002 | README example correctness                  | S36 | S | done |
+| F-X003 | Deduplicate the sample generators           | S36 | S | done |
+| F-X004 | Fix the shared temp path in the test suite  | S36 | S | done |
 | F-X005 | Tag rpptx-v0.1.2                            | S32.2 | S | done |
+| F-X006 | Tag the expanded rpptx family               | S37 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->

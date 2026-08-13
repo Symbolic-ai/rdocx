@@ -106,6 +106,52 @@ fn python_binding_facade_accessors_are_total_and_immutable() {
     assert!(frame.paragraph(1).is_none());
 }
 
+#[test]
+fn facade_replacement_counts_same_run_cross_run_group_and_table_matches() {
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(0).unwrap();
+        shape.set_text("same target").unwrap();
+        let mut frame = shape.text_frame().unwrap();
+        let mut paragraph = frame.paragraph_mut(0).unwrap();
+        paragraph.add_run(" and cross ");
+        paragraph.add_run("target");
+
+        let mut table = slide.shape_mut(2).unwrap().into_table_mut().unwrap();
+        table.cell_mut(0, 0).unwrap().set_text("table target");
+
+        let mut group = slide.shape_mut(3).unwrap();
+        group
+            .child_mut(0)
+            .unwrap()
+            .set_text("nested target")
+            .unwrap();
+    }
+
+    assert_eq!(presentation.replace_text("target", "done"), 4);
+    let slide = presentation.slide(0).unwrap();
+    assert_eq!(
+        slide.shape(0).unwrap().text().unwrap(),
+        "same done and cross done"
+    );
+    assert_eq!(
+        slide
+            .shape(2)
+            .unwrap()
+            .table()
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .text(),
+        "table done"
+    );
+    assert_eq!(
+        slide.shape(3).unwrap().child(0).unwrap().text().unwrap(),
+        "nested done"
+    );
+}
+
 fn presentation_with_authored_chart() -> Presentation {
     let mut presentation = Presentation::new().expect("open bundled template");
     presentation.add_slide(0).expect("add chart slide");

@@ -47,8 +47,8 @@ the workspace, which is what `/close-sprint` requires.
    `cargo check --target wasm32-unknown-unknown -p rdocx-wasm`. Add
    `-p rpptx-wasm` in F-138 when that crate lands. Skipped by `--fast`.
 
-9. **Docs.** `cargo doc --workspace --no-deps` with `RUSTDOCFLAGS=-D warnings`.
-   Skipped by `--fast`.
+9. **Docs.** `cargo doc --workspace --no-deps` with `RUSTDOCFLAGS=-D warnings`,
+   then `python3 scripts/readme_doctests.py`. Skipped by `--fast`.
 
 10. **Packaging.** Run the workspace dry run with every publishable internal
     crate patched to its reviewed local source:
@@ -62,6 +62,7 @@ the workspace, which is what `/close-sprint` requires.
       --config 'patch.crates-io.oxml-opc.path="crates/oxml-opc"' \
       --config 'patch.crates-io.oxml-pdf.path="crates/oxml-pdf"' \
       --config 'patch.crates-io.oxml-sml.path="crates/oxml-sml"' \
+      --config 'patch.crates-io.oxml-cli-support.path="crates/oxml-cli-support"' \
       --config 'patch.crates-io.rdocx.path="crates/rdocx"' \
       --config 'patch.crates-io.rdocx-cli.path="crates/rdocx-cli"' \
       --config 'patch.crates-io.rdocx-html.path="crates/rdocx-html"' \
@@ -70,6 +71,7 @@ the workspace, which is what `/close-sprint` requires.
       --config 'patch.crates-io.rdocx-oxml.path="crates/rdocx-oxml"' \
       --config 'patch.crates-io.rdocx-pdf.path="crates/rdocx-pdf"' \
       --config 'patch.crates-io.rpptx.path="crates/rpptx"' \
+      --config 'patch.crates-io.rpptx-cli.path="crates/rpptx-cli"' \
       --config 'patch.crates-io.rpptx-chart.path="crates/rpptx-chart"' \
       --config 'patch.crates-io.rpptx-layout.path="crates/rpptx-layout"' \
       --config 'patch.crates-io.rpptx-oxml.path="crates/rpptx-oxml"' \

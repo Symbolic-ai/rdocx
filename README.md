@@ -56,7 +56,7 @@ rdocx-layout = { version = "0.4", features = ["bundled-fonts"] }
 
 ### Create a document
 
-```rust
+```rust,no_run
 use rdocx::{Document, Length};
 
 let mut doc = Document::new();
@@ -75,7 +75,7 @@ doc.save("output.docx").unwrap();
 
 ### Read a document
 
-```rust
+```rust,no_run
 use rdocx::Document;
 
 let doc = Document::open("report.docx").unwrap();
@@ -85,8 +85,14 @@ for para in doc.paragraphs() {
 }
 
 for table in doc.tables() {
-    for row in table.rows() {
-        for cell in row.cells() {
+    for row_index in 0..table.row_count() {
+        let Some(row) = table.row(row_index) else {
+            continue;
+        };
+        for cell_index in 0..row.cell_count() {
+            let Some(cell) = row.cell(cell_index) else {
+                continue;
+            };
             print!("{}\t", cell.text());
         }
         println!();
@@ -96,7 +102,7 @@ for table in doc.tables() {
 
 ### Convert to PDF
 
-```rust
+```rust,no_run
 use rdocx::Document;
 
 let doc = Document::open("report.docx").unwrap();
@@ -108,7 +114,7 @@ let pdf_bytes = doc.to_pdf().unwrap();
 
 ### Convert to HTML / Markdown
 
-```rust
+```rust,no_run
 use rdocx::Document;
 
 let doc = Document::open("report.docx").unwrap();
@@ -119,7 +125,7 @@ let markdown = doc.to_markdown();
 
 ### Template replacement
 
-```rust
+```rust,no_run
 use rdocx::Document;
 use std::collections::HashMap;
 
@@ -135,7 +141,7 @@ doc.save("filled.docx").unwrap();
 
 ### Merge documents
 
-```rust
+```rust,no_run
 use rdocx::{Document, SectionBreak};
 
 let mut doc = Document::open("part1.docx").unwrap();
