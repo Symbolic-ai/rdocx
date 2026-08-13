@@ -31,14 +31,14 @@ sample-generator, and concurrent-test hardening work.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-143 | oxml-cli-support | S | in-progress | codex |
-| F-146 | npm publication | S | in-progress | codex |
-| F-X001 | rdocx-cli tests | M | in-progress | codex |
-| F-X002 | README example correctness | S | in-progress | codex |
-| F-X003 | Deduplicate the sample generators | S | in-progress | codex |
-| F-X004 | Fix the shared temp path in the test suite | S | in-progress | codex |
-| F-144 | rpptx-cli | L | in-progress | codex |
-| F-145 | rpptx-cli thumbnail and outline | M | in-progress | codex |
+| F-143 | oxml-cli-support | S | done | |
+| F-146 | npm publication | S | done | |
+| F-X001 | rdocx-cli tests | M | done | |
+| F-X002 | README example correctness | S | done | |
+| F-X003 | Deduplicate the sample generators | S | done | |
+| F-X004 | Fix the shared temp path in the test suite | S | done | |
+| F-144 | rpptx-cli | L | done | |
+| F-145 | rpptx-cli thumbnail and outline | M | done | |
 
 ## Sequencing note
 
