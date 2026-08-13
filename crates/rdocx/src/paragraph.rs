@@ -6,7 +6,7 @@ use rdocx_oxml::properties::{CT_PPr, CT_Shd};
 use rdocx_oxml::shared::{
     ST_Border, ST_Jc, ST_PageOrientation, ST_SectionType, ST_TabJc, ST_TabLeader,
 };
-use rdocx_oxml::text::{CT_P, CT_R};
+use rdocx_oxml::text::{BreakType, CT_P, CT_R, HyperlinkSpan, RunContent};
 use rdocx_oxml::units::Twips;
 
 use crate::Length;
@@ -134,6 +134,33 @@ impl<'a> Paragraph<'a> {
     /// Add a run with the given text and return a mutable reference for chaining.
     pub fn add_run(&mut self, text: &str) -> Run<'_> {
         self.inner.runs.push(CT_R::new(text));
+        Run {
+            inner: self.inner.runs.last_mut().unwrap(),
+        }
+    }
+
+    /// Add a line break in its own run.
+    pub fn add_line_break(&mut self) {
+        let mut run = CT_R::new("");
+        run.content = vec![RunContent::Break(BreakType::Line)];
+        self.inner.runs.push(run);
+    }
+
+    /// Add a run wrapped in an external hyperlink relationship.
+    ///
+    /// Obtain `relationship_id` from
+    /// [`crate::Document::add_hyperlink_relationship`]. Returning the run
+    /// allows the hyperlink text to receive the same direct formatting as any
+    /// other run.
+    pub fn add_hyperlink(&mut self, text: &str, relationship_id: &str) -> Run<'_> {
+        let run_start = self.inner.runs.len();
+        self.inner.runs.push(CT_R::new(text));
+        self.inner.hyperlinks.push(HyperlinkSpan {
+            rel_id: Some(relationship_id.to_string()),
+            anchor: None,
+            run_start,
+            run_end: run_start + 1,
+        });
         Run {
             inner: self.inner.runs.last_mut().unwrap(),
         }
