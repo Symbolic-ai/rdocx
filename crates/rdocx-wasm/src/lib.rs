@@ -129,7 +129,7 @@ impl WasmDocument {
             }
             tbl.rows.push(row);
         }
-        self.document.body.content.push(BodyContent::Table(tbl));
+        self.document.body.add_table(tbl);
     }
 
     /// Get the text content of the entire document.
@@ -155,7 +155,7 @@ impl WasmDocument {
                         result.push('\n');
                     }
                 }
-                BodyContent::RawXml(_) => {}
+                BodyContent::SectionProperties(_) | BodyContent::RawXml(_) => {}
             }
         }
         result
@@ -242,7 +242,7 @@ impl WasmDocument {
                 BodyContent::Table(tbl) => {
                     count += placeholder::replace_in_table(tbl, placeholder, value) as u32;
                 }
-                BodyContent::RawXml(_) => {}
+                BodyContent::SectionProperties(_) | BodyContent::RawXml(_) => {}
             }
         }
         count

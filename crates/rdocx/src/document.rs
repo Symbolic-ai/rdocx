@@ -23,9 +23,10 @@ use rdocx_oxml::text::{CT_Hyperlink, CT_P, CT_R, ParagraphChild, ParsedWithRaw, 
 use rdocx_oxml::core_properties::CoreProperties;
 
 use crate::Length;
+use crate::UnsupportedXmlRef;
 use crate::error::{Error, Result};
 use crate::paragraph::{Paragraph, ParagraphRef};
-use crate::run::RunRef;
+use crate::run::{DrawingRelationshipKind, RunRef};
 use crate::style::{Style, StyleBuilder};
 use crate::table::{Table, TableRef};
 
@@ -36,7 +37,7 @@ pub enum BodyContentRef<'a> {
     /// A body table.
     Table(TableRef<'a>),
     /// A preserved body child the facade does not model.
-    UnsupportedXml(&'a [u8]),
+    UnsupportedXml(UnsupportedXmlRef<'a>),
 }
 
 /// A Word document (.docx file).
@@ -389,12 +390,15 @@ impl Document {
             .body
             .content
             .iter()
-            .map(|content| match content {
+            .filter_map(|content| match content {
                 BodyContent::Paragraph(paragraph) => {
-                    BodyContentRef::Paragraph(ParagraphRef { inner: paragraph })
+                    Some(BodyContentRef::Paragraph(ParagraphRef { inner: paragraph }))
                 }
-                BodyContent::Table(table) => BodyContentRef::Table(TableRef { inner: table }),
-                BodyContent::RawXml(raw) => BodyContentRef::UnsupportedXml(raw.bytes()),
+                BodyContent::Table(table) => Some(BodyContentRef::Table(TableRef { inner: table })),
+                BodyContent::RawXml(raw) => {
+                    Some(BodyContentRef::UnsupportedXml(UnsupportedXmlRef::new(raw)))
+                }
+                BodyContent::SectionProperties(_) => None,
             })
     }
 
@@ -463,10 +467,8 @@ impl Document {
         if !text.is_empty() {
             p.add_run(text);
         }
-        self.document.body.content.push(BodyContent::Paragraph(p));
-        match self.document.body.content.last_mut().unwrap() {
-            BodyContent::Paragraph(p) => Paragraph { inner: p },
-            _ => unreachable!(),
+        Paragraph {
+            inner: self.document.body.add_paragraph(p),
         }
     }
 
@@ -547,10 +549,8 @@ impl Document {
             tbl.rows.push(row);
         }
 
-        self.document.body.content.push(BodyContent::Table(tbl));
-        match self.document.body.content.last_mut().unwrap() {
-            BodyContent::Table(t) => Table { inner: t },
-            _ => unreachable!(),
+        Table {
+            inner: self.document.body.add_table(tbl),
         }
     }
 
@@ -579,10 +579,8 @@ impl Document {
         if !text.is_empty() {
             p.add_run(text);
         }
-        self.document.body.insert_paragraph(index, p);
-        match &mut self.document.body.content[index] {
-            BodyContent::Paragraph(p) => Paragraph { inner: p },
-            _ => unreachable!(),
+        Paragraph {
+            inner: self.document.body.insert_paragraph(index, p),
         }
     }
 
@@ -622,10 +620,8 @@ impl Document {
             tbl.rows.push(row);
         }
 
-        self.document.body.insert_table(index, tbl);
-        match &mut self.document.body.content[index] {
-            BodyContent::Table(t) => Table { inner: t },
-            _ => unreachable!(),
+        Table {
+            inner: self.document.body.insert_table(index, tbl),
         }
     }
 
@@ -671,10 +667,8 @@ impl Document {
 
         let mut p = CT_P::new();
         p.content.push(ParagraphChild::Run(run));
-        self.document.body.content.push(BodyContent::Paragraph(p));
-        match self.document.body.content.last_mut().unwrap() {
-            BodyContent::Paragraph(p) => Paragraph { inner: p },
-            _ => unreachable!(),
+        Paragraph {
+            inner: self.document.body.add_paragraph(p),
         }
     }
 
@@ -719,8 +713,7 @@ impl Document {
         let sect = self
             .document
             .body
-            .sect_pr
-            .as_ref()
+            .sect_pr()
             .cloned()
             .unwrap_or_else(CT_SectPr::default_letter);
         let page_width_emu = sect
@@ -743,10 +736,8 @@ impl Document {
 
         let mut p = CT_P::new();
         p.content.push(ParagraphChild::Run(run));
-        self.document.body.insert_paragraph(0, p);
-        match &mut self.document.body.content[0] {
-            BodyContent::Paragraph(p) => Paragraph { inner: p },
-            _ => unreachable!(),
+        Paragraph {
+            inner: self.document.body.insert_paragraph(0, p),
         }
     }
 
@@ -776,10 +767,8 @@ impl Document {
 
         let mut p = CT_P::new();
         p.content.push(ParagraphChild::Run(run));
-        self.document.body.insert_paragraph(0, p);
-        match &mut self.document.body.content[0] {
-            BodyContent::Paragraph(p) => Paragraph { inner: p },
-            _ => unreachable!(),
+        Paragraph {
+            inner: self.document.body.insert_paragraph(0, p),
         }
     }
 
@@ -829,9 +818,12 @@ impl Document {
     /// Whether the given numbering definition renders as bullets (true)
     /// or numbers (false). None if the id is unknown.
     pub fn numbering_is_bullet(&self, num_id: u32) -> Option<bool> {
+        if num_id == 0 {
+            return None;
+        }
         let numbering = self.numbering.as_ref()?;
         let fmt = numbering
-            .get_effective_level(num_id, 0)?
+            .get_effective_level_with_styles(num_id, 0, &self.styles)?
             .level
             .num_fmt
             .as_ref()?;
@@ -840,8 +832,11 @@ impl Document {
 
     /// Resolve one level of a numbering definition.
     pub fn numbering_level(&self, num_id: u32, level: u32) -> Option<NumberingLevel<'_>> {
+        if num_id == 0 {
+            return None;
+        }
         let numbering = self.numbering.as_ref()?;
-        let effective = numbering.get_effective_level(num_id, level)?;
+        let effective = numbering.get_effective_level_with_styles(num_id, level, &self.styles)?;
         let definition = effective.level;
         let format = definition.num_fmt.as_ref();
         Some(NumberingLevel {
@@ -861,18 +856,15 @@ impl Document {
     pub fn append_hyperlink(&mut self, text: &str, url: &str) {
         let rel_id = self.add_hyperlink_relationship(url);
 
-        if !matches!(
-            self.document.body.content.last(),
-            Some(BodyContent::Paragraph(_))
-        ) {
-            self.document
-                .body
-                .content
-                .push(BodyContent::Paragraph(CT_P::new()));
+        if self.document.body.paragraphs().last().is_none() {
+            self.document.body.add_paragraph(CT_P::new());
         }
-        let Some(BodyContent::Paragraph(p)) = self.document.body.content.last_mut() else {
-            unreachable!();
-        };
+        let p = self
+            .document
+            .body
+            .paragraphs_mut()
+            .last()
+            .expect("paragraph was inserted");
         crate::Paragraph { inner: p }.add_hyperlink(text, &rel_id);
     }
 
@@ -892,10 +884,11 @@ impl Document {
     /// callers interleave plain runs with `append_hyperlink` calls.
     pub fn last_paragraph_mut(&mut self) -> Option<Paragraph<'_>> {
         self.invalidate_layout();
-        match self.document.body.content.last_mut() {
-            Some(BodyContent::Paragraph(p)) => Some(Paragraph { inner: p }),
-            _ => None,
-        }
+        self.document
+            .body
+            .paragraphs_mut()
+            .last()
+            .map(|inner| Paragraph { inner })
     }
 
     /// Fetch the raw bytes of an embedded image by its relationship ID.
@@ -1268,7 +1261,7 @@ impl Document {
     }
 
     fn get_header_footer_text(&self, is_header: bool, hdr_type: HdrFtrType) -> Option<String> {
-        let sect = self.document.body.sect_pr.as_ref()?;
+        let sect = self.document.body.sect_pr()?;
         let refs = if is_header {
             &sect.header_refs
         } else {
@@ -1333,10 +1326,8 @@ impl Document {
         };
         p.properties = Some(ppr);
 
-        self.document.body.content.push(BodyContent::Paragraph(p));
-        match self.document.body.content.last_mut().unwrap() {
-            BodyContent::Paragraph(p) => Paragraph { inner: p },
-            _ => unreachable!(),
+        Paragraph {
+            inner: self.document.body.add_paragraph(p),
         }
     }
 
@@ -1377,10 +1368,8 @@ impl Document {
         };
         p.properties = Some(ppr);
 
-        self.document.body.content.push(BodyContent::Paragraph(p));
-        match self.document.body.content.last_mut().unwrap() {
-            BodyContent::Paragraph(p) => Paragraph { inner: p },
-            _ => unreachable!(),
+        Paragraph {
+            inner: self.document.body.add_paragraph(p),
         }
     }
 
@@ -1497,16 +1486,13 @@ impl Document {
 
     /// Get the section properties (page size, margins).
     pub fn section_properties(&self) -> Option<&CT_SectPr> {
-        self.document.body.sect_pr.as_ref()
+        self.document.body.sect_pr()
     }
 
     /// Get a mutable reference to section properties, creating defaults if needed.
     pub fn section_properties_mut(&mut self) -> &mut CT_SectPr {
         self.invalidate_layout();
-        self.document
-            .body
-            .sect_pr
-            .get_or_insert_with(CT_SectPr::default_letter)
+        self.document.body.ensure_sect_pr()
     }
 
     /// Set page size.
@@ -1641,12 +1627,17 @@ impl Document {
         self.invalidate_layout();
         self.merge_styles(other);
 
-        let start_idx = self.document.body.content.len();
+        let num_offset = self.merge_numbering(other);
         for content in &other.document.body.content {
-            self.document.body.content.push(content.clone());
+            if matches!(content, BodyContent::SectionProperties(_)) {
+                continue;
+            }
+            let mut content = content.clone();
+            if let Some(offset) = num_offset {
+                Self::remap_num_ids(&mut content, offset);
+            }
+            self.document.body.add_content(content);
         }
-
-        self.remap_merged_numbering(other, start_idx);
     }
 
     /// Append the content of another document with a section break.
@@ -1676,7 +1667,7 @@ impl Document {
             sect_pr: Some(sect_pr),
             ..Default::default()
         });
-        self.document.body.content.push(BodyContent::Paragraph(p));
+        self.document.body.add_paragraph(p);
 
         self.append(other);
     }
@@ -1688,15 +1679,22 @@ impl Document {
         self.invalidate_layout();
         self.merge_styles(other);
 
-        let insert_at = index.min(self.document.body.content.len());
-        for (i, content) in other.document.body.content.iter().enumerate() {
+        let insert_at = index.min(self.document.body.content_count());
+        let num_offset = self.merge_numbering(other);
+        let mut inserted = 0;
+        for content in &other.document.body.content {
+            if matches!(content, BodyContent::SectionProperties(_)) {
+                continue;
+            }
+            let mut content = content.clone();
+            if let Some(offset) = num_offset {
+                Self::remap_num_ids(&mut content, offset);
+            }
             self.document
                 .body
-                .content
-                .insert(insert_at + i, content.clone());
+                .insert_content(insert_at + inserted, content);
+            inserted += 1;
         }
-
-        self.remap_merged_numbering(other, insert_at);
     }
 
     /// Merge styles from another document, avoiding duplicates.
@@ -1708,11 +1706,10 @@ impl Document {
         }
     }
 
-    /// Merge numbering from another document and remap IDs in the merged content.
-    /// `start_idx` is the index where the other document's content starts in self.
-    fn remap_merged_numbering(&mut self, other: &Document, start_idx: usize) {
+    /// Merge numbering from another document and return the numId offset for its content.
+    fn merge_numbering(&mut self, other: &Document) -> Option<u32> {
         let Some(other_numbering) = &other.numbering else {
-            return;
+            return None;
         };
 
         let numbering = self
@@ -1749,12 +1746,7 @@ impl Document {
             numbering.nums.push(new_num);
         }
 
-        // Remap numId references in the merged content
-        let incoming_count = other.document.body.content.len();
-        for content in self.document.body.content[start_idx..start_idx + incoming_count].iter_mut()
-        {
-            Self::remap_num_ids(content, num_offset);
-        }
+        Some(num_offset)
     }
 
     /// Remap numId references in body content by adding an offset.
@@ -1766,7 +1758,7 @@ impl Document {
             BodyContent::Table(tbl) => {
                 Self::remap_table_num_ids(tbl, offset);
             }
-            BodyContent::RawXml(_) => {}
+            BodyContent::SectionProperties(_) | BodyContent::RawXml(_) => {}
         }
     }
 
@@ -1935,12 +1927,9 @@ impl Document {
         }
 
         // Step 4: Insert TOC paragraphs at the specified index
-        let insert_at = index.min(self.document.body.content.len());
+        let insert_at = index.min(self.document.body.content_count());
         for (i, p) in toc_paragraphs.into_iter().enumerate() {
-            self.document
-                .body
-                .content
-                .insert(insert_at + i, BodyContent::Paragraph(p));
+            self.document.body.insert_paragraph(insert_at + i, p);
         }
     }
 
@@ -1982,7 +1971,7 @@ impl Document {
     fn text_width_twips(&self) -> i32 {
         const DEFAULT_TEXT_WIDTH: i32 = 9360;
 
-        let Some(sect) = self.document.body.sect_pr.as_ref() else {
+        let Some(sect) = self.document.body.sect_pr() else {
             return DEFAULT_TEXT_WIDTH;
         };
         let page_width = sect.page_width.map(|w| w.0).unwrap_or(12240);
@@ -2063,7 +2052,7 @@ impl Document {
                 BodyContent::Table(t) => {
                     count += placeholder::replace_in_table(t, placeholder, replacement);
                 }
-                BodyContent::RawXml(_) => {}
+                BodyContent::SectionProperties(_) | BodyContent::RawXml(_) => {}
             }
         }
         count
@@ -2094,7 +2083,7 @@ impl Document {
     /// Relationship IDs of the section's headers and footers, with a flag
     /// saying which kind each one is.
     fn header_footer_rel_ids(&self) -> Vec<(String, bool)> {
-        let Some(sect_pr) = self.document.body.sect_pr.as_ref() else {
+        let Some(sect_pr) = self.document.body.sect_pr() else {
             return Vec::new();
         };
         sect_pr
@@ -2149,7 +2138,7 @@ impl Document {
                 BodyContent::Table(t) => {
                     count += placeholder::replace_regex_in_table(t, re, replacement);
                 }
-                BodyContent::RawXml(_) => {}
+                BodyContent::SectionProperties(_) | BodyContent::RawXml(_) => {}
             }
         }
 
@@ -2240,7 +2229,7 @@ impl Document {
 
         // Collect part names for XML parts to process (text boxes/shapes)
         let mut xml_parts: Vec<String> = vec![self.doc_part_name.clone()];
-        if let Some(sect_pr) = self.document.body.sect_pr.as_ref()
+        if let Some(sect_pr) = self.document.body.sect_pr()
             && let Some(rels) = self.package.get_part_rels(&self.doc_part_name)
         {
             for href in &sect_pr.header_refs {
@@ -2690,28 +2679,37 @@ impl Document {
         let mut result = Vec::new();
 
         for content in &self.document.body.content {
-            Self::collect_images_from_content(content, &mut result);
+            self.collect_images_from_content(content, &mut result);
         }
         result
     }
 
-    fn collect_images_from_content(content: &BodyContent, result: &mut Vec<ImageInfo>) {
+    fn collect_images_from_content(&self, content: &BodyContent, result: &mut Vec<ImageInfo>) {
         match content {
-            BodyContent::Paragraph(p) => Self::collect_images_from_paragraph(p, result),
-            BodyContent::Table(tbl) => Self::collect_images_from_table(tbl, result),
-            BodyContent::RawXml(_) => {}
+            BodyContent::Paragraph(p) => self.collect_images_from_paragraph(p, result),
+            BodyContent::Table(tbl) => self.collect_images_from_table(tbl, result),
+            BodyContent::SectionProperties(_) | BodyContent::RawXml(_) => {}
         }
     }
 
-    fn collect_images_from_paragraph(p: &CT_P, result: &mut Vec<ImageInfo>) {
+    fn collect_images_from_paragraph(&self, p: &CT_P, result: &mut Vec<ImageInfo>) {
         for run in p.runs() {
             for rc in &run.content {
                 let RunContent::Drawing(drawing) = rc else {
                     continue;
                 };
-                if let Some(inline) = &drawing.value().inline {
+                if let Some(inline) = &drawing.value().inline
+                    && let Some(relationship_id) = inline
+                        .relationship_id()
+                        .filter(|id| self.is_image_relationship(id))
+                {
                     result.push(ImageInfo {
-                        embed_id: inline.embed_id.clone(),
+                        embed_id: relationship_id.to_string(),
+                        relationship_kind: if inline.is_linked() {
+                            DrawingRelationshipKind::Linked
+                        } else {
+                            DrawingRelationshipKind::Embedded
+                        },
                         name: inline.name.clone(),
                         description: inline.description.clone(),
                         width_emu: inline.extent_cx.0,
@@ -2719,9 +2717,18 @@ impl Document {
                         is_anchor: false,
                     });
                 }
-                if let Some(anchor) = &drawing.value().anchor {
+                if let Some(anchor) = &drawing.value().anchor
+                    && let Some(relationship_id) = anchor
+                        .relationship_id()
+                        .filter(|id| self.is_image_relationship(id))
+                {
                     result.push(ImageInfo {
-                        embed_id: anchor.embed_id.clone(),
+                        embed_id: relationship_id.to_string(),
+                        relationship_kind: if anchor.is_linked() {
+                            DrawingRelationshipKind::Linked
+                        } else {
+                            DrawingRelationshipKind::Embedded
+                        },
                         name: anchor.name.clone(),
                         description: anchor.description.clone(),
                         width_emu: anchor.extent_cx.0,
@@ -2733,22 +2740,29 @@ impl Document {
         }
     }
 
-    fn collect_images_from_table(tbl: &CT_Tbl, result: &mut Vec<ImageInfo>) {
+    fn collect_images_from_table(&self, tbl: &CT_Tbl, result: &mut Vec<ImageInfo>) {
         use rdocx_oxml::table::CellContent;
 
         for row in &tbl.rows {
             for cell in &row.cells {
                 for cc in &cell.content {
                     match cc {
-                        CellContent::Paragraph(p) => Self::collect_images_from_paragraph(p, result),
+                        CellContent::Paragraph(p) => self.collect_images_from_paragraph(p, result),
                         CellContent::Table(nested) => {
-                            Self::collect_images_from_table(nested, result)
+                            self.collect_images_from_table(nested, result)
                         }
                         CellContent::Unsupported(_) => {}
                     }
                 }
             }
         }
+    }
+
+    fn is_image_relationship(&self, relationship_id: &str) -> bool {
+        self.package
+            .get_part_rels(&self.doc_part_name)
+            .and_then(|relationships| relationships.get_by_id(relationship_id))
+            .is_some_and(|relationship| relationship.rel_type == rel_types::IMAGE)
     }
 
     /// Get information about all hyperlinks in the document.
@@ -2806,7 +2820,7 @@ impl Document {
         match content {
             BodyContent::Paragraph(p) => p.text().split_whitespace().count(),
             BodyContent::Table(tbl) => Self::word_count_in_table(tbl),
-            BodyContent::RawXml(_) => 0,
+            BodyContent::SectionProperties(_) | BodyContent::RawXml(_) => 0,
         }
     }
 
@@ -3048,8 +3062,10 @@ pub struct OutlineNode {
 /// Information about an image in the document.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImageInfo {
-    /// The relationship ID for the embedded image.
+    /// Image relationship ID. This legacy field also contains linked-image IDs.
     pub embed_id: String,
+    /// Whether the relationship embeds package data or links externally.
+    pub relationship_kind: DrawingRelationshipKind,
     /// Optional name attribute.
     pub name: Option<String>,
     /// Optional description (alt text).
@@ -3060,6 +3076,13 @@ pub struct ImageInfo {
     pub height_emu: i64,
     /// Whether this is an anchored (floating) image vs inline.
     pub is_anchor: bool,
+}
+
+impl ImageInfo {
+    /// Relationship ID for either an embedded or linked image.
+    pub fn relationship_id(&self) -> &str {
+        &self.embed_id
+    }
 }
 
 /// Information about a hyperlink in the document.
@@ -4044,6 +4067,37 @@ mod tests {
     }
 
     #[test]
+    fn shapes_are_not_reported_as_images() {
+        let mut doc = Document::new();
+        let mut anchor = CT_Anchor::background("", 100, 100);
+        anchor.shape = Some(rdocx_oxml::drawing::CT_Shape {
+            preset: Some("rect".to_string()),
+            ..Default::default()
+        });
+        let mut paragraph = CT_P::new();
+        paragraph.content.push(ParagraphChild::Run(CT_R {
+            properties: None,
+            content: vec![RunContent::Drawing(ParsedWithRaw::new(CT_Drawing::anchor(
+                anchor,
+            )))],
+        }));
+        doc.document.body.add_paragraph(paragraph);
+
+        assert!(doc.images().is_empty());
+        let paragraph = doc.paragraph(0).unwrap();
+        let run = paragraph.run(0).unwrap();
+        let drawing = run
+            .content()
+            .find_map(|content| match content {
+                crate::RunContentRef::Drawing(drawing) => Some(drawing),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(drawing.kind(), crate::DrawingKind::Shape);
+        assert_eq!(drawing.relationship_id(), None);
+    }
+
+    #[test]
     fn numbering_getter_round_trips() {
         let mut doc = Document::new();
         doc.add_bullet_list_item("bullet item", 0);
@@ -4062,6 +4116,16 @@ mod tests {
         assert_eq!(doc2.numbering_is_bullet(num_id), Some(false));
 
         assert!(paras[2].numbering().is_none());
+    }
+
+    #[test]
+    fn num_id_zero_is_not_exposed_as_a_list() {
+        let mut doc = Document::new();
+        doc.add_paragraph("not a list").set_numbering(0, 4);
+
+        assert_eq!(doc.paragraph(0).unwrap().numbering(), None);
+        assert_eq!(doc.numbering_is_bullet(0), None);
+        assert_eq!(doc.numbering_level(0, 4), None);
     }
 
     #[test]

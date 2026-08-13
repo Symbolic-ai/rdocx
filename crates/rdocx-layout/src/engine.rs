@@ -62,8 +62,7 @@ impl Engine {
         let final_sect_pr = input
             .document
             .body
-            .sect_pr
-            .as_ref()
+            .sect_pr()
             .cloned()
             .unwrap_or_else(CT_SectPr::default_letter);
 
@@ -543,7 +542,9 @@ pub fn layout_paragraph(
         && num_id != 0
     {
         let ilvl = effective_ppr.num_ilvl.unwrap_or(0);
-        if let Some(marker) = style_resolver::generate_marker(num_id, ilvl, numbering, num_state) {
+        if let Some(marker) =
+            style_resolver::generate_marker_with_styles(num_id, ilvl, numbering, styles, num_state)
+        {
             // Shape the marker text
             let marker_rpr = marker.marker_rpr;
             let marker_font_size = marker_rpr.sz.map(|hp| hp.to_pt()).unwrap_or_else(|| {
@@ -758,12 +759,15 @@ pub fn layout_paragraph(
                 },
                 RunContent::Drawing(drawing) => {
                     if let Some(ref inline) = drawing.value().inline {
+                        let Some(relationship_id) = inline.relationship_id() else {
+                            continue;
+                        };
                         let width = inline.extent_cx.to_pt();
                         let height = inline.extent_cy.to_pt();
                         inline_items.push(InlineItem::Image {
                             width,
                             height,
-                            media_id: media.id_for_relationship(&inline.embed_id),
+                            media_id: media.id_for_relationship(relationship_id),
                         });
                     }
                 }
@@ -859,7 +863,8 @@ fn collect_anchored_drawings(
             // A picture also carries a pic:spPr, so a parsed shape alone does
             // not mean this is a shape. An embed id is what makes it a
             // picture, and that takes precedence.
-            let shape = if anchor.embed_id.is_empty() {
+            let relationship_id = anchor.relationship_id();
+            let shape = if relationship_id.is_none() {
                 anchor.shape.as_ref()
             } else {
                 None
@@ -886,9 +891,9 @@ fn collect_anchored_drawings(
                         text,
                     }
                 }
-                None if anchor.embed_id.is_empty() => continue,
+                None if relationship_id.is_none() => continue,
                 None => block::AnchoredContent::Image {
-                    media_id: media.id_for_relationship(&anchor.embed_id),
+                    media_id: media.id_for_relationship(relationship_id.unwrap()),
                 },
             };
 

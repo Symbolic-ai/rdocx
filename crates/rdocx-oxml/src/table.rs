@@ -5,7 +5,7 @@ use quick_xml::{Reader, Writer};
 
 use crate::borders::CT_BorderEdge;
 use crate::error::Result;
-use crate::namespace::matches_local_name;
+use crate::namespace::{matches_local_name, matches_word_element, matches_word_name};
 use crate::properties::{CT_Shd, get_val_attr};
 use crate::raw_xml::{
     NamespaceContext, RawXml, capture_element, capture_empty_element, capture_raw_element,
@@ -956,16 +956,15 @@ impl CT_Tc {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"tcPr") {
+                    if matches_word_element(e, context, b"tcPr") {
                         properties = Some(CT_TcPr::from_xml(reader)?);
-                    } else if matches_local_name(name.as_ref(), b"p") {
+                    } else if matches_word_element(e, context, b"p") {
                         let child_context = context.with_element(e);
                         content.push(CellContent::Paragraph(CT_P::from_xml_with_context(
                             reader,
                             &child_context,
                         )?));
-                    } else if matches_local_name(name.as_ref(), b"tbl") {
+                    } else if matches_word_element(e, context, b"tbl") {
                         let child_context = context.with_element(e);
                         content.push(CellContent::Table(CT_Tbl::from_xml_with_context(
                             reader,
@@ -982,14 +981,19 @@ impl CT_Tc {
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
-                    let name = e.name();
-                    if !matches_local_name(name.as_ref(), b"tcPr") {
+                    if matches_word_element(e, context, b"tcPr") {
+                        properties = Some(CT_TcPr::default());
+                    } else if matches_word_element(e, context, b"p") {
+                        content.push(CellContent::Paragraph(CT_P::new()));
+                    } else if matches_word_element(e, context, b"tbl") {
+                        content.push(CellContent::Table(CT_Tbl::new()));
+                    } else {
                         content.push(CellContent::Unsupported(capture_raw_empty_element(
                             e, context,
                         )?));
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tc") => {
+                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"tc") => {
                     break;
                 }
                 Ok(Event::Eof) => break,
@@ -1079,10 +1083,9 @@ impl CT_Row {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"trPr") {
+                    if matches_word_element(e, context, b"trPr") {
                         properties = Some(CT_TrPr::from_xml(reader)?);
-                    } else if matches_local_name(name.as_ref(), b"tc") {
+                    } else if matches_word_element(e, context, b"tc") {
                         let child_context = context.with_element(e);
                         cells.push(CT_Tc::from_xml_with_context(reader, &child_context)?);
                     } else {
@@ -1092,12 +1095,18 @@ impl CT_Row {
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
-                    let name = e.name();
-                    if !matches_local_name(name.as_ref(), b"trPr") {
+                    if matches_word_element(e, context, b"trPr") {
+                        properties = Some(CT_TrPr::default());
+                    } else if matches_word_element(e, context, b"tc") {
+                        cells.push(CT_Tc {
+                            properties: None,
+                            content: Vec::new(),
+                        });
+                    } else {
                         extra_xml.push((cells.len(), capture_empty_element(e)?));
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tr") => {
+                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"tr") => {
                     break;
                 }
                 Ok(Event::Eof) => break,
@@ -1187,12 +1196,11 @@ impl CT_Tbl {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"tblPr") {
+                    if matches_word_element(e, context, b"tblPr") {
                         properties = Some(CT_TblPr::from_xml(reader)?);
-                    } else if matches_local_name(name.as_ref(), b"tblGrid") {
+                    } else if matches_word_element(e, context, b"tblGrid") {
                         grid = Some(CT_TblGrid::from_xml(reader)?);
-                    } else if matches_local_name(name.as_ref(), b"tr") {
+                    } else if matches_word_element(e, context, b"tr") {
                         let child_context = context.with_element(e);
                         rows.push(CT_Row::from_xml_with_context(reader, &child_context)?);
                     } else {
@@ -1202,16 +1210,17 @@ impl CT_Tbl {
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
-                    let name = e.name();
-                    // tblPr and tblGrid have fixed positions ahead of the rows,
-                    // so a self-closing one must not be re-emitted from here.
-                    if !matches_local_name(name.as_ref(), b"tblPr")
-                        && !matches_local_name(name.as_ref(), b"tblGrid")
-                    {
+                    if matches_word_element(e, context, b"tblPr") {
+                        properties = Some(CT_TblPr::default());
+                    } else if matches_word_element(e, context, b"tblGrid") {
+                        grid = Some(CT_TblGrid::default());
+                    } else if matches_word_element(e, context, b"tr") {
+                        rows.push(CT_Row::new());
+                    } else {
                         extra_xml.push((rows.len(), capture_empty_element(e)?));
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tbl") => {
+                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"tbl") => {
                     break;
                 }
                 Ok(Event::Eof) => break,
@@ -1692,7 +1701,7 @@ mod tests {
 
         assert_eq!(
             table_to_xml(&tbl),
-            format!("<w:tbl>{inner}</w:tbl>"),
+            format!("<w:tbl>{inner}</w:tbl>").replace("<w:p/>", "<w:p></w:p>"),
             "the whole thing must survive a write"
         );
     }
@@ -1751,5 +1760,41 @@ mod tests {
             !xml.contains("</w:tr><w:tblPr/>"),
             "tblPr must never follow the rows: {xml}"
         );
+    }
+
+    #[test]
+    fn table_cell_dispatch_respects_namespaces_and_empty_elements() {
+        let table = parse_table(concat!(
+            r#"<w:tblPr/><w:tblGrid/>"#,
+            r#"<x:tr xmlns:x="urn:foreign"/><x:row xmlns:x="urn:foreign"/>"#,
+            r#"<w:tr><w:trPr/><x:tc xmlns:x="urn:foreign"/><w:tc><w:tcPr/>"#,
+            r#"<x:p xmlns:x="urn:foreign"/><w:p/><w:tbl/>"#,
+            r#"</w:tc><w:tc/></w:tr>"#,
+        ));
+
+        assert!(table.properties.is_some());
+        assert!(table.grid.is_some());
+        assert_eq!(table.rows.len(), 1);
+        assert_eq!(table.extra_xml.len(), 2);
+        assert_eq!(table.rows[0].cells.len(), 2);
+        assert_eq!(table.rows[0].extra_xml.len(), 1);
+        assert!(matches!(
+            table.rows[0].cells[0].content[0],
+            CellContent::Unsupported(_)
+        ));
+        assert!(matches!(
+            table.rows[0].cells[0].content[1],
+            CellContent::Paragraph(_)
+        ));
+        assert!(matches!(
+            table.rows[0].cells[0].content[2],
+            CellContent::Table(_)
+        ));
+
+        let xml = table_to_xml(&table);
+        let foreign_tr = xml.find("<x:tr").unwrap();
+        let foreign_row = xml.find("<x:row").unwrap();
+        let word_row = xml.find("<w:tr>").unwrap();
+        assert!(foreign_tr < foreign_row && foreign_row < word_row, "{xml}");
     }
 }

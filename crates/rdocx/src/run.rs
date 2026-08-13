@@ -7,6 +7,7 @@ use rdocx_oxml::text::{BreakType, CT_R, CT_Text, RunContent};
 use rdocx_oxml::units::{HalfPoint, Twips};
 
 use crate::Length;
+use crate::UnsupportedXmlRef;
 
 /// A break embedded in a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +31,21 @@ pub enum FieldKind<'a> {
     Other(&'a str),
 }
 
+/// Semantic kind of drawing exposed by the reader facade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawingKind {
+    Image,
+    Shape,
+    Other,
+}
+
+/// How an image relationship obtains its content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawingRelationshipKind {
+    Embedded,
+    Linked,
+}
+
 /// An immutable drawing embedded in a run.
 #[derive(Debug, Clone, Copy)]
 pub struct DrawingRef<'a> {
@@ -37,6 +53,23 @@ pub struct DrawingRef<'a> {
 }
 
 impl<'a> DrawingRef<'a> {
+    /// Semantic content kind.
+    pub fn kind(&self) -> DrawingKind {
+        let has_relationship = self.relationship_id().is_some();
+        if has_relationship {
+            DrawingKind::Image
+        } else if self
+            .inner
+            .anchor
+            .as_ref()
+            .is_some_and(|anchor| anchor.shape.is_some())
+        {
+            DrawingKind::Shape
+        } else {
+            DrawingKind::Other
+        }
+    }
+
     /// Whether this drawing is inline with the surrounding text.
     pub fn is_inline(&self) -> bool {
         self.inner.inline.is_some()
@@ -52,14 +85,30 @@ impl<'a> DrawingRef<'a> {
         self.inner
             .inline
             .as_ref()
-            .map(|inline| inline.embed_id.as_str())
+            .and_then(|inline| inline.relationship_id())
             .or_else(|| {
                 self.inner
                     .anchor
                     .as_ref()
-                    .map(|anchor| anchor.embed_id.as_str())
+                    .and_then(|anchor| anchor.relationship_id())
             })
-            .filter(|id| !id.is_empty())
+    }
+
+    /// Whether the image is embedded in the package or externally linked.
+    pub fn relationship_kind(&self) -> Option<DrawingRelationshipKind> {
+        self.inner
+            .inline
+            .as_ref()
+            .map(|inline| inline.is_linked())
+            .or_else(|| self.inner.anchor.as_ref().map(|anchor| anchor.is_linked()))
+            .filter(|_| self.relationship_id().is_some())
+            .map(|linked| {
+                if linked {
+                    DrawingRelationshipKind::Linked
+                } else {
+                    DrawingRelationshipKind::Embedded
+                }
+            })
     }
 
     /// The drawing description, commonly used as image alt text.
@@ -130,14 +179,12 @@ pub enum RunContentRef<'a> {
     Break(BreakKind),
     /// An inline or anchored drawing.
     Drawing(DrawingRef<'a>),
-    /// A simple Word field.
-    Field(FieldKind<'a>),
     /// A footnote reference ID.
     FootnoteReference(i32),
     /// An endnote reference ID.
     EndnoteReference(i32),
     /// A preserved run child the facade does not model.
-    UnsupportedXml(&'a [u8]),
+    UnsupportedXml(UnsupportedXmlRef<'a>),
 }
 
 /// Underline style for runs.
@@ -557,7 +604,9 @@ impl<'a> RunRef<'a> {
             }),
             RunContent::FootnoteRef(parsed) => RunContentRef::FootnoteReference(*parsed.value()),
             RunContent::EndnoteRef(parsed) => RunContentRef::EndnoteReference(*parsed.value()),
-            RunContent::Unsupported(raw) => RunContentRef::UnsupportedXml(raw.bytes()),
+            RunContent::Unsupported(raw) => {
+                RunContentRef::UnsupportedXml(UnsupportedXmlRef::new(raw))
+            }
         })
     }
 
@@ -662,8 +711,9 @@ impl<'a> RunRef<'a> {
         for c in &self.inner.content {
             if let RunContent::Drawing(d) = c
                 && let Some(inline) = &d.value().inline
+                && let Some(relationship_id) = inline.relationship_id()
             {
-                return Some((inline.embed_id.as_str(), inline.description.as_deref()));
+                return Some((relationship_id, inline.description.as_deref()));
             }
         }
         None

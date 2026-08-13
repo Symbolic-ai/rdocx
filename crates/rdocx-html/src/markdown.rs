@@ -26,7 +26,7 @@ pub(crate) fn emit_markdown(
             BodyContent::Table(tbl) => {
                 emit_table(&mut out, tbl, hyperlink_urls);
             }
-            BodyContent::RawXml(_) => {}
+            BodyContent::SectionProperties(_) | BodyContent::RawXml(_) => {}
         }
     }
 
@@ -60,7 +60,11 @@ fn detect_heading_level(ppr: Option<&CT_PPr>, styles: &CT_Styles) -> Option<u32>
 }
 
 /// Detect if a paragraph is a list item. Returns (is_ordered, ilvl).
-fn detect_list(para: &CT_P, numbering: Option<&CT_Numbering>) -> Option<(bool, u32)> {
+fn detect_list(
+    para: &CT_P,
+    styles: &CT_Styles,
+    numbering: Option<&CT_Numbering>,
+) -> Option<(bool, u32)> {
     let ppr = para.properties.as_ref()?;
     let num_id = ppr.num_id?;
     let ilvl = ppr.num_ilvl.unwrap_or(0);
@@ -71,18 +75,9 @@ fn detect_list(para: &CT_P, numbering: Option<&CT_Numbering>) -> Option<(bool, u
 
     let numbering = numbering?;
 
-    let abstract_id = numbering
-        .nums
-        .iter()
-        .find(|n| n.num_id == num_id)
-        .map(|n| n.abstract_num_id)?;
-
-    let abstract_num = numbering
-        .abstract_nums
-        .iter()
-        .find(|a| a.abstract_num_id == abstract_id)?;
-
-    let level = abstract_num.levels.iter().find(|l| l.ilvl == ilvl)?;
+    let level = numbering
+        .get_effective_level_with_styles(num_id, ilvl, styles)?
+        .level;
 
     let is_ordered = !matches!(
         level.num_fmt,
@@ -101,7 +96,7 @@ fn emit_paragraph(
     hyperlink_urls: &HashMap<String, String>,
 ) {
     let heading_level = detect_heading_level(para.properties.as_ref(), styles);
-    let list_info = detect_list(para, numbering);
+    let list_info = detect_list(para, styles, numbering);
 
     // Collect inline text for the paragraph
     let text = collect_paragraph_text(para, hyperlink_urls);

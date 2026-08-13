@@ -473,7 +473,6 @@ mod tests {
             document: rdocx_oxml::document::CT_Document {
                 body: rdocx_oxml::document::CT_Body {
                     content: Vec::new(),
-                    sect_pr: None,
                 },
                 extra_namespaces: Vec::new(),
                 background_xml: None,

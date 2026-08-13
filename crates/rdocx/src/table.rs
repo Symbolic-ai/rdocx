@@ -10,6 +10,7 @@ use rdocx_oxml::table::{
 use rdocx_oxml::text::CT_P;
 
 use crate::Length;
+use crate::UnsupportedXmlRef;
 use crate::paragraph::{Paragraph, ParagraphRef};
 
 /// Vertical alignment within a table cell.
@@ -626,7 +627,7 @@ pub enum CellContentRef<'a> {
     /// A nested table.
     Table(TableRef<'a>),
     /// A preserved cell child the facade does not model.
-    UnsupportedXml(&'a [u8]),
+    UnsupportedXml(UnsupportedXmlRef<'a>),
 }
 
 impl<'a> CellRef<'a> {
@@ -643,7 +644,9 @@ impl<'a> CellRef<'a> {
                 CellContentRef::Paragraph(ParagraphRef { inner: paragraph })
             }
             OxmlCellContent::Table(table) => CellContentRef::Table(TableRef { inner: table }),
-            OxmlCellContent::Unsupported(raw) => CellContentRef::UnsupportedXml(raw.bytes()),
+            OxmlCellContent::Unsupported(raw) => {
+                CellContentRef::UnsupportedXml(UnsupportedXmlRef::new(raw))
+            }
         })
     }
 

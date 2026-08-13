@@ -68,11 +68,23 @@ impl<'a> FormattingResolver<'a> {
         let numbering_level = active_num_id.and_then(|num_id| {
             let numbering = self.numbering?;
             if let Some(level) = direct_level {
-                return numbering.get_effective_level(num_id, level);
+                return numbering.get_effective_level_with_styles(num_id, level, self.styles);
             }
             style_id
-                .and_then(|style_id| numbering.get_effective_level_for_style(num_id, style_id))
-                .or_else(|| numbering.get_effective_level(num_id, style_level.unwrap_or(0)))
+                .and_then(|style_id| {
+                    numbering.get_effective_level_for_style_with_styles(
+                        num_id,
+                        style_id,
+                        self.styles,
+                    )
+                })
+                .or_else(|| {
+                    numbering.get_effective_level_with_styles(
+                        num_id,
+                        style_level.unwrap_or(0),
+                        self.styles,
+                    )
+                })
         });
 
         let mut effective = CT_PPr::default();

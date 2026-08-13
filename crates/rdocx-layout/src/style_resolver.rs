@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use rdocx_oxml::numbering::{CT_Numbering, ST_NumberFormat};
+use rdocx_oxml::numbering::{CT_Numbering, EffectiveNumberingLevel, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::resolver::FormattingResolver;
 use rdocx_oxml::styles::CT_Styles;
@@ -120,8 +120,29 @@ pub fn generate_marker(
     numbering: &CT_Numbering,
     state: &mut NumberingState,
 ) -> Option<ResolvedNumbering> {
+    generate_marker_inner(num_id, ilvl, numbering, None, state)
+}
+
+/// Generate a marker while resolving numbering-style indirection.
+pub fn generate_marker_with_styles(
+    num_id: u32,
+    ilvl: u32,
+    numbering: &CT_Numbering,
+    styles: &CT_Styles,
+    state: &mut NumberingState,
+) -> Option<ResolvedNumbering> {
+    generate_marker_inner(num_id, ilvl, numbering, Some(styles), state)
+}
+
+fn generate_marker_inner(
+    num_id: u32,
+    ilvl: u32,
+    numbering: &CT_Numbering,
+    styles: Option<&CT_Styles>,
+    state: &mut NumberingState,
+) -> Option<ResolvedNumbering> {
     let abs = numbering.get_abstract_num_for(num_id)?;
-    let effective_level = numbering.get_effective_level(num_id, ilvl)?;
+    let effective_level = effective_level(numbering, styles, num_id, ilvl)?;
     let lvl = effective_level.level;
 
     // Counters belong to the abstract definition, not the numbering instance.
@@ -139,7 +160,9 @@ pub fn generate_marker(
         lvl_text.to_string()
     } else {
         let count = state.advance(counter_id, ilvl, start);
-        format_lvl_text(lvl_text, num_id, counter_id, ilvl, count, numbering, state)
+        format_lvl_text(
+            lvl_text, num_id, counter_id, ilvl, count, numbering, styles, state,
+        )
     };
 
     let marker_rpr = lvl.rpr.clone().unwrap_or_default();
@@ -158,6 +181,7 @@ fn format_lvl_text(
     current_ilvl: u32,
     current_count: u32,
     numbering: &CT_Numbering,
+    styles: Option<&CT_Styles>,
     state: &NumberingState,
 ) -> String {
     let mut result = template.to_string();
@@ -169,8 +193,7 @@ fn format_lvl_text(
             } else {
                 state.current(counter_id, lvl_idx)
             };
-            let fmt = numbering
-                .get_effective_level(num_id, lvl_idx)
+            let fmt = effective_level(numbering, styles, num_id, lvl_idx)
                 .and_then(|level| level.level.num_fmt.clone())
                 .unwrap_or(ST_NumberFormat::Decimal);
             let formatted = format_number(count, fmt);
@@ -178,6 +201,18 @@ fn format_lvl_text(
         }
     }
     result
+}
+
+fn effective_level<'a>(
+    numbering: &'a CT_Numbering,
+    styles: Option<&CT_Styles>,
+    num_id: u32,
+    ilvl: u32,
+) -> Option<EffectiveNumberingLevel<'a>> {
+    match styles {
+        Some(styles) => numbering.get_effective_level_with_styles(num_id, ilvl, styles),
+        None => numbering.get_effective_level(num_id, ilvl),
+    }
 }
 
 /// Format a number according to ST_NumberFormat.

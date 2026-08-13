@@ -13,6 +13,7 @@ use rdocx_oxml::text::{
 use rdocx_oxml::units::Twips;
 
 use crate::Length;
+use crate::UnsupportedXmlRef;
 use crate::run::{FieldKind, Run, RunRef};
 
 /// Paragraph alignment options.
@@ -124,14 +125,14 @@ pub enum ParagraphContentRef<'a> {
     Run(RunRef<'a>),
     Hyperlink(HyperlinkRef<'a>),
     SimpleField(SimpleFieldRef<'a>),
-    UnsupportedXml(&'a [u8]),
+    UnsupportedXml(UnsupportedXmlRef<'a>),
 }
 
 /// One child within a hyperlink or simple field.
 pub enum InlineContentRef<'a> {
     Run(RunRef<'a>),
     SimpleField(SimpleFieldRef<'a>),
-    UnsupportedXml(&'a [u8]),
+    UnsupportedXml(UnsupportedXmlRef<'a>),
 }
 
 /// An immutable paragraph-level hyperlink.
@@ -195,7 +196,9 @@ fn paragraph_content_ref(child: &ParagraphChild) -> ParagraphContentRef<'_> {
         ParagraphChild::SimpleField(field) => {
             ParagraphContentRef::SimpleField(SimpleFieldRef { inner: field })
         }
-        ParagraphChild::Unsupported(raw) => ParagraphContentRef::UnsupportedXml(raw.bytes()),
+        ParagraphChild::Unsupported(raw) => {
+            ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::new(raw))
+        }
     }
 }
 
@@ -205,7 +208,9 @@ fn inline_content_ref(child: &InlineChild) -> InlineContentRef<'_> {
         InlineChild::SimpleField(field) => {
             InlineContentRef::SimpleField(SimpleFieldRef { inner: field })
         }
-        InlineChild::Unsupported(raw) => InlineContentRef::UnsupportedXml(raw.bytes()),
+        InlineChild::Unsupported(raw) => {
+            InlineContentRef::UnsupportedXml(UnsupportedXmlRef::new(raw))
+        }
     }
 }
 
@@ -884,20 +889,11 @@ impl<'a> ParagraphRef<'a> {
                 ParagraphChild::Run(_) => run_index += 1,
                 ParagraphChild::Hyperlink(hyperlink) => {
                     let start = run_index;
-                    let count = hyperlink
-                        .children()
-                        .iter()
-                        .filter(|child| matches!(child, InlineChild::Run(_)))
-                        .count();
-                    run_index += count;
+                    run_index += hyperlink.run_count();
                     spans.push((start, run_index, hyperlink.rel_id()));
                 }
                 ParagraphChild::SimpleField(field) => {
-                    run_index += field
-                        .children()
-                        .iter()
-                        .filter(|child| matches!(child, InlineChild::Run(_)))
-                        .count();
+                    run_index += field.run_count();
                 }
                 ParagraphChild::Unsupported(_) => {}
             }
@@ -909,7 +905,8 @@ impl<'a> ParagraphRef<'a> {
     /// item. Resolve bullet-vs-numbered via `Document::numbering_is_bullet`.
     pub fn numbering(&self) -> Option<(u32, u32)> {
         let ppr = self.inner.properties.as_ref()?;
-        Some((ppr.num_id?, ppr.num_ilvl.unwrap_or(0)))
+        let num_id = ppr.num_id?;
+        (num_id != 0).then_some((num_id, ppr.num_ilvl.unwrap_or(0)))
     }
 
     /// Get the alignment, if set.

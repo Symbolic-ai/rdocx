@@ -127,6 +127,8 @@ pub struct CT_Anchor {
     pub wrap: WrapType,
     /// Relationship ID referencing the image part.
     pub embed_id: String,
+    /// Relationship ID referencing an externally linked image.
+    pub link_id: Option<String>,
     /// Z-order relative height.
     pub relative_height: u32,
     /// Optional description/alt text.
@@ -280,6 +282,16 @@ fn parse_shape_props(raw: &[u8]) -> (Option<String>, Option<String>) {
 }
 
 impl CT_Anchor {
+    pub fn relationship_id(&self) -> Option<&str> {
+        (!self.embed_id.is_empty())
+            .then_some(self.embed_id.as_str())
+            .or(self.link_id.as_deref())
+    }
+
+    pub fn is_linked(&self) -> bool {
+        self.embed_id.is_empty() && self.link_id.is_some()
+    }
+
     /// Create an anchor for a full-page background image.
     pub fn background(embed_id: &str, page_width_emu: i64, page_height_emu: i64) -> Self {
         CT_Anchor {
@@ -292,6 +304,7 @@ impl CT_Anchor {
             extent_cy: Emu(page_height_emu),
             wrap: WrapType::None,
             embed_id: embed_id.to_string(),
+            link_id: None,
             relative_height: 0,
             description: Some("Background".to_string()),
             name: Some("Background".to_string()),
@@ -323,6 +336,7 @@ impl CT_Anchor {
         let mut extent_cx = Emu(0);
         let mut extent_cy = Emu(0);
         let mut embed_id = String::new();
+        let mut link_id = None;
         let mut shape: Option<CT_Shape> = None;
         let mut description = None;
         let mut name = None;
@@ -355,14 +369,7 @@ impl CT_Anchor {
                             }
                         }
                     } else if matches_local_name(ename.as_ref(), b"blip") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"embed") {
-                                embed_id = val.to_string();
-                            }
-                        }
+                        parse_blip_relationships(e, &mut embed_id, &mut link_id)?;
                     } else if matches_local_name(ename.as_ref(), b"simplePos") {
                         // Ignore simplePos
                     } else if matches_local_name(ename.as_ref(), b"wrapNone") {
@@ -467,14 +474,7 @@ impl CT_Anchor {
                         }
                         shape.get_or_insert_with(CT_Shape::default).text = paragraphs;
                     } else if matches_local_name(ename.as_ref(), b"blip") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"embed") {
-                                embed_id = val.to_string();
-                            }
-                        }
+                        parse_blip_relationships(e, &mut embed_id, &mut link_id)?;
                         reader.read_to_end_into(ename, &mut Vec::new())?;
                     } else if matches_local_name(ename.as_ref(), b"docPr") {
                         for attr in e.attributes() {
@@ -512,6 +512,7 @@ impl CT_Anchor {
             extent_cy,
             wrap: WrapType::None,
             embed_id,
+            link_id,
             relative_height,
             description,
             name,
@@ -587,6 +588,7 @@ impl CT_Anchor {
         write_graphic_element(
             writer,
             &self.embed_id,
+            self.link_id.as_deref(),
             self.extent_cx,
             self.extent_cy,
             self.name.as_deref(),
@@ -606,6 +608,8 @@ pub struct CT_Inline {
     pub extent_cy: Emu,
     /// Relationship ID referencing the image part
     pub embed_id: String,
+    /// Relationship ID referencing an externally linked image.
+    pub link_id: Option<String>,
     /// Optional description/alt text
     pub description: Option<String>,
     /// Optional name
@@ -616,11 +620,22 @@ pub struct CT_Inline {
 }
 
 impl CT_Inline {
+    pub fn relationship_id(&self) -> Option<&str> {
+        (!self.embed_id.is_empty())
+            .then_some(self.embed_id.as_str())
+            .or(self.link_id.as_deref())
+    }
+
+    pub fn is_linked(&self) -> bool {
+        self.embed_id.is_empty() && self.link_id.is_some()
+    }
+
     pub fn new(embed_id: &str, width_emu: i64, height_emu: i64) -> Self {
         CT_Inline {
             extent_cx: Emu(width_emu),
             extent_cy: Emu(height_emu),
             embed_id: embed_id.to_string(),
+            link_id: None,
             description: None,
             name: None,
             raw_xml: None,
@@ -631,6 +646,7 @@ impl CT_Inline {
         let mut cx = Emu(0);
         let mut cy = Emu(0);
         let mut embed_id = String::new();
+        let mut link_id = None;
         let mut description = None;
         let mut name = None;
         let mut buf = Vec::new();
@@ -662,27 +678,13 @@ impl CT_Inline {
                             }
                         }
                     } else if matches_local_name(ename.as_ref(), b"blip") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"embed") {
-                                embed_id = val.to_string();
-                            }
-                        }
+                        parse_blip_relationships(e, &mut embed_id, &mut link_id)?;
                     }
                 }
                 Ok(Event::Start(ref e)) => {
                     let ename = e.name();
                     if matches_local_name(ename.as_ref(), b"blip") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"embed") {
-                                embed_id = val.to_string();
-                            }
-                        }
+                        parse_blip_relationships(e, &mut embed_id, &mut link_id)?;
                         reader.read_to_end_into(ename, &mut Vec::new())?;
                     } else if matches_local_name(ename.as_ref(), b"docPr") {
                         for attr in e.attributes() {
@@ -714,6 +716,7 @@ impl CT_Inline {
             extent_cx: cx,
             extent_cy: cy,
             embed_id,
+            link_id,
             description,
             name,
             raw_xml: None, // Will be set by CT_Drawing::from_xml
@@ -755,6 +758,7 @@ impl CT_Inline {
         write_graphic_element(
             writer,
             &self.embed_id,
+            self.link_id.as_deref(),
             self.extent_cx,
             self.extent_cy,
             self.name.as_deref(),
@@ -766,10 +770,28 @@ impl CT_Inline {
     }
 }
 
+fn parse_blip_relationships(
+    element: &BytesStart<'_>,
+    embed_id: &mut String,
+    link_id: &mut Option<String>,
+) -> Result<()> {
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let value = std::str::from_utf8(&attribute.value)?;
+        if matches_local_name(attribute.key.as_ref(), b"embed") {
+            *embed_id = value.to_string();
+        } else if matches_local_name(attribute.key.as_ref(), b"link") {
+            *link_id = Some(value.to_string());
+        }
+    }
+    Ok(())
+}
+
 /// Write the `a:graphic` > `a:graphicData` > `pic:pic` structure (shared by inline and anchor).
 fn write_graphic_element<W: std::io::Write>(
     writer: &mut Writer<W>,
     embed_id: &str,
+    link_id: Option<&str>,
     cx: Emu,
     cy: Emu,
     name: Option<&str>,
@@ -799,7 +821,11 @@ fn write_graphic_element<W: std::io::Write>(
     // pic:blipFill
     writer.write_event(Event::Start(BytesStart::new("pic:blipFill")))?;
     let mut blip = BytesStart::new("a:blip");
-    blip.push_attribute(("r:embed", embed_id));
+    if !embed_id.is_empty() {
+        blip.push_attribute(("r:embed", embed_id));
+    } else if let Some(link_id) = link_id {
+        blip.push_attribute(("r:link", link_id));
+    }
     writer.write_event(Event::Empty(blip))?;
     writer.write_event(Event::Start(BytesStart::new("a:stretch")))?;
     writer.write_event(Event::Empty(BytesStart::new("a:fillRect")))?;
@@ -967,6 +993,7 @@ mod tests {
             extent_cx: Emu(914400), // 1 inch
             extent_cy: Emu(457200), // 0.5 inch
             embed_id: "rId5".to_string(),
+            link_id: None,
             description: Some("A test image".to_string()),
             name: Some("TestPic".to_string()),
             raw_xml: None,
@@ -984,6 +1011,23 @@ mod tests {
         assert_eq!(inl.extent_cx, Emu(914400));
         assert_eq!(inl.extent_cy, Emu(457200));
         assert_eq!(inl.embed_id, "rId5");
+    }
+
+    #[test]
+    fn parses_linked_inline_image_relationship() {
+        let drawing = parse_drawing(concat!(
+            r#"<w:drawing xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+            r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" "#,
+            r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" "#,
+            r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+            r#"<wp:inline><wp:extent cx="10" cy="20"/><a:graphic><a:blip r:link="rId7"/>"#,
+            r#"</a:graphic></wp:inline></w:drawing>"#,
+        ));
+        let inline = drawing.inline.unwrap();
+        assert!(inline.embed_id.is_empty());
+        assert_eq!(inline.link_id.as_deref(), Some("rId7"));
+        assert_eq!(inline.relationship_id(), Some("rId7"));
+        assert!(inline.is_linked());
     }
 
     #[test]

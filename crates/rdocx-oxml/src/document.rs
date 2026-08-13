@@ -5,7 +5,9 @@ use quick_xml::{Reader, Writer};
 
 use crate::error::Result;
 use crate::header_footer::{HdrFtrRef, HdrFtrType};
-use crate::namespace::{MC_NS, R_NS, W_NS, matches_local_name};
+use crate::namespace::{
+    MC_NS, R_NS, W_NS, matches_local_name, matches_word_element, matches_word_name,
+};
 use crate::properties::get_val_attr;
 use crate::raw_xml::{
     NamespaceContext, RawXml, capture_element, capture_empty_element, capture_raw_element,
@@ -21,6 +23,7 @@ use crate::units::Twips;
 pub enum BodyContent {
     Paragraph(CT_P),
     Table(CT_Tbl),
+    SectionProperties(CT_SectPr),
     /// Raw XML for unknown elements (bookmarks, SDTs, mc:AlternateContent, etc.)
     RawXml(RawXml),
 }
@@ -101,6 +104,27 @@ pub struct CT_SectPr {
 
 #[allow(non_snake_case)]
 impl CT_SectPr {
+    pub fn empty() -> Self {
+        CT_SectPr {
+            page_width: None,
+            page_height: None,
+            orientation: None,
+            margin_top: None,
+            margin_right: None,
+            margin_bottom: None,
+            margin_left: None,
+            gutter: None,
+            header_distance: None,
+            footer_distance: None,
+            section_type: None,
+            columns: None,
+            title_pg: None,
+            header_refs: Vec::new(),
+            footer_refs: Vec::new(),
+            extra_xml: Vec::new(),
+        }
+    }
+
     /// Default US Letter page with 1-inch margins.
     pub fn default_letter() -> Self {
         CT_SectPr {
@@ -146,24 +170,7 @@ impl CT_SectPr {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
-        let mut sect = CT_SectPr {
-            page_width: None,
-            page_height: None,
-            orientation: None,
-            margin_top: None,
-            margin_right: None,
-            margin_bottom: None,
-            margin_left: None,
-            gutter: None,
-            header_distance: None,
-            footer_distance: None,
-            section_type: None,
-            columns: None,
-            title_pg: None,
-            header_refs: Vec::new(),
-            footer_refs: Vec::new(),
-            extra_xml: Vec::new(),
-        };
+        let mut sect = CT_SectPr::empty();
         let mut buf = Vec::new();
 
         loop {
@@ -485,18 +492,49 @@ impl CT_SectPr {
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_snake_case)]
 pub struct CT_Body {
-    /// Mixed content: paragraphs and tables in document order.
+    /// Mixed content in document order, including section properties.
     pub content: Vec<BodyContent>,
-    pub sect_pr: Option<CT_SectPr>,
 }
 
 #[allow(non_snake_case)]
 impl CT_Body {
     pub fn new() -> Self {
         CT_Body {
-            content: Vec::new(),
-            sect_pr: Some(CT_SectPr::default_letter()),
+            content: vec![BodyContent::SectionProperties(CT_SectPr::default_letter())],
         }
+    }
+
+    pub fn sect_pr(&self) -> Option<&CT_SectPr> {
+        self.content.iter().rev().find_map(|content| match content {
+            BodyContent::SectionProperties(properties) => Some(properties),
+            _ => None,
+        })
+    }
+
+    pub fn sect_pr_mut(&mut self) -> Option<&mut CT_SectPr> {
+        self.content
+            .iter_mut()
+            .rev()
+            .find_map(|content| match content {
+                BodyContent::SectionProperties(properties) => Some(properties),
+                _ => None,
+            })
+    }
+
+    pub fn ensure_sect_pr(&mut self) -> &mut CT_SectPr {
+        if self.sect_pr().is_none() {
+            self.content
+                .push(BodyContent::SectionProperties(CT_SectPr::default_letter()));
+        }
+        self.sect_pr_mut()
+            .expect("section properties were inserted")
+    }
+
+    fn terminal_section_index(&self) -> usize {
+        self.content
+            .iter()
+            .rposition(|content| matches!(content, BodyContent::SectionProperties(_)))
+            .unwrap_or(self.content.len())
     }
 
     /// Get an iterator over only the paragraphs.
@@ -532,59 +570,131 @@ impl CT_Body {
     }
 
     /// Add a paragraph to the body.
-    pub fn add_paragraph(&mut self, p: CT_P) {
-        self.content.push(BodyContent::Paragraph(p));
+    pub fn add_paragraph(&mut self, p: CT_P) -> &mut CT_P {
+        let index = self.terminal_section_index();
+        self.content.insert(index, BodyContent::Paragraph(p));
+        match &mut self.content[index] {
+            BodyContent::Paragraph(paragraph) => paragraph,
+            _ => unreachable!(),
+        }
     }
 
     /// Add a table to the body.
-    pub fn add_table(&mut self, tbl: CT_Tbl) {
-        self.content.push(BodyContent::Table(tbl));
+    pub fn add_table(&mut self, tbl: CT_Tbl) -> &mut CT_Tbl {
+        let index = self.terminal_section_index();
+        self.content.insert(index, BodyContent::Table(tbl));
+        match &mut self.content[index] {
+            BodyContent::Table(table) => table,
+            _ => unreachable!(),
+        }
+    }
+
+    /// Add a non-section body child immediately before the terminal section properties.
+    ///
+    /// Section properties are already part of [`Self::content`] and should be
+    /// inserted there deliberately when reproducing an unusual source order.
+    pub fn add_content(&mut self, content: BodyContent) -> &mut BodyContent {
+        assert!(
+            !matches!(content, BodyContent::SectionProperties(_)),
+            "use the ordered content vector to insert section properties"
+        );
+        let index = self.terminal_section_index();
+        self.content.insert(index, content);
+        &mut self.content[index]
     }
 
     /// Get the number of body content elements (paragraphs + tables).
     pub fn content_count(&self) -> usize {
-        self.content.len()
+        self.content
+            .iter()
+            .filter(|content| !matches!(content, BodyContent::SectionProperties(_)))
+            .count()
     }
 
     /// Insert a paragraph at the given index.
     ///
     /// Panics if `index > content_count()`.
-    pub fn insert_paragraph(&mut self, index: usize, p: CT_P) {
-        self.content.insert(index, BodyContent::Paragraph(p));
+    pub fn insert_paragraph(&mut self, index: usize, p: CT_P) -> &mut CT_P {
+        let position = self
+            .content_position(index, true)
+            .expect("body content index out of bounds");
+        self.content.insert(position, BodyContent::Paragraph(p));
+        match &mut self.content[position] {
+            BodyContent::Paragraph(paragraph) => paragraph,
+            _ => unreachable!(),
+        }
     }
 
     /// Insert a table at the given index.
     ///
     /// Panics if `index > content_count()`.
-    pub fn insert_table(&mut self, index: usize, tbl: CT_Tbl) {
-        self.content.insert(index, BodyContent::Table(tbl));
+    pub fn insert_table(&mut self, index: usize, tbl: CT_Tbl) -> &mut CT_Tbl {
+        let position = self
+            .content_position(index, true)
+            .expect("body content index out of bounds");
+        self.content.insert(position, BodyContent::Table(tbl));
+        match &mut self.content[position] {
+            BodyContent::Table(table) => table,
+            _ => unreachable!(),
+        }
+    }
+
+    /// Insert a non-section body child at a logical body-content index.
+    pub fn insert_content(&mut self, index: usize, content: BodyContent) -> &mut BodyContent {
+        assert!(
+            !matches!(content, BodyContent::SectionProperties(_)),
+            "use the ordered content vector to insert section properties"
+        );
+        let position = self
+            .content_position(index, true)
+            .expect("body content index out of bounds");
+        self.content.insert(position, content);
+        &mut self.content[position]
     }
 
     /// Find the index of the first paragraph whose text contains the given substring.
     pub fn find_paragraph_index(&self, text: &str) -> Option<usize> {
-        self.content.iter().position(|c| match c {
-            BodyContent::Paragraph(p) => p.text().contains(text),
-            _ => false,
-        })
+        self.content
+            .iter()
+            .filter(|content| !matches!(content, BodyContent::SectionProperties(_)))
+            .position(|content| match content {
+                BodyContent::Paragraph(paragraph) => paragraph.text().contains(text),
+                _ => false,
+            })
     }
 
     /// Remove and return the content at the given index, or `None` if out of bounds.
     pub fn remove(&mut self, index: usize) -> Option<BodyContent> {
-        if index < self.content.len() {
-            Some(self.content.remove(index))
-        } else {
-            None
-        }
+        let position = self.content_position(index, false)?;
+        Some(self.content.remove(position))
     }
 
     /// Get a reference to the content at the given index.
     pub fn get(&self, index: usize) -> Option<&BodyContent> {
-        self.content.get(index)
+        let position = self.content_position(index, false)?;
+        self.content.get(position)
     }
 
     /// Get a mutable reference to the content at the given index.
     pub fn get_mut(&mut self, index: usize) -> Option<&mut BodyContent> {
-        self.content.get_mut(index)
+        let position = self.content_position(index, false)?;
+        self.content.get_mut(position)
+    }
+
+    fn content_position(&self, index: usize, allow_end: bool) -> Option<usize> {
+        let count = self.content_count();
+        if index < count {
+            self.content
+                .iter()
+                .enumerate()
+                .filter(|(_, content)| !matches!(content, BodyContent::SectionProperties(_)))
+                .nth(index)
+                .map(|(position, _)| position)
+        } else if allow_end && index == count {
+            Some(self.terminal_section_index())
+        } else {
+            None
+        }
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
@@ -596,27 +706,25 @@ impl CT_Body {
         context: &NamespaceContext,
     ) -> Result<Self> {
         let mut content = Vec::new();
-        let mut sect_pr = None;
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"p") {
+                    if matches_word_element(e, context, b"p") {
                         let child_context = context.with_element(e);
                         content.push(BodyContent::Paragraph(CT_P::from_xml_with_context(
                             reader,
                             &child_context,
                         )?));
-                    } else if matches_local_name(name.as_ref(), b"tbl") {
+                    } else if matches_word_element(e, context, b"tbl") {
                         let child_context = context.with_element(e);
                         content.push(BodyContent::Table(CT_Tbl::from_xml_with_context(
                             reader,
                             &child_context,
                         )?));
-                    } else if matches_local_name(name.as_ref(), b"sectPr") {
-                        sect_pr = Some(CT_SectPr::from_xml(reader)?);
+                    } else if matches_word_element(e, context, b"sectPr") {
+                        content.push(BodyContent::SectionProperties(CT_SectPr::from_xml(reader)?));
                     } else {
                         // Capture unknown elements as raw XML
                         content.push(BodyContent::RawXml(capture_raw_element(
@@ -625,12 +733,17 @@ impl CT_Body {
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
-                    let name = e.name();
-                    if !matches_local_name(name.as_ref(), b"body") {
+                    if matches_word_element(e, context, b"p") {
+                        content.push(BodyContent::Paragraph(CT_P::new()));
+                    } else if matches_word_element(e, context, b"tbl") {
+                        content.push(BodyContent::Table(CT_Tbl::new()));
+                    } else if matches_word_element(e, context, b"sectPr") {
+                        content.push(BodyContent::SectionProperties(CT_SectPr::empty()));
+                    } else if !matches_word_element(e, context, b"body") {
                         content.push(BodyContent::RawXml(capture_raw_empty_element(e, context)?));
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"body") => {
+                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"body") => {
                     break;
                 }
                 Ok(Event::Eof) => break,
@@ -640,7 +753,7 @@ impl CT_Body {
             buf.clear();
         }
 
-        Ok(CT_Body { content, sect_pr })
+        Ok(CT_Body { content })
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -658,14 +771,11 @@ impl CT_Body {
             match item {
                 BodyContent::Paragraph(p) => p.to_xml_with_context(writer, context)?,
                 BodyContent::Table(t) => t.to_xml_with_context(writer, context)?,
+                BodyContent::SectionProperties(properties) => properties.to_xml(writer)?,
                 BodyContent::RawXml(raw) => {
                     raw.write_to_with_context(writer.get_mut(), context)?;
                 }
             }
-        }
-
-        if let Some(ref sect) = self.sect_pr {
-            sect.to_xml(writer)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:body")))?;
@@ -719,10 +829,7 @@ impl CT_Document {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"body") {
-                        let body_context = document_context.with_element(e);
-                        body = Some(CT_Body::from_xml_with_context(&mut reader, &body_context)?);
-                    } else if matches_local_name(name.as_ref(), b"document") {
+                    if matches_word_element(e, &NamespaceContext::default(), b"document") {
                         document_context = NamespaceContext::default().with_element(e);
                         // Capture extra namespace declarations from the document element
                         for attr in e.attributes().flatten() {
@@ -737,14 +844,17 @@ impl CT_Document {
                             }
                         }
                         // Continue into document element
-                    } else if matches_local_name(name.as_ref(), b"background") {
+                    } else if matches_word_element(e, &document_context, b"body") {
+                        let body_context = document_context.with_element(e);
+                        body = Some(CT_Body::from_xml_with_context(&mut reader, &body_context)?);
+                    } else if matches_word_element(e, &document_context, b"background") {
                         background_xml = Some(capture_element(&mut reader, e)?);
                     } else {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
-                    if matches_local_name(e.name().as_ref(), b"background") {
+                    if matches_word_element(e, &document_context, b"background") {
                         background_xml = Some(capture_empty_element(e)?);
                     }
                 }
@@ -894,26 +1004,70 @@ mod tests {
     }
 
     #[test]
+    fn body_dispatch_uses_resolved_namespaces_and_supports_empty_elements() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:x="urn:foreign"><w:body><x:p/><x:tbl/><w:p/><w:tbl/></w:body></w:document>"#
+        );
+        let document = CT_Document::from_xml(xml.as_bytes()).unwrap();
+
+        assert!(matches!(document.body.content[0], BodyContent::RawXml(_)));
+        assert!(matches!(document.body.content[1], BodyContent::RawXml(_)));
+        assert!(matches!(
+            document.body.content[2],
+            BodyContent::Paragraph(_)
+        ));
+        assert!(matches!(document.body.content[3], BodyContent::Table(_)));
+    }
+
+    #[test]
+    fn section_properties_remain_in_exact_body_order() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:x="urn:foreign"><w:body><w:p/><w:sectPr/><x:tail/><w:sectPr/></w:body></w:document>"#
+        );
+        let mut document = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        assert!(matches!(
+            document.body.content[0],
+            BodyContent::Paragraph(_)
+        ));
+        assert!(matches!(
+            document.body.content[1],
+            BodyContent::SectionProperties(_)
+        ));
+        assert!(matches!(document.body.content[2], BodyContent::RawXml(_)));
+        assert!(matches!(
+            document.body.content[3],
+            BodyContent::SectionProperties(_)
+        ));
+
+        document.body.insert_paragraph(0, CT_P::new());
+        let output = String::from_utf8(document.to_xml().unwrap()).unwrap();
+        let first_section = output.find("<w:sectPr").unwrap();
+        let tail = output.find("<x:tail").unwrap();
+        let last_section = output.rfind("<w:sectPr").unwrap();
+        assert!(first_section < tail && tail < last_section, "{output}");
+    }
+
+    #[test]
     fn round_trip_with_section() {
         let doc = CT_Document::new();
         let xml = doc.to_xml().unwrap();
         let parsed = CT_Document::from_xml(&xml).unwrap();
-        assert!(parsed.body.sect_pr.is_some());
-        let sect = parsed.body.sect_pr.unwrap();
+        assert!(parsed.body.sect_pr().is_some());
+        let sect = parsed.body.sect_pr().unwrap();
         assert_eq!(sect.page_width, Some(Twips(12240)));
     }
 
     #[test]
     fn round_trip_landscape() {
         let mut doc = CT_Document::new();
-        let sect = doc.body.sect_pr.as_mut().unwrap();
+        let sect = doc.body.sect_pr_mut().unwrap();
         sect.orientation = Some(ST_PageOrientation::Landscape);
         sect.page_width = Some(Twips(15840)); // 11"
         sect.page_height = Some(Twips(12240)); // 8.5"
 
         let xml = doc.to_xml().unwrap();
         let parsed = CT_Document::from_xml(&xml).unwrap();
-        let sect = parsed.body.sect_pr.unwrap();
+        let sect = parsed.body.sect_pr().unwrap();
         assert_eq!(sect.orientation, Some(ST_PageOrientation::Landscape));
         assert_eq!(sect.page_width, Some(Twips(15840)));
     }
@@ -921,7 +1075,7 @@ mod tests {
     #[test]
     fn round_trip_columns() {
         let mut doc = CT_Document::new();
-        let sect = doc.body.sect_pr.as_mut().unwrap();
+        let sect = doc.body.sect_pr_mut().unwrap();
         sect.columns = Some(CT_Columns {
             num: Some(2),
             space: Some(Twips(720)),
@@ -932,7 +1086,7 @@ mod tests {
 
         let xml = doc.to_xml().unwrap();
         let parsed = CT_Document::from_xml(&xml).unwrap();
-        let cols = parsed.body.sect_pr.unwrap().columns.unwrap();
+        let cols = parsed.body.sect_pr().unwrap().columns.as_ref().unwrap();
         assert_eq!(cols.num, Some(2));
         assert_eq!(cols.space, Some(Twips(720)));
         assert_eq!(cols.sep, Some(true));
@@ -941,13 +1095,13 @@ mod tests {
     #[test]
     fn round_trip_section_type() {
         let mut doc = CT_Document::new();
-        let sect = doc.body.sect_pr.as_mut().unwrap();
+        let sect = doc.body.sect_pr_mut().unwrap();
         sect.section_type = Some(ST_SectionType::Continuous);
         sect.title_pg = Some(true);
 
         let xml = doc.to_xml().unwrap();
         let parsed = CT_Document::from_xml(&xml).unwrap();
-        let sect = parsed.body.sect_pr.unwrap();
+        let sect = parsed.body.sect_pr().unwrap();
         assert_eq!(sect.section_type, Some(ST_SectionType::Continuous));
         assert_eq!(sect.title_pg, Some(true));
     }
@@ -1051,7 +1205,7 @@ mod tests {
     #[test]
     fn sect_pr_section_type_and_orientation_round_trip() {
         let mut doc = CT_Document::new();
-        let sect = doc.body.sect_pr.as_mut().unwrap();
+        let sect = doc.body.sect_pr_mut().unwrap();
         sect.section_type = Some(ST_SectionType::NextPage);
         sect.orientation = Some(ST_PageOrientation::Landscape);
         sect.page_width = Some(Twips(15840));
@@ -1059,7 +1213,7 @@ mod tests {
 
         let xml = doc.to_xml().unwrap();
         let parsed = CT_Document::from_xml(&xml).unwrap();
-        let sect2 = parsed.body.sect_pr.unwrap();
+        let sect2 = parsed.body.sect_pr().unwrap();
         assert_eq!(sect2.section_type, Some(ST_SectionType::NextPage));
         assert_eq!(sect2.orientation, Some(ST_PageOrientation::Landscape));
         assert_eq!(sect2.page_width, Some(Twips(15840)));
@@ -1075,12 +1229,12 @@ mod tests {
             ST_SectionType::OddPage,
         ] {
             let mut doc = CT_Document::new();
-            let sect = doc.body.sect_pr.as_mut().unwrap();
+            let sect = doc.body.sect_pr_mut().unwrap();
             sect.section_type = Some(section_type);
 
             let xml = doc.to_xml().unwrap();
             let parsed = CT_Document::from_xml(&xml).unwrap();
-            let sect2 = parsed.body.sect_pr.unwrap();
+            let sect2 = parsed.body.sect_pr().unwrap();
             assert_eq!(
                 sect2.section_type,
                 Some(section_type),

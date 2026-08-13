@@ -6,9 +6,9 @@ use rdocx::Document;
 use rdocx::paragraph::Alignment;
 use rdocx::table::VerticalAlignment;
 use rdocx::{
-    BodyContentRef, BorderStyle, BreakKind, CellContentRef, FieldKind, Length, ListLevel,
-    ListNumberFormat, ParagraphContentRef, RunContentRef, SectionBreak, StyleBuilder, TabAlignment,
-    TabLeader, UnderlineStyle,
+    BodyContentRef, BorderStyle, BreakKind, CellContentRef, DrawingKind, DrawingRelationshipKind,
+    FieldKind, Length, ListLevel, ListNumberFormat, ParagraphContentRef, RunContentRef,
+    SectionBreak, StyleBuilder, TabAlignment, TabLeader, UnderlineStyle,
 };
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::shared::ST_Jc;
@@ -2041,6 +2041,16 @@ fn ordered_body_content_keeps_paragraphs_tables_and_unknown_xml_in_place() {
     assert!(
         matches!(&content[1], BodyContentRef::UnsupportedXml(raw) if String::from_utf8_lossy(raw).contains("wrapped"))
     );
+    let BodyContentRef::UnsupportedXml(raw) = &content[1] else {
+        unreachable!()
+    };
+    assert_eq!(raw.qualified_name(), "w:sdt");
+    assert_eq!(raw.local_name(), "sdt");
+    assert_eq!(
+        raw.namespace_uri(),
+        Some("http://schemas.openxmlformats.org/wordprocessingml/2006/main")
+    );
+    assert_eq!(raw.namespace_uri_for_prefix("w"), raw.namespace_uri());
     assert!(
         matches!(&content[2], BodyContentRef::Table(table) if table.cell(0, 0).unwrap().text() == "cell")
     );
@@ -2118,6 +2128,42 @@ fn ordered_run_content_reports_inline_drawings() {
 }
 
 #[test]
+fn ordered_run_content_distinguishes_linked_images() {
+    let mut document = Document::new();
+    document
+        .add_picture_auto(PNG_2_BY_3, "two-by-three.png")
+        .unwrap();
+
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let changed = xml.replacen("r:embed=", "r:link=", 1);
+    assert_ne!(changed, xml);
+
+    let bytes = replace_document_xml(&bytes, changed);
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let run = paragraph.run(0).unwrap();
+    let drawing = run
+        .content()
+        .find_map(|content| match content {
+            RunContentRef::Drawing(drawing) => Some(drawing),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(drawing.kind(), DrawingKind::Image);
+    assert_eq!(
+        drawing.relationship_kind(),
+        Some(DrawingRelationshipKind::Linked)
+    );
+    assert_eq!(reopened.images().len(), 1);
+    assert_eq!(
+        reopened.images()[0].relationship_kind,
+        DrawingRelationshipKind::Linked
+    );
+}
+
+#[test]
 fn ordered_paragraph_content_reports_simple_fields() {
     let mut document = Document::new();
     document.add_paragraph("seed");
@@ -2146,6 +2192,32 @@ fn ordered_paragraph_content_reports_simple_fields() {
         .expect("simple field");
     assert_eq!(field.kind(), FieldKind::Page);
     assert_eq!(field.cached_text(), "1");
+}
+
+#[test]
+fn hyperlink_spans_count_runs_nested_inside_simple_fields() {
+    let mut document = Document::new();
+    document.add_paragraph("seed");
+
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let changed = xml.replace(
+        "<w:r>\n        <w:t>seed</w:t>\n      </w:r>",
+        concat!(
+            "<w:hyperlink r:id=\"rId99\"><w:r><w:t>A</w:t></w:r>",
+            "<w:fldSimple w:instr=\" PAGE \"><w:r><w:t>B</w:t></w:r>",
+            "<w:fldSimple w:instr=\" NUMPAGES \"><w:r><w:t>C</w:t></w:r></w:fldSimple>",
+            "</w:fldSimple></w:hyperlink><w:r><w:t>D</w:t></w:r>"
+        ),
+    );
+    assert_ne!(changed, xml);
+
+    let bytes = replace_document_xml(&bytes, changed);
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    assert_eq!(paragraph.run_count(), 4);
+    assert_eq!(paragraph.hyperlink_spans(), vec![(0, 3, Some("rId99"))]);
 }
 
 #[test]
@@ -2210,6 +2282,41 @@ fn numbering_level_reports_each_levels_format_and_start() {
     assert_eq!(properties.ind_hanging, Some(Twips(360)));
     assert!(reopened.numbering_level(num_id, 9).is_none());
     assert!(reopened.numbering_level(u32::MAX, 0).is_none());
+}
+
+#[test]
+fn numbering_level_resolves_num_style_link() {
+    let mut document = Document::new();
+    document.add_list_definition(&[ListLevel::decimal()]);
+    document.add_paragraph("linked").set_numbering(8, 0);
+    let bytes = document.to_bytes().unwrap();
+
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    package.set_part(
+        "/word/numbering.xml",
+        br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:abstractNum w:abstractNumId="1"><w:numStyleLink w:val="LinkedNumbering"/></w:abstractNum>
+          <w:abstractNum w:abstractNumId="2"><w:styleLink w:val="LinkedNumbering"/><w:lvl w:ilvl="0"><w:start w:val="4"/><w:numFmt w:val="bullet"/><w:lvlText w:val="-"/></w:lvl></w:abstractNum>
+          <w:num w:numId="8"><w:abstractNumId w:val="1"/></w:num>
+          <w:num w:numId="9"><w:abstractNumId w:val="2"/></w:num>
+        </w:numbering>"#
+            .to_vec(),
+    );
+    package.set_part(
+        "/word/styles.xml",
+        br#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:style w:type="numbering" w:styleId="LinkedNumbering"><w:pPr><w:numPr><w:numId w:val="9"/></w:numPr></w:pPr></w:style>
+        </w:styles>"#
+            .to_vec(),
+    );
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+
+    let reopened = Document::from_bytes(output.get_ref()).unwrap();
+    let level = reopened.numbering_level(8, 0).unwrap();
+    assert_eq!(level.format, ListNumberFormat::Bullet);
+    assert_eq!(level.start, 4);
+    assert_eq!(reopened.paragraph(0).unwrap().numbering(), Some((8, 0)));
 }
 
 #[test]

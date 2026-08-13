@@ -29,7 +29,7 @@ pub(crate) fn emit_body(
     for content in &body.content {
         match content {
             BodyContent::Paragraph(p) => {
-                let list_info = detect_list(p, numbering);
+                let list_info = detect_list(p, styles, numbering);
 
                 // Close lists that are no longer active
                 while let Some(top) = list_stack.last() {
@@ -74,7 +74,7 @@ pub(crate) fn emit_body(
                 }
                 emit_table(&mut out, tbl, styles, images, hyperlink_urls, options);
             }
-            BodyContent::RawXml(_) => {}
+            BodyContent::SectionProperties(_) | BodyContent::RawXml(_) => {}
         }
     }
 
@@ -128,7 +128,11 @@ fn detect_heading_level(ppr: Option<&CT_PPr>, styles: &CT_Styles) -> Option<u32>
 }
 
 /// Detect if a paragraph is a list item.
-fn detect_list(para: &CT_P, numbering: Option<&CT_Numbering>) -> Option<(bool, u32)> {
+fn detect_list(
+    para: &CT_P,
+    styles: &CT_Styles,
+    numbering: Option<&CT_Numbering>,
+) -> Option<(bool, u32)> {
     let ppr = para.properties.as_ref()?;
     let num_id = ppr.num_id?;
     let ilvl = ppr.num_ilvl.unwrap_or(0);
@@ -139,19 +143,9 @@ fn detect_list(para: &CT_P, numbering: Option<&CT_Numbering>) -> Option<(bool, u
 
     let numbering = numbering?;
 
-    // Look up the numbering definition to determine if ordered or bullet
-    let abstract_id = numbering
-        .nums
-        .iter()
-        .find(|n| n.num_id == num_id)
-        .map(|n| n.abstract_num_id)?;
-
-    let abstract_num = numbering
-        .abstract_nums
-        .iter()
-        .find(|a| a.abstract_num_id == abstract_id)?;
-
-    let level = abstract_num.levels.iter().find(|l| l.ilvl == ilvl)?;
+    let level = numbering
+        .get_effective_level_with_styles(num_id, ilvl, styles)?
+        .level;
 
     let is_ordered = !matches!(
         level.num_fmt,
@@ -300,8 +294,14 @@ fn emit_run(
                         .value()
                         .inline
                         .as_ref()
-                        .map(|i| i.embed_id.as_str())
-                        .or_else(|| drawing.value().anchor.as_ref().map(|a| a.embed_id.as_str()));
+                        .and_then(|inline| inline.relationship_id())
+                        .or_else(|| {
+                            drawing
+                                .value()
+                                .anchor
+                                .as_ref()
+                                .and_then(|anchor| anchor.relationship_id())
+                        });
 
                     if let Some(eid) = embed_id
                         && let Some(img_data) = images.get(eid)

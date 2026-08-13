@@ -3,13 +3,39 @@
 //! These types represent the content of `numbering.xml`, which defines
 //! abstract numbering formats and numbering instances that paragraphs reference.
 
+use std::collections::HashSet;
+use std::io::Write;
+
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
-use crate::error::Result;
+use crate::error::{OxmlError, Result};
 use crate::namespace::{W_NS, matches_local_name};
 use crate::properties::{CT_PPr, CT_RPr, get_val_attr};
+use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::shared::ST_Jc;
+use crate::styles::{CT_Styles, StyleType};
+
+fn required_u32_attr(element: &BytesStart<'_>, local: &[u8], path: &str) -> Result<u32> {
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        if matches_local_name(attribute.key.as_ref(), local) {
+            return Ok(std::str::from_utf8(&attribute.value)?.parse()?);
+        }
+    }
+    Err(OxmlError::MissingElement(path.to_string()))
+}
+
+fn write_extras_at<W: Write>(
+    writer: &mut Writer<W>,
+    extras: &[(usize, Vec<u8>)],
+    index: usize,
+) -> Result<()> {
+    for (_, raw) in extras.iter().filter(|(position, _)| *position == index) {
+        writer.get_mut().write_all(raw)?;
+    }
+    Ok(())
+}
 
 /// `ST_NumberFormat` — Numbering format type.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,6 +223,12 @@ pub struct CT_AbstractNum {
     pub levels: Vec<CT_Lvl>,
     /// Optional multi-level type hint
     pub multi_level_type: Option<String>,
+    /// Numbering style for which this definition supplies the underlying levels.
+    pub style_link: Option<String>,
+    /// Numbering style that points to the underlying definition to inherit.
+    pub num_style_link: Option<String>,
+    /// Still-unmodelled children, positioned among the modelled children.
+    pub extra_xml: Vec<(usize, Vec<u8>)>,
 }
 
 #[allow(non_snake_case)]
@@ -206,11 +238,15 @@ impl CT_AbstractNum {
             abstract_num_id: id,
             levels: Vec::new(),
             multi_level_type: None,
+            style_link: None,
+            num_style_link: None,
+            extra_xml: Vec::new(),
         }
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>, abstract_num_id: u32) -> Result<Self> {
         let mut abs = CT_AbstractNum::new(abstract_num_id);
+        let mut modelled_index = 0;
         let mut buf = Vec::new();
 
         loop {
@@ -218,22 +254,36 @@ impl CT_AbstractNum {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     if matches_local_name(name.as_ref(), b"lvl") {
-                        let mut ilvl = 0u32;
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            if matches_local_name(attr.key.as_ref(), b"ilvl") {
-                                ilvl = std::str::from_utf8(&attr.value)?.parse()?;
-                            }
-                        }
+                        let ilvl = required_u32_attr(e, b"ilvl", "w:lvl/@w:ilvl")?;
                         abs.levels.push(CT_Lvl::from_xml(reader, ilvl)?);
+                        modelled_index += 1;
                     } else {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
+                        abs.extra_xml
+                            .push((modelled_index, capture_element(reader, e)?));
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
                     if matches_local_name(name.as_ref(), b"multiLevelType") {
                         abs.multi_level_type = get_val_attr(e)?;
+                        modelled_index += 1;
+                    } else if matches_local_name(name.as_ref(), b"styleLink")
+                        && abs.style_link.is_none()
+                    {
+                        abs.style_link = get_val_attr(e)?;
+                        modelled_index += 1;
+                    } else if matches_local_name(name.as_ref(), b"numStyleLink")
+                        && abs.num_style_link.is_none()
+                    {
+                        abs.num_style_link = get_val_attr(e)?;
+                        modelled_index += 1;
+                    } else if matches_local_name(name.as_ref(), b"lvl") {
+                        let ilvl = required_u32_attr(e, b"ilvl", "w:lvl/@w:ilvl")?;
+                        abs.levels.push(CT_Lvl::new(ilvl));
+                        modelled_index += 1;
+                    } else {
+                        abs.extra_xml
+                            .push((modelled_index, capture_empty_element(e)?));
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"abstractNum") => {
@@ -255,14 +305,37 @@ impl CT_AbstractNum {
         start.push_attribute(("w:abstractNumId", buf.format(self.abstract_num_id)));
         writer.write_event(Event::Start(start))?;
 
+        let mut modelled_index = 0;
+        write_extras_at(writer, &self.extra_xml, modelled_index)?;
+
         if let Some(ref mlt) = self.multi_level_type {
             let mut e = BytesStart::new("w:multiLevelType");
             e.push_attribute(("w:val", mlt.as_str()));
             writer.write_event(Event::Empty(e))?;
+            modelled_index += 1;
+            write_extras_at(writer, &self.extra_xml, modelled_index)?;
+        }
+
+        if let Some(ref style_id) = self.style_link {
+            let mut e = BytesStart::new("w:styleLink");
+            e.push_attribute(("w:val", style_id.as_str()));
+            writer.write_event(Event::Empty(e))?;
+            modelled_index += 1;
+            write_extras_at(writer, &self.extra_xml, modelled_index)?;
+        }
+
+        if let Some(ref style_id) = self.num_style_link {
+            let mut e = BytesStart::new("w:numStyleLink");
+            e.push_attribute(("w:val", style_id.as_str()));
+            writer.write_event(Event::Empty(e))?;
+            modelled_index += 1;
+            write_extras_at(writer, &self.extra_xml, modelled_index)?;
         }
 
         for lvl in &self.levels {
             lvl.to_xml(writer)?;
+            modelled_index += 1;
+            write_extras_at(writer, &self.extra_xml, modelled_index)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:abstractNum")))?;
@@ -298,12 +371,7 @@ impl CT_LvlOverride {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) if matches_local_name(e.name().as_ref(), b"lvl") => {
-                    let level_index = e
-                        .attributes()
-                        .flatten()
-                        .find(|attr| matches_local_name(attr.key.as_ref(), b"ilvl"))
-                        .and_then(|attr| std::str::from_utf8(&attr.value).ok()?.parse().ok())
-                        .unwrap_or(ilvl);
+                    let level_index = required_u32_attr(e, b"ilvl", "w:lvl/@w:ilvl")?;
                     value.level = Some(CT_Lvl::from_xml(reader, level_index)?);
                 }
                 Ok(Event::Start(ref e)) => {
@@ -352,7 +420,7 @@ impl CT_LvlOverride {
 #[allow(non_snake_case)]
 impl CT_Num {
     pub fn from_xml(reader: &mut Reader<&[u8]>, num_id: u32) -> Result<Self> {
-        let mut abstract_num_id = 0;
+        let mut abstract_num_id = None;
         let mut level_overrides = Vec::new();
         let mut buf = Vec::new();
 
@@ -362,17 +430,12 @@ impl CT_Num {
                     if matches_local_name(e.name().as_ref(), b"abstractNumId")
                         && let Some(val) = get_val_attr(e)?
                     {
-                        abstract_num_id = val.parse()?;
+                        abstract_num_id = Some(val.parse()?);
                     }
                 }
                 Ok(Event::Start(ref e)) => {
                     if matches_local_name(e.name().as_ref(), b"lvlOverride") {
-                        let ilvl = e
-                            .attributes()
-                            .flatten()
-                            .find(|attr| matches_local_name(attr.key.as_ref(), b"ilvl"))
-                            .and_then(|attr| std::str::from_utf8(&attr.value).ok()?.parse().ok())
-                            .unwrap_or(0);
+                        let ilvl = required_u32_attr(e, b"ilvl", "w:lvlOverride/@w:ilvl")?;
                         level_overrides.push(CT_LvlOverride::from_xml(reader, ilvl)?);
                     } else {
                         reader.read_to_end_into(e.name(), &mut Vec::new())?;
@@ -390,7 +453,9 @@ impl CT_Num {
 
         Ok(CT_Num {
             num_id,
-            abstract_num_id,
+            abstract_num_id: abstract_num_id.ok_or_else(|| {
+                OxmlError::MissingElement("w:num/w:abstractNumId/@w:val".to_string())
+            })?,
             level_overrides,
         })
     }
@@ -444,27 +509,34 @@ impl CT_Numbering {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     if matches_local_name(name.as_ref(), b"abstractNum") {
-                        let mut id = 0u32;
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            if matches_local_name(attr.key.as_ref(), b"abstractNumId") {
-                                id = std::str::from_utf8(&attr.value)?.parse()?;
-                            }
-                        }
+                        let id = required_u32_attr(
+                            e,
+                            b"abstractNumId",
+                            "w:abstractNum/@w:abstractNumId",
+                        )?;
                         abstract_nums.push(CT_AbstractNum::from_xml(&mut reader, id)?);
                     } else if matches_local_name(name.as_ref(), b"num") {
-                        let mut id = 0u32;
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            if matches_local_name(attr.key.as_ref(), b"numId") {
-                                id = std::str::from_utf8(&attr.value)?.parse()?;
-                            }
-                        }
+                        let id = required_u32_attr(e, b"numId", "w:num/@w:numId")?;
                         nums.push(CT_Num::from_xml(&mut reader, id)?);
                     } else if matches_local_name(name.as_ref(), b"numbering") {
                         // root element, continue
                     } else {
                         reader.read_to_end_into(name, &mut Vec::new())?;
+                    }
+                }
+                Ok(Event::Empty(ref e)) => {
+                    if matches_local_name(e.name().as_ref(), b"abstractNum") {
+                        let id = required_u32_attr(
+                            e,
+                            b"abstractNumId",
+                            "w:abstractNum/@w:abstractNumId",
+                        )?;
+                        abstract_nums.push(CT_AbstractNum::new(id));
+                    } else if matches_local_name(e.name().as_ref(), b"num") {
+                        required_u32_attr(e, b"numId", "w:num/@w:numId")?;
+                        return Err(OxmlError::MissingElement(
+                            "w:num/w:abstractNumId/@w:val".to_string(),
+                        ));
                     }
                 }
                 Ok(Event::Eof) => break,
@@ -663,6 +735,83 @@ impl CT_Numbering {
     ) -> Option<EffectiveNumberingLevel<'_>> {
         (0..=8).find_map(|ilvl| {
             let level = self.get_effective_level(num_id, ilvl)?;
+            (level.level.p_style.as_deref() == Some(style_id)).then_some(level)
+        })
+    }
+
+    /// Resolve a numbering level through a `numStyleLink` indirection when needed.
+    pub fn get_effective_level_with_styles<'a>(
+        &'a self,
+        num_id: u32,
+        ilvl: u32,
+        styles: &CT_Styles,
+    ) -> Option<EffectiveNumberingLevel<'a>> {
+        self.get_effective_level_with_styles_inner(num_id, ilvl, styles, &mut HashSet::new())
+    }
+
+    fn get_effective_level_with_styles_inner<'a>(
+        &'a self,
+        num_id: u32,
+        ilvl: u32,
+        styles: &CT_Styles,
+        seen: &mut HashSet<u32>,
+    ) -> Option<EffectiveNumberingLevel<'a>> {
+        if num_id == 0 || !seen.insert(num_id) {
+            return None;
+        }
+
+        let num = self.nums.iter().find(|value| value.num_id == num_id)?;
+        let abstract_num = self
+            .abstract_nums
+            .iter()
+            .find(|value| value.abstract_num_id == num.abstract_num_id)?;
+        let level_override = num.level_overrides.iter().find(|value| value.ilvl == ilvl);
+
+        if let Some(level) = level_override.and_then(|value| value.level.as_ref()) {
+            let start = level_override
+                .and_then(|value| value.start_override)
+                .or(level.start)
+                .unwrap_or(1);
+            return Some(EffectiveNumberingLevel { level, start });
+        }
+
+        let inherited =
+            if let Some(level) = abstract_num.levels.iter().find(|level| level.ilvl == ilvl) {
+                EffectiveNumberingLevel {
+                    level,
+                    start: level.start.unwrap_or(1),
+                }
+            } else {
+                let style_id = abstract_num.num_style_link.as_deref()?;
+                let style = styles.get_by_id(style_id)?;
+                if style.style_type != StyleType::Numbering {
+                    return None;
+                }
+                let linked_num_id = style
+                    .ppr
+                    .as_ref()
+                    .and_then(|properties| properties.num_id)
+                    .filter(|value| *value != 0)?;
+                self.get_effective_level_with_styles_inner(linked_num_id, ilvl, styles, seen)?
+            };
+
+        Some(EffectiveNumberingLevel {
+            level: inherited.level,
+            start: level_override
+                .and_then(|value| value.start_override)
+                .unwrap_or(inherited.start),
+        })
+    }
+
+    /// Find a style-associated level, following `numStyleLink` definitions.
+    pub fn get_effective_level_for_style_with_styles<'a>(
+        &'a self,
+        num_id: u32,
+        style_id: &str,
+        styles: &CT_Styles,
+    ) -> Option<EffectiveNumberingLevel<'a>> {
+        (0..=8).find_map(|ilvl| {
+            let level = self.get_effective_level_with_styles(num_id, ilvl, styles)?;
             (level.level.p_style.as_deref() == Some(style_id)).then_some(level)
         })
     }
@@ -919,6 +1068,55 @@ mod tests {
         assert!(round_trip.contains(r#"<w:numFmt w:val="decimalZero"/>"#));
         assert!(round_trip.contains(r#"<w:startOverride w:val="7"/>"#));
         assert!(round_trip.contains(r#"<w:numFmt w:val="chicago"/>"#));
+    }
+
+    #[test]
+    fn preserves_and_resolves_numbering_style_links() {
+        let numbering_xml = br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:abstractNum w:abstractNumId="1">
+            <w:nsid w:val="A1B2C3D4"/>
+            <w:numStyleLink w:val="LinkedNumbering"/>
+          </w:abstractNum>
+          <w:abstractNum w:abstractNumId="2">
+            <w:styleLink w:val="LinkedNumbering"/>
+            <w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="-"/></w:lvl>
+          </w:abstractNum>
+          <w:num w:numId="8"><w:abstractNumId w:val="1"/></w:num>
+          <w:num w:numId="9"><w:abstractNumId w:val="2"/></w:num>
+        </w:numbering>"#;
+        let styles_xml =
+            br#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:style w:type="numbering" w:styleId="LinkedNumbering">
+            <w:pPr><w:numPr><w:numId w:val="9"/></w:numPr></w:pPr>
+          </w:style>
+        </w:styles>"#;
+
+        let numbering = CT_Numbering::from_xml(numbering_xml).unwrap();
+        let styles = CT_Styles::from_xml(styles_xml).unwrap();
+        let level = numbering
+            .get_effective_level_with_styles(8, 0, &styles)
+            .unwrap();
+        assert_eq!(level.level.num_fmt, Some(ST_NumberFormat::Bullet));
+
+        let round_trip = String::from_utf8(numbering.to_xml().unwrap()).unwrap();
+        assert!(round_trip.contains(r#"<w:nsid w:val="A1B2C3D4"/>"#));
+        assert!(round_trip.contains(r#"<w:numStyleLink w:val="LinkedNumbering"/>"#));
+        assert!(round_trip.contains(r#"<w:styleLink w:val="LinkedNumbering"/>"#));
+    }
+
+    #[test]
+    fn rejects_missing_required_numbering_identifiers() {
+        for xml in [
+            br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum/></w:numbering>"#.as_slice(),
+            br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:num><w:abstractNumId w:val="1"/></w:num></w:numbering>"#.as_slice(),
+            br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:num w:numId="1"/></w:numbering>"#.as_slice(),
+            br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"><w:lvl/></w:abstractNum></w:numbering>"#.as_slice(),
+        ] {
+            assert!(matches!(
+                CT_Numbering::from_xml(xml),
+                Err(OxmlError::MissingElement(_))
+            ));
+        }
     }
 
     #[test]
