@@ -28,9 +28,9 @@ regenerated, never hand-edited.
 | M10, Renderer                               | 20 | 20 | 0 | 0  |
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
-| M13, Bindings and tooling                   | 18 | 14 | 3 | 1  |
+| M13, Bindings and tooling                   | 18 | 14 | 4 | 0  |
 | X, Cross-cutting (opportunistic)            | 5  | 1 | 2 | 2  |
-| **Total** | **159** | **151** | **5** | **3** |
+| **Total** | **159** | **151** | **6** | **2** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -277,7 +277,7 @@ regenerated, never hand-edited.
 | F-143 | oxml-cli-support                             | S36 | S | in-progress |
 | F-144 | rpptx-cli                                    | S36 | L | in-progress |
 | F-145 | rpptx-cli thumbnail and outline              | S36 | M | in-progress |
-| F-146 | npm publication                              | S36 | S | pending |
+| F-146 | npm publication                              | S36 | S | in-progress |
 <!-- AUTOGEN:backlog-M13 END -->
 
 ### X, Cross-cutting
