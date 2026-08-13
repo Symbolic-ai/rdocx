@@ -7,7 +7,10 @@ use crate::borders::CT_BorderEdge;
 use crate::error::Result;
 use crate::namespace::matches_local_name;
 use crate::properties::{CT_Shd, get_val_attr};
-use crate::raw_xml::{capture_element, capture_empty_element};
+use crate::raw_xml::{
+    NamespaceContext, RawXml, capture_element, capture_empty_element, capture_raw_element,
+    capture_raw_empty_element,
+};
 #[cfg(test)]
 use crate::shared::ST_Border;
 use crate::shared::ST_Jc;
@@ -886,6 +889,8 @@ pub enum CellContent {
     Paragraph(CT_P),
     /// A nested table.
     Table(CT_Tbl),
+    /// A child the reader does not model, retained in its exact source order.
+    Unsupported(RawXml),
 }
 
 /// `CT_Tc` — A table cell containing paragraphs and possibly nested tables.
@@ -894,10 +899,6 @@ pub struct CT_Tc {
     pub properties: Option<CT_TcPr>,
     /// Cell content (paragraphs and nested tables).
     pub content: Vec<CellContent>,
-    /// Raw XML for children we do not model (content controls, bookmarks,
-    /// revision marks), tagged with the content index they appeared before so
-    /// they can be written back in place.
-    pub extra_xml: Vec<(usize, Vec<u8>)>,
 }
 
 #[allow(non_snake_case)]
@@ -907,7 +908,6 @@ impl CT_Tc {
             properties: None,
             // OOXML requires at least one paragraph per cell
             content: vec![CellContent::Paragraph(CT_P::new())],
-            extra_xml: Vec::new(),
         }
     }
 
@@ -917,7 +917,7 @@ impl CT_Tc {
             .iter()
             .filter_map(|c| match c {
                 CellContent::Paragraph(p) => Some(p),
-                CellContent::Table(_) => None,
+                CellContent::Table(_) | CellContent::Unsupported(_) => None,
             })
             .collect()
     }
@@ -928,7 +928,7 @@ impl CT_Tc {
             .iter_mut()
             .filter_map(|c| match c {
                 CellContent::Paragraph(p) => Some(p),
-                CellContent::Table(_) => None,
+                CellContent::Table(_) | CellContent::Unsupported(_) => None,
             })
             .collect()
     }
@@ -942,9 +942,15 @@ impl CT_Tc {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    pub fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut properties = None;
         let mut content = Vec::new();
-        let mut extra_xml = Vec::new();
         let mut buf = Vec::new();
 
         loop {
@@ -954,21 +960,33 @@ impl CT_Tc {
                     if matches_local_name(name.as_ref(), b"tcPr") {
                         properties = Some(CT_TcPr::from_xml(reader)?);
                     } else if matches_local_name(name.as_ref(), b"p") {
-                        content.push(CellContent::Paragraph(CT_P::from_xml(reader)?));
+                        let child_context = context.with_element(e);
+                        content.push(CellContent::Paragraph(CT_P::from_xml_with_context(
+                            reader,
+                            &child_context,
+                        )?));
                     } else if matches_local_name(name.as_ref(), b"tbl") {
-                        content.push(CellContent::Table(CT_Tbl::from_xml(reader)?));
+                        let child_context = context.with_element(e);
+                        content.push(CellContent::Table(CT_Tbl::from_xml_with_context(
+                            reader,
+                            &child_context,
+                        )?));
                     } else {
                         // Content controls (w:sdt), bookmarks and revision
                         // marks live here. Keep them verbatim rather than
                         // dropping the subtree, which used to delete every
                         // paragraph wrapped in a content control.
-                        extra_xml.push((content.len(), capture_element(reader, e)?));
+                        content.push(CellContent::Unsupported(capture_raw_element(
+                            reader, e, context,
+                        )?));
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
                     if !matches_local_name(name.as_ref(), b"tcPr") {
-                        extra_xml.push((content.len(), capture_empty_element(e)?));
+                        content.push(CellContent::Unsupported(capture_raw_empty_element(
+                            e, context,
+                        )?));
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tc") => {
@@ -984,25 +1002,33 @@ impl CT_Tc {
         Ok(CT_Tc {
             properties,
             content,
-            extra_xml,
         })
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        self.to_xml_with_context(writer, &NamespaceContext::default())
+    }
+
+    pub(crate) fn to_xml_with_context<W: std::io::Write>(
+        &self,
+        writer: &mut Writer<W>,
+        context: &NamespaceContext,
+    ) -> Result<()> {
         writer.write_event(Event::Start(BytesStart::new("w:tc")))?;
 
         if let Some(ref props) = self.properties {
             props.to_xml(writer)?;
         }
 
-        for (idx, item) in self.content.iter().enumerate() {
-            write_extras_at(writer, &self.extra_xml, idx)?;
+        for item in &self.content {
             match item {
-                CellContent::Paragraph(p) => p.to_xml(writer)?,
-                CellContent::Table(tbl) => tbl.to_xml(writer)?,
+                CellContent::Paragraph(p) => p.to_xml_with_context(writer, context)?,
+                CellContent::Table(tbl) => tbl.to_xml_with_context(writer, context)?,
+                CellContent::Unsupported(raw) => {
+                    raw.write_to_with_context(writer.get_mut(), context)?
+                }
             }
         }
-        write_extras_at(writer, &self.extra_xml, self.content.len())?;
 
         writer.write_event(Event::End(BytesEnd::new("w:tc")))?;
         Ok(())
@@ -1038,6 +1064,13 @@ impl CT_Row {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    pub fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut properties = None;
         let mut cells = Vec::new();
         let mut extra_xml = Vec::new();
@@ -1050,7 +1083,8 @@ impl CT_Row {
                     if matches_local_name(name.as_ref(), b"trPr") {
                         properties = Some(CT_TrPr::from_xml(reader)?);
                     } else if matches_local_name(name.as_ref(), b"tc") {
-                        cells.push(CT_Tc::from_xml(reader)?);
+                        let child_context = context.with_element(e);
+                        cells.push(CT_Tc::from_xml_with_context(reader, &child_context)?);
                     } else {
                         // A cell wrapped in a content control used to be
                         // dropped here, leaving a row with no cells at all.
@@ -1081,6 +1115,14 @@ impl CT_Row {
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        self.to_xml_with_context(writer, &NamespaceContext::default())
+    }
+
+    pub(crate) fn to_xml_with_context<W: std::io::Write>(
+        &self,
+        writer: &mut Writer<W>,
+        context: &NamespaceContext,
+    ) -> Result<()> {
         writer.write_event(Event::Start(BytesStart::new("w:tr")))?;
 
         if let Some(ref props) = self.properties {
@@ -1089,7 +1131,7 @@ impl CT_Row {
 
         for (idx, cell) in self.cells.iter().enumerate() {
             write_extras_at(writer, &self.extra_xml, idx)?;
-            cell.to_xml(writer)?;
+            cell.to_xml_with_context(writer, context)?;
         }
         write_extras_at(writer, &self.extra_xml, self.cells.len())?;
 
@@ -1129,6 +1171,13 @@ impl CT_Tbl {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    pub fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut properties = None;
         let mut grid = None;
         let mut rows = Vec::new();
@@ -1144,7 +1193,8 @@ impl CT_Tbl {
                     } else if matches_local_name(name.as_ref(), b"tblGrid") {
                         grid = Some(CT_TblGrid::from_xml(reader)?);
                     } else if matches_local_name(name.as_ref(), b"tr") {
-                        rows.push(CT_Row::from_xml(reader)?);
+                        let child_context = context.with_element(e);
+                        rows.push(CT_Row::from_xml_with_context(reader, &child_context)?);
                     } else {
                         // Rows wrapped in a content control used to be dropped
                         // here, which silently deleted whole tables.
@@ -1180,6 +1230,14 @@ impl CT_Tbl {
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        self.to_xml_with_context(writer, &NamespaceContext::default())
+    }
+
+    pub(crate) fn to_xml_with_context<W: std::io::Write>(
+        &self,
+        writer: &mut Writer<W>,
+        context: &NamespaceContext,
+    ) -> Result<()> {
         writer.write_event(Event::Start(BytesStart::new("w:tbl")))?;
 
         if let Some(ref props) = self.properties {
@@ -1192,7 +1250,7 @@ impl CT_Tbl {
 
         for (idx, row) in self.rows.iter().enumerate() {
             write_extras_at(writer, &self.extra_xml, idx)?;
-            row.to_xml(writer)?;
+            row.to_xml_with_context(writer, context)?;
         }
         write_extras_at(writer, &self.extra_xml, self.rows.len())?;
 

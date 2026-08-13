@@ -207,7 +207,7 @@ mod tests {
             italic: Some(true),
             ..Default::default()
         });
-        p.runs.push(r);
+        p.content.push(rdocx_oxml::text::ParagraphChild::Run(r));
         doc.body.add_paragraph(p);
 
         let input = HtmlInput {

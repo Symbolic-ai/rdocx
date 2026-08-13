@@ -29,17 +29,18 @@ pub mod style;
 pub mod table;
 
 pub use document::{
-    AccessibilityIssue, Document, ImageInfo, IssueSeverity, LinkInfo, ListLevel, ListNumberFormat,
-    OutlineNode,
+    AccessibilityIssue, BodyContentRef, Document, ImageInfo, IssueSeverity, LinkInfo, ListLevel,
+    ListNumberFormat, NumberingLevel, OutlineNode,
 };
 pub use error::{Error, Result};
 pub use oxml_core::Length;
 pub use paragraph::{
-    Alignment, BorderStyle, Paragraph, ParagraphRef, SectionBreak, TabAlignment, TabLeader,
+    Alignment, BorderStyle, HyperlinkRef, InlineContentRef, Paragraph, ParagraphContentRef,
+    ParagraphRef, SectionBreak, SimpleFieldRef, TabAlignment, TabLeader,
 };
-pub use run::{Run, RunRef, UnderlineStyle};
+pub use run::{BreakKind, DrawingRef, FieldKind, Run, RunContentRef, RunRef, UnderlineStyle};
 pub use style::{Style, StyleBuilder};
-pub use table::{Cell, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment};
+pub use table::{Cell, CellContentRef, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment};
 
 #[cfg(test)]
 mod tests {

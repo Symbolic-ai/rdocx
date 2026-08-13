@@ -1,11 +1,144 @@
 //! Run — a contiguous stretch of text with uniform formatting.
 
+use rdocx_oxml::drawing::CT_Drawing;
 use rdocx_oxml::properties::{CT_RPr, CT_Shd};
 use rdocx_oxml::shared::ST_Underline;
-use rdocx_oxml::text::{CT_R, CT_Text, RunContent};
+use rdocx_oxml::text::{BreakType, CT_R, CT_Text, RunContent};
 use rdocx_oxml::units::{HalfPoint, Twips};
 
 use crate::Length;
+
+/// A break embedded in a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BreakKind {
+    /// A line break within the current paragraph.
+    Line,
+    /// A page break.
+    Page,
+    /// A column break.
+    Column,
+}
+
+/// A simple Word field embedded in a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldKind<'a> {
+    /// The current page number.
+    Page,
+    /// The document's total page count.
+    NumPages,
+    /// Any other field instruction.
+    Other(&'a str),
+}
+
+/// An immutable drawing embedded in a run.
+#[derive(Debug, Clone, Copy)]
+pub struct DrawingRef<'a> {
+    inner: &'a CT_Drawing,
+}
+
+impl<'a> DrawingRef<'a> {
+    /// Whether this drawing is inline with the surrounding text.
+    pub fn is_inline(&self) -> bool {
+        self.inner.inline.is_some()
+    }
+
+    /// Whether this drawing is floating or anchored.
+    pub fn is_anchor(&self) -> bool {
+        self.inner.anchor.is_some()
+    }
+
+    /// The relationship ID for the drawing's embedded image, when present.
+    pub fn relationship_id(&self) -> Option<&str> {
+        self.inner
+            .inline
+            .as_ref()
+            .map(|inline| inline.embed_id.as_str())
+            .or_else(|| {
+                self.inner
+                    .anchor
+                    .as_ref()
+                    .map(|anchor| anchor.embed_id.as_str())
+            })
+            .filter(|id| !id.is_empty())
+    }
+
+    /// The drawing description, commonly used as image alt text.
+    pub fn description(&self) -> Option<&str> {
+        self.inner
+            .inline
+            .as_ref()
+            .and_then(|inline| inline.description.as_deref())
+            .or_else(|| {
+                self.inner
+                    .anchor
+                    .as_ref()
+                    .and_then(|anchor| anchor.description.as_deref())
+            })
+    }
+
+    /// The drawing name from its non-visual properties.
+    pub fn name(&self) -> Option<&str> {
+        self.inner
+            .inline
+            .as_ref()
+            .and_then(|inline| inline.name.as_deref())
+            .or_else(|| {
+                self.inner
+                    .anchor
+                    .as_ref()
+                    .and_then(|anchor| anchor.name.as_deref())
+            })
+    }
+
+    /// The drawing width.
+    pub fn width(&self) -> Option<Length> {
+        self.inner
+            .inline
+            .as_ref()
+            .map(|inline| Length::emu(inline.extent_cx.0))
+            .or_else(|| {
+                self.inner
+                    .anchor
+                    .as_ref()
+                    .map(|anchor| Length::emu(anchor.extent_cx.0))
+            })
+    }
+
+    /// The drawing height.
+    pub fn height(&self) -> Option<Length> {
+        self.inner
+            .inline
+            .as_ref()
+            .map(|inline| Length::emu(inline.extent_cy.0))
+            .or_else(|| {
+                self.inner
+                    .anchor
+                    .as_ref()
+                    .map(|anchor| Length::emu(anchor.extent_cy.0))
+            })
+    }
+}
+
+/// One item inside a run, in document order.
+#[derive(Debug, Clone, Copy)]
+pub enum RunContentRef<'a> {
+    /// Literal text.
+    Text(&'a str),
+    /// A tab character.
+    Tab,
+    /// A line, page, or column break.
+    Break(BreakKind),
+    /// An inline or anchored drawing.
+    Drawing(DrawingRef<'a>),
+    /// A simple Word field.
+    Field(FieldKind<'a>),
+    /// A footnote reference ID.
+    FootnoteReference(i32),
+    /// An endnote reference ID.
+    EndnoteReference(i32),
+    /// A preserved run child the facade does not model.
+    UnsupportedXml(&'a [u8]),
+}
 
 /// Underline style for runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -408,12 +541,32 @@ impl<'a> RunRef<'a> {
         self.inner.text()
     }
 
+    /// Iterate over text, controls, drawings, fields, notes, and unsupported
+    /// XML in their original order.
+    pub fn content(&self) -> impl Iterator<Item = RunContentRef<'_>> {
+        self.inner.content.iter().map(|content| match content {
+            RunContent::Text(text) => RunContentRef::Text(&text.text),
+            RunContent::Tab => RunContentRef::Tab,
+            RunContent::Break(parsed) => RunContentRef::Break(match *parsed.value() {
+                BreakType::Line => BreakKind::Line,
+                BreakType::Page => BreakKind::Page,
+                BreakType::Column => BreakKind::Column,
+            }),
+            RunContent::Drawing(drawing) => RunContentRef::Drawing(DrawingRef {
+                inner: drawing.value(),
+            }),
+            RunContent::FootnoteRef(parsed) => RunContentRef::FootnoteReference(*parsed.value()),
+            RunContent::EndnoteRef(parsed) => RunContentRef::EndnoteReference(*parsed.value()),
+            RunContent::Unsupported(raw) => RunContentRef::UnsupportedXml(raw.bytes()),
+        })
+    }
+
     /// The footnote id referenced by this run, if it holds a
     /// `<w:footnoteReference/>`.
     pub fn footnote_id(&self) -> Option<i32> {
         use rdocx_oxml::text::RunContent;
         self.inner.content.iter().find_map(|c| match c {
-            RunContent::FootnoteRef { id } => Some(*id),
+            RunContent::FootnoteRef(parsed) => Some(*parsed.value()),
             _ => None,
         })
     }
@@ -508,7 +661,7 @@ impl<'a> RunRef<'a> {
         use rdocx_oxml::text::RunContent;
         for c in &self.inner.content {
             if let RunContent::Drawing(d) = c
-                && let Some(inline) = &d.inline
+                && let Some(inline) = &d.value().inline
             {
                 return Some((inline.embed_id.as_str(), inline.description.as_deref()));
             }

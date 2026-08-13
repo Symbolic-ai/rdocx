@@ -12,7 +12,7 @@ use crate::properties::{CT_PPr, CT_RPr, get_val_attr};
 use crate::shared::ST_Jc;
 
 /// `ST_NumberFormat` — Numbering format type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ST_NumberFormat {
     Decimal,
     UpperRoman,
@@ -22,6 +22,8 @@ pub enum ST_NumberFormat {
     Ordinal,
     Bullet,
     None,
+    /// A valid producer-defined or otherwise unmodelled OOXML format name.
+    Other(String),
 }
 
 impl ST_NumberFormat {
@@ -35,11 +37,11 @@ impl ST_NumberFormat {
             "ordinal" => Self::Ordinal,
             "bullet" => Self::Bullet,
             "none" => Self::None,
-            _ => Self::Decimal,
+            other => Self::Other(other.to_string()),
         }
     }
 
-    pub fn to_str(self) -> &'static str {
+    pub fn to_str(&self) -> &str {
         match self {
             Self::Decimal => "decimal",
             Self::UpperRoman => "upperRoman",
@@ -49,6 +51,7 @@ impl ST_NumberFormat {
             Self::Ordinal => "ordinal",
             Self::Bullet => "bullet",
             Self::None => "none",
+            Self::Other(value) => value,
         }
     }
 }
@@ -66,6 +69,8 @@ pub struct CT_Lvl {
     pub lvl_text: Option<String>,
     /// Level justification
     pub lvl_jc: Option<ST_Jc>,
+    /// Paragraph style associated with this numbering level.
+    pub p_style: Option<String>,
     /// Paragraph properties for this level (typically indentation)
     pub ppr: Option<CT_PPr>,
     /// Run properties for the numbering symbol
@@ -81,6 +86,7 @@ impl CT_Lvl {
             num_fmt: None,
             lvl_text: None,
             lvl_jc: None,
+            p_style: None,
             ppr: None,
             rpr: None,
         }
@@ -114,6 +120,8 @@ impl CT_Lvl {
                         }
                     } else if matches_local_name(name.as_ref(), b"lvlText") {
                         lvl.lvl_text = get_val_attr(e)?;
+                    } else if matches_local_name(name.as_ref(), b"pStyle") {
+                        lvl.p_style = get_val_attr(e)?;
                     } else if matches_local_name(name.as_ref(), b"lvlJc")
                         && let Some(val) = get_val_attr(e)?
                     {
@@ -145,9 +153,15 @@ impl CT_Lvl {
             writer.write_event(Event::Empty(e))?;
         }
 
-        if let Some(fmt) = self.num_fmt {
+        if let Some(ref fmt) = self.num_fmt {
             let mut e = BytesStart::new("w:numFmt");
             e.push_attribute(("w:val", fmt.to_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
+
+        if let Some(ref style_id) = self.p_style {
+            let mut e = BytesStart::new("w:pStyle");
+            e.push_attribute(("w:val", style_id.as_str()));
             writer.write_event(Event::Empty(e))?;
         }
 
@@ -261,12 +275,85 @@ impl CT_AbstractNum {
 pub struct CT_Num {
     pub num_id: u32,
     pub abstract_num_id: u32,
+    pub level_overrides: Vec<CT_LvlOverride>,
+}
+
+/// An instance-specific numbering-level override.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CT_LvlOverride {
+    pub ilvl: u32,
+    pub start_override: Option<u32>,
+    pub level: Option<CT_Lvl>,
+}
+
+impl CT_LvlOverride {
+    fn from_xml(reader: &mut Reader<&[u8]>, ilvl: u32) -> Result<Self> {
+        let mut value = Self {
+            ilvl,
+            start_override: None,
+            level: None,
+        };
+        let mut buf = Vec::new();
+
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref e)) if matches_local_name(e.name().as_ref(), b"lvl") => {
+                    let level_index = e
+                        .attributes()
+                        .flatten()
+                        .find(|attr| matches_local_name(attr.key.as_ref(), b"ilvl"))
+                        .and_then(|attr| std::str::from_utf8(&attr.value).ok()?.parse().ok())
+                        .unwrap_or(ilvl);
+                    value.level = Some(CT_Lvl::from_xml(reader, level_index)?);
+                }
+                Ok(Event::Start(ref e)) => {
+                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                }
+                Ok(Event::Empty(ref e))
+                    if matches_local_name(e.name().as_ref(), b"startOverride") =>
+                {
+                    if let Some(start) = get_val_attr(e)? {
+                        value.start_override = Some(start.parse()?);
+                    }
+                }
+                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"lvlOverride") => {
+                    break;
+                }
+                Ok(Event::Eof) => break,
+                Err(error) => return Err(error.into()),
+                _ => {}
+            }
+            buf.clear();
+        }
+
+        Ok(value)
+    }
+
+    fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        let mut buf = itoa::Buffer::new();
+        let mut start = BytesStart::new("w:lvlOverride");
+        start.push_attribute(("w:ilvl", buf.format(self.ilvl)));
+        writer.write_event(Event::Start(start))?;
+
+        if let Some(value) = self.start_override {
+            let mut element = BytesStart::new("w:startOverride");
+            element.push_attribute(("w:val", buf.format(value)));
+            writer.write_event(Event::Empty(element))?;
+        }
+        if let Some(ref level) = self.level {
+            level.to_xml(writer)?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("w:lvlOverride")))?;
+        Ok(())
+    }
 }
 
 #[allow(non_snake_case)]
 impl CT_Num {
     pub fn from_xml(reader: &mut Reader<&[u8]>, num_id: u32) -> Result<Self> {
         let mut abstract_num_id = 0;
+        let mut level_overrides = Vec::new();
         let mut buf = Vec::new();
 
         loop {
@@ -279,8 +366,17 @@ impl CT_Num {
                     }
                 }
                 Ok(Event::Start(ref e)) => {
-                    // Skip lvlOverride and other nested elements
-                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                    if matches_local_name(e.name().as_ref(), b"lvlOverride") {
+                        let ilvl = e
+                            .attributes()
+                            .flatten()
+                            .find(|attr| matches_local_name(attr.key.as_ref(), b"ilvl"))
+                            .and_then(|attr| std::str::from_utf8(&attr.value).ok()?.parse().ok())
+                            .unwrap_or(0);
+                        level_overrides.push(CT_LvlOverride::from_xml(reader, ilvl)?);
+                    } else {
+                        reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                    }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"num") => {
                     break;
@@ -295,6 +391,7 @@ impl CT_Num {
         Ok(CT_Num {
             num_id,
             abstract_num_id,
+            level_overrides,
         })
     }
 
@@ -307,6 +404,10 @@ impl CT_Num {
         let mut abs_ref = BytesStart::new("w:abstractNumId");
         abs_ref.push_attribute(("w:val", buf.format(self.abstract_num_id)));
         writer.write_event(Event::Empty(abs_ref))?;
+
+        for level_override in &self.level_overrides {
+            level_override.to_xml(writer)?;
+        }
 
         writer.write_event(Event::End(BytesEnd::new("w:num")))?;
         Ok(())
@@ -463,10 +564,10 @@ impl CT_Numbering {
         for i in 0..9u32 {
             let (num_fmt, start) = match levels.get(i as usize) {
                 Some((fmt, start)) => {
-                    last_specified = *fmt;
-                    (*fmt, start.unwrap_or(1))
+                    last_specified = fmt.clone();
+                    (fmt.clone(), start.unwrap_or(1))
                 }
-                None => (level_fill_format(last_specified, i), 1),
+                None => (level_fill_format(&last_specified, i), 1),
             };
 
             abs.levels.push(build_level(i, num_fmt, start));
@@ -476,6 +577,7 @@ impl CT_Numbering {
         self.nums.push(CT_Num {
             num_id,
             abstract_num_id: abs_id,
+            level_overrides: Vec::new(),
         });
 
         num_id
@@ -528,6 +630,49 @@ impl CT_Numbering {
             .iter()
             .find(|a| a.abstract_num_id == num.abstract_num_id)
     }
+
+    /// Resolve an instance level, applying full-level and start overrides.
+    pub fn get_effective_level(
+        &self,
+        num_id: u32,
+        ilvl: u32,
+    ) -> Option<EffectiveNumberingLevel<'_>> {
+        let num = self.nums.iter().find(|num| num.num_id == num_id)?;
+        let abstract_level = self
+            .abstract_nums
+            .iter()
+            .find(|value| value.abstract_num_id == num.abstract_num_id)
+            .and_then(|value| value.levels.iter().find(|level| level.ilvl == ilvl));
+        let level_override = num.level_overrides.iter().find(|level| level.ilvl == ilvl);
+        let level = level_override
+            .and_then(|value| value.level.as_ref())
+            .or(abstract_level)?;
+        let start = level_override
+            .and_then(|value| value.start_override)
+            .or(level.start)
+            .unwrap_or(1);
+
+        Some(EffectiveNumberingLevel { level, start })
+    }
+
+    /// Find the effective level associated with a paragraph style.
+    pub fn get_effective_level_for_style(
+        &self,
+        num_id: u32,
+        style_id: &str,
+    ) -> Option<EffectiveNumberingLevel<'_>> {
+        (0..=8).find_map(|ilvl| {
+            let level = self.get_effective_level(num_id, ilvl)?;
+            (level.level.p_style.as_deref() == Some(style_id)).then_some(level)
+        })
+    }
+}
+
+/// A numbering level after applying its numbering-instance overrides.
+#[derive(Debug, Clone, Copy)]
+pub struct EffectiveNumberingLevel<'a> {
+    pub level: &'a CT_Lvl,
+    pub start: u32,
 }
 
 impl Default for CT_Numbering {
@@ -562,10 +707,10 @@ const NUMBERED_FORMATS: [ST_NumberFormat; 9] = [
 /// Template format for an unspecified level, keyed on the last format the
 /// caller did specify: bullets stay bullets; anything numeric continues the
 /// numbered rotation.
-fn level_fill_format(last_specified: ST_NumberFormat, ilvl: u32) -> ST_NumberFormat {
+fn level_fill_format(last_specified: &ST_NumberFormat, ilvl: u32) -> ST_NumberFormat {
     match last_specified {
         ST_NumberFormat::Bullet => ST_NumberFormat::Bullet,
-        _ => NUMBERED_FORMATS[ilvl as usize % NUMBERED_FORMATS.len()],
+        _ => NUMBERED_FORMATS[ilvl as usize % NUMBERED_FORMATS.len()].clone(),
     }
 }
 
@@ -574,7 +719,7 @@ fn level_fill_format(last_specified: ST_NumberFormat, ilvl: u32) -> ST_NumberFor
 fn build_level(ilvl: u32, num_fmt: ST_NumberFormat, start: u32) -> CT_Lvl {
     let mut lvl = CT_Lvl::new(ilvl);
     lvl.start = Some(start);
-    lvl.num_fmt = Some(num_fmt);
+    lvl.num_fmt = Some(num_fmt.clone());
     lvl.lvl_text = Some(match num_fmt {
         ST_NumberFormat::Bullet => BULLET_CHARS[ilvl as usize % BULLET_CHARS.len()].to_string(),
         _ => format!("%{}.", ilvl + 1),
@@ -717,6 +862,63 @@ mod tests {
         let num = &numbering.nums[0];
         assert_eq!(num.num_id, 1);
         assert_eq!(num.abstract_num_id, 0);
+    }
+
+    #[test]
+    fn preserves_style_associations_overrides_and_unmodelled_formats() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="4">
+    <w:lvl w:ilvl="1">
+      <w:start w:val="2"/>
+      <w:numFmt w:val="decimalZero"/>
+      <w:pStyle w:val="AssociatedStyle"/>
+      <w:lvlText w:val="%2."/>
+      <w:pPr><w:ind w:left="1440"/></w:pPr>
+    </w:lvl>
+    <w:lvl w:ilvl="2">
+      <w:numFmt w:val="decimal"/>
+      <w:lvlText w:val="%3."/>
+    </w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="8">
+    <w:abstractNumId w:val="4"/>
+    <w:lvlOverride w:ilvl="1"><w:startOverride w:val="7"/></w:lvlOverride>
+    <w:lvlOverride w:ilvl="2">
+      <w:lvl w:ilvl="2">
+        <w:start w:val="3"/>
+        <w:numFmt w:val="chicago"/>
+        <w:lvlText w:val="%3)"/>
+      </w:lvl>
+    </w:lvlOverride>
+  </w:num>
+</w:numbering>"#;
+
+        let numbering = CT_Numbering::from_xml(xml).unwrap();
+        let associated = numbering
+            .get_effective_level_for_style(8, "AssociatedStyle")
+            .unwrap();
+        assert_eq!(associated.level.ilvl, 1);
+        assert_eq!(associated.start, 7);
+        assert_eq!(associated.level.p_style.as_deref(), Some("AssociatedStyle"));
+        assert_eq!(
+            associated.level.num_fmt,
+            Some(ST_NumberFormat::Other("decimalZero".to_string()))
+        );
+
+        let replaced = numbering.get_effective_level(8, 2).unwrap();
+        assert_eq!(replaced.start, 3);
+        assert_eq!(replaced.level.lvl_text.as_deref(), Some("%3)"));
+        assert_eq!(
+            replaced.level.num_fmt,
+            Some(ST_NumberFormat::Other("chicago".to_string()))
+        );
+
+        let round_trip = String::from_utf8(numbering.to_xml().unwrap()).unwrap();
+        assert!(round_trip.contains(r#"<w:pStyle w:val="AssociatedStyle"/>"#));
+        assert!(round_trip.contains(r#"<w:numFmt w:val="decimalZero"/>"#));
+        assert!(round_trip.contains(r#"<w:startOverride w:val="7"/>"#));
+        assert!(round_trip.contains(r#"<w:numFmt w:val="chicago"/>"#));
     }
 
     #[test]

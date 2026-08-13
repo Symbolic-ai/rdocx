@@ -5,9 +5,12 @@ use quick_xml::{Reader, Writer};
 
 use crate::error::Result;
 use crate::header_footer::{HdrFtrRef, HdrFtrType};
-use crate::namespace::{W_NS, matches_local_name};
+use crate::namespace::{MC_NS, R_NS, W_NS, matches_local_name};
 use crate::properties::get_val_attr;
-use crate::raw_xml::{capture_element, capture_empty_element};
+use crate::raw_xml::{
+    NamespaceContext, RawXml, capture_element, capture_empty_element, capture_raw_element,
+    capture_raw_empty_element,
+};
 use crate::shared::{ST_PageOrientation, ST_SectionType};
 use crate::table::CT_Tbl;
 use crate::text::CT_P;
@@ -19,7 +22,7 @@ pub enum BodyContent {
     Paragraph(CT_P),
     Table(CT_Tbl),
     /// Raw XML for unknown elements (bookmarks, SDTs, mc:AlternateContent, etc.)
-    RawXml(Vec<u8>),
+    RawXml(RawXml),
 }
 
 /// Column definition for multi-column layouts.
@@ -585,6 +588,13 @@ impl CT_Body {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    pub fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut content = Vec::new();
         let mut sect_pr = None;
         let mut buf = Vec::new();
@@ -594,20 +604,30 @@ impl CT_Body {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     if matches_local_name(name.as_ref(), b"p") {
-                        content.push(BodyContent::Paragraph(CT_P::from_xml(reader)?));
+                        let child_context = context.with_element(e);
+                        content.push(BodyContent::Paragraph(CT_P::from_xml_with_context(
+                            reader,
+                            &child_context,
+                        )?));
                     } else if matches_local_name(name.as_ref(), b"tbl") {
-                        content.push(BodyContent::Table(CT_Tbl::from_xml(reader)?));
+                        let child_context = context.with_element(e);
+                        content.push(BodyContent::Table(CT_Tbl::from_xml_with_context(
+                            reader,
+                            &child_context,
+                        )?));
                     } else if matches_local_name(name.as_ref(), b"sectPr") {
                         sect_pr = Some(CT_SectPr::from_xml(reader)?);
                     } else {
                         // Capture unknown elements as raw XML
-                        content.push(BodyContent::RawXml(capture_element(reader, e)?));
+                        content.push(BodyContent::RawXml(capture_raw_element(
+                            reader, e, context,
+                        )?));
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
                     if !matches_local_name(name.as_ref(), b"body") {
-                        content.push(BodyContent::RawXml(capture_empty_element(e)?));
+                        content.push(BodyContent::RawXml(capture_raw_empty_element(e, context)?));
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"body") => {
@@ -624,14 +644,22 @@ impl CT_Body {
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        self.to_xml_with_context(writer, &NamespaceContext::default())
+    }
+
+    fn to_xml_with_context<W: std::io::Write>(
+        &self,
+        writer: &mut Writer<W>,
+        context: &NamespaceContext,
+    ) -> Result<()> {
         writer.write_event(Event::Start(BytesStart::new("w:body")))?;
 
         for item in &self.content {
             match item {
-                BodyContent::Paragraph(p) => p.to_xml(writer)?,
-                BodyContent::Table(t) => t.to_xml(writer)?,
+                BodyContent::Paragraph(p) => p.to_xml_with_context(writer, context)?,
+                BodyContent::Table(t) => t.to_xml_with_context(writer, context)?,
                 BodyContent::RawXml(raw) => {
-                    writer.get_mut().write_all(raw)?;
+                    raw.write_to_with_context(writer.get_mut(), context)?;
                 }
             }
         }
@@ -681,6 +709,7 @@ impl CT_Document {
         let mut body = None;
         let mut extra_namespaces = Vec::new();
         let mut background_xml = None;
+        let mut document_context = NamespaceContext::default();
         let mut buf = Vec::new();
 
         // Known namespace prefixes that we always emit ourselves
@@ -691,8 +720,10 @@ impl CT_Document {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     if matches_local_name(name.as_ref(), b"body") {
-                        body = Some(CT_Body::from_xml(&mut reader)?);
+                        let body_context = document_context.with_element(e);
+                        body = Some(CT_Body::from_xml_with_context(&mut reader, &body_context)?);
                     } else if matches_local_name(name.as_ref(), b"document") {
+                        document_context = NamespaceContext::default().with_element(e);
                         // Capture extra namespace declarations from the document element
                         for attr in e.attributes().flatten() {
                             let key = attr.key.as_ref();
@@ -777,12 +808,35 @@ impl CT_Document {
             writer.get_mut().extend_from_slice(bg);
         }
 
-        self.body.to_xml(&mut writer)?;
+        let output_context = document_output_context(&self.extra_namespaces);
+        self.body
+            .to_xml_with_context(&mut writer, &output_context)?;
 
         writer.write_event(Event::End(BytesEnd::new("w:document")))?;
 
         Ok(writer.into_inner())
     }
+}
+
+fn document_output_context(extra_namespaces: &[(String, String)]) -> NamespaceContext {
+    let mut bindings = vec![
+        ("w".to_string(), W_NS.to_string()),
+        ("r".to_string(), R_NS.to_string()),
+        ("mc".to_string(), MC_NS.to_string()),
+        (
+            "wp".to_string(),
+            "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing".to_string(),
+        ),
+    ];
+    bindings.extend(extra_namespaces.iter().filter_map(|(name, uri)| {
+        let prefix = if name == "xmlns" {
+            ""
+        } else {
+            name.strip_prefix("xmlns:")?
+        };
+        Some((prefix.to_string(), uri.clone()))
+    }));
+    NamespaceContext::new(bindings)
 }
 
 impl Default for CT_Document {
@@ -808,6 +862,35 @@ mod tests {
         let paras: Vec<_> = parsed.body.paragraphs().collect();
         assert_eq!(paras.len(), 1);
         assert_eq!(paras[0].text(), "Hello World");
+    }
+
+    #[test]
+    fn raw_child_keeps_original_bytes_when_root_replays_its_namespace() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:x="urn:foreign"><w:body><w:p><x:item/></w:p></w:body></w:document>"#
+        );
+        let document = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        let output = String::from_utf8(document.to_xml().unwrap()).unwrap();
+
+        assert!(output.contains(r#"<x:item/>"#), "{output}");
+        assert!(
+            !output.contains(r#"<x:item xmlns:x="urn:foreign"/>"#),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn raw_child_gains_a_binding_lost_with_its_regenerated_parent() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}"><w:body><w:p xmlns:x="urn:foreign"><x:item/></w:p></w:body></w:document>"#
+        );
+        let document = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        let output = String::from_utf8(document.to_xml().unwrap()).unwrap();
+
+        assert!(
+            output.contains(r#"<x:item xmlns:x="urn:foreign"/>"#),
+            "{output}"
+        );
     }
 
     #[test]

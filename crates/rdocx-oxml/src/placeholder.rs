@@ -5,17 +5,113 @@
 
 use crate::header_footer::CT_HdrFtr;
 use crate::table::CT_Tbl;
-use crate::text::{CT_P, CT_R, RunContent};
+use crate::text::{CT_P, CT_R, InlineChild, ParagraphChild, RunContent};
 
 /// Replace all occurrences of `placeholder` with `replacement` in a paragraph.
 ///
-/// Handles placeholders split across multiple runs. Preserves the formatting
-/// of the first matched run. Returns the number of replacements made.
+/// Handles placeholders split across multiple runs within the same ordered
+/// container and preserves the formatting of the first matched run. A match
+/// never crosses a hyperlink, field, or unsupported-node boundary.
+/// Returns the number of replacements made.
 pub fn replace_in_paragraph(para: &mut CT_P, placeholder: &str, replacement: &str) -> usize {
     if placeholder.is_empty() {
         return 0;
     }
 
+    replace_literal_in_paragraph_children(&mut para.content, placeholder, replacement)
+}
+
+fn replace_literal_in_paragraph_children(
+    children: &mut Vec<ParagraphChild>,
+    placeholder: &str,
+    replacement: &str,
+) -> usize {
+    let mut total = 0;
+    let mut index = 0;
+    while index < children.len() {
+        if matches!(children[index], ParagraphChild::Run(_)) {
+            let end = children[index..]
+                .iter()
+                .position(|child| !matches!(child, ParagraphChild::Run(_)))
+                .map_or(children.len(), |offset| index + offset);
+            let mut runs = children
+                .drain(index..end)
+                .map(|child| match child {
+                    ParagraphChild::Run(run) => run,
+                    _ => unreachable!(),
+                })
+                .collect::<Vec<_>>();
+            total += replace_literal_in_runs(&mut runs, placeholder, replacement);
+            let inserted = runs.len();
+            children.splice(index..index, runs.into_iter().map(ParagraphChild::Run));
+            index += inserted;
+            continue;
+        }
+
+        match &mut children[index] {
+            ParagraphChild::Hyperlink(hyperlink) => {
+                if hyperlink.text().contains(placeholder) {
+                    total += replace_literal_in_inline_children(
+                        hyperlink.children_mut(),
+                        placeholder,
+                        replacement,
+                    );
+                }
+            }
+            ParagraphChild::SimpleField(field) => {
+                if field.text().contains(placeholder) {
+                    total += replace_literal_in_inline_children(
+                        field.children_mut(),
+                        placeholder,
+                        replacement,
+                    );
+                }
+            }
+            ParagraphChild::Unsupported(_) | ParagraphChild::Run(_) => {}
+        }
+        index += 1;
+    }
+    total
+}
+
+fn replace_literal_in_inline_children(
+    children: &mut Vec<InlineChild>,
+    placeholder: &str,
+    replacement: &str,
+) -> usize {
+    let mut total = 0;
+    let mut index = 0;
+    while index < children.len() {
+        if matches!(children[index], InlineChild::Run(_)) {
+            let end = children[index..]
+                .iter()
+                .position(|child| !matches!(child, InlineChild::Run(_)))
+                .map_or(children.len(), |offset| index + offset);
+            let mut runs = children
+                .drain(index..end)
+                .map(|child| match child {
+                    InlineChild::Run(run) => run,
+                    _ => unreachable!(),
+                })
+                .collect::<Vec<_>>();
+            total += replace_literal_in_runs(&mut runs, placeholder, replacement);
+            let inserted = runs.len();
+            children.splice(index..index, runs.into_iter().map(InlineChild::Run));
+            index += inserted;
+            continue;
+        }
+        if let InlineChild::SimpleField(field) = &mut children[index]
+            && field.text().contains(placeholder)
+        {
+            total +=
+                replace_literal_in_inline_children(field.children_mut(), placeholder, replacement);
+        }
+        index += 1;
+    }
+    total
+}
+
+fn replace_literal_in_runs(runs: &mut Vec<CT_R>, placeholder: &str, replacement: &str) -> usize {
     let mut total = 0;
 
     // Byte offset in the concatenated paragraph text at which to look for the
@@ -29,7 +125,7 @@ pub fn replace_in_paragraph(para: &mut CT_P, placeholder: &str, replacement: &st
     // and there may be more matches.
     loop {
         // 1. Concatenate all run text and build a char map.
-        let (full_text, char_map) = build_char_map(&para.runs);
+        let (full_text, char_map) = build_char_map(runs);
 
         if search_from >= full_text.len() {
             break;
@@ -55,7 +151,7 @@ pub fn replace_in_paragraph(para: &mut CT_P, placeholder: &str, replacement: &st
         if first_run == last_run {
             // Single-run match: simple in-place replacement on that run's text content.
             replace_in_single_run(
-                &mut para.runs[first_run],
+                &mut runs[first_run],
                 &char_map,
                 match_start,
                 match_end,
@@ -64,7 +160,7 @@ pub fn replace_in_paragraph(para: &mut CT_P, placeholder: &str, replacement: &st
         } else {
             // Cross-run match: put replacement in first run, clear matched parts from others.
             replace_across_runs(
-                &mut para.runs,
+                runs,
                 &char_map,
                 match_start,
                 match_end,
@@ -75,10 +171,7 @@ pub fn replace_in_paragraph(para: &mut CT_P, placeholder: &str, replacement: &st
         }
 
         // Remove runs that became completely empty (no content at all).
-        para.runs.retain(|r| !r.content.is_empty());
-
-        // Update hyperlink spans to account for removed runs.
-        reindex_hyperlinks(para);
+        runs.retain(|run| !run.content.is_empty());
 
         // Text before `byte_start` is untouched and the replacement now
         // occupies `byte_start..byte_start + replacement.len()`, so this stays
@@ -209,27 +302,6 @@ fn replace_across_runs(
     }
 }
 
-/// Re-index hyperlink spans after runs may have been removed.
-fn reindex_hyperlinks(para: &mut CT_P) {
-    // After retain, run indices may have shifted. We rebuild by checking
-    // which runs still exist. Since retain preserves order and only removes
-    // empty runs, the relative order is maintained. However, hyperlink spans
-    // referenced by index need adjustment.
-    //
-    // For simplicity: we decrement indices for each removed slot.
-    // But since we already called retain, the runs are already compacted.
-    // We need to adjust hyperlinks based on the new run count.
-    //
-    // The simplest correct approach: hyperlinks that referenced removed runs
-    // get their range clamped/invalidated.
-    para.hyperlinks.retain(|hl| hl.run_start < para.runs.len());
-    for hl in &mut para.hyperlinks {
-        if hl.run_end > para.runs.len() {
-            hl.run_end = para.runs.len();
-        }
-    }
-}
-
 /// Replace all occurrences of `placeholder` in all paragraphs of a slice.
 pub fn replace_in_paragraphs(paras: &mut [CT_P], placeholder: &str, replacement: &str) -> usize {
     paras
@@ -253,6 +325,7 @@ pub fn replace_in_table(table: &mut CT_Tbl, placeholder: &str, replacement: &str
                     CellContent::Table(nested) => {
                         count += replace_in_table(nested, placeholder, replacement);
                     }
+                    CellContent::Unsupported(_) => {}
                 }
             }
         }
@@ -514,6 +587,92 @@ pub fn replace_many_in_chart_xml(
 /// Uses the same cross-run char map algorithm as literal replacement.
 /// Returns the number of replacements made.
 pub fn replace_regex_in_paragraph(para: &mut CT_P, re: &regex::Regex, replacement: &str) -> usize {
+    replace_regex_in_paragraph_children(&mut para.content, re, replacement)
+}
+
+fn replace_regex_in_paragraph_children(
+    children: &mut Vec<ParagraphChild>,
+    re: &regex::Regex,
+    replacement: &str,
+) -> usize {
+    let mut total = 0;
+    let mut index = 0;
+    while index < children.len() {
+        if matches!(children[index], ParagraphChild::Run(_)) {
+            let end = children[index..]
+                .iter()
+                .position(|child| !matches!(child, ParagraphChild::Run(_)))
+                .map_or(children.len(), |offset| index + offset);
+            let mut runs = children
+                .drain(index..end)
+                .map(|child| match child {
+                    ParagraphChild::Run(run) => run,
+                    _ => unreachable!(),
+                })
+                .collect::<Vec<_>>();
+            total += replace_regex_in_runs(&mut runs, re, replacement);
+            let inserted = runs.len();
+            children.splice(index..index, runs.into_iter().map(ParagraphChild::Run));
+            index += inserted;
+            continue;
+        }
+        match &mut children[index] {
+            ParagraphChild::Hyperlink(hyperlink) => {
+                if re.is_match(&hyperlink.text()) {
+                    total +=
+                        replace_regex_in_inline_children(hyperlink.children_mut(), re, replacement);
+                }
+            }
+            ParagraphChild::SimpleField(field) => {
+                if re.is_match(&field.text()) {
+                    total +=
+                        replace_regex_in_inline_children(field.children_mut(), re, replacement);
+                }
+            }
+            ParagraphChild::Unsupported(_) | ParagraphChild::Run(_) => {}
+        }
+        index += 1;
+    }
+    total
+}
+
+fn replace_regex_in_inline_children(
+    children: &mut Vec<InlineChild>,
+    re: &regex::Regex,
+    replacement: &str,
+) -> usize {
+    let mut total = 0;
+    let mut index = 0;
+    while index < children.len() {
+        if matches!(children[index], InlineChild::Run(_)) {
+            let end = children[index..]
+                .iter()
+                .position(|child| !matches!(child, InlineChild::Run(_)))
+                .map_or(children.len(), |offset| index + offset);
+            let mut runs = children
+                .drain(index..end)
+                .map(|child| match child {
+                    InlineChild::Run(run) => run,
+                    _ => unreachable!(),
+                })
+                .collect::<Vec<_>>();
+            total += replace_regex_in_runs(&mut runs, re, replacement);
+            let inserted = runs.len();
+            children.splice(index..index, runs.into_iter().map(InlineChild::Run));
+            index += inserted;
+            continue;
+        }
+        if let InlineChild::SimpleField(field) = &mut children[index]
+            && re.is_match(&field.text())
+        {
+            total += replace_regex_in_inline_children(field.children_mut(), re, replacement);
+        }
+        index += 1;
+    }
+    total
+}
+
+fn replace_regex_in_runs(runs: &mut Vec<CT_R>, re: &regex::Regex, replacement: &str) -> usize {
     let mut total = 0;
 
     // See `replace_in_paragraph`: resume after the inserted text so a
@@ -523,7 +682,7 @@ pub fn replace_regex_in_paragraph(para: &mut CT_P, re: &regex::Regex, replacemen
     let mut search_from = 0usize;
 
     loop {
-        let (full_text, char_map) = build_char_map(&para.runs);
+        let (full_text, char_map) = build_char_map(runs);
         if char_map.is_empty() || search_from > full_text.len() {
             break;
         }
@@ -565,7 +724,7 @@ pub fn replace_regex_in_paragraph(para: &mut CT_P, re: &regex::Regex, replacemen
 
         if first_run == last_run {
             replace_in_single_run(
-                &mut para.runs[first_run],
+                &mut runs[first_run],
                 &char_map,
                 match_start,
                 match_end,
@@ -573,7 +732,7 @@ pub fn replace_regex_in_paragraph(para: &mut CT_P, re: &regex::Regex, replacemen
             );
         } else {
             replace_across_runs(
-                &mut para.runs,
+                runs,
                 &char_map,
                 match_start,
                 match_end,
@@ -583,8 +742,7 @@ pub fn replace_regex_in_paragraph(para: &mut CT_P, re: &regex::Regex, replacemen
             );
         }
 
-        para.runs.retain(|r| !r.content.is_empty());
-        reindex_hyperlinks(para);
+        runs.retain(|run| !run.content.is_empty());
         search_from = byte_start + expanded_replacement.len();
         total += 1;
     }
@@ -619,6 +777,7 @@ pub fn replace_regex_in_table(table: &mut CT_Tbl, re: &regex::Regex, replacement
                     CellContent::Table(nested) => {
                         count += replace_regex_in_table(nested, re, replacement);
                     }
+                    CellContent::Unsupported(_) => {}
                 }
             }
         }
@@ -673,6 +832,38 @@ mod tests {
     }
 
     #[test]
+    fn replacement_does_not_cross_hyperlink_containment_boundary() {
+        let mut paragraph = CT_P::new();
+        paragraph.add_run("{{");
+        let mut hyperlink = crate::text::CT_Hyperlink::new(Some("rId1".to_string()), None);
+        hyperlink.add_run("name}}");
+        paragraph.add_hyperlink(hyperlink);
+
+        assert_eq!(replace_in_paragraph(&mut paragraph, "{{name}}", "Alice"), 0);
+        assert_eq!(paragraph.text(), "{{name}}");
+        assert!(matches!(
+            paragraph.content.as_slice(),
+            [ParagraphChild::Run(_), ParagraphChild::Hyperlink(_)]
+        ));
+    }
+
+    #[test]
+    fn replacement_across_runs_inside_hyperlink_preserves_hyperlink_node() {
+        let mut paragraph = CT_P::new();
+        let mut hyperlink = crate::text::CT_Hyperlink::new(Some("rId1".to_string()), None);
+        hyperlink.add_run("{{na");
+        hyperlink.add_run("me}}");
+        paragraph.add_hyperlink(hyperlink);
+
+        assert_eq!(replace_in_paragraph(&mut paragraph, "{{name}}", "Alice"), 1);
+        let ParagraphChild::Hyperlink(hyperlink) = &paragraph.content[0] else {
+            panic!("expected hyperlink")
+        };
+        assert_eq!(hyperlink.rel_id(), Some("rId1"));
+        assert_eq!(hyperlink.text(), "Alice");
+    }
+
+    #[test]
     fn replace_preserves_formatting() {
         let mut p = CT_P::new();
         // Run 0: bold "Hello "
@@ -681,7 +872,7 @@ mod tests {
             bold: Some(true),
             ..Default::default()
         });
-        p.runs.push(r0);
+        p.content.push(ParagraphChild::Run(r0));
 
         // Run 1: italic "{{name}}"
         let mut r1 = CT_R::new("{{name}}");
@@ -689,7 +880,7 @@ mod tests {
             italic: Some(true),
             ..Default::default()
         });
-        p.runs.push(r1);
+        p.content.push(ParagraphChild::Run(r1));
 
         // Run 2: "!"
         p.add_run("!");
@@ -699,9 +890,15 @@ mod tests {
         assert_eq!(p.text(), "Hello Alice!");
 
         // Run 0 should still be bold
-        assert_eq!(p.runs[0].properties.as_ref().unwrap().bold, Some(true));
+        assert_eq!(
+            p.run(0).unwrap().properties.as_ref().unwrap().bold,
+            Some(true)
+        );
         // Run 1 (now "Alice") should still be italic
-        assert_eq!(p.runs[1].properties.as_ref().unwrap().italic, Some(true));
+        assert_eq!(
+            p.run(1).unwrap().properties.as_ref().unwrap().italic,
+            Some(true)
+        );
     }
 
     #[test]

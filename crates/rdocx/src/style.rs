@@ -1,6 +1,7 @@
 //! Style access and manipulation for documents.
 
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
+use rdocx_oxml::resolver::FormattingResolver;
 use rdocx_oxml::styles::{CT_Style, CT_Styles, StyleType};
 
 /// An immutable reference to a style definition.
@@ -100,34 +101,7 @@ impl StyleBuilder {
 
 /// Resolve the effective paragraph properties by walking the style inheritance chain.
 pub fn resolve_paragraph_properties(style_id: Option<&str>, styles: &CT_Styles) -> CT_PPr {
-    let mut effective = CT_PPr::default();
-
-    // Start from docDefaults
-    if let Some(ref defaults) = styles.doc_defaults
-        && let Some(ref ppr) = defaults.ppr
-    {
-        effective.merge_from(ppr);
-    }
-
-    // Walk the basedOn chain
-    if let Some(sid) = style_id {
-        let chain = collect_style_chain(sid, styles);
-        // Apply from most-base to most-derived
-        for style in chain.iter().rev() {
-            if let Some(ref ppr) = style.ppr {
-                effective.merge_from(ppr);
-            }
-        }
-    } else {
-        // Apply the default paragraph style
-        if let Some(default_style) = styles.get_default(StyleType::Paragraph)
-            && let Some(ref ppr) = default_style.ppr
-        {
-            effective.merge_from(ppr);
-        }
-    }
-
-    effective
+    FormattingResolver::new(styles, None).resolve_paragraph_style(style_id)
 }
 
 /// Resolve the effective run properties by walking the style inheritance chain.
@@ -136,62 +110,7 @@ pub fn resolve_run_properties(
     run_style_id: Option<&str>,
     styles: &CT_Styles,
 ) -> CT_RPr {
-    let mut effective = CT_RPr::default();
-
-    // Start from docDefaults
-    if let Some(ref defaults) = styles.doc_defaults
-        && let Some(ref rpr) = defaults.rpr
-    {
-        effective.merge_from(rpr);
-    }
-
-    // Apply paragraph style's rpr
-    let para_sid = para_style_id.or_else(|| {
-        styles
-            .get_default(StyleType::Paragraph)
-            .map(|s| s.style_id.as_str())
-    });
-    if let Some(sid) = para_sid {
-        let chain = collect_style_chain(sid, styles);
-        for style in chain.iter().rev() {
-            if let Some(ref rpr) = style.rpr {
-                effective.merge_from(rpr);
-            }
-        }
-    }
-
-    // Apply character style's rpr
-    if let Some(sid) = run_style_id {
-        let chain = collect_style_chain(sid, styles);
-        for style in chain.iter().rev() {
-            if let Some(ref rpr) = style.rpr {
-                effective.merge_from(rpr);
-            }
-        }
-    }
-
-    effective
-}
-
-/// Collect the chain of styles from the given style up through basedOn ancestors.
-fn collect_style_chain<'a>(style_id: &str, styles: &'a CT_Styles) -> Vec<&'a CT_Style> {
-    let mut chain = Vec::new();
-    let mut current_id = Some(style_id.to_string());
-    let mut seen = std::collections::HashSet::new();
-
-    while let Some(ref sid) = current_id {
-        if !seen.insert(sid.clone()) {
-            break; // Prevent cycles
-        }
-        if let Some(style) = styles.get_by_id(sid) {
-            chain.push(style);
-            current_id = style.based_on.clone();
-        } else {
-            break;
-        }
-    }
-
-    chain
+    FormattingResolver::new(styles, None).resolve_run_sources(para_style_id, run_style_id, None)
 }
 
 #[cfg(test)]

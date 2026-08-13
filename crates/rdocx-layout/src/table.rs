@@ -341,6 +341,7 @@ fn layout_cell_content(
                     }
                 }
             }
+            CellContent::Unsupported(_) => {}
         }
     }
     Ok(blocks)

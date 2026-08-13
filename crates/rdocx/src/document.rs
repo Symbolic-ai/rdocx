@@ -14,18 +14,30 @@ use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, CT_Inline};
 use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef, HdrFtrType};
 use rdocx_oxml::numbering::{CT_Numbering, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
+use rdocx_oxml::resolver::FormattingResolver;
 use rdocx_oxml::shared::{ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::CT_Tbl;
-use rdocx_oxml::text::{CT_P, CT_R, RunContent};
+use rdocx_oxml::text::{CT_Hyperlink, CT_P, CT_R, ParagraphChild, ParsedWithRaw, RunContent};
 
 use rdocx_oxml::core_properties::CoreProperties;
 
 use crate::Length;
 use crate::error::{Error, Result};
 use crate::paragraph::{Paragraph, ParagraphRef};
-use crate::style::{self, Style, StyleBuilder};
+use crate::run::RunRef;
+use crate::style::{Style, StyleBuilder};
 use crate::table::{Table, TableRef};
+
+/// One item inside the document body, in document order.
+pub enum BodyContentRef<'a> {
+    /// A body paragraph.
+    Paragraph(ParagraphRef<'a>),
+    /// A body table.
+    Table(TableRef<'a>),
+    /// A preserved body child the facade does not model.
+    UnsupportedXml(&'a [u8]),
+}
 
 /// A Word document (.docx file).
 ///
@@ -371,6 +383,21 @@ impl Document {
 
     // ---- Paragraph access ----
 
+    /// Iterate over paragraphs, tables, and unsupported XML in body order.
+    pub fn body_content(&self) -> impl Iterator<Item = BodyContentRef<'_>> {
+        self.document
+            .body
+            .content
+            .iter()
+            .map(|content| match content {
+                BodyContent::Paragraph(paragraph) => {
+                    BodyContentRef::Paragraph(ParagraphRef { inner: paragraph })
+                }
+                BodyContent::Table(table) => BodyContentRef::Table(TableRef { inner: table }),
+                BodyContent::RawXml(raw) => BodyContentRef::UnsupportedXml(raw.bytes()),
+            })
+    }
+
     /// Get immutable references to all paragraphs.
     pub fn paragraphs(&self) -> Vec<ParagraphRef<'_>> {
         self.document
@@ -638,14 +665,12 @@ impl Document {
 
         let drawing = CT_Drawing::inline(inline);
         let run = CT_R {
-            alt_drawings: Vec::new(),
             properties: None,
-            content: vec![RunContent::Drawing(drawing)],
-            extra_xml: Vec::new(),
+            content: vec![RunContent::Drawing(ParsedWithRaw::new(drawing))],
         };
 
         let mut p = CT_P::new();
-        p.runs.push(run);
+        p.content.push(ParagraphChild::Run(run));
         self.document.body.content.push(BodyContent::Paragraph(p));
         match self.document.body.content.last_mut().unwrap() {
             BodyContent::Paragraph(p) => Paragraph { inner: p },
@@ -712,14 +737,12 @@ impl Document {
         let anchor = CT_Anchor::background(&rel_id, page_width_emu, page_height_emu);
         let drawing = CT_Drawing::anchor(anchor);
         let run = CT_R {
-            alt_drawings: Vec::new(),
             properties: None,
-            content: vec![RunContent::Drawing(drawing)],
-            extra_xml: Vec::new(),
+            content: vec![RunContent::Drawing(ParsedWithRaw::new(drawing))],
         };
 
         let mut p = CT_P::new();
-        p.runs.push(run);
+        p.content.push(ParagraphChild::Run(run));
         self.document.body.insert_paragraph(0, p);
         match &mut self.document.body.content[0] {
             BodyContent::Paragraph(p) => Paragraph { inner: p },
@@ -747,14 +770,12 @@ impl Document {
 
         let drawing = CT_Drawing::anchor(anchor);
         let run = CT_R {
-            alt_drawings: Vec::new(),
             properties: None,
-            content: vec![RunContent::Drawing(drawing)],
-            extra_xml: Vec::new(),
+            content: vec![RunContent::Drawing(ParsedWithRaw::new(drawing))],
         };
 
         let mut p = CT_P::new();
-        p.runs.push(run);
+        p.content.push(ParagraphChild::Run(run));
         self.document.body.insert_paragraph(0, p);
         match &mut self.document.body.content[0] {
             BodyContent::Paragraph(p) => Paragraph { inner: p },
@@ -809,9 +830,29 @@ impl Document {
     /// or numbers (false). None if the id is unknown.
     pub fn numbering_is_bullet(&self, num_id: u32) -> Option<bool> {
         let numbering = self.numbering.as_ref()?;
-        let abstract_num = numbering.get_abstract_num_for(num_id)?;
-        let fmt = abstract_num.levels.first()?.num_fmt?;
-        Some(fmt == rdocx_oxml::numbering::ST_NumberFormat::Bullet)
+        let fmt = numbering
+            .get_effective_level(num_id, 0)?
+            .level
+            .num_fmt
+            .as_ref()?;
+        Some(fmt == &rdocx_oxml::numbering::ST_NumberFormat::Bullet)
+    }
+
+    /// Resolve one level of a numbering definition.
+    pub fn numbering_level(&self, num_id: u32, level: u32) -> Option<NumberingLevel<'_>> {
+        let numbering = self.numbering.as_ref()?;
+        let effective = numbering.get_effective_level(num_id, level)?;
+        let definition = effective.level;
+        let format = definition.num_fmt.as_ref();
+        Some(NumberingLevel {
+            level: definition.ilvl,
+            format: format
+                .map(ListNumberFormat::from_st)
+                .unwrap_or(ListNumberFormat::Decimal),
+            format_name: format.map(ST_NumberFormat::to_str).unwrap_or("decimal"),
+            start: effective.start,
+            level_text: definition.lvl_text.as_deref(),
+        })
     }
 
     /// Append an external hyperlink to the last paragraph (creating one if
@@ -1198,14 +1239,14 @@ impl Document {
 
         let inline = CT_Inline::new(&img_rel_id, width.to_emu(), height.to_emu());
         let run = CT_R {
-            alt_drawings: Vec::new(),
             properties: None,
-            content: vec![RunContent::Drawing(CT_Drawing::inline(inline))],
-            extra_xml: Vec::new(),
+            content: vec![RunContent::Drawing(ParsedWithRaw::new(CT_Drawing::inline(
+                inline,
+            )))],
         };
 
         let mut p = CT_P::new();
-        p.runs.push(run);
+        p.content.push(ParagraphChild::Run(run));
         if let Some(color) = bg_color {
             p.properties = Some(CT_PPr {
                 shading: Some(CT_Shd {
@@ -1269,8 +1310,8 @@ impl Document {
                 numbering
                     .get_abstract_num_for(n.num_id)
                     .map(|a| {
-                        a.levels.first().and_then(|l| l.num_fmt)
-                            == Some(rdocx_oxml::numbering::ST_NumberFormat::Bullet)
+                        a.levels.first().and_then(|l| l.num_fmt.as_ref())
+                            == Some(&rdocx_oxml::numbering::ST_NumberFormat::Bullet)
                     })
                     .unwrap_or(false)
             });
@@ -1313,8 +1354,8 @@ impl Document {
                 numbering
                     .get_abstract_num_for(n.num_id)
                     .map(|a| {
-                        a.levels.first().and_then(|l| l.num_fmt)
-                            == Some(rdocx_oxml::numbering::ST_NumberFormat::Decimal)
+                        a.levels.first().and_then(|l| l.num_fmt.as_ref())
+                            == Some(&rdocx_oxml::numbering::ST_NumberFormat::Decimal)
                     })
                     .unwrap_or(false)
             });
@@ -1414,7 +1455,16 @@ impl Document {
     /// Resolve the effective paragraph properties for a given style ID,
     /// walking the full inheritance chain (docDefaults → basedOn → ...).
     pub fn resolve_paragraph_properties(&self, style_id: Option<&str>) -> CT_PPr {
-        style::resolve_paragraph_properties(style_id, &self.styles)
+        FormattingResolver::new(&self.styles, self.numbering.as_ref())
+            .resolve_paragraph_style(style_id)
+    }
+
+    /// Resolve inherited, numbering-level, and direct properties for a
+    /// paragraph.
+    pub fn effective_paragraph_properties(&self, paragraph: &ParagraphRef<'_>) -> CT_PPr {
+        FormattingResolver::new(&self.styles, self.numbering.as_ref())
+            .resolve_paragraph(paragraph.inner.properties.as_ref())
+            .properties
     }
 
     /// Resolve the effective run properties for the given paragraph and character styles,
@@ -1424,7 +1474,23 @@ impl Document {
         para_style_id: Option<&str>,
         run_style_id: Option<&str>,
     ) -> CT_RPr {
-        style::resolve_run_properties(para_style_id, run_style_id, &self.styles)
+        FormattingResolver::new(&self.styles, self.numbering.as_ref()).resolve_run_sources(
+            para_style_id,
+            run_style_id,
+            None,
+        )
+    }
+
+    /// Resolve inherited and direct properties for one run in a paragraph.
+    pub fn effective_run_properties(
+        &self,
+        paragraph: &ParagraphRef<'_>,
+        run: &RunRef<'_>,
+    ) -> CT_RPr {
+        FormattingResolver::new(&self.styles, self.numbering.as_ref()).resolve_run(
+            paragraph.inner.properties.as_ref(),
+            run.inner.properties.as_ref(),
+        )
     }
 
     // ---- Section/Page setup ----
@@ -1724,6 +1790,7 @@ impl Document {
                         rdocx_oxml::table::CellContent::Table(nested) => {
                             Self::remap_table_num_ids(nested, offset);
                         }
+                        rdocx_oxml::table::CellContent::Unsupported(_) => {}
                     }
                 }
             }
@@ -1745,7 +1812,6 @@ impl Document {
         self.invalidate_layout();
         use rdocx_oxml::borders::{CT_TabStop, CT_Tabs};
         use rdocx_oxml::shared::{ST_TabJc, ST_TabLeader};
-        use rdocx_oxml::text::HyperlinkSpan;
         use rdocx_oxml::units::Twips;
 
         let max_level = max_level.clamp(1, 9);
@@ -1785,8 +1851,7 @@ impl Document {
             }
         }
 
-        // Step 2: Insert bookmark markers at each heading paragraph (as raw XML in extra_xml)
-        // We insert bookmarkStart/bookmarkEnd as extra_xml at position 0 in the paragraph.
+        // Step 2: Insert bookmark markers as real ordered paragraph children.
         for heading in &headings {
             if let Some(BodyContent::Paragraph(p)) =
                 self.document.body.content.get_mut(heading.content_index)
@@ -1796,10 +1861,21 @@ impl Document {
                     heading.bookmark_name
                 );
                 let bm_end = format!("<w:bookmarkEnd w:id=\"{bookmark_id}\"/>");
-                // Insert at position 0 (before runs)
-                p.extra_xml.push((0, bm_start.into_bytes()));
-                // Insert at end (after runs)
-                p.extra_xml.push((p.runs.len(), bm_end.into_bytes()));
+                p.content.insert(
+                    0,
+                    ParagraphChild::Unsupported(rdocx_oxml::raw_xml::RawXml::from_bytes(
+                        bm_start.into_bytes(),
+                        b"w:bookmarkStart",
+                        Default::default(),
+                    )),
+                );
+                p.content.push(ParagraphChild::Unsupported(
+                    rdocx_oxml::raw_xml::RawXml::from_bytes(
+                        bm_end.into_bytes(),
+                        b"w:bookmarkEnd",
+                        Default::default(),
+                    ),
+                ));
                 bookmark_id += 1;
             }
         }
@@ -1824,7 +1900,7 @@ impl Document {
             bold: Some(true),
             ..Default::default()
         });
-        title_p.runs.push(title_r);
+        title_p.content.push(ParagraphChild::Run(title_r));
         title_p.properties = Some(CT_PPr {
             space_after: Some(Twips(120)),
             ..Default::default()
@@ -1843,25 +1919,17 @@ impl Document {
                 ..Default::default()
             });
 
-            // Run with heading text
-            let text_run = CT_R::new(&heading.text);
-            p.runs.push(text_run);
+            // The heading text is owned by the hyperlink, followed by a
+            // top-level tab. Their containment cannot drift after mutation.
+            let mut hyperlink = CT_Hyperlink::new(None, Some(heading.bookmark_name.clone()));
+            hyperlink.add_run(&heading.text);
+            p.content.push(ParagraphChild::Hyperlink(hyperlink));
 
             // Tab run (separates text from page number)
-            p.runs.push(CT_R {
-                alt_drawings: Vec::new(),
+            p.content.push(ParagraphChild::Run(CT_R {
                 properties: None,
                 content: vec![rdocx_oxml::text::RunContent::Tab],
-                extra_xml: Vec::new(),
-            });
-
-            // Wrap the text run in a hyperlink to the bookmark
-            p.hyperlinks.push(HyperlinkSpan {
-                rel_id: None,
-                anchor: Some(heading.bookmark_name.clone()),
-                run_start: 0,
-                run_end: 1, // Just the text run, not the tab
-            });
+            }));
 
             toc_paragraphs.push(p);
         }
@@ -1885,8 +1953,11 @@ impl Document {
             let BodyContent::Paragraph(p) = content else {
                 continue;
             };
-            for (_, raw) in &p.extra_xml {
-                let Ok(text) = std::str::from_utf8(raw) else {
+            for child in &p.content {
+                let ParagraphChild::Unsupported(raw) = child else {
+                    continue;
+                };
+                let Ok(text) = std::str::from_utf8(raw.bytes()) else {
                     continue;
                 };
                 for (_, after) in text.match_indices("_Toc") {
@@ -2633,12 +2704,12 @@ impl Document {
     }
 
     fn collect_images_from_paragraph(p: &CT_P, result: &mut Vec<ImageInfo>) {
-        for run in &p.runs {
+        for run in p.runs() {
             for rc in &run.content {
                 let RunContent::Drawing(drawing) = rc else {
                     continue;
                 };
-                if let Some(inline) = &drawing.inline {
+                if let Some(inline) = &drawing.value().inline {
                     result.push(ImageInfo {
                         embed_id: inline.embed_id.clone(),
                         name: inline.name.clone(),
@@ -2648,7 +2719,7 @@ impl Document {
                         is_anchor: false,
                     });
                 }
-                if let Some(anchor) = &drawing.anchor {
+                if let Some(anchor) = &drawing.value().anchor {
                     result.push(ImageInfo {
                         embed_id: anchor.embed_id.clone(),
                         name: anchor.name.clone(),
@@ -2673,6 +2744,7 @@ impl Document {
                         CellContent::Table(nested) => {
                             Self::collect_images_from_table(nested, result)
                         }
+                        CellContent::Unsupported(_) => {}
                     }
                 }
             }
@@ -2700,20 +2772,17 @@ impl Document {
         let mut result = Vec::new();
         for content in &self.document.body.content {
             if let BodyContent::Paragraph(p) = content {
-                for hl in &p.hyperlinks {
-                    // `HyperlinkSpan`'s bounds are public and can be set by
-                    // hand, so clamp rather than slice-panic on a bad range.
-                    let start = hl.run_start.min(p.runs.len());
-                    let end = hl.run_end.clamp(start, p.runs.len());
-                    let text: String = p.runs[start..end].iter().map(|r| r.text()).collect();
-
-                    let url = hl.rel_id.as_ref().and_then(|id| url_map.get(id)).cloned();
+                for child in &p.content {
+                    let ParagraphChild::Hyperlink(hyperlink) = child else {
+                        continue;
+                    };
+                    let url = hyperlink.rel_id().and_then(|id| url_map.get(id)).cloned();
 
                     result.push(LinkInfo {
-                        text,
+                        text: hyperlink.text(),
                         url,
-                        anchor: hl.anchor.clone(),
-                        rel_id: hl.rel_id.clone(),
+                        anchor: hyperlink.anchor().map(str::to_owned),
+                        rel_id: hyperlink.rel_id().map(str::to_owned),
                     });
                 }
             }
@@ -2755,6 +2824,7 @@ impl Document {
                         CellContent::Table(nested) => {
                             count += Self::word_count_in_table(nested);
                         }
+                        CellContent::Unsupported(_) => {}
                     }
                 }
             }
@@ -2871,7 +2941,7 @@ fn relative_target(source_part: &str, target_part: &str) -> String {
 }
 
 /// Numbering format for one level of a custom list definition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListNumberFormat {
     Bullet,
     Decimal,
@@ -2880,10 +2950,26 @@ pub enum ListNumberFormat {
     LowerRoman,
     UpperRoman,
     Ordinal,
+    None,
+    Other(String),
 }
 
 impl ListNumberFormat {
-    fn to_st(self) -> ST_NumberFormat {
+    fn from_st(value: &ST_NumberFormat) -> Self {
+        match value {
+            ST_NumberFormat::Bullet => Self::Bullet,
+            ST_NumberFormat::Decimal => Self::Decimal,
+            ST_NumberFormat::LowerLetter => Self::LowerLetter,
+            ST_NumberFormat::UpperLetter => Self::UpperLetter,
+            ST_NumberFormat::LowerRoman => Self::LowerRoman,
+            ST_NumberFormat::UpperRoman => Self::UpperRoman,
+            ST_NumberFormat::Ordinal => Self::Ordinal,
+            ST_NumberFormat::None => Self::None,
+            ST_NumberFormat::Other(value) => Self::Other(value.clone()),
+        }
+    }
+
+    fn to_st(&self) -> ST_NumberFormat {
         match self {
             Self::Bullet => ST_NumberFormat::Bullet,
             Self::Decimal => ST_NumberFormat::Decimal,
@@ -2892,12 +2978,29 @@ impl ListNumberFormat {
             Self::LowerRoman => ST_NumberFormat::LowerRoman,
             Self::UpperRoman => ST_NumberFormat::UpperRoman,
             Self::Ordinal => ST_NumberFormat::Ordinal,
+            Self::None => ST_NumberFormat::None,
+            Self::Other(value) => ST_NumberFormat::Other(value.clone()),
         }
     }
 }
 
+/// Resolved metadata for one level of a numbering definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NumberingLevel<'a> {
+    /// The zero-based list level.
+    pub level: u32,
+    /// The marker format at this level.
+    pub format: ListNumberFormat,
+    /// The exact OOXML format name, including producer-defined values.
+    pub format_name: &'a str,
+    /// The first marker value, defaulting to one when Word omits it.
+    pub start: u32,
+    /// The Word level-text template or bullet glyph.
+    pub level_text: Option<&'a str>,
+}
+
 /// One level of a custom list definition for [`Document::add_list_definition`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListLevel {
     /// Numbering format for this level.
     pub format: ListNumberFormat,
@@ -4127,43 +4230,32 @@ mod tests {
 }
 
 #[cfg(test)]
-mod hyperlink_span_tests {
+mod ordered_hyperlink_tests {
     use super::*;
-    use rdocx_oxml::text::HyperlinkSpan;
 
-    /// `HyperlinkSpan`'s bounds are public, so a caller building the OXML model
-    /// by hand can hand us a range past the end of `runs`. `links()` used to
-    /// slice with it and panic.
     #[test]
-    fn links_clamps_out_of_range_spans() {
+    fn links_read_real_hyperlink_children() {
         let mut doc = Document::new();
         {
             let mut para = doc.add_paragraph("");
             para.add_run("one");
-            para.add_run("two");
+            para.add_hyperlink("two", "missing-rel");
         }
 
         let BodyContent::Paragraph(p) = &mut doc.document.body.content[0] else {
             unreachable!("just added a paragraph")
         };
-        p.hyperlinks.push(HyperlinkSpan {
-            rel_id: None,
-            anchor: Some("bookmark".to_string()),
-            run_start: 1,
-            run_end: 99,
-        });
-        p.hyperlinks.push(HyperlinkSpan {
-            rel_id: None,
-            anchor: Some("inverted".to_string()),
-            run_start: 5,
-            run_end: 1,
-        });
+        let mut internal = CT_Hyperlink::new(None, Some("bookmark".to_string()));
+        internal.add_run("three");
+        p.content.push(ParagraphChild::Hyperlink(internal));
 
         let links = doc.links();
 
         assert_eq!(links.len(), 2);
         assert_eq!(links[0].text, "two");
-        assert_eq!(links[1].text, "");
+        assert_eq!(links[0].rel_id.as_deref(), Some("missing-rel"));
+        assert_eq!(links[1].text, "three");
+        assert_eq!(links[1].anchor.as_deref(), Some("bookmark"));
     }
 }
 

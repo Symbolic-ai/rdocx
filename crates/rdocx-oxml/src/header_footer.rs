@@ -4,8 +4,8 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::error::Result;
-use crate::namespace::{W_NS, matches_local_name};
-use crate::raw_xml::{capture_element, capture_empty_element};
+use crate::namespace::{R_NS, W_NS, matches_local_name};
+use crate::raw_xml::{NamespaceContext, capture_element, capture_empty_element};
 use crate::text::CT_P;
 
 /// `CT_HdrFtr` — Content of a header or footer part.
@@ -47,6 +47,7 @@ impl CT_HdrFtr {
         let mut paragraphs = Vec::new();
         let mut extra_namespaces = Vec::new();
         let mut extra_xml = Vec::new();
+        let mut root_context = NamespaceContext::default();
         let mut buf = Vec::new();
 
         let known_ns: &[&[u8]] = &[b"xmlns:w", b"xmlns:r", b"xmlns"];
@@ -56,10 +57,15 @@ impl CT_HdrFtr {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     if matches_local_name(name.as_ref(), b"p") {
-                        paragraphs.push(CT_P::from_xml(&mut reader)?);
+                        let paragraph_context = root_context.with_element(e);
+                        paragraphs.push(CT_P::from_xml_with_context(
+                            &mut reader,
+                            &paragraph_context,
+                        )?);
                     } else if matches_local_name(name.as_ref(), b"hdr")
                         || matches_local_name(name.as_ref(), b"ftr")
                     {
+                        root_context = NamespaceContext::default().with_element(e);
                         // Capture extra namespace declarations from root element
                         for attr in e.attributes().flatten() {
                             let key = attr.key.as_ref();
@@ -145,8 +151,9 @@ impl CT_HdrFtr {
 
         writer.write_event(Event::Start(start))?;
 
+        let output_context = header_footer_output_context(&self.extra_namespaces);
         for p in &self.paragraphs {
-            p.to_xml(&mut writer)?;
+            p.to_xml_with_context(&mut writer, &output_context)?;
         }
 
         // Write captured unknown elements
@@ -158,6 +165,26 @@ impl CT_HdrFtr {
 
         Ok(writer.into_inner())
     }
+}
+
+fn header_footer_output_context(extra_namespaces: &[(String, String)]) -> NamespaceContext {
+    let mut bindings = vec![
+        ("w".to_string(), W_NS.to_string()),
+        ("r".to_string(), R_NS.to_string()),
+        (
+            "wp".to_string(),
+            "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing".to_string(),
+        ),
+    ];
+    bindings.extend(extra_namespaces.iter().filter_map(|(name, uri)| {
+        let prefix = if name == "xmlns" {
+            ""
+        } else {
+            name.strip_prefix("xmlns:")?
+        };
+        Some((prefix.to_string(), uri.clone()))
+    }));
+    NamespaceContext::new(bindings)
 }
 
 impl Default for CT_HdrFtr {

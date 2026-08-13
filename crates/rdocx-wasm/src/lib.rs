@@ -112,7 +112,7 @@ impl WasmDocument {
             bold: Some(true),
             ..Default::default()
         });
-        p.runs.push(r);
+        p.content.push(rdocx_oxml::text::ParagraphChild::Run(r));
         self.document.body.add_paragraph(p);
     }
 

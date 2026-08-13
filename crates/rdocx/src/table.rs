@@ -5,7 +5,7 @@ use rdocx_oxml::properties::CT_Shd;
 use rdocx_oxml::shared::ST_Jc;
 use rdocx_oxml::table::{
     CT_Row, CT_Tbl, CT_TblBorders, CT_TblCellMar, CT_TblPr, CT_TblWidth, CT_Tc, CT_TcPr, CT_TrPr,
-    ST_VerticalJc, VMerge,
+    CellContent as OxmlCellContent, ST_VerticalJc, VMerge,
 };
 use rdocx_oxml::text::CT_P;
 
@@ -299,7 +299,7 @@ impl<'a> Cell<'a> {
             }
         });
         if let Some(para) = first_para {
-            para.runs.clear();
+            para.content.clear();
             if !text.is_empty() {
                 para.add_run(text);
             }
@@ -336,18 +336,16 @@ impl<'a> Cell<'a> {
     pub fn add_picture(&mut self, rel_id: &str, width: Length, height: Length) {
         use rdocx_oxml::drawing::{CT_Drawing, CT_Inline};
         use rdocx_oxml::table::CellContent;
-        use rdocx_oxml::text::{CT_R, RunContent};
+        use rdocx_oxml::text::{CT_R, ParagraphChild, ParsedWithRaw, RunContent};
 
         let inline = CT_Inline::new(rel_id, width.to_emu(), height.to_emu());
         let drawing = CT_Drawing::inline(inline);
         let run = CT_R {
-            alt_drawings: Vec::new(),
             properties: None,
-            content: vec![RunContent::Drawing(drawing)],
-            extra_xml: Vec::new(),
+            content: vec![RunContent::Drawing(ParsedWithRaw::new(drawing))],
         };
         let mut p = CT_P::new();
-        p.runs.push(run);
+        p.content.push(ParagraphChild::Run(run));
         self.inner.content.push(CellContent::Paragraph(p));
     }
 
@@ -621,10 +619,32 @@ pub struct CellRef<'a> {
     pub(crate) inner: &'a CT_Tc,
 }
 
+/// One item inside a table cell, in document order.
+pub enum CellContentRef<'a> {
+    /// A cell paragraph.
+    Paragraph(ParagraphRef<'a>),
+    /// A nested table.
+    Table(TableRef<'a>),
+    /// A preserved cell child the facade does not model.
+    UnsupportedXml(&'a [u8]),
+}
+
 impl<'a> CellRef<'a> {
     /// Get the combined text of all paragraphs.
     pub fn text(&self) -> String {
         self.inner.text()
+    }
+
+    /// Iterate over paragraphs, nested tables, and unsupported XML in their
+    /// original order.
+    pub fn content(&self) -> impl Iterator<Item = CellContentRef<'_>> {
+        self.inner.content.iter().map(|content| match content {
+            OxmlCellContent::Paragraph(paragraph) => {
+                CellContentRef::Paragraph(ParagraphRef { inner: paragraph })
+            }
+            OxmlCellContent::Table(table) => CellContentRef::Table(TableRef { inner: table }),
+            OxmlCellContent::Unsupported(raw) => CellContentRef::UnsupportedXml(raw.bytes()),
+        })
     }
 
     /// Get paragraph references.

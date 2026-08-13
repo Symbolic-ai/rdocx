@@ -8,7 +8,7 @@ use rdocx_oxml::properties::CT_PPr;
 use rdocx_oxml::shared::ST_Jc;
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Tbl, CellContent, VMerge};
-use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent};
+use rdocx_oxml::text::{BreakType, CT_P, CT_R, InlineChild, ParagraphChild, RunContent};
 
 use crate::css;
 use crate::sanitize::{escape_html, escape_html_attr, safe_url};
@@ -203,52 +203,45 @@ fn emit_paragraph_content(
     hyperlink_urls: &HashMap<String, String>,
     options: &HtmlOptions,
 ) {
-    // Build a map of which runs are inside hyperlinks
-    let mut hyperlink_map: HashMap<usize, &str> = HashMap::new();
-    for hl in &para.hyperlinks {
-        // A target with an unsafe scheme yields no <a> at all, so the run text
-        // still renders but cannot become a script trigger.
-        if let Some(rel_id) = &hl.rel_id
-            && let Some(url) = hyperlink_urls
-                .get(rel_id)
-                .map(String::as_str)
-                .and_then(safe_url)
-        {
-            for i in hl.run_start..hl.run_end {
-                hyperlink_map.insert(i, url);
+    for child in &para.content {
+        match child {
+            ParagraphChild::Run(run) => emit_run(out, run, images, options),
+            ParagraphChild::Hyperlink(hyperlink) => {
+                let url = hyperlink
+                    .rel_id()
+                    .and_then(|rel_id| hyperlink_urls.get(rel_id))
+                    .map(String::as_str)
+                    .and_then(safe_url);
+                if let Some(url) = url {
+                    out.push_str(&format!("<a href=\"{}\">", escape_html_attr(url)));
+                }
+                emit_inline_children(out, hyperlink.children(), images, options);
+                if url.is_some() {
+                    out.push_str("</a>");
+                }
             }
+            ParagraphChild::SimpleField(field) => {
+                emit_inline_children(out, field.children(), images, options);
+            }
+            ParagraphChild::Unsupported(_) => {}
         }
     }
+}
 
-    let mut current_link: Option<&str> = None;
-
-    for (run_idx, run) in para.runs.iter().enumerate() {
-        let in_link = hyperlink_map.get(&run_idx).copied();
-
-        // Open/close link tags as needed
-        match (current_link, in_link) {
-            (None, Some(url)) => {
-                out.push_str(&format!("<a href=\"{}\">", escape_html_attr(url)));
-                current_link = Some(url);
+fn emit_inline_children(
+    out: &mut String,
+    children: &[InlineChild],
+    images: &HashMap<String, ImageData>,
+    options: &HtmlOptions,
+) {
+    for child in children {
+        match child {
+            InlineChild::Run(run) => emit_run(out, run, images, options),
+            InlineChild::SimpleField(field) => {
+                emit_inline_children(out, field.children(), images, options);
             }
-            (Some(_), None) => {
-                out.push_str("</a>");
-                current_link = None;
-            }
-            (Some(old), Some(new)) if old != new => {
-                out.push_str("</a>");
-                out.push_str(&format!("<a href=\"{}\">", escape_html_attr(new)));
-                current_link = Some(new);
-            }
-            _ => {}
+            InlineChild::Unsupported(_) => {}
         }
-
-        emit_run(out, run, images, options);
-    }
-
-    // Close any open link
-    if current_link.is_some() {
-        out.push_str("</a>");
     }
 }
 
@@ -295,7 +288,7 @@ fn emit_run(
             RunContent::Tab => {
                 out.push_str("&emsp;");
             }
-            RunContent::Break(bt) => match bt {
+            RunContent::Break(parsed) => match *parsed.value() {
                 BreakType::Line => out.push_str("<br>"),
                 BreakType::Page => out.push_str("<hr>"),
                 BreakType::Column => out.push_str("<br>"),
@@ -304,10 +297,11 @@ fn emit_run(
                 if options.inline_images {
                     // Try to find image data
                     let embed_id = drawing
+                        .value()
                         .inline
                         .as_ref()
                         .map(|i| i.embed_id.as_str())
-                        .or_else(|| drawing.anchor.as_ref().map(|a| a.embed_id.as_str()));
+                        .or_else(|| drawing.value().anchor.as_ref().map(|a| a.embed_id.as_str()));
 
                     if let Some(eid) = embed_id
                         && let Some(img_data) = images.get(eid)
@@ -316,9 +310,8 @@ fn emit_run(
                     }
                 }
             }
-            RunContent::Field { .. }
-            | RunContent::FootnoteRef { .. }
-            | RunContent::EndnoteRef { .. } => {}
+            RunContent::FootnoteRef(_) | RunContent::EndnoteRef(_) | RunContent::Unsupported(_) => {
+            }
         }
     }
 
@@ -477,6 +470,7 @@ fn emit_table(
                     CellContent::Table(nested) => {
                         emit_table(out, nested, styles, images, hyperlink_urls, options);
                     }
+                    CellContent::Unsupported(_) => {}
                 }
             }
 
