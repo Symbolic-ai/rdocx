@@ -189,6 +189,31 @@ impl<'a> Paragraph<'a> {
         self.ensure_ppr().style_id = Some(style_id.to_string());
     }
 
+    /// Attach this paragraph to a list definition as a list item.
+    ///
+    /// `num_id` comes from [`crate::Document::add_list_definition`] (or the
+    /// shared definitions behind `add_bullet_list_item` /
+    /// `add_numbered_list_item`); `level` is the 0-based indentation level.
+    pub fn numbering(mut self, num_id: u32, level: u32) -> Self {
+        self.set_numbering(num_id, level);
+        self
+    }
+
+    /// Attach this paragraph to a list definition in place.
+    pub fn set_numbering(&mut self, num_id: u32, level: u32) {
+        self.set_numbering_value(Some((num_id, level)));
+    }
+
+    /// Set or clear this paragraph's list numbering.
+    pub fn set_numbering_value(&mut self, numbering: Option<(u32, u32)>) {
+        if numbering.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        let ppr = self.ensure_ppr();
+        ppr.num_id = numbering.map(|(num_id, _)| num_id);
+        ppr.num_ilvl = numbering.map(|(_, level)| level);
+    }
+
     /// Set space before the paragraph.
     pub fn space_before(mut self, length: Length) -> Self {
         self.set_space_before(length);

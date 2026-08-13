@@ -12,7 +12,7 @@ use oxml_opc::relationship::rel_types;
 use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
 use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, CT_Inline};
 use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef, HdrFtrType};
-use rdocx_oxml::numbering::CT_Numbering;
+use rdocx_oxml::numbering::{CT_Numbering, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::shared::{ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::CT_Styles;
@@ -1342,6 +1342,50 @@ impl Document {
             BodyContent::Paragraph(p) => Paragraph { inner: p },
             _ => unreachable!(),
         }
+    }
+
+    /// Create a list definition with explicit per-level formats and return
+    /// its numId.
+    ///
+    /// Unlike [`Self::add_bullet_list_item`] / [`Self::add_numbered_list_item`],
+    /// which share one bullet and one numbered definition per document, every
+    /// call creates a fresh definition — so separate lists restart their
+    /// numbering, and one definition can mix formats across levels (e.g. a
+    /// bullet list whose nested level is decimal). Attach paragraphs with
+    /// [`crate::Paragraph::set_numbering`].
+    ///
+    /// `levels[i]` configures level `i`; deeper unspecified levels fall back
+    /// to the standard template rotation for the last specified format's
+    /// family. An empty slice produces the standard numbered template.
+    ///
+    /// ```no_run
+    /// use rdocx::{Document, ListLevel};
+    ///
+    /// let mut doc = Document::new();
+    /// let num_id = doc.add_list_definition(&[
+    ///     ListLevel::bullet(),
+    ///     ListLevel::decimal().start(3),
+    /// ]);
+    /// doc.add_paragraph("first bullet").set_numbering(num_id, 0);
+    /// doc.add_paragraph("third decimal").set_numbering(num_id, 1);
+    /// ```
+    pub fn add_list_definition(&mut self, levels: &[ListLevel]) -> u32 {
+        self.invalidate_layout();
+        let levels: Vec<(ST_NumberFormat, Option<u32>)> = levels
+            .iter()
+            .map(|level| (level.format.to_st(), level.start))
+            .collect();
+        self.ensure_numbering().add_list(&levels)
+    }
+
+    /// Redefine one level (0–8) of an existing list definition, for callers
+    /// that only learn a deeper level's format when content first reaches it.
+    ///
+    /// Returns `false` when `num_id` is unknown or `level` is out of range.
+    pub fn set_list_level(&mut self, num_id: u32, level: u32, spec: ListLevel) -> bool {
+        self.invalidate_layout();
+        self.ensure_numbering()
+            .set_list_level(num_id, level, spec.format.to_st(), spec.start)
     }
 
     // ---- Style access ----
@@ -2824,6 +2868,67 @@ fn relative_target(source_part: &str, target_part: &str) -> String {
     match target_part.strip_prefix(dir) {
         Some(rest) if !rest.contains('/') => rest.to_string(),
         _ => target_part.to_string(),
+    }
+}
+
+/// Numbering format for one level of a custom list definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListNumberFormat {
+    Bullet,
+    Decimal,
+    LowerLetter,
+    UpperLetter,
+    LowerRoman,
+    UpperRoman,
+    Ordinal,
+}
+
+impl ListNumberFormat {
+    fn to_st(self) -> ST_NumberFormat {
+        match self {
+            Self::Bullet => ST_NumberFormat::Bullet,
+            Self::Decimal => ST_NumberFormat::Decimal,
+            Self::LowerLetter => ST_NumberFormat::LowerLetter,
+            Self::UpperLetter => ST_NumberFormat::UpperLetter,
+            Self::LowerRoman => ST_NumberFormat::LowerRoman,
+            Self::UpperRoman => ST_NumberFormat::UpperRoman,
+            Self::Ordinal => ST_NumberFormat::Ordinal,
+        }
+    }
+}
+
+/// One level of a custom list definition for [`Document::add_list_definition`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListLevel {
+    /// Numbering format for this level.
+    pub format: ListNumberFormat,
+    /// Starting number (defaults to 1; ignored for bullet levels).
+    pub start: Option<u32>,
+}
+
+impl ListLevel {
+    /// A level with the given format, starting at 1.
+    pub fn new(format: ListNumberFormat) -> Self {
+        ListLevel {
+            format,
+            start: None,
+        }
+    }
+
+    /// A bullet level.
+    pub fn bullet() -> Self {
+        Self::new(ListNumberFormat::Bullet)
+    }
+
+    /// A decimal-numbered level.
+    pub fn decimal() -> Self {
+        Self::new(ListNumberFormat::Decimal)
+    }
+
+    /// Override the starting number for this level.
+    pub fn start(mut self, start: u32) -> Self {
+        self.start = Some(start);
+        self
     }
 }
 

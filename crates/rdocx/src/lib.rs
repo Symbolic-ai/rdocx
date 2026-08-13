@@ -28,7 +28,10 @@ pub mod run;
 pub mod style;
 pub mod table;
 
-pub use document::{AccessibilityIssue, Document, ImageInfo, IssueSeverity, LinkInfo, OutlineNode};
+pub use document::{
+    AccessibilityIssue, Document, ImageInfo, IssueSeverity, LinkInfo, ListLevel, ListNumberFormat,
+    OutlineNode,
+};
 pub use error::{Error, Result};
 pub use oxml_core::Length;
 pub use paragraph::{
