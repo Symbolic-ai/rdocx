@@ -290,9 +290,12 @@ JavaScript members and crosses the `Uint8Array` boundary in both directions.
 CI currently target-checks the wrapper, while the Node test remains locally
 executable.
 
-`rpptx-wasm` wraps the real facade from day one, never a mini-model, in two
-profiles: a default without rendering at roughly 600 KB gzipped, and a `render`
-build with the rasteriser and bundled fonts at several MB.
+`rpptx-wasm` owns one `rpptx::Presentation`, never a mini-model. Its default
+profile exposes the constructor, `fromBytes`, `toBytes`, `slideCount`, and
+`addSlide`. It includes the bundled default template but no renderer, PDF
+backend, rasteriser, or host font discovery. The `render` feature adds only
+`toPdf` and selects the facade's deterministic renderer. The optimized default
+artifact must remain below 1,000,000 bytes after deterministic gzip.
 
 ## CLIs
 

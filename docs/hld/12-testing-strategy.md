@@ -387,6 +387,17 @@ pure-Python source in each installed wheel. Representative enum-input,
 return-type, inline-source, constructor, and member mutations must make those
 gates fail, so hand-written stubs cannot drift.
 
+The presentation WASM wrapper has one Node round-trip gate in its default
+profile and a second Node gate with `render` enabled. The first crosses the
+generated JavaScript `Uint8Array` boundary and proves that facade-owned slide
+mutation preserves the complete package. The second produces a complete PDF.
+The final normal-default artifact is built with exact wasm-pack 0.15.0,
+optimized with reviewed wasm-opt 125, compressed with `gzip -n -9`, and
+rejected at 1,000,000 decimal bytes. The wrapper manifest keeps render out of
+defaults while its facade dependency selects the bundled template explicitly.
+A padded artifact or render-enabled default must make the exact named size gate
+fail.
+
 ## What CI runs
 
 | Job | Command |

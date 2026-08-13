@@ -77,6 +77,7 @@ on CI runners as it always would have.
 | `rpptx` | `system-fonts` | on | Preserves native presentation font resolution |
 | `rpptx` | `default-template` | on | The bundled `default.pptx` |
 | `rpptx` | `render` | on | Pulls in `rpptx-render` and `oxml-pdf` |
+| `rpptx-wasm` | `render` | off | Adds `toPdf` through the deterministic facade renderer |
 | `rdocx-py`, `rpptx-py` | `extension-module` | off | Must stay off for `cargo test` |
 
 The workspace dependency entries for `oxml-layout`, `oxml-pdf`,
@@ -138,9 +139,10 @@ The fourteen crates.io names in this graph are reserved under the owner
 remain dependency-free 0.0.0 placeholders. The 12 implemented packages use
 the reviewed release path described below.
 
-`oxml-py-support` and `rpptx-py` are not reserved on crates.io. The binding
-crates are not published there. `rpptx-wasm` remains deferred to F-142 and its
-later npm publication path.
+`oxml-py-support`, `rpptx-py`, and `rpptx-wasm` are not reserved on crates.io.
+The binding crates are not published there. `rpptx-wasm` is an implemented
+workspace crate with no crates.io publication path. Its npm publication remains
+deferred to F-146.
 
 All 12 implemented shared and PowerPoint packages are published at the common
 incubating version 0.1.2. They are
@@ -255,9 +257,10 @@ unresolved-symbol link failure that is easy to misdiagnose as something else.
 --no-default-features`, which exercises the font-isolation path used by WASM.
 
 **A `wasm32-unknown-unknown` check job.** It installs the target and checks the
-facade-backed `rdocx-wasm` crate. The crate also carries an inline Node
-package-preservation regression, but this job does not execute it. The future
-`rpptx-wasm` package remains deferred to F-142.
+facade-backed `rdocx-wasm` crate. Both WASM crates carry inline Node
+package-preservation regressions, and the presentation wrapper has default and
+render profiles. The presentation Node, target, and optimized-size gates remain
+local until their CI workflow lands.
 
 **A dedicated Python artifact workflow.** Its product matrix is the Cartesian
 product of `rdocx` and `rpptx` with manylinux_2_28 x86_64 and aarch64,

@@ -14,6 +14,7 @@ members = [
     "crates/rpptx-layout",
     "crates/rpptx-oxml",
     "crates/rpptx-render",
+    "crates/rpptx-wasm",
     "crates/rpptx-py",
     "crates/rdocx-opc",
     "crates/rdocx-oxml",
@@ -56,11 +57,11 @@ oxml-media = { path = "crates/oxml-media", version = "0.1.2" }
 oxml-opc = { path = "crates/oxml-opc", version = "0.1.2" }
 oxml-pdf = { path = "crates/oxml-pdf", version = "0.1.2", default-features = false }
 oxml-sml = { path = "crates/oxml-sml", version = "0.1.2" }
-rpptx = { path = "crates/rpptx", version = "0.1.2" }
+rpptx = { path = "crates/rpptx", version = "0.1.2", default-features = false }
 rpptx-chart = { path = "crates/rpptx-chart", version = "0.1.2" }
 rpptx-layout = { path = "crates/rpptx-layout", version = "0.1.2" }
 rpptx-oxml = { path = "crates/rpptx-oxml", version = "0.1.2" }
-rpptx-render = { path = "crates/rpptx-render", version = "0.1.2" }
+rpptx-render = { path = "crates/rpptx-render", version = "0.1.2", default-features = false }
 rpptx-py = { path = "crates/rpptx-py", version = "0.4.1" }
 rdocx-opc = { path = "crates/rdocx-opc", version = "0.4.1" }
 rdocx-oxml = { path = "crates/rdocx-oxml", version = "0.4.1" }

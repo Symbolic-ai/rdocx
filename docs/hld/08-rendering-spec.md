@@ -446,11 +446,14 @@ The normal entry point retains system-font discovery. The deterministic entry
 point starts from `FontManager::new_deterministic()`, then adds only explicit
 font files already present in `RenderInput` before lowering every slide.
 
-The corpus driver in `crates/rpptx/examples/render_deck.rs` assembles all 50
-pinned decks into this input, renders every page at 150 dpi, and writes one TSV
-row per slide. Each row records the positive-extent source leaf count, resolved
-shape count, dropped count, diagnostics, and PNG path. A panic, missing page,
-or source-to-resolved count difference fails the driver.
+The `rpptx` facade assembles a presentation package into this input through its
+deterministic render boundary. It rejects a source-to-resolved shape-count
+difference and verifies that page count matches slide count before returning.
+The corpus driver in `crates/rpptx/examples/render_deck.rs` calls that boundary
+for all 50 pinned decks, renders every page at 150 dpi, and writes one TSV row
+per slide. Each row records the positive-extent source leaf count, resolved
+shape count, dropped count, diagnostics, and PNG path. A panic or missing page
+fails the driver.
 
 ## The renderer's input
 

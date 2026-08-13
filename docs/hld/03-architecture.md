@@ -191,6 +191,12 @@ cells. Consuming mutable accessors transfer a facade borrow into its nested
 handle, which lets the Python binding re-resolve a path without exposing
 PresentationML internals or storing a Rust borrow in a pyclass.
 
+The facade also owns package-to-render-input assembly. Its deterministic render
+entry points resolve the current package once and return either the shared
+render input and layout or a complete PDF. The corpus example and
+`rpptx-wasm` call that boundary, so neither binding nor development tooling
+maintains a second PresentationML package interpretation path.
+
 Every consuming formatting builder on `Paragraph`, `Run`, `Table`, `Row`, and
 `Cell` has a non-consuming `set_*` twin because a `mut self -> Self` builder
 cannot back a Python property setter. The 61 consuming builders delegate to

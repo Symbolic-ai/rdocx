@@ -1,6 +1,6 @@
 # F-142, rpptx-wasm
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S35
 **Size**: M
 **Depends on**: F-116
@@ -106,12 +106,12 @@ binding does not participate in the 28 native sample outputs.
 
 ## Implementation checklist
 
-- [ ] Create the approved unpublished wrapper crate with inline tests.
-- [ ] Add the real `rpptx` render feature while preserving native defaults.
-- [ ] Move package-to-render-input assembly into the facade and update the example.
-- [ ] Implement default facade APIs and render-only `toPdf`.
-- [ ] Gate exact optimized and deterministic compressed default size.
-- [ ] Run both profile, Node, dependency, publication, and hash riders.
+- [x] Create the approved unpublished wrapper crate with inline tests.
+- [x] Add the real `rpptx` render feature while preserving native defaults.
+- [x] Move package-to-render-input assembly into the facade and update the example.
+- [x] Implement default facade APIs and render-only `toPdf`.
+- [x] Gate exact optimized and deterministic compressed default size.
+- [x] Run both profile, Node, dependency, publication, and hash riders.
 
 ## Open questions
 

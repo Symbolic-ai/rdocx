@@ -3507,15 +3507,20 @@ mod tests {
             "[features]\ndefault = [\"system-fonts\"]\nsystem-fonts = [\"oxml-layout/system-fonts\"]"
         ));
         assert!(manifest.contains("oxml-layout = { workspace = true, default-features = false }"));
-        assert!(rpptx_manifest.contains("default = [\"default-template\", \"system-fonts\"]"));
-        assert!(rpptx_manifest.contains("system-fonts = [\"oxml-layout/system-fonts\"]"));
         assert!(
             rpptx_manifest
-                .contains("rpptx-render = { workspace = true, features = [\"system-fonts\"] }")
+                .contains("default = [\"default-template\", \"render\", \"system-fonts\"]")
         );
+        assert!(rpptx_manifest.contains(
+            "system-fonts = [\"oxml-layout/system-fonts\", \"rpptx-render?/system-fonts\"]"
+        ));
+        assert!(rpptx_manifest.contains(
+            "rpptx-render = { workspace = true, default-features = false, optional = true }"
+        ));
         assert!(
-            binding_manifest
-                .contains("rpptx = { workspace = true, features = [\"system-fonts\"] }")
+            binding_manifest.contains(
+                "rpptx = { workspace = true, features = [\"default-template\", \"render\", \"system-fonts\"] }"
+            )
         );
         for dependency in [
             "oxml-drawing.workspace = true",
