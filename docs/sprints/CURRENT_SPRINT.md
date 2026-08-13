@@ -34,7 +34,7 @@ profiles with a bounded default package.
 | F-139 | Rewrite rdocx-wasm | L | in-progress | codex |
 | F-142 | rpptx-wasm | M | in-progress | codex |
 | F-140 | wasm CI job | S | in-progress | codex |
-| F-141 | to_pdf in the browser | M | pending | - |
+| F-141 | to_pdf in the browser | M | in-progress | codex |
 
 ## Sequencing note
 
