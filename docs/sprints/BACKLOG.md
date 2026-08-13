@@ -28,9 +28,9 @@ regenerated, never hand-edited.
 | M10, Renderer                               | 20 | 20 | 0 | 0  |
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
-| M13, Bindings and tooling                   | 18 | 10 | 2 | 6  |
+| M13, Bindings and tooling                   | 18 | 10 | 3 | 5  |
 | X, Cross-cutting (opportunistic)            | 5  | 1 | 0 | 4  |
-| **Total** | **159** | **147** | **2** | **10** |
+| **Total** | **159** | **147** | **3** | **9** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -271,7 +271,7 @@ regenerated, never hand-edited.
 | F-137 | wheels.yml                                   | S34 | M | done |
 | F-138 | PR-time Python job                           | S34 | S | done |
 | F-139 | Rewrite rdocx-wasm                           | S35 | L | in-progress |
-| F-140 | wasm CI job                                  | S35 | S | pending |
+| F-140 | wasm CI job                                  | S35 | S | in-progress |
 | F-141 | to_pdf in the browser                        | S35 | M | pending |
 | F-142 | rpptx-wasm                                   | S35 | M | in-progress |
 | F-143 | oxml-cli-support                             | S36 | S | pending |
