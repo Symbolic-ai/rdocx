@@ -144,7 +144,10 @@ The fourteen crates.io names in this graph are reserved under the owner
 `oxml-drawing`, `oxml-layout`, `oxml-pdf`, `oxml-sml`, `oxml-cli-support`,
 `rpptx-oxml`, `rpptx-layout`, `rpptx-render`, `rpptx-chart`, `rpptx`, and
 `rpptx-cli`. All 14 implemented packages use the reviewed release path
-described below at the common explicit version 0.1.2.
+described below. The earlier 12-package family is published at 0.1.2.
+`oxml-cli-support` and `rpptx-cli` are publishable but remain unpublished at
+that version. F-X006 must prepare a fresh common version before the complete
+14-package family can be released.
 
 `oxml-py-support`, `rpptx-py`, and `rpptx-wasm` are not reserved on crates.io.
 The binding crates are not published there. `rpptx-wasm` is an implemented

@@ -1172,3 +1172,14 @@ reviewed release tag before released rdocx consumers cut over.
 **Test gate**: all 12 incubating packages resolve from crates.io at 0.1.2 with
 the expected owner, and the GitHub release targets the newly reviewed sprint
 SHA.
+
+### F-X006, Tag the expanded rpptx family (S)
+Prepare the complete 14-package incubating family at one fresh version above
+0.1.2, including `oxml-cli-support` and `rpptx-cli`, then publish it only
+through `/release rpptx-vX.Y.Z` after the command's separate final approval.
+The immutable `rpptx-v0.1.2` tag and its 12 published packages remain
+unchanged.
+**Depends on**: F-143, F-144, F-145.
+**Test gate**: all 14 incubating packages resolve from crates.io at the fresh
+version with the expected owner, and the GitHub release targets the reviewed
+sprint SHA.

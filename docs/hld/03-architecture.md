@@ -133,6 +133,11 @@ is the format-neutral owner of range parsing, JSON envelope, and output-path
 contracts. It has no dependency on either document family, while CLI binaries
 depend inward on it.
 
+The immutable `rpptx-v0.1.2` release contains the earlier 12-package family.
+`oxml-cli-support` and `rpptx-cli` remain unpublished at 0.1.2. F-X006 owns a
+future fresh-version release of the complete 14-package family. No existing
+tag or registry version is moved or overwritten.
+
 The `rpptx` facade owns formatting-preserving presentation text replacement.
 `Presentation::replace_text` applies literal, non-recursive replacement across
 contiguous regular runs in ordinary shapes, nested groups, and table cells.

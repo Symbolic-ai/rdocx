@@ -5,7 +5,7 @@ are dependency and review boundaries, not fixed two-week containers. Sprint
 clocks start at the first `/start-feature` of that sprint, not at a fixed
 calendar date.
 
-36 numbered sprints plus two deferred cutover sprints across 13 milestones,
+37 numbered sprints plus two deferred cutover sprints across 13 milestones,
 roughly 390 developer-days. The sizing rationale and compression options are in
 `docs/hld/14-development-backlog.md`.
 
@@ -546,7 +546,7 @@ reused.
 F-139 fixes a shipped defect that silently discards every package part except
 two. F-140 is why it will not happen again.
 
-#### Sprint S36, CLIs and publication
+#### Sprint S36, CLIs and local packaging
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -559,7 +559,20 @@ two. F-140 is why it will not happen again.
 | F-X003 | Deduplicate the sample generators           | S |
 | F-X004 | Fix the shared temp path in the test suite  | S |
 
-**This is the v1 release gate.**
+**This is the v1 implementation gate.** The CLI and local package surfaces are
+complete. Registry publication is explicitly deferred. The expanded
+incubating Rust family requires a fresh version and reviewed release through
+F-X006. npm registry publication requires a separate future story.
+
+#### Sprint S37, Expanded Rust family release
+
+**Goal**: prepare a fresh common incubating version and publish the complete
+14-package Rust family through the reviewed release workflow after separate
+final approval.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X006 | Tag the expanded rpptx family               | S |
 
 ## Cross-cutting
 

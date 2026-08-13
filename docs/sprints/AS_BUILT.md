@@ -5232,7 +5232,8 @@ whenever the normal-default dependency graph changes.
 **Completed.** 2026-08-13
 **Size.** S, estimated 1 day, actual 1 day
 
-**What was built.** The published `oxml-cli-support` crate owns bounded
+**What was built.** The publishable, currently unpublished
+`oxml-cli-support` crate owns bounded
 one-based range parsing, default output-path construction, and the schema-one
 JSON envelope shared by both command-line tools. `rdocx-cli` now uses the
 shared output-path and JSON helpers without changing its command surface.
@@ -5265,7 +5266,8 @@ crate and charge range work before materializing user input.
 **Completed.** 2026-08-13
 **Size.** L, estimated 4 days, actual 1 day
 
-**What was built.** The published `rpptx-cli` binary provides `inspect`,
+**What was built.** The publishable, currently unpublished `rpptx-cli` binary
+provides `inspect`,
 `text`, `convert`, `diff`, `replace`, `validate`, and `render`. It consumes the
 real presentation facade and shared CLI support, preserves package content and
 run formatting during replacement, and uses deterministic rendering for PDF
