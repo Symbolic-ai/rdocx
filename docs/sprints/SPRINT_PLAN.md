@@ -554,10 +554,14 @@ two. F-140 is why it will not happen again.
 | F-144 | rpptx-cli                                    | L |
 | F-145 | rpptx-cli thumbnail and outline              | M |
 | F-146 | npm publication                              | S |
+| F-X001 | rdocx-cli tests                             | M |
+| F-X002 | README example correctness                  | S |
+| F-X003 | Deduplicate the sample generators           | S |
+| F-X004 | Fix the shared temp path in the test suite  | S |
 
 **This is the v1 release gate.**
 
 ## Cross-cutting
 
-F-X001 through F-X004 are opportunistic and unscheduled. Pull one into a sprint
-when it becomes relevant, or when a sprint has capacity.
+F-X001 through F-X004 are scheduled in S36 as the final cross-cutting v1
+hardening wave.

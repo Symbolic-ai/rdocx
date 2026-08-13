@@ -285,9 +285,9 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-MX START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-X001 | rdocx-cli tests                             | -   | M | pending |
-| F-X002 | README example correctness                  | -   | S | pending |
-| F-X003 | Deduplicate the sample generators           | -   | S | pending |
-| F-X004 | Fix the shared temp path in the test suite  | -   | S | pending |
+| F-X001 | rdocx-cli tests                             | S36 | M | pending |
+| F-X002 | README example correctness                  | S36 | S | pending |
+| F-X003 | Deduplicate the sample generators           | S36 | S | pending |
+| F-X004 | Fix the shared temp path in the test suite  | S36 | S | pending |
 | F-X005 | Tag rpptx-v0.1.2                            | S32.2 | S | done |
 <!-- AUTOGEN:backlog-MX END -->

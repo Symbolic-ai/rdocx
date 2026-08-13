@@ -1,58 +1,67 @@
-# Current Sprint, S35
+# Current Sprint, S36
 
 **Milestone**: M13 Bindings and tooling.
 
-**Goal**: Make both WASM packages thin wrappers around the real Rust facades
-and keep them continuously exercised by CI. Replace the destructive rdocx
-mini-model, add browser PDF output with bundled fonts, and introduce rpptx WASM
-profiles with a bounded default package.
+**Goal**: Complete the v1 command-line and JavaScript package surfaces, then
+close the remaining cross-cutting quality gaps. Add shared CLI plumbing, ship
+the presentation CLI including thumbnail and outline commands, establish
+installable npm packages for both WASM bindings, and finish the CLI, README,
+sample-generator, and concurrent-test hardening work.
 
 ## Spec references
 
-- `docs/hld/02-scope-and-non-goals.md`, for the requirement that both libraries
-  ship supported WASM modules alongside their Rust, CLI, and Python surfaces.
-- `docs/hld/03-architecture.md`, for facade ownership and the dependency
-  direction that keeps the WASM packages as consumers of the real libraries.
-- `docs/hld/08-rendering-spec.md`, for the shared document-to-PDF rendering path
-  that browser PDF output must reuse.
-- `docs/hld/10-bindings-spec.md`, for the destructive current rdocx behavior,
-  preserved JavaScript method names, bundled-font browser rendering, CI gate,
-  and two rpptx feature profiles.
-- `docs/hld/12-testing-strategy.md`, for package-preserving behavioral tests,
-  wasm target checks, and the regression gap this sprint closes.
-- `docs/hld/13-risks-and-open-questions.md`, for the carried rdocx-wasm save-path
-  defect that discards package parts.
-- `docs/hld/14-development-backlog.md`, for F-139 through F-142 dependencies
-  and their named acceptance gates.
-- `docs/hld/15-build-and-toolchain.md`, for the `system-fonts` isolation,
-  bundled-font WASM path, target checks, and unpublished package boundary.
+- `docs/hld/02-scope-and-non-goals.md`, for the v1 requirement that both
+  libraries ship supported CLI and WASM package surfaces.
+- `docs/hld/03-architecture.md`, for ownership of `oxml-cli-support` and
+  `rpptx-cli`, plus the dependency direction from format-neutral plumbing to
+  the presentation facade.
+- `docs/hld/08-rendering-spec.md`, for the shared presentation rendering path
+  used by the thumbnail command.
+- `docs/hld/10-bindings-spec.md`, for the mirrored CLI command set,
+  presentation-specific thumbnail and outline commands, shared range and JSON
+  contracts, and WASM package names.
+- `docs/hld/12-testing-strategy.md`, for CLI exit-status, rendering, package,
+  and installation gates.
+- `docs/hld/14-development-backlog.md`, for F-143 through F-146 and F-X001
+  through F-X004 dependencies and named acceptance gates.
+- `docs/hld/15-build-and-toolchain.md`, for CLI publication order and the
+  unpublished WASM package boundary that npm packaging closes.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-139 | Rewrite rdocx-wasm | L | done | |
-| F-142 | rpptx-wasm | M | done | |
-| F-140 | wasm CI job | S | done | |
-| F-141 | to_pdf in the browser | M | done | |
+| F-143 | oxml-cli-support | S | pending | - |
+| F-146 | npm publication | S | pending | - |
+| F-X001 | rdocx-cli tests | M | pending | - |
+| F-X002 | README example correctness | S | pending | - |
+| F-X003 | Deduplicate the sample generators | S | pending | - |
+| F-X004 | Fix the shared temp path in the test suite | S | pending | - |
+| F-144 | rpptx-cli | L | pending | - |
+| F-145 | rpptx-cli thumbnail and outline | M | pending | - |
 
 ## Sequencing note
 
-Rows are listed in dependency order, not by F-ID. F-139 and F-142 can start
-independently because their dependencies F-029 and F-116 are complete. F-140
-and F-141 both follow F-139 so the CI and browser-rendering gates exercise the
-rewritten facade wrapper rather than the destructive mini-model.
+Rows are listed in dependency order, not by F-ID. F-143 establishes the shared
+CLI contracts required by F-144, and F-145 follows F-144 because it extends
+that executable. F-146 can start independently because its dependencies F-140
+and F-142 are complete. F-X001 through F-X004 are dependency-independent
+hardening stories and can run alongside the first CLI wave, subject to ordinary
+file-conflict checks during design.
 
 ## Definition of done for this sprint
 
-- An rdocx document with images, headers, and numbering round-trips through
-  `fromBytes` and `toDocxBytes` with every package part intact.
-- Pull requests run both the `wasm32-unknown-unknown` target check and
-  `wasm-pack test --node`.
-- A Node WASM test produces a non-empty PDF with embedded bundled fonts.
-- The default rpptx WASM profile is under 1 MiB gzipped and round-trips a deck,
-  while the render profile uses the real facade and rendering stack.
-- The reviewed hosted wheel run demonstrates that both Python wheels install
-  and pass their parity suites on every target platform in the M13 matrix.
-- WASM-focused gates pass without regressing the 28 deterministic document
-  hashes or introducing forbidden dependency edges.
+- `2,4-6` parses to the expected range and the shared JSON envelope carries
+  `"schema": 1`.
+- `rpptx-cli validate` exits non-zero on a corrupted deck and zero across the
+  pinned corpus.
+- `rpptx-cli thumbnail` produces a PNG of slide one, and `outline` prints the
+  title and bullet tree.
+- `npm pack` produces installable `@tensorbee/rdocx-wasm` and
+  `@tensorbee/rpptx-wasm` tarballs without publishing either package.
+- Every `rdocx-cli` subcommand has an integration test.
+- README examples compile as doctests.
+- One sample generator produces every artifact required by the hash harness.
+- Two concurrent test runs pass without sharing a fixed temporary path.
+- The full verification gate, package checks, and all 28 deterministic hashes
+  pass without forbidden dependency edges.
