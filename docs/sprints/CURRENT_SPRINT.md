@@ -36,7 +36,7 @@ sample-generator, and concurrent-test hardening work.
 | F-X001 | rdocx-cli tests | M | pending | - |
 | F-X002 | README example correctness | S | pending | - |
 | F-X003 | Deduplicate the sample generators | S | in-progress | codex |
-| F-X004 | Fix the shared temp path in the test suite | S | pending | - |
+| F-X004 | Fix the shared temp path in the test suite | S | in-progress | codex |
 | F-144 | rpptx-cli | L | pending | - |
 | F-145 | rpptx-cli thumbnail and outline | M | pending | - |
 
