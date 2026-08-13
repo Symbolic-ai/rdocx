@@ -93,23 +93,7 @@ fn inspect_json(file: &Path, doc: &Document, style_ids: Vec<String>) -> Result<V
 /// printing only `paragraphs()` would silently drop everything inside tables.
 pub fn text(file: &Path) -> Result<()> {
     let doc = Document::open(file)?;
-
-    for para in doc.paragraphs() {
-        println!("{}", para.text());
-    }
-    for table in doc.tables() {
-        for row_idx in 0..table.row_count() {
-            let Some(row) = table.row(row_idx) else {
-                continue;
-            };
-            let cells: Vec<String> = (0..row.cell_count())
-                .filter_map(|i| row.cell(i))
-                .map(|c| c.text().replace('\n', " "))
-                .collect();
-            println!("{}", cells.join("\t"));
-        }
-    }
-
+    print!("{}", doc.text());
     Ok(())
 }
 
@@ -312,7 +296,7 @@ pub fn render(file: &Path, output_dir: Option<&Path>, dpi: f64, page: Option<usi
 
     if let Some(page_idx) = page {
         let png = doc
-            .render_page_to_png(page_idx, dpi)?
+            .render_page_to_png_deterministic(page_idx, dpi)?
             .ok_or_else(|| format!("Page {page_idx} not found"))?;
         let out_path = out_dir.join(format!("{stem}_page{}.png", page_idx + 1));
         std::fs::write(&out_path, &png)?;
@@ -323,18 +307,19 @@ pub fn render(file: &Path, output_dir: Option<&Path>, dpi: f64, page: Option<usi
             png.len()
         );
     } else {
-        let pages = doc.render_all_pages(dpi)?;
-        for (i, png) in pages.iter().enumerate() {
-            let out_path = out_dir.join(format!("{stem}_page{}.png", i + 1));
-            std::fs::write(&out_path, png)?;
+        let mut page_count = 0;
+        while let Some(png) = doc.render_page_to_png_deterministic(page_count, dpi)? {
+            let out_path = out_dir.join(format!("{stem}_page{}.png", page_count + 1));
+            std::fs::write(&out_path, &png)?;
             println!(
                 "Page {} -> {} ({} bytes)",
-                i + 1,
+                page_count + 1,
                 out_path.display(),
                 png.len()
             );
+            page_count += 1;
         }
-        println!("Rendered {} page(s) at {dpi} DPI", pages.len());
+        println!("Rendered {page_count} page(s) at {dpi} DPI");
     }
 
     Ok(())

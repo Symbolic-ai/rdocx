@@ -1141,8 +1141,12 @@ TypeScript declaration, and import.
 ## Cross-cutting
 
 ### F-X001, rdocx-cli tests (M)
-The binary is published and has zero tests.
-**Test gate**: one integration test per subcommand.
+The published binary has one compiled-executable integration test for each of
+its seven subcommands in a single test binary. Fixtures are constructed in
+code. Text extraction preserves document order, and both render branches use
+bundled-font deterministic output.
+**Test gate**: all seven named command integration tests pass, and the text,
+validation, and deterministic-render sensitivity mutations fail.
 
 ### F-X002, README example correctness (S)
 The read example uses `table.rows()` and `row.cells()`, neither of which exists.

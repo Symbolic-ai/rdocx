@@ -353,4 +353,8 @@ caller-supplied `schema` field and adds the reserved top-level
 
 `rdocx-cli` uses the shared envelope for inspect JSON and the shared path helper
 for convert defaults. Its flags and zero-based `render --page` compatibility
-contract do not change.
+contract do not change. The `text` command emits paragraphs and table cells in
+document order through the facade plain-text representation. Both the selected
+page and all-page `render` paths use the bundled-font deterministic facade.
+The compiled seven-command surface is covered by one integration binary, with
+fixtures constructed in code and no command-only test dependency.

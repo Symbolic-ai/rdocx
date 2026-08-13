@@ -417,6 +417,14 @@ Regressions cover nonstandard aspect ratios, shared output defaulting, grouped
 text order, embedded paragraph-break normalization, and field-only title
 identity so the title appears exactly once.
 
+The `rdocx` CLI has one integration binary that invokes the compiled executable
+through `CARGO_BIN_EXE_rdocx`. Its seven tests cover `inspect`, `text`,
+`convert`, `diff`, `replace`, `validate`, and `render` with in-code DOCX and
+corrupt-package fixtures. The assertions bind schema 1, default paths, exact
+stdout, exit-status verdicts, output validity, replacement persistence,
+document-order text, and bundled-font deterministic render bytes. Process ID
+and an atomic counter isolate temporary workspaces across concurrent runs.
+
 ## What CI runs
 
 | Job | Command |
@@ -495,6 +503,8 @@ rust-toolchain revision are bound to full reviewed commit SHAs.
 
 Stated plainly, because they are why two shipped defects went unnoticed:
 
-- **`rdocx-cli` has zero tests** despite being a published binary.
+- **Command-level output contracts need explicit coverage.** The published
+  `rdocx-cli` surface has one compiled-binary integration test for each of its
+  seven commands.
 - **PDF and PNG output is only checked for non-emptiness**, so layout
   regressions are invisible. The hash harness closes this.
