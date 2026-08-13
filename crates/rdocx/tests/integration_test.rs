@@ -636,6 +636,22 @@ fn table_basic_creation_round_trip() {
 }
 
 #[test]
+fn table_column_width_updates_grid_and_cells() {
+    let mut doc = Document::new();
+    let mut table = doc.add_table(2, 2);
+
+    assert!(table.set_column_width(0, Length::twips(2_000)));
+    assert!(table.set_column_width(1, Length::twips(3_000)));
+    assert!(!table.set_column_width(2, Length::twips(1_000)));
+
+    let xml = String::from_utf8(document_xml(&mut doc)).unwrap();
+    assert_eq!(xml.matches("<w:gridCol w:w=\"2000\"").count(), 1);
+    assert_eq!(xml.matches("<w:gridCol w:w=\"3000\"").count(), 1);
+    assert_eq!(xml.matches("<w:tcW w:w=\"2000\" w:type=\"dxa\"").count(), 2);
+    assert_eq!(xml.matches("<w:tcW w:w=\"3000\" w:type=\"dxa\"").count(), 2);
+}
+
+#[test]
 fn table_with_formatting_round_trip() {
     let mut doc = Document::new();
     doc.add_table(2, 2)

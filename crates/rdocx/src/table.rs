@@ -155,6 +155,30 @@ impl<'a> Table<'a> {
         self.ensure_tbl_pr().layout = Some("fixed".to_string());
     }
 
+    /// Set one grid column's width and apply the same width to that cell in
+    /// every row.
+    ///
+    /// Returns `false` when `column` is outside the table grid. Keeping the
+    /// grid and cell widths in sync avoids contradictory fixed-layout table
+    /// geometry.
+    pub fn set_column_width(&mut self, column: usize, width: Length) -> bool {
+        let Some(grid_column) = self
+            .inner
+            .grid
+            .as_mut()
+            .and_then(|grid| grid.columns.get_mut(column))
+        else {
+            return false;
+        };
+        grid_column.width = width.as_twips();
+        for row in &mut self.inner.rows {
+            if let Some(cell) = row.cells.get_mut(column) {
+                Cell { inner: cell }.set_width(width);
+            }
+        }
+        true
+    }
+
     /// Get the number of rows.
     pub fn row_count(&self) -> usize {
         self.inner.rows.len()
