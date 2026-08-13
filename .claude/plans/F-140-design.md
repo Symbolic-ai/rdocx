@@ -1,6 +1,6 @@
 # F-140, wasm CI job
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S35
 **Size**: S
 **Depends on**: F-139, F-142
@@ -33,6 +33,12 @@ assertions for exact tools, package set, command order, immutable actions,
 least privilege, and ordinary failure propagation. Reject conditions,
 `continue-on-error`, fallback success, listing-only tests, missing `--node`,
 and package omissions. F-139 and F-142 own non-vacuous crate-root Node tests.
+
+Reconcile the integrated F-142 cargo-release bookkeeping in the same existing
+regression file and HLD15. The `incubating` preparation group now contains the
+12 published packages plus unpublished `rpptx-wasm`, while the crates.io
+allowlist remains exactly 12. Require the exact 13-member preparation group and
+prove a family-metadata mutation is rejected.
 
 ## Rejected alternatives
 
@@ -79,11 +85,12 @@ Expected unchanged. This story changes CI assertions and execution only.
 
 ## Implementation checklist
 
-- [ ] Update F-140 dependency prose to require both completed WASM packages.
-- [ ] Extend the existing WASM job with exact immutable tools.
-- [ ] Run target checks and Node suites for both packages.
-- [ ] Add structured positive and mutation-sensitive workflow regressions.
-- [ ] Prove a real Node failure propagates through the exact command.
+- [x] Update F-140 dependency prose to require both completed WASM packages.
+- [x] Extend the existing WASM job with exact immutable tools.
+- [x] Run target checks and Node suites for both packages.
+- [x] Add structured positive and mutation-sensitive workflow regressions.
+- [x] Prove a real Node failure propagates through the exact command.
+- [x] Reconcile the 13-member incubating preparation group after F-142.
 
 ## Open questions
 

@@ -1096,9 +1096,9 @@ as the native gate.
 regression gate.
 
 ### F-140, wasm CI job (S)
-**Depends on**: F-139.
-**Test gate**: `cargo check --target wasm32-unknown-unknown` and
-`wasm-pack test --node` both run on PRs.
+**Depends on**: F-139, F-142.
+**Test gate**: locked `cargo check --target wasm32-unknown-unknown` and
+`wasm-pack test --node` run for both WASM packages on PRs.
 
 ### F-141, to_pdf in the browser (M)
 **Depends on**: F-139, F-001.

@@ -287,8 +287,8 @@ numbering, then checks the complete part, relationship, and content-type graph
 through `fromBytes` and `toDocxBytes`. The same contract is an inline
 `wasm-bindgen-test` for Node. The Node test reflectively calls those generated
 JavaScript members and crosses the `Uint8Array` boundary in both directions.
-CI currently target-checks the wrapper, while the Node test remains locally
-executable.
+Pull-request CI target-checks the wrapper with the locked workspace graph and
+runs the inline test in Node.
 
 `rpptx-wasm` owns one `rpptx::Presentation`, never a mini-model. Its default
 profile exposes the constructor, `fromBytes`, `toBytes`, `slideCount`, and
@@ -296,6 +296,8 @@ profile exposes the constructor, `fromBytes`, `toBytes`, `slideCount`, and
 backend, rasteriser, or host font discovery. The `render` feature adds only
 `toPdf` and selects the facade's deterministic renderer. The optimized default
 artifact must remain below 1,000,000 bytes after deterministic gzip.
+Pull-request CI target-checks the default wrapper with the locked workspace
+graph and runs its package-preserving inline test in Node.
 
 ## CLIs
 

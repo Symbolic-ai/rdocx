@@ -203,9 +203,11 @@ that inherit `[workspace.package].version`, including the unpublished
 cargo-release's effective `workspace` shared-version group and the
 `v{{version}}` tag template.
 The exact published stable family remains the seven packages listed above.
-The 12 implemented `oxml-*` and `rpptx*` packages are prepared at explicit
-version 0.1.2, use the named `incubating` group, and carry the
-`rpptx-v{{version}}` template.
+The 13 implemented `oxml-*` and `rpptx*` package manifests are prepared at
+explicit version 0.1.2, use the named `incubating` group, and carry the
+`rpptx-v{{version}}` template. That preparation group is the exact 12-package
+published family listed above plus unpublished `rpptx-wasm`. The crates.io
+allowlist remains exactly 12 packages.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.
@@ -256,11 +258,12 @@ unresolved-symbol link failure that is easy to misdiagnose as something else.
 **A dedicated no-default-features job.** It runs `cargo test -p oxml-layout
 --no-default-features`, which exercises the font-isolation path used by WASM.
 
-**A `wasm32-unknown-unknown` check job.** It installs the target and checks the
-facade-backed `rdocx-wasm` crate. Both WASM crates carry inline Node
-package-preservation regressions, and the presentation wrapper has default and
-render profiles. The presentation Node, target, and optimized-size gates remain
-local until their CI workflow lands.
+**A WASM target and Node job.** It installs the `wasm32-unknown-unknown` target,
+uses exact Node 24.11.1 and wasm-pack 0.15.0, and checks both facade-backed WASM
+crates with the locked workspace graph. It then runs both packages' inline Node
+package-preservation regressions. Checkout, setup-node, the Rust toolchain, and
+the Rust cache use reviewed full commit SHAs. The presentation render-profile
+and optimized-size gates remain local.
 
 **A dedicated Python artifact workflow.** Its product matrix is the Cartesian
 product of `rdocx` and `rpptx` with manylinux_2_28 x86_64 and aarch64,

@@ -404,7 +404,7 @@ fail.
 |---|---|
 | test | `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` |
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
-| wasm | `cargo check --target wasm32-unknown-unknown -p rdocx-wasm` |
+| wasm | Locked `wasm32-unknown-unknown` checks and `wasm-pack test --node` for `rdocx-wasm` and `rpptx-wasm` |
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |
 | hash-harness | `python3 scripts/hash_harness.py --check` |
 | presentation-fidelity | Fetch the pinned corpus, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
@@ -448,14 +448,17 @@ setup-python v6.2.0, rust-cache v2.9.1, and the selected stable rust-toolchain
 revision are bound to full reviewed commit SHAs. Their operative input maps are
 exact and cannot be satisfied by comments.
 
+The pull-request WASM job uses exact Node 24.11.1 and wasm-pack 0.15.0. It
+target-checks both WASM packages with `--locked`, then runs both inline suites
+through `wasm-pack test --node`. The steps are unconditional and propagate an
+ordinary non-zero command status. Checkout v6.0.2, setup-node v6.5.0,
+rust-cache v2.9.1, and the selected stable rust-toolchain revision are bound to
+full reviewed commit SHAs.
+
 ## Gaps being closed
 
 Stated plainly, because they are why two shipped defects went unnoticed:
 
 - **`rdocx-cli` has zero tests** despite being a published binary.
-- **The `rdocx-wasm` Node test is not yet run by CI.** Native and inline Node
-  regressions prove package-preserving round trips, and the target check catches
-  compile drift. The Node test remains a local gate until the workflow invokes
-  it.
 - **PDF and PNG output is only checked for non-emptiness**, so layout
   regressions are invisible. The hash harness closes this.
