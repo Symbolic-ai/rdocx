@@ -1244,5 +1244,6 @@ labelled honestly and gain no publication authority. The README runner checks
 the exact workspace package set, required sections, manifest wiring, examples,
 and archive inventory.
 **Test gate**: `python3 scripts/readme_doctests.py` verifies exact README
-coverage for all 26 workspace packages and compiles every Rust example that is
-intended to compile.
+coverage for all 26 workspace packages, compiles 26 Rust examples, validates
+the CLI, Python, and JavaScript snippets, and proves all 21
+publishable archives contain the byte-identical declared README.

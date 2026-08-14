@@ -1,6 +1,7 @@
 [package]
 name = "oxml-core"
 description = "Format-neutral OOXML units, XML helpers, and document properties"
+readme = "README.md"
 version = "0.1.3"
 publish = true
 edition.workspace = true

@@ -1,6 +1,7 @@
 [package]
 name = "oxml-opc"
 description = "Open Packaging Conventions primitives for OOXML documents"
+readme = "README.md"
 version = "0.1.3"
 edition.workspace = true
 license.workspace = true

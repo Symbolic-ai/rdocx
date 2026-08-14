@@ -1,13 +1,14 @@
 # F-X009, README coverage for every workspace crate
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S39
 **Size**: L
 **Depends on**: none
 
 ## Problem
 
-Only eight of the 26 Cargo workspace packages currently declare a README.
+Cargo metadata resolved a README for only eight of the 26 workspace packages,
+and only seven manifests declared the path explicitly.
 Crates.io renders the seven stable package READMEs correctly at 0.5.0, but the
 remaining internal, incubating, binding, and WASM package boundaries lack the
 same explanation and examples.
@@ -25,7 +26,9 @@ same explanation and examples.
 Add one crate-local README for each of the 18 workspace members that currently
 has no README metadata. Retain the root README as the `rdocx` package README,
 retain and audit the seven existing crate-local documents, and improve the
-minimal `oxml-sml` document. Every README must state purpose, direct-use
+minimal `oxml-sml` document. Add explicit `package.readme` metadata to all 19
+manifests that lacked it, including the automatically discovered `oxml-sml`
+file. Every README must state purpose, direct-use
 guidance, neighbouring package relationships, publication status, and one
 concrete example suited to its Rust, CLI, Python, or JavaScript surface.
 
@@ -79,14 +82,14 @@ change generated outputs.
 
 ## Implementation checklist
 
-- [ ] Record the exact 26-package baseline and real missing-README red gate.
-- [ ] Add the 18 authorized README files and manifest declarations.
-- [ ] Audit and strengthen all eight existing README sources.
-- [ ] Extend the existing runner to enforce exact inventory and example quality.
-- [ ] Compile applicable Rust examples and validate CLI, Python, and JavaScript examples.
-- [ ] Verify every publishable archive contains exactly one README.
-- [ ] Run full verification, package riders, and the unchanged hash harness.
-- [ ] Obtain a clean independent microscope review.
+- [x] Record the exact 26-package baseline and real missing-README red gate.
+- [x] Add the 18 authorized README files and 19 manifest declarations.
+- [x] Audit and strengthen all eight existing README sources.
+- [x] Extend the existing runner to enforce exact inventory and example quality.
+- [x] Compile applicable Rust examples and validate CLI, Python, and JavaScript examples.
+- [x] Verify every publishable archive contains exactly one README.
+- [x] Run full verification, package riders, and the unchanged hash harness.
+- [x] Obtain a clean independent microscope review.
 
 ## Open questions
 

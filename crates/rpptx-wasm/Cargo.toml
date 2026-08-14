@@ -1,6 +1,7 @@
 [package]
 name = "rpptx-wasm"
 description = "WebAssembly bindings for rpptx"
+readme = "README.md"
 version = "0.1.3"
 edition.workspace = true
 license.workspace = true

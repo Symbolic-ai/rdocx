@@ -5608,3 +5608,48 @@ intact.
 **Notes for future sessions.** Preserve the immutable 0.4.1 and 0.5.0 tags.
 Future stable publication must use a fresh version and a separately approved
 `/release` invocation. PyPI and npm publication remain unauthorized.
+
+### F-X009, README coverage for every workspace crate
+
+**Sprint.** S39
+**Completed.** 2026-08-14
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Every one of the 26 Cargo workspace packages now explicitly
+declares a distinct README. Eighteen focused crate-local documents were added,
+and the existing package guides were audited and strengthened. Every README
+states package purpose, direct-use guidance, neighbouring package relationships,
+publication status, and a concrete example for its Rust, CLI, Python, or
+JavaScript surface.
+
+**Non-obvious choices.** The root README remains the high-level `rdocx` package
+guide. The runner derives package and publication inventories from Cargo
+metadata, then obtains primary and companion libraries from one Cargo build
+graph. This keeps the `oxml-pdf` example bound to the exact `oxml-layout`
+instance used by the renderer. Existing crates.io releases are immutable, so
+new README pages appear there only when the affected crate receives a new
+published version.
+
+**Deviations from the design plan.** None. Microscope pass 1 found that eleven
+initial examples showed dependency installation without demonstrating use.
+The final implementation replaced them with real public API examples and
+strengthened the exact gate before clean pass 2.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`, README example
+correctness. `docs/hld/14-development-backlog.md`, F-X009. `docs/hld/15-build-and-toolchain.md`,
+workspace package READMEs in the docs job.
+
+**Tests.** `python3 scripts/readme_doctests.py` validates 26 distinct declared
+README sources, compiles 26 Rust examples across 20 library READMEs, validates
+six CLI, Python, and JavaScript examples, and byte-compares the README in all
+21 publishable archives with its declared source. A package-specific API
+mutation failed the exact gate before byte-identical restoration. Canonical
+non-fast verification passed, including changed-package tests, workspace tests,
+WASM checks, warnings-denied rustdoc, and the README archive gate.
+
+**Hash harness.** Unchanged. All 28 entries match.
+
+**Notes for future sessions.** A dependency declaration is installation, not a
+usage example. The README gate deliberately requires package-specific surface
+text and compiles every applicable Rust block. Unpublished packages have
+documentation but gain no publication authority.

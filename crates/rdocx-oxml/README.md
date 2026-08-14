@@ -2,8 +2,19 @@
 
 `rdocx-oxml` provides typed WordprocessingML elements with prefix-tolerant
 parsing, schema-ordered serialization, and verbatim preservation of unmodelled
-XML. Use it when a tool already owns the XML model. Most applications should
+XML.
+
+## Use it when
+
+Use this crate when a tool already owns the XML model. Most applications should
 use the package-preserving [`rdocx`](https://docs.rs/rdocx) facade instead.
+
+## Relationship
+
+`rdocx` owns complete DOCX packages and uses these types for WordprocessingML
+parts. The shared `oxml-*` crates remain format-neutral.
+
+## Example
 
 ```rust,no_run
 use rdocx_oxml::{BodyContent, CT_Document, CT_P};

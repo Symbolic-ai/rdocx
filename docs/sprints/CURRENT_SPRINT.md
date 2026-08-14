@@ -18,7 +18,7 @@ concrete example, and is checked against the exact 26-package workspace.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X009 | README coverage for every workspace crate | L | pending | - |
+| F-X009 | README coverage for every workspace crate | L | done | |
 
 ## Sequencing note
 

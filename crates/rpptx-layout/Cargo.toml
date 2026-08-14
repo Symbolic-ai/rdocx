@@ -1,6 +1,7 @@
 [package]
 name = "rpptx-layout"
 description = "Presentation layout resolution for PowerPoint-compatible slides"
+readme = "README.md"
 version = "0.1.3"
 edition.workspace = true
 license.workspace = true

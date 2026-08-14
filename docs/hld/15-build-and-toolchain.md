@@ -277,19 +277,23 @@ unresolved-symbol link failure that is easy to misdiagnose as something else.
 **A dedicated no-default-features job.** It runs `cargo test -p oxml-layout
 --no-default-features`, which exercises the font-isolation path used by WASM.
 
-**Stable package READMEs in the docs job.** Every package in the seven-crate
-stable family declares and packages exactly one README. The root file is the
-high-level `rdocx` guide. `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`,
-`rdocx-html`, `rdocx-pdf`, and `rdocx-cli` use focused crate-local files. The
+**Workspace package READMEs in the docs job.** Every one of the 26 workspace
+packages explicitly declares one distinct README. The root file is the
+high-level `rdocx` guide. The other 25 packages use focused crate-local files.
+The documents describe purpose, direct use, neighbouring package boundaries,
+publication status, and an example suited to the actual consumer surface. The
 two deprecated shims direct new consumers to `oxml-opc` and `oxml-pdf`.
 
 After the workspace documentation build, `scripts/readme_doctests.py` checks
-that inventory, validates the shell and dependency snippets, and compiles all
-twelve Rust examples across the six stable libraries. It discovers each rlib
-from Cargo JSON messages and passes it to rustdoc with the repository edition,
-dependency search path, matching external crate binding, and warnings denied.
-The same runner is part of canonical non-fast verification. Archive checks
-assert that every stable package carries its intended README.
+the exact 26-package inventory, validates Rust, shell, Python, and JavaScript
+snippets, and compiles 26 Rust examples across the 20 Rust-library READMEs. It
+discovers each primary and companion rlib from one Cargo build graph and passes
+them to rustdoc with the repository edition, dependency search path, matching
+external crate bindings, and warnings denied.
+The same runner is part of canonical non-fast verification. It creates each of
+the 21 publishable archives, requires exactly one packaged README, and
+byte-compares it with the declared source. Version, tag, publication, and
+release-family metadata remain unchanged.
 
 **A WASM target and Node job.** It installs the `wasm32-unknown-unknown` target,
 uses exact Node 24.11.1 and wasm-pack 0.15.0, and checks both facade-backed WASM
