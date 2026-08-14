@@ -1268,21 +1268,21 @@ train. The exact 21-package dry run, README compilation and archive inventory,
 annotated `v0.6.0` tag targets the reviewed sprint SHA.
 
 ### F-X011, Tag rpptx-v0.2.0 (S)
-The complete incubating train is prepared at the next minor version, 0.2.0. The
+The complete incubating train is published at the next minor version, 0.2.0. The
 fourteen publishable `oxml-*` and `rpptx-*` packages move together with
 unpublished `rpptx-wasm`, their root dependency pins, lock entries, README
 dependency examples, source assertions, workflow regressions, and local WASM
 package version. The completed stable train remains at 0.6.0. Incubating 0.2.0
-publication is pending full verification, a clean sprint review, and separate
-immediate approval. `/release rpptx-v0.2.0` then publishes only the exact
-fourteen incubating crates. No npm, PyPI, Python, WASM, or stable publication
-is authorized.
+was published only after full verification, a clean sprint review, and
+separate immediate approval. `/release rpptx-v0.2.0` published only the exact
+fourteen incubating crates. No npm, PyPI, Python, WASM, or stable package was
+published.
 **Depends on**: F-X010.
 **Test gate**: the incubating release regression proves the fifteen-package
 preparation group, fourteen internal pins, exact fourteen-package publication
 set, README requirements, lock entries, source and workflow assertions, and
 unchanged stable train. The exact 21-package dry run, README compilation and
 archive inventory, 28-entry hash harness, WASM package gate, and supply-chain
-gate pass. The external gate remains pending until all fourteen crates resolve
-at 0.2.0 under owner `mantissaman`, each crates.io README is present, and the
-GitHub release targets the reviewed sprint SHA.
+gate pass. All fourteen crates resolve at 0.2.0 under owner `mantissaman`, each
+crates.io README is present, and the annotated tag targets the reviewed sprint
+SHA used by the successful GitHub release workflow.

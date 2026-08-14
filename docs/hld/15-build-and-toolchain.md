@@ -139,16 +139,15 @@ oxml-core -> oxml-opc -> oxml-media -> oxml-drawing -> oxml-layout -> oxml-pdf
   -> rpptx-oxml -> rpptx-layout -> rpptx-render -> rpptx-chart -> rpptx -> rpptx-cli
 ```
 
-The fourteen crates.io names in this graph are reserved under the owner
+The fourteen crates.io names in this graph are published at 0.2.0 under the owner
 `mantissaman`: `oxml-core`, `oxml-opc`, `oxml-media`,
 `oxml-drawing`, `oxml-layout`, `oxml-pdf`, `oxml-sml`, `oxml-cli-support`,
 `rpptx-oxml`, `rpptx-layout`, `rpptx-render`, `rpptx-chart`, `rpptx`, and
 `rpptx-cli`. All 14 implemented packages use the reviewed release path
 described below. The earlier 12-package family is published at 0.1.2.
 `oxml-cli-support` and `rpptx-cli` are publishable but remain unpublished at
-that version. The complete 14-package family is published at the common
-version 0.1.3 and prepared together at 0.2.0 for the next separately approved
-release.
+that version. The complete 14-package family is published at the immutable
+0.1.3 and 0.2.0 boundaries.
 
 `oxml-py-support`, `rpptx-py`, and `rpptx-wasm` are not reserved on crates.io.
 The binding crates are not published there. `rpptx-wasm` is an implemented
@@ -157,7 +156,7 @@ the local `@tensorbee/rpptx-wasm` bundler tarball. Registry publication remains
 unconfigured and unauthorized.
 
 The exact incubating crates.io allowlist contains 14 implemented shared and
-PowerPoint packages published at 0.1.3 and prepared at 0.2.0. They are
+PowerPoint packages published at 0.2.0. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `rpptx-oxml`, `rpptx-chart`,
 `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. Manifest eligibility
@@ -228,8 +227,9 @@ explicit version 0.2.0, use the named `incubating` group, and carry the
 `rpptx-v{{version}}` template. That preparation group is the exact 14-package
 crates.io family listed above plus unpublished `rpptx-wasm`. The crates.io
 allowlist remains exactly 14 packages. All 14 are published at 0.1.3, while
-their prepared 0.2.0 versions remain unpublished until the separately approved
-`/release rpptx-v0.2.0` boundary.
+all 14 are also published at 0.2.0 from the annotated `rpptx-v0.2.0` tag at
+reviewed SHA `1b13dbe4a5454f1d1629ff8915287b26daa10ed0`. The immutable 0.1.3
+release remains available, and `rpptx-wasm` remains unpublished.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.

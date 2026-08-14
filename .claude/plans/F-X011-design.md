@@ -1,6 +1,6 @@
 # F-X011, Tag rpptx-v0.2.0
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S39
 **Size**: S
 **Depends on**: F-X010
@@ -104,13 +104,13 @@ must not change document or render output.
   fail their exact gates and restore every mutation byte-identically.
 - [x] Run the full metadata, dependency, README, WASM, archive, asset,
   supply-chain, prose, generated-skill, and hash gates.
-- [ ] Obtain a clean microscope and clean sprint review at the exact release
+- [x] Obtain a clean microscope and clean sprint review at the exact release
   SHA.
-- [ ] Invoke `/release rpptx-v0.2.0` and receive its separate immediate
+- [x] Invoke `/release rpptx-v0.2.0` and receive its separate immediate
   approval.
-- [ ] Watch publication and verify all fourteen versions, owners, READMEs,
+- [x] Watch publication and verify all fourteen versions, owners, READMEs,
   tag, and GitHub release target.
-- [ ] Complete the exact HLD and delivery records only after external
+- [x] Complete the exact HLD and delivery records only after external
   verification succeeds.
 
 ## Open questions

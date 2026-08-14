@@ -5697,3 +5697,45 @@ targets the annotated tag at the reviewed SHA.
 owns the separate incubating 0.2.0 preparation and must obtain its own clean
 review and immediate `/release rpptx-v0.2.0` approval. PyPI and npm publication
 remain unauthorized.
+
+### F-X011, Tag rpptx-v0.2.0
+
+**Sprint.** S39
+**Completed.** 2026-08-14
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The fifteen-package incubating preparation train moved
+coherently to 0.2.0. The exact fourteen-package crates.io family is published
+at 0.2.0. `rpptx-wasm` moved with the local train and remains unpublished. The
+stable family remains at 0.6.0.
+
+**Non-obvious choices.** The user gave separate immediate approval at reviewed
+SHA `1b13dbe4a5454f1d1629ff8915287b26daa10ed0`. Annotated tag object
+`0d9ce33258988377751d7f10fec43e0096f014d0` peels to that exact SHA. Workflow
+run `31836554504` published only the incubating allowlist. Publication job
+`94884015713` and GitHub Release job `94887859113` succeeded. No stable, WASM,
+Python, npm, or PyPI package was published.
+
+**Deviations from the design plan.** None. Microscope pass 1 and all three
+sprint-review passes were clean.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, versioning.
+`docs/hld/14-development-backlog.md`, F-X011.
+`docs/hld/15-build-and-toolchain.md`, the incubating release family and release
+process.
+
+**Tests.** Full verification passed at the reviewed SHA, including all 38
+workflow tests, 26 README sources, 26 Rust examples, 21 archive README checks,
+the exact 21-package dry run, WASM checks, archive assets, and `cargo deny`.
+All fourteen 0.2.0 packages download independently from crates.io under sole
+owner `mantissaman`. Every crates.io README endpoint returns non-empty rendered
+HTML, and the matching
+[GitHub release](https://github.com/tensorbee/rdocx/releases/tag/rpptx-v0.2.0)
+uses the annotated tag that targets the reviewed SHA.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Preserve the immutable `rpptx-v0.1.3` and
+`rpptx-v0.2.0` tags. Future incubating publication requires a fresh version and
+a separately approved `/release` invocation. PyPI and npm publication remain
+unauthorized.
