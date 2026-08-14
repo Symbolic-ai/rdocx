@@ -29,8 +29,8 @@ regenerated, never hand-edited.
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
-| X, Cross-cutting (opportunistic)            | 12 | 11 | 0 | 1  |
-| **Total** | **166** | **165** | **0** | **1** |
+| X, Cross-cutting (opportunistic)            | 12 | 11 | 1 | 0  |
+| **Total** | **166** | **165** | **1** | **0** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -296,5 +296,5 @@ regenerated, never hand-edited.
 | F-X009 | README coverage for every workspace crate   | S39 | L | done |
 | F-X010 | Tag v0.6.0                                  | S39 | S | done |
 | F-X011 | Tag rpptx-v0.2.0                            | S39 | S | done |
-| F-X012 | Restore pinned CI toolchains                | S40 | M | pending |
+| F-X012 | Restore pinned CI toolchains                | S40 | M | in-progress |
 <!-- AUTOGEN:backlog-MX END -->

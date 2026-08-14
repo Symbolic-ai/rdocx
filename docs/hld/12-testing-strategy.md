@@ -472,6 +472,17 @@ The `--exclude` pair on every all-feature command is required, not cosmetic:
 interpreter, which is false for a test binary, and on Linux this is an
 unresolved-symbol link failure that is easy to misdiagnose.
 
+Every Poppler-dependent CI job builds the reviewed 26.01.0 command-line oracle
+from the official source archive. `scripts/install_pinned_poppler.py` enforces
+the exact source SHA-256, an 8 MiB download ceiling, streaming extraction with
+2,048-member and 64 MiB expanded-size ceilings, safe member paths and types,
+and exact runtime identities for `pdftoppm`, `pdfinfo`, and `pdftotext`. A
+successful run always starts with an empty prefix and rebuilds the reviewed
+source. Test, MSRV, both Python binding rows, and Presentation fidelity invoke
+the same unconditional failure-propagating installer before use. Platform
+package managers provide build dependencies only, never a moving Poppler
+binary package.
+
 The wheel workflow runs the installed `rdocx` suites except the
 Poppler-versioned rendering gate, which belongs to its pinned render job. It
 runs the installed `rpptx` documented-example and differential suite. Native
@@ -502,8 +513,9 @@ exact and cannot be satisfied by comments.
 The pull-request WASM job uses exact Node 24.11.1 and wasm-pack 0.15.0. It
 installs the official Binaryen version 125 Linux archive only after verifying
 its pinned SHA-256, places that optimizer on `PATH`, and requires the exact
-version string. It target-checks both WASM packages with `--locked`, then runs
-both inline suites through `wasm-pack test --node`.
+official identity `wasm-opt version 125 (version_125)`. It target-checks both
+WASM packages with `--locked`, then runs both inline suites through
+`wasm-pack test --node`.
 
 Both manifests bind release optimization to `-Oz`,
 `--enable-bulk-memory`, and `--enable-nontrapping-float-to-int`. The last flag

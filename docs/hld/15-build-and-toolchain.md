@@ -304,7 +304,8 @@ crates with the locked workspace graph. It then runs both packages' inline Node
 regressions. It installs the official Binaryen version 125 Linux archive after
 checking exact SHA-256
 `7c3bc16599c8274a04d34a504fe4be2047884f900e0e2da2f6fb9cd667183be4`,
-places its `wasm-opt` on `PATH`, and verifies the exact version.
+places its `wasm-opt` on `PATH`, and verifies the exact official identity
+`wasm-opt version 125 (version_125)`.
 
 Both WASM manifests use release optimization arguments `-Oz`,
 `--enable-bulk-memory`, and `--enable-nontrapping-float-to-int`. The job builds
@@ -340,6 +341,19 @@ condition. Workflow permissions are exactly repository content read, with no
 OIDC token grant. Checkout v6.0.2, setup-python v6.2.0, rust-cache v2.9.1, and
 the selected stable rust-toolchain revision use reviewed full commit SHAs and
 exact input maps.
+
+**One checksum-pinned Poppler installer.**
+`scripts/install_pinned_poppler.py` downloads the official 26.01.0 source
+archive, verifies SHA-256
+`1cb944a4b88847f5fb6551683bc799db59f04990f5d8be07aba2acbf38601089`,
+and builds only `pdftoppm`, `pdfinfo`, and `pdftotext` in an isolated directory.
+It caps the download at 8 MiB and streams at most 2,048 safe archive members
+with at most 64 MiB of expanded content. A populated prefix fails closed, so a
+successful invocation cannot substitute unrelated binaries that print the
+right version. All three finished tools must report exact 26.01.0 identities.
+Test, MSRV, both Python binding rows, and Presentation fidelity use this single
+unconditional step before any oracle-dependent command. Package managers may
+install build prerequisites but do not install Poppler itself.
 
 **A prose and generated-skill job.** It runs `scripts/prose_check.py` and
 `scripts/sync_agent_skills.py --check` as separate steps, so voice-rule or

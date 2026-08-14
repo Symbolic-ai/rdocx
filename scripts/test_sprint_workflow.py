@@ -7,6 +7,7 @@ import io
 import json
 import os
 import subprocess
+import tarfile
 import tempfile
 import tomllib
 import unittest
@@ -14,6 +15,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts import readme_doctests
+from scripts import install_pinned_poppler
 from scripts import sprint_workflow as workflow
 
 
@@ -109,6 +111,49 @@ class SprintWorkflowTests(unittest.TestCase):
                     line,
                 )
 
+    def assert_pinned_poppler_installer_contract(self, installer: str) -> None:
+        self.assertIn('POPLER_VERSION = "26.01.0"', installer)
+        self.assertIn(
+            'POPLER_SHA256 = "1cb944a4b88847f5fb6551683bc799db59f04990f5d8be07aba2acbf38601089"',
+            installer,
+        )
+        self.assertIn("MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024", installer)
+        self.assertIn("MAX_ARCHIVE_MEMBERS = 2_048", installer)
+        self.assertIn("MAX_EXTRACTED_BYTES = 64 * 1024 * 1024", installer)
+        for tool in ("pdftoppm", "pdfinfo", "pdftotext"):
+            self.assertIn(tool, installer)
+        self.assertIn("safe_extract", installer)
+        self.assertIn("-DENABLE_UTILS=ON", installer)
+        self.assertIn('expected = f"{tool} version {POPLER_VERSION}"', installer)
+
+    def assert_poppler_consumers_contract(self, ci: str) -> None:
+        consumers = {
+            "test": "cargo test --workspace",
+            "python-bindings": "Run full Python binding suite",
+            "presentation-fidelity": "Run all-slide SSIM trend and completeness gate",
+            "msrv": "cargo test --workspace",
+        }
+        for job_name, use_marker in consumers.items():
+            job = self.yaml_block(ci, f"  {job_name}:")
+            step = self.yaml_step(job, "Install pinned Poppler 26.01.0")
+            self.assertEqual(
+                self.yaml_direct_lines(step, 8),
+                ("shell: bash", "run: |"),
+            )
+            lines = self.yaml_run_lines(step)
+            self.assertIn("python3 scripts/install_pinned_poppler.py", lines)
+            self.assert_no_success_short_circuit(lines)
+            self.assertLess(job.index(step), job.index(use_marker))
+            self.assertFalse(
+                any(
+                    "continue-on-error:" in line
+                    for line in self.operative_lines(job)
+                )
+            )
+        self.assertEqual(ci.count("python3 scripts/install_pinned_poppler.py"), 4)
+        self.assertNotIn("brew install poppler", ci)
+        self.assertNotIn("apt-get install poppler-utils", ci)
+
     def assert_python_pr_job_contract(self, ci: str) -> None:
         triggers = self.yaml_block(ci, "on:")
         trigger_keys = tuple(
@@ -172,7 +217,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "step:1",
             "step:2",
             "Set up Python 3.12",
-            "Install pinned Poppler",
+            "Install pinned Poppler 26.01.0",
             "Create isolated binding environment",
             "Build Python extension",
             "Run full Python binding suite",
@@ -216,8 +261,16 @@ class SprintWorkflowTests(unittest.TestCase):
             ('python-version: "3.12.9"',),
         )
 
-        poppler = self.yaml_step(job, "Install pinned Poppler")
-        self.assertEqual(self.yaml_run_lines(poppler), ("brew install poppler",))
+        poppler = self.yaml_step(job, "Install pinned Poppler 26.01.0")
+        self.assertEqual(
+            self.yaml_run_lines(poppler),
+            (
+                "brew install \\",
+                "cmake ninja pkg-config fontconfig freetype jpeg-turbo \\",
+                "libpng libtiff little-cms2 openjpeg",
+                "python3 scripts/install_pinned_poppler.py",
+            ),
+        )
 
         environment = self.yaml_step(job, "Create isolated binding environment")
         self.assertEqual(
@@ -275,6 +328,174 @@ class SprintWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assert_python_pr_job_contract(ci)
+
+    def test_pinned_poppler_installer_contract(self) -> None:
+        installer_path = workflow.REPO / "scripts/install_pinned_poppler.py"
+        self.assertTrue(
+            installer_path.is_file(),
+            "F-X012 requires one shared pinned Poppler installer",
+        )
+        installer = installer_path.read_text(encoding="utf-8")
+        self.assert_pinned_poppler_installer_contract(installer)
+
+        mutations = {
+            "wrong-version": installer.replace("26.01.0", "26.02.0"),
+            "wrong-checksum": installer.replace(
+                "1cb944a4b88847f5fb6551683bc799db59f04990f5d8be07aba2acbf38601089",
+                "0" * 64,
+            ),
+            "missing-member-bound": installer.replace(
+                "MAX_ARCHIVE_MEMBERS = 2_048",
+                "MAX_ARCHIVE_MEMBERS = len(members)",
+            ),
+            "missing-runtime-identity": installer.replace(
+                'expected = f"{tool} version {POPLER_VERSION}"',
+                'expected = tool',
+            ),
+        }
+        for label, mutated in mutations.items():
+            with self.subTest(mutation=label), self.assertRaises(AssertionError):
+                self.assert_pinned_poppler_installer_contract(mutated)
+
+    def test_pinned_poppler_installer_enforces_its_runtime_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            with patch.object(
+                install_pinned_poppler.urllib.request,
+                "urlopen",
+                return_value=io.BytesIO(b"not the reviewed Poppler source"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "SHA-256"):
+                    install_pinned_poppler.download_archive(root / "poppler.tar.xz")
+
+            with patch.object(
+                install_pinned_poppler.urllib.request,
+                "urlopen",
+                return_value=io.BytesIO(
+                    b"x" * (install_pinned_poppler.MAX_DOWNLOAD_BYTES + 1)
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "download bound"):
+                    install_pinned_poppler.download_archive(root / "too-large.tar.xz")
+
+            archive_path = root / "too-many-members.tar.xz"
+            with tarfile.open(archive_path, mode="w:xz") as archive:
+                for index in range(install_pinned_poppler.MAX_ARCHIVE_MEMBERS + 1):
+                    member = tarfile.TarInfo(f"poppler-26.01.0/member-{index}")
+                    member.size = 0
+                    archive.addfile(member, io.BytesIO())
+            with patch.object(
+                tarfile.TarFile,
+                "getmembers",
+                side_effect=AssertionError("unbounded member-table allocation"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "member-count"):
+                    install_pinned_poppler.safe_extract(
+                        archive_path,
+                        root / "extract",
+                    )
+
+            oversized_member = tarfile.TarInfo("poppler-26.01.0/oversized")
+            oversized_member.size = install_pinned_poppler.MAX_EXTRACTED_BYTES + 1
+            with patch.object(
+                install_pinned_poppler.tarfile,
+                "open",
+                return_value=contextlib.nullcontext((oversized_member,)),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "extracted-size"):
+                    install_pinned_poppler.safe_extract(
+                        root / "unused.tar.xz",
+                        root / "oversized-extract",
+                    )
+
+            for wrong_tool in install_pinned_poppler.TOOLS:
+                prefix = root / f"wrong-{wrong_tool}"
+                binary_root = prefix / "bin"
+                binary_root.mkdir(parents=True)
+                for tool in install_pinned_poppler.TOOLS:
+                    version = "99.0.0" if tool == wrong_tool else "26.01.0"
+                    executable = binary_root / tool
+                    executable.write_text(
+                        f"#!/bin/sh\necho '{tool} version {version}' >&2\n",
+                        encoding="utf-8",
+                    )
+                    executable.chmod(0o755)
+                with self.subTest(wrong_tool=wrong_tool), self.assertRaisesRegex(
+                    RuntimeError,
+                    f"unexpected {wrong_tool} identity",
+                ):
+                    install_pinned_poppler.verify_tools(prefix)
+
+    def test_pinned_poppler_installer_rejects_a_populated_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            prefix = Path(temp) / "populated"
+            binary_root = prefix / "bin"
+            binary_root.mkdir(parents=True)
+            for tool in install_pinned_poppler.TOOLS:
+                executable = binary_root / tool
+                executable.write_text(
+                    f"#!/bin/sh\necho '{tool} version 26.01.0' >&2\n",
+                    encoding="utf-8",
+                )
+                executable.chmod(0o755)
+            with patch.object(
+                install_pinned_poppler,
+                "download_archive",
+                side_effect=AssertionError("download must not be bypassed"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "prefix must be empty"):
+                    install_pinned_poppler.build(prefix)
+
+    def test_every_poppler_consumer_uses_the_pinned_installer(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_poppler_consumers_contract(ci)
+        for job_name in ("test", "python-bindings", "presentation-fidelity", "msrv"):
+            marker = f"  {job_name}:"
+            job = self.yaml_block(ci, marker)
+            step = self.yaml_step(job, "Install pinned Poppler 26.01.0")
+            mutated_job = job.replace(
+                "          python3 scripts/install_pinned_poppler.py\n", "", 1
+            )
+            mutated = ci.replace(job, mutated_job, 1)
+            with self.subTest(missing_consumer=job_name), self.assertRaises(
+                AssertionError
+            ):
+                self.assert_poppler_consumers_contract(mutated)
+            for policy in ("if: false", "continue-on-error: true"):
+                weakened_step = step.replace(
+                    "        shell: bash\n",
+                    f"        {policy}\n        shell: bash\n",
+                    1,
+                )
+                weakened = ci.replace(step, weakened_step, 1)
+                with self.subTest(job=job_name, policy=policy), self.assertRaises(
+                    AssertionError
+                ):
+                    self.assert_poppler_consumers_contract(weakened)
+            short_circuited_step = step.replace(
+                "        run: |\n",
+                "        run: |\n          exit 0\n",
+                1,
+            )
+            short_circuited = ci.replace(step, short_circuited_step, 1)
+            with self.subTest(job=job_name, policy="exit 0"), self.assertRaises(
+                AssertionError
+            ):
+                self.assert_poppler_consumers_contract(short_circuited)
+
+    def test_wasm_job_accepts_the_official_binaryen_125_identity(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        job = self.yaml_block(ci, "  wasm:")
+        install = self.yaml_step(job, "Install wasm-opt 125")
+        self.assertIn(
+            'wasm-opt version 125 (version_125)',
+            "\n".join(self.yaml_run_lines(install)),
+        )
 
     def test_workspace_test_jobs_fetch_the_pinned_presentation_corpus(self) -> None:
         ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
@@ -619,8 +840,8 @@ class SprintWorkflowTests(unittest.TestCase):
                 'tar --extract --gzip --file "$binaryen_archive" --directory '
                 '"$binaryen_root" --strip-components=1',
                 'echo "$binaryen_root/bin" >> "$GITHUB_PATH"',
-                '"$binaryen_root/bin/wasm-opt" --version | grep --fixed-strings '
-                '--line-regexp "wasm-opt version 125"',
+                'test "$("$binaryen_root/bin/wasm-opt" --version)" = '
+                '"wasm-opt version 125 (version_125)"',
             ),
         )
         self.assertEqual(
@@ -869,8 +1090,8 @@ class SprintWorkflowTests(unittest.TestCase):
                 "0000000000000000000000000000000000000000000000000000000000000000",
             ),
             "missing-wasm-opt-version-check": mutate_job(
-                "          \"$binaryen_root/bin/wasm-opt\" --version | grep "
-                "--fixed-strings --line-regexp \"wasm-opt version 125\"\n",
+                '          test "$("$binaryen_root/bin/wasm-opt" --version)" = '
+                '"wasm-opt version 125 (version_125)"\n',
                 "",
             ),
             "unlocked-target-check": mutate_job(

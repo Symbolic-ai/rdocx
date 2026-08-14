@@ -20,7 +20,7 @@ without changing product output or recorded rendering baselines.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X012 | Restore pinned CI toolchains | M | pending | - |
+| F-X012 | Restore pinned CI toolchains | M | in-progress | codex |
 
 ## Sequencing note
 
