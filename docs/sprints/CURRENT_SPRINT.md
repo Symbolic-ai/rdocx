@@ -1,67 +1,44 @@
-# Current Sprint, S36
+# Current Sprint, S37
 
 **Milestone**: M13 Bindings and tooling.
 
-**Goal**: Complete the v1 command-line and JavaScript package surfaces, then
-close the remaining cross-cutting quality gaps. Add shared CLI plumbing, ship
-the presentation CLI including thumbnail and outline commands, establish
-installable npm packages for both WASM bindings, and finish the CLI, README,
-sample-generator, and concurrent-test hardening work.
+**Goal**: Prepare one fresh common version for the complete 14-package
+incubating Rust family, then publish it only through the reviewed release
+workflow after separate final approval. Preserve the immutable 0.1.2 release
+and keep npm publication outside this sprint.
 
 ## Spec references
 
-- `docs/hld/02-scope-and-non-goals.md`, for the v1 requirement that both
-  libraries ship supported CLI and WASM package surfaces.
-- `docs/hld/03-architecture.md`, for ownership of `oxml-cli-support` and
-  `rpptx-cli`, plus the dependency direction from format-neutral plumbing to
-  the presentation facade.
-- `docs/hld/08-rendering-spec.md`, for the shared presentation rendering path
-  used by the thumbnail command.
-- `docs/hld/10-bindings-spec.md`, for the mirrored CLI command set,
-  presentation-specific thumbnail and outline commands, shared range and JSON
-  contracts, and WASM package names.
-- `docs/hld/12-testing-strategy.md`, for CLI exit-status, rendering, package,
-  and installation gates.
-- `docs/hld/14-development-backlog.md`, for F-143 through F-146 and F-X001
-  through F-X004 dependencies and named acceptance gates.
-- `docs/hld/15-build-and-toolchain.md`, for CLI publication order and the
-  unpublished WASM package boundary that npm packaging closes.
+- `docs/hld/03-architecture.md`, for the split version trains, immutable
+  0.1.2 release, and fresh-version requirement for the expanded family.
+- `docs/hld/14-development-backlog.md`, for F-X006 dependencies and its exact
+  registry and GitHub release acceptance gate.
+- `docs/hld/15-build-and-toolchain.md`, for the 14-package allowlist,
+  dependency order, archive checks, tag namespace, and separate final approval
+  before publication.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-143 | oxml-cli-support | S | done | |
-| F-146 | npm publication | S | done | |
-| F-X001 | rdocx-cli tests | M | done | |
-| F-X002 | README example correctness | S | done | |
-| F-X003 | Deduplicate the sample generators | S | done | |
-| F-X004 | Fix the shared temp path in the test suite | S | done | |
-| F-144 | rpptx-cli | L | done | |
-| F-145 | rpptx-cli thumbnail and outline | M | done | |
+| F-X006 | Tag the expanded rpptx family | S | done | - |
 
 ## Sequencing note
 
-Rows are listed in dependency order, not by F-ID. F-143 establishes the shared
-CLI contracts required by F-144, and F-145 follows F-144 because it extends
-that executable. F-146 can start independently because its dependencies F-140
-and F-142 are complete. F-X001 through F-X004 are dependency-independent
-hardening stories and can run alongside the first CLI wave, subject to ordinary
-file-conflict checks during design.
+F-X006 is the only implementation story. Its dependencies F-143, F-144, and
+F-145 are complete. Version preparation, full verification, and a clean sprint
+review must finish before `/release rpptx-vX.Y.Z` asks for separate final
+approval at the external mutation boundary.
 
 ## Definition of done for this sprint
 
-- `2,4-6` parses to the expected range and the shared JSON envelope carries
-  `"schema": 1`.
-- `rpptx-cli validate` exits non-zero on a corrupted deck and zero across the
-  pinned corpus.
-- `rpptx-cli thumbnail` produces a PNG of slide one, and `outline` prints the
-  title and bullet tree.
-- `npm pack` produces installable `@tensorbee/rdocx-wasm` and
-  `@tensorbee/rpptx-wasm` tarballs without publishing either package.
-- Every `rdocx-cli` subcommand has an integration test.
-- README examples compile as doctests.
-- One sample generator produces every artifact required by the hash harness.
-- Two concurrent test runs pass without sharing a fixed temporary path.
-- The full verification gate, package checks, and all 28 deterministic hashes
-  pass without forbidden dependency edges.
+- One fresh common version above 0.1.2 covers exactly the 14 incubating Rust
+  packages and their workspace pins.
+- The full verification gate and exact 21-package dry-run union pass with all
+  archives below 10 MiB and all 28 deterministic hashes unchanged.
+- The release command receives separate final approval at the reviewed SHA
+  before creating or pushing the fresh `rpptx-v*` tag.
+- All 14 incubating packages resolve from crates.io at the fresh version with
+  the expected owner, and the GitHub release targets the reviewed sprint SHA.
+- The immutable `rpptx-v0.1.2` release remains unchanged, and no npm package is
+  published.

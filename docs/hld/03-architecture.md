@@ -122,21 +122,21 @@ entry points.
 
 ## Versioning
 
-The 14 implemented shared and PowerPoint publication candidates carry an
-explicit common incubating version of 0.1.2 in their manifests and workspace
-pins. The released `rdocx-*` crates continue to use the separate workspace
-version. Version preparation and manifest eligibility do not authorize
-publication. Registry publication for this family is authorized only when
-`/release rpptx-vX.Y.Z` reaches its exact reviewed SHA and receives the
-separate final approval at the external mutation boundary. `oxml-cli-support`
-is the format-neutral owner of range parsing, JSON envelope, and output-path
-contracts. It has no dependency on either document family, while CLI binaries
-depend inward on it.
+The 14 implemented shared and PowerPoint publication candidates use the
+explicit common incubating version 0.1.3 in their manifests and workspace
+pins. All 14 are published at that version through the reviewed
+`rpptx-v0.1.3` release. The released `rdocx-*` crates continue to use the
+separate workspace version. Version preparation and manifest eligibility do
+not authorize a later publication. Every release still requires `/release`
+at an exact reviewed SHA and separate final approval at the external mutation
+boundary. `oxml-cli-support` is the format-neutral owner of range parsing,
+JSON envelope, and output-path contracts. It has no dependency on either
+document family, while CLI binaries depend inward on it.
 
 The immutable `rpptx-v0.1.2` release contains the earlier 12-package family.
-`oxml-cli-support` and `rpptx-cli` remain unpublished at 0.1.2. F-X006 owns a
-future fresh-version release of the complete 14-package family. No existing
-tag or registry version is moved or overwritten.
+`oxml-cli-support` and `rpptx-cli` remain unpublished at 0.1.2. The complete
+14-package family is published at 0.1.3. No existing tag or registry version
+was moved or overwritten.
 
 The `rpptx` facade owns formatting-preserving presentation text replacement.
 `Presentation::replace_text` applies literal, non-recursive replacement across

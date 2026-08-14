@@ -3540,7 +3540,7 @@ mod tests {
         ] {
             assert!(!oxml_manifest.contains("rpptx-render"));
         }
-        assert!(manifest.contains("version = \"0.1.2\""));
+        assert!(manifest.contains("version = \"0.1.3\""));
         assert!(manifest.contains("publish = true"));
     }
 }
