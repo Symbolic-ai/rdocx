@@ -5,8 +5,11 @@ use quick_xml::{Reader, Writer};
 
 use crate::borders::{CT_PBdr, CT_Tabs};
 use crate::document::CT_SectPr;
-use crate::error::Result;
+use crate::error::{OxmlError, Result};
+#[cfg(test)]
 use crate::namespace::matches_local_name;
+use crate::namespace::{matches_word_element, matches_word_name};
+use crate::raw_xml::NamespaceContext;
 use crate::shared::{ST_HighlightColor, ST_Jc, ST_OnOff, ST_Underline};
 use crate::units::{HalfPoint, Twips};
 
@@ -23,6 +26,14 @@ pub struct CT_Shd {
 
 impl CT_Shd {
     pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
+        Self::from_xml_attrs_with_context(e, &NamespaceContext::default())
+    }
+
+    pub(crate) fn from_xml_attrs_with_context(
+        e: &BytesStart,
+        parent_context: &NamespaceContext,
+    ) -> Result<Self> {
+        let context = parent_context.with_element(e);
         let mut val = "clear".to_string();
         let mut color = None;
         let mut fill = None;
@@ -31,11 +42,11 @@ impl CT_Shd {
             let attr = attr?;
             let key = attr.key.as_ref();
             let v = std::str::from_utf8(&attr.value)?;
-            if matches_local_name(key, b"val") {
+            if matches_word_name(key, &context, b"val") {
                 val = v.to_string();
-            } else if matches_local_name(key, b"color") {
+            } else if matches_word_name(key, &context, b"color") {
                 color = Some(v.to_string());
-            } else if matches_local_name(key, b"fill") {
+            } else if matches_word_name(key, &context, b"fill") {
                 fill = Some(v.to_string());
             }
         }
@@ -115,6 +126,13 @@ pub struct CT_PPr {
 #[allow(non_snake_case)]
 impl CT_PPr {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    pub fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut ppr = CT_PPr::default();
         let mut buf = Vec::new();
 
@@ -122,26 +140,32 @@ impl CT_PPr {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"rPr") {
-                        ppr.rpr = Some(CT_RPr::from_xml(reader)?);
-                    } else if matches_local_name(name.as_ref(), b"numPr") {
-                        Self::parse_num_pr(reader, &mut ppr)?;
-                    } else if matches_local_name(name.as_ref(), b"pBdr") {
-                        ppr.borders = Some(CT_PBdr::from_xml(reader)?);
-                    } else if matches_local_name(name.as_ref(), b"tabs") {
-                        ppr.tabs = Some(CT_Tabs::from_xml(reader)?);
-                    } else if matches_local_name(name.as_ref(), b"sectPr") {
+                    if matches_word_element(e, context, b"rPr") {
+                        let child_context = context.with_element(e);
+                        ppr.rpr = Some(CT_RPr::from_xml_with_context(reader, &child_context)?);
+                    } else if matches_word_element(e, context, b"numPr") {
+                        let child_context = context.with_element(e);
+                        Self::parse_num_pr(reader, &child_context, &mut ppr)?;
+                    } else if matches_word_element(e, context, b"pBdr") {
+                        let child_context = context.with_element(e);
+                        ppr.borders = Some(CT_PBdr::from_xml_with_context(reader, &child_context)?);
+                    } else if matches_word_element(e, context, b"tabs") {
+                        let child_context = context.with_element(e);
+                        ppr.tabs = Some(CT_Tabs::from_xml_with_context(reader, &child_context)?);
+                    } else if matches_word_element(e, context, b"sectPr") {
                         ppr.sect_pr = Some(CT_SectPr::from_xml(reader)?);
                     } else {
-                        Self::parse_property_element(e, &mut ppr)?;
+                        Self::parse_property_element(e, context, &mut ppr)?;
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
-                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, &mut ppr)?,
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"pPr") => {
+                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, context, &mut ppr)?,
+                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"pPr") => {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:pPr".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -151,81 +175,97 @@ impl CT_PPr {
         Ok(ppr)
     }
 
-    fn parse_property_element(e: &BytesStart<'_>, ppr: &mut CT_PPr) -> Result<()> {
-        let name = e.name();
-        if matches_local_name(name.as_ref(), b"pStyle") {
-            ppr.style_id = get_val_attr(e)?;
-        } else if matches_local_name(name.as_ref(), b"jc") {
-            if let Some(val) = get_val_attr(e)? {
+    fn parse_property_element(
+        e: &BytesStart<'_>,
+        context: &NamespaceContext,
+        ppr: &mut CT_PPr,
+    ) -> Result<()> {
+        let element_context = context.with_element(e);
+        if matches_word_element(e, context, b"pStyle") {
+            ppr.style_id = get_val_attr_with_context(e, &element_context)?;
+        } else if matches_word_element(e, context, b"jc") {
+            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 ppr.jc = Some(ST_Jc::from_str(&val)?);
             }
-        } else if matches_local_name(name.as_ref(), b"spacing") {
+        } else if matches_word_element(e, context, b"spacing") {
             for attr in e.attributes() {
                 let attr = attr?;
                 let key = attr.key.as_ref();
                 let val_str = std::str::from_utf8(&attr.value)?;
-                if matches_local_name(key, b"before") {
+                if matches_word_name(key, &element_context, b"before") {
                     ppr.space_before = Some(Twips(val_str.parse()?));
-                } else if matches_local_name(key, b"after") {
+                } else if matches_word_name(key, &element_context, b"after") {
                     ppr.space_after = Some(Twips(val_str.parse()?));
-                } else if matches_local_name(key, b"line") {
+                } else if matches_word_name(key, &element_context, b"line") {
                     ppr.line_spacing = Some(Twips(val_str.parse()?));
-                } else if matches_local_name(key, b"lineRule") {
+                } else if matches_word_name(key, &element_context, b"lineRule") {
                     ppr.line_rule = Some(val_str.to_string());
-                } else if matches_local_name(key, b"beforeAutospacing") {
+                } else if matches_word_name(key, &element_context, b"beforeAutospacing") {
                     ppr.before_autospacing = Some(val_str == "1" || val_str == "true");
-                } else if matches_local_name(key, b"afterAutospacing") {
+                } else if matches_word_name(key, &element_context, b"afterAutospacing") {
                     ppr.after_autospacing = Some(val_str == "1" || val_str == "true");
                 }
             }
-        } else if matches_local_name(name.as_ref(), b"ind") {
+        } else if matches_word_element(e, context, b"ind") {
             for attr in e.attributes() {
                 let attr = attr?;
                 let key = attr.key.as_ref();
                 let val_str = std::str::from_utf8(&attr.value)?;
-                if matches_local_name(key, b"left") || matches_local_name(key, b"start") {
+                if matches_word_name(key, &element_context, b"left")
+                    || matches_word_name(key, &element_context, b"start")
+                {
                     ppr.ind_left = Some(Twips(val_str.parse()?));
-                } else if matches_local_name(key, b"right") || matches_local_name(key, b"end") {
+                } else if matches_word_name(key, &element_context, b"right")
+                    || matches_word_name(key, &element_context, b"end")
+                {
                     ppr.ind_right = Some(Twips(val_str.parse()?));
-                } else if matches_local_name(key, b"firstLine") {
+                } else if matches_word_name(key, &element_context, b"firstLine") {
                     ppr.ind_first_line = Some(Twips(val_str.parse()?));
-                } else if matches_local_name(key, b"hanging") {
+                } else if matches_word_name(key, &element_context, b"hanging") {
                     ppr.ind_hanging = Some(Twips(val_str.parse()?));
                 }
             }
-        } else if matches_local_name(name.as_ref(), b"keepNext") {
-            ppr.keep_next = Some(parse_toggle(e)?);
-        } else if matches_local_name(name.as_ref(), b"keepLines") {
-            ppr.keep_lines = Some(parse_toggle(e)?);
-        } else if matches_local_name(name.as_ref(), b"pageBreakBefore") {
-            ppr.page_break_before = Some(parse_toggle(e)?);
-        } else if matches_local_name(name.as_ref(), b"widowControl") {
-            ppr.widow_control = Some(parse_toggle(e)?);
-        } else if matches_local_name(name.as_ref(), b"suppressAutoHyphens") {
-            ppr.suppress_auto_hyphens = Some(parse_toggle(e)?);
-        } else if matches_local_name(name.as_ref(), b"outlineLvl") {
-            if let Some(val) = get_val_attr(e)? {
+        } else if matches_word_element(e, context, b"keepNext") {
+            ppr.keep_next = Some(parse_toggle(e, &element_context)?);
+        } else if matches_word_element(e, context, b"keepLines") {
+            ppr.keep_lines = Some(parse_toggle(e, &element_context)?);
+        } else if matches_word_element(e, context, b"pageBreakBefore") {
+            ppr.page_break_before = Some(parse_toggle(e, &element_context)?);
+        } else if matches_word_element(e, context, b"widowControl") {
+            ppr.widow_control = Some(parse_toggle(e, &element_context)?);
+        } else if matches_word_element(e, context, b"suppressAutoHyphens") {
+            ppr.suppress_auto_hyphens = Some(parse_toggle(e, &element_context)?);
+        } else if matches_word_element(e, context, b"outlineLvl") {
+            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 ppr.outline_lvl = Some(val.parse()?);
             }
-        } else if matches_local_name(name.as_ref(), b"shd") {
-            ppr.shading = Some(CT_Shd::from_xml_attrs(e)?);
+        } else if matches_word_element(e, context, b"shd") {
+            ppr.shading = Some(CT_Shd::from_xml_attrs_with_context(e, context)?);
         }
         Ok(())
     }
 
-    fn parse_num_pr(reader: &mut Reader<&[u8]>, ppr: &mut CT_PPr) -> Result<()> {
+    fn parse_num_pr(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+        ppr: &mut CT_PPr,
+    ) -> Result<()> {
         let mut buf = Vec::new();
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => Self::parse_num_property(e, ppr)?,
+                Ok(Event::Empty(ref e)) => Self::parse_num_property(e, context, ppr)?,
                 Ok(Event::Start(ref e)) => {
-                    Self::parse_num_property(e, ppr)?;
+                    Self::parse_num_property(e, context, ppr)?;
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"numPr") => {
+                Ok(Event::End(ref e))
+                    if matches_word_name(e.name().as_ref(), context, b"numPr") =>
+                {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:numPr".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -234,14 +274,18 @@ impl CT_PPr {
         Ok(())
     }
 
-    fn parse_num_property(e: &BytesStart<'_>, ppr: &mut CT_PPr) -> Result<()> {
-        let name = e.name();
-        if matches_local_name(name.as_ref(), b"ilvl") {
-            if let Some(val) = get_val_attr(e)? {
+    fn parse_num_property(
+        e: &BytesStart<'_>,
+        context: &NamespaceContext,
+        ppr: &mut CT_PPr,
+    ) -> Result<()> {
+        let element_context = context.with_element(e);
+        if matches_word_element(e, context, b"ilvl") {
+            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 ppr.num_ilvl = Some(val.parse()?);
             }
-        } else if matches_local_name(name.as_ref(), b"numId")
-            && let Some(val) = get_val_attr(e)?
+        } else if matches_word_element(e, context, b"numId")
+            && let Some(val) = get_val_attr_with_context(e, &element_context)?
         {
             ppr.num_id = Some(val.parse()?);
         }
@@ -551,20 +595,29 @@ pub struct CT_RPr {
 #[allow(non_snake_case)]
 impl CT_RPr {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    pub fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut rpr = CT_RPr::default();
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, &mut rpr)?,
+                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, context, &mut rpr)?,
                 Ok(Event::Start(ref e)) => {
-                    Self::parse_property_element(e, &mut rpr)?;
+                    Self::parse_property_element(e, context, &mut rpr)?;
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"rPr") => {
+                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"rPr") => {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:rPr".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -574,92 +627,96 @@ impl CT_RPr {
         Ok(rpr)
     }
 
-    fn parse_property_element(e: &BytesStart<'_>, rpr: &mut CT_RPr) -> Result<()> {
-        let name = e.name();
-        if matches_local_name(name.as_ref(), b"rStyle") {
-            rpr.style_id = get_val_attr(e)?;
-        } else if matches_local_name(name.as_ref(), b"rFonts") {
+    fn parse_property_element(
+        e: &BytesStart<'_>,
+        context: &NamespaceContext,
+        rpr: &mut CT_RPr,
+    ) -> Result<()> {
+        let element_context = context.with_element(e);
+        if matches_word_element(e, context, b"rStyle") {
+            rpr.style_id = get_val_attr_with_context(e, &element_context)?;
+        } else if matches_word_element(e, context, b"rFonts") {
             for attr in e.attributes() {
                 let attr = attr?;
                 let key = attr.key.as_ref();
                 let val = std::str::from_utf8(&attr.value)?.to_string();
-                if matches_local_name(key, b"ascii") {
+                if matches_word_name(key, &element_context, b"ascii") {
                     rpr.font_ascii = Some(val);
-                } else if matches_local_name(key, b"hAnsi") {
+                } else if matches_word_name(key, &element_context, b"hAnsi") {
                     rpr.font_hansi = Some(val);
-                } else if matches_local_name(key, b"eastAsia") {
+                } else if matches_word_name(key, &element_context, b"eastAsia") {
                     rpr.font_east_asia = Some(val);
-                } else if matches_local_name(key, b"cs") {
+                } else if matches_word_name(key, &element_context, b"cs") {
                     rpr.font_cs = Some(val);
-                } else if matches_local_name(key, b"asciiTheme") {
+                } else if matches_word_name(key, &element_context, b"asciiTheme") {
                     rpr.font_ascii_theme = Some(val);
-                } else if matches_local_name(key, b"hAnsiTheme") {
+                } else if matches_word_name(key, &element_context, b"hAnsiTheme") {
                     rpr.font_hansi_theme = Some(val);
                 }
             }
-        } else if matches_local_name(name.as_ref(), b"b") {
-            rpr.bold = Some(parse_toggle(e)?);
-        } else if matches_local_name(name.as_ref(), b"bCs") {
-            rpr.bold_cs = Some(parse_toggle(e)?);
-        } else if matches_local_name(name.as_ref(), b"i") {
-            rpr.italic = Some(parse_toggle(e)?);
-        } else if matches_local_name(name.as_ref(), b"iCs") {
-            rpr.italic_cs = Some(parse_toggle(e)?);
-        } else if matches_local_name(name.as_ref(), b"u") {
-            if let Some(val) = get_val_attr(e)? {
+        } else if matches_word_element(e, context, b"b") {
+            rpr.bold = Some(parse_toggle(e, &element_context)?);
+        } else if matches_word_element(e, context, b"bCs") {
+            rpr.bold_cs = Some(parse_toggle(e, &element_context)?);
+        } else if matches_word_element(e, context, b"i") {
+            rpr.italic = Some(parse_toggle(e, &element_context)?);
+        } else if matches_word_element(e, context, b"iCs") {
+            rpr.italic_cs = Some(parse_toggle(e, &element_context)?);
+        } else if matches_word_element(e, context, b"u") {
+            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 rpr.underline = Some(ST_Underline::from_str(&val)?);
             } else {
                 rpr.underline = Some(ST_Underline::Single);
             }
-        } else if matches_local_name(name.as_ref(), b"strike") {
-            rpr.strike = Some(parse_toggle(e)?);
-        } else if matches_local_name(name.as_ref(), b"dstrike") {
-            rpr.dstrike = Some(parse_toggle(e)?);
-        } else if matches_local_name(name.as_ref(), b"sz") {
-            if let Some(val) = get_val_attr(e)? {
+        } else if matches_word_element(e, context, b"strike") {
+            rpr.strike = Some(parse_toggle(e, &element_context)?);
+        } else if matches_word_element(e, context, b"dstrike") {
+            rpr.dstrike = Some(parse_toggle(e, &element_context)?);
+        } else if matches_word_element(e, context, b"sz") {
+            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 rpr.sz = Some(HalfPoint(val.parse()?));
             }
-        } else if matches_local_name(name.as_ref(), b"szCs") {
-            if let Some(val) = get_val_attr(e)? {
+        } else if matches_word_element(e, context, b"szCs") {
+            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 rpr.sz_cs = Some(HalfPoint(val.parse()?));
             }
-        } else if matches_local_name(name.as_ref(), b"color") {
+        } else if matches_word_element(e, context, b"color") {
             for attr in e.attributes() {
                 let attr = attr?;
                 let key = attr.key.as_ref();
                 let v = std::str::from_utf8(&attr.value)?.to_string();
-                if matches_local_name(key, b"val") {
+                if matches_word_name(key, &element_context, b"val") {
                     rpr.color = Some(v);
-                } else if matches_local_name(key, b"themeColor") {
+                } else if matches_word_name(key, &element_context, b"themeColor") {
                     rpr.color_theme = Some(v);
                 }
             }
-        } else if matches_local_name(name.as_ref(), b"highlight") {
-            if let Some(val) = get_val_attr(e)? {
+        } else if matches_word_element(e, context, b"highlight") {
+            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 rpr.highlight = Some(ST_HighlightColor::from_str(&val)?);
             }
-        } else if matches_local_name(name.as_ref(), b"caps") {
-            rpr.caps = Some(parse_toggle(e)?);
-        } else if matches_local_name(name.as_ref(), b"smallCaps") {
-            rpr.small_caps = Some(parse_toggle(e)?);
-        } else if matches_local_name(name.as_ref(), b"vertAlign") {
-            rpr.vert_align = get_val_attr(e)?;
-        } else if matches_local_name(name.as_ref(), b"spacing") {
-            if let Some(val) = get_val_attr(e)? {
+        } else if matches_word_element(e, context, b"caps") {
+            rpr.caps = Some(parse_toggle(e, &element_context)?);
+        } else if matches_word_element(e, context, b"smallCaps") {
+            rpr.small_caps = Some(parse_toggle(e, &element_context)?);
+        } else if matches_word_element(e, context, b"vertAlign") {
+            rpr.vert_align = get_val_attr_with_context(e, &element_context)?;
+        } else if matches_word_element(e, context, b"spacing") {
+            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 rpr.spacing = Some(Twips(val.parse()?));
             }
-        } else if matches_local_name(name.as_ref(), b"w") {
-            if let Some(val) = get_val_attr(e)? {
+        } else if matches_word_element(e, context, b"w") {
+            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 rpr.width_scale = Some(val.parse()?);
             }
-        } else if matches_local_name(name.as_ref(), b"position") {
-            if let Some(val) = get_val_attr(e)? {
+        } else if matches_word_element(e, context, b"position") {
+            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 rpr.position = Some(val.parse()?);
             }
-        } else if matches_local_name(name.as_ref(), b"shd") {
-            rpr.shading = Some(CT_Shd::from_xml_attrs(e)?);
-        } else if matches_local_name(name.as_ref(), b"vanish") {
-            rpr.vanish = Some(parse_toggle(e)?);
+        } else if matches_word_element(e, context, b"shd") {
+            rpr.shading = Some(CT_Shd::from_xml_attrs_with_context(e, context)?);
+        } else if matches_word_element(e, context, b"vanish") {
+            rpr.vanish = Some(parse_toggle(e, &element_context)?);
         }
         Ok(())
     }
@@ -917,9 +974,17 @@ impl CT_RPr {
 
 /// Extract the `w:val` attribute from an element.
 pub(crate) fn get_val_attr(e: &BytesStart) -> Result<Option<String>> {
+    let context = NamespaceContext::default().with_element(e);
+    get_val_attr_with_context(e, &context)
+}
+
+pub(crate) fn get_val_attr_with_context(
+    e: &BytesStart,
+    context: &NamespaceContext,
+) -> Result<Option<String>> {
     for attr in e.attributes() {
         let attr = attr?;
-        if matches_local_name(attr.key.as_ref(), b"val") {
+        if matches_word_name(attr.key.as_ref(), context, b"val") {
             return Ok(Some(std::str::from_utf8(&attr.value)?.to_string()));
         }
     }
@@ -927,8 +992,8 @@ pub(crate) fn get_val_attr(e: &BytesStart) -> Result<Option<String>> {
 }
 
 /// Parse a toggle element (like `<w:b/>` or `<w:b w:val="false"/>`).
-fn parse_toggle(e: &BytesStart) -> Result<bool> {
-    let val = get_val_attr(e)?;
+fn parse_toggle(e: &BytesStart, context: &NamespaceContext) -> Result<bool> {
+    let val = get_val_attr_with_context(e, context)?;
     Ok(ST_OnOff::from_str_or_default(val.as_deref()).is_on())
 }
 

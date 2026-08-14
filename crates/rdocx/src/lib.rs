@@ -35,6 +35,7 @@ pub use document::{
 };
 pub use error::{Error, Result};
 pub use oxml_core::Length;
+pub use oxml_opc::PackageReadLimits;
 pub use paragraph::{
     Alignment, BorderStyle, HyperlinkRef, InlineContentRef, Paragraph, ParagraphBorderRef,
     ParagraphContentRef, ParagraphRef, SectionBreak, SimpleFieldRef, TabAlignment, TabLeader,
@@ -44,7 +45,10 @@ pub use run::{
     RunRef, UnderlineStyle,
 };
 pub use style::{Style, StyleBuilder};
-pub use table::{Cell, CellContentRef, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment};
+pub use table::{
+    Cell, CellContentRef, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment,
+    VerticalMergeKind,
+};
 pub use unsupported_xml::UnsupportedXmlRef;
 
 #[cfg(test)]

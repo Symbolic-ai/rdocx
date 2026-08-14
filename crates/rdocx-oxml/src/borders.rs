@@ -3,8 +3,11 @@
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
-use crate::error::Result;
+use crate::error::{OxmlError, Result};
+#[cfg(test)]
 use crate::namespace::matches_local_name;
+use crate::namespace::{matches_word_element, matches_word_name};
+use crate::raw_xml::NamespaceContext;
 use crate::shared::{ST_Border, ST_TabJc, ST_TabLeader};
 use crate::units::Twips;
 
@@ -32,6 +35,14 @@ impl CT_BorderEdge {
     }
 
     pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
+        Self::from_xml_attrs_with_context(e, &NamespaceContext::default())
+    }
+
+    pub(crate) fn from_xml_attrs_with_context(
+        e: &BytesStart,
+        parent_context: &NamespaceContext,
+    ) -> Result<Self> {
+        let context = parent_context.with_element(e);
         let mut val = ST_Border::None;
         let mut sz = None;
         let mut space = None;
@@ -41,13 +52,13 @@ impl CT_BorderEdge {
             let attr = attr?;
             let key = attr.key.as_ref();
             let v = std::str::from_utf8(&attr.value)?;
-            if matches_local_name(key, b"val") {
+            if matches_word_name(key, &context, b"val") {
                 val = ST_Border::from_str(v)?;
-            } else if matches_local_name(key, b"sz") {
+            } else if matches_word_name(key, &context, b"sz") {
                 sz = Some(v.parse()?);
-            } else if matches_local_name(key, b"space") {
+            } else if matches_word_name(key, &context, b"space") {
                 space = Some(v.parse()?);
-            } else if matches_local_name(key, b"color") {
+            } else if matches_word_name(key, &context, b"color") {
                 color = Some(v.to_string());
             }
         }
@@ -100,20 +111,29 @@ pub struct CT_PBdr {
 
 impl CT_PBdr {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    pub fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut bdr = CT_PBdr::default();
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => Self::parse_edge(e, &mut bdr)?,
+                Ok(Event::Empty(ref e)) => Self::parse_edge(e, context, &mut bdr)?,
                 Ok(Event::Start(ref e)) => {
-                    Self::parse_edge(e, &mut bdr)?;
+                    Self::parse_edge(e, context, &mut bdr)?;
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"pBdr") => {
+                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"pBdr") => {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:pBdr".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -123,24 +143,23 @@ impl CT_PBdr {
         Ok(bdr)
     }
 
-    fn parse_edge(e: &BytesStart<'_>, bdr: &mut CT_PBdr) -> Result<()> {
-        let name = e.name();
-        let edge = CT_BorderEdge::from_xml_attrs(e)?;
-        if matches_local_name(name.as_ref(), b"top") {
+    fn parse_edge(e: &BytesStart<'_>, context: &NamespaceContext, bdr: &mut CT_PBdr) -> Result<()> {
+        let edge = CT_BorderEdge::from_xml_attrs_with_context(e, context)?;
+        if matches_word_element(e, context, b"top") {
             bdr.top = Some(edge);
-        } else if matches_local_name(name.as_ref(), b"bottom") {
+        } else if matches_word_element(e, context, b"bottom") {
             bdr.bottom = Some(edge);
-        } else if matches_local_name(name.as_ref(), b"left")
-            || matches_local_name(name.as_ref(), b"start")
+        } else if matches_word_element(e, context, b"left")
+            || matches_word_element(e, context, b"start")
         {
             bdr.left = Some(edge);
-        } else if matches_local_name(name.as_ref(), b"right")
-            || matches_local_name(name.as_ref(), b"end")
+        } else if matches_word_element(e, context, b"right")
+            || matches_word_element(e, context, b"end")
         {
             bdr.right = Some(edge);
-        } else if matches_local_name(name.as_ref(), b"between") {
+        } else if matches_word_element(e, context, b"between") {
             bdr.between = Some(edge);
-        } else if matches_local_name(name.as_ref(), b"bar") {
+        } else if matches_word_element(e, context, b"bar") {
             bdr.bar = Some(edge);
         }
         Ok(())
@@ -215,6 +234,14 @@ impl CT_TabStop {
     }
 
     pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
+        Self::from_xml_attrs_with_context(e, &NamespaceContext::default())
+    }
+
+    fn from_xml_attrs_with_context(
+        e: &BytesStart,
+        parent_context: &NamespaceContext,
+    ) -> Result<Self> {
+        let context = parent_context.with_element(e);
         let mut val = ST_TabJc::Left;
         let mut pos = Twips(0);
         let mut leader = None;
@@ -223,11 +250,11 @@ impl CT_TabStop {
             let attr = attr?;
             let key = attr.key.as_ref();
             let v = std::str::from_utf8(&attr.value)?;
-            if matches_local_name(key, b"val") {
+            if matches_word_name(key, &context, b"val") {
                 val = ST_TabJc::from_str(v)?;
-            } else if matches_local_name(key, b"pos") {
+            } else if matches_word_name(key, &context, b"pos") {
                 pos = Twips(v.parse()?);
-            } else if matches_local_name(key, b"leader") {
+            } else if matches_word_name(key, &context, b"leader") {
                 leader = Some(ST_TabLeader::from_str(v)?);
             }
         }
@@ -244,18 +271,31 @@ pub struct CT_Tabs {
 
 impl CT_Tabs {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    pub fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut tabs = Vec::new();
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) if matches_local_name(e.name().as_ref(), b"tab") => {
-                    tabs.push(CT_TabStop::from_xml_attrs(e)?);
+                Ok(Event::Empty(ref e)) if matches_word_element(e, context, b"tab") => {
+                    tabs.push(CT_TabStop::from_xml_attrs_with_context(e, context)?);
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tabs") => {
+                Ok(Event::Start(ref e)) if matches_word_element(e, context, b"tab") => {
+                    tabs.push(CT_TabStop::from_xml_attrs_with_context(e, context)?);
+                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                }
+                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"tabs") => {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:tabs".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }

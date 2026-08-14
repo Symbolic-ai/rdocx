@@ -4,9 +4,9 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::borders::CT_BorderEdge;
-use crate::error::Result;
+use crate::error::{OxmlError, Result};
 use crate::namespace::{matches_local_name, matches_word_element, matches_word_name};
-use crate::properties::{CT_Shd, get_val_attr};
+use crate::properties::{CT_Shd, get_val_attr_with_context};
 use crate::raw_xml::{
     NamespaceContext, RawXml, capture_element, capture_empty_element, capture_raw_element,
     capture_raw_empty_element,
@@ -50,39 +50,36 @@ pub struct CT_TblBorders {
 
 impl CT_TblBorders {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    pub fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut borders = CT_TblBorders::default();
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
-                    let name = e.name();
-                    let edge = CT_BorderEdge::from_xml_attrs(e)?;
-                    if matches_local_name(name.as_ref(), b"top") {
-                        borders.top = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"bottom") {
-                        borders.bottom = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"left")
-                        || matches_local_name(name.as_ref(), b"start")
-                    {
-                        borders.left = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"right")
-                        || matches_local_name(name.as_ref(), b"end")
-                    {
-                        borders.right = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"insideH") {
-                        borders.inside_h = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"insideV") {
-                        borders.inside_v = Some(edge);
-                    }
+                    Self::parse_edge(e, context, &mut borders)?;
+                }
+                Ok(Event::Start(ref e)) => {
+                    Self::parse_edge(e, context, &mut borders)?;
+                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
                 Ok(Event::End(ref e))
-                    if matches_local_name(e.name().as_ref(), b"tblBorders")
-                        || matches_local_name(e.name().as_ref(), b"tcBorders") =>
+                    if matches_word_name(e.name().as_ref(), context, b"tblBorders")
+                        || matches_word_name(e.name().as_ref(), context, b"tcBorders") =>
                 {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement(
+                        "closing table borders".to_string(),
+                    ));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -90,6 +87,37 @@ impl CT_TblBorders {
         }
 
         Ok(borders)
+    }
+
+    fn parse_edge(
+        e: &BytesStart<'_>,
+        context: &NamespaceContext,
+        borders: &mut Self,
+    ) -> Result<()> {
+        if matches_word_element(e, context, b"top") {
+            let edge = CT_BorderEdge::from_xml_attrs_with_context(e, context)?;
+            borders.top = Some(edge);
+        } else if matches_word_element(e, context, b"bottom") {
+            let edge = CT_BorderEdge::from_xml_attrs_with_context(e, context)?;
+            borders.bottom = Some(edge);
+        } else if matches_word_element(e, context, b"left")
+            || matches_word_element(e, context, b"start")
+        {
+            let edge = CT_BorderEdge::from_xml_attrs_with_context(e, context)?;
+            borders.left = Some(edge);
+        } else if matches_word_element(e, context, b"right")
+            || matches_word_element(e, context, b"end")
+        {
+            let edge = CT_BorderEdge::from_xml_attrs_with_context(e, context)?;
+            borders.right = Some(edge);
+        } else if matches_word_element(e, context, b"insideH") {
+            let edge = CT_BorderEdge::from_xml_attrs_with_context(e, context)?;
+            borders.inside_h = Some(edge);
+        } else if matches_word_element(e, context, b"insideV") {
+            let edge = CT_BorderEdge::from_xml_attrs_with_context(e, context)?;
+            borders.inside_v = Some(edge);
+        }
+        Ok(())
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
@@ -250,6 +278,14 @@ impl CT_TblWidth {
     }
 
     pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
+        Self::from_xml_attrs_with_context(e, &NamespaceContext::default())
+    }
+
+    fn from_xml_attrs_with_context(
+        e: &BytesStart,
+        parent_context: &NamespaceContext,
+    ) -> Result<Self> {
+        let context = parent_context.with_element(e);
         let mut w = 0;
         let mut width_type = "dxa".to_string();
 
@@ -257,9 +293,9 @@ impl CT_TblWidth {
             let attr = attr?;
             let key = attr.key.as_ref();
             let val = std::str::from_utf8(&attr.value)?;
-            if matches_local_name(key, b"w") {
+            if matches_word_name(key, &context, b"w") {
                 w = val.parse().unwrap_or(0);
-            } else if matches_local_name(key, b"type") {
+            } else if matches_word_name(key, &context, b"type") {
                 width_type = val.to_string();
             }
         }
@@ -351,23 +387,31 @@ fn ooxml_bool_str(value: bool) -> &'static str {
 #[allow(non_snake_case)]
 impl CT_TblLook {
     pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
+        Self::from_xml_attrs_with_context(e, &NamespaceContext::default())
+    }
+
+    fn from_xml_attrs_with_context(
+        e: &BytesStart,
+        parent_context: &NamespaceContext,
+    ) -> Result<Self> {
+        let context = parent_context.with_element(e);
         let mut look = CT_TblLook::default();
         for attr in e.attributes().flatten() {
             let value = std::str::from_utf8(&attr.value)?;
             let key = attr.key.as_ref();
-            if matches_local_name(key, b"val") {
+            if matches_word_name(key, &context, b"val") {
                 look.val = Some(value.to_string());
-            } else if matches_local_name(key, b"firstRow") {
+            } else if matches_word_name(key, &context, b"firstRow") {
                 look.first_row = parse_ooxml_bool(value);
-            } else if matches_local_name(key, b"lastRow") {
+            } else if matches_word_name(key, &context, b"lastRow") {
                 look.last_row = parse_ooxml_bool(value);
-            } else if matches_local_name(key, b"firstColumn") {
+            } else if matches_word_name(key, &context, b"firstColumn") {
                 look.first_column = parse_ooxml_bool(value);
-            } else if matches_local_name(key, b"lastColumn") {
+            } else if matches_word_name(key, &context, b"lastColumn") {
                 look.last_column = parse_ooxml_bool(value);
-            } else if matches_local_name(key, b"noHBand") {
+            } else if matches_word_name(key, &context, b"noHBand") {
                 look.no_h_band = parse_ooxml_bool(value);
-            } else if matches_local_name(key, b"noVBand") {
+            } else if matches_word_name(key, &context, b"noVBand") {
                 look.no_v_band = parse_ooxml_bool(value);
             }
         }
@@ -399,47 +443,42 @@ impl CT_TblLook {
 #[allow(non_snake_case)]
 impl CT_TblPr {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    pub fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut pr = CT_TblPr::default();
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"tblStyle") {
-                        pr.style_id = get_val_attr(e)?;
-                    } else if matches_local_name(name.as_ref(), b"tblW") {
-                        pr.width = Some(CT_TblWidth::from_xml_attrs(e)?);
-                    } else if matches_local_name(name.as_ref(), b"jc") {
-                        if let Some(val) = get_val_attr(e)? {
-                            pr.jc = Some(ST_Jc::from_str(&val)?);
-                        }
-                    } else if matches_local_name(name.as_ref(), b"tblLayout") {
-                        if let Some(val) = get_val_attr(e)? {
-                            pr.layout = Some(val);
-                        }
-                    } else if matches_local_name(name.as_ref(), b"tblInd") {
-                        pr.indent = Some(CT_TblWidth::from_xml_attrs(e)?);
-                    } else if matches_local_name(name.as_ref(), b"shd") {
-                        pr.shading = Some(CT_Shd::from_xml_attrs(e)?);
-                    } else if matches_local_name(name.as_ref(), b"tblLook") {
-                        pr.look = Some(CT_TblLook::from_xml_attrs(e)?);
-                    }
-                }
+                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, context, &mut pr)?,
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"tblBorders") {
-                        pr.borders = Some(CT_TblBorders::from_xml(reader)?);
-                    } else if matches_local_name(name.as_ref(), b"tblCellMar") {
+                    if matches_word_element(e, context, b"tblBorders") {
+                        let child_context = context.with_element(e);
+                        pr.borders = Some(CT_TblBorders::from_xml_with_context(
+                            reader,
+                            &child_context,
+                        )?);
+                    } else if matches_word_element(e, context, b"tblCellMar") {
                         pr.cell_margin = Some(CT_TblCellMar::from_xml(reader)?);
                     } else {
+                        Self::parse_property_element(e, context, &mut pr)?;
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tblPr") => {
+                Ok(Event::End(ref e))
+                    if matches_word_name(e.name().as_ref(), context, b"tblPr") =>
+                {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:tblPr".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -447,6 +486,32 @@ impl CT_TblPr {
         }
 
         Ok(pr)
+    }
+
+    fn parse_property_element(
+        e: &BytesStart<'_>,
+        context: &NamespaceContext,
+        pr: &mut Self,
+    ) -> Result<()> {
+        let element_context = context.with_element(e);
+        if matches_word_element(e, context, b"tblStyle") {
+            pr.style_id = get_val_attr_with_context(e, &element_context)?;
+        } else if matches_word_element(e, context, b"tblW") {
+            pr.width = Some(CT_TblWidth::from_xml_attrs_with_context(e, context)?);
+        } else if matches_word_element(e, context, b"jc") {
+            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
+                pr.jc = Some(ST_Jc::from_str(&val)?);
+            }
+        } else if matches_word_element(e, context, b"tblLayout") {
+            pr.layout = get_val_attr_with_context(e, &element_context)?;
+        } else if matches_word_element(e, context, b"tblInd") {
+            pr.indent = Some(CT_TblWidth::from_xml_attrs_with_context(e, context)?);
+        } else if matches_word_element(e, context, b"shd") {
+            pr.shading = Some(CT_Shd::from_xml_attrs_with_context(e, context)?);
+        } else if matches_word_element(e, context, b"tblLook") {
+            pr.look = Some(CT_TblLook::from_xml_attrs_with_context(e, context)?);
+        }
+        Ok(())
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -512,27 +577,31 @@ pub struct CT_TblGrid {
 #[allow(non_snake_case)]
 impl CT_TblGrid {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    pub fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut columns = Vec::new();
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    if matches_local_name(e.name().as_ref(), b"gridCol") {
-                        let mut width = Twips(0);
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            if matches_local_name(attr.key.as_ref(), b"w") {
-                                width = Twips(std::str::from_utf8(&attr.value)?.parse()?);
-                            }
-                        }
-                        columns.push(CT_TblGridCol { width });
-                    }
+                Ok(Event::Empty(ref e)) => Self::parse_column(e, context, &mut columns)?,
+                Ok(Event::Start(ref e)) => {
+                    Self::parse_column(e, context, &mut columns)?;
+                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tblGrid") => {
+                Ok(Event::End(ref e))
+                    if matches_word_name(e.name().as_ref(), context, b"tblGrid") =>
+                {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:tblGrid".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -540,6 +609,26 @@ impl CT_TblGrid {
         }
 
         Ok(CT_TblGrid { columns })
+    }
+
+    fn parse_column(
+        e: &BytesStart<'_>,
+        context: &NamespaceContext,
+        columns: &mut Vec<CT_TblGridCol>,
+    ) -> Result<()> {
+        if !matches_word_element(e, context, b"gridCol") {
+            return Ok(());
+        }
+        let element_context = context.with_element(e);
+        let mut width = Twips(0);
+        for attr in e.attributes() {
+            let attr = attr?;
+            if matches_word_name(attr.key.as_ref(), &element_context, b"w") {
+                width = Twips(std::str::from_utf8(&attr.value)?.parse()?);
+            }
+        }
+        columns.push(CT_TblGridCol { width });
+        Ok(())
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -595,20 +684,29 @@ pub struct CT_TrPr {
 #[allow(non_snake_case)]
 impl CT_TrPr {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    pub fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut pr = CT_TrPr::default();
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, &mut pr)?,
+                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, context, &mut pr)?,
                 Ok(Event::Start(ref e)) => {
-                    Self::parse_property_element(e, &mut pr)?;
+                    Self::parse_property_element(e, context, &mut pr)?;
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"trPr") => {
+                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"trPr") => {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:trPr".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -618,35 +716,39 @@ impl CT_TrPr {
         Ok(pr)
     }
 
-    fn parse_property_element(e: &BytesStart<'_>, pr: &mut CT_TrPr) -> Result<()> {
-        let name = e.name();
-        if matches_local_name(name.as_ref(), b"trHeight") {
+    fn parse_property_element(
+        e: &BytesStart<'_>,
+        context: &NamespaceContext,
+        pr: &mut CT_TrPr,
+    ) -> Result<()> {
+        let element_context = context.with_element(e);
+        if matches_word_element(e, context, b"trHeight") {
             for attr in e.attributes() {
                 let attr = attr?;
                 let key = attr.key.as_ref();
                 let val = std::str::from_utf8(&attr.value)?;
-                if matches_local_name(key, b"val") {
+                if matches_word_name(key, &element_context, b"val") {
                     pr.height = Some(Twips(val.parse()?));
-                } else if matches_local_name(key, b"hRule") {
+                } else if matches_word_name(key, &element_context, b"hRule") {
                     pr.height_rule = Some(val.to_string());
                 }
             }
-        } else if matches_local_name(name.as_ref(), b"tblHeader") {
+        } else if matches_word_element(e, context, b"tblHeader") {
             pr.header = Some(true);
-        } else if matches_local_name(name.as_ref(), b"jc") {
-            if let Some(val) = get_val_attr(e)? {
+        } else if matches_word_element(e, context, b"jc") {
+            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 pr.jc = Some(ST_Jc::from_str(&val)?);
             }
-        } else if matches_local_name(name.as_ref(), b"cnfStyle") {
-            pr.cnf_style = get_val_attr(e)?;
-        } else if matches_local_name(name.as_ref(), b"cantSplit") {
+        } else if matches_word_element(e, context, b"cnfStyle") {
+            pr.cnf_style = get_val_attr_with_context(e, &element_context)?;
+        } else if matches_word_element(e, context, b"cantSplit") {
             pr.cant_split = Some(true);
-        } else if matches_local_name(name.as_ref(), b"gridBefore")
-            && let Some(val) = get_val_attr(e)?
+        } else if matches_word_element(e, context, b"gridBefore")
+            && let Some(val) = get_val_attr_with_context(e, &element_context)?
         {
             pr.grid_before = Some(val.parse()?);
-        } else if matches_local_name(name.as_ref(), b"gridAfter")
-            && let Some(val) = get_val_attr(e)?
+        } else if matches_word_element(e, context, b"gridAfter")
+            && let Some(val) = get_val_attr_with_context(e, &element_context)?
         {
             pr.grid_after = Some(val.parse()?);
         }
@@ -776,25 +878,38 @@ pub struct CT_TcPr {
 #[allow(non_snake_case)]
 impl CT_TcPr {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    pub fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut pr = CT_TcPr::default();
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, &mut pr)?,
+                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, context, &mut pr)?,
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"tcBorders") {
-                        pr.borders = Some(CT_TblBorders::from_xml(reader)?);
+                    if matches_word_element(e, context, b"tcBorders") {
+                        let child_context = context.with_element(e);
+                        pr.borders = Some(CT_TblBorders::from_xml_with_context(
+                            reader,
+                            &child_context,
+                        )?);
                     } else {
-                        Self::parse_property_element(e, &mut pr)?;
+                        Self::parse_property_element(e, context, &mut pr)?;
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tcPr") => {
+                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"tcPr") => {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:tcPr".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -804,36 +919,44 @@ impl CT_TcPr {
         Ok(pr)
     }
 
-    fn parse_property_element(e: &BytesStart<'_>, pr: &mut CT_TcPr) -> Result<()> {
-        let name = e.name();
-        if matches_local_name(name.as_ref(), b"tcW") {
-            pr.width = Some(CT_TblWidth::from_xml_attrs(e)?);
-        } else if matches_local_name(name.as_ref(), b"gridSpan") {
-            if let Some(val) = get_val_attr(e)? {
+    fn parse_property_element(
+        e: &BytesStart<'_>,
+        context: &NamespaceContext,
+        pr: &mut CT_TcPr,
+    ) -> Result<()> {
+        let element_context = context.with_element(e);
+        if matches_word_element(e, context, b"tcW") {
+            pr.width = Some(CT_TblWidth::from_xml_attrs_with_context(e, context)?);
+        } else if matches_word_element(e, context, b"gridSpan") {
+            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 pr.grid_span = Some(val.parse()?);
             }
-        } else if matches_local_name(name.as_ref(), b"vMerge") {
-            if let Some(val) = get_val_attr(e)? {
-                pr.v_merge = Some(if val == "restart" {
-                    VMerge::Restart
-                } else {
-                    VMerge::Continue
+        } else if matches_word_element(e, context, b"vMerge") {
+            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
+                pr.v_merge = Some(match val.as_str() {
+                    "restart" => VMerge::Restart,
+                    "continue" => VMerge::Continue,
+                    _ => {
+                        return Err(OxmlError::InvalidValue(format!(
+                            "invalid w:vMerge value: {val}"
+                        )));
+                    }
                 });
             } else {
                 pr.v_merge = Some(VMerge::Continue);
             }
-        } else if matches_local_name(name.as_ref(), b"vAlign") {
-            if let Some(val) = get_val_attr(e)? {
+        } else if matches_word_element(e, context, b"vAlign") {
+            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 pr.v_align = Some(ST_VerticalJc::from_str(&val));
             }
-        } else if matches_local_name(name.as_ref(), b"shd") {
-            pr.shading = Some(CT_Shd::from_xml_attrs(e)?);
-        } else if matches_local_name(name.as_ref(), b"cnfStyle") {
-            pr.cnf_style = get_val_attr(e)?;
-        } else if matches_local_name(name.as_ref(), b"noWrap") {
+        } else if matches_word_element(e, context, b"shd") {
+            pr.shading = Some(CT_Shd::from_xml_attrs_with_context(e, context)?);
+        } else if matches_word_element(e, context, b"cnfStyle") {
+            pr.cnf_style = get_val_attr_with_context(e, &element_context)?;
+        } else if matches_word_element(e, context, b"noWrap") {
             pr.no_wrap = Some(true);
-        } else if matches_local_name(name.as_ref(), b"textDirection")
-            && let Some(val) = get_val_attr(e)?
+        } else if matches_word_element(e, context, b"textDirection")
+            && let Some(val) = get_val_attr_with_context(e, &element_context)?
         {
             pr.text_direction = Some(val);
         }
@@ -995,7 +1118,8 @@ impl CT_Tc {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     if matches_word_element(e, context, b"tcPr") {
-                        properties = Some(CT_TcPr::from_xml(reader)?);
+                        let child_context = context.with_element(e);
+                        properties = Some(CT_TcPr::from_xml_with_context(reader, &child_context)?);
                     } else if matches_word_element(e, context, b"p") {
                         let child_context = context.with_element(e);
                         content.push(CellContent::Paragraph(CT_P::from_xml_with_context(
@@ -1034,7 +1158,9 @@ impl CT_Tc {
                 Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"tc") => {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:tc".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -1122,7 +1248,8 @@ impl CT_Row {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     if matches_word_element(e, context, b"trPr") {
-                        properties = Some(CT_TrPr::from_xml(reader)?);
+                        let child_context = context.with_element(e);
+                        properties = Some(CT_TrPr::from_xml_with_context(reader, &child_context)?);
                     } else if matches_word_element(e, context, b"tc") {
                         let child_context = context.with_element(e);
                         cells.push(CT_Tc::from_xml_with_context(reader, &child_context)?);
@@ -1147,7 +1274,9 @@ impl CT_Row {
                 Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"tr") => {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:tr".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -1235,9 +1364,11 @@ impl CT_Tbl {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     if matches_word_element(e, context, b"tblPr") {
-                        properties = Some(CT_TblPr::from_xml(reader)?);
+                        let child_context = context.with_element(e);
+                        properties = Some(CT_TblPr::from_xml_with_context(reader, &child_context)?);
                     } else if matches_word_element(e, context, b"tblGrid") {
-                        grid = Some(CT_TblGrid::from_xml(reader)?);
+                        let child_context = context.with_element(e);
+                        grid = Some(CT_TblGrid::from_xml_with_context(reader, &child_context)?);
                     } else if matches_word_element(e, context, b"tr") {
                         let child_context = context.with_element(e);
                         rows.push(CT_Row::from_xml_with_context(reader, &child_context)?);
@@ -1261,7 +1392,9 @@ impl CT_Tbl {
                 Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"tbl") => {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:tbl".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -1419,6 +1552,45 @@ mod tests {
         assert_eq!(merged.grid_span, Some(2));
         assert_eq!(merged.v_merge, Some(VMerge::Restart));
         assert_eq!(continued.v_merge, Some(VMerge::Continue));
+    }
+
+    #[test]
+    fn expanded_grid_columns_parse_like_empty_elements() {
+        let tbl = parse_table(concat!(
+            r#"<w:tblGrid><w:gridCol w:w="100"></w:gridCol>"#,
+            r#"<w:gridCol w:w="200"/></w:tblGrid>"#,
+            r#"<w:tr><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr>"#,
+        ));
+        let widths: Vec<_> = tbl
+            .grid
+            .unwrap()
+            .columns
+            .into_iter()
+            .map(|column| column.width)
+            .collect();
+        assert_eq!(widths, vec![Twips(100), Twips(200)]);
+    }
+
+    #[test]
+    fn invalid_vertical_merge_value_is_rejected() {
+        let full = concat!(
+            r#"<w:tbl><w:tblGrid><w:gridCol w:w="100"/></w:tblGrid>"#,
+            r#"<w:tr><w:tc><w:tcPr><w:vMerge w:val="vendor"/></w:tcPr>"#,
+            r#"<w:p/></w:tc></w:tr></w:tbl>"#,
+        );
+        let mut reader = Reader::from_str(full);
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref e)) if matches_local_name(e.name().as_ref(), b"tbl") => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+        assert!(matches!(
+            CT_Tbl::from_xml(&mut reader),
+            Err(OxmlError::InvalidValue(_))
+        ));
     }
 
     #[test]

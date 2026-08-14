@@ -6,7 +6,7 @@ use std::io::Write;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
-use crate::error::Result;
+use crate::error::{OxmlError, Result};
 
 /// The resolved identity of an XML element.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -341,7 +341,12 @@ pub fn capture_element(reader: &mut Reader<&[u8]>, start: &BytesStart) -> Result
             Ok(Event::GeneralRef(ref e)) => {
                 writer.write_event(Event::GeneralRef(e.to_owned().into_owned()))?;
             }
-            Ok(Event::Eof) => break,
+            Ok(Event::Eof) => {
+                return Err(OxmlError::MissingElement(format!(
+                    "closing {}",
+                    String::from_utf8_lossy(&tag_name)
+                )));
+            }
             Err(e) => return Err(e.into()),
         }
         buf.clear();

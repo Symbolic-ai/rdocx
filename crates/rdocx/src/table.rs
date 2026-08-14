@@ -21,6 +21,13 @@ pub enum VerticalAlignment {
     Bottom,
 }
 
+/// Vertical merge state for an immutable cell view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerticalMergeKind {
+    Restart,
+    Continue,
+}
+
 impl VerticalAlignment {
     fn to_st(self) -> ST_VerticalJc {
         match self {
@@ -592,6 +599,24 @@ impl<'a> TableRef<'a> {
         let width = self.inner.properties.as_ref()?.width.as_ref()?;
         (width.width_type == "dxa").then(|| Length::twips(width.w))
     }
+
+    /// Whether explicit table borders are present.
+    pub fn has_borders(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.borders.as_ref())
+            .is_some_and(|borders| !borders.is_empty())
+    }
+
+    /// Get the table shading fill color, if set.
+    pub fn shading_fill(&self) -> Option<&str> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.shading.as_ref())
+            .and_then(|shading| shading.fill.as_deref())
+    }
 }
 
 /// An immutable reference to a table row.
@@ -709,11 +734,15 @@ impl<'a> CellRef<'a> {
     }
 
     /// Get the vertical merge state, if set.
-    pub fn v_merge(&self) -> Option<&VMerge> {
+    pub fn v_merge(&self) -> Option<VerticalMergeKind> {
         self.inner
             .properties
             .as_ref()
-            .and_then(|pr| pr.v_merge.as_ref())
+            .and_then(|pr| pr.v_merge)
+            .map(|merge| match merge {
+                VMerge::Restart => VerticalMergeKind::Restart,
+                VMerge::Continue => VerticalMergeKind::Continue,
+            })
     }
 
     /// Get the shading fill color, if set.
@@ -723,6 +752,15 @@ impl<'a> CellRef<'a> {
             .as_ref()
             .and_then(|pr| pr.shading.as_ref())
             .and_then(|shd| shd.fill.as_deref())
+    }
+
+    /// Whether explicit cell borders are present.
+    pub fn has_borders(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.borders.as_ref())
+            .is_some_and(|borders| !borders.is_empty())
     }
 
     /// Get the vertical alignment, if set.

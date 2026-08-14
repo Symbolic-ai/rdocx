@@ -19,6 +19,9 @@ pub enum OpcError {
     #[error("part not found: {0}")]
     PartNotFound(String),
 
+    #[error("OPC package {kind} exceeds limit of {limit}")]
+    PackageLimitExceeded { kind: &'static str, limit: u64 },
+
     #[error("invalid content types XML")]
     InvalidContentTypes,
 

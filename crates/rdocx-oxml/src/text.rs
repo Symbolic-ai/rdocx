@@ -11,7 +11,7 @@ use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::drawing::CT_Drawing;
-use crate::error::Result;
+use crate::error::{OxmlError, Result};
 #[cfg(test)]
 use crate::namespace::W_NS;
 use crate::namespace::{
@@ -146,20 +146,31 @@ impl CT_R {
                 Ok(Event::Start(ref element)) => {
                     let name = element.name();
                     if matches_word_element(element, context, b"rPr") {
-                        properties = Some(CT_RPr::from_xml(reader)?);
+                        let property_context = context.with_element(element);
+                        properties =
+                            Some(CT_RPr::from_xml_with_context(reader, &property_context)?);
                     } else if matches_word_element(element, context, b"t") {
                         let preserve_space = element.attributes().flatten().any(|attribute| {
                             attribute.key.as_ref() == b"xml:space"
                                 && attribute.value.as_ref() == b"preserve"
                         });
-                        let text = reader
-                            .read_text(name)
-                            .map(|text| crate::xml_text::decode_escaped(&text))
-                            .unwrap_or_default();
+                        let text = crate::xml_text::decode_escaped(&reader.read_text(name)?);
                         content.push(RunContent::Text(CT_Text {
                             text,
                             preserve_space,
                         }));
+                    } else if matches_word_element(element, context, b"tab") {
+                        reader.read_to_end_into(name, &mut Vec::new())?;
+                        content.push(RunContent::Tab);
+                    } else if matches_word_element(element, context, b"br") {
+                        let raw = capture_raw_element(reader, element, context)?;
+                        parse_break(element, context, raw, &mut content)?;
+                    } else if matches_word_element(element, context, b"footnoteReference") {
+                        let raw = capture_raw_element(reader, element, context)?;
+                        parse_note_reference_with_raw(element, context, true, raw, &mut content);
+                    } else if matches_word_element(element, context, b"endnoteReference") {
+                        let raw = capture_raw_element(reader, element, context)?;
+                        parse_note_reference_with_raw(element, context, false, raw, &mut content);
                     } else if matches_word_element(element, context, b"drawing") {
                         let raw = capture_raw_element(reader, element, context)?;
                         if let Some(drawing) = parse_drawing(raw.bytes())? {
@@ -197,27 +208,8 @@ impl CT_R {
                             }),
                         }));
                     } else if matches_word_element(element, context, b"br") {
-                        let element_context = context.with_element(element);
-                        let break_value = element
-                            .attributes()
-                            .flatten()
-                            .find(|attribute| {
-                                matches_word_name(attribute.key.as_ref(), &element_context, b"type")
-                            })
-                            .map(|attribute| attribute.value.into_owned());
                         let raw = capture_raw_empty_element(element, context)?;
-                        match break_value.as_deref() {
-                            None | Some(b"textWrapping") => content.push(RunContent::Break(
-                                ParsedWithRaw::from_parsed(BreakType::Line, raw),
-                            )),
-                            Some(b"page") => content.push(RunContent::Break(
-                                ParsedWithRaw::from_parsed(BreakType::Page, raw),
-                            )),
-                            Some(b"column") => content.push(RunContent::Break(
-                                ParsedWithRaw::from_parsed(BreakType::Column, raw),
-                            )),
-                            Some(_) => content.push(RunContent::Unsupported(raw)),
-                        }
+                        parse_break(element, context, raw, &mut content)?;
                     } else if matches_word_element(element, context, b"footnoteReference") {
                         parse_note_reference(element, context, true, &mut content)?;
                     } else if matches_word_element(element, context, b"endnoteReference") {
@@ -235,7 +227,9 @@ impl CT_R {
                 {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:r".to_string()));
+                }
                 Err(error) => return Err(error.into()),
                 _ => {}
             }
@@ -535,7 +529,9 @@ impl CT_Hyperlink {
                     );
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("w:hyperlink".to_string()));
+                }
                 Err(error) => return Err(error.into()),
                 _ => {}
             }
@@ -749,7 +745,9 @@ impl CT_P {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref element)) => {
                     if matches_word_element(element, context, b"pPr") {
-                        properties = Some(CT_PPr::from_xml(reader)?);
+                        let property_context = context.with_element(element);
+                        properties =
+                            Some(CT_PPr::from_xml_with_context(reader, &property_context)?);
                     } else if matches_word_element(element, context, b"r") {
                         let child_context = context.with_element(element);
                         content.push(ParagraphChild::Run(CT_R::from_xml_with_context(
@@ -793,7 +791,9 @@ impl CT_P {
                 {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:p".to_string()));
+                }
                 Err(error) => return Err(error.into()),
                 _ => {}
             }
@@ -886,7 +886,12 @@ fn parse_inline_children(
             {
                 break;
             }
-            Ok(Event::Eof) => break,
+            Ok(Event::Eof) => {
+                return Err(OxmlError::MissingElement(format!(
+                    "closing w:{}",
+                    String::from_utf8_lossy(end_name)
+                )));
+            }
             Err(error) => return Err(error.into()),
             _ => {}
         }
@@ -932,7 +937,12 @@ fn parse_composite_children(raw: &RawXml, end_name: &[u8]) -> Result<ParsedCompo
                 );
                 break;
             }
-            Ok(Event::Eof) => break,
+            Ok(Event::Eof) => {
+                return Err(OxmlError::MissingElement(format!(
+                    "w:{}",
+                    String::from_utf8_lossy(end_name)
+                )));
+            }
             Err(error) => return Err(error.into()),
             _ => {}
         }
@@ -990,6 +1000,18 @@ fn parse_note_reference(
     footnote: bool,
     content: &mut Vec<RunContent>,
 ) -> Result<()> {
+    let raw = capture_raw_empty_element(element, context)?;
+    parse_note_reference_with_raw(element, context, footnote, raw, content);
+    Ok(())
+}
+
+fn parse_note_reference_with_raw(
+    element: &BytesStart<'_>,
+    context: &NamespaceContext,
+    footnote: bool,
+    raw: RawXml,
+    content: &mut Vec<RunContent>,
+) {
     let element_context = context.with_element(element);
     let id = element
         .attributes()
@@ -1001,7 +1023,6 @@ fn parse_note_reference(
                 .parse::<i32>()
                 .ok()
         });
-    let raw = capture_raw_empty_element(element, context)?;
     match (footnote, id) {
         (true, Some(id)) => {
             content.push(RunContent::FootnoteRef(ParsedWithRaw::from_parsed(id, raw)))
@@ -1010,6 +1031,35 @@ fn parse_note_reference(
             content.push(RunContent::EndnoteRef(ParsedWithRaw::from_parsed(id, raw)))
         }
         (_, None) => content.push(RunContent::Unsupported(raw)),
+    }
+}
+
+fn parse_break(
+    element: &BytesStart<'_>,
+    context: &NamespaceContext,
+    raw: RawXml,
+    content: &mut Vec<RunContent>,
+) -> Result<()> {
+    let element_context = context.with_element(element);
+    let break_type = element
+        .attributes()
+        .flatten()
+        .find(|attribute| matches_word_name(attribute.key.as_ref(), &element_context, b"type"))
+        .map(|attribute| String::from_utf8_lossy(attribute.value.as_ref()).into_owned());
+    match break_type.as_deref() {
+        None | Some("textWrapping") => content.push(RunContent::Break(ParsedWithRaw::from_parsed(
+            BreakType::Line,
+            raw,
+        ))),
+        Some("page") => content.push(RunContent::Break(ParsedWithRaw::from_parsed(
+            BreakType::Page,
+            raw,
+        ))),
+        Some("column") => content.push(RunContent::Break(ParsedWithRaw::from_parsed(
+            BreakType::Column,
+            raw,
+        ))),
+        Some(_) => content.push(RunContent::Unsupported(raw)),
     }
     Ok(())
 }
@@ -1284,6 +1334,61 @@ mod tests {
         let xml = serialize(&paragraph);
         assert!(xml.contains(r#"w:clear="all""#), "{xml}");
         assert!(xml.contains(r#"w:clear="left""#), "{xml}");
+    }
+
+    #[test]
+    fn expanded_run_controls_parse_like_empty_elements() {
+        let paragraph = parse_paragraph(concat!(
+            r#"<w:r><w:tab></w:tab><w:br w:type="page"></w:br>"#,
+            r#"<w:footnoteReference w:id="7"></w:footnoteReference>"#,
+            r#"<w:endnoteReference w:id="9"></w:endnoteReference></w:r>"#,
+        ));
+        let run = paragraph.run(0).unwrap();
+        assert!(matches!(run.content[0], RunContent::Tab));
+        assert!(matches!(
+            run.content[1],
+            RunContent::Break(ref parsed) if parsed.value() == &BreakType::Page
+        ));
+        assert!(matches!(
+            run.content[2],
+            RunContent::FootnoteRef(ref parsed) if parsed.value() == &7
+        ));
+        assert!(matches!(
+            run.content[3],
+            RunContent::EndnoteRef(ref parsed) if parsed.value() == &9
+        ));
+    }
+
+    #[test]
+    fn formatting_properties_require_the_word_namespace() {
+        let inner = format!(
+            concat!(
+                r#"<w:r><w:rPr><x:vanish xmlns:x="urn:foreign"/></w:rPr><w:t>a</w:t></w:r>"#,
+                r#"<w:r><w:rPr><z:vanish xmlns:z="{}"/></w:rPr><w:t>b</w:t></w:r>"#,
+            ),
+            W_NS
+        );
+        let paragraph = parse_paragraph(&inner);
+        assert_eq!(
+            paragraph
+                .run(0)
+                .unwrap()
+                .properties
+                .as_ref()
+                .unwrap()
+                .vanish,
+            None
+        );
+        assert_eq!(
+            paragraph
+                .run(1)
+                .unwrap()
+                .properties
+                .as_ref()
+                .unwrap()
+                .vanish,
+            Some(true)
+        );
     }
 
     #[test]

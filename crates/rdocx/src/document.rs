@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::cell::Cell;
 
 use oxml_media::MediaNamer;
-use oxml_opc::OpcPackage;
 use oxml_opc::relationship::rel_types;
+use oxml_opc::{OpcPackage, PackageReadLimits};
 use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
 use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, CT_Inline};
 use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef, HdrFtrType};
@@ -141,8 +141,13 @@ impl Document {
 
     /// Open a document from bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        Self::from_bytes_with_limits(bytes, PackageReadLimits::UNBOUNDED)
+    }
+
+    /// Open a document from bytes while bounding OPC archive expansion.
+    pub fn from_bytes_with_limits(bytes: &[u8], limits: PackageReadLimits) -> Result<Self> {
         let cursor = std::io::Cursor::new(bytes);
-        let package = OpcPackage::from_reader(cursor)?;
+        let package = OpcPackage::from_reader_with_limits(cursor, limits)?;
         Self::from_package(package)
     }
 
@@ -905,7 +910,11 @@ impl Document {
         let rels = self.package.get_part_rels(&self.doc_part_name)?;
         rels.items
             .iter()
-            .find(|r| r.id == rel_id && r.rel_type == rel_types::HYPERLINK)
+            .find(|r| {
+                r.id == rel_id
+                    && r.rel_type == rel_types::HYPERLINK
+                    && r.target_mode.as_deref() == Some("External")
+            })
             .map(|r| r.target.clone())
     }
 

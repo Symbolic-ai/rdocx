@@ -3,7 +3,7 @@
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
-use crate::error::Result;
+use crate::error::{OxmlError, Result};
 use crate::header_footer::{HdrFtrRef, HdrFtrType};
 use crate::namespace::{
     MC_NS, R_NS, W_NS, matches_local_name, matches_word_element, matches_word_name,
@@ -278,7 +278,9 @@ impl CT_SectPr {
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"sectPr") => {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:sectPr".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -335,7 +337,9 @@ impl CT_SectPr {
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"cols") => {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:cols".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -746,7 +750,9 @@ impl CT_Body {
                 Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"body") => {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:body".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -820,6 +826,8 @@ impl CT_Document {
         let mut extra_namespaces = Vec::new();
         let mut background_xml = None;
         let mut document_context = NamespaceContext::default();
+        let mut saw_document = false;
+        let mut saw_document_end = false;
         let mut buf = Vec::new();
 
         // Known namespace prefixes that we always emit ourselves
@@ -830,6 +838,12 @@ impl CT_Document {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     if matches_word_element(e, &NamespaceContext::default(), b"document") {
+                        if saw_document {
+                            return Err(OxmlError::UnexpectedElement(
+                                "duplicate w:document".to_string(),
+                            ));
+                        }
+                        saw_document = true;
                         document_context = NamespaceContext::default().with_element(e);
                         // Capture extra namespace declarations from the document element
                         for attr in e.attributes().flatten() {
@@ -844,19 +858,41 @@ impl CT_Document {
                             }
                         }
                         // Continue into document element
-                    } else if matches_word_element(e, &document_context, b"body") {
+                    } else if saw_document && matches_word_element(e, &document_context, b"body") {
+                        if body.is_some() {
+                            return Err(OxmlError::UnexpectedElement(
+                                "duplicate w:body".to_string(),
+                            ));
+                        }
                         let body_context = document_context.with_element(e);
                         body = Some(CT_Body::from_xml_with_context(&mut reader, &body_context)?);
-                    } else if matches_word_element(e, &document_context, b"background") {
+                    } else if saw_document
+                        && matches_word_element(e, &document_context, b"background")
+                    {
                         background_xml = Some(capture_element(&mut reader, e)?);
                     } else {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
-                    if matches_word_element(e, &document_context, b"background") {
+                    if saw_document && matches_word_element(e, &document_context, b"body") {
+                        if body.replace(CT_Body::new()).is_some() {
+                            return Err(OxmlError::UnexpectedElement(
+                                "duplicate w:body".to_string(),
+                            ));
+                        }
+                    } else if saw_document
+                        && matches_word_element(e, &document_context, b"background")
+                    {
                         background_xml = Some(capture_empty_element(e)?);
                     }
+                }
+                Ok(Event::End(ref e))
+                    if saw_document
+                        && matches_word_name(e.name().as_ref(), &document_context, b"document") =>
+                {
+                    saw_document_end = true;
+                    break;
                 }
                 Ok(Event::Eof) => break,
                 Err(e) => return Err(e.into()),
@@ -865,8 +901,15 @@ impl CT_Document {
             buf.clear();
         }
 
+        if !saw_document {
+            return Err(OxmlError::MissingElement("w:document".to_string()));
+        }
+        if !saw_document_end {
+            return Err(OxmlError::MissingElement("closing w:document".to_string()));
+        }
+
         Ok(CT_Document {
-            body: body.unwrap_or_default(),
+            body: body.ok_or_else(|| OxmlError::MissingElement("w:body".to_string()))?,
             extra_namespaces,
             background_xml,
         })

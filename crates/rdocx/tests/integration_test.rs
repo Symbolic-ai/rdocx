@@ -1,14 +1,14 @@
 //! Integration tests for rdocx — end-to-end document creation and round-trip.
 
-use oxml_opc::OpcPackage;
 use oxml_opc::relationship::rel_types;
+use oxml_opc::{OpcPackage, PackageReadLimits};
 use rdocx::Document;
 use rdocx::paragraph::Alignment;
 use rdocx::table::VerticalAlignment;
 use rdocx::{
     BodyContentRef, BorderStyle, BreakKind, CellContentRef, DrawingKind, DrawingRelationshipKind,
     FieldKind, Length, ListLevel, ListNumberFormat, ParagraphContentRef, RunContentRef,
-    SectionBreak, StyleBuilder, TabAlignment, TabLeader, UnderlineStyle,
+    SectionBreak, StyleBuilder, TabAlignment, TabLeader, UnderlineStyle, VerticalMergeKind,
 };
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::shared::ST_Jc;
@@ -96,6 +96,65 @@ fn create_and_round_trip_simple_document() {
     let paras = doc2.paragraphs();
     assert_eq!(paras[0].text(), "Hello, World!");
     assert_eq!(paras[1].text(), "This is a test document.");
+}
+
+#[test]
+fn bounded_document_reader_rejects_package_expansion() {
+    let bytes = Document::new().to_bytes().unwrap();
+    let result = Document::from_bytes_with_limits(
+        &bytes,
+        PackageReadLimits {
+            max_entries: 1,
+            max_part_uncompressed_bytes: 1_024 * 1_024,
+            max_total_uncompressed_bytes: 2 * 1_024 * 1_024,
+        },
+    );
+    let error = match result {
+        Ok(_) => panic!("package limit should reject the document"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        rdocx::Error::Opc(oxml_opc::OpcError::PackageLimitExceeded {
+            kind: "entry count",
+            limit: 1
+        })
+    ));
+}
+
+#[test]
+fn valid_zip_with_truncated_document_xml_is_rejected() {
+    let bytes = Document::new().to_bytes().unwrap();
+    let truncated = concat!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+        r#"<w:body><w:p><w:r><w:t>partial</w:t></w:r></w:p>"#,
+    );
+    let bytes = replace_document_xml(&bytes, truncated.to_string());
+    assert!(Document::from_bytes(&bytes).is_err());
+}
+
+#[test]
+fn hyperlink_url_rejects_internal_relationship_targets() {
+    let mut document = Document::new();
+    let rel_id = document.add_hyperlink_relationship("https://example.com");
+    document.add_paragraph("").add_hyperlink("link", &rel_id);
+    let bytes = document.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let relationship = package
+        .part_rels
+        .get_mut("/word/document.xml")
+        .unwrap()
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.id == rel_id)
+        .unwrap();
+    relationship.target_mode = None;
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+
+    let reopened = Document::from_bytes(&output.into_inner()).unwrap();
+    assert_eq!(reopened.hyperlink_url(&rel_id), None);
 }
 
 #[test]
@@ -295,6 +354,26 @@ fn facade_table_and_tristate_accessors_are_total() {
     assert_eq!(run.italic_value(), Some(true));
     assert_eq!(run.strike_value(), Some(false));
     assert_eq!(run.underline_code_value(), Some(10));
+}
+
+#[test]
+fn table_facade_exposes_vertical_merge_states() {
+    let mut document = Document::new();
+    let mut table = document.add_table(2, 1);
+    table.cell(0, 0).unwrap().set_v_merge_restart();
+    table.cell(1, 0).unwrap().set_v_merge_continue();
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let table = reopened.table(0).unwrap();
+    assert_eq!(
+        table.cell(0, 0).unwrap().v_merge(),
+        Some(VerticalMergeKind::Restart)
+    );
+    assert_eq!(
+        table.cell(1, 0).unwrap().v_merge(),
+        Some(VerticalMergeKind::Continue)
+    );
 }
 
 #[test]
