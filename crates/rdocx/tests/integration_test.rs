@@ -645,6 +645,11 @@ fn table_column_width_updates_grid_and_cells() {
     assert!(!table.set_column_width(2, Length::twips(1_000)));
 
     let xml = String::from_utf8(document_xml(&mut doc)).unwrap();
+    assert_eq!(
+        xml.matches("<w:tblW w:w=\"5000\" w:type=\"dxa\"").count(),
+        1,
+        "the table width must equal the synchronized grid width"
+    );
     assert_eq!(xml.matches("<w:gridCol w:w=\"2000\"").count(), 1);
     assert_eq!(xml.matches("<w:gridCol w:w=\"3000\"").count(), 1);
     assert_eq!(xml.matches("<w:tcW w:w=\"2000\" w:type=\"dxa\"").count(), 2);

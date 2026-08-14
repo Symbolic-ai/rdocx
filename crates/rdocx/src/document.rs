@@ -1382,9 +1382,13 @@ impl Document {
     ///
     /// Returns `false` when `num_id` is unknown or `level` is out of range.
     pub fn set_list_level(&mut self, num_id: u32, level: u32, spec: ListLevel) -> bool {
-        self.invalidate_layout();
-        self.ensure_numbering()
-            .set_list_level(num_id, level, spec.format.to_st(), spec.start)
+        let updated = self.numbering.as_mut().is_some_and(|numbering| {
+            numbering.set_list_level(num_id, level, spec.format.to_st(), spec.start)
+        });
+        if updated {
+            self.invalidate_layout();
+        }
+        updated
     }
 
     // ---- Style access ----
@@ -4050,6 +4054,19 @@ mod tests {
         assert_eq!(
             reopened.hyperlink_url(spans[0].2.expect("relationship id")),
             Some("https://example.com/table".to_string())
+        );
+    }
+
+    #[test]
+    fn rejected_list_level_update_does_not_materialize_numbering() {
+        let mut doc = Document::new();
+        assert!(doc.numbering.is_none());
+
+        assert!(!doc.set_list_level(999, 1, ListLevel::decimal()));
+
+        assert!(
+            doc.numbering.is_none(),
+            "a rejected setter must not add an empty numbering part"
         );
     }
 

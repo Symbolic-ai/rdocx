@@ -155,25 +155,71 @@ impl<'a> Table<'a> {
         self.ensure_tbl_pr().layout = Some("fixed".to_string());
     }
 
-    /// Set one grid column's width and apply the same width to that cell in
-    /// every row.
+    /// Set one grid column's width and keep the table, grid, and covering cell
+    /// widths synchronized.
     ///
-    /// Returns `false` when `column` is outside the table grid. Keeping the
-    /// grid and cell widths in sync avoids contradictory fixed-layout table
-    /// geometry.
+    /// A cell that spans the changed grid column receives the sum of every
+    /// grid column it covers. Returns `false` without changing the table when
+    /// `column` is outside the grid, a row's spans exceed the grid, or a width
+    /// total overflows.
     pub fn set_column_width(&mut self, column: usize, width: Length) -> bool {
-        let Some(grid_column) = self
-            .inner
-            .grid
-            .as_mut()
-            .and_then(|grid| grid.columns.get_mut(column))
+        let Some(grid) = self.inner.grid.as_ref() else {
+            return false;
+        };
+        if column >= grid.columns.len() {
+            return false;
+        }
+
+        let mut grid_widths: Vec<i32> = grid.columns.iter().map(|item| item.width.0).collect();
+        grid_widths[column] = width.as_twips().0;
+        let Some(table_width) = grid_widths
+            .iter()
+            .try_fold(0_i32, |total, item| total.checked_add(*item))
         else {
             return false;
         };
-        grid_column.width = width.as_twips();
-        for row in &mut self.inner.rows {
-            if let Some(cell) = row.cells.get_mut(column) {
-                Cell { inner: cell }.set_width(width);
+
+        let mut cell_widths = Vec::with_capacity(self.inner.rows.len());
+        for row in &self.inner.rows {
+            let mut grid_index = 0_usize;
+            let mut row_widths = Vec::with_capacity(row.cells.len());
+            for cell in &row.cells {
+                let span = cell
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.grid_span)
+                    .unwrap_or(1)
+                    .max(1) as usize;
+                let Some(end) = grid_index.checked_add(span) else {
+                    return false;
+                };
+                if end > grid_widths.len() {
+                    return false;
+                }
+                if (grid_index..end).contains(&column) {
+                    let Some(cell_width) = grid_widths[grid_index..end]
+                        .iter()
+                        .try_fold(0_i32, |total, item| total.checked_add(*item))
+                    else {
+                        return false;
+                    };
+                    row_widths.push(Some(cell_width));
+                } else {
+                    row_widths.push(None);
+                }
+                grid_index = end;
+            }
+            cell_widths.push(row_widths);
+        }
+
+        self.inner.grid.as_mut().unwrap().columns[column].width = width.as_twips();
+        self.ensure_tbl_pr().width = Some(CT_TblWidth::dxa(table_width));
+        for (row, widths) in self.inner.rows.iter_mut().zip(cell_widths) {
+            for (cell, cell_width) in row.cells.iter_mut().zip(widths) {
+                if let Some(cell_width) = cell_width {
+                    cell.properties.get_or_insert_with(CT_TcPr::default).width =
+                        Some(CT_TblWidth::dxa(cell_width));
+                }
             }
         }
         true
@@ -683,5 +729,50 @@ impl<'a> CellRef<'a> {
             .as_ref()
             .and_then(|pr| pr.v_align)
             .map(VerticalAlignment::from_st)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rdocx_oxml::table::{CT_Row, CT_TblGrid, CT_TblGridCol};
+    use rdocx_oxml::units::Twips;
+
+    #[test]
+    fn table_column_width_updates_grid_table_and_spanning_cells() {
+        let mut inner = CT_Tbl::new();
+        inner.grid = Some(CT_TblGrid {
+            columns: vec![
+                CT_TblGridCol {
+                    width: Twips(1_000),
+                },
+                CT_TblGridCol {
+                    width: Twips(2_000),
+                },
+                CT_TblGridCol {
+                    width: Twips(3_000),
+                },
+            ],
+        });
+        let mut row = CT_Row::new();
+        let mut spanning_cell = CT_Tc::new();
+        spanning_cell.properties = Some(CT_TcPr {
+            grid_span: Some(2),
+            ..CT_TcPr::default()
+        });
+        row.cells.push(spanning_cell);
+        row.cells.push(CT_Tc::new());
+        inner.rows.push(row);
+
+        let mut table = Table { inner: &mut inner };
+        assert!(table.set_column_width(1, Length::twips(4_000)));
+
+        let properties = table.inner.properties.as_ref().unwrap();
+        assert_eq!(properties.width, Some(CT_TblWidth::dxa(8_000)));
+        let first_cell = &table.inner.rows[0].cells[0];
+        assert_eq!(
+            first_cell.properties.as_ref().unwrap().width,
+            Some(CT_TblWidth::dxa(5_000))
+        );
     }
 }
