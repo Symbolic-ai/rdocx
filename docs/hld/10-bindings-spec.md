@@ -187,6 +187,46 @@ intentionally stales every pre-write handle and collection. Pure-Python
 `Length`, `Inches`, `Pt` and the required `MSO_SHAPE` members keep native
 inheritance outside the limited ABI.
 
+## Native Word facade stability
+
+The public `rdocx` facade is the common source for native, Python, WASM, and
+CLI consumers. Custom lists are created with `Document::add_list_definition`
+from up to nine `ListLevel` values. Each value selects a `ListNumberFormat` and
+an optional start number. Later slice entries are ignored because Word exposes
+exactly nine levels. Paragraph numbering stores an explicit list ID and a
+zero-based level from 0 through 8. Its in-place setters return `false` without
+mutation for a larger value. `Document::set_list_level` can redefine an
+existing level without rebuilding the document. A rejected redefinition is
+side-effect free.
+
+Paragraph mutation supports explicit hard breaks and hyperlinks backed by a
+document relationship. Table column mutation keeps the table width, grid
+column, and every covering cell width consistent. A cell with `gridSpan`
+receives the sum of its covered grid columns. Negative widths, invalid spans,
+and overflowing totals are rejected without mutation. These are additive
+stable APIs. Existing binding surfaces do not gain new methods implicitly, but
+their owned `rdocx::Document` remains package-preserving when native code uses
+the new operations.
+
+The stable Rust family moves to 0.5.0 for the numbering preservation model.
+`CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
+producer extensions survive typed mutations. Full struct literals written for
+0.4 must add the preservation fields, or callers should use the existing
+constructors. This is an intentional breaking pre-1.0 boundary. Python, WASM,
+and CLI consumers continue through the package-preserving facade and do not
+construct these low-level structs.
+
+`CT_TabStop` also exposes `source_occurrence: Option<usize>`. Parsed numbering
+tabs use this provenance to retain producer XML on the same occurrence after
+an edit, insertion, or removal. New tabs carry `None`, and semantic equality
+continues to compare only alignment, position, and leader. The public
+`CT_Tabs::from_xml_with_prefixes` parser accepts the in-scope WordprocessingML
+prefixes and tracks nested namespace shadows. Paragraph-property namespace
+context stays in one internal projection used by numbering, style, body,
+table-cell, header, footer, footnote, and endnote readers, so `CT_PPr` does not
+expose a partially contextual parser. Established aliased and default
+WordprocessingML inputs remain accepted outside numbering.
+
 ## Packaging
 
 **maturin, mixed Rust and Python layout**, so type stubs and enum shims have a

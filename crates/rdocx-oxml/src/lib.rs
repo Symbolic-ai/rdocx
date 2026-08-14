@@ -1,11 +1,4 @@
-//! WordprocessingML XML element types for OOXML.
-//!
-//! This crate provides 1:1 Rust struct mappings for OOXML elements,
-//! with manual `quick-xml` parsing and serialization.
-//!
-//! We use OOXML naming conventions (CT_P, CT_R, ST_Jc, etc.) for
-//! direct correspondence with the specification.
-
+#![doc = include_str!("../README.md")]
 #![allow(non_camel_case_types)]
 #![allow(clippy::large_enum_variant)]
 #![allow(clippy::should_implement_trait)]

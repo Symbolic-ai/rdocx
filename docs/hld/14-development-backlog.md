@@ -17,7 +17,7 @@ incrementally-testable slices so something verifiable lands every few days.
 
 ## Velocity assumption
 
-This backlog is **150 stories**. Summed by size it is roughly **390 developer-days**:
+This backlog is **162 stories**. Summed by size it is roughly **408 developer-days**:
 about 50 at S, 60 at M, 38 at L and 2 at XL.
 
 At a sustained solo pace that is **17 to 18 months**, not the nine to twelve
@@ -1182,3 +1182,55 @@ its 12 published packages remain unchanged.
 **Depends on**: F-143, F-144, F-145.
 **Test gate**: all 14 incubating packages resolve from crates.io at 0.1.3 with
 the expected owner, and the GitHub release targets the reviewed sprint SHA.
+
+### F-X007, Integrate PR 25 and stable crate documentation (L)
+Integrate Jon Stokes's PR 25 through the sprint branch, retaining contributor
+credit in the GitHub merge record. The public Word facade gains custom list
+definitions, per-paragraph numbering, composable hard line breaks and
+hyperlinks, and fixed table-column widths. Rejected list updates remain
+side-effect free, and fixed table geometry keeps the table width, grid, and
+spanning cell widths consistent. Every stable crate has a package README that
+states when to use it, links to its API documentation, and includes a current
+example or a clear deprecation path. The README examples are compile-checked.
+Typed numbering edits preserve unsupported attributes and child XML in schema
+order across namespace aliases and collisions. Repeated tab stops carry public
+source-occurrence provenance so edits, insertions, removals, and explicit
+clears retain producer ownership in deterministic linear work. The public tab
+parser tracks namespace scopes and accepts both empty and expanded tab-stop
+elements. Preservation carriers extend one expanded-name `mc:Ignorable`
+attribute without duplicating it, using the actual property ancestor scope
+rather than a document-wide declaration list. Style, body, table-cell, header,
+footer, footnote, and endnote paragraph properties retain established aliased
+and default WordprocessingML parsing. Nested tab namespace scope has a normal
+64-element depth bound. These public model additions set the stable release
+boundary at 0.5.0.
+**Test gate**: the merged PR's focused round-trip suite passes against current
+`main`, the two rejected-state and table-geometry regressions pass, and every
+stable crate README example compiles against its packaged crate. Numbering
+round trips cover schema order, foreign namespace collisions, nested property
+markup, provenance-only replacement, repeated occurrence ownership, explicit
+clear carriers, namespace shadows, and expanded tab elements. The hash harness
+remains 28 of 28. The gate also covers direct style and paragraph boundaries,
+table cells, headers, notes, foreign same-local negatives, property-local
+compatibility scope, and bounded deep tab aliases. Stable package archives stay
+below 10 MiB, and the public migration examples compile.
+
+### F-X008, Tag v0.5.0 (S)
+The stable workspace package, nine internal pins, and eleven inherited
+lockfile packages are 0.5.0 after F-X007. The exact seven stable crates.io
+packages are published at 0.5.0 from the reviewed `v0.5.0` tag. The two Python
+project versions and `rdocx-wasm` inherit 0.5.0 without gaining publication
+authority. All 15 incubating manifests remain at 0.1.3, with exactly 14 in the
+incubating crates.io family and `rpptx-wasm` unpublished. `publish.yml` runs the
+exact stable and incubating metadata preflights before its patched 21-package
+workspace dry run. No incubating, WASM, Python, or npm package is part of the
+stable publication.
+**Depends on**: F-X007.
+**Test gate**: the stable metadata regression proves the workspace version,
+nine pins, eleven lock entries, two Python versions, WASM literals, README
+requirements, exact stable publication set, and unchanged incubating 0.1.3
+state. The workflow contract, 12 README examples, 28-entry hash harness, exact
+patched 21-package dry run, seven stable archive inventories, and `cargo deny`
+pass. All seven stable packages resolve independently from crates.io at 0.5.0
+under owner `mantissaman`, the GitHub release targets the reviewed sprint SHA,
+and the PR 25 contributor credit and merge note remain visible on GitHub.

@@ -1,9 +1,4 @@
-//! Layout engine for converting DOCX flow model to positioned page frames.
-//!
-//! This crate implements style resolution, font loading, text shaping,
-//! line breaking, block/table layout, and pagination to produce
-//! [`LayoutResult`] containing [`PageFrame`]s with absolutely-positioned elements.
-
+#![doc = include_str!("../README.md")]
 #![allow(non_camel_case_types)]
 #![allow(clippy::too_many_arguments)]
 

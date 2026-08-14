@@ -574,7 +574,26 @@ final approval.
 |------|-------|------|
 | F-X006 | Tag the expanded rpptx family               | S |
 
+#### Sprint S38, Contributor integration and stable release
+
+**Goal**: land PR 25 with its contributor credit intact, harden the new Word
+composition APIs against package and table-geometry regressions, and make the
+stable crate family documentation useful at the point of publication. Prepare
+and publish the complete stable family at the breaking pre-1.0 0.5.0 boundary
+only after the integrated result passes review and receives separate release
+approval.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X007 | Integrate PR 25 and stable crate documentation | L |
+| F-X008 | Tag v0.5.0                                      | S |
+
+F-X008 depends on F-X007. The GitHub PR is merged into the sprint branch so
+the contributor remains credited in the pull request and merge record. Only
+`/close-sprint` later merges the reviewed sprint to `main`.
+
 ## Cross-cutting
 
 F-X001 through F-X004 are scheduled in S36 as the final cross-cutting v1
-hardening wave.
+hardening wave. F-X007 and F-X008 handle the external Word contribution and
+its stable-family release without rewriting the completed milestone history.

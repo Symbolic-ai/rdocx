@@ -6,7 +6,8 @@ use quick_xml::{Reader, Writer};
 use crate::error::Result;
 use crate::header_footer::{HdrFtrRef, HdrFtrType};
 use crate::namespace::{W_NS, matches_local_name};
-use crate::properties::get_val_attr;
+use crate::numbering::word_prefixes_at;
+use crate::properties::{get_val_attr, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::shared::{ST_PageOrientation, ST_SectionType};
 use crate::table::CT_Tbl;
@@ -585,6 +586,13 @@ impl CT_Body {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_string()])
+    }
+
+    fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut content = Vec::new();
         let mut sect_pr = None;
         let mut buf = Vec::new();
@@ -593,10 +601,15 @@ impl CT_Body {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"p") {
-                        content.push(BodyContent::Paragraph(CT_P::from_xml(reader)?));
-                    } else if matches_local_name(name.as_ref(), b"tbl") {
-                        content.push(BodyContent::Table(CT_Tbl::from_xml(reader)?));
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"p", &prefixes) {
+                        content.push(BodyContent::Paragraph(CT_P::from_xml_with_prefixes(
+                            reader, &prefixes,
+                        )?));
+                    } else if is_word_element(name.as_ref(), b"tbl", &prefixes) {
+                        content.push(BodyContent::Table(CT_Tbl::from_xml_with_prefixes(
+                            reader, &prefixes,
+                        )?));
                     } else if matches_local_name(name.as_ref(), b"sectPr") {
                         sect_pr = Some(CT_SectPr::from_xml(reader)?);
                     } else {
@@ -682,6 +695,7 @@ impl CT_Document {
         let mut extra_namespaces = Vec::new();
         let mut background_xml = None;
         let mut buf = Vec::new();
+        let mut word_prefixes = Vec::new();
 
         // Known namespace prefixes that we always emit ourselves
         let known_ns: &[&[u8]] = &[b"xmlns:w", b"xmlns:r", b"xmlns:mc", b"xmlns"];
@@ -690,8 +704,9 @@ impl CT_Document {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
+                    let prefixes = word_prefixes_at(e, &word_prefixes)?;
                     if matches_local_name(name.as_ref(), b"body") {
-                        body = Some(CT_Body::from_xml(&mut reader)?);
+                        body = Some(CT_Body::from_xml_with_prefixes(&mut reader, &prefixes)?);
                     } else if matches_local_name(name.as_ref(), b"document") {
                         // Capture extra namespace declarations from the document element
                         for attr in e.attributes().flatten() {
@@ -706,6 +721,7 @@ impl CT_Document {
                             }
                         }
                         // Continue into document element
+                        word_prefixes = prefixes;
                     } else if matches_local_name(name.as_ref(), b"background") {
                         background_xml = Some(capture_element(&mut reader, e)?);
                     } else {
@@ -808,6 +824,20 @@ mod tests {
         let paras: Vec<_> = parsed.body.paragraphs().collect();
         assert_eq!(paras.len(), 1);
         assert_eq!(paras[0].text(), "Hello World");
+    }
+
+    #[test]
+    fn default_namespace_document_paragraph_properties_parse_in_scope() {
+        let xml = format!(
+            r#"<document xmlns="{W_NS}" xmlns:q="{W_NS}" xmlns:ext="urn:producer"><body><p><pPr><ext:jc ext:val="right"/><jc q:val="center"/></pPr><r><t>Scoped</t></r></p></body></document>"#
+        );
+        let parsed = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        let paragraph = parsed.body.paragraphs().next().unwrap();
+        assert_eq!(paragraph.text(), "Scoped");
+        assert_eq!(
+            paragraph.properties.as_ref().unwrap().jc,
+            Some(crate::shared::ST_Jc::Center)
+        );
     }
 
     #[test]

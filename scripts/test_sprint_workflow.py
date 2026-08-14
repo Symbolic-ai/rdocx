@@ -649,7 +649,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm-pack build --target bundler --scope tensorbee --release "
             '--out-dir "$package_root/rpptx-wasm" crates/rpptx-wasm --locked',
             'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
-            '"0.4.1" "rdocx_wasm"',
+            '"0.5.0" "rdocx_wasm"',
             'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
             '"0.1.3" "rpptx_wasm"',
             "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
@@ -2868,6 +2868,146 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(wasm["package"]["version"], {"workspace": True})
         self.assertFalse(wasm["package"]["publish"])
 
+    def test_stable_release_family_is_prepared_at_0_5_0(self) -> None:
+        expected_version = "0.5.0"
+        stable_members = (
+            "oxml-py-support",
+            "rpptx-py",
+            "rdocx-opc",
+            "rdocx-oxml",
+            "rdocx",
+            "rdocx-layout",
+            "rdocx-pdf",
+            "rdocx-html",
+            "rdocx-py",
+            "rdocx-cli",
+            "rdocx-wasm",
+        )
+        stable_pins = (
+            "oxml-py-support",
+            "rpptx-py",
+            "rdocx-opc",
+            "rdocx-oxml",
+            "rdocx",
+            "rdocx-layout",
+            "rdocx-pdf",
+            "rdocx-html",
+            "rdocx-py",
+        )
+        stable_publishable = {
+            "rdocx-opc",
+            "rdocx-oxml",
+            "rdocx-layout",
+            "rdocx-html",
+            "rdocx-pdf",
+            "rdocx",
+            "rdocx-cli",
+        }
+        incubating_members = (
+            "oxml-core",
+            "oxml-drawing",
+            "oxml-layout",
+            "oxml-media",
+            "oxml-opc",
+            "oxml-pdf",
+            "oxml-sml",
+            "oxml-cli-support",
+            "rpptx",
+            "rpptx-cli",
+            "rpptx-chart",
+            "rpptx-layout",
+            "rpptx-oxml",
+            "rpptx-render",
+            "rpptx-wasm",
+        )
+
+        root_text = (workflow.REPO / "Cargo.toml").read_text(encoding="utf-8")
+        root = tomllib.loads(root_text)
+        workspace = root["workspace"]
+        self.assertEqual(workspace["package"]["version"], expected_version)
+        dependencies = workspace["dependencies"]
+        for name in stable_pins:
+            self.assertEqual(dependencies[name]["version"], expected_version, name)
+
+        lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
+        lock_versions = {
+            package["name"]: package["version"]
+            for package in lock["package"]
+            if package["name"] in stable_members
+        }
+        self.assertEqual(set(lock_versions), set(stable_members))
+        for name in stable_members:
+            self.assertEqual(lock_versions[name], expected_version, name)
+
+        publishable = set()
+        for name in stable_members:
+            manifest = tomllib.loads(
+                (workflow.REPO / f"crates/{name}/Cargo.toml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(manifest["package"]["version"], {"workspace": True})
+            if manifest["package"].get("publish", True):
+                publishable.add(name)
+        self.assertEqual(publishable, stable_publishable)
+
+        for name in ("rdocx-py", "rpptx-py"):
+            pyproject = tomllib.loads(
+                (workflow.REPO / f"crates/{name}/pyproject.toml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(pyproject["project"]["version"], expected_version, name)
+
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertEqual(
+            ci.count(
+                'verify_package "$package_root/rdocx-wasm" '
+                '"@tensorbee/rdocx-wasm" "0.5.0" "rdocx_wasm"'
+            ),
+            1,
+        )
+        wasm_source = (workflow.REPO / "crates/rdocx-wasm/src/lib.rs").read_text(
+            encoding="utf-8"
+        )
+        for dependency in ("rdocx", "rdocx-layout"):
+            self.assertEqual(
+                wasm_source.count(
+                    f'{dependency} = {{ path = \\"crates/{dependency}\\", '
+                    f'version = \\"{expected_version}\\", '
+                    'default-features = false }'
+                ),
+                1,
+                dependency,
+            )
+
+        readme_requirements = {
+            "README.md": ('rdocx = "0.5"', 'version = "0.5"'),
+            "crates/rdocx-cli/README.md": ("--version '^0.5'",),
+            "crates/rdocx-html/README.md": ('rdocx-html = "0.5"',),
+            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.5"',),
+            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.5"',),
+            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.5"',),
+            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.5"',),
+        }
+        for path, requirements in readme_requirements.items():
+            text = (workflow.REPO / path).read_text(encoding="utf-8")
+            for requirement in requirements:
+                self.assertIn(requirement, text, path)
+
+        for name in incubating_members:
+            manifest = tomllib.loads(
+                (workflow.REPO / f"crates/{name}/Cargo.toml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(manifest["package"]["version"], "0.1.3", name)
+            self.assertIs(
+                manifest["package"].get("publish", True),
+                name != "rpptx-wasm",
+                name,
+            )
+
     def test_stable_release_family_has_lockstep_preparation_metadata(self) -> None:
         stable_packages = (
             "rdocx-opc",
@@ -3258,20 +3398,28 @@ class SprintWorkflowTests(unittest.TestCase):
         publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
             encoding="utf-8"
         )
-        metadata_check = (
-            "python3 -m unittest "
+        stable_check = (
+            "scripts.test_sprint_workflow.SprintWorkflowTests."
+            "test_stable_release_family_is_prepared_at_0_5_0"
+        )
+        incubating_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
             "test_incubating_release_family_is_prepared_at_0_1_3"
         )
+        metadata_command = (
+            "python3 -m unittest "
+            f"{stable_check} {incubating_check}"
+        )
 
         self.assert_publish_preflight_contract(publish)
-        self.assertEqual(publish.count(metadata_check), 1)
+        self.assertEqual(publish.count(metadata_command), 1)
+        self.assertLess(publish.index(stable_check), publish.index(incubating_check))
         self.assertLess(
             publish.index("python3 scripts/hash_harness.py --check"),
-            publish.index(metadata_check),
+            publish.index(metadata_command),
         )
         self.assertLess(
-            publish.index(metadata_check),
+            publish.index(metadata_command),
             publish.index("cargo publish --workspace --dry-run"),
         )
         self.assertLess(

@@ -425,13 +425,20 @@ stdout, exit-status verdicts, output validity, replacement persistence,
 document-order text, and bundled-font deterministic render bytes. Process ID
 and an atomic counter isolate temporary workspaces across concurrent runs.
 
-The root README is the sole source for its six Rust examples. Every fence is
-`rust,no_run`, so rustdoc compiles the examples without executing their
-filesystem writes. `scripts/readme_doctests.py` builds the current `rdocx`
-library with locked dependencies and Cargo JSON messages, locates the emitted
-rlib, and invokes rustdoc with the 2024 edition, warnings denied, its dependency
-search path, and the exact `--extern rdocx` artifact. The docs job and canonical
-non-fast verification call this same runner.
+The seven stable package archives each carry one README. The root README is the
+high-level `rdocx` guide, while each companion package has a focused README
+that states when to use it and either demonstrates its public boundary or
+directs users away from a deprecated shim. The CLI uses shell examples. The
+six stable libraries contain twelve total `rust,no_run` examples, so rustdoc
+compiles them without executing filesystem writes.
+
+`scripts/readme_doctests.py` validates the exact package-to-README inventory,
+the documented CLI argument names, the deterministic feature guidance, and the
+matching dependency and import names in both compatibility shims. It then
+builds each library with locked dependencies and Cargo JSON messages, locates
+its emitted rlib, and invokes rustdoc with the 2024 edition, warnings denied,
+the dependency search path, and the matching `--extern` binding. The docs job
+and canonical non-fast verification call this same runner.
 
 ## What CI runs
 

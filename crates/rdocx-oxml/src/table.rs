@@ -6,7 +6,8 @@ use quick_xml::{Reader, Writer};
 use crate::borders::CT_BorderEdge;
 use crate::error::Result;
 use crate::namespace::matches_local_name;
-use crate::properties::{CT_Shd, get_val_attr};
+use crate::numbering::word_prefixes_at;
+use crate::properties::{CT_Shd, get_val_attr, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
 #[cfg(test)]
 use crate::shared::ST_Border;
@@ -942,6 +943,13 @@ impl CT_Tc {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_string()])
+    }
+
+    fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut properties = None;
         let mut content = Vec::new();
         let mut extra_xml = Vec::new();
@@ -951,12 +959,17 @@ impl CT_Tc {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if matches_local_name(name.as_ref(), b"tcPr") {
                         properties = Some(CT_TcPr::from_xml(reader)?);
-                    } else if matches_local_name(name.as_ref(), b"p") {
-                        content.push(CellContent::Paragraph(CT_P::from_xml(reader)?));
-                    } else if matches_local_name(name.as_ref(), b"tbl") {
-                        content.push(CellContent::Table(CT_Tbl::from_xml(reader)?));
+                    } else if is_word_element(name.as_ref(), b"p", &prefixes) {
+                        content.push(CellContent::Paragraph(CT_P::from_xml_with_prefixes(
+                            reader, &prefixes,
+                        )?));
+                    } else if is_word_element(name.as_ref(), b"tbl", &prefixes) {
+                        content.push(CellContent::Table(CT_Tbl::from_xml_with_prefixes(
+                            reader, &prefixes,
+                        )?));
                     } else {
                         // Content controls (w:sdt), bookmarks and revision
                         // marks live here. Keep them verbatim rather than
@@ -1038,6 +1051,13 @@ impl CT_Row {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_string()])
+    }
+
+    fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut properties = None;
         let mut cells = Vec::new();
         let mut extra_xml = Vec::new();
@@ -1047,10 +1067,11 @@ impl CT_Row {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if matches_local_name(name.as_ref(), b"trPr") {
                         properties = Some(CT_TrPr::from_xml(reader)?);
-                    } else if matches_local_name(name.as_ref(), b"tc") {
-                        cells.push(CT_Tc::from_xml(reader)?);
+                    } else if is_word_element(name.as_ref(), b"tc", &prefixes) {
+                        cells.push(CT_Tc::from_xml_with_prefixes(reader, &prefixes)?);
                     } else {
                         // A cell wrapped in a content control used to be
                         // dropped here, leaving a row with no cells at all.
@@ -1129,6 +1150,13 @@ impl CT_Tbl {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_string()])
+    }
+
+    pub(crate) fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut properties = None;
         let mut grid = None;
         let mut rows = Vec::new();
@@ -1139,12 +1167,13 @@ impl CT_Tbl {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if matches_local_name(name.as_ref(), b"tblPr") {
                         properties = Some(CT_TblPr::from_xml(reader)?);
                     } else if matches_local_name(name.as_ref(), b"tblGrid") {
                         grid = Some(CT_TblGrid::from_xml(reader)?);
-                    } else if matches_local_name(name.as_ref(), b"tr") {
-                        rows.push(CT_Row::from_xml(reader)?);
+                    } else if is_word_element(name.as_ref(), b"tr", &prefixes) {
+                        rows.push(CT_Row::from_xml_with_prefixes(reader, &prefixes)?);
                     } else {
                         // Rows wrapped in a content control used to be dropped
                         // here, which silently deleted whole tables.
@@ -1251,6 +1280,66 @@ mod tests {
 
         let pr = tbl.properties.unwrap();
         assert_eq!(pr.width.as_ref().unwrap().w, 5000);
+    }
+
+    #[test]
+    fn aliased_table_cell_paragraph_properties_keep_root_scope() {
+        let xml = format!(
+            r#"<q:tbl xmlns:q="{}" xmlns:ext="urn:producer"><q:tr><q:tc><ext:p><ext:pPr><ext:jc ext:val="right"/></ext:pPr></ext:p><q:p><q:pPr><ext:jc ext:val="right"/><q:jc q:val="center"/></q:pPr><q:r><q:t>Cell</q:t></q:r></q:p></q:tc></q:tr></q:tbl>"#,
+            crate::namespace::W_NS
+        );
+        let mut reader = Reader::from_str(&xml);
+        let mut buf = Vec::new();
+        let table = loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref element)) if element.local_name().as_ref() == b"tbl" => {
+                    let prefixes = word_prefixes_at(element, &[]).unwrap();
+                    break CT_Tbl::from_xml_with_prefixes(&mut reader, &prefixes).unwrap();
+                }
+                Ok(Event::Eof) => panic!("missing table"),
+                event => {
+                    event.unwrap();
+                }
+            }
+            buf.clear();
+        };
+        let paragraphs = table.rows[0].cells[0].paragraphs();
+        assert_eq!(paragraphs.len(), 1);
+        assert_eq!(paragraphs[0].text(), "Cell");
+        assert_eq!(
+            paragraphs[0].properties.as_ref().unwrap().jc,
+            Some(ST_Jc::Center)
+        );
+    }
+
+    #[test]
+    fn default_namespace_table_cell_properties_keep_root_scope() {
+        let xml = format!(
+            r#"<tbl xmlns="{0}" xmlns:w="{0}" xmlns:ext="urn:producer"><tr><tc><ext:p><ext:pPr><ext:jc ext:val="right"/></ext:pPr></ext:p><p><pPr><ext:jc ext:val="right"/><jc w:val="center"/></pPr><r><t>Cell</t></r></p></tc></tr></tbl>"#,
+            crate::namespace::W_NS
+        );
+        let mut reader = Reader::from_str(&xml);
+        let mut buf = Vec::new();
+        let table = loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref element)) if element.local_name().as_ref() == b"tbl" => {
+                    let prefixes = word_prefixes_at(element, &[]).unwrap();
+                    break CT_Tbl::from_xml_with_prefixes(&mut reader, &prefixes).unwrap();
+                }
+                Ok(Event::Eof) => panic!("missing table"),
+                event => {
+                    event.unwrap();
+                }
+            }
+            buf.clear();
+        };
+        let paragraphs = table.rows[0].cells[0].paragraphs();
+        assert_eq!(paragraphs.len(), 1);
+        assert_eq!(paragraphs[0].text(), "Cell");
+        assert_eq!(
+            paragraphs[0].properties.as_ref().unwrap().jc,
+            Some(ST_Jc::Center)
+        );
     }
 
     #[test]

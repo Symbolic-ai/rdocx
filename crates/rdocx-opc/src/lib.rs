@@ -1,10 +1,4 @@
-//! Deprecated compatibility shim for [`oxml_opc`].
-//!
-//! Use `oxml-opc` directly for new code. Retained types are exact re-exports,
-//! so legacy type paths remain type-identical. The removed Word-specific
-//! `OpcPackage::new_docx` and `ContentTypes::new_docx` constructors have no
-//! shared equivalent. Word consumers should configure the generic constructors
-//! at their format boundary.
+#![doc = include_str!("../README.md")]
 
 pub use oxml_opc::*;
 

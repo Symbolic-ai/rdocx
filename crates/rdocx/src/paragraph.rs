@@ -6,7 +6,7 @@ use rdocx_oxml::properties::{CT_PPr, CT_Shd};
 use rdocx_oxml::shared::{
     ST_Border, ST_Jc, ST_PageOrientation, ST_SectionType, ST_TabJc, ST_TabLeader,
 };
-use rdocx_oxml::text::{CT_P, CT_R};
+use rdocx_oxml::text::{BreakType, CT_P, CT_R, HyperlinkSpan, RunContent};
 use rdocx_oxml::units::Twips;
 
 use crate::Length;
@@ -139,6 +139,33 @@ impl<'a> Paragraph<'a> {
         }
     }
 
+    /// Add a line break in its own run.
+    pub fn add_line_break(&mut self) {
+        let mut run = CT_R::new("");
+        run.content = vec![RunContent::Break(BreakType::Line)];
+        self.inner.runs.push(run);
+    }
+
+    /// Add a run wrapped in an external hyperlink relationship.
+    ///
+    /// Obtain `relationship_id` from
+    /// [`crate::Document::add_hyperlink_relationship`]. Returning the run
+    /// allows the hyperlink text to receive the same direct formatting as any
+    /// other run.
+    pub fn add_hyperlink(&mut self, text: &str, relationship_id: &str) -> Run<'_> {
+        let run_start = self.inner.runs.len();
+        self.inner.runs.push(CT_R::new(text));
+        self.inner.hyperlinks.push(HyperlinkSpan {
+            rel_id: Some(relationship_id.to_string()),
+            anchor: None,
+            run_start,
+            run_end: run_start + 1,
+        });
+        Run {
+            inner: self.inner.runs.last_mut().unwrap(),
+        }
+    }
+
     /// Get the number of runs in this paragraph.
     pub fn run_count(&self) -> usize {
         self.inner.runs.len()
@@ -187,6 +214,40 @@ impl<'a> Paragraph<'a> {
     /// Set the paragraph style by ID in place.
     pub fn set_style(&mut self, style_id: &str) {
         self.ensure_ppr().style_id = Some(style_id.to_string());
+    }
+
+    /// Attach this paragraph to a list definition as a list item.
+    ///
+    /// `num_id` comes from [`crate::Document::add_list_definition`] (or the
+    /// shared definitions behind `add_bullet_list_item` /
+    /// `add_numbered_list_item`); `level` is the 0-based indentation level.
+    pub fn numbering(mut self, num_id: u32, level: u32) -> Self {
+        let _ = self.set_numbering(num_id, level);
+        self
+    }
+
+    /// Attach this paragraph to a list definition in place.
+    ///
+    /// Returns `false` without mutation when `level` is outside Word's
+    /// supported range of 0 through 8.
+    pub fn set_numbering(&mut self, num_id: u32, level: u32) -> bool {
+        self.set_numbering_value(Some((num_id, level)))
+    }
+
+    /// Set or clear this paragraph's list numbering.
+    ///
+    /// Returns `false` without mutation for an out-of-range level.
+    pub fn set_numbering_value(&mut self, numbering: Option<(u32, u32)>) -> bool {
+        if numbering.is_some_and(|(_, level)| level > 8) {
+            return false;
+        }
+        if numbering.is_none() && self.inner.properties.is_none() {
+            return true;
+        }
+        let ppr = self.ensure_ppr();
+        ppr.num_id = numbering.map(|(num_id, _)| num_id);
+        ppr.num_ilvl = numbering.map(|(_, level)| level);
+        true
     }
 
     /// Set space before the paragraph.
@@ -498,6 +559,7 @@ impl<'a> Paragraph<'a> {
             val: alignment.to_st(),
             pos: position.as_twips(),
             leader: None,
+            source_occurrence: None,
         });
     }
 
@@ -527,6 +589,7 @@ impl<'a> Paragraph<'a> {
             val: alignment.to_st(),
             pos: position.as_twips(),
             leader: Some(leader.to_st()),
+            source_occurrence: None,
         });
     }
 
