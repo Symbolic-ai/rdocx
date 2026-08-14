@@ -105,26 +105,10 @@ impl CT_PBdr {
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    let name = e.name();
-                    let edge = CT_BorderEdge::from_xml_attrs(e)?;
-                    if matches_local_name(name.as_ref(), b"top") {
-                        bdr.top = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"bottom") {
-                        bdr.bottom = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"left")
-                        || matches_local_name(name.as_ref(), b"start")
-                    {
-                        bdr.left = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"right")
-                        || matches_local_name(name.as_ref(), b"end")
-                    {
-                        bdr.right = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"between") {
-                        bdr.between = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"bar") {
-                        bdr.bar = Some(edge);
-                    }
+                Ok(Event::Empty(ref e)) => Self::parse_edge(e, &mut bdr)?,
+                Ok(Event::Start(ref e)) => {
+                    Self::parse_edge(e, &mut bdr)?;
+                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"pBdr") => {
                     break;
@@ -137,6 +121,29 @@ impl CT_PBdr {
         }
 
         Ok(bdr)
+    }
+
+    fn parse_edge(e: &BytesStart<'_>, bdr: &mut CT_PBdr) -> Result<()> {
+        let name = e.name();
+        let edge = CT_BorderEdge::from_xml_attrs(e)?;
+        if matches_local_name(name.as_ref(), b"top") {
+            bdr.top = Some(edge);
+        } else if matches_local_name(name.as_ref(), b"bottom") {
+            bdr.bottom = Some(edge);
+        } else if matches_local_name(name.as_ref(), b"left")
+            || matches_local_name(name.as_ref(), b"start")
+        {
+            bdr.left = Some(edge);
+        } else if matches_local_name(name.as_ref(), b"right")
+            || matches_local_name(name.as_ref(), b"end")
+        {
+            bdr.right = Some(edge);
+        } else if matches_local_name(name.as_ref(), b"between") {
+            bdr.between = Some(edge);
+        } else if matches_local_name(name.as_ref(), b"bar") {
+            bdr.bar = Some(edge);
+        }
+        Ok(())
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -285,6 +292,22 @@ impl CT_Tabs {
 mod tests {
     use super::*;
 
+    fn parse_borders(xml: &str) -> CT_PBdr {
+        let mut reader = Reader::from_str(xml);
+        reader.config_mut().trim_text(true);
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref e)) if matches_local_name(e.name().as_ref(), b"pBdr") => {
+                    break;
+                }
+                _ => {}
+            }
+            buf.clear();
+        }
+        CT_PBdr::from_xml(&mut reader).unwrap()
+    }
+
     #[test]
     fn round_trip_borders() {
         let bdr = CT_PBdr {
@@ -328,6 +351,20 @@ mod tests {
         assert_eq!(parsed.top.as_ref().unwrap().sz, Some(4));
         assert_eq!(parsed.bottom.as_ref().unwrap().val, ST_Border::Double);
         assert!(parsed.left.is_none());
+    }
+
+    #[test]
+    fn expanded_border_edge_parses_like_empty_element() {
+        let parsed = parse_borders(concat!(
+            r#"<w:pBdr><w:bottom w:val="single" w:sz="8" "#,
+            r#"w:space="1" w:color="808080"></w:bottom></w:pBdr>"#,
+        ));
+        let bottom = parsed.bottom.unwrap();
+
+        assert_eq!(bottom.val, ST_Border::Single);
+        assert_eq!(bottom.sz, Some(8));
+        assert_eq!(bottom.space, Some(1));
+        assert_eq!(bottom.color, Some("808080".to_string()));
     }
 
     #[test]

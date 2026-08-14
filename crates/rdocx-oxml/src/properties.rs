@@ -133,72 +133,11 @@ impl CT_PPr {
                     } else if matches_local_name(name.as_ref(), b"sectPr") {
                         ppr.sect_pr = Some(CT_SectPr::from_xml(reader)?);
                     } else {
+                        Self::parse_property_element(e, &mut ppr)?;
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
-                Ok(Event::Empty(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"pStyle") {
-                        ppr.style_id = get_val_attr(e)?;
-                    } else if matches_local_name(name.as_ref(), b"jc") {
-                        if let Some(val) = get_val_attr(e)? {
-                            ppr.jc = Some(ST_Jc::from_str(&val)?);
-                        }
-                    } else if matches_local_name(name.as_ref(), b"spacing") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val_str = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"before") {
-                                ppr.space_before = Some(Twips(val_str.parse()?));
-                            } else if matches_local_name(key, b"after") {
-                                ppr.space_after = Some(Twips(val_str.parse()?));
-                            } else if matches_local_name(key, b"line") {
-                                ppr.line_spacing = Some(Twips(val_str.parse()?));
-                            } else if matches_local_name(key, b"lineRule") {
-                                ppr.line_rule = Some(val_str.to_string());
-                            } else if matches_local_name(key, b"beforeAutospacing") {
-                                ppr.before_autospacing = Some(val_str == "1" || val_str == "true");
-                            } else if matches_local_name(key, b"afterAutospacing") {
-                                ppr.after_autospacing = Some(val_str == "1" || val_str == "true");
-                            }
-                        }
-                    } else if matches_local_name(name.as_ref(), b"ind") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val_str = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"left") || matches_local_name(key, b"start")
-                            {
-                                ppr.ind_left = Some(Twips(val_str.parse()?));
-                            } else if matches_local_name(key, b"right")
-                                || matches_local_name(key, b"end")
-                            {
-                                ppr.ind_right = Some(Twips(val_str.parse()?));
-                            } else if matches_local_name(key, b"firstLine") {
-                                ppr.ind_first_line = Some(Twips(val_str.parse()?));
-                            } else if matches_local_name(key, b"hanging") {
-                                ppr.ind_hanging = Some(Twips(val_str.parse()?));
-                            }
-                        }
-                    } else if matches_local_name(name.as_ref(), b"keepNext") {
-                        ppr.keep_next = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"keepLines") {
-                        ppr.keep_lines = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"pageBreakBefore") {
-                        ppr.page_break_before = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"widowControl") {
-                        ppr.widow_control = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"suppressAutoHyphens") {
-                        ppr.suppress_auto_hyphens = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"outlineLvl") {
-                        if let Some(val) = get_val_attr(e)? {
-                            ppr.outline_lvl = Some(val.parse()?);
-                        }
-                    } else if matches_local_name(name.as_ref(), b"shd") {
-                        ppr.shading = Some(CT_Shd::from_xml_attrs(e)?);
-                    }
-                }
+                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, &mut ppr)?,
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"pPr") => {
                     break;
                 }
@@ -212,21 +151,76 @@ impl CT_PPr {
         Ok(ppr)
     }
 
+    fn parse_property_element(e: &BytesStart<'_>, ppr: &mut CT_PPr) -> Result<()> {
+        let name = e.name();
+        if matches_local_name(name.as_ref(), b"pStyle") {
+            ppr.style_id = get_val_attr(e)?;
+        } else if matches_local_name(name.as_ref(), b"jc") {
+            if let Some(val) = get_val_attr(e)? {
+                ppr.jc = Some(ST_Jc::from_str(&val)?);
+            }
+        } else if matches_local_name(name.as_ref(), b"spacing") {
+            for attr in e.attributes() {
+                let attr = attr?;
+                let key = attr.key.as_ref();
+                let val_str = std::str::from_utf8(&attr.value)?;
+                if matches_local_name(key, b"before") {
+                    ppr.space_before = Some(Twips(val_str.parse()?));
+                } else if matches_local_name(key, b"after") {
+                    ppr.space_after = Some(Twips(val_str.parse()?));
+                } else if matches_local_name(key, b"line") {
+                    ppr.line_spacing = Some(Twips(val_str.parse()?));
+                } else if matches_local_name(key, b"lineRule") {
+                    ppr.line_rule = Some(val_str.to_string());
+                } else if matches_local_name(key, b"beforeAutospacing") {
+                    ppr.before_autospacing = Some(val_str == "1" || val_str == "true");
+                } else if matches_local_name(key, b"afterAutospacing") {
+                    ppr.after_autospacing = Some(val_str == "1" || val_str == "true");
+                }
+            }
+        } else if matches_local_name(name.as_ref(), b"ind") {
+            for attr in e.attributes() {
+                let attr = attr?;
+                let key = attr.key.as_ref();
+                let val_str = std::str::from_utf8(&attr.value)?;
+                if matches_local_name(key, b"left") || matches_local_name(key, b"start") {
+                    ppr.ind_left = Some(Twips(val_str.parse()?));
+                } else if matches_local_name(key, b"right") || matches_local_name(key, b"end") {
+                    ppr.ind_right = Some(Twips(val_str.parse()?));
+                } else if matches_local_name(key, b"firstLine") {
+                    ppr.ind_first_line = Some(Twips(val_str.parse()?));
+                } else if matches_local_name(key, b"hanging") {
+                    ppr.ind_hanging = Some(Twips(val_str.parse()?));
+                }
+            }
+        } else if matches_local_name(name.as_ref(), b"keepNext") {
+            ppr.keep_next = Some(parse_toggle(e)?);
+        } else if matches_local_name(name.as_ref(), b"keepLines") {
+            ppr.keep_lines = Some(parse_toggle(e)?);
+        } else if matches_local_name(name.as_ref(), b"pageBreakBefore") {
+            ppr.page_break_before = Some(parse_toggle(e)?);
+        } else if matches_local_name(name.as_ref(), b"widowControl") {
+            ppr.widow_control = Some(parse_toggle(e)?);
+        } else if matches_local_name(name.as_ref(), b"suppressAutoHyphens") {
+            ppr.suppress_auto_hyphens = Some(parse_toggle(e)?);
+        } else if matches_local_name(name.as_ref(), b"outlineLvl") {
+            if let Some(val) = get_val_attr(e)? {
+                ppr.outline_lvl = Some(val.parse()?);
+            }
+        } else if matches_local_name(name.as_ref(), b"shd") {
+            ppr.shading = Some(CT_Shd::from_xml_attrs(e)?);
+        }
+        Ok(())
+    }
+
     fn parse_num_pr(reader: &mut Reader<&[u8]>, ppr: &mut CT_PPr) -> Result<()> {
         let mut buf = Vec::new();
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"ilvl") {
-                        if let Some(val) = get_val_attr(e)? {
-                            ppr.num_ilvl = Some(val.parse()?);
-                        }
-                    } else if matches_local_name(name.as_ref(), b"numId")
-                        && let Some(val) = get_val_attr(e)?
-                    {
-                        ppr.num_id = Some(val.parse()?);
-                    }
+                Ok(Event::Empty(ref e)) => Self::parse_num_property(e, ppr)?,
+                Ok(Event::Start(ref e)) => {
+                    Self::parse_num_property(e, ppr)?;
+                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"numPr") => {
                     break;
@@ -236,6 +230,20 @@ impl CT_PPr {
                 _ => {}
             }
             buf.clear();
+        }
+        Ok(())
+    }
+
+    fn parse_num_property(e: &BytesStart<'_>, ppr: &mut CT_PPr) -> Result<()> {
+        let name = e.name();
+        if matches_local_name(name.as_ref(), b"ilvl") {
+            if let Some(val) = get_val_attr(e)? {
+                ppr.num_ilvl = Some(val.parse()?);
+            }
+        } else if matches_local_name(name.as_ref(), b"numId")
+            && let Some(val) = get_val_attr(e)?
+        {
+            ppr.num_id = Some(val.parse()?);
         }
         Ok(())
     }
@@ -548,95 +556,9 @@ impl CT_RPr {
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"rStyle") {
-                        rpr.style_id = get_val_attr(e)?;
-                    } else if matches_local_name(name.as_ref(), b"rFonts") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?.to_string();
-                            if matches_local_name(key, b"ascii") {
-                                rpr.font_ascii = Some(val);
-                            } else if matches_local_name(key, b"hAnsi") {
-                                rpr.font_hansi = Some(val);
-                            } else if matches_local_name(key, b"eastAsia") {
-                                rpr.font_east_asia = Some(val);
-                            } else if matches_local_name(key, b"cs") {
-                                rpr.font_cs = Some(val);
-                            } else if matches_local_name(key, b"asciiTheme") {
-                                rpr.font_ascii_theme = Some(val);
-                            } else if matches_local_name(key, b"hAnsiTheme") {
-                                rpr.font_hansi_theme = Some(val);
-                            }
-                        }
-                    } else if matches_local_name(name.as_ref(), b"b") {
-                        rpr.bold = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"bCs") {
-                        rpr.bold_cs = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"i") {
-                        rpr.italic = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"iCs") {
-                        rpr.italic_cs = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"u") {
-                        if let Some(val) = get_val_attr(e)? {
-                            rpr.underline = Some(ST_Underline::from_str(&val)?);
-                        } else {
-                            rpr.underline = Some(ST_Underline::Single);
-                        }
-                    } else if matches_local_name(name.as_ref(), b"strike") {
-                        rpr.strike = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"dstrike") {
-                        rpr.dstrike = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"sz") {
-                        if let Some(val) = get_val_attr(e)? {
-                            rpr.sz = Some(HalfPoint(val.parse()?));
-                        }
-                    } else if matches_local_name(name.as_ref(), b"szCs") {
-                        if let Some(val) = get_val_attr(e)? {
-                            rpr.sz_cs = Some(HalfPoint(val.parse()?));
-                        }
-                    } else if matches_local_name(name.as_ref(), b"color") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let v = std::str::from_utf8(&attr.value)?.to_string();
-                            if matches_local_name(key, b"val") {
-                                rpr.color = Some(v);
-                            } else if matches_local_name(key, b"themeColor") {
-                                rpr.color_theme = Some(v);
-                            }
-                        }
-                    } else if matches_local_name(name.as_ref(), b"highlight") {
-                        if let Some(val) = get_val_attr(e)? {
-                            rpr.highlight = Some(ST_HighlightColor::from_str(&val)?);
-                        }
-                    } else if matches_local_name(name.as_ref(), b"caps") {
-                        rpr.caps = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"smallCaps") {
-                        rpr.small_caps = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"vertAlign") {
-                        rpr.vert_align = get_val_attr(e)?;
-                    } else if matches_local_name(name.as_ref(), b"spacing") {
-                        if let Some(val) = get_val_attr(e)? {
-                            rpr.spacing = Some(Twips(val.parse()?));
-                        }
-                    } else if matches_local_name(name.as_ref(), b"w") {
-                        if let Some(val) = get_val_attr(e)? {
-                            rpr.width_scale = Some(val.parse()?);
-                        }
-                    } else if matches_local_name(name.as_ref(), b"position") {
-                        if let Some(val) = get_val_attr(e)? {
-                            rpr.position = Some(val.parse()?);
-                        }
-                    } else if matches_local_name(name.as_ref(), b"shd") {
-                        rpr.shading = Some(CT_Shd::from_xml_attrs(e)?);
-                    } else if matches_local_name(name.as_ref(), b"vanish") {
-                        rpr.vanish = Some(parse_toggle(e)?);
-                    }
-                }
+                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, &mut rpr)?,
                 Ok(Event::Start(ref e)) => {
+                    Self::parse_property_element(e, &mut rpr)?;
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"rPr") => {
@@ -650,6 +572,96 @@ impl CT_RPr {
         }
 
         Ok(rpr)
+    }
+
+    fn parse_property_element(e: &BytesStart<'_>, rpr: &mut CT_RPr) -> Result<()> {
+        let name = e.name();
+        if matches_local_name(name.as_ref(), b"rStyle") {
+            rpr.style_id = get_val_attr(e)?;
+        } else if matches_local_name(name.as_ref(), b"rFonts") {
+            for attr in e.attributes() {
+                let attr = attr?;
+                let key = attr.key.as_ref();
+                let val = std::str::from_utf8(&attr.value)?.to_string();
+                if matches_local_name(key, b"ascii") {
+                    rpr.font_ascii = Some(val);
+                } else if matches_local_name(key, b"hAnsi") {
+                    rpr.font_hansi = Some(val);
+                } else if matches_local_name(key, b"eastAsia") {
+                    rpr.font_east_asia = Some(val);
+                } else if matches_local_name(key, b"cs") {
+                    rpr.font_cs = Some(val);
+                } else if matches_local_name(key, b"asciiTheme") {
+                    rpr.font_ascii_theme = Some(val);
+                } else if matches_local_name(key, b"hAnsiTheme") {
+                    rpr.font_hansi_theme = Some(val);
+                }
+            }
+        } else if matches_local_name(name.as_ref(), b"b") {
+            rpr.bold = Some(parse_toggle(e)?);
+        } else if matches_local_name(name.as_ref(), b"bCs") {
+            rpr.bold_cs = Some(parse_toggle(e)?);
+        } else if matches_local_name(name.as_ref(), b"i") {
+            rpr.italic = Some(parse_toggle(e)?);
+        } else if matches_local_name(name.as_ref(), b"iCs") {
+            rpr.italic_cs = Some(parse_toggle(e)?);
+        } else if matches_local_name(name.as_ref(), b"u") {
+            if let Some(val) = get_val_attr(e)? {
+                rpr.underline = Some(ST_Underline::from_str(&val)?);
+            } else {
+                rpr.underline = Some(ST_Underline::Single);
+            }
+        } else if matches_local_name(name.as_ref(), b"strike") {
+            rpr.strike = Some(parse_toggle(e)?);
+        } else if matches_local_name(name.as_ref(), b"dstrike") {
+            rpr.dstrike = Some(parse_toggle(e)?);
+        } else if matches_local_name(name.as_ref(), b"sz") {
+            if let Some(val) = get_val_attr(e)? {
+                rpr.sz = Some(HalfPoint(val.parse()?));
+            }
+        } else if matches_local_name(name.as_ref(), b"szCs") {
+            if let Some(val) = get_val_attr(e)? {
+                rpr.sz_cs = Some(HalfPoint(val.parse()?));
+            }
+        } else if matches_local_name(name.as_ref(), b"color") {
+            for attr in e.attributes() {
+                let attr = attr?;
+                let key = attr.key.as_ref();
+                let v = std::str::from_utf8(&attr.value)?.to_string();
+                if matches_local_name(key, b"val") {
+                    rpr.color = Some(v);
+                } else if matches_local_name(key, b"themeColor") {
+                    rpr.color_theme = Some(v);
+                }
+            }
+        } else if matches_local_name(name.as_ref(), b"highlight") {
+            if let Some(val) = get_val_attr(e)? {
+                rpr.highlight = Some(ST_HighlightColor::from_str(&val)?);
+            }
+        } else if matches_local_name(name.as_ref(), b"caps") {
+            rpr.caps = Some(parse_toggle(e)?);
+        } else if matches_local_name(name.as_ref(), b"smallCaps") {
+            rpr.small_caps = Some(parse_toggle(e)?);
+        } else if matches_local_name(name.as_ref(), b"vertAlign") {
+            rpr.vert_align = get_val_attr(e)?;
+        } else if matches_local_name(name.as_ref(), b"spacing") {
+            if let Some(val) = get_val_attr(e)? {
+                rpr.spacing = Some(Twips(val.parse()?));
+            }
+        } else if matches_local_name(name.as_ref(), b"w") {
+            if let Some(val) = get_val_attr(e)? {
+                rpr.width_scale = Some(val.parse()?);
+            }
+        } else if matches_local_name(name.as_ref(), b"position") {
+            if let Some(val) = get_val_attr(e)? {
+                rpr.position = Some(val.parse()?);
+            }
+        } else if matches_local_name(name.as_ref(), b"shd") {
+            rpr.shading = Some(CT_Shd::from_xml_attrs(e)?);
+        } else if matches_local_name(name.as_ref(), b"vanish") {
+            rpr.vanish = Some(parse_toggle(e)?);
+        }
+        Ok(())
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -1024,6 +1036,19 @@ mod tests {
         assert_eq!(rpr.italic, Some(true));
         assert_eq!(rpr.sz, Some(HalfPoint(24)));
         assert_eq!(rpr.color, Some("FF0000".to_string()));
+    }
+
+    #[test]
+    fn expanded_numbering_and_hidden_properties_parse_like_empty_elements() {
+        let ppr = parse_ppr(concat!(
+            r#"<w:numPr><w:ilvl w:val="2"></w:ilvl>"#,
+            r#"<w:numId w:val="7"></w:numId></w:numPr>"#,
+        ));
+        let rpr = parse_rpr(r#"<w:vanish></w:vanish>"#);
+
+        assert_eq!(ppr.num_ilvl, Some(2));
+        assert_eq!(ppr.num_id, Some(7));
+        assert_eq!(rpr.vanish, Some(true));
     }
 
     #[test]

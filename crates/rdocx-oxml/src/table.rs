@@ -600,38 +600,10 @@ impl CT_TrPr {
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"trHeight") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"val") {
-                                pr.height = Some(Twips(val.parse()?));
-                            } else if matches_local_name(key, b"hRule") {
-                                pr.height_rule = Some(val.to_string());
-                            }
-                        }
-                    } else if matches_local_name(name.as_ref(), b"tblHeader") {
-                        pr.header = Some(true);
-                    } else if matches_local_name(name.as_ref(), b"jc") {
-                        if let Some(val) = get_val_attr(e)? {
-                            pr.jc = Some(ST_Jc::from_str(&val)?);
-                        }
-                    } else if matches_local_name(name.as_ref(), b"cnfStyle") {
-                        pr.cnf_style = get_val_attr(e)?;
-                    } else if matches_local_name(name.as_ref(), b"cantSplit") {
-                        pr.cant_split = Some(true);
-                    } else if matches_local_name(name.as_ref(), b"gridBefore")
-                        && let Some(val) = get_val_attr(e)?
-                    {
-                        pr.grid_before = Some(val.parse()?);
-                    } else if matches_local_name(name.as_ref(), b"gridAfter")
-                        && let Some(val) = get_val_attr(e)?
-                    {
-                        pr.grid_after = Some(val.parse()?);
-                    }
+                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, &mut pr)?,
+                Ok(Event::Start(ref e)) => {
+                    Self::parse_property_element(e, &mut pr)?;
+                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"trPr") => {
                     break;
@@ -644,6 +616,41 @@ impl CT_TrPr {
         }
 
         Ok(pr)
+    }
+
+    fn parse_property_element(e: &BytesStart<'_>, pr: &mut CT_TrPr) -> Result<()> {
+        let name = e.name();
+        if matches_local_name(name.as_ref(), b"trHeight") {
+            for attr in e.attributes() {
+                let attr = attr?;
+                let key = attr.key.as_ref();
+                let val = std::str::from_utf8(&attr.value)?;
+                if matches_local_name(key, b"val") {
+                    pr.height = Some(Twips(val.parse()?));
+                } else if matches_local_name(key, b"hRule") {
+                    pr.height_rule = Some(val.to_string());
+                }
+            }
+        } else if matches_local_name(name.as_ref(), b"tblHeader") {
+            pr.header = Some(true);
+        } else if matches_local_name(name.as_ref(), b"jc") {
+            if let Some(val) = get_val_attr(e)? {
+                pr.jc = Some(ST_Jc::from_str(&val)?);
+            }
+        } else if matches_local_name(name.as_ref(), b"cnfStyle") {
+            pr.cnf_style = get_val_attr(e)?;
+        } else if matches_local_name(name.as_ref(), b"cantSplit") {
+            pr.cant_split = Some(true);
+        } else if matches_local_name(name.as_ref(), b"gridBefore")
+            && let Some(val) = get_val_attr(e)?
+        {
+            pr.grid_before = Some(val.parse()?);
+        } else if matches_local_name(name.as_ref(), b"gridAfter")
+            && let Some(val) = get_val_attr(e)?
+        {
+            pr.grid_after = Some(val.parse()?);
+        }
+        Ok(())
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -1704,6 +1711,21 @@ mod tests {
             )),
             "{xml}"
         );
+    }
+
+    #[test]
+    fn expanded_row_grid_offsets_parse_like_empty_elements() {
+        let inner = concat!(
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid>"#,
+            r#"<w:tr><w:trPr><w:gridBefore w:val="2"></w:gridBefore>"#,
+            r#"<w:gridAfter w:val="1"></w:gridAfter></w:trPr>"#,
+            r#"<w:tc><w:p/></w:tc></w:tr>"#,
+        );
+        let table = parse_table(inner);
+        let properties = table.rows[0].properties.as_ref().unwrap();
+
+        assert_eq!(properties.grid_before, Some(2));
+        assert_eq!(properties.grid_after, Some(1));
     }
 
     /// A styled table must keep the markup that says which conditional parts
