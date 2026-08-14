@@ -517,7 +517,13 @@ impl CT_TblPr {
                 pr.jc = Some(ST_Jc::from_str(&val)?);
             }
         } else if matches_word_element(e, context, b"tblLayout") {
-            pr.layout = get_val_attr_with_context(e, &element_context)?;
+            for attribute in e.attributes() {
+                let attribute = attribute?;
+                if matches_word_attribute(attribute.key.as_ref(), &element_context, b"type") {
+                    pr.layout = Some(std::str::from_utf8(&attribute.value)?.to_string());
+                    break;
+                }
+            }
         } else if matches_word_element(e, context, b"tblInd") {
             pr.indent = Some(CT_TblWidth::from_xml_attrs_with_context(e, context)?);
         } else if matches_word_element(e, context, b"shd") {
@@ -2061,6 +2067,16 @@ mod tests {
         assert_eq!(look.first_row, Some(true));
         assert_eq!(look.last_row, Some(false));
         assert_eq!(look.no_v_band, Some(true));
+    }
+
+    #[test]
+    fn table_layout_reads_the_schema_type_attribute() {
+        let table = parse_table(concat!(
+            r#"<w:tblPr><w:tblLayout w:type="fixed"/></w:tblPr>"#,
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid>"#,
+        ));
+
+        assert_eq!(table.properties.unwrap().layout.as_deref(), Some("fixed"));
     }
 
     /// A self-closing tblPr or tblGrid must not be captured as extra XML.
