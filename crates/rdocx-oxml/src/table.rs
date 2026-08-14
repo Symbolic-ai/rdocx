@@ -781,46 +781,13 @@ impl CT_TcPr {
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"tcW") {
-                        pr.width = Some(CT_TblWidth::from_xml_attrs(e)?);
-                    } else if matches_local_name(name.as_ref(), b"gridSpan") {
-                        if let Some(val) = get_val_attr(e)? {
-                            pr.grid_span = Some(val.parse()?);
-                        }
-                    } else if matches_local_name(name.as_ref(), b"vMerge") {
-                        if let Some(val) = get_val_attr(e)? {
-                            pr.v_merge = Some(if val == "restart" {
-                                VMerge::Restart
-                            } else {
-                                VMerge::Continue
-                            });
-                        } else {
-                            // Empty vMerge means "continue"
-                            pr.v_merge = Some(VMerge::Continue);
-                        }
-                    } else if matches_local_name(name.as_ref(), b"vAlign") {
-                        if let Some(val) = get_val_attr(e)? {
-                            pr.v_align = Some(ST_VerticalJc::from_str(&val));
-                        }
-                    } else if matches_local_name(name.as_ref(), b"shd") {
-                        pr.shading = Some(CT_Shd::from_xml_attrs(e)?);
-                    } else if matches_local_name(name.as_ref(), b"cnfStyle") {
-                        pr.cnf_style = get_val_attr(e)?;
-                    } else if matches_local_name(name.as_ref(), b"noWrap") {
-                        pr.no_wrap = Some(true);
-                    } else if matches_local_name(name.as_ref(), b"textDirection")
-                        && let Some(val) = get_val_attr(e)?
-                    {
-                        pr.text_direction = Some(val);
-                    }
-                }
+                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, &mut pr)?,
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     if matches_local_name(name.as_ref(), b"tcBorders") {
                         pr.borders = Some(CT_TblBorders::from_xml(reader)?);
                     } else {
+                        Self::parse_property_element(e, &mut pr)?;
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
@@ -835,6 +802,42 @@ impl CT_TcPr {
         }
 
         Ok(pr)
+    }
+
+    fn parse_property_element(e: &BytesStart<'_>, pr: &mut CT_TcPr) -> Result<()> {
+        let name = e.name();
+        if matches_local_name(name.as_ref(), b"tcW") {
+            pr.width = Some(CT_TblWidth::from_xml_attrs(e)?);
+        } else if matches_local_name(name.as_ref(), b"gridSpan") {
+            if let Some(val) = get_val_attr(e)? {
+                pr.grid_span = Some(val.parse()?);
+            }
+        } else if matches_local_name(name.as_ref(), b"vMerge") {
+            if let Some(val) = get_val_attr(e)? {
+                pr.v_merge = Some(if val == "restart" {
+                    VMerge::Restart
+                } else {
+                    VMerge::Continue
+                });
+            } else {
+                pr.v_merge = Some(VMerge::Continue);
+            }
+        } else if matches_local_name(name.as_ref(), b"vAlign") {
+            if let Some(val) = get_val_attr(e)? {
+                pr.v_align = Some(ST_VerticalJc::from_str(&val));
+            }
+        } else if matches_local_name(name.as_ref(), b"shd") {
+            pr.shading = Some(CT_Shd::from_xml_attrs(e)?);
+        } else if matches_local_name(name.as_ref(), b"cnfStyle") {
+            pr.cnf_style = get_val_attr(e)?;
+        } else if matches_local_name(name.as_ref(), b"noWrap") {
+            pr.no_wrap = Some(true);
+        } else if matches_local_name(name.as_ref(), b"textDirection")
+            && let Some(val) = get_val_attr(e)?
+        {
+            pr.text_direction = Some(val);
+        }
+        Ok(())
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -1398,6 +1401,24 @@ mod tests {
             tbl.rows[2].cells[0].properties.as_ref().unwrap().v_merge,
             Some(VMerge::Continue)
         );
+    }
+
+    #[test]
+    fn expanded_cell_merge_properties_parse_like_empty_elements() {
+        let tbl = parse_table(
+            r#"<w:tblGrid><w:gridCol w:w="100"/><w:gridCol w:w="100"/><w:gridCol w:w="100"/></w:tblGrid>
+               <w:tr><w:tc><w:tcPr>
+                 <w:gridSpan w:val="2"></w:gridSpan>
+                 <w:vMerge w:val="restart"></w:vMerge>
+               </w:tcPr><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr>
+               <w:tr><w:tc><w:tcPr><w:vMerge></w:vMerge></w:tcPr><w:p/></w:tc></w:tr>"#,
+        );
+
+        let merged = tbl.rows[0].cells[0].properties.as_ref().unwrap();
+        let continued = tbl.rows[1].cells[0].properties.as_ref().unwrap();
+        assert_eq!(merged.grid_span, Some(2));
+        assert_eq!(merged.v_merge, Some(VMerge::Restart));
+        assert_eq!(continued.v_merge, Some(VMerge::Continue));
     }
 
     #[test]
