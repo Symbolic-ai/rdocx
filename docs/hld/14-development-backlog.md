@@ -17,7 +17,7 @@ incrementally-testable slices so something verifiable lands every few days.
 
 ## Velocity assumption
 
-This backlog is **150 stories**. Summed by size it is roughly **390 developer-days**:
+This backlog is **162 stories**. Summed by size it is roughly **408 developer-days**:
 about 50 at S, 60 at M, 38 at L and 2 at XL.
 
 At a sustained solo pace that is **17 to 18 months**, not the nine to twelve
@@ -1182,3 +1182,26 @@ its 12 published packages remain unchanged.
 **Depends on**: F-143, F-144, F-145.
 **Test gate**: all 14 incubating packages resolve from crates.io at 0.1.3 with
 the expected owner, and the GitHub release targets the reviewed sprint SHA.
+
+### F-X007, Integrate PR 25 and stable crate documentation (L)
+Integrate Jon Stokes's PR 25 through the sprint branch, retaining contributor
+credit in the GitHub merge record. The public Word facade gains custom list
+definitions, per-paragraph numbering, composable hard line breaks and
+hyperlinks, and fixed table-column widths. Rejected list updates remain
+side-effect free, and fixed table geometry keeps the table width, grid, and
+spanning cell widths consistent. Every stable crate has a package README that
+states when to use it, links to its API documentation, and includes a current
+example or a clear deprecation path. The README examples are compile-checked.
+**Test gate**: the merged PR's focused round-trip suite passes against current
+`main`, the two rejected-state and table-geometry regressions pass, and every
+stable crate README example compiles against its packaged crate.
+
+### F-X008, Tag the updated stable rdocx family (S)
+Prepare the complete seven-package stable family at 0.4.2 after F-X007, then
+publish it only through `/release v0.4.2` after the command's separate final
+approval. `rdocx-wasm` may inherit the version but remains unpublished. No
+incubating or npm package is published by this story.
+**Depends on**: F-X007.
+**Test gate**: all seven stable packages resolve from crates.io at 0.4.2 with
+the expected owner, the GitHub release targets the reviewed sprint SHA, and
+the PR 25 contributor credit and merge note remain visible on GitHub.
