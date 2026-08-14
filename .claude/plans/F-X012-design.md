@@ -15,7 +15,12 @@ Binaryen 125 archive but rejects its official Linux identity string because it
 expects the shorter Homebrew spelling.
 
 The same failure set is present in the S37 and S38 merge runs. This is a
-workflow portability defect rather than an S39 product regression.
+workflow portability defect rather than an S39 product regression. The first
+hosted validation of the Poppler and Binaryen corrections then exposed two
+previously unreachable corpus-test requirements in Test and MSRV. Those jobs
+did not install the `uv` executable used by the pinned python-pptx oracles, and
+their default Rust test-thread stack is too small for the largest modelled
+corpus round trip on hosted Linux.
 
 ## Spec reference
 
@@ -44,6 +49,13 @@ installation separate. Correct the WASM identity assertion to the exact
 official Linux output `wasm-opt version 125 (version_125)` after the existing
 archive checksum verification.
 
+In Test and MSRV, install exact `uv` 0.10.2 through the official setup action
+at reviewed commit `20cfd1bf945f4377ade1205e4dbc17946fc9a30d`. Run the full
+workspace suite with an isolated runner-temporary uv cache and an 8 MiB
+`RUST_MIN_STACK`. This keeps the two concurrent pinned python-pptx oracles
+self-contained and gives the existing largest corpus round trip a declared
+hosted-Linux stack budget.
+
 Extend the existing workflow regression suite. Do not add another test binary
 or another workflow file.
 
@@ -64,6 +76,7 @@ or another workflow file.
 |---|---|---|
 | unit | `test_pinned_poppler_installer_contract` | Exact version, source checksum, tools, extraction bound, and build options |
 | regression | `test_every_poppler_consumer_uses_the_pinned_installer` | Test, MSRV, Python bindings, and Presentation fidelity install the oracle before use |
+| regression | `test_workspace_oracle_jobs_pin_uv_cache_and_stack` | Test and MSRV pin official uv 0.10.2, isolate its cache, and run with the exact 8 MiB stack budget |
 | regression | `test_wasm_pr_job_checks_both_targets_and_runs_node_tests` | Official Binaryen 125 Linux identity is accepted only after checksum verification |
 | integration | installer on macOS and disposable Ubuntu 24.04 | All three Poppler tools report exact 26.01.0 and execute |
 | integration | hosted pull-request CI run | Every job passes at the reviewed SHA |
@@ -86,6 +99,9 @@ unchanged.
 - External oracle comparison. Retain Poppler 26.01.0, verify the official
   source checksum and all three runtime identities, and run the existing exact
   pixel and fidelity gates without changing their baselines.
+- Hosted test runtime. Pin the official uv setup action and executable version,
+  isolate its cache per job, and bind the explicit stack budget to only the two
+  broad corpus-test jobs. No product runtime or published package changes.
 
 ## Hash harness
 
@@ -98,6 +114,7 @@ validation only.
 - [ ] Add the authorized Poppler installer with exact source and runtime checks.
 - [ ] Wire every Poppler consumer job to the shared installer.
 - [ ] Correct the official Binaryen 125 Linux identity assertion.
+- [ ] Pin uv and the corpus-test stack budget in Test and MSRV.
 - [ ] Add positive and mutation-sensitive workflow regressions.
 - [ ] Prove the installer on macOS and disposable Ubuntu 24.04.
 - [ ] Run full verification with all 28 hashes unchanged.

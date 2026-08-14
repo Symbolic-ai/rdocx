@@ -23,6 +23,11 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Set up uv 0.10.2
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.10.2"
+          enable-cache: false
       - name: Install pinned Poppler 26.01.0
         shell: bash
         run: |
@@ -34,7 +39,11 @@ jobs:
           python3 scripts/install_pinned_poppler.py
       - name: Fetch pinned presentation corpus
         run: python3 scripts/fetch_pptx_corpus.py
-      - run: >-
+      - name: Run full workspace suite
+        env:
+          UV_CACHE_DIR: "${{ runner.temp }}/uv-cache"
+          RUST_MIN_STACK: "8388608"
+        run: >-
           cargo test --workspace --all-features
           --exclude rdocx-py --exclude rpptx-py
 
@@ -365,6 +374,11 @@ jobs:
         with:
           toolchain: "1.93"
       - uses: Swatinem/rust-cache@v2
+      - name: Set up uv 0.10.2
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.10.2"
+          enable-cache: false
       - name: Install pinned Poppler 26.01.0
         shell: bash
         run: |
@@ -376,7 +390,11 @@ jobs:
           python3 scripts/install_pinned_poppler.py
       - name: Fetch pinned presentation corpus
         run: python3 scripts/fetch_pptx_corpus.py
-      - run: >-
+      - name: Run full workspace suite
+        env:
+          UV_CACHE_DIR: "${{ runner.temp }}/uv-cache"
+          RUST_MIN_STACK: "8388608"
+        run: >-
           cargo test --workspace --all-features
           --exclude rdocx-py --exclude rpptx-py
 

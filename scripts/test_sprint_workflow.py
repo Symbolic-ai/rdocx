@@ -53,6 +53,17 @@ class SprintWorkflowTests(unittest.TestCase):
             if line.strip() and not line.lstrip().startswith("#")
         )
 
+    def yaml_mapping_key_count(self, source: str, key: str) -> int:
+        count = 0
+        for line in source.splitlines():
+            stripped = line.strip().split(" #", 1)[0].rstrip()
+            if not stripped or stripped.startswith("#") or ":" not in stripped:
+                continue
+            candidate = stripped.split(":", 1)[0].strip().strip("'\"").strip()
+            if candidate == key:
+                count += 1
+        return count
+
     def yaml_steps(self, job: str) -> tuple[str, ...]:
         steps = self.yaml_block(job, "    steps:")
         lines = steps.splitlines()[1:]
@@ -153,6 +164,49 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(ci.count("python3 scripts/install_pinned_poppler.py"), 4)
         self.assertNotIn("brew install poppler", ci)
         self.assertNotIn("apt-get install poppler-utils", ci)
+
+    def assert_workspace_oracle_environment_contract(self, ci: str) -> None:
+        setup_action = (
+            "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d"
+        )
+        for job_name in ("test", "msrv"):
+            job = self.yaml_block(ci, f"  {job_name}:")
+            steps = self.yaml_steps(job)
+            setup_steps = tuple(
+                step
+                for step in steps
+                if self.yaml_step_actions(step) == (setup_action,)
+            )
+            self.assertEqual(len(setup_steps), 1, job_name)
+            setup = setup_steps[0]
+            self.assertEqual(
+                self.yaml_direct_lines(setup, 8),
+                (f"uses: {setup_action}", "with:"),
+            )
+            setup_with = self.yaml_block(setup, "        with:")
+            self.assertEqual(
+                self.yaml_direct_lines(setup_with, 10),
+                ('version: "0.10.2"', "enable-cache: false"),
+            )
+
+            test_step = self.yaml_step(job, "Run full workspace suite")
+            self.assertEqual(
+                self.yaml_direct_lines(test_step, 8),
+                ("env:", "run: >-"),
+            )
+            environment = self.yaml_block(test_step, "        env:")
+            self.assertEqual(
+                self.yaml_direct_lines(environment, 10),
+                (
+                    'UV_CACHE_DIR: "${{ runner.temp }}/uv-cache"',
+                    'RUST_MIN_STACK: "8388608"',
+                ),
+            )
+            self.assertIn("cargo test --workspace", test_step)
+            self.assert_no_success_short_circuit(self.operative_lines(test_step))
+            self.assertLess(job.index(setup), job.index(test_step))
+            self.assertNotIn("continue-on-error", setup + test_step)
+        self.assertEqual(self.yaml_mapping_key_count(ci, "RUST_MIN_STACK"), 2)
 
     def assert_python_pr_job_contract(self, ci: str) -> None:
         triggers = self.yaml_block(ci, "on:")
@@ -485,6 +539,86 @@ class SprintWorkflowTests(unittest.TestCase):
                 AssertionError
             ):
                 self.assert_poppler_consumers_contract(short_circuited)
+
+    def test_workspace_oracle_jobs_pin_uv_cache_and_stack(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_workspace_oracle_environment_contract(ci)
+        mutations = {
+            "global-stack": ci.replace(
+                "  CARGO_TERM_COLOR: always\n",
+                "  CARGO_TERM_COLOR: always\n  RUST_MIN_STACK: \"8388608\"\n",
+                1,
+            ),
+            "global-quoted-stack": ci.replace(
+                "  CARGO_TERM_COLOR: always\n",
+                "  CARGO_TERM_COLOR: always\n  \"RUST_MIN_STACK\": \"8388608\"\n",
+                1,
+            ),
+            "global-spaced-stack": ci.replace(
+                "  CARGO_TERM_COLOR: always\n",
+                "  CARGO_TERM_COLOR: always\n  RUST_MIN_STACK : \"8388608\"\n",
+                1,
+            ),
+            "global-quoted-spaced-stack": ci.replace(
+                "  CARGO_TERM_COLOR: always\n",
+                "  CARGO_TERM_COLOR: always\n  \"RUST_MIN_STACK\" : \"8388608\"\n",
+                1,
+            ),
+        }
+        for job_name in ("test", "msrv"):
+            job = self.yaml_block(ci, f"  {job_name}:")
+            test_step = self.yaml_step(job, "Run full workspace suite")
+            mutations.update(
+                {
+                    f"{job_name}-wrong-action": ci.replace(
+                        job,
+                        job.replace(
+                            "astral-sh/setup-uv@"
+                            "20cfd1bf945f4377ade1205e4dbc17946fc9a30d",
+                            "astral-sh/setup-uv@main",
+                            1,
+                        ),
+                        1,
+                    ),
+                    f"{job_name}-wrong-uv-version": ci.replace(
+                        job,
+                        job.replace(
+                            'version: "0.10.2"', 'version: "latest"', 1
+                        ),
+                        1,
+                    ),
+                    f"{job_name}-shared-home-cache": ci.replace(
+                        job,
+                        job.replace(
+                            'UV_CACHE_DIR: "${{ runner.temp }}/uv-cache"',
+                            'UV_CACHE_DIR: "~/.cache/uv"',
+                            1,
+                        ),
+                        1,
+                    ),
+                    f"{job_name}-default-stack": ci.replace(
+                        job,
+                        job.replace(
+                            '          RUST_MIN_STACK: "8388608"\n', "", 1
+                        ),
+                        1,
+                    ),
+                    f"{job_name}-exit-zero": ci.replace(
+                        test_step,
+                        test_step.replace(
+                            "        run: >-\n",
+                            "        run: >-\n          exit 0\n",
+                            1,
+                        ),
+                        1,
+                    ),
+                }
+            )
+        for label, mutated in mutations.items():
+            with self.subTest(mutation=label), self.assertRaises(AssertionError):
+                self.assert_workspace_oracle_environment_contract(mutated)
 
     def test_wasm_job_accepts_the_official_binaryen_125_identity(self) -> None:
         ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(

@@ -1297,8 +1297,12 @@ and Presentation fidelity invoke it unconditionally before use. The WASM job
 verifies the official Binaryen 125 Linux archive and exact
 `wasm-opt version 125 (version_125)` release identity. Product code, package
 versions, published artifacts, and rendering baselines remain unchanged.
+Test and MSRV also install exact uv 0.10.2 through the reviewed official setup
+action, isolate its cache, and run their corpus tests with an explicit 8 MiB
+Rust test-thread stack.
 **Test gate**: behavioral regressions execute every source, resource, runtime,
 and prefix guard. Workflow mutations reject missing, conditional,
 failure-tolerant, or successfully short-circuited installer steps and reject a
-weakened Binaryen checksum or identity gate. Full verification and a hosted
-pull-request CI run at the reviewed SHA pass with all 28 hashes unchanged.
+weakened Binaryen checksum or identity gate. They also reject uv action,
+version, cache, or stack drift. Full verification and a hosted pull-request CI
+run at the reviewed SHA pass with all 28 hashes unchanged.

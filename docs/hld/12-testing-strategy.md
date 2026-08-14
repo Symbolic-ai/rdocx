@@ -409,8 +409,11 @@ The `rpptx` CLI integration gate corrupts a relationship and requires
 `validate` to exit nonzero. It then requires all 50 manifest decks to validate
 with a zero exit and never skips a missing corpus. The primary workspace-test
 job and the MSRV job fetch and verify the pinned corpus before running Cargo
-tests. Command regressions also prove bounded DPI, bounded diff work,
-zero-slide PNG failure without output, and one-slide-at-a-time PNG conversion.
+tests. Both jobs install exact uv 0.10.2 through the reviewed official setup
+action, isolate its cache under the runner temporary directory, and give Rust
+test threads an explicit 8 MiB stack for the largest corpus round trip. Command
+regressions also prove bounded DPI, bounded diff work, zero-slide PNG failure
+without output, and one-slide-at-a-time PNG conversion.
 The thumbnail and outline gate requires an exactly 320-pixel-wide proportional
 slide-one PNG and recursive paragraph output with stable level indentation.
 Regressions cover nonstandard aspect ratios, shared output defaulting, grouped
@@ -452,7 +455,7 @@ returns non-empty rendered HTML after publication.
 
 | Job | Command |
 |---|---|
-| test | Fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` |
+| test | Install exact uv 0.10.2, fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack |
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
 | wasm | Locked `wasm32-unknown-unknown` checks, `wasm-pack test --node`, and local bundler pack and fresh-install gates for `rdocx-wasm` and `rpptx-wasm` |
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |
@@ -462,7 +465,7 @@ returns non-empty rendered HTML after publication.
 | fmt | `cargo fmt --all -- --check` |
 | doc | `cargo doc --workspace --no-deps --all-features --exclude rdocx-py --exclude rpptx-py` with `RUSTDOCFLAGS=-D warnings`, then `python3 scripts/readme_doctests.py` |
 | package-oxml-layout | Verify the exact font and legal-file inventory, then build and size-check the verified archive |
-| msrv | Fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 |
+| msrv | Install exact uv 0.10.2, fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 with an isolated uv cache and 8 MiB Rust test-thread stack |
 | python-bindings | On pull requests, build each Python package with `maturin develop --locked` in its own Python 3.12.9 environment, then run its complete pytest directory |
 | supply-chain | `cargo-deny check` |
 | python-wheels | On manual dispatch or a `py-v*` tag, build six cp39-abi3 wheels for each Python package and one source distribution per package, then install and test every compatible artifact in a fresh environment |

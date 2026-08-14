@@ -355,6 +355,14 @@ Test, MSRV, both Python binding rows, and Presentation fidelity use this single
 unconditional step before any oracle-dependent command. Package managers may
 install build prerequisites but do not install Poppler itself.
 
+**Pinned corpus-test runtime.** Test and MSRV install uv 0.10.2 with official
+`astral-sh/setup-uv` commit
+`20cfd1bf945f4377ade1205e4dbc17946fc9a30d`. Each job disables the action cache,
+uses only its runner-temporary uv cache, and runs the broad workspace suite with
+`RUST_MIN_STACK=8388608`. The pin makes the python-pptx oracle executable
+available on a clean Ubuntu host. The stack budget is scoped to these two
+corpus-heavy jobs and does not alter product runtime behavior.
+
 **A prose and generated-skill job.** It runs `scripts/prose_check.py` and
 `scripts/sync_agent_skills.py --check` as separate steps, so voice-rule or
 adapter drift fails before integration.
