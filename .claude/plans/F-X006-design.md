@@ -119,7 +119,8 @@ after the registry and GitHub release checks succeed. Preserve the immutable
 - Public API of published crates. State that the patch changes package metadata
   only. Run the exact 21-package locally patched workspace dry run and reject
   any archive over 10 MiB.
-- Bundled fonts and assets. Verify both layout font and legal inventories and
+- Bundled fonts and assets. Verify the complete `oxml-layout` font and legal
+  inventory, confirm `rdocx-layout` does not duplicate those assets, and verify
   `rpptx/assets/default.pptx` in the generated archives.
 - WASM bindings. Run the locked wasm32 checks and Node tests for both WASM
   packages, plus the local `rpptx-wasm` pack and fresh install gate at 0.1.3.

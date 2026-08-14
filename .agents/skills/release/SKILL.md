@@ -7,6 +7,6 @@ description: "Release an already prepared and reviewed stable or incubating Rust
 
 Canonical source: `.claude/commands/release.md`.
 
-Source SHA-256: `f1aa5a1dd1f498494b4aa5e0431cd4887f79aa53b32f66753537f3ce1d9a0890`.
+Source SHA-256: `4a0ae16fa98eeb7cab42b2b3fc110c1312b582ea849cc7f8ef519c7e32812906`.
 
 Read the canonical source in full before acting, and follow it with whatever tools this host provides. Treat any invocation arguments as arguments to that workflow. Where it names another slash command, follow the repository skill of the same name. Where it says to ask with `AskUserQuestion`, ask through this host's own question mechanism. `.claude/WORKFLOW.md` wins on any process question. Do not edit this generated adapter.

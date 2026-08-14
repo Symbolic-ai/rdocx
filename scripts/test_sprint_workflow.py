@@ -3136,6 +3136,16 @@ class SprintWorkflowTests(unittest.TestCase):
         )
         self.assertIn("go or no-go immediately", normalized_release)
         self.assertIn(
+            "The `oxml-layout` archive must contain its complete bundled TTF "
+            "and legal-file inventory. The `rdocx-layout` archive must not "
+            "duplicate those assets.",
+            normalized_release,
+        )
+        self.assertNotIn(
+            "The `rdocx-layout` and `oxml-layout` archives must contain",
+            normalized_release,
+        )
+        self.assertIn(
             "Create one annotated tag for the requested argument",
             normalized_release,
         )
