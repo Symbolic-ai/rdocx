@@ -445,6 +445,8 @@ creation uses the same exact 21-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.
+The current stable 0.6.0 release also verifies every crates.io README endpoint
+returns non-empty rendered HTML after publication.
 
 ## What CI runs
 

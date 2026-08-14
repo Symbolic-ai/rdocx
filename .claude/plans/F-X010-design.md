@@ -1,6 +1,6 @@
 # F-X010, Tag v0.6.0
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S39
 **Size**: S
 **Depends on**: F-X009
@@ -111,12 +111,12 @@ must not change document or render output.
   their exact gates and restore every mutation byte-identically.
 - [x] Run the full metadata, dependency, README, WASM, archive, asset,
   supply-chain, prose, generated-skill, and hash gates.
-- [ ] Obtain a clean microscope and clean sprint review at the exact release
+- [x] Obtain a clean microscope and clean sprint review at the exact release
   SHA.
-- [ ] Invoke `/release v0.6.0` and receive its separate immediate approval.
-- [ ] Watch publication and verify all seven versions, owners, READMEs, tag,
+- [x] Invoke `/release v0.6.0` and receive its separate immediate approval.
+- [x] Watch publication and verify all seven versions, owners, READMEs, tag,
   and GitHub release target.
-- [ ] Complete the exact HLD and delivery records only after external
+- [x] Complete the exact HLD and delivery records only after external
   verification succeeds.
 
 ## Open questions

@@ -22,7 +22,7 @@ the next minor version through its exact release family.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-X009 | README coverage for every workspace crate | L | done | |
-| F-X010 | Tag v0.6.0 | S | in-progress | codex |
+| F-X010 | Tag v0.6.0 | S | done | |
 | F-X011 | Tag rpptx-v0.2.0 | S | pending | |
 
 ## Sequencing note

@@ -131,13 +131,12 @@ unchanged.
 
 ## What happens to the published crates
 
-All seven released rdocx crates are published at the breaking pre-1.0 0.5.0
-boundary from the reviewed `v0.5.0` tag. Their immutable 0.4.1 releases remain
-available. The eleven-package shared-version group is prepared at 0.6.0 for
-the next minor release. It also carries unpublished `rdocx-wasm`, `rdocx-py`,
-`rpptx-py`, and `oxml-py-support` without adding them to crates.io
-publication. The seven stable 0.6.0 registry versions and `v0.6.0` tag remain
-absent until the reviewed release receives its separate immediate approval.
+All seven released rdocx crates are published at 0.6.0 from the reviewed
+`v0.6.0` tag. Their immutable 0.4.1 and breaking pre-1.0 0.5.0 releases remain
+available. The eleven-package shared-version group is coherent at 0.6.0. It
+also carries unpublished `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and
+`oxml-py-support` without adding them to crates.io publication. Every stable
+0.6.0 crates.io page renders its package README.
 The complete 14-package `oxml-*` and `rpptx*` crates.io family remains
 published at the immutable 0.1.3 boundary. Released rdocx consumers depend on
 those registry-backed shared crates.
@@ -198,10 +197,9 @@ A stable tag publishes exactly `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`,
 exactly `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `rpptx-oxml`, `rpptx-chart`,
 `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. The stable registry
-family is published at 0.5.0 from the annotated `v0.5.0` tag, while the four
+family is published at 0.6.0 from the annotated `v0.6.0` tag, while the four
 non-publishable shared-version members remain local distribution only. The
-next stable train is prepared at 0.6.0 with publication pending. The incubating
-registry family remains at 0.1.3.
+incubating registry family remains at 0.1.3.
 
 Before either real allowlist, the workflow reproduces the deterministic hash
 baseline and verifies the full publishable workspace with a dry run. Each real

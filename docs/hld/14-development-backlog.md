@@ -1254,18 +1254,18 @@ workspace-version packages move together, including the exact seven crates.io
 packages and the four unpublished Python and WASM support packages. Stable
 README dependency examples, metadata regressions, lock entries, Python project
 versions, and WASM contract literals move to 0.6.0. The incubating train remains
-at 0.1.3. After full verification, a clean microscope, a clean sprint review,
-and separate immediate approval, `/release v0.6.0` publishes only the exact
-seven stable crates. No PyPI, npm, WASM, Python, or incubating publication is
-authorized.
+at 0.1.3. The reviewed `/release v0.6.0` workflow publishes only the exact
+seven stable crates after full verification, a clean microscope, a clean
+sprint review, and separate immediate approval. No PyPI, npm, WASM, Python, or
+incubating publication is authorized.
 **Depends on**: F-X009.
 **Test gate**: the stable release regression proves the eleven-package train,
 nine internal pins, exact seven-package publication set, README requirements,
 lock entries, Python project versions, WASM literals, and unchanged incubating
 train. The exact 21-package dry run, README compilation and archive inventory,
-28-entry hash harness, and supply-chain gate pass. After release, all seven
-crates resolve at 0.6.0 under owner `mantissaman`, each crates.io README is
-present, and the GitHub release targets the reviewed sprint SHA.
+28-entry hash harness, and supply-chain gate pass. All seven crates resolve at
+0.6.0 under owner `mantissaman`, each crates.io README is present, and the
+annotated `v0.6.0` tag targets the reviewed sprint SHA.
 
 ### F-X011, Tag rpptx-v0.2.0 (S)
 Prepare the complete incubating train at the next minor version, 0.2.0. The

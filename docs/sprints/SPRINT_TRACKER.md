@@ -221,6 +221,7 @@ defended.
 | F-X007 | S38 | L | 4 | 1 | 2026-08-14 | Integrated PR 25, stable crate READMEs, and package-preserving numbering XML |
 | F-X008 | S38 | S | 1 | 1 | 2026-08-14 | Published and verified the stable rdocx 0.5.0 family |
 | F-X009 | S39 | L | 4 | 1 | 2026-08-14 | Exact README coverage and usage examples for all 26 workspace packages |
+| F-X010 | S39 | S | 1 | 1 | 2026-08-14 | Published and verified the stable rdocx 0.6.0 family with rendered crate READMEs |
 
 ## Velocity
 
