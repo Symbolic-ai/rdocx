@@ -217,6 +217,7 @@ defended.
 | F-X003 | S36 | S | 1 | 1 | One canonical sample generator with unchanged outputs |
 | F-X004 | S36 | S | 1 | 1 | Process-unique integration-test output paths |
 | F-X006 | S37 | S | 1 | 1 | Published and verified the complete rpptx 0.1.3 family |
+| F-X007 | S38 | L | 4 | 1 | 2026-08-14 | Integrated PR 25, stable crate READMEs, and package-preserving numbering XML |
 
 ## Velocity
 

@@ -5,7 +5,7 @@
 **Goal**: integrate PR 25 with its contributor credit intact, harden its new
 Word composition APIs, and publish useful documentation for every stable
 crate. After the integrated result passes full verification and sprint review,
-prepare and release the complete stable family at 0.4.2 through the dedicated
+prepare and release the complete stable family at 0.5.0 through the dedicated
 release workflow.
 
 ## Spec references
@@ -25,8 +25,8 @@ release workflow.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X007 | Integrate PR 25 and stable crate documentation | L | in-progress | codex |
-| F-X008 | Tag the updated stable rdocx family | S | pending | - |
+| F-X007 | Integrate PR 25 and stable crate documentation | L | done | - |
+| F-X008 | Tag v0.5.0 | S | pending | - |
 
 ## Sequencing note
 
@@ -47,7 +47,7 @@ final approval immediately before the first release mutation.
   users when and how to use it. All Rust examples compile.
 - `/verify --full` passes with all 28 deterministic hashes unchanged and every
   stable archive below 10 MiB.
-- `/release v0.4.2` receives separate final approval at the reviewed SHA before
+- `/release v0.5.0` receives separate final approval at the reviewed SHA before
   creating or pushing the tag.
-- All seven stable packages resolve from crates.io at 0.4.2 with the expected
+- All seven stable packages resolve from crates.io at 0.5.0 with the expected
   owner, and no incubating, WASM, Python, or npm package is published.

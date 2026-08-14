@@ -1383,7 +1383,8 @@ impl Document {
     ///
     /// `levels[i]` configures level `i`; deeper unspecified levels fall back
     /// to the standard template rotation for the last specified format's
-    /// family. An empty slice produces the standard numbered template.
+    /// family. An empty slice produces the standard numbered template. Word
+    /// supports nine levels, so entries after index eight are ignored.
     ///
     /// ```no_run
     /// use rdocx::{Document, ListLevel};
@@ -1400,6 +1401,7 @@ impl Document {
         self.invalidate_layout();
         let levels: Vec<(ST_NumberFormat, Option<u32>)> = levels
             .iter()
+            .take(9)
             .map(|level| (level.format.to_st(), level.start))
             .collect();
         self.ensure_numbering().add_list(&levels)
@@ -1686,6 +1688,8 @@ impl Document {
             .get_or_insert_with(|| rdocx_oxml::numbering::CT_Numbering {
                 abstract_nums: Vec::new(),
                 nums: Vec::new(),
+                root_attributes: Vec::new(),
+                extra_xml: Vec::new(),
             });
 
         // Find max existing IDs to avoid collision
@@ -1844,6 +1848,7 @@ impl Document {
                 val: ST_TabJc::Right,
                 pos: Twips(self.text_width_twips()),
                 leader: Some(ST_TabLeader::Dot),
+                source_occurrence: None,
             }],
         };
 
@@ -2278,8 +2283,8 @@ impl Document {
     ///
     /// Font resolution order:
     /// 1. Fonts embedded in the DOCX file (word/fonts/)
-    /// 2. System fonts
-    /// 3. Bundled fonts (if `bundled-fonts` feature is enabled)
+    /// 2. System fonts when the default `system-fonts` feature is enabled
+    /// 3. Always-available bundled metric-compatible fonts
     pub fn to_pdf(&self) -> Result<Vec<u8>> {
         let layout = self.cached_layout()?;
         Ok(oxml_pdf::render_to_pdf(&layout))
@@ -2305,8 +2310,8 @@ impl Document {
     /// Font resolution order:
     /// 1. User-provided fonts (this parameter)
     /// 2. Fonts embedded in the DOCX file (word/fonts/)
-    /// 3. System fonts
-    /// 4. Bundled fonts (if `bundled-fonts` feature is enabled)
+    /// 3. System fonts when the default `system-fonts` feature is enabled
+    /// 4. Always-available bundled metric-compatible fonts
     pub fn to_pdf_with_fonts(&self, font_files: &[(&str, &[u8])]) -> Result<Vec<u8>> {
         let mut input = self.build_layout_input();
         for (family, data) in font_files {
@@ -4107,6 +4112,31 @@ mod tests {
         assert!(
             doc.numbering.is_none(),
             "a rejected setter must not add an empty numbering part"
+        );
+    }
+
+    #[test]
+    fn custom_list_and_paragraph_numbering_enforce_the_nine_level_contract() {
+        let mut doc = Document::new();
+        let levels = vec![ListLevel::decimal(); 10];
+        let num_id = doc.add_list_definition(&levels);
+        assert_eq!(
+            doc.numbering.as_ref().unwrap().abstract_nums[0]
+                .levels
+                .len(),
+            9
+        );
+
+        let mut paragraph = doc.add_paragraph("item");
+        assert!(!paragraph.set_numbering(num_id, 9));
+        assert_eq!(
+            paragraph.inner.properties.as_ref().and_then(|p| p.num_id),
+            None
+        );
+        assert!(paragraph.set_numbering(num_id, 8));
+        assert_eq!(
+            paragraph.inner.properties.as_ref().unwrap().num_ilvl,
+            Some(8)
         );
     }
 

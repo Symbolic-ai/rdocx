@@ -160,9 +160,12 @@ impl<'a> Table<'a> {
     ///
     /// A cell that spans the changed grid column receives the sum of every
     /// grid column it covers. Returns `false` without changing the table when
-    /// `column` is outside the grid, a row's spans exceed the grid, or a width
-    /// total overflows.
+    /// `column` is outside the grid, `width` is negative, a row's spans exceed
+    /// the grid, or a width total overflows.
     pub fn set_column_width(&mut self, column: usize, width: Length) -> bool {
+        if width.as_twips().0 < 0 {
+            return false;
+        }
         let Some(grid) = self.inner.grid.as_ref() else {
             return false;
         };
@@ -774,5 +777,29 @@ mod tests {
             first_cell.properties.as_ref().unwrap().width,
             Some(CT_TblWidth::dxa(5_000))
         );
+    }
+
+    #[test]
+    fn table_column_width_rejects_negative_geometry_without_mutation() {
+        let mut inner = CT_Tbl::new();
+        inner.grid = Some(CT_TblGrid {
+            columns: vec![
+                CT_TblGridCol {
+                    width: Twips(1_000),
+                },
+                CT_TblGridCol {
+                    width: Twips(2_000),
+                },
+            ],
+        });
+        inner.properties = Some(CT_TblPr {
+            width: Some(CT_TblWidth::dxa(3_000)),
+            ..CT_TblPr::default()
+        });
+        let before = inner.clone();
+
+        let mut table = Table { inner: &mut inner };
+        assert!(!table.set_column_width(0, Length::twips(-1)));
+        assert_eq!(*table.inner, before);
     }
 }

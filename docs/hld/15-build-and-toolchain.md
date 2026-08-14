@@ -269,12 +269,19 @@ unresolved-symbol link failure that is easy to misdiagnose as something else.
 **A dedicated no-default-features job.** It runs `cargo test -p oxml-layout
 --no-default-features`, which exercises the font-isolation path used by WASM.
 
-**README examples in the docs job.** The root README is the sole source for six
-`rust,no_run` examples. After the workspace documentation build,
-`scripts/readme_doctests.py` discovers the current `rdocx` rlib from Cargo JSON
-messages and passes it directly to rustdoc with the repository edition,
-dependency search path, exact external crate binding, and warnings denied. The
-same runner is part of canonical non-fast verification.
+**Stable package READMEs in the docs job.** Every package in the seven-crate
+stable family declares and packages exactly one README. The root file is the
+high-level `rdocx` guide. `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`,
+`rdocx-html`, `rdocx-pdf`, and `rdocx-cli` use focused crate-local files. The
+two deprecated shims direct new consumers to `oxml-opc` and `oxml-pdf`.
+
+After the workspace documentation build, `scripts/readme_doctests.py` checks
+that inventory, validates the shell and dependency snippets, and compiles all
+twelve Rust examples across the six stable libraries. It discovers each rlib
+from Cargo JSON messages and passes it to rustdoc with the repository edition,
+dependency search path, matching external crate binding, and warnings denied.
+The same runner is part of canonical non-fast verification. Archive checks
+assert that every stable package carries its intended README.
 
 **A WASM target and Node job.** It installs the `wasm32-unknown-unknown` target,
 uses exact Node 24.11.1 and wasm-pack 0.15.0, and checks both facade-backed WASM

@@ -1,12 +1,14 @@
 //! Border and tab stop types for paragraph formatting.
 
 use quick_xml::events::{BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::{Reader, Writer, XmlVersion};
 
-use crate::error::Result;
-use crate::namespace::matches_local_name;
+use crate::error::{OxmlError, Result};
+use crate::namespace::{W_NS, matches_local_name};
 use crate::shared::{ST_Border, ST_TabJc, ST_TabLeader};
 use crate::units::Twips;
+
+const MAX_TAB_XML_DEPTH: usize = 64;
 
 /// A single border edge (top, bottom, left, right, between).
 #[derive(Debug, Clone, PartialEq)]
@@ -188,7 +190,7 @@ impl CT_PBdr {
 }
 
 /// A single tab stop definition.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct CT_TabStop {
     /// Tab stop alignment
     pub val: ST_TabJc,
@@ -196,6 +198,17 @@ pub struct CT_TabStop {
     pub pos: Twips,
     /// Leader character
     pub leader: Option<ST_TabLeader>,
+    /// Original occurrence in a parsed tab collection, or `None` for a new tab.
+    ///
+    /// This preservation value is ignored by semantic equality. Callers moving
+    /// a tab into another `CT_Tabs` collection should set it to `None`.
+    pub source_occurrence: Option<usize>,
+}
+
+impl PartialEq for CT_TabStop {
+    fn eq(&self, other: &Self) -> bool {
+        self.val == other.val && self.pos == other.pos && self.leader == other.leader
+    }
 }
 
 impl CT_TabStop {
@@ -204,10 +217,17 @@ impl CT_TabStop {
             val,
             pos,
             leader: None,
+            source_occurrence: None,
         }
     }
 
     pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
+        Self::from_xml_attrs_with_prefixes(e, &["w".to_string()])
+    }
+
+    /// Parse a tab stop using the in-scope WordprocessingML prefixes.
+    pub fn from_xml_attrs_with_prefixes(e: &BytesStart, word_prefixes: &[String]) -> Result<Self> {
+        let prefixes = word_prefixes_at(e, word_prefixes)?;
         let mut val = ST_TabJc::Left;
         let mut pos = Twips(0);
         let mut leader = None;
@@ -216,17 +236,68 @@ impl CT_TabStop {
             let attr = attr?;
             let key = attr.key.as_ref();
             let v = std::str::from_utf8(&attr.value)?;
-            if matches_local_name(key, b"val") {
+            if is_word_attribute(key, b"val", &prefixes) {
                 val = ST_TabJc::from_str(v)?;
-            } else if matches_local_name(key, b"pos") {
+            } else if is_word_attribute(key, b"pos", &prefixes) {
                 pos = Twips(v.parse()?);
-            } else if matches_local_name(key, b"leader") {
+            } else if is_word_attribute(key, b"leader", &prefixes) {
                 leader = Some(ST_TabLeader::from_str(v)?);
             }
         }
 
-        Ok(CT_TabStop { val, pos, leader })
+        Ok(CT_TabStop {
+            val,
+            pos,
+            leader,
+            source_occurrence: None,
+        })
     }
+}
+
+fn word_prefixes_at(start: &BytesStart<'_>, inherited: &[String]) -> Result<Vec<String>> {
+    let mut prefixes = inherited.to_vec();
+    for attribute in start.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref();
+        let prefix = if name == b"xmlns" {
+            b"".as_slice()
+        } else if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+            prefix
+        } else {
+            continue;
+        };
+        let prefix = std::str::from_utf8(prefix)?.to_string();
+        prefixes.retain(|candidate| candidate != &prefix);
+        let value =
+            attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())?;
+        if value.as_bytes() == W_NS.as_bytes() {
+            prefixes.push(prefix);
+        }
+    }
+    Ok(prefixes)
+}
+
+fn is_word_name(name: &[u8], word_prefixes: &[String]) -> bool {
+    let Some(separator) = name.iter().position(|byte| *byte == b':') else {
+        return word_prefixes.iter().any(String::is_empty);
+    };
+    word_prefixes
+        .iter()
+        .any(|prefix| prefix.as_bytes() == &name[..separator])
+}
+
+fn is_word_element(name: &[u8], local: &[u8], word_prefixes: &[String]) -> bool {
+    matches_local_name(name, local) && is_word_name(name, word_prefixes)
+}
+
+fn is_word_attribute(key: &[u8], local: &[u8], word_prefixes: &[String]) -> bool {
+    let Some(separator) = key.iter().position(|byte| *byte == b':') else {
+        return false;
+    };
+    key.get(separator + 1..) == Some(local)
+        && word_prefixes
+            .iter()
+            .any(|prefix| prefix.as_bytes() == &key[..separator])
 }
 
 /// `CT_Tabs` — Collection of tab stop definitions.
@@ -237,16 +308,50 @@ pub struct CT_Tabs {
 
 impl CT_Tabs {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_string()])
+    }
+
+    /// Parse tab stops using the in-scope WordprocessingML prefixes.
+    pub fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut tabs = Vec::new();
         let mut buf = Vec::new();
+        let mut scopes = vec![word_prefixes.to_vec()];
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) if matches_local_name(e.name().as_ref(), b"tab") => {
-                    tabs.push(CT_TabStop::from_xml_attrs(e)?);
+                Ok(Event::Empty(ref e)) => {
+                    let prefixes = word_prefixes_at(e, scopes.last().expect("outer scope"))?;
+                    if scopes.len() == 1 && is_word_element(e.name().as_ref(), b"tab", &prefixes) {
+                        let mut tab = CT_TabStop::from_xml_attrs_with_prefixes(e, &prefixes)?;
+                        tab.source_occurrence = Some(tabs.len());
+                        tabs.push(tab);
+                    }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tabs") => {
-                    break;
+                Ok(Event::Start(ref e)) => {
+                    if scopes.len() >= MAX_TAB_XML_DEPTH {
+                        return Err(OxmlError::InvalidValue(format!(
+                            "tab XML depth exceeds {MAX_TAB_XML_DEPTH}"
+                        )));
+                    }
+                    let prefixes = word_prefixes_at(e, scopes.last().expect("outer scope"))?;
+                    if scopes.len() == 1 && is_word_element(e.name().as_ref(), b"tab", &prefixes) {
+                        let mut tab = CT_TabStop::from_xml_attrs_with_prefixes(e, &prefixes)?;
+                        tab.source_occurrence = Some(tabs.len());
+                        tabs.push(tab);
+                    }
+                    scopes.push(prefixes);
+                }
+                Ok(Event::End(ref e)) => {
+                    if scopes.len() == 1 && is_word_element(e.name().as_ref(), b"tabs", &scopes[0])
+                    {
+                        break;
+                    }
+                    if scopes.len() > 1 {
+                        scopes.pop();
+                    }
                 }
                 Ok(Event::Eof) => break,
                 Err(e) => return Err(e.into()),
@@ -338,16 +443,19 @@ mod tests {
                     val: ST_TabJc::Left,
                     pos: Twips(720),
                     leader: None,
+                    source_occurrence: None,
                 },
                 CT_TabStop {
                     val: ST_TabJc::Center,
                     pos: Twips(4320),
                     leader: Some(ST_TabLeader::Dot),
+                    source_occurrence: None,
                 },
                 CT_TabStop {
                     val: ST_TabJc::Right,
                     pos: Twips(8640),
                     leader: Some(ST_TabLeader::Hyphen),
+                    source_occurrence: None,
                 },
             ],
         };
@@ -377,6 +485,103 @@ mod tests {
         assert_eq!(parsed.tabs[1].val, ST_TabJc::Center);
         assert_eq!(parsed.tabs[1].leader, Some(ST_TabLeader::Dot));
         assert_eq!(parsed.tabs[2].val, ST_TabJc::Right);
+        assert_eq!(parsed.tabs[0].source_occurrence, Some(0));
+        assert_eq!(parsed.tabs[1].source_occurrence, Some(1));
+    }
+
+    #[test]
+    fn namespace_aware_tabs_ignore_foreign_same_local_children() {
+        let xml = r#"<q:tabs xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:ext="urn:producer"><ext:tab ext:val="right" ext:pos="99"/><q:tab q:val="left" q:pos="720"/></q:tabs>"#;
+        let mut reader = Reader::from_str(xml);
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(_)) => break,
+                Ok(Event::Eof) => panic!("missing tabs start"),
+                _ => {}
+            }
+            buf.clear();
+        }
+        let parsed = CT_Tabs::from_xml_with_prefixes(&mut reader, &["q".to_string()]).unwrap();
+        assert_eq!(parsed.tabs.len(), 1);
+        assert_eq!(parsed.tabs[0].pos, Twips(720));
+        assert_eq!(parsed.tabs[0].source_occurrence, Some(0));
+
+        let mut constructed = CT_TabStop::new(ST_TabJc::Left, Twips(720));
+        assert_eq!(parsed.tabs[0], constructed);
+        constructed.source_occurrence = Some(99);
+        assert_eq!(parsed.tabs[0], constructed);
+    }
+
+    #[test]
+    fn namespace_aware_tabs_track_shadows_and_expanded_tab_elements() {
+        let xml = r#"<q:tabs xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><foreign xmlns="urn:producer" xmlns:q="urn:producer"><q:tab q:val="right" q:pos="99"/><q:tabs><q:tab q:val="right" q:pos="100"/></q:tabs></foreign><q:tab q:val="left" q:pos="720"></q:tab><q:tab q:val="right" q:pos="1440"/></q:tabs>"#;
+        let mut reader = Reader::from_str(xml);
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(_)) => break,
+                Ok(Event::Eof) => panic!("missing tabs start"),
+                event => {
+                    event.unwrap();
+                }
+            }
+            buf.clear();
+        }
+
+        let parsed = CT_Tabs::from_xml_with_prefixes(&mut reader, &["q".to_string()]).unwrap();
+        assert_eq!(parsed.tabs.len(), 2);
+        assert_eq!(parsed.tabs[0].pos, Twips(720));
+        assert_eq!(parsed.tabs[0].source_occurrence, Some(0));
+        assert_eq!(parsed.tabs[1].pos, Twips(1440));
+        assert_eq!(parsed.tabs[1].source_occurrence, Some(1));
+
+        let default_xml = r#"<tabs xmlns="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><foreign xmlns="urn:producer"><tab val="right" pos="99"/><tabs><tab val="right" pos="100"/></tabs></foreign><tab xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="center" w:pos="2160"></tab></tabs>"#;
+        let mut reader = Reader::from_str(default_xml);
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(_)) => break,
+                Ok(Event::Eof) => panic!("missing default tabs start"),
+                event => {
+                    event.unwrap();
+                }
+            }
+            buf.clear();
+        }
+        let parsed = CT_Tabs::from_xml_with_prefixes(&mut reader, &[String::new()]).unwrap();
+        assert_eq!(parsed.tabs.len(), 1);
+        assert_eq!(parsed.tabs[0].val, ST_TabJc::Center);
+        assert_eq!(parsed.tabs[0].pos, Twips(2160));
+        assert_eq!(parsed.tabs[0].source_occurrence, Some(0));
+    }
+
+    #[test]
+    fn namespace_aware_tabs_reject_deep_distinct_aliases_normally() {
+        let mut xml = format!(r#"<q:tabs xmlns:q="{W_NS}">"#);
+        for depth in 0..MAX_TAB_XML_DEPTH {
+            xml.push_str(&format!(r#"<n{depth}:unknown xmlns:n{depth}="{W_NS}">"#));
+        }
+        for depth in (0..MAX_TAB_XML_DEPTH).rev() {
+            xml.push_str(&format!("</n{depth}:unknown>"));
+        }
+        xml.push_str("</q:tabs>");
+
+        let mut reader = Reader::from_str(&xml);
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(_)) => break,
+                Ok(Event::Eof) => panic!("missing tabs start"),
+                event => {
+                    event.unwrap();
+                }
+            }
+            buf.clear();
+        }
+        let error = CT_Tabs::from_xml_with_prefixes(&mut reader, &["q".to_string()])
+            .expect_err("deep alias nesting must be bounded");
+        assert!(error.to_string().contains("tab XML depth exceeds 64"));
     }
 
     #[test]

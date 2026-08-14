@@ -211,6 +211,7 @@ mod tests {
                 val: word_align,
                 pos: Twips(1),
                 leader: Some(word_leader),
+                source_occurrence: None,
             }]);
             assert_eq!(converted.len(), 1);
             assert_eq!(converted[0].align, shared_align);

@@ -5,7 +5,9 @@ use quick_xml::{Reader, Writer};
 
 use crate::error::{OxmlError, Result};
 use crate::namespace::{W_NS, matches_local_name};
-use crate::properties::{CT_PPr, CT_RPr};
+use crate::numbering::{parse_scoped_ppr, word_prefixes_at};
+use crate::properties::{CT_PPr, CT_RPr, is_word_element};
+use crate::raw_xml::capture_element;
 
 /// The type of a style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +56,15 @@ pub struct CT_Style {
 #[allow(non_snake_case)]
 impl CT_Style {
     pub fn from_xml(reader: &mut Reader<&[u8]>, attrs: &BytesStart) -> Result<Self> {
+        let prefixes = word_prefixes_at(attrs, &["w".to_string()])?;
+        Self::from_xml_with_prefixes(reader, attrs, &prefixes)
+    }
+
+    fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        attrs: &BytesStart,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut style_id = String::new();
         let mut style_type = StyleType::Paragraph;
         let mut is_default = false;
@@ -92,8 +103,10 @@ impl CT_Style {
                 }
                 Ok(Event::Start(ref e)) => {
                     let ename = e.name();
-                    if matches_local_name(ename.as_ref(), b"pPr") {
-                        ppr = Some(CT_PPr::from_xml(reader)?);
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(ename.as_ref(), b"pPr", &prefixes) {
+                        let raw = capture_element(reader, e)?;
+                        ppr = Some(parse_scoped_ppr(&raw, &prefixes)?);
                     } else if matches_local_name(ename.as_ref(), b"rPr") {
                         rpr = Some(CT_RPr::from_xml(reader)?);
                     } else {
@@ -172,6 +185,13 @@ pub struct CT_DocDefaults {
 #[allow(non_snake_case)]
 impl CT_DocDefaults {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_string()])
+    }
+
+    fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut defaults = CT_DocDefaults::default();
         let mut buf = Vec::new();
 
@@ -179,11 +199,12 @@ impl CT_DocDefaults {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if matches_local_name(name.as_ref(), b"rPrDefault") {
                         // Read into rPrDefault, expecting rPr child
                         defaults.rpr = Self::parse_pr_default(reader, b"rPrDefault")?;
                     } else if matches_local_name(name.as_ref(), b"pPrDefault") {
-                        defaults.ppr = Self::parse_ppr_default(reader)?;
+                        defaults.ppr = Self::parse_ppr_default(reader, &prefixes)?;
                     } else {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
@@ -228,7 +249,10 @@ impl CT_DocDefaults {
         Ok(rpr)
     }
 
-    fn parse_ppr_default(reader: &mut Reader<&[u8]>) -> Result<Option<CT_PPr>> {
+    fn parse_ppr_default(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Option<CT_PPr>> {
         let mut ppr = None;
         let mut buf = Vec::new();
 
@@ -236,8 +260,10 @@ impl CT_DocDefaults {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"pPr") {
-                        ppr = Some(CT_PPr::from_xml(reader)?);
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"pPr", &prefixes) {
+                        let raw = capture_element(reader, e)?;
+                        ppr = Some(parse_scoped_ppr(&raw, &prefixes)?);
                     } else {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
@@ -300,17 +326,23 @@ impl CT_Styles {
         let mut doc_defaults = None;
         let mut styles = Vec::new();
         let mut buf = Vec::new();
+        let mut word_prefixes = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
+                    let prefixes = word_prefixes_at(e, &word_prefixes)?;
                     if matches_local_name(name.as_ref(), b"docDefaults") {
-                        doc_defaults = Some(CT_DocDefaults::from_xml(&mut reader)?);
+                        doc_defaults = Some(CT_DocDefaults::from_xml_with_prefixes(
+                            &mut reader,
+                            &prefixes,
+                        )?);
                     } else if matches_local_name(name.as_ref(), b"style") {
-                        styles.push(CT_Style::from_xml(&mut reader, e)?);
+                        styles.push(CT_Style::from_xml_with_prefixes(&mut reader, e, &prefixes)?);
                     } else if matches_local_name(name.as_ref(), b"styles") {
                         // Root element, continue
+                        word_prefixes = prefixes;
                     } else {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
@@ -478,5 +510,85 @@ mod tests {
         let styles = CT_Styles::new_default();
         let default_para = styles.get_default(StyleType::Paragraph).unwrap();
         assert_eq!(default_para.style_id, "Normal");
+    }
+
+    #[test]
+    fn aliased_style_paragraph_properties_use_ancestor_namespace_scope() {
+        let xml = format!(
+            r#"<q:styles xmlns:q="{W_NS}" xmlns:ext="urn:producer"><q:style q:type="paragraph" q:styleId="Alias"><q:pPr><ext:jc ext:val="right"/><q:jc q:val="center"/></q:pPr></q:style></q:styles>"#
+        );
+        let parsed = CT_Styles::from_xml(xml.as_bytes()).unwrap();
+        let ppr = parsed.styles[0].ppr.as_ref().unwrap();
+        assert_eq!(ppr.jc, Some(crate::shared::ST_Jc::Center));
+    }
+
+    #[test]
+    fn direct_style_parser_uses_supplied_start_ancestor_scope() {
+        let xml = format!(
+            r#"<outer xmlns:ext="urn:producer"><q:style xmlns:q="{W_NS}" q:type="paragraph" q:styleId="Direct"><ext:pPr><ext:jc ext:val="right"/></ext:pPr><q:pPr><ext:jc ext:val="right"/><q:jc q:val="center"/></q:pPr></q:style></outer>"#
+        );
+        let mut reader = Reader::from_str(&xml);
+        let mut buf = Vec::new();
+        let parsed = loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref element)) if element.local_name().as_ref() == b"style" => {
+                    break CT_Style::from_xml(&mut reader, element).unwrap();
+                }
+                Ok(Event::Eof) => panic!("missing style"),
+                event => {
+                    event.unwrap();
+                }
+            }
+            buf.clear();
+        };
+        assert_eq!(
+            parsed.ppr.as_ref().unwrap().jc,
+            Some(crate::shared::ST_Jc::Center)
+        );
+    }
+
+    #[test]
+    fn direct_style_parser_does_not_promote_foreign_start_prefix() {
+        let xml = r#"<outer><ext:style xmlns:ext="urn:producer" ext:type="paragraph" ext:styleId="Foreign"><ext:pPr><ext:jc ext:val="right"/></ext:pPr></ext:style></outer>"#;
+        let mut reader = Reader::from_str(xml);
+        let mut buf = Vec::new();
+        let parsed = loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref element)) if element.local_name().as_ref() == b"style" => {
+                    break CT_Style::from_xml(&mut reader, element).unwrap();
+                }
+                Ok(Event::Eof) => panic!("missing style"),
+                event => {
+                    event.unwrap();
+                }
+            }
+            buf.clear();
+        };
+        assert!(parsed.ppr.is_none());
+    }
+
+    #[test]
+    fn direct_style_parser_accepts_default_word_namespace() {
+        let xml = format!(
+            r#"<outer xmlns:ext="urn:producer"><style xmlns="{W_NS}" xmlns:w="{W_NS}" w:type="paragraph" w:styleId="Direct"><ext:pPr><ext:jc ext:val="right"/></ext:pPr><pPr><ext:jc ext:val="right"/><jc w:val="center"/></pPr></style></outer>"#
+        );
+        let mut reader = Reader::from_str(&xml);
+        let mut buf = Vec::new();
+        let parsed = loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref element)) if element.local_name().as_ref() == b"style" => {
+                    break CT_Style::from_xml(&mut reader, element).unwrap();
+                }
+                Ok(Event::Eof) => panic!("missing style"),
+                event => {
+                    event.unwrap();
+                }
+            }
+            buf.clear();
+        };
+        assert_eq!(
+            parsed.ppr.as_ref().unwrap().jc,
+            Some(crate::shared::ST_Jc::Center)
+        );
     }
 }

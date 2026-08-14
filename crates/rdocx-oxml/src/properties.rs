@@ -1,12 +1,12 @@
 //! Paragraph properties (`CT_PPr`) and run properties (`CT_RPr`).
 
 use quick_xml::events::{BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::borders::{CT_PBdr, CT_Tabs};
 use crate::document::CT_SectPr;
 use crate::error::Result;
-use crate::namespace::matches_local_name;
+use crate::namespace::{W_NS, matches_local_name};
 use crate::shared::{ST_HighlightColor, ST_Jc, ST_OnOff, ST_Underline};
 use crate::units::{HalfPoint, Twips};
 
@@ -115,6 +115,13 @@ pub struct CT_PPr {
 #[allow(non_snake_case)]
 impl CT_PPr {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_string()])
+    }
+
+    fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut ppr = CT_PPr::default();
         let mut buf = Vec::new();
 
@@ -122,15 +129,16 @@ impl CT_PPr {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"rPr") {
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"rPr", &prefixes) {
                         ppr.rpr = Some(CT_RPr::from_xml(reader)?);
-                    } else if matches_local_name(name.as_ref(), b"numPr") {
-                        Self::parse_num_pr(reader, &mut ppr)?;
-                    } else if matches_local_name(name.as_ref(), b"pBdr") {
+                    } else if is_word_element(name.as_ref(), b"numPr", &prefixes) {
+                        Self::parse_num_pr(reader, &mut ppr, &prefixes)?;
+                    } else if is_word_element(name.as_ref(), b"pBdr", &prefixes) {
                         ppr.borders = Some(CT_PBdr::from_xml(reader)?);
-                    } else if matches_local_name(name.as_ref(), b"tabs") {
-                        ppr.tabs = Some(CT_Tabs::from_xml(reader)?);
-                    } else if matches_local_name(name.as_ref(), b"sectPr") {
+                    } else if is_word_element(name.as_ref(), b"tabs", &prefixes) {
+                        ppr.tabs = Some(CT_Tabs::from_xml_with_prefixes(reader, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"sectPr", &prefixes) {
                         ppr.sect_pr = Some(CT_SectPr::from_xml(reader)?);
                     } else {
                         reader.read_to_end_into(name, &mut Vec::new())?;
@@ -138,68 +146,72 @@ impl CT_PPr {
                 }
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"pStyle") {
-                        ppr.style_id = get_val_attr(e)?;
-                    } else if matches_local_name(name.as_ref(), b"jc") {
-                        if let Some(val) = get_val_attr(e)? {
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"pStyle", &prefixes) {
+                        ppr.style_id = get_word_val_attr(e, &prefixes)?;
+                    } else if is_word_element(name.as_ref(), b"jc", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             ppr.jc = Some(ST_Jc::from_str(&val)?);
                         }
-                    } else if matches_local_name(name.as_ref(), b"spacing") {
+                    } else if is_word_element(name.as_ref(), b"spacing", &prefixes) {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
                             let val_str = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"before") {
+                            if is_word_attribute(key, b"before", &prefixes) {
                                 ppr.space_before = Some(Twips(val_str.parse()?));
-                            } else if matches_local_name(key, b"after") {
+                            } else if is_word_attribute(key, b"after", &prefixes) {
                                 ppr.space_after = Some(Twips(val_str.parse()?));
-                            } else if matches_local_name(key, b"line") {
+                            } else if is_word_attribute(key, b"line", &prefixes) {
                                 ppr.line_spacing = Some(Twips(val_str.parse()?));
-                            } else if matches_local_name(key, b"lineRule") {
+                            } else if is_word_attribute(key, b"lineRule", &prefixes) {
                                 ppr.line_rule = Some(val_str.to_string());
-                            } else if matches_local_name(key, b"beforeAutospacing") {
+                            } else if is_word_attribute(key, b"beforeAutospacing", &prefixes) {
                                 ppr.before_autospacing = Some(val_str == "1" || val_str == "true");
-                            } else if matches_local_name(key, b"afterAutospacing") {
+                            } else if is_word_attribute(key, b"afterAutospacing", &prefixes) {
                                 ppr.after_autospacing = Some(val_str == "1" || val_str == "true");
                             }
                         }
-                    } else if matches_local_name(name.as_ref(), b"ind") {
+                    } else if is_word_element(name.as_ref(), b"ind", &prefixes) {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
                             let val_str = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"left") || matches_local_name(key, b"start")
+                            if is_word_attribute(key, b"left", &prefixes)
+                                || is_word_attribute(key, b"start", &prefixes)
                             {
                                 ppr.ind_left = Some(Twips(val_str.parse()?));
-                            } else if matches_local_name(key, b"right")
-                                || matches_local_name(key, b"end")
+                            } else if is_word_attribute(key, b"right", &prefixes)
+                                || is_word_attribute(key, b"end", &prefixes)
                             {
                                 ppr.ind_right = Some(Twips(val_str.parse()?));
-                            } else if matches_local_name(key, b"firstLine") {
+                            } else if is_word_attribute(key, b"firstLine", &prefixes) {
                                 ppr.ind_first_line = Some(Twips(val_str.parse()?));
-                            } else if matches_local_name(key, b"hanging") {
+                            } else if is_word_attribute(key, b"hanging", &prefixes) {
                                 ppr.ind_hanging = Some(Twips(val_str.parse()?));
                             }
                         }
-                    } else if matches_local_name(name.as_ref(), b"keepNext") {
-                        ppr.keep_next = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"keepLines") {
-                        ppr.keep_lines = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"pageBreakBefore") {
-                        ppr.page_break_before = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"widowControl") {
-                        ppr.widow_control = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"suppressAutoHyphens") {
-                        ppr.suppress_auto_hyphens = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"outlineLvl") {
-                        if let Some(val) = get_val_attr(e)? {
+                    } else if is_word_element(name.as_ref(), b"keepNext", &prefixes) {
+                        ppr.keep_next = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"keepLines", &prefixes) {
+                        ppr.keep_lines = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"pageBreakBefore", &prefixes) {
+                        ppr.page_break_before = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"widowControl", &prefixes) {
+                        ppr.widow_control = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"suppressAutoHyphens", &prefixes) {
+                        ppr.suppress_auto_hyphens = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"outlineLvl", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             ppr.outline_lvl = Some(val.parse()?);
                         }
-                    } else if matches_local_name(name.as_ref(), b"shd") {
+                    } else if is_word_element(name.as_ref(), b"shd", &prefixes) {
                         ppr.shading = Some(CT_Shd::from_xml_attrs(e)?);
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"pPr") => {
+                Ok(Event::End(ref e))
+                    if is_word_element(e.name().as_ref(), b"pPr", word_prefixes) =>
+                {
                     break;
                 }
                 Ok(Event::Eof) => break,
@@ -212,23 +224,30 @@ impl CT_PPr {
         Ok(ppr)
     }
 
-    fn parse_num_pr(reader: &mut Reader<&[u8]>, ppr: &mut CT_PPr) -> Result<()> {
+    fn parse_num_pr(
+        reader: &mut Reader<&[u8]>,
+        ppr: &mut CT_PPr,
+        word_prefixes: &[String],
+    ) -> Result<()> {
         let mut buf = Vec::new();
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"ilvl") {
-                        if let Some(val) = get_val_attr(e)? {
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"ilvl", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             ppr.num_ilvl = Some(val.parse()?);
                         }
-                    } else if matches_local_name(name.as_ref(), b"numId")
-                        && let Some(val) = get_val_attr(e)?
+                    } else if is_word_element(name.as_ref(), b"numId", &prefixes)
+                        && let Some(val) = get_word_val_attr(e, &prefixes)?
                     {
                         ppr.num_id = Some(val.parse()?);
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"numPr") => {
+                Ok(Event::End(ref e))
+                    if is_word_element(e.name().as_ref(), b"numPr", word_prefixes) =>
+                {
                     break;
                 }
                 Ok(Event::Eof) => break,
@@ -266,8 +285,21 @@ impl CT_PPr {
         if let Some(widow) = self.widow_control {
             write_toggle(writer, "w:widowControl", widow)?;
         }
-        if let Some(suppress) = self.suppress_auto_hyphens {
-            write_toggle(writer, "w:suppressAutoHyphens", suppress)?;
+
+        // numPr
+        if self.num_id.is_some() || self.num_ilvl.is_some() {
+            writer.write_event(Event::Start(BytesStart::new("w:numPr")))?;
+            if let Some(ilvl) = self.num_ilvl {
+                let mut e = BytesStart::new("w:ilvl");
+                e.push_attribute(("w:val", buf.format(ilvl)));
+                writer.write_event(Event::Empty(e))?;
+            }
+            if let Some(num_id) = self.num_id {
+                let mut e = BytesStart::new("w:numId");
+                e.push_attribute(("w:val", buf.format(num_id)));
+                writer.write_event(Event::Empty(e))?;
+            }
+            writer.write_event(Event::End(BytesEnd::new("w:numPr")))?;
         }
 
         // pBdr
@@ -287,20 +319,8 @@ impl CT_PPr {
             tabs.to_xml(writer)?;
         }
 
-        // numPr
-        if self.num_id.is_some() || self.num_ilvl.is_some() {
-            writer.write_event(Event::Start(BytesStart::new("w:numPr")))?;
-            if let Some(ilvl) = self.num_ilvl {
-                let mut e = BytesStart::new("w:ilvl");
-                e.push_attribute(("w:val", buf.format(ilvl)));
-                writer.write_event(Event::Empty(e))?;
-            }
-            if let Some(num_id) = self.num_id {
-                let mut e = BytesStart::new("w:numId");
-                e.push_attribute(("w:val", buf.format(num_id)));
-                writer.write_event(Event::Empty(e))?;
-            }
-            writer.write_event(Event::End(BytesEnd::new("w:numPr")))?;
+        if let Some(suppress) = self.suppress_auto_hyphens {
+            write_toggle(writer, "w:suppressAutoHyphens", suppress)?;
         }
 
         // spacing
@@ -714,14 +734,14 @@ impl CT_RPr {
         if let Some(small_caps) = self.small_caps {
             write_toggle(writer, "w:smallCaps", small_caps)?;
         }
-        if let Some(vanish) = self.vanish {
-            write_toggle(writer, "w:vanish", vanish)?;
-        }
         if let Some(strike) = self.strike {
             write_toggle(writer, "w:strike", strike)?;
         }
         if let Some(dstrike) = self.dstrike {
             write_toggle(writer, "w:dstrike", dstrike)?;
+        }
+        if let Some(vanish) = self.vanish {
+            write_toggle(writer, "w:vanish", vanish)?;
         }
 
         if let Some(ref color) = self.color {
@@ -760,26 +780,26 @@ impl CT_RPr {
             writer.write_event(Event::Empty(e))?;
         }
 
-        if let Some(underline) = self.underline {
-            let mut e = BytesStart::new("w:u");
-            e.push_attribute(("w:val", underline.to_str()));
-            writer.write_event(Event::Empty(e))?;
-        }
-
         if let Some(ref highlight) = self.highlight {
             let mut e = BytesStart::new("w:highlight");
             e.push_attribute(("w:val", highlight.to_str()));
             writer.write_event(Event::Empty(e))?;
         }
 
-        if let Some(ref vert_align) = self.vert_align {
-            let mut e = BytesStart::new("w:vertAlign");
-            e.push_attribute(("w:val", vert_align.as_str()));
+        if let Some(underline) = self.underline {
+            let mut e = BytesStart::new("w:u");
+            e.push_attribute(("w:val", underline.to_str()));
             writer.write_event(Event::Empty(e))?;
         }
 
         if let Some(ref shd) = self.shading {
             shd.write_xml(writer, "w:shd")?;
+        }
+
+        if let Some(ref vert_align) = self.vert_align {
+            let mut e = BytesStart::new("w:vertAlign");
+            e.push_attribute(("w:val", vert_align.as_str()));
+            writer.write_event(Event::Empty(e))?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:rPr")))?;
@@ -903,6 +923,70 @@ impl CT_RPr {
     }
 }
 
+pub(crate) fn word_prefixes_at(
+    start: &BytesStart<'_>,
+    inherited: &[String],
+) -> Result<Vec<String>> {
+    let mut prefixes = inherited.to_vec();
+    for attribute in start.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref();
+        let prefix = if name == b"xmlns" {
+            b"".as_slice()
+        } else if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+            prefix
+        } else {
+            continue;
+        };
+        let prefix = std::str::from_utf8(prefix)?.to_string();
+        prefixes.retain(|candidate| candidate != &prefix);
+        let value =
+            attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())?;
+        if value.as_bytes() == W_NS.as_bytes() {
+            prefixes.push(prefix);
+        }
+    }
+    Ok(prefixes)
+}
+
+fn is_word_name(name: &[u8], word_prefixes: &[String]) -> bool {
+    let Some(separator) = name.iter().position(|byte| *byte == b':') else {
+        return word_prefixes.iter().any(String::is_empty);
+    };
+    word_prefixes
+        .iter()
+        .any(|prefix| prefix.as_bytes() == &name[..separator])
+}
+
+pub(crate) fn is_word_element(name: &[u8], local: &[u8], word_prefixes: &[String]) -> bool {
+    matches_local_name(name, local) && is_word_name(name, word_prefixes)
+}
+
+fn is_word_attribute(key: &[u8], local: &[u8], word_prefixes: &[String]) -> bool {
+    let Some(separator) = key.iter().position(|byte| *byte == b':') else {
+        return false;
+    };
+    key.get(separator + 1..) == Some(local)
+        && word_prefixes
+            .iter()
+            .any(|prefix| prefix.as_bytes() == &key[..separator])
+}
+
+fn get_word_val_attr(e: &BytesStart, word_prefixes: &[String]) -> Result<Option<String>> {
+    for attr in e.attributes() {
+        let attr = attr?;
+        if is_word_attribute(attr.key.as_ref(), b"val", word_prefixes) {
+            return Ok(Some(std::str::from_utf8(&attr.value)?.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+fn parse_word_toggle(e: &BytesStart, word_prefixes: &[String]) -> Result<bool> {
+    let val = get_word_val_attr(e, word_prefixes)?;
+    Ok(ST_OnOff::from_str_or_default(val.as_deref()).is_on())
+}
+
 /// Extract the `w:val` attribute from an element.
 pub(crate) fn get_val_attr(e: &BytesStart) -> Result<Option<String>> {
     for attr in e.attributes() {
@@ -1007,6 +1091,27 @@ mod tests {
         assert_eq!(tabs.tabs.len(), 2);
         assert_eq!(tabs.tabs[0].pos, Twips(720));
         assert_eq!(tabs.tabs[1].leader, Some(crate::shared::ST_TabLeader::Dot));
+    }
+
+    #[test]
+    fn canonical_ppr_ignores_foreign_same_local_containers() {
+        let xml = r#"<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:ext="urn:producer"><w:tabs><ext:tab ext:val="right" ext:pos="100"/><w:tab w:val="left" w:pos="720"/></w:tabs><ext:tabs><ext:tab ext:val="right" ext:pos="99"/></ext:tabs><ext:rPr><ext:b/></ext:rPr></w:pPr>"#;
+        let mut reader = Reader::from_str(xml);
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(_)) => break,
+                Ok(Event::Eof) => panic!("missing pPr start"),
+                _ => {}
+            }
+            buf.clear();
+        }
+        let ppr = CT_PPr::from_xml(&mut reader).unwrap();
+        let tabs = ppr.tabs.unwrap();
+        assert_eq!(tabs.tabs.len(), 1);
+        assert_eq!(tabs.tabs[0].pos, Twips(720));
+        assert_eq!(tabs.tabs[0].source_occurrence, Some(0));
+        assert!(ppr.rpr.is_none());
     }
 
     #[test]

@@ -5525,3 +5525,45 @@ The remote annotated tag peels to the reviewed SHA.
 **Notes for future sessions.** Preserve the immutable 0.1.2 and 0.1.3 tags.
 Future Rust-family publication must use a fresh version and a separately
 approved `/release` invocation. npm publication remains unauthorized.
+
+### F-X007, Integrate PR 25 and stable crate documentation
+
+**Sprint.** S38
+**Completed.** 2026-08-14
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** PR 25's custom-list, hyperlink, hard-break, and fixed-table
+authoring APIs are integrated with side-effect-free rejection and synchronized
+table geometry. All seven stable crates now carry package-specific README
+documentation with twelve compile-checked Rust examples. Numbering mutation
+preserves unmodelled XML through namespace-aware parsing, typed property
+overlays, deterministic prefix allocation, and tab-stop occurrence provenance.
+
+**Non-obvious choices.** The contributor's commits and GitHub credit remain
+intact. The public numbering preservation fields use the approved breaking
+pre-1.0 boundary for v0.5.0. Stable archive checks use the complete local patch
+graph so every package is evaluated against the integrated workspace rather
+than an older immutable registry dependency.
+
+**Deviations from the design plan.** The reviewed remediation expanded from
+the two initial hardening fixes and README work to a complete raw-numbering
+preservation model. This was required to uphold the repository's unmodelled XML
+contract, and the user approved the breaking pre-1.0 v0.5.0 boundary.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Canonical non-fast verification passed. Focused list rejection,
+table geometry, raw-numbering round-trip, namespace projection, and bounded
+tab-overlay gates passed. A safe table-width mutation made the named gate fail
+before byte-identical restoration. The 21-package workspace dry run passed,
+all seven stable archives included their intended README, and every archive
+was below 10 MiB.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** F-X008 owns v0.5.0 preparation and publication
+through the separate release workflow. No stable crate was published by this
+story. Preserve Jon Stokes's `@jonstokes` credit in the PR and merge record.

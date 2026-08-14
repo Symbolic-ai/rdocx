@@ -5,6 +5,8 @@ use quick_xml::{Reader, Writer};
 
 use crate::error::Result;
 use crate::namespace::{W_NS, matches_local_name};
+use crate::numbering::word_prefixes_at;
+use crate::properties::is_word_element;
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::text::CT_P;
 
@@ -48,6 +50,7 @@ impl CT_HdrFtr {
         let mut extra_namespaces = Vec::new();
         let mut extra_xml = Vec::new();
         let mut buf = Vec::new();
+        let mut word_prefixes = Vec::new();
 
         let known_ns: &[&[u8]] = &[b"xmlns:w", b"xmlns:r", b"xmlns"];
 
@@ -55,10 +58,11 @@ impl CT_HdrFtr {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"p") {
-                        paragraphs.push(CT_P::from_xml(&mut reader)?);
-                    } else if matches_local_name(name.as_ref(), b"hdr")
-                        || matches_local_name(name.as_ref(), b"ftr")
+                    let prefixes = word_prefixes_at(e, &word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"p", &prefixes) {
+                        paragraphs.push(CT_P::from_xml_with_prefixes(&mut reader, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"hdr", &prefixes)
+                        || is_word_element(name.as_ref(), b"ftr", &prefixes)
                     {
                         // Capture extra namespace declarations from root element
                         for attr in e.attributes().flatten() {
@@ -72,6 +76,7 @@ impl CT_HdrFtr {
                                 extra_namespaces.push((key_str, val_str));
                             }
                         }
+                        word_prefixes = prefixes;
                     } else {
                         // Capture unknown elements as raw XML
                         extra_xml.push(capture_element(&mut reader, e)?);
@@ -239,5 +244,33 @@ mod tests {
         let xml = hdr.to_xml_header().unwrap();
         let parsed = CT_HdrFtr::from_xml(&xml).unwrap();
         assert_eq!(parsed.paragraphs.len(), 0);
+    }
+
+    #[test]
+    fn aliased_header_paragraph_properties_keep_root_scope() {
+        let xml = format!(
+            r#"<q:hdr xmlns:q="{W_NS}" xmlns:ext="urn:producer"><ext:p><ext:pPr><ext:jc ext:val="right"/></ext:pPr></ext:p><q:p><q:pPr><ext:jc ext:val="right"/><q:jc q:val="center"/></q:pPr><q:r><q:t>Header</q:t></q:r></q:p></q:hdr>"#
+        );
+        let parsed = CT_HdrFtr::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(parsed.paragraphs.len(), 1);
+        assert_eq!(parsed.text(), "Header");
+        assert_eq!(
+            parsed.paragraphs[0].properties.as_ref().unwrap().jc,
+            Some(crate::shared::ST_Jc::Center)
+        );
+    }
+
+    #[test]
+    fn default_namespace_header_properties_keep_root_scope() {
+        let xml = format!(
+            r#"<hdr xmlns="{W_NS}" xmlns:w="{W_NS}" xmlns:ext="urn:producer"><ext:p><ext:pPr><ext:jc ext:val="right"/></ext:pPr></ext:p><p><pPr><ext:jc ext:val="right"/><jc w:val="center"/></pPr><r><t>Header</t></r></p></hdr>"#
+        );
+        let parsed = CT_HdrFtr::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(parsed.paragraphs.len(), 1);
+        assert_eq!(parsed.text(), "Header");
+        assert_eq!(
+            parsed.paragraphs[0].properties.as_ref().unwrap().jc,
+            Some(crate::shared::ST_Jc::Center)
+        );
     }
 }

@@ -449,6 +449,8 @@ mod tests {
         numbering.nums.push(rdocx_oxml::numbering::CT_Num {
             num_id: second,
             abstract_num_id: abstract_id,
+            extra_xml: Vec::new(),
+            extra_attributes: Vec::new(),
         });
 
         let mut state = NumberingState::new();

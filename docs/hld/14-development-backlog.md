@@ -1192,16 +1192,35 @@ side-effect free, and fixed table geometry keeps the table width, grid, and
 spanning cell widths consistent. Every stable crate has a package README that
 states when to use it, links to its API documentation, and includes a current
 example or a clear deprecation path. The README examples are compile-checked.
+Typed numbering edits preserve unsupported attributes and child XML in schema
+order across namespace aliases and collisions. Repeated tab stops carry public
+source-occurrence provenance so edits, insertions, removals, and explicit
+clears retain producer ownership in deterministic linear work. The public tab
+parser tracks namespace scopes and accepts both empty and expanded tab-stop
+elements. Preservation carriers extend one expanded-name `mc:Ignorable`
+attribute without duplicating it, using the actual property ancestor scope
+rather than a document-wide declaration list. Style, body, table-cell, header,
+footer, footnote, and endnote paragraph properties retain established aliased
+and default WordprocessingML parsing. Nested tab namespace scope has a normal
+64-element depth bound. These public model additions set the stable release
+boundary at 0.5.0.
 **Test gate**: the merged PR's focused round-trip suite passes against current
 `main`, the two rejected-state and table-geometry regressions pass, and every
-stable crate README example compiles against its packaged crate.
+stable crate README example compiles against its packaged crate. Numbering
+round trips cover schema order, foreign namespace collisions, nested property
+markup, provenance-only replacement, repeated occurrence ownership, explicit
+clear carriers, namespace shadows, and expanded tab elements. The hash harness
+remains 28 of 28. The gate also covers direct style and paragraph boundaries,
+table cells, headers, notes, foreign same-local negatives, property-local
+compatibility scope, and bounded deep tab aliases. Stable package archives stay
+below 10 MiB, and the public migration examples compile.
 
-### F-X008, Tag the updated stable rdocx family (S)
-Prepare the complete seven-package stable family at 0.4.2 after F-X007, then
-publish it only through `/release v0.4.2` after the command's separate final
+### F-X008, Tag v0.5.0 (S)
+Prepare the complete seven-package stable family at 0.5.0 after F-X007, then
+publish it only through `/release v0.5.0` after the command's separate final
 approval. `rdocx-wasm` may inherit the version but remains unpublished. No
 incubating or npm package is published by this story.
 **Depends on**: F-X007.
-**Test gate**: all seven stable packages resolve from crates.io at 0.4.2 with
+**Test gate**: all seven stable packages resolve from crates.io at 0.5.0 with
 the expected owner, the GitHub release targets the reviewed sprint SHA, and
 the PR 25 contributor credit and merge note remain visible on GitHub.

@@ -6,7 +6,8 @@ use quick_xml::{Reader, Writer};
 use crate::drawing::CT_Drawing;
 use crate::error::Result;
 use crate::namespace::matches_local_name;
-use crate::properties::{CT_PPr, CT_RPr};
+use crate::numbering::{parse_scoped_ppr, word_prefixes_at};
+use crate::properties::{CT_PPr, CT_RPr, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
 
 /// `CT_Text` — The text content of a run, with optional xml:space="preserve".
@@ -329,6 +330,13 @@ impl CT_P {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_string()])
+    }
+
+    pub(crate) fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut properties = None;
         let mut runs = Vec::new();
         let mut hyperlinks = Vec::new();
@@ -339,8 +347,10 @@ impl CT_P {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"pPr") {
-                        properties = Some(CT_PPr::from_xml(reader)?);
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"pPr", &prefixes) {
+                        let raw = capture_element(reader, e)?;
+                        properties = Some(parse_scoped_ppr(&raw, &prefixes)?);
                     } else if matches_local_name(name.as_ref(), b"r") {
                         runs.push(CT_R::from_xml(reader)?);
                     } else if matches_local_name(name.as_ref(), b"hyperlink") {
@@ -594,6 +604,81 @@ mod tests {
         assert!(p.properties.is_some());
         assert_eq!(
             p.properties.as_ref().unwrap().jc,
+            Some(crate::shared::ST_Jc::Center)
+        );
+    }
+
+    #[test]
+    fn direct_paragraph_parser_accepts_explicit_property_binding() {
+        let xml = format!(
+            r#"<outer xmlns:ext="urn:producer"><q:p xmlns:q="{}"><ext:pPr><ext:jc ext:val="right"/></ext:pPr><q:pPr xmlns:q="{}"><ext:jc ext:val="right"/><q:jc q:val="center"/></q:pPr><q:r><q:t>Direct</q:t></q:r></q:p></outer>"#,
+            crate::namespace::W_NS,
+            crate::namespace::W_NS
+        );
+        let mut reader = Reader::from_str(&xml);
+        let mut buf = Vec::new();
+        let parsed = loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref element)) if element.local_name().as_ref() == b"p" => {
+                    break CT_P::from_xml(&mut reader).unwrap();
+                }
+                Ok(Event::Eof) => panic!("missing paragraph"),
+                event => {
+                    event.unwrap();
+                }
+            }
+            buf.clear();
+        };
+        assert_eq!(parsed.text(), "Direct");
+        assert_eq!(
+            parsed.properties.as_ref().unwrap().jc,
+            Some(crate::shared::ST_Jc::Center)
+        );
+    }
+
+    #[test]
+    fn direct_paragraph_parser_does_not_invent_foreign_word_identity() {
+        let xml = r#"<outer><ext:p xmlns:ext="urn:producer"><ext:pPr xmlns:ext="urn:producer"><ext:jc ext:val="right"/></ext:pPr><ext:r><ext:t>Foreign</ext:t></ext:r></ext:p></outer>"#;
+        let mut reader = Reader::from_str(xml);
+        let mut buf = Vec::new();
+        let parsed = loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref element)) if element.local_name().as_ref() == b"p" => {
+                    break CT_P::from_xml(&mut reader).unwrap();
+                }
+                Ok(Event::Eof) => panic!("missing paragraph"),
+                event => {
+                    event.unwrap();
+                }
+            }
+            buf.clear();
+        };
+        assert!(parsed.properties.is_none());
+    }
+
+    #[test]
+    fn direct_paragraph_parser_accepts_default_word_namespace() {
+        let xml = format!(
+            r#"<outer xmlns:ext="urn:producer"><p xmlns="{0}" xmlns:w="{0}"><ext:pPr><ext:jc ext:val="right"/></ext:pPr><pPr xmlns="{0}" xmlns:w="{0}"><ext:jc ext:val="right"/><jc w:val="center"/></pPr><r><t>Direct</t></r></p></outer>"#,
+            crate::namespace::W_NS
+        );
+        let mut reader = Reader::from_str(&xml);
+        let mut buf = Vec::new();
+        let parsed = loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref element)) if element.local_name().as_ref() == b"p" => {
+                    break CT_P::from_xml(&mut reader).unwrap();
+                }
+                Ok(Event::Eof) => panic!("missing paragraph"),
+                event => {
+                    event.unwrap();
+                }
+            }
+            buf.clear();
+        };
+        assert_eq!(parsed.text(), "Direct");
+        assert_eq!(
+            parsed.properties.as_ref().unwrap().jc,
             Some(crate::shared::ST_Jc::Center)
         );
     }
