@@ -122,20 +122,20 @@ entry points.
 
 ## Versioning
 
-The 14 implemented shared and PowerPoint publication candidates carry an
-explicit common incubating version of 0.1.2 in their manifests and workspace
-pins. The released `rdocx-*` crates continue to use the separate workspace
-version. Version preparation and manifest eligibility do not authorize
-publication. Registry publication for this family is authorized only when
-`/release rpptx-vX.Y.Z` reaches its exact reviewed SHA and receives the
+The 14 implemented shared and PowerPoint publication candidates are prepared
+at the explicit common incubating version 0.1.3 in their manifests and
+workspace pins. The released `rdocx-*` crates continue to use the separate
+workspace version. Version preparation and manifest eligibility do not
+authorize publication. Registry publication for this family remains pending
+until `/release rpptx-v0.1.3` reaches its exact reviewed SHA and receives the
 separate final approval at the external mutation boundary. `oxml-cli-support`
 is the format-neutral owner of range parsing, JSON envelope, and output-path
 contracts. It has no dependency on either document family, while CLI binaries
 depend inward on it.
 
 The immutable `rpptx-v0.1.2` release contains the earlier 12-package family.
-`oxml-cli-support` and `rpptx-cli` remain unpublished at 0.1.2. F-X006 owns a
-future fresh-version release of the complete 14-package family. No existing
+`oxml-cli-support` and `rpptx-cli` remain unpublished at 0.1.2. The complete
+14-package family is prepared at 0.1.3 but is not yet published. No existing
 tag or registry version is moved or overwritten.
 
 The `rpptx` facade owns formatting-preserving presentation text replacement.

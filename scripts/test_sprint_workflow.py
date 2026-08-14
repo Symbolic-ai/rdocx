@@ -651,7 +651,7 @@ class SprintWorkflowTests(unittest.TestCase):
             'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
             '"0.4.1" "rdocx_wasm"',
             'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
-            '"0.1.2" "rpptx_wasm"',
+            '"0.1.3" "rpptx_wasm"',
             "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
             "--ignore-scripts --no-audit --no-fund --package-lock=false "
             '"$tarball_root/$tarball"',
@@ -2929,7 +2929,7 @@ class SprintWorkflowTests(unittest.TestCase):
             self.assertEqual(release["shared-version"], "incubating")
             self.assertEqual(release["tag-name"], "rpptx-v{{version}}")
 
-    def test_incubating_release_family_is_prepared_at_0_1_2(self) -> None:
+    def test_incubating_release_family_is_prepared_at_0_1_3(self) -> None:
         incubating_packages = (
             "oxml-core",
             "oxml-opc",
@@ -2946,7 +2946,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "rpptx",
             "rpptx-cli",
         )
-        expected_version = "0.1.2"
+        expected_version = "0.1.3"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
         dependencies = root["workspace"]["dependencies"]
         lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
@@ -3040,7 +3040,7 @@ class SprintWorkflowTests(unittest.TestCase):
 
         wasm_package = manifests["crates/rpptx-wasm"]["package"]
         self.assertEqual(wasm_package["name"], "rpptx-wasm")
-        self.assertEqual(wasm_package["version"], "0.1.2")
+        self.assertEqual(wasm_package["version"], "0.1.3")
         self.assertTrue(wasm_package.get("description", "").strip())
         self.assertFalse(wasm_package["publish"])
         self.assertEqual(
@@ -3059,7 +3059,7 @@ class SprintWorkflowTests(unittest.TestCase):
             for package in lock["package"]
             if package["name"] == "rpptx-wasm"
         )
-        self.assertEqual(wasm_lock_versions, ("0.1.2",))
+        self.assertEqual(wasm_lock_versions, ("0.1.3",))
 
     def test_release_preparation_metadata_cannot_mutate_external_state(self) -> None:
         self.assert_release_preparation_metadata_contract()
@@ -3094,7 +3094,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 1,
             ),
             "workspace-version": manifest.replace(
-                'version = "0.1.2"',
+                'version = "0.1.3"',
                 "version.workspace = true",
                 1,
             ),
@@ -3251,7 +3251,7 @@ class SprintWorkflowTests(unittest.TestCase):
         metadata_check = (
             "python3 -m unittest "
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_incubating_release_family_is_prepared_at_0_1_2"
+            "test_incubating_release_family_is_prepared_at_0_1_3"
         )
 
         self.assert_publish_preflight_contract(publish)

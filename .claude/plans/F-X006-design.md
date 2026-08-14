@@ -101,9 +101,10 @@ the reviewed sprint SHA.
 - `docs/hld/14-development-backlog.md`
 - `docs/hld/15-build-and-toolchain.md`
 
-Describe 0.1.3 as the current complete 14-package incubating release only after
-the registry and GitHub release checks succeed. Preserve the immutable 0.1.2
-history and the separate stable version train.
+Describe 0.1.3 as the current prepared 14-package incubating family before the
+release, with publication explicitly pending. Describe it as published only
+after the registry and GitHub release checks succeed. Preserve the immutable
+0.1.2 history and the separate stable version train.
 
 ## Risk routing
 
@@ -130,26 +131,30 @@ workflow assertions must not change document or render behavior.
 
 ## Implementation checklist
 
-- [ ] Record the 28-entry hash baseline and the exact starting manifest and
+- [x] Record the 28-entry hash baseline and the exact starting manifest and
   lockfile inventory.
-- [ ] Add the failing 0.1.3 release metadata and workflow regressions.
-- [ ] Bump the 14 publishable manifests, 14 workspace pins, unpublished
+- [x] Add the failing 0.1.3 release metadata and workflow regressions.
+- [x] Bump the 14 publishable manifests, 14 workspace pins, unpublished
   `rpptx-wasm`, and matching lock entries to 0.1.3.
-- [ ] Update only existing version-sensitive source, CI, and publish workflow
+- [x] Update only existing version-sensitive source, CI, and publish workflow
   assertions required by the new preparation version.
-- [ ] Prove manifest, pin, lockfile, and workflow sensitivity with
+- [x] Prove manifest, pin, lockfile, and workflow sensitivity with
   byte-identical restoration.
-- [ ] Run metadata, dependency, WASM, package, asset, archive, workspace,
+- [x] Run metadata, dependency, WASM, package, asset, archive, workspace,
   supply-chain, prose, generated-skill, and hash gates.
-- [ ] Complete independent microscope review and prepare a validated feature
-  handoff without completing the release story.
+- [x] Complete independent microscope review without completing the release
+  story.
+- [x] Prepare a validated feature handoff with the external gate deferred to
+  `/release rpptx-v0.1.3`.
 - [ ] Integrate and run `/verify --full` plus a clean sprint review at the exact
   release SHA.
 - [ ] Invoke `/release rpptx-v0.1.3` and request its separate final approval.
 - [ ] Watch publication, verify all 14 registry entries and owners, and verify
   the GitHub release target SHA.
-- [ ] Update exactly the three listed HLD files and complete F-X006 only after
-  successful external verification.
+- [x] Update exactly the three listed HLD files to describe the prepared 0.1.3
+  state with publication pending.
+- [ ] After successful external verification, update the three HLD files to
+  the published state and complete F-X006.
 
 ## Open questions
 
