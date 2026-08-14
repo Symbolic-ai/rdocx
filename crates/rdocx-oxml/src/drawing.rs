@@ -393,10 +393,9 @@ impl CT_Anchor {
                                 Ok(Event::Start(ref ie))
                                     if matches_local_name(ie.name().as_ref(), b"posOffset") =>
                                 {
-                                    let text = reader
-                                        .read_text(ie.name())
-                                        .map(|t| crate::xml_text::decode_escaped(&t))
-                                        .unwrap_or_default();
+                                    let text = crate::xml_text::decode_escaped(
+                                        &reader.read_text(ie.name())?,
+                                    )?;
                                     pos_h_offset = Emu(text.trim().parse().unwrap_or(0));
                                 }
                                 Ok(Event::End(ref ie))
@@ -424,10 +423,9 @@ impl CT_Anchor {
                                 Ok(Event::Start(ref ie))
                                     if matches_local_name(ie.name().as_ref(), b"posOffset") =>
                                 {
-                                    let text = reader
-                                        .read_text(ie.name())
-                                        .map(|t| crate::xml_text::decode_escaped(&t))
-                                        .unwrap_or_default();
+                                    let text = crate::xml_text::decode_escaped(
+                                        &reader.read_text(ie.name())?,
+                                    )?;
                                     pos_v_offset = Emu(text.trim().parse().unwrap_or(0));
                                 }
                                 Ok(Event::End(ref ie))

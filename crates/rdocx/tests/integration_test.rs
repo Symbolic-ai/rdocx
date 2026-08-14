@@ -135,6 +135,44 @@ fn valid_zip_with_truncated_document_xml_is_rejected() {
 }
 
 #[test]
+fn dangling_styles_and_numbering_relationships_are_rejected() {
+    let mut document = Document::new();
+    document.add_bullet_list_item("item", 0);
+    let bytes = document.to_bytes().unwrap();
+
+    for part_name in ["/word/styles.xml", "/word/numbering.xml"] {
+        let mut package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        package.parts.remove(part_name);
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+
+        assert!(matches!(
+            Document::from_bytes(output.get_ref()),
+            Err(rdocx::Error::Opc(oxml_opc::OpcError::PartNotFound(ref missing)))
+                if missing == part_name
+        ));
+    }
+}
+
+#[test]
+fn document_reports_header_footer_and_section_layout_references() {
+    let mut document = Document::new();
+    assert!(!document.has_header_footer_references());
+
+    document.set_header("Visible header");
+    document.set_margins(
+        Length::inches(1.0),
+        Length::inches(1.0),
+        Length::inches(1.0),
+        Length::inches(1.0),
+    );
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+
+    assert!(reopened.has_header_footer_references());
+    assert!(reopened.has_section_layout_formatting());
+}
+
+#[test]
 fn hyperlink_url_rejects_internal_relationship_targets() {
     let mut document = Document::new();
     let rel_id = document.add_hyperlink_relationship("https://example.com");

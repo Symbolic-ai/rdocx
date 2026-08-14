@@ -5,7 +5,9 @@ use quick_xml::{Reader, Writer};
 
 use crate::borders::CT_BorderEdge;
 use crate::error::{OxmlError, Result};
-use crate::namespace::{matches_local_name, matches_word_element, matches_word_name};
+use crate::namespace::{
+    matches_local_name, matches_word_attribute, matches_word_element, matches_word_name,
+};
 use crate::properties::{CT_Shd, get_val_attr_with_context};
 use crate::raw_xml::{
     NamespaceContext, RawXml, capture_element, capture_empty_element, capture_raw_element,
@@ -293,9 +295,9 @@ impl CT_TblWidth {
             let attr = attr?;
             let key = attr.key.as_ref();
             let val = std::str::from_utf8(&attr.value)?;
-            if matches_word_name(key, &context, b"w") {
+            if matches_word_attribute(key, &context, b"w") {
                 w = val.parse().unwrap_or(0);
-            } else if matches_word_name(key, &context, b"type") {
+            } else if matches_word_attribute(key, &context, b"type") {
                 width_type = val.to_string();
             }
         }
@@ -384,6 +386,18 @@ fn ooxml_bool_str(value: bool) -> &'static str {
     if value { "1" } else { "0" }
 }
 
+fn parse_toggle_element(
+    element: &BytesStart<'_>,
+    context: &NamespaceContext,
+    name: &str,
+) -> Result<bool> {
+    let Some(value) = get_val_attr_with_context(element, context)? else {
+        return Ok(true);
+    };
+    parse_ooxml_bool(&value)
+        .ok_or_else(|| OxmlError::InvalidValue(format!("invalid w:{name} toggle value: {value}")))
+}
+
 #[allow(non_snake_case)]
 impl CT_TblLook {
     pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
@@ -399,19 +413,19 @@ impl CT_TblLook {
         for attr in e.attributes().flatten() {
             let value = std::str::from_utf8(&attr.value)?;
             let key = attr.key.as_ref();
-            if matches_word_name(key, &context, b"val") {
+            if matches_word_attribute(key, &context, b"val") {
                 look.val = Some(value.to_string());
-            } else if matches_word_name(key, &context, b"firstRow") {
+            } else if matches_word_attribute(key, &context, b"firstRow") {
                 look.first_row = parse_ooxml_bool(value);
-            } else if matches_word_name(key, &context, b"lastRow") {
+            } else if matches_word_attribute(key, &context, b"lastRow") {
                 look.last_row = parse_ooxml_bool(value);
-            } else if matches_word_name(key, &context, b"firstColumn") {
+            } else if matches_word_attribute(key, &context, b"firstColumn") {
                 look.first_column = parse_ooxml_bool(value);
-            } else if matches_word_name(key, &context, b"lastColumn") {
+            } else if matches_word_attribute(key, &context, b"lastColumn") {
                 look.last_column = parse_ooxml_bool(value);
-            } else if matches_word_name(key, &context, b"noHBand") {
+            } else if matches_word_attribute(key, &context, b"noHBand") {
                 look.no_h_band = parse_ooxml_bool(value);
-            } else if matches_word_name(key, &context, b"noVBand") {
+            } else if matches_word_attribute(key, &context, b"noVBand") {
                 look.no_v_band = parse_ooxml_bool(value);
             }
         }
@@ -623,7 +637,7 @@ impl CT_TblGrid {
         let mut width = Twips(0);
         for attr in e.attributes() {
             let attr = attr?;
-            if matches_word_name(attr.key.as_ref(), &element_context, b"w") {
+            if matches_word_attribute(attr.key.as_ref(), &element_context, b"w") {
                 width = Twips(std::str::from_utf8(&attr.value)?.parse()?);
             }
         }
@@ -655,6 +669,33 @@ pub enum VMerge {
     Restart,
     /// Continuation of the merge group above
     Continue,
+}
+
+fn parse_merge_element(
+    element: &BytesStart<'_>,
+    context: &NamespaceContext,
+    name: &str,
+) -> Result<VMerge> {
+    match get_val_attr_with_context(element, context)?.as_deref() {
+        Some("restart") => Ok(VMerge::Restart),
+        None | Some("continue") => Ok(VMerge::Continue),
+        Some(value) => Err(OxmlError::InvalidValue(format!(
+            "invalid w:{name} value: {value}"
+        ))),
+    }
+}
+
+fn write_merge_element<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    name: &str,
+    merge: &VMerge,
+) -> Result<()> {
+    let mut element = BytesStart::new(name);
+    if matches!(merge, VMerge::Restart) {
+        element.push_attribute(("w:val", "restart"));
+    }
+    writer.write_event(Event::Empty(element))?;
+    Ok(())
 }
 
 /// `CT_TrPr` — Table row properties.
@@ -727,14 +768,14 @@ impl CT_TrPr {
                 let attr = attr?;
                 let key = attr.key.as_ref();
                 let val = std::str::from_utf8(&attr.value)?;
-                if matches_word_name(key, &element_context, b"val") {
+                if matches_word_attribute(key, &element_context, b"val") {
                     pr.height = Some(Twips(val.parse()?));
-                } else if matches_word_name(key, &element_context, b"hRule") {
+                } else if matches_word_attribute(key, &element_context, b"hRule") {
                     pr.height_rule = Some(val.to_string());
                 }
             }
         } else if matches_word_element(e, context, b"tblHeader") {
-            pr.header = Some(true);
+            pr.header = Some(parse_toggle_element(e, &element_context, "tblHeader")?);
         } else if matches_word_element(e, context, b"jc") {
             if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 pr.jc = Some(ST_Jc::from_str(&val)?);
@@ -742,7 +783,7 @@ impl CT_TrPr {
         } else if matches_word_element(e, context, b"cnfStyle") {
             pr.cnf_style = get_val_attr_with_context(e, &element_context)?;
         } else if matches_word_element(e, context, b"cantSplit") {
-            pr.cant_split = Some(true);
+            pr.cant_split = Some(parse_toggle_element(e, &element_context, "cantSplit")?);
         } else if matches_word_element(e, context, b"gridBefore")
             && let Some(val) = get_val_attr_with_context(e, &element_context)?
         {
@@ -783,10 +824,12 @@ impl CT_TrPr {
             writer.write_event(Event::Empty(e))?;
         }
 
-        if let Some(ref cant_split) = self.cant_split
-            && *cant_split
-        {
-            writer.write_event(Event::Empty(BytesStart::new("w:cantSplit")))?;
+        if let Some(cant_split) = self.cant_split {
+            let mut element = BytesStart::new("w:cantSplit");
+            if !cant_split {
+                element.push_attribute(("w:val", "0"));
+            }
+            writer.write_event(Event::Empty(element))?;
         }
 
         if let Some(height) = self.height {
@@ -799,8 +842,12 @@ impl CT_TrPr {
             writer.write_event(Event::Empty(e))?;
         }
 
-        if let Some(true) = self.header {
-            writer.write_event(Event::Empty(BytesStart::new("w:tblHeader")))?;
+        if let Some(header) = self.header {
+            let mut element = BytesStart::new("w:tblHeader");
+            if !header {
+                element.push_attribute(("w:val", "0"));
+            }
+            writer.write_event(Event::Empty(element))?;
         }
 
         if let Some(jc) = self.jc {
@@ -859,6 +906,8 @@ pub struct CT_TcPr {
     pub width: Option<CT_TblWidth>,
     /// Horizontal merge (number of grid columns spanned)
     pub grid_span: Option<u32>,
+    /// Legacy horizontal merge state.
+    pub h_merge: Option<VMerge>,
     /// Vertical merge
     pub v_merge: Option<VMerge>,
     /// Cell borders
@@ -929,22 +978,18 @@ impl CT_TcPr {
             pr.width = Some(CT_TblWidth::from_xml_attrs_with_context(e, context)?);
         } else if matches_word_element(e, context, b"gridSpan") {
             if let Some(val) = get_val_attr_with_context(e, &element_context)? {
-                pr.grid_span = Some(val.parse()?);
+                let span = val.parse()?;
+                if span == 0 {
+                    return Err(OxmlError::InvalidValue(
+                        "w:gridSpan must be greater than zero".to_string(),
+                    ));
+                }
+                pr.grid_span = Some(span);
             }
+        } else if matches_word_element(e, context, b"hMerge") {
+            pr.h_merge = Some(parse_merge_element(e, &element_context, "hMerge")?);
         } else if matches_word_element(e, context, b"vMerge") {
-            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
-                pr.v_merge = Some(match val.as_str() {
-                    "restart" => VMerge::Restart,
-                    "continue" => VMerge::Continue,
-                    _ => {
-                        return Err(OxmlError::InvalidValue(format!(
-                            "invalid w:vMerge value: {val}"
-                        )));
-                    }
-                });
-            } else {
-                pr.v_merge = Some(VMerge::Continue);
-            }
+            pr.v_merge = Some(parse_merge_element(e, &element_context, "vMerge")?);
         } else if matches_word_element(e, context, b"vAlign") {
             if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 pr.v_align = Some(ST_VerticalJc::from_str(&val));
@@ -954,7 +999,7 @@ impl CT_TcPr {
         } else if matches_word_element(e, context, b"cnfStyle") {
             pr.cnf_style = get_val_attr_with_context(e, &element_context)?;
         } else if matches_word_element(e, context, b"noWrap") {
-            pr.no_wrap = Some(true);
+            pr.no_wrap = Some(parse_toggle_element(e, &element_context, "noWrap")?);
         } else if matches_word_element(e, context, b"textDirection")
             && let Some(val) = get_val_attr_with_context(e, &element_context)?
         {
@@ -989,13 +1034,12 @@ impl CT_TcPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        if let Some(ref merge) = self.h_merge {
+            write_merge_element(writer, "w:hMerge", merge)?;
+        }
+
         if let Some(ref vm) = self.v_merge {
-            let mut e = BytesStart::new("w:vMerge");
-            match vm {
-                VMerge::Restart => e.push_attribute(("w:val", "restart")),
-                VMerge::Continue => {} // empty element
-            }
-            writer.write_event(Event::Empty(e))?;
+            write_merge_element(writer, "w:vMerge", vm)?;
         }
 
         if let Some(ref borders) = self.borders
@@ -1008,8 +1052,12 @@ impl CT_TcPr {
             shd.write_xml(writer, "w:shd")?;
         }
 
-        if let Some(true) = self.no_wrap {
-            writer.write_event(Event::Empty(BytesStart::new("w:noWrap")))?;
+        if let Some(no_wrap) = self.no_wrap {
+            let mut element = BytesStart::new("w:noWrap");
+            if !no_wrap {
+                element.push_attribute(("w:val", "0"));
+            }
+            writer.write_event(Event::Empty(element))?;
         }
 
         if let Some(ref va) = self.v_align {
@@ -1031,6 +1079,7 @@ impl CT_TcPr {
     fn is_empty(&self) -> bool {
         self.width.is_none()
             && self.grid_span.is_none()
+            && self.h_merge.is_none()
             && self.v_merge.is_none()
             && self.borders.is_none()
             && self.shading.is_none()
@@ -1448,6 +1497,7 @@ impl Default for CT_Tbl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::namespace::W_NS;
 
     fn parse_table(xml: &str) -> CT_Tbl {
         let full = format!("<w:tbl>{xml}</w:tbl>");
@@ -2063,5 +2113,52 @@ mod tests {
         let foreign_row = xml.find("<x:row").unwrap();
         let word_row = xml.find("<w:tr>").unwrap();
         assert!(foreign_tr < foreign_row && foreign_row < word_row, "{xml}");
+    }
+
+    #[test]
+    fn table_toggles_preserve_explicit_false() {
+        let table = parse_table(concat!(
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid>"#,
+            r#"<w:tr><w:trPr><w:tblHeader w:val="false"/><w:cantSplit w:val="0"/></w:trPr>"#,
+            r#"<w:tc><w:tcPr><w:noWrap w:val="off"/></w:tcPr><w:p/></w:tc></w:tr>"#,
+        ));
+
+        let row = table.rows[0].properties.as_ref().unwrap();
+        let cell = table.rows[0].cells[0].properties.as_ref().unwrap();
+        assert_eq!(row.header, Some(false));
+        assert_eq!(row.cant_split, Some(false));
+        assert_eq!(cell.no_wrap, Some(false));
+    }
+
+    #[test]
+    fn horizontal_merge_is_exposed_and_zero_grid_span_is_rejected() {
+        let table = parse_table(concat!(
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid>"#,
+            r#"<w:tr><w:tc><w:tcPr><w:hMerge w:val="restart"/></w:tcPr><w:p/></w:tc></w:tr>"#,
+        ));
+        assert_eq!(
+            table.rows[0].cells[0].properties.as_ref().unwrap().h_merge,
+            Some(VMerge::Restart)
+        );
+
+        let full = format!(
+            r#"<w:tbl xmlns:w="{W_NS}"><w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:gridSpan w:val="0"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>"#
+        );
+        let mut reader = Reader::from_str(&full);
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref element))
+                    if matches_local_name(element.name().as_ref(), b"tbl") =>
+                {
+                    break;
+                }
+                _ => buf.clear(),
+            }
+        }
+        assert!(matches!(
+            CT_Tbl::from_xml(&mut reader),
+            Err(OxmlError::InvalidValue(_))
+        ));
     }
 }

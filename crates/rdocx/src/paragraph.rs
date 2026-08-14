@@ -213,6 +213,11 @@ impl<'a> SimpleFieldRef<'a> {
     pub fn content(&self) -> impl Iterator<Item = InlineContentRef<'a>> {
         self.inner.children().iter().map(inline_content_ref)
     }
+
+    /// Whether Word stored cached result children for this field.
+    pub fn has_cached_content(&self) -> bool {
+        self.inner.has_cached_content()
+    }
 }
 
 fn paragraph_content_ref(child: &ParagraphChild) -> ParagraphContentRef<'_> {

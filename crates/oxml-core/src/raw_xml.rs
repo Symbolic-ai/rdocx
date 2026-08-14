@@ -8,6 +8,8 @@ use quick_xml::{Reader, Writer};
 
 use crate::error::{OxmlError, Result};
 
+const MAX_CAPTURE_DEPTH: usize = 64;
+
 /// The resolved identity of an XML element.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedName {
@@ -58,13 +60,36 @@ impl NamespaceContext {
         context
     }
 
+    /// Resolve an element name. An unprefixed element inherits the default
+    /// namespace, as required by XML Namespaces.
+    pub fn resolve_element(&self, qualified_name: &[u8]) -> ResolvedName {
+        self.resolve_name(qualified_name, true)
+    }
+
+    /// Resolve an attribute name. Default namespaces never apply to
+    /// unprefixed attributes.
+    pub fn resolve_attribute(&self, qualified_name: &[u8]) -> ResolvedName {
+        self.resolve_name(qualified_name, false)
+    }
+
+    /// Resolve an element name.
     pub fn resolve(&self, qualified_name: &[u8]) -> ResolvedName {
+        self.resolve_element(qualified_name)
+    }
+
+    fn resolve_name(&self, qualified_name: &[u8], use_default_namespace: bool) -> ResolvedName {
         let qualified = String::from_utf8_lossy(qualified_name).into_owned();
-        let (prefix, local) = qualified
-            .split_once(':')
-            .map_or(("", qualified.as_str()), |(prefix, local)| (prefix, local));
+        let (prefix, local) = qualified.split_once(':').map_or_else(
+            || (None, qualified.as_str()),
+            |(prefix, local)| (Some(prefix), local),
+        );
         let local = local.to_string();
-        let namespace_uri = self.namespace_uri(prefix).map(str::to_owned);
+        let namespace_uri = match prefix {
+            Some(prefix) => self.namespace_uri(prefix),
+            None if use_default_namespace => self.namespace_uri(""),
+            None => None,
+        }
+        .map(str::to_owned);
         ResolvedName {
             qualified,
             local,
@@ -293,23 +318,28 @@ pub fn capture_element(reader: &mut Reader<&[u8]>, start: &BytesStart) -> Result
     // Write the start tag
     writer.write_event(Event::Start(start.to_owned()))?;
 
-    // Track nesting depth for the tag name
+    // Bound and track the full subtree depth, not only repeated root names.
     let tag_name = start.name().as_ref().to_vec();
-    let mut depth = 1u32;
+    let mut depth = 1usize;
     let mut buf = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
-                if e.name().as_ref() == tag_name {
-                    depth += 1;
+                depth = depth.checked_add(1).ok_or_else(|| {
+                    OxmlError::InvalidValue("XML nesting depth overflow".to_string())
+                })?;
+                if depth > MAX_CAPTURE_DEPTH {
+                    return Err(OxmlError::InvalidValue(format!(
+                        "XML nesting exceeds {MAX_CAPTURE_DEPTH} elements"
+                    )));
                 }
                 writer.write_event(Event::Start(e.to_owned()))?;
             }
             Ok(Event::End(ref e)) => {
-                if e.name().as_ref() == tag_name {
-                    depth -= 1;
-                }
+                depth = depth.checked_sub(1).ok_or_else(|| {
+                    OxmlError::InvalidValue("XML nesting depth underflow".to_string())
+                })?;
                 writer.write_event(Event::End(e.to_owned()))?;
                 if depth == 0 {
                     break;
@@ -370,7 +400,7 @@ pub fn capture_raw_element(
     parent_context: &NamespaceContext,
 ) -> Result<RawXml> {
     let context = parent_context.with_element(start);
-    let name = context.resolve(start.name().as_ref());
+    let name = context.resolve_element(start.name().as_ref());
     Ok(RawXml::new(capture_element(reader, start)?, name, context))
 }
 
@@ -380,7 +410,7 @@ pub fn capture_raw_empty_element(
     parent_context: &NamespaceContext,
 ) -> Result<RawXml> {
     let context = parent_context.with_element(start);
-    let name = context.resolve(start.name().as_ref());
+    let name = context.resolve_element(start.name().as_ref());
     Ok(RawXml::new(capture_empty_element(start)?, name, context))
 }
 
@@ -569,5 +599,34 @@ mod tests {
         raw.write_to(&mut output).unwrap();
 
         assert_eq!(output, raw.bytes());
+    }
+
+    #[test]
+    fn default_namespace_applies_to_elements_but_not_attributes() {
+        let context = NamespaceContext::new([("".to_string(), "urn:default".to_string())]);
+
+        assert_eq!(
+            context.resolve_element(b"item").namespace_uri.as_deref(),
+            Some("urn:default")
+        );
+        assert_eq!(context.resolve_attribute(b"value").namespace_uri, None);
+    }
+
+    #[test]
+    fn capturing_rejects_excessive_subtree_depth() {
+        let xml = format!("{}value{}", "<n>".repeat(66), "</n>".repeat(66));
+        let mut reader = Reader::from_str(&xml);
+        let mut buf = Vec::new();
+        let start = loop {
+            match reader.read_event_into(&mut buf).unwrap() {
+                Event::Start(element) => break element.into_owned(),
+                _ => buf.clear(),
+            }
+        };
+
+        assert!(matches!(
+            capture_element(&mut reader, &start),
+            Err(OxmlError::InvalidValue(_))
+        ));
     }
 }

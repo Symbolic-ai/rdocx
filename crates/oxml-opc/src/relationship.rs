@@ -1,9 +1,13 @@
 //! Parsing and writing of `.rels` relationship files.
 
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::name::{Namespace, ResolveResult};
+use quick_xml::{NsReader, Writer};
 
 use crate::error::{OpcError, Result};
+
+const PACKAGE_RELATIONSHIPS_NS: &[u8] =
+    b"http://schemas.openxmlformats.org/package/2006/relationships";
 
 /// Well-known OOXML relationship types.
 pub mod rel_types {
@@ -100,62 +104,58 @@ impl Relationships {
 
     /// Parse from XML bytes.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
-        let mut reader = Reader::from_reader(xml);
+        let mut reader = NsReader::from_reader(xml);
         reader.config_mut().trim_text(true);
 
         let mut items = Vec::new();
         let mut max_id: u32 = 0;
+        let mut root_open = false;
+        let mut root_closed = false;
         let mut buf = Vec::new();
 
         loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) if e.name().as_ref() == b"Relationship" => {
-                    let mut id = None;
-                    let mut rel_type = None;
-                    let mut target = None;
-                    let mut target_mode = None;
-
-                    for attr in e.attributes() {
-                        let attr = attr?;
-                        match attr.key.as_ref() {
-                            b"Id" => {
-                                let val = std::str::from_utf8(&attr.value)?.to_string();
-                                // Extract numeric suffix for next_id tracking
-                                if let Some(num_str) = val.strip_prefix("rId")
-                                    && let Ok(n) = num_str.parse::<u32>()
-                                {
-                                    max_id = max_id.max(n);
-                                }
-                                id = Some(val);
-                            }
-                            b"Type" => {
-                                rel_type = Some(std::str::from_utf8(&attr.value)?.to_string());
-                            }
-                            b"Target" => {
-                                target = Some(std::str::from_utf8(&attr.value)?.to_string());
-                            }
-                            b"TargetMode" => {
-                                target_mode = Some(std::str::from_utf8(&attr.value)?.to_string());
-                            }
-                            _ => {}
+            match reader.read_resolved_event_into(&mut buf) {
+                Ok((namespace, Event::Start(ref element))) => {
+                    if !root_open && !root_closed {
+                        if !is_relationship_element(&namespace, element, b"Relationships") {
+                            return Err(OpcError::InvalidRelationship);
                         }
-                    }
-
-                    match (id, rel_type, target) {
-                        (Some(id), Some(rel_type), Some(target)) => {
-                            items.push(Relationship {
-                                id,
-                                rel_type,
-                                target,
-                                target_mode,
-                            });
-                        }
-                        _ => return Err(OpcError::InvalidRelationship),
+                        root_open = true;
+                    } else if root_open
+                        && is_relationship_element(&namespace, element, b"Relationship")
+                    {
+                        items.push(parse_relationship(element, &mut max_id)?);
+                        reader.read_to_end_into(element.name(), &mut Vec::new())?;
+                    } else {
+                        return Err(OpcError::InvalidRelationship);
                     }
                 }
-                Ok(Event::Eof) => break,
+                Ok((namespace, Event::Empty(ref element))) => {
+                    if !root_open
+                        && !root_closed
+                        && is_relationship_element(&namespace, element, b"Relationships")
+                    {
+                        root_closed = true;
+                    } else if root_open
+                        && is_relationship_element(&namespace, element, b"Relationship")
+                    {
+                        items.push(parse_relationship(element, &mut max_id)?);
+                    } else {
+                        return Err(OpcError::InvalidRelationship);
+                    }
+                }
+                Ok((namespace, Event::End(ref element)))
+                    if root_open && is_relationship_end(&namespace, element.name().as_ref()) =>
+                {
+                    root_open = false;
+                    root_closed = true;
+                }
+                Ok((_, Event::Eof)) if root_closed => break,
+                Ok((_, Event::Eof)) => return Err(OpcError::InvalidRelationship),
                 Err(e) => return Err(e.into()),
-                _ => {}
+                Ok((_, Event::Text(ref text))) if is_ascii_whitespace_text(text) => {}
+                Ok((_, Event::Decl(_) | Event::Comment(_) | Event::PI(_))) => {}
+                _ => return Err(OpcError::InvalidRelationship),
             }
             buf.clear();
         }
@@ -282,6 +282,63 @@ impl Relationships {
             }
         }
         unreachable!("the generated relationship id space is unbounded")
+    }
+}
+
+fn is_relationship_element(
+    namespace: &ResolveResult<'_>,
+    element: &BytesStart<'_>,
+    local_name: &[u8],
+) -> bool {
+    matches!(namespace, ResolveResult::Bound(Namespace(uri)) if *uri == PACKAGE_RELATIONSHIPS_NS)
+        && element.local_name().as_ref() == local_name
+}
+
+fn is_ascii_whitespace_text(text: &quick_xml::events::BytesText<'_>) -> bool {
+    let bytes: &[u8] = text.as_ref();
+    bytes.iter().all(|byte| byte.is_ascii_whitespace())
+}
+
+fn is_relationship_end(namespace: &ResolveResult<'_>, name: &[u8]) -> bool {
+    matches!(namespace, ResolveResult::Bound(Namespace(uri)) if *uri == PACKAGE_RELATIONSHIPS_NS)
+        && name.rsplit(|byte| *byte == b':').next() == Some(b"Relationships".as_slice())
+}
+
+fn parse_relationship(element: &BytesStart<'_>, max_id: &mut u32) -> Result<Relationship> {
+    let mut id = None;
+    let mut rel_type = None;
+    let mut target = None;
+    let mut target_mode = None;
+
+    for attr in element.attributes() {
+        let attr = attr?;
+        match attr.key.as_ref() {
+            b"Id" => {
+                let value = std::str::from_utf8(&attr.value)?.to_string();
+                if let Some(num_str) = value.strip_prefix("rId")
+                    && let Ok(number) = num_str.parse::<u32>()
+                {
+                    *max_id = (*max_id).max(number);
+                }
+                id = Some(value);
+            }
+            b"Type" => rel_type = Some(std::str::from_utf8(&attr.value)?.to_string()),
+            b"Target" => target = Some(std::str::from_utf8(&attr.value)?.to_string()),
+            b"TargetMode" => {
+                target_mode = Some(std::str::from_utf8(&attr.value)?.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    match (id, rel_type, target) {
+        (Some(id), Some(rel_type), Some(target)) => Ok(Relationship {
+            id,
+            rel_type,
+            target,
+            target_mode,
+        }),
+        _ => Err(OpcError::InvalidRelationship),
     }
 }
 
@@ -438,5 +495,26 @@ mod tests {
         assert_eq!(relationships.add("type-two", "two.xml"), "rId2");
         relationships.add_with_id("rId4294967295", "type-max", "replacement.xml");
         assert_eq!(relationships.add("type-three", "three.xml"), "rId3");
+    }
+
+    #[test]
+    fn namespace_equivalent_expanded_relationships_are_parsed() {
+        let xml = br#"<r:Relationships xmlns:r="http://schemas.openxmlformats.org/package/2006/relationships">
+          <r:Relationship Id="rId7" Type="type-a" Target="a.xml"></r:Relationship>
+        </r:Relationships>"#;
+
+        let relationships = Relationships::from_xml(xml).unwrap();
+        assert_eq!(relationships.items.len(), 1);
+        assert_eq!(relationships.items[0].id, "rId7");
+    }
+
+    #[test]
+    fn malformed_relationship_parts_are_rejected() {
+        for xml in [
+            br#"<Relationships><Relationship Id="rId1" Type="t" Target="a"/></Relationships>"#.as_slice(),
+            br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="t" Target="a"/>"#.as_slice(),
+        ] {
+            assert!(Relationships::from_xml(xml).is_err());
+        }
     }
 }

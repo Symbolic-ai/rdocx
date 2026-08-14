@@ -633,6 +633,38 @@ impl<'a> TableRef<'a> {
             .as_ref()
             .is_some_and(|properties| properties.shading.is_some())
     }
+
+    /// Whether the table declares a fixed or autofit layout mode.
+    pub fn has_layout(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.layout.is_some())
+    }
+
+    /// Whether the table declares default cell margins.
+    pub fn has_cell_margins(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.cell_margin.is_some())
+    }
+
+    /// Whether the table declares an explicit indentation.
+    pub fn has_indent(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.indent.is_some())
+    }
+
+    /// Whether conditional table-style look flags are present.
+    pub fn has_style_look(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.look.is_some())
+    }
 }
 
 /// An immutable reference to a table row.
@@ -679,6 +711,18 @@ impl<'a> RowRef<'a> {
             .as_ref()
             .and_then(|pr| pr.header)
             .unwrap_or(false)
+    }
+
+    /// Whether the row carries formatting that is not represented in the
+    /// projected table schema.
+    pub fn has_formatting(&self) -> bool {
+        self.inner.properties.as_ref().is_some_and(|properties| {
+            properties.height.is_some()
+                || properties.height_rule.is_some()
+                || properties.jc.is_some()
+                || properties.cant_split.is_some()
+                || properties.cnf_style.is_some()
+        })
     }
 }
 
@@ -757,6 +801,14 @@ impl<'a> CellRef<'a> {
         self.inner.properties.as_ref().and_then(|pr| pr.grid_span)
     }
 
+    /// Whether the cell uses the legacy horizontal-merge property.
+    pub fn has_horizontal_merge(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.h_merge.is_some())
+    }
+
     /// Get the vertical merge state, if set.
     pub fn v_merge(&self) -> Option<VerticalMergeKind> {
         self.inner
@@ -802,5 +854,29 @@ impl<'a> CellRef<'a> {
             .as_ref()
             .and_then(|pr| pr.v_align)
             .map(VerticalAlignment::from_st)
+    }
+
+    /// Whether an explicit no-wrap toggle is present.
+    pub fn has_wrapping_formatting(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.no_wrap.is_some())
+    }
+
+    /// Whether an explicit text direction is present.
+    pub fn has_text_direction(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.text_direction.is_some())
+    }
+
+    /// Whether conditional table-style flags are present on this cell.
+    pub fn has_conditional_formatting(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.cnf_style.is_some())
     }
 }

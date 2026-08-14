@@ -16,10 +16,12 @@ use crate::error::{OxmlError, Result};
 use crate::namespace::W_NS;
 use crate::namespace::{
     MC_NS, R_NS, matches_local_name, matches_namespace_element, matches_namespace_name,
-    matches_word_element, matches_word_name,
+    matches_word_attribute, matches_word_element, matches_word_name,
 };
 use crate::properties::{CT_PPr, CT_RPr};
 use crate::raw_xml::{NamespaceContext, RawXml, capture_raw_element, capture_raw_empty_element};
+
+const MAX_COMPOSITE_DEPTH: usize = 8;
 
 /// `CT_Text` — the text content of a run.
 #[derive(Debug, Clone, PartialEq)]
@@ -154,7 +156,7 @@ impl CT_R {
                             attribute.key.as_ref() == b"xml:space"
                                 && attribute.value.as_ref() == b"preserve"
                         });
-                        let text = crate::xml_text::decode_escaped(&reader.read_text(name)?);
+                        let text = crate::xml_text::decode_escaped(&reader.read_text(name)?)?;
                         content.push(RunContent::Text(CT_Text {
                             text,
                             preserve_space,
@@ -370,6 +372,10 @@ impl CT_SimpleField {
         &self.children
     }
 
+    pub fn has_cached_content(&self) -> bool {
+        !self.children.is_empty()
+    }
+
     pub fn children_mut(&mut self) -> &mut Vec<InlineChild> {
         self.raw_xml = None;
         &mut self.children
@@ -390,7 +396,11 @@ impl CT_SimpleField {
     }
 
     fn from_raw(raw_xml: RawXml) -> Result<Self> {
-        let parsed = parse_composite_children(&raw_xml, b"fldSimple")?;
+        Self::from_raw_at_depth(raw_xml, 1)
+    }
+
+    fn from_raw_at_depth(raw_xml: RawXml, depth: usize) -> Result<Self> {
+        let parsed = parse_composite_children(&raw_xml, b"fldSimple", depth)?;
         Ok(Self {
             field_type: parse_field_instruction(&parsed.instruction),
             instruction: parsed.instruction,
@@ -513,7 +523,8 @@ impl CT_Hyperlink {
                         &mut anchor,
                         &mut extra_attributes,
                     );
-                    children = parse_inline_children(&mut reader, &element_context, b"hyperlink")?;
+                    children =
+                        parse_inline_children(&mut reader, &element_context, b"hyperlink", 0)?;
                     break;
                 }
                 Ok(Event::Empty(ref element))
@@ -586,7 +597,7 @@ fn parse_hyperlink_attributes(
     for attribute in element.attributes().flatten() {
         if matches_namespace_name(attribute.key.as_ref(), context, b"r", R_NS, b"id") {
             *rel_id = Some(String::from_utf8_lossy(attribute.value.as_ref()).into_owned());
-        } else if matches_word_name(attribute.key.as_ref(), context, b"anchor") {
+        } else if matches_word_attribute(attribute.key.as_ref(), context, b"anchor") {
             *anchor = Some(String::from_utf8_lossy(attribute.value.as_ref()).into_owned());
         } else if attribute.key.as_ref() != b"xmlns"
             && !attribute.key.as_ref().starts_with(b"xmlns:")
@@ -843,6 +854,7 @@ fn parse_inline_children(
     reader: &mut Reader<&[u8]>,
     context: &NamespaceContext,
     end_name: &[u8],
+    composite_depth: usize,
 ) -> Result<Vec<InlineChild>> {
     let mut children = Vec::new();
     let mut buf = Vec::new();
@@ -858,8 +870,16 @@ fn parse_inline_children(
             Ok(Event::Start(ref element))
                 if matches_word_element(element, context, b"fldSimple") =>
             {
+                if composite_depth >= MAX_COMPOSITE_DEPTH {
+                    return Err(OxmlError::InvalidValue(format!(
+                        "composite field nesting exceeds {MAX_COMPOSITE_DEPTH} levels"
+                    )));
+                }
                 let raw = capture_raw_element(reader, element, context)?;
-                children.push(InlineChild::SimpleField(CT_SimpleField::from_raw(raw)?));
+                children.push(InlineChild::SimpleField(CT_SimpleField::from_raw_at_depth(
+                    raw,
+                    composite_depth + 1,
+                )?));
             }
             Ok(Event::Start(ref element)) => {
                 children.push(InlineChild::Unsupported(capture_raw_element(
@@ -873,8 +893,16 @@ fn parse_inline_children(
                         content: Vec::new(),
                     }));
                 } else if matches_word_element(element, context, b"fldSimple") {
+                    if composite_depth >= MAX_COMPOSITE_DEPTH {
+                        return Err(OxmlError::InvalidValue(format!(
+                            "composite field nesting exceeds {MAX_COMPOSITE_DEPTH} levels"
+                        )));
+                    }
                     let raw = capture_raw_empty_element(element, context)?;
-                    children.push(InlineChild::SimpleField(CT_SimpleField::from_raw(raw)?));
+                    children.push(InlineChild::SimpleField(CT_SimpleField::from_raw_at_depth(
+                        raw,
+                        composite_depth + 1,
+                    )?));
                 } else {
                     children.push(InlineChild::Unsupported(capture_raw_empty_element(
                         element, context,
@@ -906,7 +934,11 @@ struct ParsedCompositeChildren {
     extra_attributes: Vec<(String, String)>,
 }
 
-fn parse_composite_children(raw: &RawXml, end_name: &[u8]) -> Result<ParsedCompositeChildren> {
+fn parse_composite_children(
+    raw: &RawXml,
+    end_name: &[u8],
+    composite_depth: usize,
+) -> Result<ParsedCompositeChildren> {
     let context = raw.namespaces().clone();
     let mut reader = Reader::from_reader(raw.bytes());
     reader.config_mut().trim_text(true);
@@ -924,7 +956,12 @@ fn parse_composite_children(raw: &RawXml, end_name: &[u8]) -> Result<ParsedCompo
                     &mut instruction,
                     &mut extra_attributes,
                 );
-                children = parse_inline_children(&mut reader, &element_context, end_name)?;
+                children = parse_inline_children(
+                    &mut reader,
+                    &element_context,
+                    end_name,
+                    composite_depth,
+                )?;
                 break;
             }
             Ok(Event::Empty(ref element)) if matches_word_element(element, &context, end_name) => {
@@ -962,7 +999,7 @@ fn parse_field_attributes(
     extra_attributes: &mut Vec<(String, String)>,
 ) {
     for attribute in element.attributes().flatten() {
-        if matches_word_name(attribute.key.as_ref(), context, b"instr") {
+        if matches_word_attribute(attribute.key.as_ref(), context, b"instr") {
             *instruction = String::from_utf8_lossy(attribute.value.as_ref()).into_owned();
         } else if attribute.key.as_ref() != b"xmlns"
             && !attribute.key.as_ref().starts_with(b"xmlns:")
@@ -1016,7 +1053,7 @@ fn parse_note_reference_with_raw(
     let id = element
         .attributes()
         .flatten()
-        .find(|attribute| matches_word_name(attribute.key.as_ref(), &element_context, b"id"))
+        .find(|attribute| matches_word_attribute(attribute.key.as_ref(), &element_context, b"id"))
         .and_then(|attribute| {
             std::str::from_utf8(attribute.value.as_ref())
                 .ok()?
@@ -1044,7 +1081,7 @@ fn parse_break(
     let break_type = element
         .attributes()
         .flatten()
-        .find(|attribute| matches_word_name(attribute.key.as_ref(), &element_context, b"type"))
+        .find(|attribute| matches_word_attribute(attribute.key.as_ref(), &element_context, b"type"))
         .map(|attribute| String::from_utf8_lossy(attribute.value.as_ref()).into_owned());
     match break_type.as_deref() {
         None | Some("textWrapping") => content.push(RunContent::Break(ParsedWithRaw::from_parsed(
@@ -1508,5 +1545,50 @@ mod tests {
         };
         assert!(matches!(run.content[0], RunContent::Text(_)));
         assert!(matches!(run.content[1], RunContent::Unsupported(_)));
+    }
+
+    #[test]
+    fn simple_fields_report_cached_children() {
+        let paragraph = parse_paragraph(concat!(
+            r#"<w:fldSimple w:instr=" PAGE "/>"#,
+            r#"<w:fldSimple w:instr=" PAGE "><w:r><w:t>7</w:t></w:r></w:fldSimple>"#,
+        ));
+        let ParagraphChild::SimpleField(empty) = &paragraph.content[0] else {
+            panic!("expected empty field")
+        };
+        let ParagraphChild::SimpleField(cached) = &paragraph.content[1] else {
+            panic!("expected cached field")
+        };
+        assert!(!empty.has_cached_content());
+        assert!(cached.has_cached_content());
+    }
+
+    #[test]
+    fn excessive_simple_field_nesting_is_rejected() {
+        let xml = format!(
+            "{}<w:r><w:t>value</w:t></w:r>{}",
+            r#"<w:fldSimple w:instr=" PAGE ">"#.repeat(MAX_COMPOSITE_DEPTH + 1),
+            "</w:fldSimple>".repeat(MAX_COMPOSITE_DEPTH + 1)
+        );
+        let full = format!(r#"<w:p xmlns:w="{W_NS}">{xml}</w:p>"#);
+        let mut reader = Reader::from_str(&full);
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref element))
+                    if matches_local_name(element.name().as_ref(), b"p") =>
+                {
+                    let context = NamespaceContext::default().with_element(element);
+                    assert!(matches!(
+                        CT_P::from_xml_with_context(&mut reader, &context),
+                        Err(OxmlError::InvalidValue(_))
+                    ));
+                    return;
+                }
+                Ok(Event::Eof) => panic!("paragraph not found"),
+                _ => {}
+            }
+            buf.clear();
+        }
     }
 }

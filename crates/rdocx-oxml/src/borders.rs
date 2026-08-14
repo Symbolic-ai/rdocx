@@ -6,7 +6,7 @@ use quick_xml::{Reader, Writer};
 use crate::error::{OxmlError, Result};
 #[cfg(test)]
 use crate::namespace::matches_local_name;
-use crate::namespace::{matches_word_element, matches_word_name};
+use crate::namespace::{matches_word_attribute, matches_word_element, matches_word_name};
 use crate::raw_xml::NamespaceContext;
 use crate::shared::{ST_Border, ST_TabJc, ST_TabLeader};
 use crate::units::Twips;
@@ -52,13 +52,13 @@ impl CT_BorderEdge {
             let attr = attr?;
             let key = attr.key.as_ref();
             let v = std::str::from_utf8(&attr.value)?;
-            if matches_word_name(key, &context, b"val") {
+            if matches_word_attribute(key, &context, b"val") {
                 val = ST_Border::from_str(v)?;
-            } else if matches_word_name(key, &context, b"sz") {
+            } else if matches_word_attribute(key, &context, b"sz") {
                 sz = Some(v.parse()?);
-            } else if matches_word_name(key, &context, b"space") {
+            } else if matches_word_attribute(key, &context, b"space") {
                 space = Some(v.parse()?);
-            } else if matches_word_name(key, &context, b"color") {
+            } else if matches_word_attribute(key, &context, b"color") {
                 color = Some(v.to_string());
             }
         }
@@ -250,11 +250,11 @@ impl CT_TabStop {
             let attr = attr?;
             let key = attr.key.as_ref();
             let v = std::str::from_utf8(&attr.value)?;
-            if matches_word_name(key, &context, b"val") {
+            if matches_word_attribute(key, &context, b"val") {
                 val = ST_TabJc::from_str(v)?;
-            } else if matches_word_name(key, &context, b"pos") {
+            } else if matches_word_attribute(key, &context, b"pos") {
                 pos = Twips(v.parse()?);
-            } else if matches_word_name(key, &context, b"leader") {
+            } else if matches_word_attribute(key, &context, b"leader") {
                 leader = Some(ST_TabLeader::from_str(v)?);
             }
         }

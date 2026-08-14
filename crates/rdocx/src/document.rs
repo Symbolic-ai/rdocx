@@ -168,21 +168,25 @@ impl Document {
 
         // Try to load styles, remembering where they came from.
         let styles_part_name = resolve_part(rel_types::STYLES);
-        let styles = match styles_part_name
-            .as_deref()
-            .and_then(|p| package.get_part(p))
-        {
-            Some(styles_xml) => CT_Styles::from_xml(styles_xml)?,
+        let styles = match styles_part_name.as_deref() {
+            Some(part_name) => {
+                let styles_xml = package
+                    .get_part(part_name)
+                    .ok_or_else(|| oxml_opc::OpcError::PartNotFound(part_name.to_string()))?;
+                CT_Styles::from_xml(styles_xml)?
+            }
             None => CT_Styles::new_default(),
         };
 
         // Try to load numbering definitions
         let numbering_part_name = resolve_part(rel_types::NUMBERING);
-        let numbering = match numbering_part_name
-            .as_deref()
-            .and_then(|p| package.get_part(p))
-        {
-            Some(num_xml) => Some(CT_Numbering::from_xml(num_xml)?),
+        let numbering = match numbering_part_name.as_deref() {
+            Some(part_name) => {
+                let numbering_xml = package
+                    .get_part(part_name)
+                    .ok_or_else(|| oxml_opc::OpcError::PartNotFound(part_name.to_string()))?;
+                Some(CT_Numbering::from_xml(numbering_xml)?)
+            }
             None => None,
         };
 
@@ -405,6 +409,23 @@ impl Document {
                 }
                 BodyContent::SectionProperties(_) => None,
             })
+    }
+
+    /// Whether any body section declares a header or footer relationship.
+    pub fn has_header_footer_references(&self) -> bool {
+        self.document.body.content.iter().any(|content| {
+            section_properties_for_body_content(content).is_some_and(|properties| {
+                !properties.header_refs.is_empty() || !properties.footer_refs.is_empty()
+            })
+        })
+    }
+
+    /// Whether any body section carries layout formatting that the semantic
+    /// body iterator does not expose as content.
+    pub fn has_section_layout_formatting(&self) -> bool {
+        self.document.body.content.iter().any(|content| {
+            section_properties_for_body_content(content).is_some_and(section_has_layout)
+        })
     }
 
     /// Get immutable references to all paragraphs.
@@ -2952,6 +2973,33 @@ impl Default for Document {
 ///
 /// Falls back to the absolute part name when the two live in different
 /// directories, which OPC also permits.
+fn section_properties_for_body_content(content: &BodyContent) -> Option<&CT_SectPr> {
+    match content {
+        BodyContent::Paragraph(paragraph) => paragraph
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.sect_pr.as_ref()),
+        BodyContent::SectionProperties(properties) => Some(properties),
+        BodyContent::Table(_) | BodyContent::RawXml(_) => None,
+    }
+}
+
+fn section_has_layout(properties: &CT_SectPr) -> bool {
+    properties.page_width.is_some()
+        || properties.page_height.is_some()
+        || properties.orientation.is_some()
+        || properties.margin_top.is_some()
+        || properties.margin_right.is_some()
+        || properties.margin_bottom.is_some()
+        || properties.margin_left.is_some()
+        || properties.gutter.is_some()
+        || properties.header_distance.is_some()
+        || properties.footer_distance.is_some()
+        || properties.section_type.is_some()
+        || properties.columns.is_some()
+        || properties.title_pg.is_some()
+}
+
 fn relative_target(source_part: &str, target_part: &str) -> String {
     let dir = match source_part.rfind('/') {
         Some(pos) => &source_part[..=pos],

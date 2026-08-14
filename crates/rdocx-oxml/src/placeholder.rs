@@ -515,7 +515,7 @@ pub fn replace_many_in_chart_xml(
                 // Consume the element as a whole. Reading it event by event
                 // would split the value at every entity reference and could
                 // miss a placeholder straddling one.
-                let mut text = crate::xml_text::read_element_text(&mut reader, name);
+                let mut text = crate::xml_text::read_element_text(&mut reader, name)?;
                 for (placeholder, replacement) in replacements {
                     let occurrences = text.matches(placeholder).count();
                     if occurrences > 0 {

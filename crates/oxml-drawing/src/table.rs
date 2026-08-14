@@ -740,7 +740,7 @@ impl CT_TableProperties {
                             "duplicate a:tableStyleId".to_owned(),
                         ));
                     }
-                    style_id = Some(read_element_text(reader, child.name()));
+                    style_id = Some(read_element_text(reader, child.name())?);
                     boundary = 1;
                 }
                 Event::Empty(child)

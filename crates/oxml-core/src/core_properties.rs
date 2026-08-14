@@ -57,7 +57,7 @@ impl CoreProperties {
                     // Consume the whole element: a value containing an entity
                     // arrives as several events, so a single Text event is not
                     // enough to reconstruct it.
-                    let text = crate::xml_text::read_element_text(&mut reader, name);
+                    let text = crate::xml_text::read_element_text(&mut reader, name)?;
                     if !text.is_empty() {
                         *field = Some(text);
                     }

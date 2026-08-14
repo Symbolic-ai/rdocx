@@ -10,16 +10,21 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::error::{OxmlError, Result};
-use crate::namespace::{W_NS, matches_local_name};
-use crate::properties::{CT_PPr, CT_RPr, get_val_attr};
-use crate::raw_xml::{capture_element, capture_empty_element};
+use crate::namespace::{W_NS, matches_word_attribute, matches_word_element, matches_word_name};
+use crate::properties::{CT_PPr, CT_RPr, get_val_attr_with_context};
+use crate::raw_xml::{NamespaceContext, capture_element, capture_empty_element};
 use crate::shared::ST_Jc;
 use crate::styles::{CT_Styles, StyleType};
 
-fn required_u32_attr(element: &BytesStart<'_>, local: &[u8], path: &str) -> Result<u32> {
+fn required_u32_attr(
+    element: &BytesStart<'_>,
+    context: &NamespaceContext,
+    local: &[u8],
+    path: &str,
+) -> Result<u32> {
     for attribute in element.attributes() {
         let attribute = attribute?;
-        if matches_local_name(attribute.key.as_ref(), local) {
+        if matches_word_attribute(attribute.key.as_ref(), context, local) {
             return Ok(std::str::from_utf8(&attribute.value)?.parse()?);
         }
     }
@@ -119,6 +124,14 @@ impl CT_Lvl {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>, ilvl: u32) -> Result<Self> {
+        Self::from_xml_with_context(reader, ilvl, &NamespaceContext::default())
+    }
+
+    fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        ilvl: u32,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut lvl = CT_Lvl::new(ilvl);
         let mut buf = Vec::new();
 
@@ -126,38 +139,27 @@ impl CT_Lvl {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"pPr") {
-                        lvl.ppr = Some(CT_PPr::from_xml(reader)?);
-                    } else if matches_local_name(name.as_ref(), b"rPr") {
-                        lvl.rpr = Some(CT_RPr::from_xml(reader)?);
+                    let child_context = context.with_element(e);
+                    if matches_word_element(e, context, b"pPr") {
+                        lvl.ppr = Some(CT_PPr::from_xml_with_context(reader, &child_context)?);
+                    } else if matches_word_element(e, context, b"rPr") {
+                        lvl.rpr = Some(CT_RPr::from_xml_with_context(reader, &child_context)?);
+                    } else if Self::parse_value_element(e, context, &child_context, &mut lvl)? {
+                        reader.read_to_end_into(name, &mut Vec::new())?;
                     } else {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"start") {
-                        if let Some(val) = get_val_attr(e)? {
-                            lvl.start = Some(val.parse()?);
-                        }
-                    } else if matches_local_name(name.as_ref(), b"numFmt") {
-                        if let Some(val) = get_val_attr(e)? {
-                            lvl.num_fmt = Some(ST_NumberFormat::from_str(&val));
-                        }
-                    } else if matches_local_name(name.as_ref(), b"lvlText") {
-                        lvl.lvl_text = get_val_attr(e)?;
-                    } else if matches_local_name(name.as_ref(), b"pStyle") {
-                        lvl.p_style = get_val_attr(e)?;
-                    } else if matches_local_name(name.as_ref(), b"lvlJc")
-                        && let Some(val) = get_val_attr(e)?
-                    {
-                        lvl.lvl_jc = Some(ST_Jc::from_str(&val)?);
-                    }
+                    let child_context = context.with_element(e);
+                    Self::parse_value_element(e, context, &child_context, &mut lvl)?;
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"lvl") => {
+                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"lvl") => {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:lvl".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -165,6 +167,34 @@ impl CT_Lvl {
         }
 
         Ok(lvl)
+    }
+
+    fn parse_value_element(
+        element: &BytesStart<'_>,
+        context: &NamespaceContext,
+        element_context: &NamespaceContext,
+        lvl: &mut Self,
+    ) -> Result<bool> {
+        if matches_word_element(element, context, b"start") {
+            if let Some(val) = get_val_attr_with_context(element, element_context)? {
+                lvl.start = Some(val.parse()?);
+            }
+        } else if matches_word_element(element, context, b"numFmt") {
+            if let Some(val) = get_val_attr_with_context(element, element_context)? {
+                lvl.num_fmt = Some(ST_NumberFormat::from_str(&val));
+            }
+        } else if matches_word_element(element, context, b"lvlText") {
+            lvl.lvl_text = get_val_attr_with_context(element, element_context)?;
+        } else if matches_word_element(element, context, b"pStyle") {
+            lvl.p_style = get_val_attr_with_context(element, element_context)?;
+        } else if matches_word_element(element, context, b"lvlJc") {
+            if let Some(val) = get_val_attr_with_context(element, element_context)? {
+                lvl.lvl_jc = Some(ST_Jc::from_str(&val)?);
+            }
+        } else {
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -245,6 +275,14 @@ impl CT_AbstractNum {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>, abstract_num_id: u32) -> Result<Self> {
+        Self::from_xml_with_context(reader, abstract_num_id, &NamespaceContext::default())
+    }
+
+    fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        abstract_num_id: u32,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut abs = CT_AbstractNum::new(abstract_num_id);
         let mut modelled_index = 0;
         let mut buf = Vec::new();
@@ -253,9 +291,17 @@ impl CT_AbstractNum {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"lvl") {
-                        let ilvl = required_u32_attr(e, b"ilvl", "w:lvl/@w:ilvl")?;
-                        abs.levels.push(CT_Lvl::from_xml(reader, ilvl)?);
+                    let child_context = context.with_element(e);
+                    if matches_word_element(e, context, b"lvl") {
+                        let ilvl = required_u32_attr(e, &child_context, b"ilvl", "w:lvl/@w:ilvl")?;
+                        abs.levels.push(CT_Lvl::from_xml_with_context(
+                            reader,
+                            ilvl,
+                            &child_context,
+                        )?);
+                        modelled_index += 1;
+                    } else if Self::parse_value_element(e, context, &child_context, &mut abs)? {
+                        reader.read_to_end_into(name, &mut Vec::new())?;
                         modelled_index += 1;
                     } else {
                         abs.extra_xml
@@ -263,22 +309,11 @@ impl CT_AbstractNum {
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"multiLevelType") {
-                        abs.multi_level_type = get_val_attr(e)?;
+                    let child_context = context.with_element(e);
+                    if Self::parse_value_element(e, context, &child_context, &mut abs)? {
                         modelled_index += 1;
-                    } else if matches_local_name(name.as_ref(), b"styleLink")
-                        && abs.style_link.is_none()
-                    {
-                        abs.style_link = get_val_attr(e)?;
-                        modelled_index += 1;
-                    } else if matches_local_name(name.as_ref(), b"numStyleLink")
-                        && abs.num_style_link.is_none()
-                    {
-                        abs.num_style_link = get_val_attr(e)?;
-                        modelled_index += 1;
-                    } else if matches_local_name(name.as_ref(), b"lvl") {
-                        let ilvl = required_u32_attr(e, b"ilvl", "w:lvl/@w:ilvl")?;
+                    } else if matches_word_element(e, context, b"lvl") {
+                        let ilvl = required_u32_attr(e, &child_context, b"ilvl", "w:lvl/@w:ilvl")?;
                         abs.levels.push(CT_Lvl::new(ilvl));
                         modelled_index += 1;
                     } else {
@@ -286,10 +321,16 @@ impl CT_AbstractNum {
                             .push((modelled_index, capture_empty_element(e)?));
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"abstractNum") => {
+                Ok(Event::End(ref e))
+                    if matches_word_name(e.name().as_ref(), context, b"abstractNum") =>
+                {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement(
+                        "closing w:abstractNum".to_string(),
+                    ));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -297,6 +338,26 @@ impl CT_AbstractNum {
         }
 
         Ok(abs)
+    }
+
+    fn parse_value_element(
+        element: &BytesStart<'_>,
+        context: &NamespaceContext,
+        element_context: &NamespaceContext,
+        abs: &mut Self,
+    ) -> Result<bool> {
+        if matches_word_element(element, context, b"multiLevelType") {
+            abs.multi_level_type = get_val_attr_with_context(element, element_context)?;
+        } else if matches_word_element(element, context, b"styleLink") && abs.style_link.is_none() {
+            abs.style_link = get_val_attr_with_context(element, element_context)?;
+        } else if matches_word_element(element, context, b"numStyleLink")
+            && abs.num_style_link.is_none()
+        {
+            abs.num_style_link = get_val_attr_with_context(element, element_context)?;
+        } else {
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -360,7 +421,7 @@ pub struct CT_LvlOverride {
 }
 
 impl CT_LvlOverride {
-    fn from_xml(reader: &mut Reader<&[u8]>, ilvl: u32) -> Result<Self> {
+    fn from_xml(reader: &mut Reader<&[u8]>, ilvl: u32, context: &NamespaceContext) -> Result<Self> {
         let mut value = Self {
             ilvl,
             start_override: None,
@@ -370,24 +431,35 @@ impl CT_LvlOverride {
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) if matches_local_name(e.name().as_ref(), b"lvl") => {
-                    let level_index = required_u32_attr(e, b"ilvl", "w:lvl/@w:ilvl")?;
-                    value.level = Some(CT_Lvl::from_xml(reader, level_index)?);
+                Ok(Event::Start(ref e)) if matches_word_element(e, context, b"lvl") => {
+                    let child_context = context.with_element(e);
+                    let level_index =
+                        required_u32_attr(e, &child_context, b"ilvl", "w:lvl/@w:ilvl")?;
+                    value.level = Some(CT_Lvl::from_xml_with_context(
+                        reader,
+                        level_index,
+                        &child_context,
+                    )?);
                 }
                 Ok(Event::Start(ref e)) => {
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
-                Ok(Event::Empty(ref e))
-                    if matches_local_name(e.name().as_ref(), b"startOverride") =>
-                {
-                    if let Some(start) = get_val_attr(e)? {
+                Ok(Event::Empty(ref e)) if matches_word_element(e, context, b"startOverride") => {
+                    let child_context = context.with_element(e);
+                    if let Some(start) = get_val_attr_with_context(e, &child_context)? {
                         value.start_override = Some(start.parse()?);
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"lvlOverride") => {
+                Ok(Event::End(ref e))
+                    if matches_word_name(e.name().as_ref(), context, b"lvlOverride") =>
+                {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement(
+                        "closing w:lvlOverride".to_string(),
+                    ));
+                }
                 Err(error) => return Err(error.into()),
                 _ => {}
             }
@@ -420,6 +492,14 @@ impl CT_LvlOverride {
 #[allow(non_snake_case)]
 impl CT_Num {
     pub fn from_xml(reader: &mut Reader<&[u8]>, num_id: u32) -> Result<Self> {
+        Self::from_xml_with_context(reader, num_id, &NamespaceContext::default())
+    }
+
+    fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        num_id: u32,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut abstract_num_id = None;
         let mut level_overrides = Vec::new();
         let mut buf = Vec::new();
@@ -427,24 +507,37 @@ impl CT_Num {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
-                    if matches_local_name(e.name().as_ref(), b"abstractNumId")
-                        && let Some(val) = get_val_attr(e)?
+                    if matches_word_element(e, context, b"abstractNumId")
+                        && let Some(val) = get_val_attr_with_context(e, &context.with_element(e))?
                     {
                         abstract_num_id = Some(val.parse()?);
                     }
                 }
                 Ok(Event::Start(ref e)) => {
-                    if matches_local_name(e.name().as_ref(), b"lvlOverride") {
-                        let ilvl = required_u32_attr(e, b"ilvl", "w:lvlOverride/@w:ilvl")?;
-                        level_overrides.push(CT_LvlOverride::from_xml(reader, ilvl)?);
+                    let child_context = context.with_element(e);
+                    if matches_word_element(e, context, b"lvlOverride") {
+                        let ilvl =
+                            required_u32_attr(e, &child_context, b"ilvl", "w:lvlOverride/@w:ilvl")?;
+                        level_overrides.push(CT_LvlOverride::from_xml(
+                            reader,
+                            ilvl,
+                            &child_context,
+                        )?);
+                    } else if matches_word_element(e, context, b"abstractNumId") {
+                        if let Some(val) = get_val_attr_with_context(e, &child_context)? {
+                            abstract_num_id = Some(val.parse()?);
+                        }
+                        reader.read_to_end_into(e.name(), &mut Vec::new())?;
                     } else {
                         reader.read_to_end_into(e.name(), &mut Vec::new())?;
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"num") => {
+                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"num") => {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:num".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -502,44 +595,102 @@ impl CT_Numbering {
 
         let mut abstract_nums = Vec::new();
         let mut nums = Vec::new();
+        let mut root_context = None;
+        let mut root_closed = false;
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"abstractNum") {
+                    if root_context.is_none() && !root_closed {
+                        let document_context = NamespaceContext::default();
+                        if !matches_word_element(e, &document_context, b"numbering") {
+                            return Err(OxmlError::UnexpectedElement(
+                                String::from_utf8_lossy(name.as_ref()).into_owned(),
+                            ));
+                        }
+                        root_context = Some(document_context.with_element(e));
+                    } else if let Some(context) = root_context.as_ref()
+                        && matches_word_element(e, context, b"abstractNum")
+                    {
+                        let child_context = context.with_element(e);
                         let id = required_u32_attr(
                             e,
+                            &child_context,
                             b"abstractNumId",
                             "w:abstractNum/@w:abstractNumId",
                         )?;
-                        abstract_nums.push(CT_AbstractNum::from_xml(&mut reader, id)?);
-                    } else if matches_local_name(name.as_ref(), b"num") {
-                        let id = required_u32_attr(e, b"numId", "w:num/@w:numId")?;
-                        nums.push(CT_Num::from_xml(&mut reader, id)?);
-                    } else if matches_local_name(name.as_ref(), b"numbering") {
-                        // root element, continue
-                    } else {
+                        abstract_nums.push(CT_AbstractNum::from_xml_with_context(
+                            &mut reader,
+                            id,
+                            &child_context,
+                        )?);
+                    } else if let Some(context) = root_context.as_ref()
+                        && matches_word_element(e, context, b"num")
+                    {
+                        let child_context = context.with_element(e);
+                        let id = required_u32_attr(e, &child_context, b"numId", "w:num/@w:numId")?;
+                        nums.push(CT_Num::from_xml_with_context(
+                            &mut reader,
+                            id,
+                            &child_context,
+                        )?);
+                    } else if root_context.is_some() {
                         reader.read_to_end_into(name, &mut Vec::new())?;
+                    } else {
+                        return Err(OxmlError::UnexpectedElement(
+                            String::from_utf8_lossy(name.as_ref()).into_owned(),
+                        ));
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
-                    if matches_local_name(e.name().as_ref(), b"abstractNum") {
+                    let document_context = NamespaceContext::default();
+                    if root_context.is_none()
+                        && !root_closed
+                        && matches_word_element(e, &document_context, b"numbering")
+                    {
+                        root_closed = true;
+                    } else if let Some(context) = root_context.as_ref()
+                        && matches_word_element(e, context, b"abstractNum")
+                    {
+                        let child_context = context.with_element(e);
                         let id = required_u32_attr(
                             e,
+                            &child_context,
                             b"abstractNumId",
                             "w:abstractNum/@w:abstractNumId",
                         )?;
                         abstract_nums.push(CT_AbstractNum::new(id));
-                    } else if matches_local_name(e.name().as_ref(), b"num") {
-                        required_u32_attr(e, b"numId", "w:num/@w:numId")?;
+                    } else if let Some(context) = root_context.as_ref()
+                        && matches_word_element(e, context, b"num")
+                    {
+                        let child_context = context.with_element(e);
+                        required_u32_attr(e, &child_context, b"numId", "w:num/@w:numId")?;
                         return Err(OxmlError::MissingElement(
                             "w:num/w:abstractNumId/@w:val".to_string(),
                         ));
+                    } else if root_context.is_none() || root_closed {
+                        return Err(OxmlError::UnexpectedElement(
+                            String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                        ));
                     }
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::End(ref e)) => {
+                    let Some(context) = root_context.as_ref() else {
+                        return Err(OxmlError::UnexpectedElement(
+                            String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                        ));
+                    };
+                    if matches_word_name(e.name().as_ref(), context, b"numbering") {
+                        root_context = None;
+                        root_closed = true;
+                    }
+                }
+                Ok(Event::Eof) if root_closed => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:numbering".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -1203,5 +1354,33 @@ mod tests {
 
         assert!(!numbering.set_list_level(99, 0, ST_NumberFormat::Decimal, None));
         assert!(!numbering.set_list_level(num_id, 9, ST_NumberFormat::Decimal, None));
+    }
+
+    #[test]
+    fn numbering_requires_word_namespaces_and_qualified_attributes() {
+        let xml = format!(
+            r#"<z:numbering xmlns:z="{W_NS}" xmlns:x="urn:foreign">
+              <x:abstractNum z:abstractNumId="4"/>
+              <z:abstractNum abstractNumId="5"/>
+              <z:abstractNum z:abstractNumId="6"/>
+            </z:numbering>"#
+        );
+
+        assert!(matches!(
+            CT_Numbering::from_xml(xml.as_bytes()),
+            Err(OxmlError::MissingElement(_))
+        ));
+
+        let accepted = format!(
+            r#"<z:numbering xmlns:z="{W_NS}"><z:abstractNum z:abstractNumId="6"/></z:numbering>"#
+        );
+        let numbering = CT_Numbering::from_xml(accepted.as_bytes()).unwrap();
+        assert_eq!(numbering.abstract_nums[0].abstract_num_id, 6);
+    }
+
+    #[test]
+    fn truncated_numbering_is_rejected() {
+        let xml = format!(r#"<w:numbering xmlns:w="{W_NS}"><w:abstractNum w:abstractNumId="0">"#);
+        assert!(CT_Numbering::from_xml(xml.as_bytes()).is_err());
     }
 }

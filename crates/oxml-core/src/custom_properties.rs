@@ -218,30 +218,30 @@ fn parse_value_element(
         b"lpstr" => Ok(CustomPropertyValue::Lpstr(read_element_text(
             reader,
             element.name(),
-        ))),
+        )?)),
         b"lpwstr" => Ok(CustomPropertyValue::Lpwstr(read_element_text(
             reader,
             element.name(),
-        ))),
+        )?)),
         b"i4" => {
-            let text = read_element_text(reader, element.name());
+            let text = read_element_text(reader, element.name())?;
             let value = text.trim().parse().map_err(|_| {
                 OxmlError::InvalidValue(format!("vt:i4 must be an integer, got {text:?}"))
             })?;
             Ok(CustomPropertyValue::I4(value))
         }
         b"r8" => {
-            let text = read_element_text(reader, element.name());
+            let text = read_element_text(reader, element.name())?;
             Ok(CustomPropertyValue::R8(parse_r8(&text)?))
         }
         b"bool" => {
-            let text = read_element_text(reader, element.name());
+            let text = read_element_text(reader, element.name())?;
             Ok(CustomPropertyValue::Bool(parse_bool(&text)?))
         }
         b"filetime" => Ok(CustomPropertyValue::FileTime(read_element_text(
             reader,
             element.name(),
-        ))),
+        )?)),
         b"empty" => {
             reader.read_to_end_into(element.name(), &mut Vec::new())?;
             Ok(CustomPropertyValue::Empty)

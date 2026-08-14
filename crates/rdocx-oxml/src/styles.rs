@@ -4,8 +4,9 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::error::{OxmlError, Result};
-use crate::namespace::{W_NS, matches_local_name};
+use crate::namespace::{W_NS, matches_word_attribute, matches_word_element, matches_word_name};
 use crate::properties::{CT_PPr, CT_RPr};
+use crate::raw_xml::NamespaceContext;
 
 /// The type of a style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +55,15 @@ pub struct CT_Style {
 #[allow(non_snake_case)]
 impl CT_Style {
     pub fn from_xml(reader: &mut Reader<&[u8]>, attrs: &BytesStart) -> Result<Self> {
+        let context = NamespaceContext::default().with_element(attrs);
+        Self::from_xml_with_context(reader, attrs, &context)
+    }
+
+    fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        attrs: &BytesStart,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut style_id = String::new();
         let mut style_type = StyleType::Paragraph;
         let mut is_default = false;
@@ -61,11 +71,11 @@ impl CT_Style {
         for attr in attrs.attributes() {
             let attr = attr?;
             let key = attr.key.as_ref();
-            if matches_local_name(key, b"styleId") {
+            if matches_word_attribute(key, context, b"styleId") {
                 style_id = std::str::from_utf8(&attr.value)?.to_string();
-            } else if matches_local_name(key, b"type") {
+            } else if matches_word_attribute(key, context, b"type") {
                 style_type = StyleType::from_str(std::str::from_utf8(&attr.value)?)?;
-            } else if matches_local_name(key, b"default") {
+            } else if matches_word_attribute(key, context, b"default") {
                 is_default = std::str::from_utf8(&attr.value)? == "1"
                     || std::str::from_utf8(&attr.value)? == "true";
             }
@@ -81,29 +91,43 @@ impl CT_Style {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
-                    let ename = e.name();
-                    if matches_local_name(ename.as_ref(), b"name") {
-                        name = get_val_attr(e)?;
-                    } else if matches_local_name(ename.as_ref(), b"basedOn") {
-                        based_on = get_val_attr(e)?;
-                    } else if matches_local_name(ename.as_ref(), b"next") {
-                        next_style = get_val_attr(e)?;
+                    let element_context = context.with_element(e);
+                    if matches_word_element(e, context, b"name") {
+                        name = get_val_attr(e, &element_context)?;
+                    } else if matches_word_element(e, context, b"basedOn") {
+                        based_on = get_val_attr(e, &element_context)?;
+                    } else if matches_word_element(e, context, b"next") {
+                        next_style = get_val_attr(e, &element_context)?;
                     }
                 }
                 Ok(Event::Start(ref e)) => {
                     let ename = e.name();
-                    if matches_local_name(ename.as_ref(), b"pPr") {
-                        ppr = Some(CT_PPr::from_xml(reader)?);
-                    } else if matches_local_name(ename.as_ref(), b"rPr") {
-                        rpr = Some(CT_RPr::from_xml(reader)?);
+                    let child_context = context.with_element(e);
+                    if matches_word_element(e, context, b"pPr") {
+                        ppr = Some(CT_PPr::from_xml_with_context(reader, &child_context)?);
+                    } else if matches_word_element(e, context, b"rPr") {
+                        rpr = Some(CT_RPr::from_xml_with_context(reader, &child_context)?);
+                    } else if matches_word_element(e, context, b"name") {
+                        name = get_val_attr(e, &child_context)?;
+                        reader.read_to_end_into(ename, &mut Vec::new())?;
+                    } else if matches_word_element(e, context, b"basedOn") {
+                        based_on = get_val_attr(e, &child_context)?;
+                        reader.read_to_end_into(ename, &mut Vec::new())?;
+                    } else if matches_word_element(e, context, b"next") {
+                        next_style = get_val_attr(e, &child_context)?;
+                        reader.read_to_end_into(ename, &mut Vec::new())?;
                     } else {
                         reader.read_to_end_into(ename, &mut Vec::new())?;
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"style") => {
+                Ok(Event::End(ref e))
+                    if matches_word_name(e.name().as_ref(), context, b"style") =>
+                {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:style".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -172,6 +196,13 @@ pub struct CT_DocDefaults {
 #[allow(non_snake_case)]
 impl CT_DocDefaults {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut defaults = CT_DocDefaults::default();
         let mut buf = Vec::new();
 
@@ -179,19 +210,27 @@ impl CT_DocDefaults {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"rPrDefault") {
+                    let child_context = context.with_element(e);
+                    if matches_word_element(e, context, b"rPrDefault") {
                         // Read into rPrDefault, expecting rPr child
-                        defaults.rpr = Self::parse_pr_default(reader, b"rPrDefault")?;
-                    } else if matches_local_name(name.as_ref(), b"pPrDefault") {
-                        defaults.ppr = Self::parse_ppr_default(reader)?;
+                        defaults.rpr =
+                            Self::parse_pr_default(reader, &child_context, b"rPrDefault")?;
+                    } else if matches_word_element(e, context, b"pPrDefault") {
+                        defaults.ppr = Self::parse_ppr_default(reader, &child_context)?;
                     } else {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"docDefaults") => {
+                Ok(Event::End(ref e))
+                    if matches_word_name(e.name().as_ref(), context, b"docDefaults") =>
+                {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement(
+                        "closing w:docDefaults".to_string(),
+                    ));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -201,7 +240,11 @@ impl CT_DocDefaults {
         Ok(defaults)
     }
 
-    fn parse_pr_default(reader: &mut Reader<&[u8]>, end_tag: &[u8]) -> Result<Option<CT_RPr>> {
+    fn parse_pr_default(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+        end_tag: &[u8],
+    ) -> Result<Option<CT_RPr>> {
         let mut rpr = None;
         let mut buf = Vec::new();
 
@@ -209,16 +252,22 @@ impl CT_DocDefaults {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"rPr") {
-                        rpr = Some(CT_RPr::from_xml(reader)?);
+                    if matches_word_element(e, context, b"rPr") {
+                        let child_context = context.with_element(e);
+                        rpr = Some(CT_RPr::from_xml_with_context(reader, &child_context)?);
                     } else {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), end_tag) => {
+                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, end_tag) => {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement(format!(
+                        "closing w:{}",
+                        String::from_utf8_lossy(end_tag)
+                    )));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -228,7 +277,10 @@ impl CT_DocDefaults {
         Ok(rpr)
     }
 
-    fn parse_ppr_default(reader: &mut Reader<&[u8]>) -> Result<Option<CT_PPr>> {
+    fn parse_ppr_default(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Option<CT_PPr>> {
         let mut ppr = None;
         let mut buf = Vec::new();
 
@@ -236,16 +288,23 @@ impl CT_DocDefaults {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"pPr") {
-                        ppr = Some(CT_PPr::from_xml(reader)?);
+                    if matches_word_element(e, context, b"pPr") {
+                        let child_context = context.with_element(e);
+                        ppr = Some(CT_PPr::from_xml_with_context(reader, &child_context)?);
                     } else {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"pPrDefault") => {
+                Ok(Event::End(ref e))
+                    if matches_word_name(e.name().as_ref(), context, b"pPrDefault") =>
+                {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement(
+                        "closing w:pPrDefault".to_string(),
+                    ));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -299,23 +358,73 @@ impl CT_Styles {
 
         let mut doc_defaults = None;
         let mut styles = Vec::new();
+        let mut root_context = None;
+        let mut root_closed = false;
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"docDefaults") {
-                        doc_defaults = Some(CT_DocDefaults::from_xml(&mut reader)?);
-                    } else if matches_local_name(name.as_ref(), b"style") {
-                        styles.push(CT_Style::from_xml(&mut reader, e)?);
-                    } else if matches_local_name(name.as_ref(), b"styles") {
-                        // Root element, continue
+                    if root_context.is_none() && !root_closed {
+                        let document_context = NamespaceContext::default();
+                        if !matches_word_element(e, &document_context, b"styles") {
+                            return Err(OxmlError::UnexpectedElement(
+                                String::from_utf8_lossy(name.as_ref()).into_owned(),
+                            ));
+                        }
+                        root_context = Some(document_context.with_element(e));
+                    } else if let Some(context) = root_context.as_ref() {
+                        if matches_word_element(e, context, b"docDefaults") {
+                            let child_context = context.with_element(e);
+                            doc_defaults = Some(CT_DocDefaults::from_xml_with_context(
+                                &mut reader,
+                                &child_context,
+                            )?);
+                        } else if matches_word_element(e, context, b"style") {
+                            let child_context = context.with_element(e);
+                            styles.push(CT_Style::from_xml_with_context(
+                                &mut reader,
+                                e,
+                                &child_context,
+                            )?);
+                        } else {
+                            reader.read_to_end_into(name, &mut Vec::new())?;
+                        }
                     } else {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
+                        return Err(OxmlError::UnexpectedElement(
+                            String::from_utf8_lossy(name.as_ref()).into_owned(),
+                        ));
                     }
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Empty(ref e)) => {
+                    let document_context = NamespaceContext::default();
+                    if root_context.is_none()
+                        && !root_closed
+                        && matches_word_element(e, &document_context, b"styles")
+                    {
+                        root_closed = true;
+                    } else if root_context.is_none() || root_closed {
+                        return Err(OxmlError::UnexpectedElement(
+                            String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                        ));
+                    }
+                }
+                Ok(Event::End(ref e)) => {
+                    let Some(context) = root_context.as_ref() else {
+                        return Err(OxmlError::UnexpectedElement(
+                            String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                        ));
+                    };
+                    if matches_word_name(e.name().as_ref(), context, b"styles") {
+                        root_context = None;
+                        root_closed = true;
+                    }
+                }
+                Ok(Event::Eof) if root_closed => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("closing w:styles".to_string()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -442,10 +551,10 @@ impl Default for CT_Styles {
 }
 
 /// Extract the `w:val` attribute from an element.
-fn get_val_attr(e: &BytesStart) -> Result<Option<String>> {
+fn get_val_attr(e: &BytesStart, context: &NamespaceContext) -> Result<Option<String>> {
     for attr in e.attributes() {
         let attr = attr?;
-        if matches_local_name(attr.key.as_ref(), b"val") {
+        if matches_word_attribute(attr.key.as_ref(), context, b"val") {
             return Ok(Some(std::str::from_utf8(&attr.value)?.to_string()));
         }
     }
@@ -478,5 +587,31 @@ mod tests {
         let styles = CT_Styles::new_default();
         let default_para = styles.get_default(StyleType::Paragraph).unwrap();
         assert_eq!(default_para.style_id, "Normal");
+    }
+
+    #[test]
+    fn styles_require_word_namespaces_and_qualified_attributes() {
+        let xml = format!(
+            r#"<z:styles xmlns:z="{W_NS}" xmlns:x="urn:foreign">
+              <x:style z:styleId="Foreign"><x:name z:val="Foreign"/></x:style>
+              <z:style styleId="Unqualified" type="paragraph"><z:name val="Ignored"/></z:style>
+              <z:style z:styleId="Accepted" z:type="paragraph"><z:name z:val="Accepted"/></z:style>
+            </z:styles>"#
+        );
+
+        let styles = CT_Styles::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(styles.styles.len(), 2);
+        assert!(styles.get_by_id("Foreign").is_none());
+        assert!(styles.get_by_id("Unqualified").is_none());
+        assert_eq!(
+            styles.get_by_id("Accepted").unwrap().name.as_deref(),
+            Some("Accepted")
+        );
+    }
+
+    #[test]
+    fn truncated_styles_are_rejected() {
+        let xml = format!(r#"<w:styles xmlns:w="{W_NS}"><w:style w:styleId="Normal">"#);
+        assert!(CT_Styles::from_xml(xml.as_bytes()).is_err());
     }
 }

@@ -8,7 +8,7 @@ use crate::document::CT_SectPr;
 use crate::error::{OxmlError, Result};
 #[cfg(test)]
 use crate::namespace::matches_local_name;
-use crate::namespace::{matches_word_element, matches_word_name};
+use crate::namespace::{matches_word_attribute, matches_word_element, matches_word_name};
 use crate::raw_xml::NamespaceContext;
 use crate::shared::{ST_HighlightColor, ST_Jc, ST_OnOff, ST_Underline};
 use crate::units::{HalfPoint, Twips};
@@ -42,11 +42,11 @@ impl CT_Shd {
             let attr = attr?;
             let key = attr.key.as_ref();
             let v = std::str::from_utf8(&attr.value)?;
-            if matches_word_name(key, &context, b"val") {
+            if matches_word_attribute(key, &context, b"val") {
                 val = v.to_string();
-            } else if matches_word_name(key, &context, b"color") {
+            } else if matches_word_attribute(key, &context, b"color") {
                 color = Some(v.to_string());
-            } else if matches_word_name(key, &context, b"fill") {
+            } else if matches_word_attribute(key, &context, b"fill") {
                 fill = Some(v.to_string());
             }
         }
@@ -192,17 +192,17 @@ impl CT_PPr {
                 let attr = attr?;
                 let key = attr.key.as_ref();
                 let val_str = std::str::from_utf8(&attr.value)?;
-                if matches_word_name(key, &element_context, b"before") {
+                if matches_word_attribute(key, &element_context, b"before") {
                     ppr.space_before = Some(Twips(val_str.parse()?));
-                } else if matches_word_name(key, &element_context, b"after") {
+                } else if matches_word_attribute(key, &element_context, b"after") {
                     ppr.space_after = Some(Twips(val_str.parse()?));
-                } else if matches_word_name(key, &element_context, b"line") {
+                } else if matches_word_attribute(key, &element_context, b"line") {
                     ppr.line_spacing = Some(Twips(val_str.parse()?));
-                } else if matches_word_name(key, &element_context, b"lineRule") {
+                } else if matches_word_attribute(key, &element_context, b"lineRule") {
                     ppr.line_rule = Some(val_str.to_string());
-                } else if matches_word_name(key, &element_context, b"beforeAutospacing") {
+                } else if matches_word_attribute(key, &element_context, b"beforeAutospacing") {
                     ppr.before_autospacing = Some(val_str == "1" || val_str == "true");
-                } else if matches_word_name(key, &element_context, b"afterAutospacing") {
+                } else if matches_word_attribute(key, &element_context, b"afterAutospacing") {
                     ppr.after_autospacing = Some(val_str == "1" || val_str == "true");
                 }
             }
@@ -211,17 +211,17 @@ impl CT_PPr {
                 let attr = attr?;
                 let key = attr.key.as_ref();
                 let val_str = std::str::from_utf8(&attr.value)?;
-                if matches_word_name(key, &element_context, b"left")
-                    || matches_word_name(key, &element_context, b"start")
+                if matches_word_attribute(key, &element_context, b"left")
+                    || matches_word_attribute(key, &element_context, b"start")
                 {
                     ppr.ind_left = Some(Twips(val_str.parse()?));
-                } else if matches_word_name(key, &element_context, b"right")
-                    || matches_word_name(key, &element_context, b"end")
+                } else if matches_word_attribute(key, &element_context, b"right")
+                    || matches_word_attribute(key, &element_context, b"end")
                 {
                     ppr.ind_right = Some(Twips(val_str.parse()?));
-                } else if matches_word_name(key, &element_context, b"firstLine") {
+                } else if matches_word_attribute(key, &element_context, b"firstLine") {
                     ppr.ind_first_line = Some(Twips(val_str.parse()?));
-                } else if matches_word_name(key, &element_context, b"hanging") {
+                } else if matches_word_attribute(key, &element_context, b"hanging") {
                     ppr.ind_hanging = Some(Twips(val_str.parse()?));
                 }
             }
@@ -640,17 +640,17 @@ impl CT_RPr {
                 let attr = attr?;
                 let key = attr.key.as_ref();
                 let val = std::str::from_utf8(&attr.value)?.to_string();
-                if matches_word_name(key, &element_context, b"ascii") {
+                if matches_word_attribute(key, &element_context, b"ascii") {
                     rpr.font_ascii = Some(val);
-                } else if matches_word_name(key, &element_context, b"hAnsi") {
+                } else if matches_word_attribute(key, &element_context, b"hAnsi") {
                     rpr.font_hansi = Some(val);
-                } else if matches_word_name(key, &element_context, b"eastAsia") {
+                } else if matches_word_attribute(key, &element_context, b"eastAsia") {
                     rpr.font_east_asia = Some(val);
-                } else if matches_word_name(key, &element_context, b"cs") {
+                } else if matches_word_attribute(key, &element_context, b"cs") {
                     rpr.font_cs = Some(val);
-                } else if matches_word_name(key, &element_context, b"asciiTheme") {
+                } else if matches_word_attribute(key, &element_context, b"asciiTheme") {
                     rpr.font_ascii_theme = Some(val);
-                } else if matches_word_name(key, &element_context, b"hAnsiTheme") {
+                } else if matches_word_attribute(key, &element_context, b"hAnsiTheme") {
                     rpr.font_hansi_theme = Some(val);
                 }
             }
@@ -685,9 +685,9 @@ impl CT_RPr {
                 let attr = attr?;
                 let key = attr.key.as_ref();
                 let v = std::str::from_utf8(&attr.value)?.to_string();
-                if matches_word_name(key, &element_context, b"val") {
+                if matches_word_attribute(key, &element_context, b"val") {
                     rpr.color = Some(v);
-                } else if matches_word_name(key, &element_context, b"themeColor") {
+                } else if matches_word_attribute(key, &element_context, b"themeColor") {
                     rpr.color_theme = Some(v);
                 }
             }
@@ -984,7 +984,7 @@ pub(crate) fn get_val_attr_with_context(
 ) -> Result<Option<String>> {
     for attr in e.attributes() {
         let attr = attr?;
-        if matches_word_name(attr.key.as_ref(), context, b"val") {
+        if matches_word_attribute(attr.key.as_ref(), context, b"val") {
             return Ok(Some(std::str::from_utf8(&attr.value)?.to_string()));
         }
     }
