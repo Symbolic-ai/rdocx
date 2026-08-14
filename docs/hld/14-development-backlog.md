@@ -1247,3 +1247,42 @@ and archive inventory.
 coverage for all 26 workspace packages, compiles 26 Rust examples, validates
 the CLI, Python, and JavaScript snippets, and proves all 21
 publishable archives contain the byte-identical declared README.
+
+### F-X010, Tag v0.6.0 (S)
+Prepare the complete stable train at the next minor version, 0.6.0. The eleven
+workspace-version packages move together, including the exact seven crates.io
+packages and the four unpublished Python and WASM support packages. Stable
+README dependency examples, metadata regressions, lock entries, Python project
+versions, and WASM contract literals move to 0.6.0. The incubating train remains
+at 0.1.3. After full verification, a clean microscope, a clean sprint review,
+and separate immediate approval, `/release v0.6.0` publishes only the exact
+seven stable crates. No PyPI, npm, WASM, Python, or incubating publication is
+authorized.
+**Depends on**: F-X009.
+**Test gate**: the stable release regression proves the eleven-package train,
+nine internal pins, exact seven-package publication set, README requirements,
+lock entries, Python project versions, WASM literals, and unchanged incubating
+train. The exact 21-package dry run, README compilation and archive inventory,
+28-entry hash harness, and supply-chain gate pass. After release, all seven
+crates resolve at 0.6.0 under owner `mantissaman`, each crates.io README is
+present, and the GitHub release targets the reviewed sprint SHA.
+
+### F-X011, Tag rpptx-v0.2.0 (S)
+Prepare the complete incubating train at the next minor version, 0.2.0. The
+fourteen publishable `oxml-*` and `rpptx-*` packages move together with
+unpublished `rpptx-wasm`, their root dependency pins, lock entries, README
+dependency examples, source assertions, workflow regressions, and local WASM
+package version. The completed stable train remains at 0.6.0. After full
+verification, a clean microscope, a clean sprint review, and separate
+immediate approval, `/release rpptx-v0.2.0` publishes only the exact fourteen
+incubating crates. No npm, PyPI, Python, WASM, or stable publication is
+authorized.
+**Depends on**: F-X010.
+**Test gate**: the incubating release regression proves the fifteen-package
+preparation group, fourteen internal pins, exact fourteen-package publication
+set, README requirements, lock entries, source and workflow assertions, and
+unchanged stable train. The exact 21-package dry run, README compilation and
+archive inventory, 28-entry hash harness, WASM package gate, and supply-chain
+gate pass. After release, all fourteen crates resolve at 0.2.0 under owner
+`mantissaman`, each crates.io README is present, and the GitHub release targets
+the reviewed sprint SHA.

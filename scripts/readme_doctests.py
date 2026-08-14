@@ -22,6 +22,29 @@ EXAMPLE_FENCE = re.compile(
 )
 WORKSPACE_PACKAGE_COUNT = 26
 PUBLISHABLE_PACKAGE_COUNT = 21
+LOCAL_PATCHES = (
+    ("oxml-core", "crates/oxml-core"),
+    ("oxml-drawing", "crates/oxml-drawing"),
+    ("oxml-layout", "crates/oxml-layout"),
+    ("oxml-media", "crates/oxml-media"),
+    ("oxml-opc", "crates/oxml-opc"),
+    ("oxml-pdf", "crates/oxml-pdf"),
+    ("oxml-sml", "crates/oxml-sml"),
+    ("oxml-cli-support", "crates/oxml-cli-support"),
+    ("rdocx", "crates/rdocx"),
+    ("rdocx-cli", "crates/rdocx-cli"),
+    ("rdocx-html", "crates/rdocx-html"),
+    ("rdocx-layout", "crates/rdocx-layout"),
+    ("rdocx-opc", "crates/rdocx-opc"),
+    ("rdocx-oxml", "crates/rdocx-oxml"),
+    ("rdocx-pdf", "crates/rdocx-pdf"),
+    ("rpptx", "crates/rpptx"),
+    ("rpptx-cli", "crates/rpptx-cli"),
+    ("rpptx-chart", "crates/rpptx-chart"),
+    ("rpptx-layout", "crates/rpptx-layout"),
+    ("rpptx-oxml", "crates/rpptx-oxml"),
+    ("rpptx-render", "crates/rpptx-render"),
+)
 
 
 @dataclass(frozen=True)
@@ -145,26 +168,26 @@ README_CASES = (
 
 README_REQUIRED_TEXT = {
     REPO_ROOT / "README.md": (
-        'rdocx = "0.5"',
-        'rdocx = { version = "0.5", default-features = false }',
+        'rdocx = "0.6"',
+        'rdocx = { version = "0.6", default-features = false }',
         "rdocx convert report.docx --to pdf -o report.pdf",
         "rdocx convert report.docx --to html -o report.html",
         "rdocx convert report.docx --to md -o report.md",
         'rdocx replace report.docx --placeholder "Draft" --value "Final" -o final.docx',
     ),
     REPO_ROOT / "crates/rdocx-cli/README.md": (
-        "cargo install rdocx-cli --version '^0.5'",
+        "cargo install rdocx-cli --version '^0.6'",
         "rdocx convert report.docx --to pdf -o report.pdf",
     ),
-    REPO_ROOT / "crates/rdocx-html/README.md": ('rdocx-html = "0.5"',),
-    REPO_ROOT / "crates/rdocx-layout/README.md": ('rdocx-layout = "0.5"',),
+    REPO_ROOT / "crates/rdocx-html/README.md": ('rdocx-html = "0.6"',),
+    REPO_ROOT / "crates/rdocx-layout/README.md": ('rdocx-layout = "0.6"',),
     REPO_ROOT / "crates/rdocx-opc/README.md": (
-        'rdocx-opc = "0.5"',
+        'rdocx-opc = "0.6"',
         "use rdocx_opc::OpcPackage;",
     ),
-    REPO_ROOT / "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.5"',),
+    REPO_ROOT / "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.6"',),
     REPO_ROOT / "crates/rdocx-pdf/README.md": (
-        'rdocx-pdf = "0.5"',
+        'rdocx-pdf = "0.6"',
         "use rdocx_pdf::render_to_pdf;",
     ),
     REPO_ROOT / "crates/oxml-cli-support/README.md": (
@@ -247,22 +270,63 @@ def package_readme(package: dict[str, object]) -> Path | None:
     return (Path(manifest).parent / value).resolve()
 
 
+def validate_local_patches(packages: list[object]) -> bool:
+    expected: set[tuple[str, str]] = set()
+    for package in packages:
+        if not isinstance(package, dict) or package.get("publish") == []:
+            continue
+        name = package.get("name")
+        manifest = package.get("manifest_path")
+        if not isinstance(name, str) or not isinstance(manifest, str):
+            print(
+                "README doctest error: invalid publishable package metadata",
+                file=sys.stderr,
+            )
+            return False
+        try:
+            package_path = Path(manifest).parent.resolve().relative_to(REPO_ROOT)
+        except ValueError:
+            print(
+                f"README doctest error: {name} is outside the repository",
+                file=sys.stderr,
+            )
+            return False
+        expected.add((name, package_path.as_posix()))
+
+    actual = set(LOCAL_PATCHES)
+    if len(actual) != len(LOCAL_PATCHES) or actual != expected:
+        missing = sorted(expected - actual)
+        unexpected = sorted(actual - expected)
+        print(
+            "README doctest error: local patches differ from publishable "
+            f"metadata, missing={missing!r}, unexpected={unexpected!r}",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
 def validate_package_archive(package: dict[str, object], readme: Path) -> bool:
     name = package["name"]
     version = package.get("version")
     if not isinstance(name, str) or not isinstance(version, str):
         print("README doctest error: invalid package identity", file=sys.stderr)
         return False
+    command = [
+        "cargo",
+        "package",
+        "--locked",
+        "--allow-dirty",
+        "--no-verify",
+        "-p",
+        name,
+    ]
+    for patch_name, patch_path in LOCAL_PATCHES:
+        command.extend(
+            ["--config", f'patch.crates-io.{patch_name}.path="{patch_path}"']
+        )
     result = subprocess.run(
-        [
-            "cargo",
-            "package",
-            "--locked",
-            "--allow-dirty",
-            "--no-verify",
-            "-p",
-            name,
-        ],
+        command,
         cwd=REPO_ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -389,6 +453,8 @@ def validate_inventory() -> bool:
             f"publishable packages, found {len(publishable)}",
             file=sys.stderr,
         )
+        valid = False
+    if not validate_local_patches(packages):
         valid = False
 
     for readme, required_items in README_REQUIRED_TEXT.items():

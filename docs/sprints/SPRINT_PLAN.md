@@ -592,21 +592,27 @@ F-X008 depends on F-X007. The GitHub PR is merged into the sprint branch so
 the contributor remains credited in the pull request and merge record. Only
 `/close-sprint` later merges the reviewed sprint to `main`.
 
-#### Sprint S39, Workspace crate documentation
+#### Sprint S39, Workspace crate documentation and next-minor releases
 
 **Goal**: every one of the 26 Cargo workspace packages declares a useful
 README. Each README explains the crate's role, intended audience, relationship
 to neighbouring packages, and includes a concrete example in the language or
-command surface that users actually consume.
+command surface that users actually consume. Publish those READMEs for every
+crates.io-eligible package through separate next-minor stable and incubating
+release tags.
 
 | F-ID | Title | Size |
 |------|-------|------|
 | F-X009 | README coverage for every workspace crate | L |
+| F-X010 | Tag v0.6.0 | S |
+| F-X011 | Tag rpptx-v0.2.0 | S |
 
 The existing README runner becomes an exact 26-package contract. Published
 archives must each contain one intended README, while unpublished Python and
 WASM packages receive accurate local usage examples without gaining any new
-publication authority.
+publication authority. F-X010 publishes the seven stable crates first. F-X011
+then publishes the fourteen incubating crates. Each tag has its own full
+verification, clean review, and immediate release approval boundary.
 
 ## Cross-cutting
 

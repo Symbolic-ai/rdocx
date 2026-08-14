@@ -133,15 +133,18 @@ unchanged.
 
 All seven released rdocx crates are published at the breaking pre-1.0 0.5.0
 boundary from the reviewed `v0.5.0` tag. Their immutable 0.4.1 releases remain
-available. The eleven-package shared-version group also carries unpublished
-`rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` at 0.5.0 without
-adding them to crates.io publication. The complete 14-package `oxml-*` and
-`rpptx*` crates.io family remains published at the immutable 0.1.3 boundary.
-Released rdocx consumers depend on those registry-backed shared crates.
+available. The eleven-package shared-version group is prepared at 0.6.0 for
+the next minor release. It also carries unpublished `rdocx-wasm`, `rdocx-py`,
+`rpptx-py`, and `oxml-py-support` without adding them to crates.io
+publication. The seven stable 0.6.0 registry versions and `v0.6.0` tag remain
+absent until the reviewed release receives its separate immediate approval.
+The complete 14-package `oxml-*` and `rpptx*` crates.io family remains
+published at the immutable 0.1.3 boundary. Released rdocx consumers depend on
+those registry-backed shared crates.
 
 | Crate | Fate |
 |---|---|
-| `rdocx-opc` | Deprecation shim in the approved cutover release, then stop publishing. Prior versions stay on crates.io forever |
+| `rdocx-opc` | Deprecated compatibility shim that remains in the stable release train while the exact seven-package allowlist is current. Prior versions stay on crates.io forever |
 | `rdocx-pdf` | Same, over published `oxml-pdf` |
 | `rdocx-oxml` | **Stays a real crate permanently.** It keeps ~8,700 lines of WordprocessingML |
 | `rdocx-layout` | Stays. Keeps the flow model |
@@ -157,6 +160,12 @@ deprecation signal Cargo surfaces. Retained paths such as
 `rdocx_opc::OpcPackage` are type-identical to the shared type. The removed
 Word-specific `OpcPackage::new_docx` and `ContentTypes::new_docx` constructors
 are an intentional breaking change.
+
+Both deprecated shims continue to publish with each coherent stable train so
+existing dependency names can select the same version as the facade and its
+other stable packages. Removing either shim from future publication requires
+an explicit release-family redesign rather than an implicit stop after the
+cutover release.
 
 A shim is cheap insurance specifically for `rdocx-oxml`, because rdocx's public
 API currently **leaks** its types (`CT_PPr`, `CT_SectPr`, `VMerge`, `Twips`)
@@ -191,7 +200,8 @@ exactly `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. The stable registry
 family is published at 0.5.0 from the annotated `v0.5.0` tag, while the four
 non-publishable shared-version members remain local distribution only. The
-incubating registry family remains at 0.1.3.
+next stable train is prepared at 0.6.0 with publication pending. The incubating
+registry family remains at 0.1.3.
 
 Before either real allowlist, the workflow reproduces the deterministic hash
 baseline and verifies the full publishable workspace with a dry run. Each real

@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from scripts import readme_doctests
 from scripts import sprint_workflow as workflow
 
 
@@ -649,7 +650,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm-pack build --target bundler --scope tensorbee --release "
             '--out-dir "$package_root/rpptx-wasm" crates/rpptx-wasm --locked',
             'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
-            '"0.5.0" "rdocx_wasm"',
+            '"0.6.0" "rdocx_wasm"',
             'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
             '"0.1.3" "rpptx_wasm"',
             "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
@@ -2868,8 +2869,8 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(wasm["package"]["version"], {"workspace": True})
         self.assertFalse(wasm["package"]["publish"])
 
-    def test_stable_release_family_is_prepared_at_0_5_0(self) -> None:
-        expected_version = "0.5.0"
+    def test_stable_release_family_is_prepared_at_0_6_0(self) -> None:
+        expected_version = "0.6.0"
         stable_members = (
             "oxml-py-support",
             "rpptx-py",
@@ -2959,11 +2960,21 @@ class SprintWorkflowTests(unittest.TestCase):
             )
             self.assertEqual(pyproject["project"]["version"], expected_version, name)
 
+        migration = (
+            workflow.REPO / "docs/hld/11-migration-plan.md"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("then stop publishing", migration)
+        self.assertIn(
+            "Both deprecated shims continue to publish with each coherent "
+            "stable train",
+            migration,
+        )
+
         ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertEqual(
             ci.count(
                 'verify_package "$package_root/rdocx-wasm" '
-                '"@tensorbee/rdocx-wasm" "0.5.0" "rdocx_wasm"'
+                '"@tensorbee/rdocx-wasm" "0.6.0" "rdocx_wasm"'
             ),
             1,
         )
@@ -2982,13 +2993,13 @@ class SprintWorkflowTests(unittest.TestCase):
             )
 
         readme_requirements = {
-            "README.md": ('rdocx = "0.5"', 'version = "0.5"'),
-            "crates/rdocx-cli/README.md": ("--version '^0.5'",),
-            "crates/rdocx-html/README.md": ('rdocx-html = "0.5"',),
-            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.5"',),
-            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.5"',),
-            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.5"',),
-            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.5"',),
+            "README.md": ('rdocx = "0.6"', 'version = "0.6"'),
+            "crates/rdocx-cli/README.md": ("--version '^0.6'",),
+            "crates/rdocx-html/README.md": ('rdocx-html = "0.6"',),
+            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.6"',),
+            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.6"',),
+            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.6"',),
+            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.6"',),
         }
         for path, requirements in readme_requirements.items():
             text = (workflow.REPO / path).read_text(encoding="utf-8")
@@ -3007,6 +3018,25 @@ class SprintWorkflowTests(unittest.TestCase):
                 name != "rpptx-wasm",
                 name,
             )
+
+    def test_readme_archive_gate_rejects_a_missing_local_patch(self) -> None:
+        metadata = readme_doctests.cargo_metadata()
+        self.assertIsNotNone(metadata)
+        packages = metadata["packages"]
+        self.assertTrue(readme_doctests.validate_local_patches(packages))
+
+        without_oxml_core = tuple(
+            patch_entry
+            for patch_entry in readme_doctests.LOCAL_PATCHES
+            if patch_entry[0] != "oxml-core"
+        )
+        errors = io.StringIO()
+        with (
+            patch.object(readme_doctests, "LOCAL_PATCHES", without_oxml_core),
+            contextlib.redirect_stderr(errors),
+        ):
+            self.assertFalse(readme_doctests.validate_inventory())
+        self.assertIn("('oxml-core', 'crates/oxml-core')", errors.getvalue())
 
     def test_stable_release_family_has_lockstep_preparation_metadata(self) -> None:
         stable_packages = (
@@ -3400,7 +3430,7 @@ class SprintWorkflowTests(unittest.TestCase):
         )
         stable_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_stable_release_family_is_prepared_at_0_5_0"
+            "test_stable_release_family_is_prepared_at_0_6_0"
         )
         incubating_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."

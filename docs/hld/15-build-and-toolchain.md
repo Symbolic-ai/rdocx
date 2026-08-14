@@ -166,7 +166,7 @@ separately approved `/release` invocation at the exact reviewed SHA.
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires workspace 0.5.0, nine internal pins, eleven
+stable regression requires workspace 0.6.0, nine internal pins, eleven
 inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
 set. The incubating regression requires the exact 0.1.3 versions, pins,
@@ -216,12 +216,14 @@ possible and never rewrite README prose by pattern.
 that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
 cargo-release's effective `workspace` shared-version group and the
-`v{{version}}` tag template. That shared-version group is at 0.5.0,
+`v{{version}}` tag template. That shared-version group is prepared at 0.6.0,
 and its two Python project versions and rdocx WASM contract literals are also
-0.5.0. The exact seven-package stable family is published at 0.5.0 from the
-annotated `v0.5.0` tag whose target is the reviewed sprint SHA. The immutable
-0.4.1 registry releases remain available. No binding, WASM, Python, npm, or
-incubating package gained publication authority from the stable release.
+0.6.0. The exact seven-package stable family remains published at 0.5.0 from
+the annotated `v0.5.0` tag whose target is the reviewed sprint SHA. The
+prepared 0.6.0 registry versions and `v0.6.0` tag remain absent until the clean
+reviewed SHA receives separate immediate release approval. The immutable 0.4.1
+registry releases remain available. No binding, WASM, Python, npm, or
+incubating package gains publication authority from the preparation.
 The 15 implemented `oxml-*` and `rpptx*` package manifests are prepared at
 explicit version 0.1.3, use the named `incubating` group, and carry the
 `rpptx-v{{version}}` template. That preparation group is the exact 14-package

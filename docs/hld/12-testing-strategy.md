@@ -440,8 +440,11 @@ messages, locates each emitted rlib from one package build graph, and invokes
 rustdoc with the 2024 edition, warnings denied, the dependency search path, and
 every matching `--extern` binding. It compiles 26 Rust examples across the 20
 Rust-library READMEs. It also creates all 21 publishable archives and
-byte-compares their single packaged README with the declared source. The docs
-job and canonical non-fast verification call this same runner.
+byte-compares their single packaged README with the declared source. Archive
+creation uses the same exact 21-package local source patch set as the release
+dry run, so a reviewed version can be checked before its internal dependencies
+exist on crates.io. The patches never enter an archive and upload nothing. The
+docs job and canonical non-fast verification call this same runner.
 
 ## What CI runs
 

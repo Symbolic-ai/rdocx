@@ -27,5 +27,5 @@ fn page_count(input: &LayoutInput) -> Result<usize> {
 
 ```toml
 [dependencies]
-rdocx-layout = "0.5"
+rdocx-layout = "0.6"
 ```
