@@ -545,6 +545,11 @@ impl<'a> TableRef<'a> {
             .unwrap_or(0)
     }
 
+    /// Whether the table contains child elements the facade does not model.
+    pub fn has_unsupported_content(&self) -> bool {
+        !self.inner.extra_xml.is_empty()
+    }
+
     /// Get an immutable row reference.
     pub fn row(&self, index: usize) -> Option<RowRef<'_>> {
         self.inner.rows.get(index).map(|r| RowRef { inner: r })
@@ -598,6 +603,27 @@ impl<'a> RowRef<'a> {
     /// Get the number of cells.
     pub fn cell_count(&self) -> usize {
         self.inner.cells.len()
+    }
+
+    /// Whether the row contains child elements the facade does not model.
+    pub fn has_unsupported_content(&self) -> bool {
+        !self.inner.extra_xml.is_empty()
+    }
+
+    /// Number of table grid columns omitted before the first cell.
+    pub fn grid_before(&self) -> Option<u32> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.grid_before)
+    }
+
+    /// Number of table grid columns omitted after the last cell.
+    pub fn grid_after(&self) -> Option<u32> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.grid_after)
     }
 
     /// Get a cell reference by index.

@@ -298,6 +298,39 @@ fn facade_table_and_tristate_accessors_are_total() {
 }
 
 #[test]
+fn table_facade_reports_unsupported_children_and_row_grid_offsets() {
+    let mut document = Document::new();
+    document.add_table(1, 1);
+    let bytes = document.to_bytes().unwrap();
+    let xml = String::from_utf8(document_xml(&mut document)).unwrap();
+    let changed = xml
+        .replacen(
+            "</w:tblGrid>",
+            r#"</w:tblGrid><w:bookmarkStart w:id="1" w:name="table"/>"#,
+            1,
+        )
+        .replacen(
+            "<w:tr>",
+            concat!(
+                r#"<w:tr><w:trPr><w:gridBefore w:val="2"/>"#,
+                r#"<w:gridAfter w:val="1"/></w:trPr>"#,
+                r#"<w:bookmarkStart w:id="2" w:name="row"/>"#,
+            ),
+            1,
+        );
+    assert_ne!(changed, xml);
+
+    let reopened = Document::from_bytes(&replace_document_xml(&bytes, changed)).unwrap();
+    let table = reopened.table(0).unwrap();
+    let row = table.row(0).unwrap();
+
+    assert!(table.has_unsupported_content());
+    assert!(row.has_unsupported_content());
+    assert_eq!(row.grid_before(), Some(2));
+    assert_eq!(row.grid_after(), Some(1));
+}
+
+#[test]
 fn established_underline_enum_and_first_line_indent_remain_compatible() {
     fn established_underline_code(style: UnderlineStyle) -> i32 {
         match style {

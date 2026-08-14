@@ -581,6 +581,10 @@ pub struct CT_TrPr {
     pub jc: Option<ST_Jc>,
     /// Allow row to break across pages
     pub cant_split: Option<bool>,
+    /// Number of table grid columns omitted before the first cell.
+    pub grid_before: Option<u32>,
+    /// Number of table grid columns omitted after the last cell.
+    pub grid_after: Option<u32>,
     /// `w:cnfStyle` — which conditional parts of the table style this row is.
     ///
     /// Word writes this alongside `w:tblLook` and needs both to reproduce a
@@ -619,6 +623,14 @@ impl CT_TrPr {
                         pr.cnf_style = get_val_attr(e)?;
                     } else if matches_local_name(name.as_ref(), b"cantSplit") {
                         pr.cant_split = Some(true);
+                    } else if matches_local_name(name.as_ref(), b"gridBefore")
+                        && let Some(val) = get_val_attr(e)?
+                    {
+                        pr.grid_before = Some(val.parse()?);
+                    } else if matches_local_name(name.as_ref(), b"gridAfter")
+                        && let Some(val) = get_val_attr(e)?
+                    {
+                        pr.grid_after = Some(val.parse()?);
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"trPr") => {
@@ -645,6 +657,20 @@ impl CT_TrPr {
         if let Some(ref cnf) = self.cnf_style {
             let mut e = BytesStart::new("w:cnfStyle");
             e.push_attribute(("w:val", cnf.as_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
+
+        if let Some(grid_before) = self.grid_before {
+            let mut buf = itoa::Buffer::new();
+            let mut e = BytesStart::new("w:gridBefore");
+            e.push_attribute(("w:val", buf.format(grid_before)));
+            writer.write_event(Event::Empty(e))?;
+        }
+
+        if let Some(grid_after) = self.grid_after {
+            let mut buf = itoa::Buffer::new();
+            let mut e = BytesStart::new("w:gridAfter");
+            e.push_attribute(("w:val", buf.format(grid_after)));
             writer.write_event(Event::Empty(e))?;
         }
 
@@ -683,6 +709,8 @@ impl CT_TrPr {
             && self.header.is_none()
             && self.jc.is_none()
             && self.cant_split.is_none()
+            && self.grid_before.is_none()
+            && self.grid_after.is_none()
             && self.cnf_style.is_none()
     }
 }
@@ -1652,6 +1680,30 @@ mod tests {
                 "{label} was not preserved"
             );
         }
+    }
+
+    #[test]
+    fn row_grid_offsets_round_trip_in_schema_order() {
+        let inner = concat!(
+            r#"<w:tblGrid><w:gridCol w:w="100"/><w:gridCol w:w="100"/></w:tblGrid>"#,
+            r#"<w:tr><w:trPr><w:gridBefore w:val="2"/><w:gridAfter w:val="1"/>"#,
+            r#"<w:cantSplit/><w:trHeight w:val="240"/><w:tblHeader/><w:jc w:val="center"/>"#,
+            r#"</w:trPr><w:tc><w:p/></w:tc></w:tr>"#,
+        );
+        let table = parse_table(inner);
+        let properties = table.rows[0].properties.as_ref().unwrap();
+
+        assert_eq!(properties.grid_before, Some(2));
+        assert_eq!(properties.grid_after, Some(1));
+        let xml = table_to_xml(&table);
+        assert!(
+            xml.contains(concat!(
+                r#"<w:trPr><w:gridBefore w:val="2"/><w:gridAfter w:val="1"/>"#,
+                r#"<w:cantSplit/><w:trHeight w:val="240"/><w:tblHeader/>"#,
+                r#"<w:jc w:val="center"/></w:trPr>"#,
+            )),
+            "{xml}"
+        );
     }
 
     /// A styled table must keep the markup that says which conditional parts
