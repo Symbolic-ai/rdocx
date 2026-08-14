@@ -24,4 +24,4 @@ assert_eq!(content_types.defaults["xml"], "application/xml");
 # Ok::<(), oxml_opc::OpcError>(())
 ```
 
-Add `oxml-opc = "0.1.3"` to your dependencies. Start with the [package API documentation](https://docs.rs/oxml-opc).
+Add `oxml-opc = "0.2.0"` to your dependencies. Start with the [package API documentation](https://docs.rs/oxml-opc).

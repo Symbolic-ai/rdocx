@@ -93,16 +93,16 @@ must not change document or render output.
 
 ## Implementation checklist
 
-- [ ] Confirm F-X010 is published and completed at 0.6.0.
-- [ ] Record the exact 0.1.3 incubating starting inventory.
-- [ ] Add the failing 0.2.0 metadata, workflow, README, and WASM regressions.
-- [ ] Move fourteen publishable manifests, unpublished `rpptx-wasm`, fourteen
+- [x] Confirm F-X010 is published and completed at 0.6.0.
+- [x] Record the exact 0.1.3 incubating starting inventory.
+- [x] Add the failing 0.2.0 metadata, workflow, README, and WASM regressions.
+- [x] Move fourteen publishable manifests, unpublished `rpptx-wasm`, fourteen
   pins, and fifteen lock entries to 0.2.0.
-- [ ] Update only existing version-sensitive source, README, CI, workflow, and
+- [x] Update only existing version-sensitive source, README, CI, workflow, and
   local package assertions required by the new preparation version.
-- [ ] Prove stale manifest, pin, lock, workflow, README, and WASM requirements
+- [x] Prove stale manifest, pin, lock, workflow, README, and WASM requirements
   fail their exact gates and restore every mutation byte-identically.
-- [ ] Run the full metadata, dependency, README, WASM, archive, asset,
+- [x] Run the full metadata, dependency, README, WASM, archive, asset,
   supply-chain, prose, generated-skill, and hash gates.
 - [ ] Obtain a clean microscope and clean sprint review at the exact release
   SHA.

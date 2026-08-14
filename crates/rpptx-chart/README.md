@@ -21,4 +21,4 @@ assert_ne!(category_axis, value_axis);
 # Ok::<(), rpptx_chart::ChartError>(())
 ```
 
-Add `rpptx-chart = "0.1.3"` to your dependencies. See the [chart API](https://docs.rs/rpptx-chart) for supported plot families.
+Add `rpptx-chart = "0.2.0"` to your dependencies. See the [chart API](https://docs.rs/rpptx-chart) for supported plot families.

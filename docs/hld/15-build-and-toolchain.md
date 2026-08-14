@@ -147,7 +147,8 @@ The fourteen crates.io names in this graph are reserved under the owner
 described below. The earlier 12-package family is published at 0.1.2.
 `oxml-cli-support` and `rpptx-cli` are publishable but remain unpublished at
 that version. The complete 14-package family is published at the common
-version 0.1.3.
+version 0.1.3 and prepared together at 0.2.0 for the next separately approved
+release.
 
 `oxml-py-support`, `rpptx-py`, and `rpptx-wasm` are not reserved on crates.io.
 The binding crates are not published there. `rpptx-wasm` is an implemented
@@ -156,7 +157,7 @@ the local `@tensorbee/rpptx-wasm` bundler tarball. Registry publication remains
 unconfigured and unauthorized.
 
 The exact incubating crates.io allowlist contains 14 implemented shared and
-PowerPoint packages published at the common version 0.1.3. They are
+PowerPoint packages published at 0.1.3 and prepared at 0.2.0. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `rpptx-oxml`, `rpptx-chart`,
 `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. Manifest eligibility
@@ -169,7 +170,7 @@ and incubating metadata regressions without external development tools. The
 stable regression requires workspace 0.6.0, nine internal pins, eleven
 inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
-set. The incubating regression requires the exact 0.1.3 versions, pins,
+set. The incubating regression requires the exact 0.2.0 versions, pins,
 lockfile entries, publication flags, and non-empty package descriptions. The
 workflow then runs
 `cargo publish --workspace --dry-run` with an exact local source patch for each
@@ -223,10 +224,12 @@ exact seven-package stable family is published at 0.6.0 from the annotated
 0.5.0 registry releases remain available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
 The 15 implemented `oxml-*` and `rpptx*` package manifests are prepared at
-explicit version 0.1.3, use the named `incubating` group, and carry the
+explicit version 0.2.0, use the named `incubating` group, and carry the
 `rpptx-v{{version}}` template. That preparation group is the exact 14-package
 crates.io family listed above plus unpublished `rpptx-wasm`. The crates.io
-allowlist remains exactly 14 packages, and all 14 are published at 0.1.3.
+allowlist remains exactly 14 packages. All 14 are published at 0.1.3, while
+their prepared 0.2.0 versions remain unpublished until the separately approved
+`/release rpptx-v0.2.0` boundary.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.

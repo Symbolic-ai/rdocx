@@ -652,7 +652,7 @@ class SprintWorkflowTests(unittest.TestCase):
             'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
             '"0.6.0" "rdocx_wasm"',
             'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
-            '"0.1.3" "rpptx_wasm"',
+            '"0.2.0" "rpptx_wasm"',
             "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
             "--ignore-scripts --no-audit --no-fund --package-lock=false "
             '"$tarball_root/$tarball"',
@@ -3012,7 +3012,7 @@ class SprintWorkflowTests(unittest.TestCase):
                     encoding="utf-8"
                 )
             )
-            self.assertEqual(manifest["package"]["version"], "0.1.3", name)
+            self.assertEqual(manifest["package"]["version"], "0.2.0", name)
             self.assertIs(
                 manifest["package"].get("publish", True),
                 name != "rpptx-wasm",
@@ -3099,7 +3099,7 @@ class SprintWorkflowTests(unittest.TestCase):
             self.assertEqual(release["shared-version"], "incubating")
             self.assertEqual(release["tag-name"], "rpptx-v{{version}}")
 
-    def test_incubating_release_family_is_prepared_at_0_1_3(self) -> None:
+    def test_incubating_release_family_is_prepared_at_0_2_0(self) -> None:
         incubating_packages = (
             "oxml-core",
             "oxml-opc",
@@ -3116,17 +3116,19 @@ class SprintWorkflowTests(unittest.TestCase):
             "rpptx",
             "rpptx-cli",
         )
-        expected_version = "0.1.3"
+        preparation_packages = (*incubating_packages, "rpptx-wasm")
+        expected_version = "0.2.0"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
+        self.assertEqual(root["workspace"]["package"]["version"], "0.6.0")
         dependencies = root["workspace"]["dependencies"]
         lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
         lock_versions = {
             package["name"]: package["version"]
             for package in lock["package"]
-            if package["name"] in incubating_packages
+            if package["name"] in preparation_packages
         }
 
-        self.assertEqual(set(lock_versions), set(incubating_packages))
+        self.assertEqual(set(lock_versions), set(preparation_packages))
         for name in incubating_packages:
             manifest = tomllib.loads(
                 (workflow.REPO / f"crates/{name}/Cargo.toml").read_text(
@@ -3135,8 +3137,40 @@ class SprintWorkflowTests(unittest.TestCase):
             )
             self.assertEqual(manifest["package"]["version"], expected_version, name)
             self.assertTrue(manifest["package"].get("description", "").strip(), name)
+            self.assertTrue(manifest["package"].get("publish", True), name)
             self.assertEqual(dependencies[name]["version"], expected_version, name)
             self.assertEqual(lock_versions[name], expected_version, name)
+
+        wasm = tomllib.loads(
+            (workflow.REPO / "crates/rpptx-wasm/Cargo.toml").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(wasm["package"]["version"], expected_version)
+        self.assertFalse(wasm["package"]["publish"])
+        self.assertNotIn("rpptx-wasm", dependencies)
+        self.assertEqual(lock_versions["rpptx-wasm"], expected_version)
+
+        readme_requirements = {
+            "crates/oxml-core/README.md": ('oxml-core = "0.2.0"',),
+            "crates/oxml-drawing/README.md": ('oxml-drawing = "0.2.0"',),
+            "crates/oxml-layout/README.md": ('version = "0.2.0"',),
+            "crates/oxml-media/README.md": ('oxml-media = "0.2.0"',),
+            "crates/oxml-opc/README.md": ('oxml-opc = "0.2.0"',),
+            "crates/oxml-pdf/README.md": (
+                'oxml-pdf = "0.2.0"',
+                'oxml-layout = "0.2.0"',
+            ),
+            "crates/rpptx-chart/README.md": ('rpptx-chart = "0.2.0"',),
+            "crates/rpptx-cli/README.md": ("--version '^0.2.0'",),
+            "crates/rpptx-layout/README.md": ('rpptx-layout = "0.2.0"',),
+            "crates/rpptx-oxml/README.md": ('rpptx-oxml = "0.2.0"',),
+            "crates/rpptx-render/README.md": ('rpptx-render = "0.2.0"',),
+        }
+        for path, requirements in readme_requirements.items():
+            text = (workflow.REPO / path).read_text(encoding="utf-8")
+            for requirement in requirements:
+                self.assertIn(requirement, text, path)
 
     def assert_release_preparation_metadata_contract(
         self, manifest_overrides: dict[str, str] | None = None
@@ -3210,7 +3244,7 @@ class SprintWorkflowTests(unittest.TestCase):
 
         wasm_package = manifests["crates/rpptx-wasm"]["package"]
         self.assertEqual(wasm_package["name"], "rpptx-wasm")
-        self.assertEqual(wasm_package["version"], "0.1.3")
+        self.assertEqual(wasm_package["version"], "0.2.0")
         self.assertTrue(wasm_package.get("description", "").strip())
         self.assertFalse(wasm_package["publish"])
         self.assertEqual(
@@ -3229,7 +3263,7 @@ class SprintWorkflowTests(unittest.TestCase):
             for package in lock["package"]
             if package["name"] == "rpptx-wasm"
         )
-        self.assertEqual(wasm_lock_versions, ("0.1.3",))
+        self.assertEqual(wasm_lock_versions, ("0.2.0",))
 
     def test_release_preparation_metadata_cannot_mutate_external_state(self) -> None:
         self.assert_release_preparation_metadata_contract()
@@ -3264,7 +3298,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 1,
             ),
             "workspace-version": manifest.replace(
-                'version = "0.1.3"',
+                'version = "0.2.0"',
                 "version.workspace = true",
                 1,
             ),
@@ -3434,7 +3468,7 @@ class SprintWorkflowTests(unittest.TestCase):
         )
         incubating_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_incubating_release_family_is_prepared_at_0_1_3"
+            "test_incubating_release_family_is_prepared_at_0_2_0"
         )
         metadata_command = (
             "python3 -m unittest "

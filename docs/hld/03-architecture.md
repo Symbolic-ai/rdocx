@@ -123,12 +123,13 @@ entry points.
 ## Versioning
 
 The 14 implemented shared and PowerPoint publication candidates use the
-explicit common incubating version 0.1.3 in their manifests and workspace
-pins. All 14 are published at that version through the reviewed
-`rpptx-v0.1.3` release. The released `rdocx-*` crates continue to use the
-separate workspace version. Version preparation and manifest eligibility do
-not authorize a later publication. Every release still requires `/release`
-at an exact reviewed SHA and separate final approval at the external mutation
+explicit common incubating version 0.2.0 in their manifests and workspace
+pins. The same 14-package family is published at the immutable 0.1.3 boundary,
+while 0.2.0 is prepared and remains unpublished pending the separately
+approved `rpptx-v0.2.0` release. The released `rdocx-*` crates continue to use
+the separate workspace version. Version preparation and manifest eligibility
+do not authorize publication. Every release still requires `/release` at an
+exact reviewed SHA and separate final approval at the external mutation
 boundary. `oxml-cli-support` is the format-neutral owner of range parsing,
 JSON envelope, and output-path contracts. It has no dependency on either
 document family, while CLI binaries depend inward on it.
