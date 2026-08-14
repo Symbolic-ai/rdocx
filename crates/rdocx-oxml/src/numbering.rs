@@ -183,7 +183,15 @@ impl CT_Lvl {
                 }
                 Ok(Event::Empty(ref e)) => {
                     let child_context = context.with_element(e);
-                    if !Self::parse_value_element(e, context, &child_context, &mut lvl)? {
+                    if matches_word_element(e, context, b"pPr") {
+                        lvl.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
+                        lvl.ppr = Some(CT_PPr::default());
+                    } else if matches_word_element(e, context, b"rPr") {
+                        lvl.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
+                        lvl.rpr = Some(CT_RPr::default());
+                    } else if !Self::parse_value_element(e, context, &child_context, &mut lvl)? {
                         lvl.has_unmodeled_properties = true;
                     }
                 }
@@ -1366,6 +1374,7 @@ mod tests {
             <w:lvl w:ilvl="1" w:vendor="x"><w:numFmt w:val="decimal"/></w:lvl>
             <w:lvl w:ilvl="2"><w:numFmt w:val="decimal" w:vendor="x"/></w:lvl>
             <w:lvl w:ilvl="3"><w:numFmt w:val="decimal"/></w:lvl>
+            <w:lvl w:ilvl="4"><w:pPr/><w:rPr/></w:lvl>
           </w:abstractNum>
           <w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>
         </w:numbering>"#;
@@ -1382,6 +1391,12 @@ mod tests {
         assert!(
             !numbering
                 .get_effective_level(1, 3)
+                .unwrap()
+                .has_unmodeled_properties
+        );
+        assert!(
+            !numbering
+                .get_effective_level(1, 4)
                 .unwrap()
                 .has_unmodeled_properties
         );

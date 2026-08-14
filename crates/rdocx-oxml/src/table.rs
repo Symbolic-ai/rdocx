@@ -798,9 +798,14 @@ impl CT_TblGrid {
             let attr = attr?;
             if matches_word_attribute(attr.key.as_ref(), &element_context, b"w") {
                 width = Twips(std::str::from_utf8(&attr.value)?.parse()?);
+            } else if matches_word_attribute(attr.key.as_ref(), &element_context, b"type")
+                && attr.value.as_ref() != b"dxa"
+            {
+                grid.has_unmodeled_properties = true;
             }
         }
-        grid.has_unmodeled_properties |= has_unmodeled_attributes(e, context, &[b"w"], &[])?;
+        grid.has_unmodeled_properties |=
+            has_unmodeled_attributes(e, context, &[b"w", b"type"], &[])?;
         grid.columns.push(CT_TblGridCol { width });
         Ok(true)
     }
@@ -1892,6 +1897,12 @@ mod tests {
         let grid = table.grid.unwrap();
         assert_eq!(grid.columns.len(), 1);
         assert!(grid.has_unmodeled_properties);
+
+        let table = parse_table(concat!(
+            r#"<w:tblGrid><w:gridCol w:w="100" w:type="dxa"/></w:tblGrid>"#,
+            r#"<w:tr><w:tc><w:p/></w:tc></w:tr>"#,
+        ));
+        assert!(!table.grid.unwrap().has_unmodeled_properties);
     }
 
     #[test]
