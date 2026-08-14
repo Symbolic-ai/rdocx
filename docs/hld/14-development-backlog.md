@@ -1286,3 +1286,15 @@ archive inventory, 28-entry hash harness, WASM package gate, and supply-chain
 gate pass. All fourteen crates resolve at 0.2.0 under owner `mantissaman`, each
 crates.io README is present, and the annotated tag targets the reviewed sprint
 SHA used by the successful GitHub release workflow.
+
+### F-X012, Restore pinned CI toolchains (M)
+Hosted CI installs the reviewed Poppler 26.01.0 rendering oracle from its exact
+source archive rather than a moving package-manager version. Every job that
+executes a Poppler-dependent gate uses that installation. The WASM job verifies
+the official Binaryen 125 Linux archive and its exact release identity without
+assuming the shorter Homebrew version string. Product code, package versions,
+published artifacts, and rendering baselines remain unchanged.
+**Test gate**: the workflow contract rejects missing Poppler jobs, version or
+checksum drift, and a weakened Binaryen identity check. Full verification and
+a hosted pull-request CI run at the reviewed SHA pass with all 28 hashes
+unchanged.
