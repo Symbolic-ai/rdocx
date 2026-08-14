@@ -75,6 +75,34 @@ impl BorderStyle {
     }
 }
 
+/// An immutable paragraph border edge.
+#[derive(Debug, Clone, Copy)]
+pub struct ParagraphBorderRef<'a> {
+    inner: &'a CT_BorderEdge,
+}
+
+impl ParagraphBorderRef<'_> {
+    /// The OOXML border style name.
+    pub fn style(self) -> &'static str {
+        self.inner.val.to_str()
+    }
+
+    /// Border width in eighths of a point.
+    pub fn size_eighths_pt(self) -> Option<u32> {
+        self.inner.sz
+    }
+
+    /// Space between the border and content in points.
+    pub fn space_points(self) -> Option<u32> {
+        self.inner.space
+    }
+
+    /// Border color, normally a six-digit RGB hex value or `auto`.
+    pub fn color(&self) -> Option<&str> {
+        self.inner.color.as_deref()
+    }
+}
+
 /// Tab stop alignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabAlignment {
@@ -977,6 +1005,42 @@ impl<'a> ParagraphRef<'a> {
             .and_then(|ppr| ppr.borders.as_ref())
             .map(|b| !b.is_empty())
             .unwrap_or(false)
+    }
+
+    /// Get the direct bottom border, if present.
+    pub fn bottom_border(&self) -> Option<ParagraphBorderRef<'_>> {
+        self.inner
+            .properties
+            .as_ref()?
+            .borders
+            .as_ref()?
+            .bottom
+            .as_ref()
+            .map(|inner| ParagraphBorderRef { inner })
+    }
+
+    /// Count direct paragraph border edges.
+    pub fn border_count(&self) -> usize {
+        let Some(borders) = self
+            .inner
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.borders.as_ref())
+        else {
+            return 0;
+        };
+
+        [
+            borders.top.as_ref(),
+            borders.bottom.as_ref(),
+            borders.left.as_ref(),
+            borders.right.as_ref(),
+            borders.between.as_ref(),
+            borders.bar.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .count()
     }
 
     /// Get the number of tab stops defined.

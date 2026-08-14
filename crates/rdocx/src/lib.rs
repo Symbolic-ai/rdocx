@@ -36,8 +36,8 @@ pub use document::{
 pub use error::{Error, Result};
 pub use oxml_core::Length;
 pub use paragraph::{
-    Alignment, BorderStyle, HyperlinkRef, InlineContentRef, Paragraph, ParagraphContentRef,
-    ParagraphRef, SectionBreak, SimpleFieldRef, TabAlignment, TabLeader,
+    Alignment, BorderStyle, HyperlinkRef, InlineContentRef, Paragraph, ParagraphBorderRef,
+    ParagraphContentRef, ParagraphRef, SectionBreak, SimpleFieldRef, TabAlignment, TabLeader,
 };
 pub use run::{
     BreakKind, DrawingKind, DrawingRef, DrawingRelationshipKind, FieldKind, Run, RunContentRef,
