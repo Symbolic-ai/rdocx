@@ -5,7 +5,7 @@ are dependency and review boundaries, not fixed two-week containers. Sprint
 clocks start at the first `/start-feature` of that sprint, not at a fixed
 calendar date.
 
-37 numbered sprints plus two deferred cutover sprints across 13 milestones,
+39 numbered sprints plus two deferred cutover sprints across 13 milestones,
 roughly 390 developer-days. The sizing rationale and compression options are in
 `docs/hld/14-development-backlog.md`.
 
@@ -591,6 +591,22 @@ approval.
 F-X008 depends on F-X007. The GitHub PR is merged into the sprint branch so
 the contributor remains credited in the pull request and merge record. Only
 `/close-sprint` later merges the reviewed sprint to `main`.
+
+#### Sprint S39, Workspace crate documentation
+
+**Goal**: every one of the 26 Cargo workspace packages declares a useful
+README. Each README explains the crate's role, intended audience, relationship
+to neighbouring packages, and includes a concrete example in the language or
+command surface that users actually consume.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X009 | README coverage for every workspace crate | L |
+
+The existing README runner becomes an exact 26-package contract. Published
+archives must each contain one intended README, while unpublished Python and
+WASM packages receive accurate local usage examples without gaining any new
+publication authority.
 
 ## Cross-cutting
 

@@ -1234,3 +1234,15 @@ patched 21-package dry run, seven stable archive inventories, and `cargo deny`
 pass. All seven stable packages resolve independently from crates.io at 0.5.0
 under owner `mantissaman`, the GitHub release targets the reviewed sprint SHA,
 and the PR 25 contributor credit and merge note remain visible on GitHub.
+
+### F-X009, README coverage for every workspace crate (L)
+Every one of the 26 Cargo workspace packages declares a README. Each document
+states what the crate owns, when it should be used directly, its relationship
+to adjacent packages, and provides a concrete Rust, CLI, Python, or JavaScript
+example appropriate to that package. Internal and unpublished packages are
+labelled honestly and gain no publication authority. The README runner checks
+the exact workspace package set, required sections, manifest wiring, examples,
+and archive inventory.
+**Test gate**: `python3 scripts/readme_doctests.py` verifies exact README
+coverage for all 26 workspace packages and compiles every Rust example that is
+intended to compile.
