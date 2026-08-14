@@ -70,21 +70,26 @@ README_INVENTORY = (
 
 README_REQUIRED_TEXT = {
     REPO_ROOT / "README.md": (
-        'rdocx = { version = "0.4", default-features = false }',
+        'rdocx = "0.5"',
+        'rdocx = { version = "0.5", default-features = false }',
         "rdocx convert report.docx --to pdf -o report.pdf",
         "rdocx convert report.docx --to html -o report.html",
         "rdocx convert report.docx --to md -o report.md",
         'rdocx replace report.docx --placeholder "Draft" --value "Final" -o final.docx',
     ),
     REPO_ROOT / "crates/rdocx-cli/README.md": (
+        "cargo install rdocx-cli --version '^0.5'",
         "rdocx convert report.docx --to pdf -o report.pdf",
     ),
+    REPO_ROOT / "crates/rdocx-html/README.md": ('rdocx-html = "0.5"',),
+    REPO_ROOT / "crates/rdocx-layout/README.md": ('rdocx-layout = "0.5"',),
     REPO_ROOT / "crates/rdocx-opc/README.md": (
-        'rdocx-opc = "0.4"',
+        'rdocx-opc = "0.5"',
         "use rdocx_opc::OpcPackage;",
     ),
+    REPO_ROOT / "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.5"',),
     REPO_ROOT / "crates/rdocx-pdf/README.md": (
-        'rdocx-pdf = "0.4"',
+        'rdocx-pdf = "0.5"',
         "use rdocx_pdf::render_to_pdf;",
     ),
 }

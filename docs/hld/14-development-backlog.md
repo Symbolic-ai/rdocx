@@ -1216,11 +1216,23 @@ compatibility scope, and bounded deep tab aliases. Stable package archives stay
 below 10 MiB, and the public migration examples compile.
 
 ### F-X008, Tag v0.5.0 (S)
-Prepare the complete seven-package stable family at 0.5.0 after F-X007, then
-publish it only through `/release v0.5.0` after the command's separate final
-approval. `rdocx-wasm` may inherit the version but remains unpublished. No
-incubating or npm package is published by this story.
+The stable release preparation sets the workspace package, nine internal pins,
+and eleven inherited lockfile packages to 0.5.0 after F-X007. The two Python
+project versions and `rdocx-wasm` inherit 0.5.0 without gaining publication
+authority. All 15 incubating manifests remain at 0.1.3, with exactly 14 in the
+incubating crates.io family and `rpptx-wasm` unpublished. `publish.yml` runs the
+exact stable and incubating metadata preflights before its patched 21-package
+workspace dry run. The seven stable packages remain published at 0.4.1 until
+`/release v0.5.0` receives separate final approval at the clean reviewed SHA.
+No tag, GitHub release, registry publication, npm publication, or Python
+publication is part of the preparation.
 **Depends on**: F-X007.
-**Test gate**: all seven stable packages resolve from crates.io at 0.5.0 with
-the expected owner, the GitHub release targets the reviewed sprint SHA, and
-the PR 25 contributor credit and merge note remain visible on GitHub.
+**Test gate**: the stable metadata regression proves the workspace version,
+nine pins, eleven lock entries, two Python versions, WASM literals, README
+requirements, exact stable publication set, and unchanged incubating 0.1.3
+state. The workflow contract, 12 README examples, 28-entry hash harness, exact
+patched 21-package dry run, seven stable archive inventories, and `cargo deny`
+pass before release approval. The deferred external gate requires all seven
+stable packages to resolve from crates.io at 0.5.0 with the expected owner, the
+GitHub release to target the reviewed sprint SHA, and the PR 25 contributor
+credit and merge note to remain visible on GitHub.

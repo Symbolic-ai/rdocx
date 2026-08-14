@@ -164,10 +164,14 @@ and allowlist membership do not authorize a later publication without a
 separately approved `/release` invocation at the exact reviewed SHA.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
-real allowlist it reproduces the hash harness, runs the self-contained
-incubating metadata regression to require the exact versions, pins, lockfile
-entries, and non-empty package descriptions without external development
-tools, and runs
+real allowlist it reproduces the hash harness and runs self-contained stable
+and incubating metadata regressions without external development tools. The
+stable regression requires workspace 0.5.0, nine internal pins, eleven
+inherited lockfile packages, two Python project versions, unpublished
+`rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
+set. The incubating regression requires the exact 0.1.3 versions, pins,
+lockfile entries, publication flags, and non-empty package descriptions. The
+workflow then runs
 `cargo publish --workspace --dry-run` with an exact local source patch for each
 member of the 21-package publishable union. Cargo rewrites packaged path
 dependencies to the registry, so the patches keep verification on the reviewed
@@ -212,8 +216,12 @@ possible and never rewrite README prose by pattern.
 that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
 cargo-release's effective `workspace` shared-version group and the
-`v{{version}}` tag template.
-The exact published stable family remains the seven packages listed above.
+`v{{version}}` tag template. That shared-version group is prepared at 0.5.0,
+and its two Python project versions and rdocx WASM contract literals are also
+0.5.0. The exact published stable family remains the seven packages listed
+above, with immutable 0.4.1 registry releases until `/release v0.5.0` receives
+separate final approval at the clean reviewed SHA. No local or remote 0.5.0 tag,
+GitHub release, or registry publication exists in the prepared state.
 The 15 implemented `oxml-*` and `rpptx*` package manifests are prepared at
 explicit version 0.1.3, use the named `incubating` group, and carry the
 `rpptx-v{{version}}` template. That preparation group is the exact 14-package

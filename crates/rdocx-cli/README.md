@@ -6,7 +6,7 @@ the [`rdocx`](https://docs.rs/rdocx) library when these operations need to run
 inside a Rust application.
 
 ```sh
-cargo install rdocx-cli --version '^0.4'
+cargo install rdocx-cli --version '^0.5'
 
 rdocx inspect report.docx
 rdocx text report.docx
