@@ -432,37 +432,44 @@ impl CT_Numbering {
 
     /// Create a bullet list definition and return its numId.
     pub fn add_bullet_list(&mut self) -> u32 {
+        self.add_list(&[(ST_NumberFormat::Bullet, Some(1))])
+    }
+
+    /// Create a numbered (decimal) list definition and return its numId.
+    pub fn add_numbered_list(&mut self) -> u32 {
+        self.add_list(&[(ST_NumberFormat::Decimal, Some(1))])
+    }
+
+    /// Create a list definition with explicit per-level formats and return
+    /// its numId.
+    ///
+    /// `levels[i]` specifies level `i` as `(format, start)`; a `start` of
+    /// `None` defaults to 1 (`start` has no meaning for bullet levels). All
+    /// nine levels are always defined so a paragraph referencing a deeper
+    /// level than was specified still renders: unspecified levels continue
+    /// from the last specified format's family — the bullet-glyph rotation
+    /// for bullets, the decimal/letter/roman rotation otherwise — matching
+    /// the [`Self::add_bullet_list`] / [`Self::add_numbered_list`] templates.
+    ///
+    /// An empty `levels` behaves like [`Self::add_numbered_list`].
+    pub fn add_list(&mut self, levels: &[(ST_NumberFormat, Option<u32>)]) -> u32 {
         let abs_id = self.next_abstract_num_id();
         let num_id = self.next_num_id();
-
-        let bullet_chars = [
-            "\u{2022}", // bullet •
-            "\u{25E6}", // white bullet ◦
-            "\u{25AA}", // black small square ▪
-            "\u{2022}", // repeat pattern
-            "\u{25E6}", "\u{25AA}", "\u{2022}", "\u{25E6}", "\u{25AA}",
-        ];
 
         let mut abs = CT_AbstractNum::new(abs_id);
         abs.multi_level_type = Some("hybridMultilevel".to_string());
 
+        let mut last_specified = ST_NumberFormat::Decimal;
         for i in 0..9u32 {
-            let mut lvl = CT_Lvl::new(i);
-            lvl.start = Some(1);
-            lvl.num_fmt = Some(ST_NumberFormat::Bullet);
-            lvl.lvl_text = Some(bullet_chars[i as usize].to_string());
-            lvl.lvl_jc = Some(ST_Jc::Left);
-
-            // Standard indentation: 720tw per level
-            let indent = (i + 1) as i32 * 720;
-            let ppr = CT_PPr {
-                ind_left: Some(crate::units::Twips(indent)),
-                ind_hanging: Some(crate::units::Twips(360)),
-                ..Default::default()
+            let (num_fmt, start) = match levels.get(i as usize) {
+                Some((fmt, start)) => {
+                    last_specified = *fmt;
+                    (*fmt, start.unwrap_or(1))
+                }
+                None => (level_fill_format(last_specified, i), 1),
             };
-            lvl.ppr = Some(ppr);
 
-            abs.levels.push(lvl);
+            abs.levels.push(build_level(i, num_fmt, start));
         }
 
         self.abstract_nums.push(abs);
@@ -474,51 +481,44 @@ impl CT_Numbering {
         num_id
     }
 
-    /// Create a numbered (decimal) list definition and return its numId.
-    pub fn add_numbered_list(&mut self) -> u32 {
-        let abs_id = self.next_abstract_num_id();
-        let num_id = self.next_num_id();
-
-        let formats = [
-            (ST_NumberFormat::Decimal, "%1."),
-            (ST_NumberFormat::LowerLetter, "%2."),
-            (ST_NumberFormat::LowerRoman, "%3."),
-            (ST_NumberFormat::Decimal, "%4."),
-            (ST_NumberFormat::LowerLetter, "%5."),
-            (ST_NumberFormat::LowerRoman, "%6."),
-            (ST_NumberFormat::Decimal, "%7."),
-            (ST_NumberFormat::LowerLetter, "%8."),
-            (ST_NumberFormat::LowerRoman, "%9."),
-        ];
-
-        let mut abs = CT_AbstractNum::new(abs_id);
-        abs.multi_level_type = Some("hybridMultilevel".to_string());
-
-        for (i, (fmt, text)) in formats.iter().enumerate() {
-            let mut lvl = CT_Lvl::new(i as u32);
-            lvl.start = Some(1);
-            lvl.num_fmt = Some(*fmt);
-            lvl.lvl_text = Some(text.to_string());
-            lvl.lvl_jc = Some(ST_Jc::Left);
-
-            let indent = (i as i32 + 1) * 720;
-            let ppr = CT_PPr {
-                ind_left: Some(crate::units::Twips(indent)),
-                ind_hanging: Some(crate::units::Twips(360)),
-                ..Default::default()
-            };
-            lvl.ppr = Some(ppr);
-
-            abs.levels.push(lvl);
+    /// Redefine one level of an existing list definition, for callers that
+    /// only learn a deeper level's format when content first reaches it.
+    ///
+    /// Returns `false` when `num_id` is unknown or `ilvl` is out of range
+    /// (levels are 0–8).
+    pub fn set_list_level(
+        &mut self,
+        num_id: u32,
+        ilvl: u32,
+        num_fmt: ST_NumberFormat,
+        start: Option<u32>,
+    ) -> bool {
+        if ilvl > 8 {
+            return false;
         }
 
-        self.abstract_nums.push(abs);
-        self.nums.push(CT_Num {
-            num_id,
-            abstract_num_id: abs_id,
-        });
+        let Some(num) = self.nums.iter().find(|n| n.num_id == num_id) else {
+            return false;
+        };
+        let abstract_num_id = num.abstract_num_id;
+        let Some(abs) = self
+            .abstract_nums
+            .iter_mut()
+            .find(|a| a.abstract_num_id == abstract_num_id)
+        else {
+            return false;
+        };
 
-        num_id
+        let level = build_level(ilvl, num_fmt, start.unwrap_or(1));
+        match abs.levels.iter_mut().find(|l| l.ilvl == ilvl) {
+            Some(existing) => *existing = level,
+            None => {
+                abs.levels.push(level);
+                abs.levels.sort_by_key(|l| l.ilvl);
+            }
+        }
+
+        true
     }
 
     /// Look up the abstract numbering definition for a given numId.
@@ -534,6 +534,62 @@ impl Default for CT_Numbering {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Bullet glyph rotation shared by the list templates: • ◦ ▪ repeating.
+const BULLET_CHARS: [&str; 9] = [
+    "\u{2022}", // bullet •
+    "\u{25E6}", // white bullet ◦
+    "\u{25AA}", // black small square ▪
+    "\u{2022}", // repeat pattern
+    "\u{25E6}", "\u{25AA}", "\u{2022}", "\u{25E6}", "\u{25AA}",
+];
+
+/// Numeric format rotation shared by the list templates:
+/// decimal, lowerLetter, lowerRoman repeating.
+const NUMBERED_FORMATS: [ST_NumberFormat; 9] = [
+    ST_NumberFormat::Decimal,
+    ST_NumberFormat::LowerLetter,
+    ST_NumberFormat::LowerRoman,
+    ST_NumberFormat::Decimal,
+    ST_NumberFormat::LowerLetter,
+    ST_NumberFormat::LowerRoman,
+    ST_NumberFormat::Decimal,
+    ST_NumberFormat::LowerLetter,
+    ST_NumberFormat::LowerRoman,
+];
+
+/// Template format for an unspecified level, keyed on the last format the
+/// caller did specify: bullets stay bullets; anything numeric continues the
+/// numbered rotation.
+fn level_fill_format(last_specified: ST_NumberFormat, ilvl: u32) -> ST_NumberFormat {
+    match last_specified {
+        ST_NumberFormat::Bullet => ST_NumberFormat::Bullet,
+        _ => NUMBERED_FORMATS[ilvl as usize % NUMBERED_FORMATS.len()],
+    }
+}
+
+/// One level in the shared template shape: bullet glyph or `%N.` text,
+/// left-justified, indented 720tw per depth with a 360tw hanging indent.
+fn build_level(ilvl: u32, num_fmt: ST_NumberFormat, start: u32) -> CT_Lvl {
+    let mut lvl = CT_Lvl::new(ilvl);
+    lvl.start = Some(start);
+    lvl.num_fmt = Some(num_fmt);
+    lvl.lvl_text = Some(match num_fmt {
+        ST_NumberFormat::Bullet => BULLET_CHARS[ilvl as usize % BULLET_CHARS.len()].to_string(),
+        _ => format!("%{}.", ilvl + 1),
+    });
+    lvl.lvl_jc = Some(ST_Jc::Left);
+
+    // Standard indentation: 720tw per level
+    let indent = (ilvl + 1) as i32 * 720;
+    lvl.ppr = Some(CT_PPr {
+        ind_left: Some(crate::units::Twips(indent)),
+        ind_hanging: Some(crate::units::Twips(360)),
+        ..Default::default()
+    });
+
+    lvl
 }
 
 #[cfg(test)]
@@ -673,5 +729,79 @@ mod tests {
         assert_eq!(abs.levels[0].num_fmt, Some(ST_NumberFormat::Decimal));
 
         assert!(numbering.get_abstract_num_for(99).is_none());
+    }
+
+    #[test]
+    fn add_list_mixed_levels_round_trip() {
+        let mut numbering = CT_Numbering::new();
+        let num_id = numbering.add_list(&[
+            (ST_NumberFormat::Bullet, None),
+            (ST_NumberFormat::Decimal, Some(3)),
+        ]);
+        assert_eq!(num_id, 1);
+
+        let xml = numbering.to_xml().unwrap();
+        let parsed = CT_Numbering::from_xml(&xml).unwrap();
+
+        let abs = parsed.get_abstract_num_for(num_id).unwrap();
+        assert_eq!(abs.levels.len(), 9);
+        assert_eq!(abs.levels[0].num_fmt, Some(ST_NumberFormat::Bullet));
+        assert_eq!(abs.levels[0].lvl_text, Some("\u{2022}".to_string()));
+        assert_eq!(abs.levels[1].num_fmt, Some(ST_NumberFormat::Decimal));
+        assert_eq!(abs.levels[1].lvl_text, Some("%2.".to_string()));
+        assert_eq!(abs.levels[1].start, Some(3));
+        // Unspecified levels continue the last specified family (numeric).
+        assert_eq!(abs.levels[2].num_fmt, Some(ST_NumberFormat::LowerRoman));
+        assert_eq!(abs.levels[2].start, Some(1));
+    }
+
+    #[test]
+    fn add_list_fill_keeps_bullets_for_bullet_lists() {
+        let mut numbering = CT_Numbering::new();
+        let num_id = numbering.add_list(&[(ST_NumberFormat::Bullet, None)]);
+
+        let abs = numbering.get_abstract_num_for(num_id).unwrap();
+        for level in &abs.levels {
+            assert_eq!(level.num_fmt, Some(ST_NumberFormat::Bullet));
+        }
+    }
+
+    #[test]
+    fn add_list_delegation_matches_legacy_templates() {
+        let mut via_helpers = CT_Numbering::new();
+        via_helpers.add_bullet_list();
+        via_helpers.add_numbered_list();
+
+        let mut via_add_list = CT_Numbering::new();
+        via_add_list.add_list(&[(ST_NumberFormat::Bullet, Some(1))]);
+        via_add_list.add_list(&[(ST_NumberFormat::Decimal, Some(1))]);
+
+        assert_eq!(via_helpers.abstract_nums, via_add_list.abstract_nums);
+        assert_eq!(via_helpers.nums, via_add_list.nums);
+    }
+
+    #[test]
+    fn set_list_level_redefines_one_level() {
+        let mut numbering = CT_Numbering::new();
+        let num_id = numbering.add_list(&[(ST_NumberFormat::Bullet, None)]);
+
+        assert!(numbering.set_list_level(num_id, 1, ST_NumberFormat::Decimal, Some(3)));
+
+        let abs = numbering.get_abstract_num_for(num_id).unwrap();
+        assert_eq!(abs.levels[1].num_fmt, Some(ST_NumberFormat::Decimal));
+        assert_eq!(abs.levels[1].lvl_text, Some("%2.".to_string()));
+        assert_eq!(abs.levels[1].start, Some(3));
+        // Neighbors untouched.
+        assert_eq!(abs.levels[0].num_fmt, Some(ST_NumberFormat::Bullet));
+        assert_eq!(abs.levels[2].num_fmt, Some(ST_NumberFormat::Bullet));
+    }
+
+    #[test]
+    fn set_list_level_rejects_unknown_targets() {
+        let mut numbering = CT_Numbering::new();
+        let num_id = numbering.add_list(&[(ST_NumberFormat::Bullet, None)]);
+
+        assert!(!numbering.set_list_level(99, 0, ST_NumberFormat::Decimal, None));
+        assert!(!numbering.set_list_level(num_id, 9, ST_NumberFormat::Decimal, None));
     }
 }

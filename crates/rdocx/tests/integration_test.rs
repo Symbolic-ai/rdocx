@@ -6,7 +6,8 @@ use rdocx::Document;
 use rdocx::paragraph::Alignment;
 use rdocx::table::VerticalAlignment;
 use rdocx::{
-    BorderStyle, Length, SectionBreak, StyleBuilder, TabAlignment, TabLeader, UnderlineStyle,
+    BorderStyle, Length, ListLevel, SectionBreak, StyleBuilder, TabAlignment, TabLeader,
+    UnderlineStyle,
 };
 
 fn document_xml(document: &mut Document) -> Vec<u8> {
@@ -642,6 +643,22 @@ fn table_basic_creation_round_trip() {
 }
 
 #[test]
+fn table_column_width_updates_grid_and_cells() {
+    let mut doc = Document::new();
+    let mut table = doc.add_table(2, 2);
+
+    assert!(table.set_column_width(0, Length::twips(2_000)));
+    assert!(table.set_column_width(1, Length::twips(3_000)));
+    assert!(!table.set_column_width(2, Length::twips(1_000)));
+
+    let xml = String::from_utf8(document_xml(&mut doc)).unwrap();
+    assert_eq!(xml.matches("<w:gridCol w:w=\"2000\"").count(), 1);
+    assert_eq!(xml.matches("<w:gridCol w:w=\"3000\"").count(), 1);
+    assert_eq!(xml.matches("<w:tcW w:w=\"2000\" w:type=\"dxa\"").count(), 2);
+    assert_eq!(xml.matches("<w:tcW w:w=\"3000\" w:type=\"dxa\"").count(), 2);
+}
+
+#[test]
 fn table_with_formatting_round_trip() {
     let mut doc = Document::new();
     doc.add_table(2, 2)
@@ -951,6 +968,85 @@ fn mixed_lists_round_trip() {
     assert_eq!(paras[1].text(), "Bullet 1");
     assert_eq!(paras[3].text(), "Transition");
     assert_eq!(paras[4].text(), "Step 1");
+}
+
+#[test]
+fn custom_list_definitions_restart_numbering_per_list() {
+    let mut doc = Document::new();
+    let first = doc.add_list_definition(&[ListLevel::decimal()]);
+    let second = doc.add_list_definition(&[ListLevel::decimal()]);
+    assert_ne!(first, second);
+
+    doc.add_paragraph("List one, item one")
+        .set_numbering(first, 0);
+    doc.add_paragraph("List two, item one")
+        .set_numbering(second, 0);
+
+    let bytes = doc.to_bytes().unwrap();
+    let doc2 = Document::from_bytes(&bytes).unwrap();
+
+    let paras = doc2.paragraphs();
+    // Distinct numId means each list numbers independently from its start.
+    assert_eq!(paras[0].numbering(), Some((first, 0)));
+    assert_eq!(paras[1].numbering(), Some((second, 0)));
+    assert_eq!(doc2.numbering_is_bullet(first), Some(false));
+    assert_eq!(doc2.numbering_is_bullet(second), Some(false));
+}
+
+#[test]
+fn custom_list_definition_mixes_formats_across_levels() {
+    let mut doc = Document::new();
+    let num_id = doc.add_list_definition(&[ListLevel::bullet(), ListLevel::decimal().start(3)]);
+
+    doc.add_paragraph("bullet item").set_numbering(num_id, 0);
+    doc.add_paragraph("third decimal item")
+        .set_numbering(num_id, 1);
+
+    let bytes = doc.to_bytes().unwrap();
+    let doc2 = Document::from_bytes(&bytes).unwrap();
+
+    let paras = doc2.paragraphs();
+    assert_eq!(paras[0].numbering(), Some((num_id, 0)));
+    assert_eq!(paras[1].numbering(), Some((num_id, 1)));
+    // Level 0 is a bullet; the definition still resolves as a bullet list.
+    assert_eq!(doc2.numbering_is_bullet(num_id), Some(true));
+
+    // The persisted numbering part survives the round trip: the reopened
+    // document still knows the definition, so a level can be redefined.
+    let mut doc3 = Document::from_bytes(&bytes).unwrap();
+    assert!(doc3.set_list_level(num_id, 2, ListLevel::decimal().start(7)));
+}
+
+#[test]
+fn set_list_level_upgrades_a_deeper_level_after_the_fact() {
+    let mut doc = Document::new();
+    let num_id = doc.add_list_definition(&[ListLevel::bullet()]);
+
+    // Level 1 starts as the bullet fill; content later needs it decimal.
+    assert!(doc.set_list_level(num_id, 1, ListLevel::decimal().start(3)));
+    assert!(!doc.set_list_level(999, 1, ListLevel::decimal()));
+
+    doc.add_paragraph("bullet").set_numbering(num_id, 0);
+    doc.add_paragraph("decimal from three")
+        .set_numbering(num_id, 1);
+
+    let bytes = doc.to_bytes().unwrap();
+    let doc2 = Document::from_bytes(&bytes).unwrap();
+    assert_eq!(doc2.paragraphs()[1].numbering(), Some((num_id, 1)));
+}
+
+#[test]
+fn paragraph_numbering_value_can_be_cleared() {
+    let mut doc = Document::new();
+    let num_id = doc.add_list_definition(&[ListLevel::bullet()]);
+
+    let mut para = doc.add_paragraph("was a list item");
+    para.set_numbering(num_id, 0);
+    para.set_numbering_value(None);
+
+    let bytes = doc.to_bytes().unwrap();
+    let doc2 = Document::from_bytes(&bytes).unwrap();
+    assert_eq!(doc2.paragraphs()[0].numbering(), None);
 }
 
 #[test]
