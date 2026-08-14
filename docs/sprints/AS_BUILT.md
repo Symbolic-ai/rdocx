@@ -5484,3 +5484,42 @@ integrated full gate passed.
 
 **Notes for future sessions.** Test files that can be created concurrently
 must include process identity or use an isolated workspace.
+
+### F-X006, Tag the expanded rpptx family
+
+**Sprint.** S37
+**Completed.** 2026-08-14
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The complete 14-package shared and PowerPoint family is
+published on crates.io at 0.1.3 through `rpptx-v0.1.3`. The release adds
+`oxml-cli-support` and `rpptx-cli` to the earlier 12-package family while
+keeping unpublished `rpptx-wasm` in the 0.1.3 local preparation group.
+
+**Non-obvious choices.** The release used the smallest fresh patch version
+above immutable 0.1.2. The annotated tag peels to reviewed sprint SHA
+`805680ab8a6dadd4d4247471a81cbb21b88a3196`. The workflow published only the
+14-package incubating allowlist and created the matching GitHub release. No
+npm package was published.
+
+**Deviations from the design plan.** Full verification exposed stale release
+prose that required font assets in both `rdocx-layout` and `oxml-layout`.
+The reviewed correction names `oxml-layout` as the sole owner of 20 TTF files
+and four legal files, forbids duplication in `rdocx-layout`, and retains the
+`rpptx` default presentation asset check.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Full verification passed at the reviewed release SHA. GitHub Actions
+run `31762653847` completed successfully for tag `rpptx-v0.1.3`, including the
+incubating publication and GitHub release jobs. All 14 packages resolve from
+crates.io at 0.1.3, and every owner check reports `mantissaman (Atul Sharma)`.
+The remote annotated tag peels to the reviewed SHA.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Preserve the immutable 0.1.2 and 0.1.3 tags.
+Future Rust-family publication must use a fresh version and a separately
+approved `/release` invocation. npm publication remains unauthorized.

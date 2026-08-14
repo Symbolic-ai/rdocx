@@ -29,8 +29,8 @@ regenerated, never hand-edited.
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
-| X, Cross-cutting (opportunistic)            | 6  | 5 | 1 | 0  |
-| **Total** | **160** | **159** | **1** | **0** |
+| X, Cross-cutting (opportunistic)            | 6  | 6 | 0 | 0  |
+| **Total** | **160** | **160** | **0** | **0** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -290,5 +290,5 @@ regenerated, never hand-edited.
 | F-X003 | Deduplicate the sample generators           | S36 | S | done |
 | F-X004 | Fix the shared temp path in the test suite  | S36 | S | done |
 | F-X005 | Tag rpptx-v0.1.2                            | S32.2 | S | done |
-| F-X006 | Tag the expanded rpptx family               | S37 | S | in-progress |
+| F-X006 | Tag the expanded rpptx family               | S37 | S | done |
 <!-- AUTOGEN:backlog-MX END -->

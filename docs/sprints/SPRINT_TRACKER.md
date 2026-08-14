@@ -215,6 +215,7 @@ defended.
 | F-X002 | S36 | S | 1 | 1 | Six compiled README examples and canonical rustdoc runner |
 | F-X003 | S36 | S | 1 | 1 | One canonical sample generator with unchanged outputs |
 | F-X004 | S36 | S | 1 | 1 | Process-unique integration-test output paths |
+| F-X006 | S37 | S | 1 | 1 | Published and verified the complete rpptx 0.1.3 family |
 
 ## Velocity
 

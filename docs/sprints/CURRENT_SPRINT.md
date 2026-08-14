@@ -21,7 +21,7 @@ and keep npm publication outside this sprint.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X006 | Tag the expanded rpptx family | S | in-progress | codex |
+| F-X006 | Tag the expanded rpptx family | S | done | - |
 
 ## Sequencing note
 

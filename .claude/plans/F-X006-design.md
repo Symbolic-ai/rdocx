@@ -1,6 +1,6 @@
 # F-X006, Tag the expanded rpptx family
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S37
 **Size**: S
 **Depends on**: F-143, F-144, F-145
@@ -147,14 +147,14 @@ workflow assertions must not change document or render behavior.
   story.
 - [x] Prepare a validated feature handoff with the external gate deferred to
   `/release rpptx-v0.1.3`.
-- [ ] Integrate and run `/verify --full` plus a clean sprint review at the exact
+- [x] Integrate and run `/verify --full` plus a clean sprint review at the exact
   release SHA.
-- [ ] Invoke `/release rpptx-v0.1.3` and request its separate final approval.
-- [ ] Watch publication, verify all 14 registry entries and owners, and verify
+- [x] Invoke `/release rpptx-v0.1.3` and request its separate final approval.
+- [x] Watch publication, verify all 14 registry entries and owners, and verify
   the GitHub release target SHA.
 - [x] Update exactly the three listed HLD files to describe the prepared 0.1.3
   state with publication pending.
-- [ ] After successful external verification, update the three HLD files to
+- [x] After successful external verification, update the three HLD files to
   the published state and complete F-X006.
 
 ## Open questions

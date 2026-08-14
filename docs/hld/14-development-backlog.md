@@ -1177,8 +1177,8 @@ SHA.
 Prepare the complete 14-package incubating family at 0.1.3, including
 `oxml-cli-support` and `rpptx-cli`, then publish it only through
 `/release rpptx-v0.1.3` after the command's separate final approval. The
-workspace preparation is complete, while publication remains pending. The
-immutable `rpptx-v0.1.2` tag and its 12 published packages remain unchanged.
+complete family is published at 0.1.3. The immutable `rpptx-v0.1.2` tag and
+its 12 published packages remain unchanged.
 **Depends on**: F-143, F-144, F-145.
 **Test gate**: all 14 incubating packages resolve from crates.io at 0.1.3 with
 the expected owner, and the GitHub release targets the reviewed sprint SHA.
