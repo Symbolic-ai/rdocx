@@ -501,6 +501,7 @@ impl<'a> Cell<'a> {
             columns: (0..cols)
                 .map(|_| CT_TblGridCol { width: col_width })
                 .collect(),
+            ..Default::default()
         };
 
         let mut tbl = CT_Tbl::new();
@@ -563,6 +564,11 @@ impl<'a> TableRef<'a> {
             .properties
             .as_ref()
             .is_some_and(|properties| properties.has_unmodeled_properties)
+            || self
+                .inner
+                .grid
+                .as_ref()
+                .is_some_and(|grid| grid.has_unmodeled_properties)
     }
 
     /// Get an immutable row reference.

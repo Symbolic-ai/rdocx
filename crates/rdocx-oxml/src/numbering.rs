@@ -10,11 +10,15 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::error::{OxmlError, Result};
-use crate::namespace::{W_NS, matches_word_attribute, matches_word_element, matches_word_name};
+use crate::namespace::{
+    W_NS, has_unmodeled_attributes, matches_word_attribute, matches_word_element, matches_word_name,
+};
 use crate::properties::{CT_PPr, CT_RPr, get_val_attr_with_context};
 use crate::raw_xml::{NamespaceContext, capture_element, capture_empty_element};
 use crate::shared::ST_Jc;
 use crate::styles::{CT_Styles, StyleType};
+
+const MAX_NUMBERING_LEVEL: u32 = 8;
 
 fn required_u32_attr(
     element: &BytesStart<'_>,
@@ -29,6 +33,21 @@ fn required_u32_attr(
         }
     }
     Err(OxmlError::MissingElement(path.to_string()))
+}
+
+fn required_numbering_level_attr(
+    element: &BytesStart<'_>,
+    context: &NamespaceContext,
+    path: &str,
+) -> Result<u32> {
+    let level = required_u32_attr(element, context, b"ilvl", path)?;
+    if level <= MAX_NUMBERING_LEVEL {
+        Ok(level)
+    } else {
+        Err(OxmlError::InvalidValue(format!(
+            "{path} must be between 0 and {MAX_NUMBERING_LEVEL}, got {level}"
+        )))
+    }
 }
 
 fn write_extras_at<W: Write>(
@@ -106,6 +125,8 @@ pub struct CT_Lvl {
     pub ppr: Option<CT_PPr>,
     /// Run properties for the numbering symbol
     pub rpr: Option<CT_RPr>,
+    /// Whether this level contains properties the semantic model does not expose.
+    pub has_unmodeled_properties: bool,
 }
 
 #[allow(non_snake_case)]
@@ -120,6 +141,7 @@ impl CT_Lvl {
             p_style: None,
             ppr: None,
             rpr: None,
+            has_unmodeled_properties: false,
         }
     }
 
@@ -141,18 +163,29 @@ impl CT_Lvl {
                     let name = e.name();
                     let child_context = context.with_element(e);
                     if matches_word_element(e, context, b"pPr") {
-                        lvl.ppr = Some(CT_PPr::from_xml_with_context(reader, &child_context)?);
+                        lvl.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
+                        let properties = CT_PPr::from_xml_with_context(reader, &child_context)?;
+                        lvl.has_unmodeled_properties |= properties.has_unmodeled_properties;
+                        lvl.ppr = Some(properties);
                     } else if matches_word_element(e, context, b"rPr") {
-                        lvl.rpr = Some(CT_RPr::from_xml_with_context(reader, &child_context)?);
+                        lvl.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
+                        let properties = CT_RPr::from_xml_with_context(reader, &child_context)?;
+                        lvl.has_unmodeled_properties |= properties.has_unmodeled_properties;
+                        lvl.rpr = Some(properties);
                     } else if Self::parse_value_element(e, context, &child_context, &mut lvl)? {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     } else {
+                        lvl.has_unmodeled_properties = true;
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
                     let child_context = context.with_element(e);
-                    Self::parse_value_element(e, context, &child_context, &mut lvl)?;
+                    if !Self::parse_value_element(e, context, &child_context, &mut lvl)? {
+                        lvl.has_unmodeled_properties = true;
+                    }
                 }
                 Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"lvl") => {
                     break;
@@ -194,6 +227,7 @@ impl CT_Lvl {
         } else {
             return Ok(false);
         }
+        lvl.has_unmodeled_properties |= has_unmodeled_attributes(element, context, &[b"val"], &[])?;
         Ok(true)
     }
 
@@ -293,12 +327,13 @@ impl CT_AbstractNum {
                     let name = e.name();
                     let child_context = context.with_element(e);
                     if matches_word_element(e, context, b"lvl") {
-                        let ilvl = required_u32_attr(e, &child_context, b"ilvl", "w:lvl/@w:ilvl")?;
-                        abs.levels.push(CT_Lvl::from_xml_with_context(
-                            reader,
-                            ilvl,
-                            &child_context,
-                        )?);
+                        let ilvl =
+                            required_numbering_level_attr(e, &child_context, "w:lvl/@w:ilvl")?;
+                        let mut level =
+                            CT_Lvl::from_xml_with_context(reader, ilvl, &child_context)?;
+                        level.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[b"ilvl"], &[])?;
+                        abs.levels.push(level);
                         modelled_index += 1;
                     } else if Self::parse_value_element(e, context, &child_context, &mut abs)? {
                         reader.read_to_end_into(name, &mut Vec::new())?;
@@ -313,8 +348,12 @@ impl CT_AbstractNum {
                     if Self::parse_value_element(e, context, &child_context, &mut abs)? {
                         modelled_index += 1;
                     } else if matches_word_element(e, context, b"lvl") {
-                        let ilvl = required_u32_attr(e, &child_context, b"ilvl", "w:lvl/@w:ilvl")?;
-                        abs.levels.push(CT_Lvl::new(ilvl));
+                        let ilvl =
+                            required_numbering_level_attr(e, &child_context, "w:lvl/@w:ilvl")?;
+                        let mut level = CT_Lvl::new(ilvl);
+                        level.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[b"ilvl"], &[])?;
+                        abs.levels.push(level);
                         modelled_index += 1;
                     } else {
                         abs.extra_xml
@@ -434,12 +473,12 @@ impl CT_LvlOverride {
                 Ok(Event::Start(ref e)) if matches_word_element(e, context, b"lvl") => {
                     let child_context = context.with_element(e);
                     let level_index =
-                        required_u32_attr(e, &child_context, b"ilvl", "w:lvl/@w:ilvl")?;
-                    value.level = Some(CT_Lvl::from_xml_with_context(
-                        reader,
-                        level_index,
-                        &child_context,
-                    )?);
+                        required_numbering_level_attr(e, &child_context, "w:lvl/@w:ilvl")?;
+                    let mut level =
+                        CT_Lvl::from_xml_with_context(reader, level_index, &child_context)?;
+                    level.has_unmodeled_properties |=
+                        has_unmodeled_attributes(e, context, &[b"ilvl"], &[])?;
+                    value.level = Some(level);
                 }
                 Ok(Event::Start(ref e)) => {
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
@@ -449,6 +488,15 @@ impl CT_LvlOverride {
                     if let Some(start) = get_val_attr_with_context(e, &child_context)? {
                         value.start_override = Some(start.parse()?);
                     }
+                }
+                Ok(Event::Empty(ref e)) if matches_word_element(e, context, b"lvl") => {
+                    let child_context = context.with_element(e);
+                    let level_index =
+                        required_numbering_level_attr(e, &child_context, "w:lvl/@w:ilvl")?;
+                    let mut level = CT_Lvl::new(level_index);
+                    level.has_unmodeled_properties |=
+                        has_unmodeled_attributes(e, context, &[b"ilvl"], &[])?;
+                    value.level = Some(level);
                 }
                 Ok(Event::End(ref e))
                     if matches_word_name(e.name().as_ref(), context, b"lvlOverride") =>
@@ -511,13 +559,28 @@ impl CT_Num {
                         && let Some(val) = get_val_attr_with_context(e, &context.with_element(e))?
                     {
                         abstract_num_id = Some(val.parse()?);
+                    } else if matches_word_element(e, context, b"lvlOverride") {
+                        let child_context = context.with_element(e);
+                        let ilvl = required_numbering_level_attr(
+                            e,
+                            &child_context,
+                            "w:lvlOverride/@w:ilvl",
+                        )?;
+                        level_overrides.push(CT_LvlOverride {
+                            ilvl,
+                            start_override: None,
+                            level: None,
+                        });
                     }
                 }
                 Ok(Event::Start(ref e)) => {
                     let child_context = context.with_element(e);
                     if matches_word_element(e, context, b"lvlOverride") {
-                        let ilvl =
-                            required_u32_attr(e, &child_context, b"ilvl", "w:lvlOverride/@w:ilvl")?;
+                        let ilvl = required_numbering_level_attr(
+                            e,
+                            &child_context,
+                            "w:lvlOverride/@w:ilvl",
+                        )?;
                         level_overrides.push(CT_LvlOverride::from_xml(
                             reader,
                             ilvl,
@@ -875,7 +938,11 @@ impl CT_Numbering {
             .or(level.start)
             .unwrap_or(1);
 
-        Some(EffectiveNumberingLevel { level, start })
+        Some(EffectiveNumberingLevel {
+            level,
+            start,
+            has_unmodeled_properties: level.has_unmodeled_properties,
+        })
     }
 
     /// Find the effective level associated with a paragraph style.
@@ -923,7 +990,11 @@ impl CT_Numbering {
                 .and_then(|value| value.start_override)
                 .or(level.start)
                 .unwrap_or(1);
-            return Some(EffectiveNumberingLevel { level, start });
+            return Some(EffectiveNumberingLevel {
+                level,
+                start,
+                has_unmodeled_properties: level.has_unmodeled_properties,
+            });
         }
 
         let inherited =
@@ -931,6 +1002,7 @@ impl CT_Numbering {
                 EffectiveNumberingLevel {
                     level,
                     start: level.start.unwrap_or(1),
+                    has_unmodeled_properties: level.has_unmodeled_properties,
                 }
             } else {
                 let style_id = abstract_num.num_style_link.as_deref()?;
@@ -951,6 +1023,7 @@ impl CT_Numbering {
             start: level_override
                 .and_then(|value| value.start_override)
                 .unwrap_or(inherited.start),
+            has_unmodeled_properties: inherited.has_unmodeled_properties,
         })
     }
 
@@ -973,6 +1046,7 @@ impl CT_Numbering {
 pub struct EffectiveNumberingLevel<'a> {
     pub level: &'a CT_Lvl,
     pub start: u32,
+    pub has_unmodeled_properties: bool,
 }
 
 impl Default for CT_Numbering {
@@ -1268,6 +1342,49 @@ mod tests {
                 Err(OxmlError::MissingElement(_))
             ));
         }
+    }
+
+    #[test]
+    fn rejects_numbering_levels_above_the_ooxml_limit() {
+        for xml in [
+            br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="9"/></w:abstractNum></w:numbering>"#.as_slice(),
+            br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"/><w:num w:numId="1"><w:abstractNumId w:val="1"/><w:lvlOverride w:ilvl="9"/></w:num></w:numbering>"#.as_slice(),
+            br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"/><w:num w:numId="1"><w:abstractNumId w:val="1"/><w:lvlOverride w:ilvl="0"><w:lvl w:ilvl="9"></w:lvl></w:lvlOverride></w:num></w:numbering>"#.as_slice(),
+        ] {
+            assert!(matches!(
+                CT_Numbering::from_xml(xml),
+                Err(OxmlError::InvalidValue(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn numbering_levels_report_unmodeled_semantics() {
+        let xml = br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:abstractNum w:abstractNumId="1">
+            <w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlRestart w:val="0"/></w:lvl>
+            <w:lvl w:ilvl="1" w:vendor="x"><w:numFmt w:val="decimal"/></w:lvl>
+            <w:lvl w:ilvl="2"><w:numFmt w:val="decimal" w:vendor="x"/></w:lvl>
+            <w:lvl w:ilvl="3"><w:numFmt w:val="decimal"/></w:lvl>
+          </w:abstractNum>
+          <w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>
+        </w:numbering>"#;
+
+        let numbering = CT_Numbering::from_xml(xml).unwrap();
+        for level in 0..=2 {
+            assert!(
+                numbering
+                    .get_effective_level(1, level)
+                    .unwrap()
+                    .has_unmodeled_properties
+            );
+        }
+        assert!(
+            !numbering
+                .get_effective_level(1, 3)
+                .unwrap()
+                .has_unmodeled_properties
+        );
     }
 
     #[test]

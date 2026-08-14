@@ -737,6 +737,8 @@ impl CT_TblPr {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CT_TblGrid {
     pub columns: Vec<CT_TblGridCol>,
+    /// Whether the grid contains children or attributes the semantic model does not expose.
+    pub has_unmodeled_properties: bool,
 }
 
 #[allow(non_snake_case)]
@@ -749,14 +751,20 @@ impl CT_TblGrid {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
-        let mut columns = Vec::new();
+        let mut grid = CT_TblGrid::default();
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => Self::parse_column(e, context, &mut columns)?,
+                Ok(Event::Empty(ref e)) => {
+                    if !Self::parse_column(e, context, &mut grid)? {
+                        grid.has_unmodeled_properties = true;
+                    }
+                }
                 Ok(Event::Start(ref e)) => {
-                    Self::parse_column(e, context, &mut columns)?;
+                    if !Self::parse_column(e, context, &mut grid)? {
+                        grid.has_unmodeled_properties = true;
+                    }
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
                 Ok(Event::End(ref e))
@@ -773,16 +781,16 @@ impl CT_TblGrid {
             buf.clear();
         }
 
-        Ok(CT_TblGrid { columns })
+        Ok(grid)
     }
 
     fn parse_column(
         e: &BytesStart<'_>,
         context: &NamespaceContext,
-        columns: &mut Vec<CT_TblGridCol>,
-    ) -> Result<()> {
+        grid: &mut CT_TblGrid,
+    ) -> Result<bool> {
         if !matches_word_element(e, context, b"gridCol") {
-            return Ok(());
+            return Ok(false);
         }
         let element_context = context.with_element(e);
         let mut width = Twips(0);
@@ -792,8 +800,9 @@ impl CT_TblGrid {
                 width = Twips(std::str::from_utf8(&attr.value)?.parse()?);
             }
         }
-        columns.push(CT_TblGridCol { width });
-        Ok(())
+        grid.has_unmodeled_properties |= has_unmodeled_attributes(e, context, &[b"w"], &[])?;
+        grid.columns.push(CT_TblGridCol { width });
+        Ok(true)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -1873,6 +1882,19 @@ mod tests {
     }
 
     #[test]
+    fn table_grid_reports_unmodeled_children_and_attributes() {
+        let table = parse_table(concat!(
+            r#"<w:tblGrid><w:gridCol w:w="100" w:vendor="x"/>"#,
+            r#"<w:tblGridChange/></w:tblGrid>"#,
+            r#"<w:tr><w:tc><w:p/></w:tc></w:tr>"#,
+        ));
+
+        let grid = table.grid.unwrap();
+        assert_eq!(grid.columns.len(), 1);
+        assert!(grid.has_unmodeled_properties);
+    }
+
+    #[test]
     fn invalid_vertical_merge_value_is_rejected() {
         let full = concat!(
             r#"<w:tbl><w:tblGrid><w:gridCol w:w="100"/></w:tblGrid>"#,
@@ -1985,6 +2007,7 @@ mod tests {
                 CT_TblGridCol { width: Twips(4500) },
                 CT_TblGridCol { width: Twips(4500) },
             ],
+            ..Default::default()
         });
 
         let mut row = CT_Row::new();
@@ -2035,6 +2058,7 @@ mod tests {
         let mut nested_tbl = CT_Tbl::new();
         nested_tbl.grid = Some(CT_TblGrid {
             columns: vec![CT_TblGridCol { width: Twips(2000) }],
+            ..Default::default()
         });
         let mut nested_row = CT_Row::new();
         let mut nested_cell = CT_Tc::new();

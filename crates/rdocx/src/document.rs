@@ -567,6 +567,7 @@ impl Document {
             columns: (0..cols)
                 .map(|_| CT_TblGridCol { width: col_width })
                 .collect(),
+            ..Default::default()
         };
 
         let mut tbl = CT_Tbl::new();
@@ -638,6 +639,7 @@ impl Document {
             columns: (0..cols)
                 .map(|_| CT_TblGridCol { width: col_width })
                 .collect(),
+            ..Default::default()
         };
 
         let mut tbl = CT_Tbl::new();
@@ -882,6 +884,7 @@ impl Document {
             format_name: format.map(ST_NumberFormat::to_str).unwrap_or("decimal"),
             start: effective.start,
             level_text: definition.lvl_text.as_deref(),
+            has_unmodeled_properties: effective.has_unmodeled_properties,
         })
     }
 
@@ -3077,6 +3080,8 @@ pub struct NumberingLevel<'a> {
     pub start: u32,
     /// The Word level-text template or bullet glyph.
     pub level_text: Option<&'a str>,
+    /// Whether the level contains Word numbering semantics the facade does not model.
+    pub has_unmodeled_properties: bool,
 }
 
 /// One level of a custom list definition for [`Document::add_list_definition`].
@@ -3414,6 +3419,24 @@ mod tests {
             .has_unmodeled_properties = true;
 
         assert!(document.has_unmodeled_section_properties());
+    }
+
+    #[test]
+    fn unmodeled_grid_properties_are_exposed_by_the_reader_facade() {
+        let mut document = Document::new();
+        document.add_table(1, 1);
+        document
+            .document
+            .body
+            .tables_mut()
+            .next()
+            .unwrap()
+            .grid
+            .as_mut()
+            .unwrap()
+            .has_unmodeled_properties = true;
+
+        assert!(document.table(0).unwrap().has_unmodeled_properties());
     }
 
     #[test]
@@ -4195,6 +4218,22 @@ mod tests {
         assert_eq!(doc2.numbering_is_bullet(num_id), Some(false));
 
         assert!(paras[2].numbering().is_none());
+    }
+
+    #[test]
+    fn numbering_level_exposes_unmodeled_properties() {
+        let mut document = Document::new();
+        document.add_numbered_list_item("numbered item", 0);
+        document.numbering.as_mut().unwrap().abstract_nums[0].levels[0].has_unmodeled_properties =
+            true;
+        let (num_id, level) = document.paragraph(0).unwrap().numbering().unwrap();
+
+        assert!(
+            document
+                .numbering_level(num_id, level)
+                .unwrap()
+                .has_unmodeled_properties
+        );
     }
 
     #[test]
