@@ -600,6 +600,14 @@ impl<'a> TableRef<'a> {
         (width.width_type == "dxa").then(|| Length::twips(width.w))
     }
 
+    /// Whether an explicit table width is present in any supported unit.
+    pub fn has_width(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.width.is_some())
+    }
+
     /// Whether explicit table borders are present.
     pub fn has_borders(&self) -> bool {
         self.inner
@@ -616,6 +624,14 @@ impl<'a> TableRef<'a> {
             .as_ref()
             .and_then(|properties| properties.shading.as_ref())
             .and_then(|shading| shading.fill.as_deref())
+    }
+
+    /// Whether explicit table shading is present.
+    pub fn has_shading(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.shading.is_some())
     }
 }
 
@@ -728,6 +744,14 @@ impl<'a> CellRef<'a> {
         (width.width_type == "dxa").then(|| Length::twips(width.w))
     }
 
+    /// Whether an explicit cell width is present in any supported unit.
+    pub fn has_width(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.width.is_some())
+    }
+
     /// Get the grid span, if set.
     pub fn grid_span(&self) -> Option<u32> {
         self.inner.properties.as_ref().and_then(|pr| pr.grid_span)
@@ -752,6 +776,14 @@ impl<'a> CellRef<'a> {
             .as_ref()
             .and_then(|pr| pr.shading.as_ref())
             .and_then(|shd| shd.fill.as_deref())
+    }
+
+    /// Whether explicit cell shading is present.
+    pub fn has_shading(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.shading.is_some())
     }
 
     /// Whether explicit cell borders are present.
