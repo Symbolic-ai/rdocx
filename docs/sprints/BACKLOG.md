@@ -29,8 +29,8 @@ regenerated, never hand-edited.
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
-| X, Cross-cutting (opportunistic)            | 8  | 6 | 0 | 2  |
-| **Total** | **162** | **160** | **0** | **2** |
+| X, Cross-cutting (opportunistic)            | 8  | 6 | 1 | 1  |
+| **Total** | **162** | **160** | **1** | **1** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -291,6 +291,6 @@ regenerated, never hand-edited.
 | F-X004 | Fix the shared temp path in the test suite  | S36 | S | done |
 | F-X005 | Tag rpptx-v0.1.2                            | S32.2 | S | done |
 | F-X006 | Tag the expanded rpptx family               | S37 | S | done |
-| F-X007 | Integrate PR 25 and stable crate documentation | S38 | L | pending |
+| F-X007 | Integrate PR 25 and stable crate documentation | S38 | L | in-progress |
 | F-X008 | Tag the updated stable rdocx family         | S38 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->

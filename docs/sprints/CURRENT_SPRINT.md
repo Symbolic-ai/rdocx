@@ -25,7 +25,7 @@ release workflow.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X007 | Integrate PR 25 and stable crate documentation | L | pending | - |
+| F-X007 | Integrate PR 25 and stable crate documentation | L | in-progress | codex |
 | F-X008 | Tag the updated stable rdocx family | S | pending | - |
 
 ## Sequencing note
