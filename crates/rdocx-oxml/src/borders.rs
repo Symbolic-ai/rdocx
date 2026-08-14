@@ -6,7 +6,9 @@ use quick_xml::{Reader, Writer};
 use crate::error::{OxmlError, Result};
 #[cfg(test)]
 use crate::namespace::matches_local_name;
-use crate::namespace::{matches_word_attribute, matches_word_element, matches_word_name};
+use crate::namespace::{
+    has_unmodeled_attributes, matches_word_attribute, matches_word_element, matches_word_name,
+};
 use crate::raw_xml::NamespaceContext;
 use crate::shared::{ST_Border, ST_TabJc, ST_TabLeader};
 use crate::units::Twips;
@@ -118,14 +120,28 @@ impl CT_PBdr {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
+        Self::from_xml_with_context_and_completeness(reader, context).map(|(borders, _)| borders)
+    }
+
+    pub(crate) fn from_xml_with_context_and_completeness(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<(Self, bool)> {
         let mut bdr = CT_PBdr::default();
+        let mut has_unmodeled_properties = false;
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => Self::parse_edge(e, context, &mut bdr)?,
+                Ok(Event::Empty(ref e)) => {
+                    if !Self::parse_edge(e, context, &mut bdr)? {
+                        has_unmodeled_properties = true;
+                    }
+                }
                 Ok(Event::Start(ref e)) => {
-                    Self::parse_edge(e, context, &mut bdr)?;
+                    if !Self::parse_edge(e, context, &mut bdr)? {
+                        has_unmodeled_properties = true;
+                    }
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
                 Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"pBdr") => {
@@ -140,10 +156,25 @@ impl CT_PBdr {
             buf.clear();
         }
 
-        Ok(bdr)
+        Ok((bdr, has_unmodeled_properties))
     }
 
-    fn parse_edge(e: &BytesStart<'_>, context: &NamespaceContext, bdr: &mut CT_PBdr) -> Result<()> {
+    fn parse_edge(
+        e: &BytesStart<'_>,
+        context: &NamespaceContext,
+        bdr: &mut CT_PBdr,
+    ) -> Result<bool> {
+        let modeled = matches_word_element(e, context, b"top")
+            || matches_word_element(e, context, b"bottom")
+            || matches_word_element(e, context, b"left")
+            || matches_word_element(e, context, b"start")
+            || matches_word_element(e, context, b"right")
+            || matches_word_element(e, context, b"end")
+            || matches_word_element(e, context, b"between")
+            || matches_word_element(e, context, b"bar");
+        if !modeled {
+            return Ok(false);
+        }
         let edge = CT_BorderEdge::from_xml_attrs_with_context(e, context)?;
         if matches_word_element(e, context, b"top") {
             bdr.top = Some(edge);
@@ -162,7 +193,12 @@ impl CT_PBdr {
         } else if matches_word_element(e, context, b"bar") {
             bdr.bar = Some(edge);
         }
-        Ok(())
+        Ok(!has_unmodeled_attributes(
+            e,
+            context,
+            &[b"val", b"sz", b"space", b"color"],
+            &[],
+        )?)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -278,16 +314,33 @@ impl CT_Tabs {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
+        Self::from_xml_with_context_and_completeness(reader, context).map(|(tabs, _)| tabs)
+    }
+
+    pub(crate) fn from_xml_with_context_and_completeness(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<(Self, bool)> {
         let mut tabs = Vec::new();
+        let mut has_unmodeled_properties = false;
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) if matches_word_element(e, context, b"tab") => {
+                    has_unmodeled_properties |=
+                        has_unmodeled_attributes(e, context, &[b"val", b"pos", b"leader"], &[])?;
                     tabs.push(CT_TabStop::from_xml_attrs_with_context(e, context)?);
                 }
                 Ok(Event::Start(ref e)) if matches_word_element(e, context, b"tab") => {
+                    has_unmodeled_properties |=
+                        has_unmodeled_attributes(e, context, &[b"val", b"pos", b"leader"], &[])?;
                     tabs.push(CT_TabStop::from_xml_attrs_with_context(e, context)?);
+                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                }
+                Ok(Event::Empty(_)) => has_unmodeled_properties = true,
+                Ok(Event::Start(ref e)) => {
+                    has_unmodeled_properties = true;
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
                 Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"tabs") => {
@@ -302,7 +355,7 @@ impl CT_Tabs {
             buf.clear();
         }
 
-        Ok(CT_Tabs { tabs })
+        Ok((CT_Tabs { tabs }, has_unmodeled_properties))
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {

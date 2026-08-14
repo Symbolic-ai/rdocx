@@ -9,7 +9,7 @@ use crate::error::{OxmlError, Result};
 #[cfg(test)]
 use crate::namespace::matches_local_name;
 use crate::namespace::{
-    is_word_element, matches_word_attribute, matches_word_element, matches_word_name,
+    has_unmodeled_attributes, matches_word_attribute, matches_word_element, matches_word_name,
 };
 use crate::raw_xml::NamespaceContext;
 use crate::shared::{ST_HighlightColor, ST_Jc, ST_OnOff, ST_Underline};
@@ -145,34 +145,74 @@ impl CT_PPr {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     if matches_word_element(e, context, b"rPr") {
+                        ppr.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
                         let child_context = context.with_element(e);
-                        ppr.rpr = Some(CT_RPr::from_xml_with_context(reader, &child_context)?);
+                        let rpr = CT_RPr::from_xml_with_context(reader, &child_context)?;
+                        ppr.has_unmodeled_properties |= rpr.has_unmodeled_properties;
+                        ppr.rpr = Some(rpr);
                     } else if matches_word_element(e, context, b"numPr") {
+                        ppr.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
                         let child_context = context.with_element(e);
                         Self::parse_num_pr(reader, &child_context, &mut ppr)?;
                     } else if matches_word_element(e, context, b"pBdr") {
+                        ppr.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
                         let child_context = context.with_element(e);
-                        ppr.borders = Some(CT_PBdr::from_xml_with_context(reader, &child_context)?);
+                        let (borders, has_unmodeled_properties) =
+                            CT_PBdr::from_xml_with_context_and_completeness(
+                                reader,
+                                &child_context,
+                            )?;
+                        ppr.has_unmodeled_properties |= has_unmodeled_properties;
+                        ppr.borders = Some(borders);
                     } else if matches_word_element(e, context, b"tabs") {
+                        ppr.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
                         let child_context = context.with_element(e);
-                        ppr.tabs = Some(CT_Tabs::from_xml_with_context(reader, &child_context)?);
+                        let (tabs, has_unmodeled_properties) =
+                            CT_Tabs::from_xml_with_context_and_completeness(
+                                reader,
+                                &child_context,
+                            )?;
+                        ppr.has_unmodeled_properties |= has_unmodeled_properties;
+                        ppr.tabs = Some(tabs);
                     } else if matches_word_element(e, context, b"sectPr") {
                         let child_context = context.with_element(e);
-                        ppr.sect_pr =
-                            Some(CT_SectPr::from_xml_with_context(reader, &child_context)?);
+                        let mut sect_pr = CT_SectPr::from_xml_with_context(reader, &child_context)?;
+                        sect_pr.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
+                        ppr.sect_pr = Some(sect_pr);
                     } else {
-                        if !Self::parse_property_element(e, context, &mut ppr)?
-                            && is_word_element(e, context)
-                        {
+                        if !Self::parse_property_element(e, context, &mut ppr)? {
                             ppr.has_unmodeled_properties = true;
                         }
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
-                    if !Self::parse_property_element(e, context, &mut ppr)?
-                        && is_word_element(e, context)
-                    {
+                    if matches_word_element(e, context, b"rPr") {
+                        ppr.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
+                        ppr.rpr = Some(CT_RPr::default());
+                    } else if matches_word_element(e, context, b"numPr") {
+                        ppr.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
+                    } else if matches_word_element(e, context, b"pBdr") {
+                        ppr.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
+                        ppr.borders = Some(CT_PBdr::default());
+                    } else if matches_word_element(e, context, b"tabs") {
+                        ppr.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
+                        ppr.tabs = Some(CT_Tabs::default());
+                    } else if matches_word_element(e, context, b"sectPr") {
+                        let mut sect_pr = CT_SectPr::empty();
+                        sect_pr.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
+                        ppr.sect_pr = Some(sect_pr);
+                    } else if !Self::parse_property_element(e, context, &mut ppr)? {
                         ppr.has_unmodeled_properties = true;
                     }
                 }
@@ -197,12 +237,15 @@ impl CT_PPr {
         ppr: &mut CT_PPr,
     ) -> Result<bool> {
         let element_context = context.with_element(e);
+        let allowed_word_attributes: &[&[u8]];
         if matches_word_element(e, context, b"pStyle") {
             ppr.style_id = get_val_attr_with_context(e, &element_context)?;
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"jc") {
             if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 ppr.jc = Some(ST_Jc::from_str(&val)?);
             }
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"spacing") {
             for attr in e.attributes() {
                 let attr = attr?;
@@ -222,6 +265,14 @@ impl CT_PPr {
                     ppr.after_autospacing = Some(val_str == "1" || val_str == "true");
                 }
             }
+            allowed_word_attributes = &[
+                b"before",
+                b"after",
+                b"line",
+                b"lineRule",
+                b"beforeAutospacing",
+                b"afterAutospacing",
+            ];
         } else if matches_word_element(e, context, b"ind") {
             for attr in e.attributes() {
                 let attr = attr?;
@@ -241,25 +292,42 @@ impl CT_PPr {
                     ppr.ind_hanging = Some(Twips(val_str.parse()?));
                 }
             }
+            allowed_word_attributes = &[
+                b"left",
+                b"start",
+                b"right",
+                b"end",
+                b"firstLine",
+                b"hanging",
+            ];
         } else if matches_word_element(e, context, b"keepNext") {
             ppr.keep_next = Some(parse_toggle(e, &element_context)?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"keepLines") {
             ppr.keep_lines = Some(parse_toggle(e, &element_context)?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"pageBreakBefore") {
             ppr.page_break_before = Some(parse_toggle(e, &element_context)?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"widowControl") {
             ppr.widow_control = Some(parse_toggle(e, &element_context)?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"suppressAutoHyphens") {
             ppr.suppress_auto_hyphens = Some(parse_toggle(e, &element_context)?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"outlineLvl") {
             if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 ppr.outline_lvl = Some(val.parse()?);
             }
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"shd") {
             ppr.shading = Some(CT_Shd::from_xml_attrs_with_context(e, context)?);
+            allowed_word_attributes = &[b"val", b"color", b"fill"];
         } else {
             return Ok(false);
         }
+        ppr.has_unmodeled_properties |=
+            has_unmodeled_attributes(e, context, allowed_word_attributes, &[])?;
         Ok(true)
     }
 
@@ -272,12 +340,12 @@ impl CT_PPr {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
-                    if !Self::parse_num_property(e, context, ppr)? && is_word_element(e, context) {
+                    if !Self::parse_num_property(e, context, ppr)? {
                         ppr.has_unmodeled_properties = true;
                     }
                 }
                 Ok(Event::Start(ref e)) => {
-                    if !Self::parse_num_property(e, context, ppr)? && is_word_element(e, context) {
+                    if !Self::parse_num_property(e, context, ppr)? {
                         ppr.has_unmodeled_properties = true;
                     }
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
@@ -315,6 +383,7 @@ impl CT_PPr {
         } else {
             return Ok(false);
         }
+        ppr.has_unmodeled_properties |= has_unmodeled_attributes(e, context, &[b"val"], &[])?;
         Ok(true)
     }
 
@@ -637,16 +706,12 @@ impl CT_RPr {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
-                    if !Self::parse_property_element(e, context, &mut rpr)?
-                        && is_word_element(e, context)
-                    {
+                    if !Self::parse_property_element(e, context, &mut rpr)? {
                         rpr.has_unmodeled_properties = true;
                     }
                 }
                 Ok(Event::Start(ref e)) => {
-                    if !Self::parse_property_element(e, context, &mut rpr)?
-                        && is_word_element(e, context)
-                    {
+                    if !Self::parse_property_element(e, context, &mut rpr)? {
                         rpr.has_unmodeled_properties = true;
                     }
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
@@ -672,8 +737,10 @@ impl CT_RPr {
         rpr: &mut CT_RPr,
     ) -> Result<bool> {
         let element_context = context.with_element(e);
+        let allowed_word_attributes: &[&[u8]];
         if matches_word_element(e, context, b"rStyle") {
             rpr.style_id = get_val_attr_with_context(e, &element_context)?;
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"rFonts") {
             for attr in e.attributes() {
                 let attr = attr?;
@@ -693,32 +760,49 @@ impl CT_RPr {
                     rpr.font_hansi_theme = Some(val);
                 }
             }
+            allowed_word_attributes = &[
+                b"ascii",
+                b"hAnsi",
+                b"eastAsia",
+                b"cs",
+                b"asciiTheme",
+                b"hAnsiTheme",
+            ];
         } else if matches_word_element(e, context, b"b") {
             rpr.bold = Some(parse_toggle(e, &element_context)?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"bCs") {
             rpr.bold_cs = Some(parse_toggle(e, &element_context)?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"i") {
             rpr.italic = Some(parse_toggle(e, &element_context)?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"iCs") {
             rpr.italic_cs = Some(parse_toggle(e, &element_context)?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"u") {
             if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 rpr.underline = Some(ST_Underline::from_str(&val)?);
             } else {
                 rpr.underline = Some(ST_Underline::Single);
             }
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"strike") {
             rpr.strike = Some(parse_toggle(e, &element_context)?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"dstrike") {
             rpr.dstrike = Some(parse_toggle(e, &element_context)?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"sz") {
             if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 rpr.sz = Some(HalfPoint(val.parse()?));
             }
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"szCs") {
             if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 rpr.sz_cs = Some(HalfPoint(val.parse()?));
             }
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"color") {
             for attr in e.attributes() {
                 let attr = attr?;
@@ -730,35 +814,47 @@ impl CT_RPr {
                     rpr.color_theme = Some(v);
                 }
             }
+            allowed_word_attributes = &[b"val", b"themeColor"];
         } else if matches_word_element(e, context, b"highlight") {
             if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 rpr.highlight = Some(ST_HighlightColor::from_str(&val)?);
             }
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"caps") {
             rpr.caps = Some(parse_toggle(e, &element_context)?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"smallCaps") {
             rpr.small_caps = Some(parse_toggle(e, &element_context)?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"vertAlign") {
             rpr.vert_align = get_val_attr_with_context(e, &element_context)?;
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"spacing") {
             if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 rpr.spacing = Some(Twips(val.parse()?));
             }
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"w") {
             if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 rpr.width_scale = Some(val.parse()?);
             }
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"position") {
             if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 rpr.position = Some(val.parse()?);
             }
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"shd") {
             rpr.shading = Some(CT_Shd::from_xml_attrs_with_context(e, context)?);
+            allowed_word_attributes = &[b"val", b"color", b"fill"];
         } else if matches_word_element(e, context, b"vanish") {
             rpr.vanish = Some(parse_toggle(e, &element_context)?);
+            allowed_word_attributes = &[b"val"];
         } else {
             return Ok(false);
         }
+        rpr.has_unmodeled_properties |=
+            has_unmodeled_attributes(e, context, allowed_word_attributes, &[])?;
         Ok(true)
     }
 
@@ -1014,12 +1110,6 @@ impl CT_RPr {
     }
 }
 
-/// Extract the `w:val` attribute from an element.
-pub(crate) fn get_val_attr(e: &BytesStart) -> Result<Option<String>> {
-    let context = NamespaceContext::default().with_element(e);
-    get_val_attr_with_context(e, &context)
-}
-
 pub(crate) fn get_val_attr_with_context(
     e: &BytesStart,
     context: &NamespaceContext,
@@ -1168,12 +1258,29 @@ mod tests {
     }
 
     #[test]
-    fn foreign_extension_properties_do_not_set_the_word_property_signal() {
-        let ppr = parse_ppr(r#"<x:ignored xmlns:x="urn:foreign"/>"#);
-        let rpr = parse_rpr(r#"<x:ignored xmlns:x="urn:foreign"/>"#);
+    fn extension_properties_make_the_semantic_container_incomplete() {
+        let ppr = parse_ppr(r#"<x:paragraphEffect xmlns:x="urn:foreign"/>"#);
+        let rpr = parse_rpr(
+            r#"<w14:textOutline xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"/>"#,
+        );
 
-        assert!(!ppr.has_unmodeled_properties);
-        assert!(!rpr.has_unmodeled_properties);
+        assert!(ppr.has_unmodeled_properties);
+        assert!(rpr.has_unmodeled_properties);
+    }
+
+    #[test]
+    fn unmodeled_attributes_and_nested_properties_propagate_to_the_container() {
+        let ppr = parse_ppr(concat!(
+            r#"<w:spacing w:before="240" w:beforeLines="2"/>"#,
+            r#"<w:pBdr><w:top w:val="single" w:shadow="true"/></w:pBdr>"#,
+        ));
+        let rpr = parse_rpr(r#"<w:color w:val="FF0000" w:themeTint="80"/>"#);
+
+        assert_eq!(ppr.space_before, Some(Twips(240)));
+        assert!(ppr.borders.unwrap().top.is_some());
+        assert!(ppr.has_unmodeled_properties);
+        assert_eq!(rpr.color, Some("FF0000".to_string()));
+        assert!(rpr.has_unmodeled_properties);
     }
 
     #[test]

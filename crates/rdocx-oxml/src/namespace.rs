@@ -3,6 +3,8 @@
 use oxml_core::raw_xml::NamespaceContext;
 use quick_xml::events::BytesStart;
 
+use crate::error::Result;
+
 /// WordprocessingML main namespace
 pub const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 /// WordprocessingML namespace prefix
@@ -121,4 +123,33 @@ pub fn is_word_element(element: &BytesStart<'_>, parent_context: &NamespaceConte
             .position(|byte| *byte == b':')
             .is_some_and(|separator| &name.as_ref()[..separator] == W_PREFIX),
     }
+}
+
+/// Whether an element carries a non-declaration attribute outside the modeled
+/// WordprocessingML and relationship attribute sets.
+pub fn has_unmodeled_attributes(
+    element: &BytesStart<'_>,
+    parent_context: &NamespaceContext,
+    word_attributes: &[&[u8]],
+    relationship_attributes: &[&[u8]],
+) -> Result<bool> {
+    let context = parent_context.with_element(element);
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref();
+        if name == b"xmlns" || name.starts_with(b"xmlns:") {
+            continue;
+        }
+        if word_attributes
+            .iter()
+            .any(|expected| matches_word_attribute(name, &context, expected))
+            || relationship_attributes
+                .iter()
+                .any(|expected| matches_namespace_attribute(name, &context, b"r", R_NS, expected))
+        {
+            continue;
+        }
+        return Ok(true);
+    }
+    Ok(false)
 }

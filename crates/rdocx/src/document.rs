@@ -428,6 +428,15 @@ impl Document {
         })
     }
 
+    /// Whether any body section contains a property the reader cannot fully
+    /// model as semantic section formatting.
+    pub fn has_unmodeled_section_properties(&self) -> bool {
+        self.document.body.content.iter().any(|content| {
+            section_properties_for_body_content(content)
+                .is_some_and(|properties| properties.has_unmodeled_properties)
+        })
+    }
+
     /// Get immutable references to all paragraphs.
     pub fn paragraphs(&self) -> Vec<ParagraphRef<'_>> {
         self.document
@@ -3392,6 +3401,19 @@ mod tests {
 
     fn layout_invocations() -> usize {
         LAYOUT_INVOCATIONS.get()
+    }
+
+    #[test]
+    fn unmodeled_section_properties_are_exposed_by_the_reader_facade() {
+        let mut document = Document::new();
+        document
+            .document
+            .body
+            .sect_pr_mut()
+            .unwrap()
+            .has_unmodeled_properties = true;
+
+        assert!(document.has_unmodeled_section_properties());
     }
 
     #[test]

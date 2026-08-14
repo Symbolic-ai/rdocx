@@ -6,15 +6,15 @@ use quick_xml::{Reader, Writer};
 use crate::error::{OxmlError, Result};
 use crate::header_footer::{HdrFtrRef, HdrFtrType};
 use crate::namespace::{
-    MC_NS, R_NS, W_NS, matches_local_name, matches_namespace_attribute, matches_word_attribute,
-    matches_word_element, matches_word_name,
+    MC_NS, R_NS, W_NS, has_unmodeled_attributes, matches_namespace_attribute,
+    matches_word_attribute, matches_word_element, matches_word_name,
 };
-use crate::properties::get_val_attr;
+use crate::properties::get_val_attr_with_context;
 use crate::raw_xml::{
     NamespaceContext, RawXml, capture_element, capture_empty_element, capture_raw_element,
     capture_raw_empty_element,
 };
-use crate::shared::{ST_PageOrientation, ST_SectionType};
+use crate::shared::{ST_OnOff, ST_PageOrientation, ST_SectionType};
 use crate::table::CT_Tbl;
 use crate::text::CT_P;
 use crate::units::Twips;
@@ -69,6 +69,8 @@ impl Default for CT_Columns {
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_snake_case)]
 pub struct CT_SectPr {
+    /// Whether this group contains properties the reader cannot fully model.
+    pub has_unmodeled_properties: bool,
     /// Page width in twips
     pub page_width: Option<Twips>,
     /// Page height in twips
@@ -107,6 +109,7 @@ pub struct CT_SectPr {
 impl CT_SectPr {
     pub fn empty() -> Self {
         CT_SectPr {
+            has_unmodeled_properties: false,
             page_width: None,
             page_height: None,
             orientation: None,
@@ -129,6 +132,7 @@ impl CT_SectPr {
     /// Default US Letter page with 1-inch margins.
     pub fn default_letter() -> Self {
         CT_SectPr {
+            has_unmodeled_properties: false,
             page_width: Some(Twips(12240)),  // 8.5"
             page_height: Some(Twips(15840)), // 11"
             orientation: Some(ST_PageOrientation::Portrait),
@@ -151,6 +155,7 @@ impl CT_SectPr {
     /// Default A4 page with 1-inch margins.
     pub fn default_a4() -> Self {
         CT_SectPr {
+            has_unmodeled_properties: false,
             page_width: Some(Twips(11906)),  // 210mm
             page_height: Some(Twips(16838)), // 297mm
             orientation: Some(ST_PageOrientation::Portrait),
@@ -184,82 +189,53 @@ impl CT_SectPr {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"pgSz") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val_str = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"w") {
-                                sect.page_width = Some(Twips(val_str.parse()?));
-                            } else if matches_local_name(key, b"h") {
-                                sect.page_height = Some(Twips(val_str.parse()?));
-                            } else if matches_local_name(key, b"orient") {
-                                sect.orientation = Some(ST_PageOrientation::from_str(val_str)?);
-                            }
-                        }
-                    } else if matches_local_name(name.as_ref(), b"pgMar") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val: i32 = std::str::from_utf8(&attr.value)?.parse()?;
-                            if matches_local_name(key, b"top") {
-                                sect.margin_top = Some(Twips(val));
-                            } else if matches_local_name(key, b"right")
-                                || matches_local_name(key, b"end")
-                            {
-                                sect.margin_right = Some(Twips(val));
-                            } else if matches_local_name(key, b"bottom") {
-                                sect.margin_bottom = Some(Twips(val));
-                            } else if matches_local_name(key, b"left")
-                                || matches_local_name(key, b"start")
-                            {
-                                sect.margin_left = Some(Twips(val));
-                            } else if matches_local_name(key, b"gutter") {
-                                sect.gutter = Some(Twips(val));
-                            } else if matches_local_name(key, b"header") {
-                                sect.header_distance = Some(Twips(val));
-                            } else if matches_local_name(key, b"footer") {
-                                sect.footer_distance = Some(Twips(val));
-                            }
-                        }
-                    } else if matches_local_name(name.as_ref(), b"type") {
-                        if let Some(val) = get_val_attr(e)? {
-                            sect.section_type = Some(ST_SectionType::from_str(&val)?);
-                        }
-                    } else if matches_local_name(name.as_ref(), b"cols") {
-                        sect.columns = Some(Self::parse_cols_empty(e)?);
-                    } else if matches_word_element(e, context, b"headerReference") {
+                    if matches_word_element(e, context, b"headerReference") {
+                        sect.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[b"type"], &[b"id"])?;
                         if let Some(reference) = Self::parse_header_footer_reference(e, context)? {
                             sect.header_refs.push(reference);
                         }
                     } else if matches_word_element(e, context, b"footerReference") {
+                        sect.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[b"type"], &[b"id"])?;
                         if let Some(reference) = Self::parse_header_footer_reference(e, context)? {
                             sect.footer_refs.push(reference);
                         }
-                    } else if matches_local_name(name.as_ref(), b"titlePg") {
-                        sect.title_pg = Some(true);
-                    } else {
-                        // Capture unknown empty elements
+                    } else if matches_word_element(e, context, b"cols") {
+                        let (columns, has_unmodeled_properties) =
+                            Self::parse_cols_attrs(e, context)?;
+                        sect.has_unmodeled_properties |= has_unmodeled_properties;
+                        sect.columns = Some(columns);
+                    } else if !Self::parse_property_element(e, context, &mut sect)? {
+                        sect.has_unmodeled_properties = true;
                         sect.extra_xml.push(capture_empty_element(e)?);
                     }
                 }
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     if matches_word_element(e, context, b"cols") {
-                        sect.columns = Some(Self::parse_cols_start(reader, e)?);
+                        let (columns, has_unmodeled_properties) =
+                            Self::parse_cols_start(reader, e, context)?;
+                        sect.has_unmodeled_properties |= has_unmodeled_properties;
+                        sect.columns = Some(columns);
                     } else if matches_word_element(e, context, b"headerReference") {
+                        sect.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[b"type"], &[b"id"])?;
                         if let Some(reference) = Self::parse_header_footer_reference(e, context)? {
                             sect.header_refs.push(reference);
                         }
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     } else if matches_word_element(e, context, b"footerReference") {
+                        sect.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[b"type"], &[b"id"])?;
                         if let Some(reference) = Self::parse_header_footer_reference(e, context)? {
                             sect.footer_refs.push(reference);
                         }
                         reader.read_to_end_into(name, &mut Vec::new())?;
+                    } else if Self::parse_property_element(e, context, &mut sect)? {
+                        reader.read_to_end_into(name, &mut Vec::new())?;
                     } else {
-                        // Capture unknown start elements as raw XML
+                        sect.has_unmodeled_properties = true;
                         sect.extra_xml.push(capture_element(reader, e)?);
                     }
                 }
@@ -278,6 +254,73 @@ impl CT_SectPr {
         }
 
         Ok(sect)
+    }
+
+    fn parse_property_element(
+        element: &BytesStart<'_>,
+        context: &NamespaceContext,
+        sect: &mut CT_SectPr,
+    ) -> Result<bool> {
+        let element_context = context.with_element(element);
+        let allowed_word_attributes: &[&[u8]];
+        if matches_word_element(element, context, b"pgSz") {
+            for attribute in element.attributes() {
+                let attribute = attribute?;
+                let name = attribute.key.as_ref();
+                let value = std::str::from_utf8(&attribute.value)?;
+                if matches_word_attribute(name, &element_context, b"w") {
+                    sect.page_width = Some(Twips(value.parse()?));
+                } else if matches_word_attribute(name, &element_context, b"h") {
+                    sect.page_height = Some(Twips(value.parse()?));
+                } else if matches_word_attribute(name, &element_context, b"orient") {
+                    sect.orientation = Some(ST_PageOrientation::from_str(value)?);
+                }
+            }
+            allowed_word_attributes = &[b"w", b"h", b"orient"];
+        } else if matches_word_element(element, context, b"pgMar") {
+            for attribute in element.attributes() {
+                let attribute = attribute?;
+                let name = attribute.key.as_ref();
+                let value = std::str::from_utf8(&attribute.value)?;
+                if matches_word_attribute(name, &element_context, b"top") {
+                    sect.margin_top = Some(Twips(value.parse()?));
+                } else if matches_word_attribute(name, &element_context, b"right")
+                    || matches_word_attribute(name, &element_context, b"end")
+                {
+                    sect.margin_right = Some(Twips(value.parse()?));
+                } else if matches_word_attribute(name, &element_context, b"bottom") {
+                    sect.margin_bottom = Some(Twips(value.parse()?));
+                } else if matches_word_attribute(name, &element_context, b"left")
+                    || matches_word_attribute(name, &element_context, b"start")
+                {
+                    sect.margin_left = Some(Twips(value.parse()?));
+                } else if matches_word_attribute(name, &element_context, b"gutter") {
+                    sect.gutter = Some(Twips(value.parse()?));
+                } else if matches_word_attribute(name, &element_context, b"header") {
+                    sect.header_distance = Some(Twips(value.parse()?));
+                } else if matches_word_attribute(name, &element_context, b"footer") {
+                    sect.footer_distance = Some(Twips(value.parse()?));
+                }
+            }
+            allowed_word_attributes = &[
+                b"top", b"right", b"end", b"bottom", b"left", b"start", b"gutter", b"header",
+                b"footer",
+            ];
+        } else if matches_word_element(element, context, b"type") {
+            if let Some(value) = get_val_attr_with_context(element, &element_context)? {
+                sect.section_type = Some(ST_SectionType::from_str(&value)?);
+            }
+            allowed_word_attributes = &[b"val"];
+        } else if matches_word_element(element, context, b"titlePg") {
+            let value = get_val_attr_with_context(element, &element_context)?;
+            sect.title_pg = Some(ST_OnOff::from_str_or_default(value.as_deref()).is_on());
+            allowed_word_attributes = &[b"val"];
+        } else {
+            return Ok(false);
+        }
+        sect.has_unmodeled_properties |=
+            has_unmodeled_attributes(element, context, allowed_word_attributes, &[])?;
+        Ok(true)
     }
 
     fn parse_header_footer_reference(
@@ -303,51 +346,84 @@ impl CT_SectPr {
         }))
     }
 
-    fn parse_cols_attrs(e: &BytesStart) -> Result<CT_Columns> {
+    fn parse_cols_attrs(e: &BytesStart, context: &NamespaceContext) -> Result<(CT_Columns, bool)> {
+        let element_context = context.with_element(e);
         let mut cols = CT_Columns::default();
         for attr in e.attributes() {
             let attr = attr?;
             let key = attr.key.as_ref();
             let val_str = std::str::from_utf8(&attr.value)?;
-            if matches_local_name(key, b"num") {
+            if matches_word_attribute(key, &element_context, b"num") {
                 cols.num = Some(val_str.parse()?);
-            } else if matches_local_name(key, b"space") {
+            } else if matches_word_attribute(key, &element_context, b"space") {
                 cols.space = Some(Twips(val_str.parse()?));
-            } else if matches_local_name(key, b"equalWidth") {
+            } else if matches_word_attribute(key, &element_context, b"equalWidth") {
                 cols.equal_width = Some(val_str == "1" || val_str == "true");
-            } else if matches_local_name(key, b"sep") {
+            } else if matches_word_attribute(key, &element_context, b"sep") {
                 cols.sep = Some(val_str == "1" || val_str == "true");
             }
         }
-        Ok(cols)
+        let has_unmodeled_properties =
+            has_unmodeled_attributes(e, context, &[b"num", b"space", b"equalWidth", b"sep"], &[])?;
+        Ok((cols, has_unmodeled_properties))
     }
 
-    fn parse_cols_empty(e: &BytesStart) -> Result<CT_Columns> {
-        Self::parse_cols_attrs(e)
-    }
-
-    fn parse_cols_start(reader: &mut Reader<&[u8]>, e: &BytesStart) -> Result<CT_Columns> {
-        let mut cols = Self::parse_cols_attrs(e)?;
+    fn parse_cols_start(
+        reader: &mut Reader<&[u8]>,
+        e: &BytesStart,
+        context: &NamespaceContext,
+    ) -> Result<(CT_Columns, bool)> {
+        let (mut cols, mut has_unmodeled_properties) = Self::parse_cols_attrs(e, context)?;
+        let child_context = context.with_element(e);
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) if matches_local_name(e.name().as_ref(), b"col") => {
+                Ok(Event::Empty(ref e)) if matches_word_element(e, &child_context, b"col") => {
                     let mut width = None;
                     let mut space = None;
+                    let column_context = child_context.with_element(e);
                     for attr in e.attributes() {
                         let attr = attr?;
                         let key = attr.key.as_ref();
-                        let val: i32 = std::str::from_utf8(&attr.value)?.parse()?;
-                        if matches_local_name(key, b"w") {
-                            width = Some(Twips(val));
-                        } else if matches_local_name(key, b"space") {
-                            space = Some(Twips(val));
+                        let value = std::str::from_utf8(&attr.value)?;
+                        if matches_word_attribute(key, &column_context, b"w") {
+                            width = Some(Twips(value.parse()?));
+                        } else if matches_word_attribute(key, &column_context, b"space") {
+                            space = Some(Twips(value.parse()?));
                         }
                     }
+                    has_unmodeled_properties |=
+                        has_unmodeled_attributes(e, &child_context, &[b"w", b"space"], &[])?;
                     cols.columns.push(CT_Column { width, space });
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"cols") => {
+                Ok(Event::Start(ref e)) if matches_word_element(e, &child_context, b"col") => {
+                    let mut width = None;
+                    let mut space = None;
+                    let column_context = child_context.with_element(e);
+                    for attribute in e.attributes() {
+                        let attribute = attribute?;
+                        let name = attribute.key.as_ref();
+                        let value = std::str::from_utf8(&attribute.value)?;
+                        if matches_word_attribute(name, &column_context, b"w") {
+                            width = Some(Twips(value.parse()?));
+                        } else if matches_word_attribute(name, &column_context, b"space") {
+                            space = Some(Twips(value.parse()?));
+                        }
+                    }
+                    has_unmodeled_properties |=
+                        has_unmodeled_attributes(e, &child_context, &[b"w", b"space"], &[])?;
+                    cols.columns.push(CT_Column { width, space });
+                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                }
+                Ok(Event::Empty(_)) => has_unmodeled_properties = true,
+                Ok(Event::Start(ref e)) => {
+                    has_unmodeled_properties = true;
+                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                }
+                Ok(Event::End(ref e))
+                    if matches_word_name(e.name().as_ref(), &child_context, b"cols") =>
+                {
                     break;
                 }
                 Ok(Event::Eof) => {
@@ -359,7 +435,7 @@ impl CT_SectPr {
             buf.clear();
         }
 
-        Ok(cols)
+        Ok((cols, has_unmodeled_properties))
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -742,9 +818,11 @@ impl CT_Body {
                         )?));
                     } else if matches_word_element(e, context, b"sectPr") {
                         let child_context = context.with_element(e);
-                        content.push(BodyContent::SectionProperties(
-                            CT_SectPr::from_xml_with_context(reader, &child_context)?,
-                        ));
+                        let mut properties =
+                            CT_SectPr::from_xml_with_context(reader, &child_context)?;
+                        properties.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
+                        content.push(BodyContent::SectionProperties(properties));
                     } else {
                         // Capture unknown elements as raw XML
                         content.push(BodyContent::RawXml(capture_raw_element(
@@ -758,7 +836,10 @@ impl CT_Body {
                     } else if matches_word_element(e, context, b"tbl") {
                         content.push(BodyContent::Table(CT_Tbl::new()));
                     } else if matches_word_element(e, context, b"sectPr") {
-                        content.push(BodyContent::SectionProperties(CT_SectPr::empty()));
+                        let mut properties = CT_SectPr::empty();
+                        properties.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
+                        content.push(BodyContent::SectionProperties(properties));
                     } else if !matches_word_element(e, context, b"body") {
                         content.push(BodyContent::RawXml(capture_raw_empty_element(e, context)?));
                     }
@@ -1348,5 +1429,68 @@ mod tests {
         assert_eq!(section.footer_refs.len(), 1);
         assert_eq!(section.footer_refs[0].rel_id, "rId8");
         assert!(section.extra_xml.is_empty());
+    }
+
+    #[test]
+    fn expanded_section_properties_are_namespace_aware_and_equivalent() {
+        let xml = format!(
+            concat!(
+                r#"<a:document xmlns:a="{}"><a:body><a:sectPr>"#,
+                r#"<a:pgSz a:w="12240" a:h="15840" a:orient="portrait"></a:pgSz>"#,
+                r#"<a:pgMar a:top="1440" a:right="1200" a:bottom="1440" a:left="1200"></a:pgMar>"#,
+                r#"<a:type a:val="continuous"></a:type>"#,
+                r#"<a:cols a:num="2" a:equalWidth="false"><a:col a:w="5000" a:space="720"></a:col></a:cols>"#,
+                r#"<a:titlePg a:val="false"></a:titlePg>"#,
+                r#"</a:sectPr></a:body></a:document>"#,
+            ),
+            W_NS
+        );
+
+        let parsed = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        let section = parsed.body.sect_pr().unwrap();
+        assert_eq!(section.page_width, Some(Twips(12240)));
+        assert_eq!(section.page_height, Some(Twips(15840)));
+        assert_eq!(section.margin_right, Some(Twips(1200)));
+        assert_eq!(section.section_type, Some(ST_SectionType::Continuous));
+        assert_eq!(section.title_pg, Some(false));
+        let columns = section.columns.as_ref().unwrap();
+        assert_eq!(columns.num, Some(2));
+        assert_eq!(columns.columns[0].width, Some(Twips(5000)));
+        assert!(!section.has_unmodeled_properties);
+    }
+
+    #[test]
+    fn foreign_and_unsupported_section_properties_are_not_silently_interpreted() {
+        let xml = format!(
+            concat!(
+                r#"<w:document xmlns:w="{}" xmlns:x="urn:foreign"><w:body><w:sectPr>"#,
+                r#"<x:pgSz x:w="not-a-number"/><w:docGrid/><w:pgBorders/>"#,
+                r#"</w:sectPr></w:body></w:document>"#,
+            ),
+            W_NS
+        );
+
+        let parsed = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        let section = parsed.body.sect_pr().unwrap();
+        assert_eq!(section.page_width, None);
+        assert_eq!(section.extra_xml.len(), 3);
+        assert!(section.has_unmodeled_properties);
+    }
+
+    #[test]
+    fn unmodeled_attributes_on_section_properties_are_observable() {
+        let xml = format!(
+            concat!(
+                r#"<w:document xmlns:w="{}"><w:body><w:sectPr>"#,
+                r#"<w:pgSz w:w="12240" w:code="9"/>"#,
+                r#"</w:sectPr></w:body></w:document>"#,
+            ),
+            W_NS
+        );
+
+        let parsed = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        let section = parsed.body.sect_pr().unwrap();
+        assert_eq!(section.page_width, Some(Twips(12240)));
+        assert!(section.has_unmodeled_properties);
     }
 }

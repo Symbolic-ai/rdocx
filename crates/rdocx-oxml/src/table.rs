@@ -5,9 +5,10 @@ use quick_xml::{Reader, Writer};
 
 use crate::borders::CT_BorderEdge;
 use crate::error::{OxmlError, Result};
+#[cfg(test)]
+use crate::namespace::matches_local_name;
 use crate::namespace::{
-    is_word_element, matches_local_name, matches_word_attribute, matches_word_element,
-    matches_word_name,
+    has_unmodeled_attributes, matches_word_attribute, matches_word_element, matches_word_name,
 };
 use crate::properties::{CT_Shd, get_val_attr_with_context};
 use crate::raw_xml::{
@@ -68,16 +69,28 @@ impl CT_TblBorders {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
+        Self::from_xml_with_context_and_completeness(reader, context).map(|(borders, _)| borders)
+    }
+
+    fn from_xml_with_context_and_completeness(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<(Self, bool)> {
         let mut borders = CT_TblBorders::default();
+        let mut has_unmodeled_properties = false;
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
-                    Self::parse_edge(e, context, &mut borders)?;
+                    if !Self::parse_edge(e, context, &mut borders)? {
+                        has_unmodeled_properties = true;
+                    }
                 }
                 Ok(Event::Start(ref e)) => {
-                    Self::parse_edge(e, context, &mut borders)?;
+                    if !Self::parse_edge(e, context, &mut borders)? {
+                        has_unmodeled_properties = true;
+                    }
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
                 Ok(Event::End(ref e))
@@ -97,14 +110,25 @@ impl CT_TblBorders {
             buf.clear();
         }
 
-        Ok(borders)
+        Ok((borders, has_unmodeled_properties))
     }
 
     fn parse_edge(
         e: &BytesStart<'_>,
         context: &NamespaceContext,
         borders: &mut Self,
-    ) -> Result<()> {
+    ) -> Result<bool> {
+        let modeled = matches_word_element(e, context, b"top")
+            || matches_word_element(e, context, b"bottom")
+            || matches_word_element(e, context, b"left")
+            || matches_word_element(e, context, b"start")
+            || matches_word_element(e, context, b"right")
+            || matches_word_element(e, context, b"end")
+            || matches_word_element(e, context, b"insideH")
+            || matches_word_element(e, context, b"insideV");
+        if !modeled {
+            return Ok(false);
+        }
         if matches_word_element(e, context, b"top") {
             let edge = CT_BorderEdge::from_xml_attrs_with_context(e, context)?;
             borders.top = Some(edge);
@@ -128,7 +152,12 @@ impl CT_TblBorders {
             let edge = CT_BorderEdge::from_xml_attrs_with_context(e, context)?;
             borders.inside_v = Some(edge);
         }
-        Ok(())
+        Ok(!has_unmodeled_attributes(
+            e,
+            context,
+            &[b"val", b"sz", b"space", b"color"],
+            &[],
+        )?)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
@@ -175,50 +204,107 @@ pub struct CT_TblCellMar {
 }
 
 impl CT_TblCellMar {
-    fn parse_edge(e: &BytesStart) -> Result<Option<Twips>> {
+    fn parse_edge(e: &BytesStart, context: &NamespaceContext) -> Result<(Option<Twips>, bool)> {
+        let element_context = context.with_element(e);
+        let mut width = None;
+        let mut width_type_is_modeled = true;
         for attr in e.attributes() {
             let attr = attr?;
-            if matches_local_name(attr.key.as_ref(), b"w") {
+            if matches_word_attribute(attr.key.as_ref(), &element_context, b"w") {
                 let val: i32 = std::str::from_utf8(&attr.value)?.parse()?;
-                return Ok(Some(Twips(val)));
+                width = Some(Twips(val));
+            } else if matches_word_attribute(attr.key.as_ref(), &element_context, b"type") {
+                width_type_is_modeled = std::str::from_utf8(&attr.value)? == "dxa";
             }
         }
-        Ok(None)
+        let has_unmodeled_properties =
+            has_unmodeled_attributes(e, context, &[b"w", b"type"], &[])? || !width_type_is_modeled;
+        Ok((width, has_unmodeled_properties))
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context_and_completeness(reader, &NamespaceContext::default())
+            .map(|(margins, _)| margins)
+    }
+
+    fn from_xml_with_context_and_completeness(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<(Self, bool)> {
         let mut mar = CT_TblCellMar::default();
+        let mut has_unmodeled_properties = false;
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"top") {
-                        mar.top = Self::parse_edge(e)?;
-                    } else if matches_local_name(name.as_ref(), b"bottom") {
-                        mar.bottom = Self::parse_edge(e)?;
-                    } else if matches_local_name(name.as_ref(), b"left")
-                        || matches_local_name(name.as_ref(), b"start")
+                    if matches_word_element(e, context, b"top") {
+                        let (value, unmodeled) = Self::parse_edge(e, context)?;
+                        mar.top = value;
+                        has_unmodeled_properties |= unmodeled;
+                    } else if matches_word_element(e, context, b"bottom") {
+                        let (value, unmodeled) = Self::parse_edge(e, context)?;
+                        mar.bottom = value;
+                        has_unmodeled_properties |= unmodeled;
+                    } else if matches_word_element(e, context, b"left")
+                        || matches_word_element(e, context, b"start")
                     {
-                        mar.left = Self::parse_edge(e)?;
-                    } else if matches_local_name(name.as_ref(), b"right")
-                        || matches_local_name(name.as_ref(), b"end")
+                        let (value, unmodeled) = Self::parse_edge(e, context)?;
+                        mar.left = value;
+                        has_unmodeled_properties |= unmodeled;
+                    } else if matches_word_element(e, context, b"right")
+                        || matches_word_element(e, context, b"end")
                     {
-                        mar.right = Self::parse_edge(e)?;
+                        let (value, unmodeled) = Self::parse_edge(e, context)?;
+                        mar.right = value;
+                        has_unmodeled_properties |= unmodeled;
+                    } else {
+                        has_unmodeled_properties = true;
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tblCellMar") => {
+                Ok(Event::Start(ref e)) => {
+                    if matches_word_element(e, context, b"top")
+                        || matches_word_element(e, context, b"bottom")
+                        || matches_word_element(e, context, b"left")
+                        || matches_word_element(e, context, b"start")
+                        || matches_word_element(e, context, b"right")
+                        || matches_word_element(e, context, b"end")
+                    {
+                        let (value, unmodeled) = Self::parse_edge(e, context)?;
+                        if matches_word_element(e, context, b"top") {
+                            mar.top = value;
+                        } else if matches_word_element(e, context, b"bottom") {
+                            mar.bottom = value;
+                        } else if matches_word_element(e, context, b"left")
+                            || matches_word_element(e, context, b"start")
+                        {
+                            mar.left = value;
+                        } else {
+                            mar.right = value;
+                        }
+                        has_unmodeled_properties |= unmodeled;
+                    } else {
+                        has_unmodeled_properties = true;
+                    }
+                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                }
+                Ok(Event::End(ref e))
+                    if matches_word_name(e.name().as_ref(), context, b"tblCellMar") =>
+                {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement(
+                        "closing w:tblCellMar".to_string(),
+                    ));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
             buf.clear();
         }
 
-        Ok(mar)
+        Ok((mar, has_unmodeled_properties))
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -482,29 +568,43 @@ impl CT_TblPr {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
                     if matches_word_element(e, context, b"tblBorders") {
+                        pr.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
                         pr.borders = Some(CT_TblBorders::default());
                     } else if matches_word_element(e, context, b"tblCellMar") {
+                        pr.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
                         pr.cell_margin = Some(CT_TblCellMar::default());
-                    } else if !Self::parse_property_element(e, context, &mut pr)?
-                        && is_word_element(e, context)
-                    {
+                    } else if !Self::parse_property_element(e, context, &mut pr)? {
                         pr.has_unmodeled_properties = true;
                     }
                 }
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     if matches_word_element(e, context, b"tblBorders") {
+                        pr.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
                         let child_context = context.with_element(e);
-                        pr.borders = Some(CT_TblBorders::from_xml_with_context(
-                            reader,
-                            &child_context,
-                        )?);
+                        let (borders, has_unmodeled_properties) =
+                            CT_TblBorders::from_xml_with_context_and_completeness(
+                                reader,
+                                &child_context,
+                            )?;
+                        pr.has_unmodeled_properties |= has_unmodeled_properties;
+                        pr.borders = Some(borders);
                     } else if matches_word_element(e, context, b"tblCellMar") {
-                        pr.cell_margin = Some(CT_TblCellMar::from_xml(reader)?);
+                        pr.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
+                        let child_context = context.with_element(e);
+                        let (cell_margin, has_unmodeled_properties) =
+                            CT_TblCellMar::from_xml_with_context_and_completeness(
+                                reader,
+                                &child_context,
+                            )?;
+                        pr.has_unmodeled_properties |= has_unmodeled_properties;
+                        pr.cell_margin = Some(cell_margin);
                     } else {
-                        if !Self::parse_property_element(e, context, &mut pr)?
-                            && is_word_element(e, context)
-                        {
+                        if !Self::parse_property_element(e, context, &mut pr)? {
                             pr.has_unmodeled_properties = true;
                         }
                         reader.read_to_end_into(name, &mut Vec::new())?;
@@ -533,14 +633,18 @@ impl CT_TblPr {
         pr: &mut Self,
     ) -> Result<bool> {
         let element_context = context.with_element(e);
+        let allowed_word_attributes: &[&[u8]];
         if matches_word_element(e, context, b"tblStyle") {
             pr.style_id = get_val_attr_with_context(e, &element_context)?;
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"tblW") {
             pr.width = Some(CT_TblWidth::from_xml_attrs_with_context(e, context)?);
+            allowed_word_attributes = &[b"w", b"type"];
         } else if matches_word_element(e, context, b"jc") {
             if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 pr.jc = Some(ST_Jc::from_str(&val)?);
             }
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"tblLayout") {
             for attribute in e.attributes() {
                 let attribute = attribute?;
@@ -549,15 +653,29 @@ impl CT_TblPr {
                     break;
                 }
             }
+            allowed_word_attributes = &[b"type"];
         } else if matches_word_element(e, context, b"tblInd") {
             pr.indent = Some(CT_TblWidth::from_xml_attrs_with_context(e, context)?);
+            allowed_word_attributes = &[b"w", b"type"];
         } else if matches_word_element(e, context, b"shd") {
             pr.shading = Some(CT_Shd::from_xml_attrs_with_context(e, context)?);
+            allowed_word_attributes = &[b"val", b"color", b"fill"];
         } else if matches_word_element(e, context, b"tblLook") {
             pr.look = Some(CT_TblLook::from_xml_attrs_with_context(e, context)?);
+            allowed_word_attributes = &[
+                b"val",
+                b"firstRow",
+                b"lastRow",
+                b"firstColumn",
+                b"lastColumn",
+                b"noHBand",
+                b"noVBand",
+            ];
         } else {
             return Ok(false);
         }
+        pr.has_unmodeled_properties |=
+            has_unmodeled_attributes(e, context, allowed_word_attributes, &[])?;
         Ok(true)
     }
 
@@ -773,16 +891,12 @@ impl CT_TrPr {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
-                    if !Self::parse_property_element(e, context, &mut pr)?
-                        && is_word_element(e, context)
-                    {
+                    if !Self::parse_property_element(e, context, &mut pr)? {
                         pr.has_unmodeled_properties = true;
                     }
                 }
                 Ok(Event::Start(ref e)) => {
-                    if !Self::parse_property_element(e, context, &mut pr)?
-                        && is_word_element(e, context)
-                    {
+                    if !Self::parse_property_element(e, context, &mut pr)? {
                         pr.has_unmodeled_properties = true;
                     }
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
@@ -808,6 +922,7 @@ impl CT_TrPr {
         pr: &mut CT_TrPr,
     ) -> Result<bool> {
         let element_context = context.with_element(e);
+        let allowed_word_attributes: &[&[u8]];
         if matches_word_element(e, context, b"trHeight") {
             for attr in e.attributes() {
                 let attr = attr?;
@@ -819,27 +934,42 @@ impl CT_TrPr {
                     pr.height_rule = Some(val.to_string());
                 }
             }
+            allowed_word_attributes = &[b"val", b"hRule"];
         } else if matches_word_element(e, context, b"tblHeader") {
             pr.header = Some(parse_toggle_element(e, &element_context, "tblHeader")?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"jc") {
             if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 pr.jc = Some(ST_Jc::from_str(&val)?);
             }
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"cnfStyle") {
             pr.cnf_style = get_val_attr_with_context(e, &element_context)?;
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"cantSplit") {
             pr.cant_split = Some(parse_toggle_element(e, &element_context, "cantSplit")?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"gridBefore")
             && let Some(val) = get_val_attr_with_context(e, &element_context)?
         {
             pr.grid_before = Some(val.parse()?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"gridAfter")
             && let Some(val) = get_val_attr_with_context(e, &element_context)?
         {
             pr.grid_after = Some(val.parse()?);
+            allowed_word_attributes = &[b"val"];
+        } else if matches_word_element(e, context, b"gridBefore")
+            || matches_word_element(e, context, b"gridAfter")
+        {
+            allowed_word_attributes = &[b"val"];
         } else if !matches_word_element(e, context, b"gridAfter") {
             return Ok(false);
+        } else {
+            allowed_word_attributes = &[b"val"];
         }
+        pr.has_unmodeled_properties |=
+            has_unmodeled_attributes(e, context, allowed_word_attributes, &[])?;
         Ok(true)
     }
 
@@ -990,25 +1120,28 @@ impl CT_TcPr {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
                     if matches_word_element(e, context, b"tcBorders") {
+                        pr.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
                         pr.borders = Some(CT_TblBorders::default());
-                    } else if !Self::parse_property_element(e, context, &mut pr)?
-                        && is_word_element(e, context)
-                    {
+                    } else if !Self::parse_property_element(e, context, &mut pr)? {
                         pr.has_unmodeled_properties = true;
                     }
                 }
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     if matches_word_element(e, context, b"tcBorders") {
+                        pr.has_unmodeled_properties |=
+                            has_unmodeled_attributes(e, context, &[], &[])?;
                         let child_context = context.with_element(e);
-                        pr.borders = Some(CT_TblBorders::from_xml_with_context(
-                            reader,
-                            &child_context,
-                        )?);
+                        let (borders, has_unmodeled_properties) =
+                            CT_TblBorders::from_xml_with_context_and_completeness(
+                                reader,
+                                &child_context,
+                            )?;
+                        pr.has_unmodeled_properties |= has_unmodeled_properties;
+                        pr.borders = Some(borders);
                     } else {
-                        if !Self::parse_property_element(e, context, &mut pr)?
-                            && is_word_element(e, context)
-                        {
+                        if !Self::parse_property_element(e, context, &mut pr)? {
                             pr.has_unmodeled_properties = true;
                         }
                         reader.read_to_end_into(name, &mut Vec::new())?;
@@ -1035,8 +1168,10 @@ impl CT_TcPr {
         pr: &mut CT_TcPr,
     ) -> Result<bool> {
         let element_context = context.with_element(e);
+        let allowed_word_attributes: &[&[u8]];
         if matches_word_element(e, context, b"tcW") {
             pr.width = Some(CT_TblWidth::from_xml_attrs_with_context(e, context)?);
+            allowed_word_attributes = &[b"w", b"type"];
         } else if matches_word_element(e, context, b"gridSpan") {
             if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 let span = val.parse()?;
@@ -1047,27 +1182,41 @@ impl CT_TcPr {
                 }
                 pr.grid_span = Some(span);
             }
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"hMerge") {
             pr.h_merge = Some(parse_merge_element(e, &element_context, "hMerge")?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"vMerge") {
             pr.v_merge = Some(parse_merge_element(e, &element_context, "vMerge")?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"vAlign") {
             if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 pr.v_align = Some(ST_VerticalJc::from_str(&val));
             }
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"shd") {
             pr.shading = Some(CT_Shd::from_xml_attrs_with_context(e, context)?);
+            allowed_word_attributes = &[b"val", b"color", b"fill"];
         } else if matches_word_element(e, context, b"cnfStyle") {
             pr.cnf_style = get_val_attr_with_context(e, &element_context)?;
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"noWrap") {
             pr.no_wrap = Some(parse_toggle_element(e, &element_context, "noWrap")?);
+            allowed_word_attributes = &[b"val"];
         } else if matches_word_element(e, context, b"textDirection")
             && let Some(val) = get_val_attr_with_context(e, &element_context)?
         {
             pr.text_direction = Some(val);
+            allowed_word_attributes = &[b"val"];
+        } else if matches_word_element(e, context, b"textDirection") {
+            allowed_word_attributes = &[b"val"];
         } else if !matches_word_element(e, context, b"textDirection") {
             return Ok(false);
+        } else {
+            allowed_word_attributes = &[b"val"];
         }
+        pr.has_unmodeled_properties |=
+            has_unmodeled_attributes(e, context, allowed_word_attributes, &[])?;
         Ok(true)
     }
 
@@ -2182,6 +2331,56 @@ mod tests {
             r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid>"#,
             r#"<w:tr><w:trPr><w:tblCellSpacing/></w:trPr>"#,
             r#"<w:tc><w:tcPr><w:fitText/></w:tcPr><w:p/></w:tc></w:tr>"#,
+        ));
+
+        assert!(table.properties.as_ref().unwrap().has_unmodeled_properties);
+        assert!(
+            table.rows[0]
+                .properties
+                .as_ref()
+                .unwrap()
+                .has_unmodeled_properties
+        );
+        assert!(
+            table.rows[0].cells[0]
+                .properties
+                .as_ref()
+                .unwrap()
+                .has_unmodeled_properties
+        );
+    }
+
+    #[test]
+    fn extension_attributes_and_nested_cell_borders_make_properties_incomplete() {
+        let table = parse_table(concat!(
+            r#"<w:tblPr><w:tblW w:w="100" w:type="dxa" w14:foo="1" xmlns:w14="urn:w14"/></w:tblPr>"#,
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid>"#,
+            r#"<w:tr><w:trPr><w:trHeight w:val="240" w14:foo="1" xmlns:w14="urn:w14"/></w:trPr>"#,
+            r#"<w:tc><w:tcPr><w:tcBorders><w:tl2br w:val="single"/></w:tcBorders>"#,
+            r#"</w:tcPr><w:p/></w:tc></w:tr>"#,
+        ));
+
+        assert!(table.properties.as_ref().unwrap().has_unmodeled_properties);
+        assert!(
+            table.rows[0]
+                .properties
+                .as_ref()
+                .unwrap()
+                .has_unmodeled_properties
+        );
+        let cell_properties = table.rows[0].cells[0].properties.as_ref().unwrap();
+        assert!(cell_properties.has_unmodeled_properties);
+        assert!(cell_properties.borders.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn foreign_extension_property_children_are_observable() {
+        let table = parse_table(concat!(
+            r#"<w:tblPr><x:effect xmlns:x="urn:foreign"/></w:tblPr>"#,
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid>"#,
+            r#"<w:tr><w:trPr><x:effect xmlns:x="urn:foreign"/></w:trPr>"#,
+            r#"<w:tc><w:tcPr><x:effect xmlns:x="urn:foreign"/></w:tcPr><w:p/></w:tc>"#,
+            r#"</w:tr>"#,
         ));
 
         assert!(table.properties.as_ref().unwrap().has_unmodeled_properties);
