@@ -123,20 +123,20 @@ entry points.
 ## Versioning
 
 The 14 implemented shared and PowerPoint publication candidates use the
-explicit common incubating version 0.1.3 in their manifests and workspace
-pins. All 14 are published at that version through the reviewed
-`rpptx-v0.1.3` release. The released `rdocx-*` crates continue to use the
-separate workspace version. Version preparation and manifest eligibility do
-not authorize a later publication. Every release still requires `/release`
-at an exact reviewed SHA and separate final approval at the external mutation
-boundary. `oxml-cli-support` is the format-neutral owner of range parsing,
-JSON envelope, and output-path contracts. It has no dependency on either
-document family, while CLI binaries depend inward on it.
+explicit common incubating version 0.2.0 in their manifests and workspace
+pins. The complete 14-package family is published at 0.2.0 from the annotated
+`rpptx-v0.2.0` tag at its reviewed sprint SHA. The released `rdocx-*` crates
+continue to use the separate workspace version. Version preparation and
+manifest eligibility do not authorize publication. Every release still
+requires `/release` at an exact reviewed SHA and separate final approval at
+the external mutation boundary. `oxml-cli-support` is the format-neutral owner
+of range parsing, JSON envelope, and output-path contracts. It has no
+dependency on either document family, while CLI binaries depend inward on it.
 
 The immutable `rpptx-v0.1.2` release contains the earlier 12-package family.
 `oxml-cli-support` and `rpptx-cli` remain unpublished at 0.1.2. The complete
-14-package family is published at 0.1.3. No existing tag or registry version
-was moved or overwritten.
+14-package family is published at the immutable 0.1.3 and 0.2.0 boundaries. No
+existing tag or registry version was moved or overwritten.
 
 The `rpptx` facade owns formatting-preserving presentation text replacement.
 `Presentation::replace_text` applies literal, non-recursive replacement across

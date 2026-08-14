@@ -139,15 +139,15 @@ oxml-core -> oxml-opc -> oxml-media -> oxml-drawing -> oxml-layout -> oxml-pdf
   -> rpptx-oxml -> rpptx-layout -> rpptx-render -> rpptx-chart -> rpptx -> rpptx-cli
 ```
 
-The fourteen crates.io names in this graph are reserved under the owner
+The fourteen crates.io names in this graph are published at 0.2.0 under the owner
 `mantissaman`: `oxml-core`, `oxml-opc`, `oxml-media`,
 `oxml-drawing`, `oxml-layout`, `oxml-pdf`, `oxml-sml`, `oxml-cli-support`,
 `rpptx-oxml`, `rpptx-layout`, `rpptx-render`, `rpptx-chart`, `rpptx`, and
 `rpptx-cli`. All 14 implemented packages use the reviewed release path
 described below. The earlier 12-package family is published at 0.1.2.
 `oxml-cli-support` and `rpptx-cli` are publishable but remain unpublished at
-that version. The complete 14-package family is published at the common
-version 0.1.3.
+that version. The complete 14-package family is published at the immutable
+0.1.3 and 0.2.0 boundaries.
 
 `oxml-py-support`, `rpptx-py`, and `rpptx-wasm` are not reserved on crates.io.
 The binding crates are not published there. `rpptx-wasm` is an implemented
@@ -156,7 +156,7 @@ the local `@tensorbee/rpptx-wasm` bundler tarball. Registry publication remains
 unconfigured and unauthorized.
 
 The exact incubating crates.io allowlist contains 14 implemented shared and
-PowerPoint packages published at the common version 0.1.3. They are
+PowerPoint packages published at 0.2.0. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `rpptx-oxml`, `rpptx-chart`,
 `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. Manifest eligibility
@@ -166,10 +166,10 @@ separately approved `/release` invocation at the exact reviewed SHA.
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires workspace 0.5.0, nine internal pins, eleven
+stable regression requires workspace 0.6.0, nine internal pins, eleven
 inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
-set. The incubating regression requires the exact 0.1.3 versions, pins,
+set. The incubating regression requires the exact 0.2.0 versions, pins,
 lockfile entries, publication flags, and non-empty package descriptions. The
 workflow then runs
 `cargo publish --workspace --dry-run` with an exact local source patch for each
@@ -216,17 +216,20 @@ possible and never rewrite README prose by pattern.
 that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
 cargo-release's effective `workspace` shared-version group and the
-`v{{version}}` tag template. That shared-version group is at 0.5.0,
-and its two Python project versions and rdocx WASM contract literals are also
-0.5.0. The exact seven-package stable family is published at 0.5.0 from the
-annotated `v0.5.0` tag whose target is the reviewed sprint SHA. The immutable
-0.4.1 registry releases remain available. No binding, WASM, Python, npm, or
+`v{{version}}` tag template. That shared-version group is at 0.6.0, and its two
+Python project versions and rdocx WASM contract literals are also 0.6.0. The
+exact seven-package stable family is published at 0.6.0 from the annotated
+`v0.6.0` tag whose target is the reviewed sprint SHA. The immutable 0.4.1 and
+0.5.0 registry releases remain available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
 The 15 implemented `oxml-*` and `rpptx*` package manifests are prepared at
-explicit version 0.1.3, use the named `incubating` group, and carry the
+explicit version 0.2.0, use the named `incubating` group, and carry the
 `rpptx-v{{version}}` template. That preparation group is the exact 14-package
 crates.io family listed above plus unpublished `rpptx-wasm`. The crates.io
-allowlist remains exactly 14 packages, and all 14 are published at 0.1.3.
+allowlist remains exactly 14 packages. All 14 are published at 0.1.3, while
+all 14 are also published at 0.2.0 from the annotated `rpptx-v0.2.0` tag at
+reviewed SHA `1b13dbe4a5454f1d1629ff8915287b26daa10ed0`. The immutable 0.1.3
+release remains available, and `rpptx-wasm` remains unpublished.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.
@@ -277,19 +280,23 @@ unresolved-symbol link failure that is easy to misdiagnose as something else.
 **A dedicated no-default-features job.** It runs `cargo test -p oxml-layout
 --no-default-features`, which exercises the font-isolation path used by WASM.
 
-**Stable package READMEs in the docs job.** Every package in the seven-crate
-stable family declares and packages exactly one README. The root file is the
-high-level `rdocx` guide. `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`,
-`rdocx-html`, `rdocx-pdf`, and `rdocx-cli` use focused crate-local files. The
+**Workspace package READMEs in the docs job.** Every one of the 26 workspace
+packages explicitly declares one distinct README. The root file is the
+high-level `rdocx` guide. The other 25 packages use focused crate-local files.
+The documents describe purpose, direct use, neighbouring package boundaries,
+publication status, and an example suited to the actual consumer surface. The
 two deprecated shims direct new consumers to `oxml-opc` and `oxml-pdf`.
 
 After the workspace documentation build, `scripts/readme_doctests.py` checks
-that inventory, validates the shell and dependency snippets, and compiles all
-twelve Rust examples across the six stable libraries. It discovers each rlib
-from Cargo JSON messages and passes it to rustdoc with the repository edition,
-dependency search path, matching external crate binding, and warnings denied.
-The same runner is part of canonical non-fast verification. Archive checks
-assert that every stable package carries its intended README.
+the exact 26-package inventory, validates Rust, shell, Python, and JavaScript
+snippets, and compiles 26 Rust examples across the 20 Rust-library READMEs. It
+discovers each primary and companion rlib from one Cargo build graph and passes
+them to rustdoc with the repository edition, dependency search path, matching
+external crate bindings, and warnings denied.
+The same runner is part of canonical non-fast verification. It creates each of
+the 21 publishable archives, requires exactly one packaged README, and
+byte-compares it with the declared source. Version, tag, publication, and
+release-family metadata remain unchanged.
 
 **A WASM target and Node job.** It installs the `wasm32-unknown-unknown` target,
 uses exact Node 24.11.1 and wasm-pack 0.15.0, and checks both facade-backed WASM

@@ -1,53 +1,47 @@
-# Current Sprint, S38
+# Current Sprint, S39
 
 **Milestone**: X Cross-cutting.
 
-**Goal**: integrate PR 25 with its contributor credit intact, harden its new
-Word composition APIs, and publish useful documentation for every stable
-crate. After the integrated result passes full verification and sprint review,
-prepare and release the complete stable family at 0.5.0 through the dedicated
-release workflow.
+**Goal**: every Cargo workspace package has documentation at its package
+boundary, and every crates.io-eligible package publishes that documentation at
+the next minor version through its exact release family.
 
 ## Spec references
 
-- `docs/hld/04-opc-and-packaging.md`, for relationship ownership and
-  package-preserving document mutation.
-- `docs/hld/10-bindings-spec.md`, for the public facade and downstream binding
-  compatibility boundary.
-- `docs/hld/12-testing-strategy.md`, for round-trip, README, hash, and external
-  contribution gates.
-- `docs/hld/14-development-backlog.md`, for the two story contracts and their
-  exact acceptance gates.
-- `docs/hld/15-build-and-toolchain.md`, for stable package documentation,
-  archive inventory, version preparation, and release authority.
+- `docs/hld/12-testing-strategy.md`, for README compilation and package
+  inventory gates.
+- `docs/hld/11-migration-plan.md`, for the stable family release boundary.
+- `docs/hld/03-architecture.md`, for the incubating family version boundary.
+- `docs/hld/14-development-backlog.md`, for the exact F-X009, F-X010, and
+  F-X011 acceptance gates.
+- `docs/hld/15-build-and-toolchain.md`, for package metadata and publication
+  boundaries.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X007 | Integrate PR 25 and stable crate documentation | L | done | - |
-| F-X008 | Tag v0.5.0 | S | done | - |
+| F-X009 | README coverage for every workspace crate | L | done | |
+| F-X010 | Tag v0.6.0 | S | done | |
+| F-X011 | Tag rpptx-v0.2.0 | S | done | |
 
 ## Sequencing note
 
-Rows are listed in dependency order, not F-ID order.
-
-F-X007 merges and hardens the contributor change before the stable version is
-prepared. F-X008 depends on that reviewed implementation and requests separate
-final approval immediately before the first release mutation.
+The documentation story completes first. The stable train then moves to 0.6.0
+and publishes seven crates. After that release is verified, the incubating
+train moves to 0.2.0 and publishes fourteen crates. The five `publish = false`
+packages move with their local train but are not published.
 
 ## Definition of done for this sprint
 
-- PR 25 is merged through GitHub into `sprint/s38` with a merge note that
-  explains the value of the fix and credits Jon Stokes as `@jonstokes`.
-- The new custom-list, numbering, hyperlink, hard-break, and fixed-table APIs
-  preserve package state and pass their focused regression and round-trip
-  gates.
-- Every stable crate has current package documentation and a README that tells
-  users when and how to use it. All Rust examples compile.
-- `/verify --full` passes with all 28 deterministic hashes unchanged and every
-  stable archive below 10 MiB.
-- `/release v0.5.0` receives separate final approval at the reviewed SHA before
-  creating or pushing the tag.
-- All seven stable packages resolve from crates.io at 0.5.0 with the expected
-  owner, and no incubating, WASM, Python, or npm package is published.
+- All 26 workspace packages declare a README.
+- Every README states purpose, audience, package relationships, and a concrete
+  usage example.
+- Rust examples compile where applicable, and CLI, Python, and JavaScript
+  examples pass exact syntax and package-name contracts.
+- Every publishable archive contains exactly one intended README.
+- `/verify --full` passes with all 28 deterministic hashes unchanged.
+- All seven stable crates publish at 0.6.0 and render their README on crates.io.
+- All fourteen incubating crates publish at 0.2.0 and render their README on
+  crates.io.
+- Python, WASM, npm, and PyPI publication authority remains unchanged.

@@ -53,6 +53,7 @@ defended.
 | S36 | M13, X | 8 | 8 | 0 | 13 | 8 | Completed both v1 CLIs, local npm package assembly, README doctests, sample-generator deduplication, and concurrent test isolation. All 28 hashes remained unchanged, and no Rust or npm package was published |
 | S37 | M13, X | 1 | 1 | 0 | 1 | 1 | Published and verified the complete 14-package rpptx 0.1.3 family through the reviewed release workflow. The M13 hosted wheel gate remains satisfied, all 28 hashes remained unchanged, and no npm package was published |
 | S38 | X | 2 | 2 | 0 | 5 | 2 | Integrated PR 25 with Jon Stokes credited, added compile-checked documentation for every stable crate, and published the seven-package stable rdocx 0.5.0 family. All 28 hashes remained unchanged, and no incubating, WASM, Python, or npm package was published |
+| S39 | X | 3 | 3 | 0 | 6 | 3 | Added compile-checked README coverage for all 26 workspace crates, published the seven-package stable rdocx 0.6.0 family, and published the complete 14-package rpptx 0.2.0 family. Every crates.io README rendered, all 28 hashes remained unchanged, and no WASM, Python, npm, or PyPI package was published |
 
 ## Completed features
 
@@ -220,6 +221,9 @@ defended.
 | F-X006 | S37 | S | 1 | 1 | Published and verified the complete rpptx 0.1.3 family |
 | F-X007 | S38 | L | 4 | 1 | 2026-08-14 | Integrated PR 25, stable crate READMEs, and package-preserving numbering XML |
 | F-X008 | S38 | S | 1 | 1 | 2026-08-14 | Published and verified the stable rdocx 0.5.0 family |
+| F-X009 | S39 | L | 4 | 1 | 2026-08-14 | Exact README coverage and usage examples for all 26 workspace packages |
+| F-X010 | S39 | S | 1 | 1 | 2026-08-14 | Published and verified the stable rdocx 0.6.0 family with rendered crate READMEs |
+| F-X011 | S39 | S | 1 | 1 | 2026-08-14 | Published and verified the complete rpptx 0.2.0 family with rendered crate READMEs |
 
 ## Velocity
 
@@ -273,6 +277,7 @@ five working days.
 | S36 | 8 | 8 | 5.00 |
 | S37 | 1 | 1 | 5.00 |
 | S38 | 2 | 2 | 5.00 |
+| S39 | 3 | 3 | 5.00 |
 
 ## Escalation record
 
@@ -315,3 +320,4 @@ was done about it. Empty is the expected state.
 | 2026-08-13 | Sprint estimate variance exceeded 30 percent | S35 | Record 4 actual days against 9 estimated and reforecast 8 pending stories at the observed five stories per active week to about 2 active weeks, retaining dependency-defined sprint boundaries |
 | 2026-08-13 | Sprint estimate variance exceeded 30 percent | S36 | Record 8 actual days against 13 estimated, retain one pending fresh-version release story, and reforecast it as the remaining active sprint |
 | 2026-08-14 | Sprint estimate variance exceeded 30 percent | S38 | Record 2 actual days against 5 estimated. The externally contributed implementation reduced authoring work, while eighteen review passes established the required package-preserving numbering boundary before release |
+| 2026-08-14 | Sprint estimate variance exceeded 30 percent | S39 | Record 3 actual days against 6 estimated. Documentation automation and the established release workflow reduced delivery time while preserving exact package, registry, and rendered README verification |

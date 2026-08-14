@@ -425,20 +425,28 @@ stdout, exit-status verdicts, output validity, replacement persistence,
 document-order text, and bundled-font deterministic render bytes. Process ID
 and an atomic counter isolate temporary workspaces across concurrent runs.
 
-The seven stable package archives each carry one README. The root README is the
-high-level `rdocx` guide, while each companion package has a focused README
-that states when to use it and either demonstrates its public boundary or
-directs users away from a deprecated shim. The CLI uses shell examples. The
-six stable libraries contain twelve total `rust,no_run` examples, so rustdoc
-compiles them without executing filesystem writes.
+All 26 workspace packages explicitly declare one distinct README. The root
+README is the high-level `rdocx` guide. Each crate-local document states the
+package purpose, direct-use guidance, adjacent package relationship,
+publication status, and a concrete Rust, CLI, Python, or JavaScript example.
+The compatibility shims direct users to their shared replacements.
+Internal binding and WASM crates state that they are not crates.io packages.
 
 `scripts/readme_doctests.py` validates the exact package-to-README inventory,
-the documented CLI argument names, the deterministic feature guidance, and the
-matching dependency and import names in both compatibility shims. It then
-builds each library with locked dependencies and Cargo JSON messages, locates
-its emitted rlib, and invokes rustdoc with the 2024 edition, warnings denied,
-the dependency search path, and the matching `--extern` binding. The docs job
-and canonical non-fast verification call this same runner.
+the documented CLI argument names, Python and JavaScript surface names,
+deterministic feature guidance, and matching dependency and import names. It
+builds the applicable libraries with locked dependencies and Cargo JSON
+messages, locates each emitted rlib from one package build graph, and invokes
+rustdoc with the 2024 edition, warnings denied, the dependency search path, and
+every matching `--extern` binding. It compiles 26 Rust examples across the 20
+Rust-library READMEs. It also creates all 21 publishable archives and
+byte-compares their single packaged README with the declared source. Archive
+creation uses the same exact 21-package local source patch set as the release
+dry run, so a reviewed version can be checked before its internal dependencies
+exist on crates.io. The patches never enter an archive and upload nothing. The
+docs job and canonical non-fast verification call this same runner.
+The current stable 0.6.0 release also verifies every crates.io README endpoint
+returns non-empty rendered HTML after publication.
 
 ## What CI runs
 

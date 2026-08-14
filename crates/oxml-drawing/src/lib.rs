@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn oxml_drawing_is_an_explicit_publication_candidate() {
         let manifest = include_str!("../Cargo.toml");
-        assert!(manifest.contains("version = \"0.1.3\""));
+        assert!(manifest.contains("version = \"0.2.0\""));
         assert!(manifest.contains("publish = true"));
     }
 }
