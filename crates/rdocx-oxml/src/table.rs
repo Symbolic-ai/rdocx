@@ -6,7 +6,8 @@ use quick_xml::{Reader, Writer};
 use crate::borders::CT_BorderEdge;
 use crate::error::{OxmlError, Result};
 use crate::namespace::{
-    matches_local_name, matches_word_attribute, matches_word_element, matches_word_name,
+    is_word_element, matches_local_name, matches_word_attribute, matches_word_element,
+    matches_word_name,
 };
 use crate::properties::{CT_Shd, get_val_attr_with_context};
 use crate::raw_xml::{
@@ -18,6 +19,14 @@ use crate::shared::ST_Border;
 use crate::shared::ST_Jc;
 use crate::text::CT_P;
 use crate::units::Twips;
+
+const MAX_MODEL_DEPTH: usize = 32;
+
+fn model_depth_error() -> OxmlError {
+    OxmlError::InvalidValue(format!(
+        "recognized model nesting exceeds {MAX_MODEL_DEPTH} levels"
+    ))
+}
 
 /// Write any captured raw XML that belongs immediately before position `pos`.
 ///
@@ -329,6 +338,8 @@ pub struct CT_TblGridCol {
 /// `CT_TblPr` — Table properties.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CT_TblPr {
+    /// Whether this group contained a Word property the reader does not model.
+    pub has_unmodeled_properties: bool,
     /// Table style ID
     pub style_id: Option<String>,
     /// Table width
@@ -469,7 +480,17 @@ impl CT_TblPr {
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, context, &mut pr)?,
+                Ok(Event::Empty(ref e)) => {
+                    if matches_word_element(e, context, b"tblBorders") {
+                        pr.borders = Some(CT_TblBorders::default());
+                    } else if matches_word_element(e, context, b"tblCellMar") {
+                        pr.cell_margin = Some(CT_TblCellMar::default());
+                    } else if !Self::parse_property_element(e, context, &mut pr)?
+                        && is_word_element(e, context)
+                    {
+                        pr.has_unmodeled_properties = true;
+                    }
+                }
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     if matches_word_element(e, context, b"tblBorders") {
@@ -481,7 +502,11 @@ impl CT_TblPr {
                     } else if matches_word_element(e, context, b"tblCellMar") {
                         pr.cell_margin = Some(CT_TblCellMar::from_xml(reader)?);
                     } else {
-                        Self::parse_property_element(e, context, &mut pr)?;
+                        if !Self::parse_property_element(e, context, &mut pr)?
+                            && is_word_element(e, context)
+                        {
+                            pr.has_unmodeled_properties = true;
+                        }
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
@@ -506,7 +531,7 @@ impl CT_TblPr {
         e: &BytesStart<'_>,
         context: &NamespaceContext,
         pr: &mut Self,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let element_context = context.with_element(e);
         if matches_word_element(e, context, b"tblStyle") {
             pr.style_id = get_val_attr_with_context(e, &element_context)?;
@@ -530,8 +555,10 @@ impl CT_TblPr {
             pr.shading = Some(CT_Shd::from_xml_attrs_with_context(e, context)?);
         } else if matches_word_element(e, context, b"tblLook") {
             pr.look = Some(CT_TblLook::from_xml_attrs_with_context(e, context)?);
+        } else {
+            return Ok(false);
         }
-        Ok(())
+        Ok(true)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -707,6 +734,8 @@ fn write_merge_element<W: std::io::Write>(
 /// `CT_TrPr` — Table row properties.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CT_TrPr {
+    /// Whether this group contained a Word property the reader does not model.
+    pub has_unmodeled_properties: bool,
     /// Row height in twips
     pub height: Option<Twips>,
     /// Row height rule: "exact" or "atLeast"
@@ -743,9 +772,19 @@ impl CT_TrPr {
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, context, &mut pr)?,
+                Ok(Event::Empty(ref e)) => {
+                    if !Self::parse_property_element(e, context, &mut pr)?
+                        && is_word_element(e, context)
+                    {
+                        pr.has_unmodeled_properties = true;
+                    }
+                }
                 Ok(Event::Start(ref e)) => {
-                    Self::parse_property_element(e, context, &mut pr)?;
+                    if !Self::parse_property_element(e, context, &mut pr)?
+                        && is_word_element(e, context)
+                    {
+                        pr.has_unmodeled_properties = true;
+                    }
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
                 Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"trPr") => {
@@ -767,7 +806,7 @@ impl CT_TrPr {
         e: &BytesStart<'_>,
         context: &NamespaceContext,
         pr: &mut CT_TrPr,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let element_context = context.with_element(e);
         if matches_word_element(e, context, b"trHeight") {
             for attr in e.attributes() {
@@ -798,8 +837,10 @@ impl CT_TrPr {
             && let Some(val) = get_val_attr_with_context(e, &element_context)?
         {
             pr.grid_after = Some(val.parse()?);
+        } else if !matches_word_element(e, context, b"gridAfter") {
+            return Ok(false);
         }
-        Ok(())
+        Ok(true)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -908,6 +949,8 @@ impl ST_VerticalJc {
 /// `CT_TcPr` — Table cell properties.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CT_TcPr {
+    /// Whether this group contained a Word property the reader does not model.
+    pub has_unmodeled_properties: bool,
     /// Cell width
     pub width: Option<CT_TblWidth>,
     /// Horizontal merge (number of grid columns spanned)
@@ -945,7 +988,15 @@ impl CT_TcPr {
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, context, &mut pr)?,
+                Ok(Event::Empty(ref e)) => {
+                    if matches_word_element(e, context, b"tcBorders") {
+                        pr.borders = Some(CT_TblBorders::default());
+                    } else if !Self::parse_property_element(e, context, &mut pr)?
+                        && is_word_element(e, context)
+                    {
+                        pr.has_unmodeled_properties = true;
+                    }
+                }
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     if matches_word_element(e, context, b"tcBorders") {
@@ -955,7 +1006,11 @@ impl CT_TcPr {
                             &child_context,
                         )?);
                     } else {
-                        Self::parse_property_element(e, context, &mut pr)?;
+                        if !Self::parse_property_element(e, context, &mut pr)?
+                            && is_word_element(e, context)
+                        {
+                            pr.has_unmodeled_properties = true;
+                        }
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
@@ -978,7 +1033,7 @@ impl CT_TcPr {
         e: &BytesStart<'_>,
         context: &NamespaceContext,
         pr: &mut CT_TcPr,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let element_context = context.with_element(e);
         if matches_word_element(e, context, b"tcW") {
             pr.width = Some(CT_TblWidth::from_xml_attrs_with_context(e, context)?);
@@ -1010,8 +1065,10 @@ impl CT_TcPr {
             && let Some(val) = get_val_attr_with_context(e, &element_context)?
         {
             pr.text_direction = Some(val);
+        } else if !matches_word_element(e, context, b"textDirection") {
+            return Ok(false);
         }
-        Ok(())
+        Ok(true)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -1165,6 +1222,17 @@ impl CT_Tc {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
+        Self::from_xml_with_context_at_depth(reader, context, 1)
+    }
+
+    fn from_xml_with_context_at_depth(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+        model_depth: usize,
+    ) -> Result<Self> {
+        if model_depth > MAX_MODEL_DEPTH {
+            return Err(model_depth_error());
+        }
         let mut properties = None;
         let mut content = Vec::new();
         let mut buf = Vec::new();
@@ -1183,9 +1251,10 @@ impl CT_Tc {
                         )?));
                     } else if matches_word_element(e, context, b"tbl") {
                         let child_context = context.with_element(e);
-                        content.push(CellContent::Table(CT_Tbl::from_xml_with_context(
+                        content.push(CellContent::Table(CT_Tbl::from_xml_with_context_at_depth(
                             reader,
                             &child_context,
+                            model_depth + 1,
                         )?));
                     } else {
                         // Content controls (w:sdt), bookmarks and revision
@@ -1294,6 +1363,14 @@ impl CT_Row {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
+        Self::from_xml_with_context_at_depth(reader, context, 1)
+    }
+
+    fn from_xml_with_context_at_depth(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+        model_depth: usize,
+    ) -> Result<Self> {
         let mut properties = None;
         let mut cells = Vec::new();
         let mut extra_xml = Vec::new();
@@ -1307,7 +1384,11 @@ impl CT_Row {
                         properties = Some(CT_TrPr::from_xml_with_context(reader, &child_context)?);
                     } else if matches_word_element(e, context, b"tc") {
                         let child_context = context.with_element(e);
-                        cells.push(CT_Tc::from_xml_with_context(reader, &child_context)?);
+                        cells.push(CT_Tc::from_xml_with_context_at_depth(
+                            reader,
+                            &child_context,
+                            model_depth,
+                        )?);
                     } else {
                         // A cell wrapped in a content control used to be
                         // dropped here, leaving a row with no cells at all.
@@ -1409,6 +1490,17 @@ impl CT_Tbl {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
+        Self::from_xml_with_context_at_depth(reader, context, 1)
+    }
+
+    fn from_xml_with_context_at_depth(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+        model_depth: usize,
+    ) -> Result<Self> {
+        if model_depth > MAX_MODEL_DEPTH {
+            return Err(model_depth_error());
+        }
         let mut properties = None;
         let mut grid = None;
         let mut rows = Vec::new();
@@ -1426,7 +1518,11 @@ impl CT_Tbl {
                         grid = Some(CT_TblGrid::from_xml_with_context(reader, &child_context)?);
                     } else if matches_word_element(e, context, b"tr") {
                         let child_context = context.with_element(e);
-                        rows.push(CT_Row::from_xml_with_context(reader, &child_context)?);
+                        rows.push(CT_Row::from_xml_with_context_at_depth(
+                            reader,
+                            &child_context,
+                            model_depth,
+                        )?);
                     } else {
                         // Rows wrapped in a content control used to be dropped
                         // here, which silently deleted whole tables.
@@ -2077,6 +2173,68 @@ mod tests {
         ));
 
         assert_eq!(table.properties.unwrap().layout.as_deref(), Some("fixed"));
+    }
+
+    #[test]
+    fn unmodeled_table_row_and_cell_properties_are_observable() {
+        let table = parse_table(concat!(
+            r#"<w:tblPr><w:bidiVisual/></w:tblPr>"#,
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid>"#,
+            r#"<w:tr><w:trPr><w:tblCellSpacing/></w:trPr>"#,
+            r#"<w:tc><w:tcPr><w:fitText/></w:tcPr><w:p/></w:tc></w:tr>"#,
+        ));
+
+        assert!(table.properties.as_ref().unwrap().has_unmodeled_properties);
+        assert!(
+            table.rows[0]
+                .properties
+                .as_ref()
+                .unwrap()
+                .has_unmodeled_properties
+        );
+        assert!(
+            table.rows[0].cells[0]
+                .properties
+                .as_ref()
+                .unwrap()
+                .has_unmodeled_properties
+        );
+    }
+
+    #[test]
+    fn recognized_table_nesting_is_bounded() {
+        let mut xml = String::new();
+        for _ in 0..=MAX_MODEL_DEPTH {
+            xml.push_str("<w:tbl><w:tr><w:tc>");
+        }
+        xml.push_str("<w:p/>");
+        for _ in 0..=MAX_MODEL_DEPTH {
+            xml.push_str("</w:tc></w:tr></w:tbl>");
+        }
+
+        let mut reader = Reader::from_str(&xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer) {
+                Ok(Event::Start(ref element))
+                    if matches_local_name(element.name().as_ref(), b"tbl") =>
+                {
+                    break;
+                }
+                Ok(Event::Eof) => panic!("missing table root"),
+                Ok(_) => {}
+                Err(error) => panic!("failed before table root: {error}"),
+            }
+            buffer.clear();
+        }
+
+        let error = CT_Tbl::from_xml(&mut reader).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("recognized model nesting exceeds 32 levels"),
+            "{error}"
+        );
     }
 
     /// A self-closing tblPr or tblGrid must not be captured as extra XML.

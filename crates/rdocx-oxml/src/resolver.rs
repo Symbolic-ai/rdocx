@@ -226,6 +226,7 @@ impl<'a> FormattingResolver<'a> {
 }
 
 fn apply_paragraph_values(target: &mut CT_PPr, source: &CT_PPr) {
+    target.has_unmodeled_properties |= source.has_unmodeled_properties;
     macro_rules! apply {
         ($($field:ident),+ $(,)?) => {
             $(if source.$field.is_some() {
@@ -263,6 +264,7 @@ fn apply_paragraph_values(target: &mut CT_PPr, source: &CT_PPr) {
 }
 
 fn apply_direct_run_values(target: &mut CT_RPr, source: &CT_RPr) {
+    target.has_unmodeled_properties |= source.has_unmodeled_properties;
     macro_rules! apply {
         ($($field:ident),+ $(,)?) => {
             $(if source.$field.is_some() {
@@ -369,6 +371,40 @@ mod tests {
             Some(&direct),
         );
         assert_eq!(resolved.bold, Some(false));
+    }
+
+    #[test]
+    fn unmodeled_property_signals_survive_the_formatting_cascade() {
+        let mut paragraph_style = style("Paragraph", StyleType::Paragraph);
+        paragraph_style.ppr = Some(CT_PPr {
+            has_unmodeled_properties: true,
+            ..Default::default()
+        });
+        paragraph_style.rpr = Some(CT_RPr {
+            has_unmodeled_properties: true,
+            ..Default::default()
+        });
+        let styles = CT_Styles {
+            doc_defaults: None,
+            styles: vec![paragraph_style],
+        };
+        let direct = CT_PPr {
+            style_id: Some("Paragraph".to_string()),
+            ..Default::default()
+        };
+        let resolver = FormattingResolver::new(&styles, None);
+
+        assert!(
+            resolver
+                .resolve_paragraph(Some(&direct))
+                .properties
+                .has_unmodeled_properties
+        );
+        assert!(
+            resolver
+                .resolve_run(Some(&direct), None)
+                .has_unmodeled_properties
+        );
     }
 
     #[test]

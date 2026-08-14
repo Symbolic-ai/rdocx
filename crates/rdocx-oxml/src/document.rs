@@ -6,7 +6,8 @@ use quick_xml::{Reader, Writer};
 use crate::error::{OxmlError, Result};
 use crate::header_footer::{HdrFtrRef, HdrFtrType};
 use crate::namespace::{
-    MC_NS, R_NS, W_NS, matches_local_name, matches_word_element, matches_word_name,
+    MC_NS, R_NS, W_NS, matches_local_name, matches_namespace_attribute, matches_word_attribute,
+    matches_word_element, matches_word_name,
 };
 use crate::properties::get_val_attr;
 use crate::raw_xml::{
@@ -170,6 +171,13 @@ impl CT_SectPr {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    pub fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut sect = CT_SectPr::empty();
         let mut buf = Vec::new();
 
@@ -221,43 +229,13 @@ impl CT_SectPr {
                         }
                     } else if matches_local_name(name.as_ref(), b"cols") {
                         sect.columns = Some(Self::parse_cols_empty(e)?);
-                    } else if matches_local_name(name.as_ref(), b"headerReference") {
-                        let mut hdr_type = HdrFtrType::Default;
-                        let mut rel_id = String::new();
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"type") {
-                                hdr_type = HdrFtrType::from_str(val);
-                            } else if matches_local_name(key, b"id") {
-                                rel_id = val.to_string();
-                            }
+                    } else if matches_word_element(e, context, b"headerReference") {
+                        if let Some(reference) = Self::parse_header_footer_reference(e, context)? {
+                            sect.header_refs.push(reference);
                         }
-                        if !rel_id.is_empty() {
-                            sect.header_refs.push(HdrFtrRef {
-                                hdr_ftr_type: hdr_type,
-                                rel_id,
-                            });
-                        }
-                    } else if matches_local_name(name.as_ref(), b"footerReference") {
-                        let mut ftr_type = HdrFtrType::Default;
-                        let mut rel_id = String::new();
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"type") {
-                                ftr_type = HdrFtrType::from_str(val);
-                            } else if matches_local_name(key, b"id") {
-                                rel_id = val.to_string();
-                            }
-                        }
-                        if !rel_id.is_empty() {
-                            sect.footer_refs.push(HdrFtrRef {
-                                hdr_ftr_type: ftr_type,
-                                rel_id,
-                            });
+                    } else if matches_word_element(e, context, b"footerReference") {
+                        if let Some(reference) = Self::parse_header_footer_reference(e, context)? {
+                            sect.footer_refs.push(reference);
                         }
                     } else if matches_local_name(name.as_ref(), b"titlePg") {
                         sect.title_pg = Some(true);
@@ -268,14 +246,26 @@ impl CT_SectPr {
                 }
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"cols") {
+                    if matches_word_element(e, context, b"cols") {
                         sect.columns = Some(Self::parse_cols_start(reader, e)?);
+                    } else if matches_word_element(e, context, b"headerReference") {
+                        if let Some(reference) = Self::parse_header_footer_reference(e, context)? {
+                            sect.header_refs.push(reference);
+                        }
+                        reader.read_to_end_into(name, &mut Vec::new())?;
+                    } else if matches_word_element(e, context, b"footerReference") {
+                        if let Some(reference) = Self::parse_header_footer_reference(e, context)? {
+                            sect.footer_refs.push(reference);
+                        }
+                        reader.read_to_end_into(name, &mut Vec::new())?;
                     } else {
                         // Capture unknown start elements as raw XML
                         sect.extra_xml.push(capture_element(reader, e)?);
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"sectPr") => {
+                Ok(Event::End(ref e))
+                    if matches_word_name(e.name().as_ref(), context, b"sectPr") =>
+                {
                     break;
                 }
                 Ok(Event::Eof) => {
@@ -288,6 +278,29 @@ impl CT_SectPr {
         }
 
         Ok(sect)
+    }
+
+    fn parse_header_footer_reference(
+        element: &BytesStart<'_>,
+        context: &NamespaceContext,
+    ) -> Result<Option<HdrFtrRef>> {
+        let element_context = context.with_element(element);
+        let mut hdr_ftr_type = HdrFtrType::Default;
+        let mut rel_id = None;
+        for attribute in element.attributes() {
+            let attribute = attribute?;
+            let key = attribute.key.as_ref();
+            let value = std::str::from_utf8(&attribute.value)?;
+            if matches_word_attribute(key, &element_context, b"type") {
+                hdr_ftr_type = HdrFtrType::from_str(value);
+            } else if matches_namespace_attribute(key, &element_context, b"r", R_NS, b"id") {
+                rel_id = Some(value.to_string());
+            }
+        }
+        Ok(rel_id.map(|rel_id| HdrFtrRef {
+            hdr_ftr_type,
+            rel_id,
+        }))
     }
 
     fn parse_cols_attrs(e: &BytesStart) -> Result<CT_Columns> {
@@ -728,7 +741,10 @@ impl CT_Body {
                             &child_context,
                         )?));
                     } else if matches_word_element(e, context, b"sectPr") {
-                        content.push(BodyContent::SectionProperties(CT_SectPr::from_xml(reader)?));
+                        let child_context = context.with_element(e);
+                        content.push(BodyContent::SectionProperties(
+                            CT_SectPr::from_xml_with_context(reader, &child_context)?,
+                        ));
                     } else {
                         // Capture unknown elements as raw XML
                         content.push(BodyContent::RawXml(capture_raw_element(
@@ -1311,5 +1327,26 @@ mod tests {
         let sect2 = ppr2.sect_pr.as_ref().unwrap();
         assert_eq!(sect2.section_type, Some(ST_SectionType::NextPage));
         assert_eq!(sect2.orientation, Some(ST_PageOrientation::Landscape));
+    }
+
+    #[test]
+    fn expanded_header_and_footer_references_are_inventoried() {
+        let xml = format!(
+            concat!(
+                r#"<w:document xmlns:w="{}" xmlns:r="{}"><w:body><w:sectPr>"#,
+                r#"<w:headerReference w:type="first" r:id="rId7"></w:headerReference>"#,
+                r#"<w:footerReference w:type="even" r:id="rId8"></w:footerReference>"#,
+                r#"</w:sectPr></w:body></w:document>"#,
+            ),
+            W_NS, R_NS
+        );
+
+        let parsed = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        let section = parsed.body.sect_pr().unwrap();
+        assert_eq!(section.header_refs.len(), 1);
+        assert_eq!(section.header_refs[0].rel_id, "rId7");
+        assert_eq!(section.footer_refs.len(), 1);
+        assert_eq!(section.footer_refs[0].rel_id, "rId8");
+        assert!(section.extra_xml.is_empty());
     }
 }

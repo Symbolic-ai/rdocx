@@ -8,7 +8,9 @@ use crate::document::CT_SectPr;
 use crate::error::{OxmlError, Result};
 #[cfg(test)]
 use crate::namespace::matches_local_name;
-use crate::namespace::{matches_word_attribute, matches_word_element, matches_word_name};
+use crate::namespace::{
+    is_word_element, matches_word_attribute, matches_word_element, matches_word_name,
+};
 use crate::raw_xml::NamespaceContext;
 use crate::shared::{ST_HighlightColor, ST_Jc, ST_OnOff, ST_Underline};
 use crate::units::{HalfPoint, Twips};
@@ -71,6 +73,8 @@ impl CT_Shd {
 /// `CT_PPr` — Paragraph properties.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CT_PPr {
+    /// Whether this group contained a Word property the reader does not model.
+    pub has_unmodeled_properties: bool,
     /// Paragraph style ID (pStyle)
     pub style_id: Option<String>,
     /// Justification (jc)
@@ -153,13 +157,25 @@ impl CT_PPr {
                         let child_context = context.with_element(e);
                         ppr.tabs = Some(CT_Tabs::from_xml_with_context(reader, &child_context)?);
                     } else if matches_word_element(e, context, b"sectPr") {
-                        ppr.sect_pr = Some(CT_SectPr::from_xml(reader)?);
+                        let child_context = context.with_element(e);
+                        ppr.sect_pr =
+                            Some(CT_SectPr::from_xml_with_context(reader, &child_context)?);
                     } else {
-                        Self::parse_property_element(e, context, &mut ppr)?;
+                        if !Self::parse_property_element(e, context, &mut ppr)?
+                            && is_word_element(e, context)
+                        {
+                            ppr.has_unmodeled_properties = true;
+                        }
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
-                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, context, &mut ppr)?,
+                Ok(Event::Empty(ref e)) => {
+                    if !Self::parse_property_element(e, context, &mut ppr)?
+                        && is_word_element(e, context)
+                    {
+                        ppr.has_unmodeled_properties = true;
+                    }
+                }
                 Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"pPr") => {
                     break;
                 }
@@ -179,7 +195,7 @@ impl CT_PPr {
         e: &BytesStart<'_>,
         context: &NamespaceContext,
         ppr: &mut CT_PPr,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let element_context = context.with_element(e);
         if matches_word_element(e, context, b"pStyle") {
             ppr.style_id = get_val_attr_with_context(e, &element_context)?;
@@ -241,8 +257,10 @@ impl CT_PPr {
             }
         } else if matches_word_element(e, context, b"shd") {
             ppr.shading = Some(CT_Shd::from_xml_attrs_with_context(e, context)?);
+        } else {
+            return Ok(false);
         }
-        Ok(())
+        Ok(true)
     }
 
     fn parse_num_pr(
@@ -253,9 +271,15 @@ impl CT_PPr {
         let mut buf = Vec::new();
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => Self::parse_num_property(e, context, ppr)?,
+                Ok(Event::Empty(ref e)) => {
+                    if !Self::parse_num_property(e, context, ppr)? && is_word_element(e, context) {
+                        ppr.has_unmodeled_properties = true;
+                    }
+                }
                 Ok(Event::Start(ref e)) => {
-                    Self::parse_num_property(e, context, ppr)?;
+                    if !Self::parse_num_property(e, context, ppr)? && is_word_element(e, context) {
+                        ppr.has_unmodeled_properties = true;
+                    }
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
                 Ok(Event::End(ref e))
@@ -278,18 +302,20 @@ impl CT_PPr {
         e: &BytesStart<'_>,
         context: &NamespaceContext,
         ppr: &mut CT_PPr,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let element_context = context.with_element(e);
         if matches_word_element(e, context, b"ilvl") {
             if let Some(val) = get_val_attr_with_context(e, &element_context)? {
                 ppr.num_ilvl = Some(val.parse()?);
             }
-        } else if matches_word_element(e, context, b"numId")
-            && let Some(val) = get_val_attr_with_context(e, &element_context)?
-        {
-            ppr.num_id = Some(val.parse()?);
+        } else if matches_word_element(e, context, b"numId") {
+            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
+                ppr.num_id = Some(val.parse()?);
+            }
+        } else {
+            return Ok(false);
         }
-        Ok(())
+        Ok(true)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -460,6 +486,7 @@ impl CT_PPr {
     /// Merge another CT_PPr into this one (non-None fields override).
     /// Used for style inheritance.
     pub fn merge_from(&mut self, other: &CT_PPr) {
+        self.has_unmodeled_properties |= other.has_unmodeled_properties;
         if other.style_id.is_some() {
             self.style_id = other.style_id.clone();
         }
@@ -536,6 +563,8 @@ impl CT_PPr {
 #[derive(Debug, Clone, Default, PartialEq)]
 #[allow(non_snake_case)]
 pub struct CT_RPr {
+    /// Whether this group contained a Word property the reader does not model.
+    pub has_unmodeled_properties: bool,
     /// Character style ID (rStyle)
     pub style_id: Option<String>,
     /// Font name for ASCII range (rFonts/@w:ascii)
@@ -607,9 +636,19 @@ impl CT_RPr {
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => Self::parse_property_element(e, context, &mut rpr)?,
+                Ok(Event::Empty(ref e)) => {
+                    if !Self::parse_property_element(e, context, &mut rpr)?
+                        && is_word_element(e, context)
+                    {
+                        rpr.has_unmodeled_properties = true;
+                    }
+                }
                 Ok(Event::Start(ref e)) => {
-                    Self::parse_property_element(e, context, &mut rpr)?;
+                    if !Self::parse_property_element(e, context, &mut rpr)?
+                        && is_word_element(e, context)
+                    {
+                        rpr.has_unmodeled_properties = true;
+                    }
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
                 Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"rPr") => {
@@ -631,7 +670,7 @@ impl CT_RPr {
         e: &BytesStart<'_>,
         context: &NamespaceContext,
         rpr: &mut CT_RPr,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let element_context = context.with_element(e);
         if matches_word_element(e, context, b"rStyle") {
             rpr.style_id = get_val_attr_with_context(e, &element_context)?;
@@ -717,8 +756,10 @@ impl CT_RPr {
             rpr.shading = Some(CT_Shd::from_xml_attrs_with_context(e, context)?);
         } else if matches_word_element(e, context, b"vanish") {
             rpr.vanish = Some(parse_toggle(e, &element_context)?);
+        } else {
+            return Ok(false);
         }
-        Ok(())
+        Ok(true)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -888,6 +929,7 @@ impl CT_RPr {
     /// Merge another CT_RPr into this one (non-None fields override).
     /// Used for style inheritance.
     pub fn merge_from(&mut self, other: &CT_RPr) {
+        self.has_unmodeled_properties |= other.has_unmodeled_properties;
         if other.style_id.is_some() {
             self.style_id = other.style_id.clone();
         }
@@ -1114,6 +1156,24 @@ mod tests {
         assert_eq!(ppr.num_ilvl, Some(2));
         assert_eq!(ppr.num_id, Some(7));
         assert_eq!(rpr.vanish, Some(true));
+    }
+
+    #[test]
+    fn unmodeled_word_properties_are_observable() {
+        let ppr = parse_ppr(r#"<w:contextualSpacing/><x:ignored xmlns:x="urn:foreign"/>"#);
+        let rpr = parse_rpr(r#"<w:rtl/><x:ignored xmlns:x="urn:foreign"/>"#);
+
+        assert!(ppr.has_unmodeled_properties);
+        assert!(rpr.has_unmodeled_properties);
+    }
+
+    #[test]
+    fn foreign_extension_properties_do_not_set_the_word_property_signal() {
+        let ppr = parse_ppr(r#"<x:ignored xmlns:x="urn:foreign"/>"#);
+        let rpr = parse_rpr(r#"<x:ignored xmlns:x="urn:foreign"/>"#);
+
+        assert!(!ppr.has_unmodeled_properties);
+        assert!(!rpr.has_unmodeled_properties);
     }
 
     #[test]

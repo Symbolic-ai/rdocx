@@ -104,3 +104,21 @@ pub fn matches_word_element(
 ) -> bool {
     matches_namespace_element(element, parent_context, W_PREFIX, W_NS, expected_local)
 }
+
+/// Whether an element belongs to the WordprocessingML namespace.
+///
+/// Fragments without an ancestor namespace context retain the conventional
+/// `w:` prefix fallback used by the specific-name matchers above.
+pub fn is_word_element(element: &BytesStart<'_>, parent_context: &NamespaceContext) -> bool {
+    let context = parent_context.with_element(element);
+    let name = element.name();
+    let resolved = context.resolve_element(name.as_ref());
+    match resolved.namespace_uri.as_deref() {
+        Some(uri) => uri == W_NS,
+        None => name
+            .as_ref()
+            .iter()
+            .position(|byte| *byte == b':')
+            .is_some_and(|separator| &name.as_ref()[..separator] == W_PREFIX),
+    }
+}

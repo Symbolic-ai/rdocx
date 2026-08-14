@@ -557,6 +557,14 @@ impl<'a> TableRef<'a> {
         !self.inner.extra_xml.is_empty()
     }
 
+    /// Whether table properties contain Word formatting the reader does not model.
+    pub fn has_unmodeled_properties(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.has_unmodeled_properties)
+    }
+
     /// Get an immutable row reference.
     pub fn row(&self, index: usize) -> Option<RowRef<'_>> {
         self.inner.rows.get(index).map(|r| RowRef { inner: r })
@@ -683,6 +691,14 @@ impl<'a> RowRef<'a> {
         !self.inner.extra_xml.is_empty()
     }
 
+    /// Whether row properties contain Word formatting the reader does not model.
+    pub fn has_unmodeled_properties(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.has_unmodeled_properties)
+    }
+
     /// Number of table grid columns omitted before the first cell.
     pub fn grid_before(&self) -> Option<u32> {
         self.inner
@@ -742,6 +758,14 @@ pub enum CellContentRef<'a> {
 }
 
 impl<'a> CellRef<'a> {
+    /// Whether cell properties contain Word formatting the reader does not model.
+    pub fn has_unmodeled_properties(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.has_unmodeled_properties)
+    }
+
     /// Get the combined text of all paragraphs.
     pub fn text(&self) -> String {
         self.inner.text()
