@@ -5500,7 +5500,9 @@ keeping unpublished `rpptx-wasm` in the 0.1.3 local preparation group.
 above immutable 0.1.2. The annotated tag peels to reviewed sprint SHA
 `805680ab8a6dadd4d4247471a81cbb21b88a3196`. The workflow published only the
 14-package incubating allowlist and created the matching GitHub release. No
-npm package was published.
+npm package was published. The user gave separate final approval at that
+reviewed SHA immediately before the sprint branch push, annotated tag
+creation, tag push, and publication workflow.
 
 **Deviations from the design plan.** Full verification exposed stale release
 prose that required font assets in both `rdocx-layout` and `oxml-layout`.

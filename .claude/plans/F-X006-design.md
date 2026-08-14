@@ -149,7 +149,7 @@ workflow assertions must not change document or render behavior.
   `/release rpptx-v0.1.3`.
 - [x] Integrate and run `/verify --full` plus a clean sprint review at the exact
   release SHA.
-- [x] Invoke `/release rpptx-v0.1.3` and request its separate final approval.
+- [x] Invoke `/release rpptx-v0.1.3` and receive its separate final approval.
 - [x] Watch publication, verify all 14 registry entries and owners, and verify
   the GitHub release target SHA.
 - [x] Update exactly the three listed HLD files to describe the prepared 0.1.3
