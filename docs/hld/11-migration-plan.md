@@ -131,16 +131,13 @@ unchanged.
 
 ## What happens to the published crates
 
-All seven released rdocx crates remain published at the immutable 0.4.1
-boundary. The workspace prepares the same seven-package crates.io family at
-the breaking pre-1.0 0.5.0 boundary, but no 0.5.0 tag, GitHub release, or
-registry version exists until `/release v0.5.0` receives its separate final
-approval at the reviewed SHA. The eleven-package shared-version preparation
-group also carries unpublished `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and
-`oxml-py-support` at 0.5.0 without adding them to crates.io publication. The
-complete 14-package `oxml-*` and `rpptx*` crates.io family remains published at
-the immutable 0.1.3 boundary. Released rdocx consumers depend on those
-registry-backed shared crates.
+All seven released rdocx crates are published at the breaking pre-1.0 0.5.0
+boundary from the reviewed `v0.5.0` tag. Their immutable 0.4.1 releases remain
+available. The eleven-package shared-version group also carries unpublished
+`rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` at 0.5.0 without
+adding them to crates.io publication. The complete 14-package `oxml-*` and
+`rpptx*` crates.io family remains published at the immutable 0.1.3 boundary.
+Released rdocx consumers depend on those registry-backed shared crates.
 
 | Crate | Fate |
 |---|---|
@@ -191,10 +188,10 @@ A stable tag publishes exactly `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`,
 `rdocx-html`, `rdocx-pdf`, `rdocx`, and `rdocx-cli`. An incubating tag publishes
 exactly `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `rpptx-oxml`, `rpptx-chart`,
-`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. The stable
-shared-version group is prepared locally at 0.5.0 while the seven stable
-registry releases remain at 0.4.1. Preparation does not authorize the pending
-tag, GitHub release, or registry publication.
+`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. The stable registry
+family is published at 0.5.0 from the annotated `v0.5.0` tag, while the four
+non-publishable shared-version members remain local distribution only. The
+incubating registry family remains at 0.1.3.
 
 Before either real allowlist, the workflow reproduces the deterministic hash
 baseline and verifies the full publishable workspace with a dry run. Each real

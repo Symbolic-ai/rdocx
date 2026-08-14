@@ -1216,23 +1216,21 @@ compatibility scope, and bounded deep tab aliases. Stable package archives stay
 below 10 MiB, and the public migration examples compile.
 
 ### F-X008, Tag v0.5.0 (S)
-The stable release preparation sets the workspace package, nine internal pins,
-and eleven inherited lockfile packages to 0.5.0 after F-X007. The two Python
+The stable workspace package, nine internal pins, and eleven inherited
+lockfile packages are 0.5.0 after F-X007. The exact seven stable crates.io
+packages are published at 0.5.0 from the reviewed `v0.5.0` tag. The two Python
 project versions and `rdocx-wasm` inherit 0.5.0 without gaining publication
 authority. All 15 incubating manifests remain at 0.1.3, with exactly 14 in the
 incubating crates.io family and `rpptx-wasm` unpublished. `publish.yml` runs the
 exact stable and incubating metadata preflights before its patched 21-package
-workspace dry run. The seven stable packages remain published at 0.4.1 until
-`/release v0.5.0` receives separate final approval at the clean reviewed SHA.
-No tag, GitHub release, registry publication, npm publication, or Python
-publication is part of the preparation.
+workspace dry run. No incubating, WASM, Python, or npm package is part of the
+stable publication.
 **Depends on**: F-X007.
 **Test gate**: the stable metadata regression proves the workspace version,
 nine pins, eleven lock entries, two Python versions, WASM literals, README
 requirements, exact stable publication set, and unchanged incubating 0.1.3
 state. The workflow contract, 12 README examples, 28-entry hash harness, exact
 patched 21-package dry run, seven stable archive inventories, and `cargo deny`
-pass before release approval. The deferred external gate requires all seven
-stable packages to resolve from crates.io at 0.5.0 with the expected owner, the
-GitHub release to target the reviewed sprint SHA, and the PR 25 contributor
-credit and merge note to remain visible on GitHub.
+pass. All seven stable packages resolve independently from crates.io at 0.5.0
+under owner `mantissaman`, the GitHub release targets the reviewed sprint SHA,
+and the PR 25 contributor credit and merge note remain visible on GitHub.

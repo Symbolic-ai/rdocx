@@ -5567,3 +5567,44 @@ was below 10 MiB.
 **Notes for future sessions.** F-X008 owns v0.5.0 preparation and publication
 through the separate release workflow. No stable crate was published by this
 story. Preserve Jon Stokes's `@jonstokes` credit in the PR and merge record.
+
+### F-X008, Tag v0.5.0
+
+**Sprint.** S38
+**Completed.** 2026-08-14
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The exact seven-package stable rdocx family is published
+on crates.io at 0.5.0 through `v0.5.0`. The eleven-package shared-version group
+is coherent at 0.5.0 while unpublished WASM, Python, and support packages
+remain outside the crates.io allowlist. The 15-package incubating preparation
+group remains at 0.1.3, with its 14 published crates unchanged.
+
+**Non-obvious choices.** The user gave separate final approval at reviewed SHA
+`01bd2379097344120f5e1dba0c36882d95af88a6`. Annotated tag object
+`5cbf51479ba0f8ae383684b57b2e7ca68eca01d4` peels to that exact SHA. Workflow
+run `31815290384` published only the stable family. Stable publication job
+`94815375298` succeeded, the incubating step was skipped, and GitHub Release
+job `94817628637` succeeded. No incubating, WASM, Python, or npm package was
+published.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/11-migration-plan.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The stable and incubating metadata preflights, release workflow
+contract, README examples, exact patched 21-package dry run, archive inventory,
+WASM checks, dependency graph, and `cargo deny` passed at the reviewed release
+SHA. All seven 0.5.0 packages were downloaded independently from crates.io,
+and every owner check reports `mantissaman`. The matching
+[GitHub release](https://github.com/tensorbee/rdocx/releases/tag/v0.5.0)
+targets the reviewed SHA. PR 25 contributor credit and its merge note remain
+intact.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Preserve the immutable 0.4.1 and 0.5.0 tags.
+Future stable publication must use a fresh version and a separately approved
+`/release` invocation. PyPI and npm publication remain unauthorized.

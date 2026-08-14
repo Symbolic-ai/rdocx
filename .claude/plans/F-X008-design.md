@@ -1,6 +1,6 @@
 # F-X008, Tag v0.5.0
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S38
 **Size**: S
 **Depends on**: F-X007
@@ -115,10 +115,10 @@ Expected to be unchanged. This story changes release metadata only.
 - [x] Prove 0.5.0 and `v0.5.0` are absent locally and remotely.
 - [x] Prepare all stable versions, pins, lock entries, and contract tests.
 - [x] Run `/verify --full`, exact archive inventory, and hash harness.
-- [ ] Obtain a clean microscope and sprint review at the release SHA.
-- [ ] Ask for separate final release approval at that exact SHA.
-- [ ] Run `/release v0.5.0` and watch the publication workflow.
-- [ ] Verify all seven registry entries, owner, tag, release, and PR credit.
+- [x] Obtain a clean microscope and sprint review at the release SHA.
+- [x] Ask for separate final release approval at that exact SHA.
+- [x] Run `/release v0.5.0` and watch the publication workflow.
+- [x] Verify all seven registry entries, owner, tag, release, and PR credit.
 
 ## Open questions
 

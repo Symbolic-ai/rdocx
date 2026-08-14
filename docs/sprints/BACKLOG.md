@@ -29,8 +29,8 @@ regenerated, never hand-edited.
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
-| X, Cross-cutting (opportunistic)            | 8  | 7 | 1 | 0  |
-| **Total** | **162** | **161** | **1** | **0** |
+| X, Cross-cutting (opportunistic)            | 8  | 8 | 0 | 0  |
+| **Total** | **162** | **162** | **0** | **0** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -292,5 +292,5 @@ regenerated, never hand-edited.
 | F-X005 | Tag rpptx-v0.1.2                            | S32.2 | S | done |
 | F-X006 | Tag the expanded rpptx family               | S37 | S | done |
 | F-X007 | Integrate PR 25 and stable crate documentation | S38 | L | done |
-| F-X008 | Tag v0.5.0                                  | S38 | S | in-progress |
+| F-X008 | Tag v0.5.0                                  | S38 | S | done |
 <!-- AUTOGEN:backlog-MX END -->
