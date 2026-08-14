@@ -12,7 +12,7 @@ use oxml_opc::relationship::rel_types;
 use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
 use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, CT_Inline};
 use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef, HdrFtrType};
-use rdocx_oxml::numbering::CT_Numbering;
+use rdocx_oxml::numbering::{CT_Numbering, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::shared::{ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::CT_Styles;
@@ -846,13 +846,7 @@ impl Document {
     /// the document is empty): adds the External relationship and wraps the
     /// new run in a hyperlink span.
     pub fn append_hyperlink(&mut self, text: &str, url: &str) {
-        self.invalidate_layout();
-        use oxml_opc::relationship::rel_types;
-
-        let rel_id = {
-            let rels = self.package.get_or_create_part_rels(&self.doc_part_name);
-            rels.add_external(rel_types::HYPERLINK, url)
-        };
+        let rel_id = self.add_hyperlink_relationship(url);
 
         if !matches!(
             self.document.body.content.last(),
@@ -866,14 +860,19 @@ impl Document {
         let Some(BodyContent::Paragraph(p)) = self.document.body.content.last_mut() else {
             unreachable!();
         };
-        let run_start = p.runs.len();
-        p.add_run(text);
-        p.hyperlinks.push(rdocx_oxml::text::HyperlinkSpan {
-            rel_id: Some(rel_id),
-            anchor: None,
-            run_start,
-            run_end: run_start + 1,
-        });
+        crate::Paragraph { inner: p }.add_hyperlink(text, &rel_id);
+    }
+
+    /// Add an external hyperlink relationship and return its relationship ID.
+    ///
+    /// Use this with [`crate::Paragraph::add_hyperlink`] when the target
+    /// paragraph is not the last body paragraph, such as a paragraph inside a
+    /// table cell.
+    pub fn add_hyperlink_relationship(&mut self, url: &str) -> String {
+        self.invalidate_layout();
+        self.package
+            .get_or_create_part_rels(&self.doc_part_name)
+            .add_external(rel_types::HYPERLINK, url)
     }
 
     /// Get a builder for the last paragraph in the body, if any. Lets
@@ -1370,6 +1369,54 @@ impl Document {
             BodyContent::Paragraph(p) => Paragraph { inner: p },
             _ => unreachable!(),
         }
+    }
+
+    /// Create a list definition with explicit per-level formats and return
+    /// its numId.
+    ///
+    /// Unlike [`Self::add_bullet_list_item`] / [`Self::add_numbered_list_item`],
+    /// which share one bullet and one numbered definition per document, every
+    /// call creates a fresh definition — so separate lists restart their
+    /// numbering, and one definition can mix formats across levels (e.g. a
+    /// bullet list whose nested level is decimal). Attach paragraphs with
+    /// [`crate::Paragraph::set_numbering`].
+    ///
+    /// `levels[i]` configures level `i`; deeper unspecified levels fall back
+    /// to the standard template rotation for the last specified format's
+    /// family. An empty slice produces the standard numbered template.
+    ///
+    /// ```no_run
+    /// use rdocx::{Document, ListLevel};
+    ///
+    /// let mut doc = Document::new();
+    /// let num_id = doc.add_list_definition(&[
+    ///     ListLevel::bullet(),
+    ///     ListLevel::decimal().start(3),
+    /// ]);
+    /// doc.add_paragraph("first bullet").set_numbering(num_id, 0);
+    /// doc.add_paragraph("third decimal").set_numbering(num_id, 1);
+    /// ```
+    pub fn add_list_definition(&mut self, levels: &[ListLevel]) -> u32 {
+        self.invalidate_layout();
+        let levels: Vec<(ST_NumberFormat, Option<u32>)> = levels
+            .iter()
+            .map(|level| (level.format.to_st(), level.start))
+            .collect();
+        self.ensure_numbering().add_list(&levels)
+    }
+
+    /// Redefine one level (0–8) of an existing list definition, for callers
+    /// that only learn a deeper level's format when content first reaches it.
+    ///
+    /// Returns `false` when `num_id` is unknown or `level` is out of range.
+    pub fn set_list_level(&mut self, num_id: u32, level: u32, spec: ListLevel) -> bool {
+        let updated = self.numbering.as_mut().is_some_and(|numbering| {
+            numbering.set_list_level(num_id, level, spec.format.to_st(), spec.start)
+        });
+        if updated {
+            self.invalidate_layout();
+        }
+        updated
     }
 
     // ---- Style access ----
@@ -2855,6 +2902,67 @@ fn relative_target(source_part: &str, target_part: &str) -> String {
     }
 }
 
+/// Numbering format for one level of a custom list definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListNumberFormat {
+    Bullet,
+    Decimal,
+    LowerLetter,
+    UpperLetter,
+    LowerRoman,
+    UpperRoman,
+    Ordinal,
+}
+
+impl ListNumberFormat {
+    fn to_st(self) -> ST_NumberFormat {
+        match self {
+            Self::Bullet => ST_NumberFormat::Bullet,
+            Self::Decimal => ST_NumberFormat::Decimal,
+            Self::LowerLetter => ST_NumberFormat::LowerLetter,
+            Self::UpperLetter => ST_NumberFormat::UpperLetter,
+            Self::LowerRoman => ST_NumberFormat::LowerRoman,
+            Self::UpperRoman => ST_NumberFormat::UpperRoman,
+            Self::Ordinal => ST_NumberFormat::Ordinal,
+        }
+    }
+}
+
+/// One level of a custom list definition for [`Document::add_list_definition`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListLevel {
+    /// Numbering format for this level.
+    pub format: ListNumberFormat,
+    /// Starting number (defaults to 1; ignored for bullet levels).
+    pub start: Option<u32>,
+}
+
+impl ListLevel {
+    /// A level with the given format, starting at 1.
+    pub fn new(format: ListNumberFormat) -> Self {
+        ListLevel {
+            format,
+            start: None,
+        }
+    }
+
+    /// A bullet level.
+    pub fn bullet() -> Self {
+        Self::new(ListNumberFormat::Bullet)
+    }
+
+    /// A decimal-numbered level.
+    pub fn decimal() -> Self {
+        Self::new(ListNumberFormat::Decimal)
+    }
+
+    /// Override the starting number for this level.
+    pub fn start(mut self, start: u32) -> Self {
+        self.start = Some(start);
+        self
+    }
+}
+
 /// A node in the document outline tree.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutlineNode {
@@ -3953,6 +4061,53 @@ mod tests {
         assert_eq!(end - start, 1);
         let url = doc2.hyperlink_url(rel_id.expect("rel id"));
         assert_eq!(url.as_deref(), Some("https://gnome.org"));
+    }
+
+    #[test]
+    fn paragraph_hard_break_and_table_cell_hyperlink_round_trip() {
+        let mut doc = Document::new();
+        let relationship_id = doc.add_hyperlink_relationship("https://example.com/table");
+
+        let mut paragraph = doc.add_paragraph("");
+        paragraph.add_run("before");
+        paragraph.add_line_break();
+        paragraph.add_run("after");
+
+        let mut table = doc.add_table(1, 1);
+        let mut cell = table.cell(0, 0).expect("cell");
+        cell.remove_first_empty_paragraph();
+        cell.add_paragraph("")
+            .add_hyperlink("table link", &relationship_id)
+            .bold(true);
+
+        let bytes = doc.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+
+        assert_eq!(reopened.paragraphs()[0].text(), "before\nafter");
+        let tables = reopened.tables();
+        let cell = tables[0].cell(0, 0).expect("cell");
+        let paragraph = cell.paragraphs().next().expect("paragraph");
+        assert_eq!(paragraph.text(), "table link");
+        assert!(paragraph.runs().next().expect("run").is_bold());
+        let spans = paragraph.hyperlink_spans();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(
+            reopened.hyperlink_url(spans[0].2.expect("relationship id")),
+            Some("https://example.com/table".to_string())
+        );
+    }
+
+    #[test]
+    fn rejected_list_level_update_does_not_materialize_numbering() {
+        let mut doc = Document::new();
+        assert!(doc.numbering.is_none());
+
+        assert!(!doc.set_list_level(999, 1, ListLevel::decimal()));
+
+        assert!(
+            doc.numbering.is_none(),
+            "a rejected setter must not add an empty numbering part"
+        );
     }
 
     #[test]
