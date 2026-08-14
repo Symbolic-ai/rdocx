@@ -51,6 +51,7 @@ defended.
 | S34 | M13 | 5 | 5 | 0 | 11 | 5 | Completed typed Python packages, bidirectional python-docx and python-pptx parity, six-target wheel automation, and pull-request binding CI. The hosted every-platform M13 gate remains for later M13 work, all 28 hashes remained unchanged, and no package was published |
 | S35 | M13 | 4 | 4 | 0 | 9 | 4 | Completed facade-backed Word and presentation WASM packages, browser PDF export, and two-package WASM CI. Hosted wheels installed and passed parity on every M13 target, all 28 hashes remained unchanged, and no package was published |
 | S36 | M13, X | 8 | 8 | 0 | 13 | 8 | Completed both v1 CLIs, local npm package assembly, README doctests, sample-generator deduplication, and concurrent test isolation. All 28 hashes remained unchanged, and no Rust or npm package was published |
+| S37 | M13, X | 1 | 1 | 0 | 1 | 1 | Published and verified the complete 14-package rpptx 0.1.3 family through the reviewed release workflow. The M13 hosted wheel gate remains satisfied, all 28 hashes remained unchanged, and no npm package was published |
 
 ## Completed features
 
@@ -267,6 +268,7 @@ five working days.
 | S34 | 5 | 5 | 5.00 |
 | S35 | 4 | 4 | 5.00 |
 | S36 | 8 | 8 | 5.00 |
+| S37 | 1 | 1 | 5.00 |
 
 ## Escalation record
 
