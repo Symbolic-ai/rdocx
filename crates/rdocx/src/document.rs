@@ -1041,6 +1041,15 @@ impl Document {
         self.get_header_footer_text(false, HdrFtrType::Default)
     }
 
+    /// Whether the document references any header or footer part.
+    ///
+    /// This is intentionally broader than [`Self::header_text`] and
+    /// [`Self::footer_text`]: a referenced part can contain drawings, fields,
+    /// tables, or other visible content without contributing literal text.
+    pub fn has_header_footer_content(&self) -> bool {
+        !self.header_footer_rel_ids().is_empty()
+    }
+
     /// Set the default header to an inline image.
     ///
     /// Creates a header part with an image paragraph. The image is embedded
@@ -3962,9 +3971,12 @@ mod tests {
     #[test]
     fn replace_text_in_header_and_footer() {
         let mut doc = Document::new();
+        assert!(!doc.has_header_footer_content());
         doc.set_header("Header: {{title}}");
         doc.set_footer("Footer: {{title}}");
         doc.add_paragraph("Body: {{title}}");
+
+        assert!(doc.has_header_footer_content());
 
         let count = doc.replace_text("{{title}}", "My Doc");
         assert_eq!(count, 3);
@@ -3972,6 +3984,31 @@ mod tests {
         assert_eq!(doc.paragraphs()[0].text(), "Body: My Doc");
         assert_eq!(doc.header_text().unwrap(), "Header: My Doc");
         assert_eq!(doc.footer_text().unwrap(), "Footer: My Doc");
+    }
+
+    #[test]
+    fn header_footer_content_detects_non_text_parts_after_round_trip() {
+        let png_data = [
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc,
+            0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        ];
+        let mut doc = Document::new();
+        doc.set_header_image(
+            &png_data,
+            "logo.png",
+            Length::inches(1.0),
+            Length::inches(1.0),
+        );
+
+        assert_eq!(doc.header_text(), Some(String::new()));
+        assert!(doc.has_header_footer_content());
+
+        let reopened = Document::from_bytes(&doc.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.header_text(), Some(String::new()));
+        assert!(reopened.has_header_footer_content());
     }
 
     #[test]
