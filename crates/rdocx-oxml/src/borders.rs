@@ -3,12 +3,15 @@
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
+use oxml_core::xml::{
+    StrictXmlCompleteness, StrictXmlElement, StrictXmlNode, StrictXmlParsed,
+    parse_empty_started_element, parse_reader_element,
+};
+
 use crate::error::{OxmlError, Result};
+use crate::namespace::W_NS;
 #[cfg(test)]
 use crate::namespace::matches_local_name;
-use crate::namespace::{
-    has_unmodeled_attributes, matches_word_attribute, matches_word_element, matches_word_name,
-};
 use crate::raw_xml::NamespaceContext;
 use crate::shared::{ST_Border, ST_TabJc, ST_TabLeader};
 use crate::units::Twips;
@@ -37,39 +40,32 @@ impl CT_BorderEdge {
     }
 
     pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
-        Self::from_xml_attrs_with_context(e, &NamespaceContext::default())
+        let element = parse_empty_started_element(&NamespaceContext::default(), Some(W_NS), e)?;
+        Ok(Self::from_strict_xml(element)?.value)
     }
 
-    pub(crate) fn from_xml_attrs_with_context(
-        e: &BytesStart,
-        parent_context: &NamespaceContext,
-    ) -> Result<Self> {
-        let context = parent_context.with_element(e);
-        let mut val = ST_Border::None;
-        let mut sz = None;
-        let mut space = None;
-        let mut color = None;
-
-        for attr in e.attributes() {
-            let attr = attr?;
-            let key = attr.key.as_ref();
-            let v = std::str::from_utf8(&attr.value)?;
-            if matches_word_attribute(key, &context, b"val") {
-                val = ST_Border::from_str(v)?;
-            } else if matches_word_attribute(key, &context, b"sz") {
-                sz = Some(v.parse()?);
-            } else if matches_word_attribute(key, &context, b"space") {
-                space = Some(v.parse()?);
-            } else if matches_word_attribute(key, &context, b"color") {
-                color = Some(v.to_string());
-            }
-        }
-
-        Ok(CT_BorderEdge {
-            val,
-            sz,
-            space,
-            color,
+    pub(crate) fn from_strict_xml(element: StrictXmlElement) -> Result<StrictXmlParsed<Self>> {
+        element.parse(|cursor| {
+            let val = cursor
+                .take_attribute(Some(W_NS), "val")
+                .map(|value| ST_Border::from_str(&value))
+                .transpose()?
+                .unwrap_or(ST_Border::None);
+            let sz = cursor
+                .take_attribute(Some(W_NS), "sz")
+                .map(|value| value.parse())
+                .transpose()?;
+            let space = cursor
+                .take_attribute(Some(W_NS), "space")
+                .map(|value| value.parse())
+                .transpose()?;
+            let color = cursor.take_attribute(Some(W_NS), "color");
+            Ok(Self {
+                val,
+                sz,
+                space,
+                color,
+            })
         })
     }
 
@@ -103,6 +99,8 @@ impl CT_BorderEdge {
 /// `CT_PBdr` — Paragraph borders (top, bottom, left, right, between, bar).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CT_PBdr {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     pub top: Option<CT_BorderEdge>,
     pub bottom: Option<CT_BorderEdge>,
     pub left: Option<CT_BorderEdge>,
@@ -112,6 +110,61 @@ pub struct CT_PBdr {
 }
 
 impl CT_PBdr {
+    pub(crate) fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut borders = Self::default();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let target = if child.is_named(Some(W_NS), "top") {
+                    Some("top")
+                } else if child.is_named(Some(W_NS), "bottom") {
+                    Some("bottom")
+                } else if child.is_named(Some(W_NS), "left") || child.is_named(Some(W_NS), "start")
+                {
+                    Some("left")
+                } else if child.is_named(Some(W_NS), "right") || child.is_named(Some(W_NS), "end") {
+                    Some("right")
+                } else if child.is_named(Some(W_NS), "between") {
+                    Some("between")
+                } else if child.is_named(Some(W_NS), "bar") {
+                    Some("bar")
+                } else {
+                    None
+                };
+                let Some(target) = target else {
+                    continue;
+                };
+                let child = cursor
+                    .take_child(index)
+                    .and_then(StrictXmlNode::into_element)
+                    .ok_or_else(|| OxmlError::MissingElement("border edge".to_string()))?;
+                let parsed_edge = CT_BorderEdge::from_strict_xml(child)?;
+                let (edge, leftovers) = parsed_edge.into_parts();
+                descendants.push(StrictXmlCompleteness::from_leftovers(leftovers));
+                match target {
+                    "top" => borders.top = Some(edge),
+                    "bottom" => borders.bottom = Some(edge),
+                    "left" => borders.left = Some(edge),
+                    "right" => borders.right = Some(edge),
+                    "between" => borders.between = Some(edge),
+                    "bar" => borders.bar = Some(edge),
+                    _ => unreachable!(),
+                }
+            }
+            Ok(borders)
+        })?;
+        let (mut borders, leftovers) = parsed.into_parts();
+        borders.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(borders)
+    }
+
+    pub fn has_unmodeled_properties(&self) -> bool {
+        !self.completeness.is_complete()
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_context(reader, &NamespaceContext::default())
     }
@@ -120,85 +173,8 @@ impl CT_PBdr {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
-        Self::from_xml_with_context_and_completeness(reader, context).map(|(borders, _)| borders)
-    }
-
-    pub(crate) fn from_xml_with_context_and_completeness(
-        reader: &mut Reader<&[u8]>,
-        context: &NamespaceContext,
-    ) -> Result<(Self, bool)> {
-        let mut bdr = CT_PBdr::default();
-        let mut has_unmodeled_properties = false;
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    if !Self::parse_edge(e, context, &mut bdr)? {
-                        has_unmodeled_properties = true;
-                    }
-                }
-                Ok(Event::Start(ref e)) => {
-                    if !Self::parse_edge(e, context, &mut bdr)? {
-                        has_unmodeled_properties = true;
-                    }
-                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
-                }
-                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"pBdr") => {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:pBdr".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok((bdr, has_unmodeled_properties))
-    }
-
-    fn parse_edge(
-        e: &BytesStart<'_>,
-        context: &NamespaceContext,
-        bdr: &mut CT_PBdr,
-    ) -> Result<bool> {
-        let modeled = matches_word_element(e, context, b"top")
-            || matches_word_element(e, context, b"bottom")
-            || matches_word_element(e, context, b"left")
-            || matches_word_element(e, context, b"start")
-            || matches_word_element(e, context, b"right")
-            || matches_word_element(e, context, b"end")
-            || matches_word_element(e, context, b"between")
-            || matches_word_element(e, context, b"bar");
-        if !modeled {
-            return Ok(false);
-        }
-        let edge = CT_BorderEdge::from_xml_attrs_with_context(e, context)?;
-        if matches_word_element(e, context, b"top") {
-            bdr.top = Some(edge);
-        } else if matches_word_element(e, context, b"bottom") {
-            bdr.bottom = Some(edge);
-        } else if matches_word_element(e, context, b"left")
-            || matches_word_element(e, context, b"start")
-        {
-            bdr.left = Some(edge);
-        } else if matches_word_element(e, context, b"right")
-            || matches_word_element(e, context, b"end")
-        {
-            bdr.right = Some(edge);
-        } else if matches_word_element(e, context, b"between") {
-            bdr.between = Some(edge);
-        } else if matches_word_element(e, context, b"bar") {
-            bdr.bar = Some(edge);
-        }
-        Ok(!has_unmodeled_attributes(
-            e,
-            context,
-            &[b"val", b"sz", b"space", b"color"],
-            &[],
-        )?)
+        let element = parse_reader_element(reader, context, Some(W_NS), "pBdr", [])?;
+        Self::from_strict_xml(element)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -270,42 +246,73 @@ impl CT_TabStop {
     }
 
     pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
-        Self::from_xml_attrs_with_context(e, &NamespaceContext::default())
+        let element = parse_empty_started_element(&NamespaceContext::default(), Some(W_NS), e)?;
+        Ok(Self::from_strict_xml(element)?.value)
     }
 
-    fn from_xml_attrs_with_context(
-        e: &BytesStart,
-        parent_context: &NamespaceContext,
-    ) -> Result<Self> {
-        let context = parent_context.with_element(e);
-        let mut val = ST_TabJc::Left;
-        let mut pos = Twips(0);
-        let mut leader = None;
-
-        for attr in e.attributes() {
-            let attr = attr?;
-            let key = attr.key.as_ref();
-            let v = std::str::from_utf8(&attr.value)?;
-            if matches_word_attribute(key, &context, b"val") {
-                val = ST_TabJc::from_str(v)?;
-            } else if matches_word_attribute(key, &context, b"pos") {
-                pos = Twips(v.parse()?);
-            } else if matches_word_attribute(key, &context, b"leader") {
-                leader = Some(ST_TabLeader::from_str(v)?);
-            }
-        }
-
-        Ok(CT_TabStop { val, pos, leader })
+    fn from_strict_xml(element: StrictXmlElement) -> Result<StrictXmlParsed<Self>> {
+        element.parse(|cursor| {
+            let val = cursor
+                .take_attribute(Some(W_NS), "val")
+                .map(|value| ST_TabJc::from_str(&value))
+                .transpose()?
+                .unwrap_or(ST_TabJc::Left);
+            let pos = cursor
+                .take_attribute(Some(W_NS), "pos")
+                .map(|value| value.parse().map(Twips))
+                .transpose()?
+                .unwrap_or(Twips(0));
+            let leader = cursor
+                .take_attribute(Some(W_NS), "leader")
+                .map(|value| ST_TabLeader::from_str(&value))
+                .transpose()?;
+            Ok(Self { val, pos, leader })
+        })
     }
 }
 
 /// `CT_Tabs` — Collection of tab stop definitions.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CT_Tabs {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     pub tabs: Vec<CT_TabStop>,
 }
 
 impl CT_Tabs {
+    pub(crate) fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut tabs = Vec::new();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                if !child.is_named(Some(W_NS), "tab") {
+                    continue;
+                }
+                let child = cursor
+                    .take_child(index)
+                    .and_then(StrictXmlNode::into_element)
+                    .ok_or_else(|| OxmlError::MissingElement("tab stop".to_string()))?;
+                let parsed_tab = CT_TabStop::from_strict_xml(child)?;
+                let (tab, leftovers) = parsed_tab.into_parts();
+                tabs.push(tab);
+                descendants.push(StrictXmlCompleteness::from_leftovers(leftovers));
+            }
+            Ok(tabs)
+        })?;
+        let (tabs, leftovers) = parsed.into_parts();
+        Ok(Self {
+            completeness: StrictXmlCompleteness::new(leftovers, descendants),
+            tabs,
+        })
+    }
+
+    pub fn has_unmodeled_properties(&self) -> bool {
+        !self.completeness.is_complete()
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_context(reader, &NamespaceContext::default())
     }
@@ -314,48 +321,8 @@ impl CT_Tabs {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
-        Self::from_xml_with_context_and_completeness(reader, context).map(|(tabs, _)| tabs)
-    }
-
-    pub(crate) fn from_xml_with_context_and_completeness(
-        reader: &mut Reader<&[u8]>,
-        context: &NamespaceContext,
-    ) -> Result<(Self, bool)> {
-        let mut tabs = Vec::new();
-        let mut has_unmodeled_properties = false;
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) if matches_word_element(e, context, b"tab") => {
-                    has_unmodeled_properties |=
-                        has_unmodeled_attributes(e, context, &[b"val", b"pos", b"leader"], &[])?;
-                    tabs.push(CT_TabStop::from_xml_attrs_with_context(e, context)?);
-                }
-                Ok(Event::Start(ref e)) if matches_word_element(e, context, b"tab") => {
-                    has_unmodeled_properties |=
-                        has_unmodeled_attributes(e, context, &[b"val", b"pos", b"leader"], &[])?;
-                    tabs.push(CT_TabStop::from_xml_attrs_with_context(e, context)?);
-                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
-                }
-                Ok(Event::Empty(_)) => has_unmodeled_properties = true,
-                Ok(Event::Start(ref e)) => {
-                    has_unmodeled_properties = true;
-                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
-                }
-                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"tabs") => {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:tabs".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok((CT_Tabs { tabs }, has_unmodeled_properties))
+        let element = parse_reader_element(reader, context, Some(W_NS), "tabs", [])?;
+        Self::from_strict_xml(element)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -480,6 +447,7 @@ mod tests {
                     leader: Some(ST_TabLeader::Hyphen),
                 },
             ],
+            ..Default::default()
         };
 
         let mut output = Vec::new();

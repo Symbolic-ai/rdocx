@@ -663,6 +663,7 @@ impl<'a> Paragraph<'a> {
             right: Some(edge),
             between: None,
             bar: None,
+            ..Default::default()
         });
     }
 
@@ -695,10 +696,7 @@ impl<'a> Paragraph<'a> {
 
     /// Add a tab stop in place.
     pub fn set_add_tab_stop(&mut self, alignment: TabAlignment, position: Length) {
-        let tabs = self
-            .ensure_ppr()
-            .tabs
-            .get_or_insert_with(|| CT_Tabs { tabs: Vec::new() });
+        let tabs = self.ensure_ppr().tabs.get_or_insert_with(CT_Tabs::default);
         tabs.tabs.push(CT_TabStop {
             val: alignment.to_st(),
             pos: position.as_twips(),
@@ -724,10 +722,7 @@ impl<'a> Paragraph<'a> {
         position: Length,
         leader: TabLeader,
     ) {
-        let tabs = self
-            .ensure_ppr()
-            .tabs
-            .get_or_insert_with(|| CT_Tabs { tabs: Vec::new() });
+        let tabs = self.ensure_ppr().tabs.get_or_insert_with(CT_Tabs::default);
         tabs.tabs.push(CT_TabStop {
             val: alignment.to_st(),
             pos: position.as_twips(),

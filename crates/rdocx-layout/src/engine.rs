@@ -608,6 +608,7 @@ pub fn layout_paragraph(
     let empty_run = CT_R {
         properties: None,
         content: Vec::new(),
+        ..Default::default()
     };
     for item in ordered_inline_items(para, input) {
         let (run, field_type, current_hyperlink_url) = match item {

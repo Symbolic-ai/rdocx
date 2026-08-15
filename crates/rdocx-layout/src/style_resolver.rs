@@ -287,6 +287,7 @@ mod tests {
                 color: Some("2E74B5".to_string()),
                 ..Default::default()
             }),
+            ..Default::default()
         });
         styles
     }
@@ -366,6 +367,7 @@ mod tests {
                 lvl_text: Some("%1)".to_string()),
                 ..CT_Lvl::new(0)
             }),
+            ..Default::default()
         });
 
         let marker = generate_marker(num_id, 0, &numbering, &mut NumberingState::new()).unwrap();
@@ -429,6 +431,7 @@ mod tests {
             num_id: second,
             abstract_num_id: abstract_id,
             level_overrides: Vec::new(),
+            ..Default::default()
         });
 
         let mut state = NumberingState::new();

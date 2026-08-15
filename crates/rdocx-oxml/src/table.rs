@@ -3,30 +3,66 @@
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
+use oxml_core::xml::{
+    StrictXmlCompleteness, StrictXmlCursor, StrictXmlElement, StrictXmlLeftovers, StrictXmlNode,
+    StrictXmlParsed, parse_empty_started_element, parse_reader_element,
+};
+
 use crate::borders::CT_BorderEdge;
 use crate::error::{OxmlError, Result};
+use crate::namespace::W_NS;
 #[cfg(test)]
 use crate::namespace::matches_local_name;
-use crate::namespace::{
-    has_unmodeled_attributes, matches_word_attribute, matches_word_element, matches_word_name,
-};
-use crate::properties::{CT_Shd, get_val_attr_with_context};
-use crate::raw_xml::{
-    NamespaceContext, RawXml, capture_element, capture_empty_element, capture_raw_element,
-    capture_raw_empty_element,
-};
+use crate::properties::CT_Shd;
+use crate::raw_xml::{NamespaceContext, RawXml};
 #[cfg(test)]
 use crate::shared::ST_Border;
 use crate::shared::ST_Jc;
 use crate::text::CT_P;
 use crate::units::Twips;
 
-const MAX_MODEL_DEPTH: usize = 32;
+const MAX_MODEL_DEPTH: usize = 16;
 
 fn model_depth_error() -> OxmlError {
     OxmlError::InvalidValue(format!(
         "recognized model nesting exceeds {MAX_MODEL_DEPTH} levels"
     ))
+}
+
+fn take_strict_element(
+    cursor: &mut StrictXmlCursor,
+    index: usize,
+    description: &str,
+) -> Result<StrictXmlElement> {
+    cursor
+        .take_child(index)
+        .and_then(StrictXmlNode::into_element)
+        .ok_or_else(|| OxmlError::MissingElement(description.to_string()))
+}
+
+fn unmodeled_element_completeness(element: StrictXmlElement) -> StrictXmlCompleteness {
+    StrictXmlCompleteness::from_leftovers(StrictXmlLeftovers {
+        attributes: Vec::new(),
+        children: vec![StrictXmlNode::Element(Box::new(element))],
+    })
+}
+
+fn parse_strict_toggle(cursor: &mut StrictXmlCursor, name: &str) -> Result<bool> {
+    let Some(value) = cursor.take_attribute(Some(W_NS), "val") else {
+        return Ok(true);
+    };
+    parse_ooxml_bool(&value)
+        .ok_or_else(|| OxmlError::InvalidValue(format!("invalid w:{name} toggle value: {value}")))
+}
+
+fn parse_strict_merge(cursor: &mut StrictXmlCursor, name: &str) -> Result<VMerge> {
+    match cursor.take_attribute(Some(W_NS), "val").as_deref() {
+        Some("restart") => Ok(VMerge::Restart),
+        None | Some("continue") => Ok(VMerge::Continue),
+        Some(value) => Err(OxmlError::InvalidValue(format!(
+            "invalid w:{name} value: {value}"
+        ))),
+    }
 }
 
 /// Write any captured raw XML that belongs immediately before position `pos`.
@@ -52,6 +88,8 @@ fn write_extras_at<W: std::io::Write>(
 /// `CT_TblBorders` — Table-level borders.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CT_TblBorders {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     pub top: Option<CT_BorderEdge>,
     pub bottom: Option<CT_BorderEdge>,
     pub left: Option<CT_BorderEdge>,
@@ -61,6 +99,62 @@ pub struct CT_TblBorders {
 }
 
 impl CT_TblBorders {
+    pub(crate) fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut borders = Self::default();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let target = if child.is_named(Some(W_NS), "top") && borders.top.is_none() {
+                    Some("top")
+                } else if child.is_named(Some(W_NS), "bottom") && borders.bottom.is_none() {
+                    Some("bottom")
+                } else if (child.is_named(Some(W_NS), "left")
+                    || child.is_named(Some(W_NS), "start"))
+                    && borders.left.is_none()
+                {
+                    Some("left")
+                } else if (child.is_named(Some(W_NS), "right") || child.is_named(Some(W_NS), "end"))
+                    && borders.right.is_none()
+                {
+                    Some("right")
+                } else if child.is_named(Some(W_NS), "insideH") && borders.inside_h.is_none() {
+                    Some("insideH")
+                } else if child.is_named(Some(W_NS), "insideV") && borders.inside_v.is_none() {
+                    Some("insideV")
+                } else {
+                    None
+                };
+                let Some(target) = target else {
+                    continue;
+                };
+                let child = take_strict_element(cursor, index, "table border edge")?;
+                let parsed_edge = CT_BorderEdge::from_strict_xml(child)?;
+                let (edge, leftovers) = parsed_edge.into_parts();
+                descendants.push(StrictXmlCompleteness::from_leftovers(leftovers));
+                match target {
+                    "top" => borders.top = Some(edge),
+                    "bottom" => borders.bottom = Some(edge),
+                    "left" => borders.left = Some(edge),
+                    "right" => borders.right = Some(edge),
+                    "insideH" => borders.inside_h = Some(edge),
+                    "insideV" => borders.inside_v = Some(edge),
+                    _ => unreachable!(),
+                }
+            }
+            Ok(borders)
+        })?;
+        let (mut borders, leftovers) = parsed.into_parts();
+        borders.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(borders)
+    }
+
+    pub fn has_unmodeled_properties(&self) -> bool {
+        !self.completeness.is_complete()
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_context(reader, &NamespaceContext::default())
     }
@@ -69,95 +163,8 @@ impl CT_TblBorders {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
-        Self::from_xml_with_context_and_completeness(reader, context).map(|(borders, _)| borders)
-    }
-
-    fn from_xml_with_context_and_completeness(
-        reader: &mut Reader<&[u8]>,
-        context: &NamespaceContext,
-    ) -> Result<(Self, bool)> {
-        let mut borders = CT_TblBorders::default();
-        let mut has_unmodeled_properties = false;
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    if !Self::parse_edge(e, context, &mut borders)? {
-                        has_unmodeled_properties = true;
-                    }
-                }
-                Ok(Event::Start(ref e)) => {
-                    if !Self::parse_edge(e, context, &mut borders)? {
-                        has_unmodeled_properties = true;
-                    }
-                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
-                }
-                Ok(Event::End(ref e))
-                    if matches_word_name(e.name().as_ref(), context, b"tblBorders")
-                        || matches_word_name(e.name().as_ref(), context, b"tcBorders") =>
-                {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement(
-                        "closing table borders".to_string(),
-                    ));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok((borders, has_unmodeled_properties))
-    }
-
-    fn parse_edge(
-        e: &BytesStart<'_>,
-        context: &NamespaceContext,
-        borders: &mut Self,
-    ) -> Result<bool> {
-        let modeled = matches_word_element(e, context, b"top")
-            || matches_word_element(e, context, b"bottom")
-            || matches_word_element(e, context, b"left")
-            || matches_word_element(e, context, b"start")
-            || matches_word_element(e, context, b"right")
-            || matches_word_element(e, context, b"end")
-            || matches_word_element(e, context, b"insideH")
-            || matches_word_element(e, context, b"insideV");
-        if !modeled {
-            return Ok(false);
-        }
-        if matches_word_element(e, context, b"top") {
-            let edge = CT_BorderEdge::from_xml_attrs_with_context(e, context)?;
-            borders.top = Some(edge);
-        } else if matches_word_element(e, context, b"bottom") {
-            let edge = CT_BorderEdge::from_xml_attrs_with_context(e, context)?;
-            borders.bottom = Some(edge);
-        } else if matches_word_element(e, context, b"left")
-            || matches_word_element(e, context, b"start")
-        {
-            let edge = CT_BorderEdge::from_xml_attrs_with_context(e, context)?;
-            borders.left = Some(edge);
-        } else if matches_word_element(e, context, b"right")
-            || matches_word_element(e, context, b"end")
-        {
-            let edge = CT_BorderEdge::from_xml_attrs_with_context(e, context)?;
-            borders.right = Some(edge);
-        } else if matches_word_element(e, context, b"insideH") {
-            let edge = CT_BorderEdge::from_xml_attrs_with_context(e, context)?;
-            borders.inside_h = Some(edge);
-        } else if matches_word_element(e, context, b"insideV") {
-            let edge = CT_BorderEdge::from_xml_attrs_with_context(e, context)?;
-            borders.inside_v = Some(edge);
-        }
-        Ok(!has_unmodeled_attributes(
-            e,
-            context,
-            &[b"val", b"sz", b"space", b"color"],
-            &[],
-        )?)
+        let element = parse_reader_element(reader, context, Some(W_NS), "tblBorders", [])?;
+        Self::from_strict_xml(element)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
@@ -197,6 +204,8 @@ impl CT_TblBorders {
 /// Table cell margin (a single edge width).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CT_TblCellMar {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     pub top: Option<Twips>,
     pub bottom: Option<Twips>,
     pub left: Option<Twips>,
@@ -204,107 +213,74 @@ pub struct CT_TblCellMar {
 }
 
 impl CT_TblCellMar {
-    fn parse_edge(e: &BytesStart, context: &NamespaceContext) -> Result<(Option<Twips>, bool)> {
-        let element_context = context.with_element(e);
-        let mut width = None;
-        let mut width_type_is_modeled = true;
-        for attr in e.attributes() {
-            let attr = attr?;
-            if matches_word_attribute(attr.key.as_ref(), &element_context, b"w") {
-                let val: i32 = std::str::from_utf8(&attr.value)?.parse()?;
-                width = Some(Twips(val));
-            } else if matches_word_attribute(attr.key.as_ref(), &element_context, b"type") {
-                width_type_is_modeled = std::str::from_utf8(&attr.value)? == "dxa";
+    pub(crate) fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut margins = Self::default();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let target = if child.is_named(Some(W_NS), "top") && margins.top.is_none() {
+                    Some("top")
+                } else if child.is_named(Some(W_NS), "bottom") && margins.bottom.is_none() {
+                    Some("bottom")
+                } else if (child.is_named(Some(W_NS), "left")
+                    || child.is_named(Some(W_NS), "start"))
+                    && margins.left.is_none()
+                {
+                    Some("left")
+                } else if (child.is_named(Some(W_NS), "right") || child.is_named(Some(W_NS), "end"))
+                    && margins.right.is_none()
+                {
+                    Some("right")
+                } else {
+                    None
+                };
+                let Some(target) = target else {
+                    continue;
+                };
+                let child = take_strict_element(cursor, index, "table cell margin")?;
+                let parsed_edge = child.parse(|cursor| {
+                    let width = cursor
+                        .take_attribute(Some(W_NS), "w")
+                        .map(|value| value.parse().map(Twips))
+                        .transpose()?;
+                    if cursor.attribute(Some(W_NS), "type") == Some("dxa") {
+                        cursor.take_attribute(Some(W_NS), "type");
+                    }
+                    Ok(width)
+                })?;
+                let (width, leftovers) = parsed_edge.into_parts();
+                descendants.push(StrictXmlCompleteness::from_leftovers(leftovers));
+                match target {
+                    "top" => margins.top = width,
+                    "bottom" => margins.bottom = width,
+                    "left" => margins.left = width,
+                    "right" => margins.right = width,
+                    _ => unreachable!(),
+                }
             }
-        }
-        let has_unmodeled_properties =
-            has_unmodeled_attributes(e, context, &[b"w", b"type"], &[])? || !width_type_is_modeled;
-        Ok((width, has_unmodeled_properties))
+            Ok(margins)
+        })?;
+        let (mut margins, leftovers) = parsed.into_parts();
+        margins.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(margins)
+    }
+
+    pub fn has_unmodeled_properties(&self) -> bool {
+        !self.completeness.is_complete()
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
-        Self::from_xml_with_context_and_completeness(reader, &NamespaceContext::default())
-            .map(|(margins, _)| margins)
-    }
-
-    fn from_xml_with_context_and_completeness(
-        reader: &mut Reader<&[u8]>,
-        context: &NamespaceContext,
-    ) -> Result<(Self, bool)> {
-        let mut mar = CT_TblCellMar::default();
-        let mut has_unmodeled_properties = false;
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    if matches_word_element(e, context, b"top") {
-                        let (value, unmodeled) = Self::parse_edge(e, context)?;
-                        mar.top = value;
-                        has_unmodeled_properties |= unmodeled;
-                    } else if matches_word_element(e, context, b"bottom") {
-                        let (value, unmodeled) = Self::parse_edge(e, context)?;
-                        mar.bottom = value;
-                        has_unmodeled_properties |= unmodeled;
-                    } else if matches_word_element(e, context, b"left")
-                        || matches_word_element(e, context, b"start")
-                    {
-                        let (value, unmodeled) = Self::parse_edge(e, context)?;
-                        mar.left = value;
-                        has_unmodeled_properties |= unmodeled;
-                    } else if matches_word_element(e, context, b"right")
-                        || matches_word_element(e, context, b"end")
-                    {
-                        let (value, unmodeled) = Self::parse_edge(e, context)?;
-                        mar.right = value;
-                        has_unmodeled_properties |= unmodeled;
-                    } else {
-                        has_unmodeled_properties = true;
-                    }
-                }
-                Ok(Event::Start(ref e)) => {
-                    if matches_word_element(e, context, b"top")
-                        || matches_word_element(e, context, b"bottom")
-                        || matches_word_element(e, context, b"left")
-                        || matches_word_element(e, context, b"start")
-                        || matches_word_element(e, context, b"right")
-                        || matches_word_element(e, context, b"end")
-                    {
-                        let (value, unmodeled) = Self::parse_edge(e, context)?;
-                        if matches_word_element(e, context, b"top") {
-                            mar.top = value;
-                        } else if matches_word_element(e, context, b"bottom") {
-                            mar.bottom = value;
-                        } else if matches_word_element(e, context, b"left")
-                            || matches_word_element(e, context, b"start")
-                        {
-                            mar.left = value;
-                        } else {
-                            mar.right = value;
-                        }
-                        has_unmodeled_properties |= unmodeled;
-                    } else {
-                        has_unmodeled_properties = true;
-                    }
-                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
-                }
-                Ok(Event::End(ref e))
-                    if matches_word_name(e.name().as_ref(), context, b"tblCellMar") =>
-                {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement(
-                        "closing w:tblCellMar".to_string(),
-                    ));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok((mar, has_unmodeled_properties))
+        let element = parse_reader_element(
+            reader,
+            &NamespaceContext::default(),
+            Some(W_NS),
+            "tblCellMar",
+            [],
+        )?;
+        Self::from_strict_xml(element)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -353,6 +329,20 @@ pub struct CT_TblWidth {
 }
 
 impl CT_TblWidth {
+    fn from_strict_xml(element: StrictXmlElement) -> Result<StrictXmlParsed<Self>> {
+        element.parse(|cursor| {
+            Ok(Self {
+                w: cursor
+                    .take_attribute(Some(W_NS), "w")
+                    .map(|value| value.parse().unwrap_or(0))
+                    .unwrap_or(0),
+                width_type: cursor
+                    .take_attribute(Some(W_NS), "type")
+                    .unwrap_or_else(|| "dxa".to_string()),
+            })
+        })
+    }
+
     pub fn dxa(twips: i32) -> Self {
         CT_TblWidth {
             w: twips,
@@ -375,29 +365,8 @@ impl CT_TblWidth {
     }
 
     pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
-        Self::from_xml_attrs_with_context(e, &NamespaceContext::default())
-    }
-
-    fn from_xml_attrs_with_context(
-        e: &BytesStart,
-        parent_context: &NamespaceContext,
-    ) -> Result<Self> {
-        let context = parent_context.with_element(e);
-        let mut w = 0;
-        let mut width_type = "dxa".to_string();
-
-        for attr in e.attributes() {
-            let attr = attr?;
-            let key = attr.key.as_ref();
-            let val = std::str::from_utf8(&attr.value)?;
-            if matches_word_attribute(key, &context, b"w") {
-                w = val.parse().unwrap_or(0);
-            } else if matches_word_attribute(key, &context, b"type") {
-                width_type = val.to_string();
-            }
-        }
-
-        Ok(CT_TblWidth { w, width_type })
+        let element = parse_empty_started_element(&NamespaceContext::default(), Some(W_NS), e)?;
+        Ok(Self::from_strict_xml(element)?.value)
     }
 
     pub fn write_xml<W: std::io::Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
@@ -424,8 +393,8 @@ pub struct CT_TblGridCol {
 /// `CT_TblPr` — Table properties.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CT_TblPr {
-    /// Whether this group contained a Word property the reader does not model.
-    pub has_unmodeled_properties: bool,
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     /// Table style ID
     pub style_id: Option<String>,
     /// Table width
@@ -483,50 +452,36 @@ fn ooxml_bool_str(value: bool) -> &'static str {
     if value { "1" } else { "0" }
 }
 
-fn parse_toggle_element(
-    element: &BytesStart<'_>,
-    context: &NamespaceContext,
-    name: &str,
-) -> Result<bool> {
-    let Some(value) = get_val_attr_with_context(element, context)? else {
-        return Ok(true);
-    };
-    parse_ooxml_bool(&value)
-        .ok_or_else(|| OxmlError::InvalidValue(format!("invalid w:{name} toggle value: {value}")))
-}
-
 #[allow(non_snake_case)]
 impl CT_TblLook {
-    pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
-        Self::from_xml_attrs_with_context(e, &NamespaceContext::default())
+    fn from_strict_xml(element: StrictXmlElement) -> Result<StrictXmlParsed<Self>> {
+        element.parse(|cursor| {
+            let mut look = Self {
+                val: cursor.take_attribute(Some(W_NS), "val"),
+                ..Default::default()
+            };
+            for (local, target) in [
+                ("firstRow", &mut look.first_row),
+                ("lastRow", &mut look.last_row),
+                ("firstColumn", &mut look.first_column),
+                ("lastColumn", &mut look.last_column),
+                ("noHBand", &mut look.no_h_band),
+                ("noVBand", &mut look.no_v_band),
+            ] {
+                if let Some(value) = cursor.attribute(Some(W_NS), local)
+                    && let Some(value) = parse_ooxml_bool(value)
+                {
+                    cursor.take_attribute(Some(W_NS), local);
+                    *target = Some(value);
+                }
+            }
+            Ok(look)
+        })
     }
 
-    fn from_xml_attrs_with_context(
-        e: &BytesStart,
-        parent_context: &NamespaceContext,
-    ) -> Result<Self> {
-        let context = parent_context.with_element(e);
-        let mut look = CT_TblLook::default();
-        for attr in e.attributes().flatten() {
-            let value = std::str::from_utf8(&attr.value)?;
-            let key = attr.key.as_ref();
-            if matches_word_attribute(key, &context, b"val") {
-                look.val = Some(value.to_string());
-            } else if matches_word_attribute(key, &context, b"firstRow") {
-                look.first_row = parse_ooxml_bool(value);
-            } else if matches_word_attribute(key, &context, b"lastRow") {
-                look.last_row = parse_ooxml_bool(value);
-            } else if matches_word_attribute(key, &context, b"firstColumn") {
-                look.first_column = parse_ooxml_bool(value);
-            } else if matches_word_attribute(key, &context, b"lastColumn") {
-                look.last_column = parse_ooxml_bool(value);
-            } else if matches_word_attribute(key, &context, b"noHBand") {
-                look.no_h_band = parse_ooxml_bool(value);
-            } else if matches_word_attribute(key, &context, b"noVBand") {
-                look.no_v_band = parse_ooxml_bool(value);
-            }
-        }
-        Ok(look)
+    pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
+        let element = parse_empty_started_element(&NamespaceContext::default(), Some(W_NS), e)?;
+        Ok(Self::from_strict_xml(element)?.value)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -553,6 +508,101 @@ impl CT_TblLook {
 
 #[allow(non_snake_case)]
 impl CT_TblPr {
+    pub(crate) fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut properties = Self::default();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let local = [
+                    "tblStyle",
+                    "tblW",
+                    "jc",
+                    "tblBorders",
+                    "tblCellMar",
+                    "tblLayout",
+                    "tblInd",
+                    "shd",
+                    "tblLook",
+                ]
+                .into_iter()
+                .find(|local| child.is_named(Some(W_NS), local));
+                let Some(local) = local else {
+                    continue;
+                };
+                let child = take_strict_element(cursor, index, local)?;
+                let completeness = match local {
+                    "tblBorders" => {
+                        let borders = CT_TblBorders::from_strict_xml(child)?;
+                        let completeness = borders.completeness.clone();
+                        properties.borders = Some(borders);
+                        completeness
+                    }
+                    "tblCellMar" => {
+                        let margins = CT_TblCellMar::from_strict_xml(child)?;
+                        let completeness = margins.completeness.clone();
+                        properties.cell_margin = Some(margins);
+                        completeness
+                    }
+                    "tblW" | "tblInd" => {
+                        let parsed_width = CT_TblWidth::from_strict_xml(child)?;
+                        let (width, leftovers) = parsed_width.into_parts();
+                        if local == "tblW" {
+                            properties.width = Some(width);
+                        } else {
+                            properties.indent = Some(width);
+                        }
+                        StrictXmlCompleteness::from_leftovers(leftovers)
+                    }
+                    "shd" => {
+                        let parsed_shading = CT_Shd::from_strict_xml(child)?;
+                        let (shading, leftovers) = parsed_shading.into_parts();
+                        properties.shading = Some(shading);
+                        StrictXmlCompleteness::from_leftovers(leftovers)
+                    }
+                    "tblLook" => {
+                        let parsed_look = CT_TblLook::from_strict_xml(child)?;
+                        let (look, leftovers) = parsed_look.into_parts();
+                        properties.look = Some(look);
+                        StrictXmlCompleteness::from_leftovers(leftovers)
+                    }
+                    _ => {
+                        let parsed_leaf = child.parse(|cursor| {
+                            match local {
+                                "tblStyle" => {
+                                    properties.style_id = cursor.take_attribute(Some(W_NS), "val");
+                                }
+                                "jc" => {
+                                    properties.jc = cursor
+                                        .take_attribute(Some(W_NS), "val")
+                                        .map(|value| ST_Jc::from_str(&value))
+                                        .transpose()?;
+                                }
+                                "tblLayout" => {
+                                    properties.layout = cursor.take_attribute(Some(W_NS), "type");
+                                }
+                                _ => unreachable!(),
+                            }
+                            Ok(())
+                        })?;
+                        StrictXmlCompleteness::from_leftovers(parsed_leaf.leftovers)
+                    }
+                };
+                descendants.push(completeness);
+            }
+            Ok(properties)
+        })?;
+        let (mut properties, leftovers) = parsed.into_parts();
+        properties.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(properties)
+    }
+
+    pub fn has_unmodeled_properties(&self) -> bool {
+        !self.completeness.is_complete()
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_context(reader, &NamespaceContext::default())
     }
@@ -561,122 +611,8 @@ impl CT_TblPr {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
-        let mut pr = CT_TblPr::default();
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    if matches_word_element(e, context, b"tblBorders") {
-                        pr.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        pr.borders = Some(CT_TblBorders::default());
-                    } else if matches_word_element(e, context, b"tblCellMar") {
-                        pr.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        pr.cell_margin = Some(CT_TblCellMar::default());
-                    } else if !Self::parse_property_element(e, context, &mut pr)? {
-                        pr.has_unmodeled_properties = true;
-                    }
-                }
-                Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    if matches_word_element(e, context, b"tblBorders") {
-                        pr.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        let child_context = context.with_element(e);
-                        let (borders, has_unmodeled_properties) =
-                            CT_TblBorders::from_xml_with_context_and_completeness(
-                                reader,
-                                &child_context,
-                            )?;
-                        pr.has_unmodeled_properties |= has_unmodeled_properties;
-                        pr.borders = Some(borders);
-                    } else if matches_word_element(e, context, b"tblCellMar") {
-                        pr.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        let child_context = context.with_element(e);
-                        let (cell_margin, has_unmodeled_properties) =
-                            CT_TblCellMar::from_xml_with_context_and_completeness(
-                                reader,
-                                &child_context,
-                            )?;
-                        pr.has_unmodeled_properties |= has_unmodeled_properties;
-                        pr.cell_margin = Some(cell_margin);
-                    } else {
-                        if !Self::parse_property_element(e, context, &mut pr)? {
-                            pr.has_unmodeled_properties = true;
-                        }
-                        reader.read_to_end_into(name, &mut Vec::new())?;
-                    }
-                }
-                Ok(Event::End(ref e))
-                    if matches_word_name(e.name().as_ref(), context, b"tblPr") =>
-                {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:tblPr".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(pr)
-    }
-
-    fn parse_property_element(
-        e: &BytesStart<'_>,
-        context: &NamespaceContext,
-        pr: &mut Self,
-    ) -> Result<bool> {
-        let element_context = context.with_element(e);
-        let allowed_word_attributes: &[&[u8]];
-        if matches_word_element(e, context, b"tblStyle") {
-            pr.style_id = get_val_attr_with_context(e, &element_context)?;
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"tblW") {
-            pr.width = Some(CT_TblWidth::from_xml_attrs_with_context(e, context)?);
-            allowed_word_attributes = &[b"w", b"type"];
-        } else if matches_word_element(e, context, b"jc") {
-            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
-                pr.jc = Some(ST_Jc::from_str(&val)?);
-            }
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"tblLayout") {
-            for attribute in e.attributes() {
-                let attribute = attribute?;
-                if matches_word_attribute(attribute.key.as_ref(), &element_context, b"type") {
-                    pr.layout = Some(std::str::from_utf8(&attribute.value)?.to_string());
-                    break;
-                }
-            }
-            allowed_word_attributes = &[b"type"];
-        } else if matches_word_element(e, context, b"tblInd") {
-            pr.indent = Some(CT_TblWidth::from_xml_attrs_with_context(e, context)?);
-            allowed_word_attributes = &[b"w", b"type"];
-        } else if matches_word_element(e, context, b"shd") {
-            pr.shading = Some(CT_Shd::from_xml_attrs_with_context(e, context)?);
-            allowed_word_attributes = &[b"val", b"color", b"fill"];
-        } else if matches_word_element(e, context, b"tblLook") {
-            pr.look = Some(CT_TblLook::from_xml_attrs_with_context(e, context)?);
-            allowed_word_attributes = &[
-                b"val",
-                b"firstRow",
-                b"lastRow",
-                b"firstColumn",
-                b"lastColumn",
-                b"noHBand",
-                b"noVBand",
-            ];
-        } else {
-            return Ok(false);
-        }
-        pr.has_unmodeled_properties |=
-            has_unmodeled_attributes(e, context, allowed_word_attributes, &[])?;
-        Ok(true)
+        let element = parse_reader_element(reader, context, Some(W_NS), "tblPr", [])?;
+        Self::from_strict_xml(element)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -737,12 +673,50 @@ impl CT_TblPr {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CT_TblGrid {
     pub columns: Vec<CT_TblGridCol>,
-    /// Whether the grid contains children or attributes the semantic model does not expose.
-    pub has_unmodeled_properties: bool,
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
 }
 
 #[allow(non_snake_case)]
 impl CT_TblGrid {
+    pub(crate) fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut grid = Self::default();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                if !child.is_named(Some(W_NS), "gridCol") {
+                    continue;
+                }
+                let child = take_strict_element(cursor, index, "gridCol")?;
+                let parsed_column = child.parse(|cursor| {
+                    let width = cursor
+                        .take_attribute(Some(W_NS), "w")
+                        .map(|value| value.parse().map(Twips))
+                        .transpose()?
+                        .unwrap_or(Twips(0));
+                    if cursor.attribute(Some(W_NS), "type") == Some("dxa") {
+                        cursor.take_attribute(Some(W_NS), "type");
+                    }
+                    Ok(CT_TblGridCol { width })
+                })?;
+                let (column, leftovers) = parsed_column.into_parts();
+                grid.columns.push(column);
+                descendants.push(StrictXmlCompleteness::from_leftovers(leftovers));
+            }
+            Ok(grid)
+        })?;
+        let (mut grid, leftovers) = parsed.into_parts();
+        grid.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(grid)
+    }
+
+    pub fn has_unmodeled_properties(&self) -> bool {
+        !self.completeness.is_complete()
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_context(reader, &NamespaceContext::default())
     }
@@ -751,63 +725,8 @@ impl CT_TblGrid {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
-        let mut grid = CT_TblGrid::default();
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    if !Self::parse_column(e, context, &mut grid)? {
-                        grid.has_unmodeled_properties = true;
-                    }
-                }
-                Ok(Event::Start(ref e)) => {
-                    if !Self::parse_column(e, context, &mut grid)? {
-                        grid.has_unmodeled_properties = true;
-                    }
-                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
-                }
-                Ok(Event::End(ref e))
-                    if matches_word_name(e.name().as_ref(), context, b"tblGrid") =>
-                {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:tblGrid".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(grid)
-    }
-
-    fn parse_column(
-        e: &BytesStart<'_>,
-        context: &NamespaceContext,
-        grid: &mut CT_TblGrid,
-    ) -> Result<bool> {
-        if !matches_word_element(e, context, b"gridCol") {
-            return Ok(false);
-        }
-        let element_context = context.with_element(e);
-        let mut width = Twips(0);
-        for attr in e.attributes() {
-            let attr = attr?;
-            if matches_word_attribute(attr.key.as_ref(), &element_context, b"w") {
-                width = Twips(std::str::from_utf8(&attr.value)?.parse()?);
-            } else if matches_word_attribute(attr.key.as_ref(), &element_context, b"type")
-                && attr.value.as_ref() != b"dxa"
-            {
-                grid.has_unmodeled_properties = true;
-            }
-        }
-        grid.has_unmodeled_properties |=
-            has_unmodeled_attributes(e, context, &[b"w", b"type"], &[])?;
-        grid.columns.push(CT_TblGridCol { width });
-        Ok(true)
+        let element = parse_reader_element(reader, context, Some(W_NS), "tblGrid", [])?;
+        Self::from_strict_xml(element)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -836,20 +755,6 @@ pub enum VMerge {
     Continue,
 }
 
-fn parse_merge_element(
-    element: &BytesStart<'_>,
-    context: &NamespaceContext,
-    name: &str,
-) -> Result<VMerge> {
-    match get_val_attr_with_context(element, context)?.as_deref() {
-        Some("restart") => Ok(VMerge::Restart),
-        None | Some("continue") => Ok(VMerge::Continue),
-        Some(value) => Err(OxmlError::InvalidValue(format!(
-            "invalid w:{name} value: {value}"
-        ))),
-    }
-}
-
 fn write_merge_element<W: std::io::Write>(
     writer: &mut Writer<W>,
     name: &str,
@@ -866,8 +771,8 @@ fn write_merge_element<W: std::io::Write>(
 /// `CT_TrPr` — Table row properties.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CT_TrPr {
-    /// Whether this group contained a Word property the reader does not model.
-    pub has_unmodeled_properties: bool,
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     /// Row height in twips
     pub height: Option<Twips>,
     /// Row height rule: "exact" or "atLeast"
@@ -891,6 +796,82 @@ pub struct CT_TrPr {
 
 #[allow(non_snake_case)]
 impl CT_TrPr {
+    pub(crate) fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut properties = Self::default();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let local = [
+                    "trHeight",
+                    "tblHeader",
+                    "jc",
+                    "cnfStyle",
+                    "cantSplit",
+                    "gridBefore",
+                    "gridAfter",
+                ]
+                .into_iter()
+                .find(|local| child.is_named(Some(W_NS), local));
+                let Some(local) = local else {
+                    continue;
+                };
+                let child = take_strict_element(cursor, index, local)?;
+                let parsed_leaf = child.parse(|cursor| {
+                    match local {
+                        "trHeight" => {
+                            properties.height = cursor
+                                .take_attribute(Some(W_NS), "val")
+                                .map(|value| value.parse().map(Twips))
+                                .transpose()?;
+                            properties.height_rule = cursor.take_attribute(Some(W_NS), "hRule");
+                        }
+                        "tblHeader" => {
+                            properties.header = Some(parse_strict_toggle(cursor, "tblHeader")?);
+                        }
+                        "jc" => {
+                            properties.jc = cursor
+                                .take_attribute(Some(W_NS), "val")
+                                .map(|value| ST_Jc::from_str(&value))
+                                .transpose()?;
+                        }
+                        "cnfStyle" => {
+                            properties.cnf_style = cursor.take_attribute(Some(W_NS), "val");
+                        }
+                        "cantSplit" => {
+                            properties.cant_split = Some(parse_strict_toggle(cursor, "cantSplit")?);
+                        }
+                        "gridBefore" => {
+                            properties.grid_before = cursor
+                                .take_attribute(Some(W_NS), "val")
+                                .map(|value| value.parse())
+                                .transpose()?;
+                        }
+                        "gridAfter" => {
+                            properties.grid_after = cursor
+                                .take_attribute(Some(W_NS), "val")
+                                .map(|value| value.parse())
+                                .transpose()?;
+                        }
+                        _ => unreachable!(),
+                    }
+                    Ok(())
+                })?;
+                descendants.push(StrictXmlCompleteness::from_leftovers(parsed_leaf.leftovers));
+            }
+            Ok(properties)
+        })?;
+        let (mut properties, leftovers) = parsed.into_parts();
+        properties.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(properties)
+    }
+
+    pub fn has_unmodeled_properties(&self) -> bool {
+        !self.completeness.is_complete()
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_context(reader, &NamespaceContext::default())
     }
@@ -899,92 +880,8 @@ impl CT_TrPr {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
-        let mut pr = CT_TrPr::default();
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    if !Self::parse_property_element(e, context, &mut pr)? {
-                        pr.has_unmodeled_properties = true;
-                    }
-                }
-                Ok(Event::Start(ref e)) => {
-                    if !Self::parse_property_element(e, context, &mut pr)? {
-                        pr.has_unmodeled_properties = true;
-                    }
-                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
-                }
-                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"trPr") => {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:trPr".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(pr)
-    }
-
-    fn parse_property_element(
-        e: &BytesStart<'_>,
-        context: &NamespaceContext,
-        pr: &mut CT_TrPr,
-    ) -> Result<bool> {
-        let element_context = context.with_element(e);
-        let allowed_word_attributes: &[&[u8]];
-        if matches_word_element(e, context, b"trHeight") {
-            for attr in e.attributes() {
-                let attr = attr?;
-                let key = attr.key.as_ref();
-                let val = std::str::from_utf8(&attr.value)?;
-                if matches_word_attribute(key, &element_context, b"val") {
-                    pr.height = Some(Twips(val.parse()?));
-                } else if matches_word_attribute(key, &element_context, b"hRule") {
-                    pr.height_rule = Some(val.to_string());
-                }
-            }
-            allowed_word_attributes = &[b"val", b"hRule"];
-        } else if matches_word_element(e, context, b"tblHeader") {
-            pr.header = Some(parse_toggle_element(e, &element_context, "tblHeader")?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"jc") {
-            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
-                pr.jc = Some(ST_Jc::from_str(&val)?);
-            }
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"cnfStyle") {
-            pr.cnf_style = get_val_attr_with_context(e, &element_context)?;
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"cantSplit") {
-            pr.cant_split = Some(parse_toggle_element(e, &element_context, "cantSplit")?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"gridBefore")
-            && let Some(val) = get_val_attr_with_context(e, &element_context)?
-        {
-            pr.grid_before = Some(val.parse()?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"gridAfter")
-            && let Some(val) = get_val_attr_with_context(e, &element_context)?
-        {
-            pr.grid_after = Some(val.parse()?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"gridBefore")
-            || matches_word_element(e, context, b"gridAfter")
-        {
-            allowed_word_attributes = &[b"val"];
-        } else if !matches_word_element(e, context, b"gridAfter") {
-            return Ok(false);
-        } else {
-            allowed_word_attributes = &[b"val"];
-        }
-        pr.has_unmodeled_properties |=
-            has_unmodeled_attributes(e, context, allowed_word_attributes, &[])?;
-        Ok(true)
+        let element = parse_reader_element(reader, context, Some(W_NS), "trPr", [])?;
+        Self::from_strict_xml(element)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -1093,8 +990,8 @@ impl ST_VerticalJc {
 /// `CT_TcPr` — Table cell properties.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CT_TcPr {
-    /// Whether this group contained a Word property the reader does not model.
-    pub has_unmodeled_properties: bool,
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     /// Cell width
     pub width: Option<CT_TblWidth>,
     /// Horizontal merge (number of grid columns spanned)
@@ -1119,6 +1016,109 @@ pub struct CT_TcPr {
 
 #[allow(non_snake_case)]
 impl CT_TcPr {
+    pub(crate) fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut properties = Self::default();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let local = [
+                    "tcW",
+                    "gridSpan",
+                    "hMerge",
+                    "vMerge",
+                    "tcBorders",
+                    "shd",
+                    "vAlign",
+                    "cnfStyle",
+                    "noWrap",
+                    "textDirection",
+                ]
+                .into_iter()
+                .find(|local| child.is_named(Some(W_NS), local));
+                let Some(local) = local else {
+                    continue;
+                };
+                let child = take_strict_element(cursor, index, local)?;
+                let completeness = match local {
+                    "tcBorders" => {
+                        let borders = CT_TblBorders::from_strict_xml(child)?;
+                        let completeness = borders.completeness.clone();
+                        properties.borders = Some(borders);
+                        completeness
+                    }
+                    "tcW" => {
+                        let parsed_width = CT_TblWidth::from_strict_xml(child)?;
+                        let (width, leftovers) = parsed_width.into_parts();
+                        properties.width = Some(width);
+                        StrictXmlCompleteness::from_leftovers(leftovers)
+                    }
+                    "shd" => {
+                        let parsed_shading = CT_Shd::from_strict_xml(child)?;
+                        let (shading, leftovers) = parsed_shading.into_parts();
+                        properties.shading = Some(shading);
+                        StrictXmlCompleteness::from_leftovers(leftovers)
+                    }
+                    _ => {
+                        let parsed_leaf = child.parse(|cursor| {
+                            match local {
+                                "gridSpan" => {
+                                    properties.grid_span = cursor
+                                        .take_attribute(Some(W_NS), "val")
+                                        .map(|value| value.parse())
+                                        .transpose()?;
+                                    if properties.grid_span == Some(0) {
+                                        return Err(OxmlError::InvalidValue(
+                                            "w:gridSpan must be greater than zero".to_string(),
+                                        ));
+                                    }
+                                }
+                                "hMerge" => {
+                                    properties.h_merge =
+                                        Some(parse_strict_merge(cursor, "hMerge")?);
+                                }
+                                "vMerge" => {
+                                    properties.v_merge =
+                                        Some(parse_strict_merge(cursor, "vMerge")?);
+                                }
+                                "vAlign" => {
+                                    properties.v_align = cursor
+                                        .take_attribute(Some(W_NS), "val")
+                                        .map(|value| ST_VerticalJc::from_str(&value));
+                                }
+                                "cnfStyle" => {
+                                    properties.cnf_style = cursor.take_attribute(Some(W_NS), "val");
+                                }
+                                "noWrap" => {
+                                    properties.no_wrap =
+                                        Some(parse_strict_toggle(cursor, "noWrap")?);
+                                }
+                                "textDirection" => {
+                                    properties.text_direction =
+                                        cursor.take_attribute(Some(W_NS), "val");
+                                }
+                                _ => unreachable!(),
+                            }
+                            Ok(())
+                        })?;
+                        StrictXmlCompleteness::from_leftovers(parsed_leaf.leftovers)
+                    }
+                };
+                descendants.push(completeness);
+            }
+            Ok(properties)
+        })?;
+        let (mut properties, leftovers) = parsed.into_parts();
+        properties.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(properties)
+    }
+
+    pub fn has_unmodeled_properties(&self) -> bool {
+        !self.completeness.is_complete()
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_context(reader, &NamespaceContext::default())
     }
@@ -1127,111 +1127,8 @@ impl CT_TcPr {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
-        let mut pr = CT_TcPr::default();
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    if matches_word_element(e, context, b"tcBorders") {
-                        pr.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        pr.borders = Some(CT_TblBorders::default());
-                    } else if !Self::parse_property_element(e, context, &mut pr)? {
-                        pr.has_unmodeled_properties = true;
-                    }
-                }
-                Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    if matches_word_element(e, context, b"tcBorders") {
-                        pr.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        let child_context = context.with_element(e);
-                        let (borders, has_unmodeled_properties) =
-                            CT_TblBorders::from_xml_with_context_and_completeness(
-                                reader,
-                                &child_context,
-                            )?;
-                        pr.has_unmodeled_properties |= has_unmodeled_properties;
-                        pr.borders = Some(borders);
-                    } else {
-                        if !Self::parse_property_element(e, context, &mut pr)? {
-                            pr.has_unmodeled_properties = true;
-                        }
-                        reader.read_to_end_into(name, &mut Vec::new())?;
-                    }
-                }
-                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"tcPr") => {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:tcPr".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(pr)
-    }
-
-    fn parse_property_element(
-        e: &BytesStart<'_>,
-        context: &NamespaceContext,
-        pr: &mut CT_TcPr,
-    ) -> Result<bool> {
-        let element_context = context.with_element(e);
-        let allowed_word_attributes: &[&[u8]];
-        if matches_word_element(e, context, b"tcW") {
-            pr.width = Some(CT_TblWidth::from_xml_attrs_with_context(e, context)?);
-            allowed_word_attributes = &[b"w", b"type"];
-        } else if matches_word_element(e, context, b"gridSpan") {
-            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
-                let span = val.parse()?;
-                if span == 0 {
-                    return Err(OxmlError::InvalidValue(
-                        "w:gridSpan must be greater than zero".to_string(),
-                    ));
-                }
-                pr.grid_span = Some(span);
-            }
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"hMerge") {
-            pr.h_merge = Some(parse_merge_element(e, &element_context, "hMerge")?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"vMerge") {
-            pr.v_merge = Some(parse_merge_element(e, &element_context, "vMerge")?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"vAlign") {
-            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
-                pr.v_align = Some(ST_VerticalJc::from_str(&val));
-            }
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"shd") {
-            pr.shading = Some(CT_Shd::from_xml_attrs_with_context(e, context)?);
-            allowed_word_attributes = &[b"val", b"color", b"fill"];
-        } else if matches_word_element(e, context, b"cnfStyle") {
-            pr.cnf_style = get_val_attr_with_context(e, &element_context)?;
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"noWrap") {
-            pr.no_wrap = Some(parse_toggle_element(e, &element_context, "noWrap")?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"textDirection")
-            && let Some(val) = get_val_attr_with_context(e, &element_context)?
-        {
-            pr.text_direction = Some(val);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"textDirection") {
-            allowed_word_attributes = &[b"val"];
-        } else if !matches_word_element(e, context, b"textDirection") {
-            return Ok(false);
-        } else {
-            allowed_word_attributes = &[b"val"];
-        }
-        pr.has_unmodeled_properties |=
-            has_unmodeled_attributes(e, context, allowed_word_attributes, &[])?;
-        Ok(true)
+        let element = parse_reader_element(reader, context, Some(W_NS), "tcPr", [])?;
+        Self::from_strict_xml(element)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -1332,6 +1229,8 @@ pub enum CellContent {
 /// `CT_Tc` — A table cell containing paragraphs and possibly nested tables.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CT_Tc {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     pub properties: Option<CT_TcPr>,
     /// Cell content (paragraphs and nested tables).
     pub content: Vec<CellContent>,
@@ -1341,6 +1240,7 @@ pub struct CT_Tc {
 impl CT_Tc {
     pub fn new() -> Self {
         CT_Tc {
+            completeness: StrictXmlCompleteness::default(),
             properties: None,
             // OOXML requires at least one paragraph per cell
             content: vec![CellContent::Paragraph(CT_P::new())],
@@ -1377,6 +1277,62 @@ impl CT_Tc {
             .join("\n")
     }
 
+    pub(crate) fn from_strict_xml(element: StrictXmlElement, model_depth: usize) -> Result<Self> {
+        if model_depth > MAX_MODEL_DEPTH {
+            return Err(model_depth_error());
+        }
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut cell = Self {
+                completeness: StrictXmlCompleteness::default(),
+                properties: None,
+                content: Vec::new(),
+            };
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let kind = if child.is_named(Some(W_NS), "tcPr") {
+                    Some("tcPr")
+                } else if child.is_named(Some(W_NS), "p") {
+                    Some("p")
+                } else if child.is_named(Some(W_NS), "tbl") {
+                    Some("tbl")
+                } else {
+                    None
+                };
+                let child = take_strict_element(cursor, index, "table cell child")?;
+                match kind {
+                    Some("tcPr") => {
+                        let properties = CT_TcPr::from_strict_xml(child)?;
+                        descendants.push(properties.completeness.clone());
+                        cell.properties = Some(properties);
+                    }
+                    Some("p") => {
+                        let paragraph = CT_P::from_strict_xml(child)?;
+                        descendants.push(paragraph.completeness.clone());
+                        cell.content.push(CellContent::Paragraph(paragraph));
+                    }
+                    Some("tbl") => {
+                        let table = CT_Tbl::from_strict_xml(child, model_depth + 1)?;
+                        descendants.push(table.completeness.clone());
+                        cell.content.push(CellContent::Table(table));
+                    }
+                    None => {
+                        descendants.push(unmodeled_element_completeness(child.clone()));
+                        cell.content
+                            .push(CellContent::Unsupported(child.into_raw_xml()));
+                    }
+                    Some(_) => unreachable!(),
+                }
+            }
+            Ok(cell)
+        })?;
+        let (mut cell, leftovers) = parsed.into_parts();
+        cell.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(cell)
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_context(reader, &NamespaceContext::default())
     }
@@ -1385,83 +1341,15 @@ impl CT_Tc {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
-        Self::from_xml_with_context_at_depth(reader, context, 1)
-    }
-
-    fn from_xml_with_context_at_depth(
-        reader: &mut Reader<&[u8]>,
-        context: &NamespaceContext,
-        model_depth: usize,
-    ) -> Result<Self> {
-        if model_depth > MAX_MODEL_DEPTH {
-            return Err(model_depth_error());
-        }
-        let mut properties = None;
-        let mut content = Vec::new();
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    if matches_word_element(e, context, b"tcPr") {
-                        let child_context = context.with_element(e);
-                        properties = Some(CT_TcPr::from_xml_with_context(reader, &child_context)?);
-                    } else if matches_word_element(e, context, b"p") {
-                        let child_context = context.with_element(e);
-                        content.push(CellContent::Paragraph(CT_P::from_xml_with_context(
-                            reader,
-                            &child_context,
-                        )?));
-                    } else if matches_word_element(e, context, b"tbl") {
-                        let child_context = context.with_element(e);
-                        content.push(CellContent::Table(CT_Tbl::from_xml_with_context_at_depth(
-                            reader,
-                            &child_context,
-                            model_depth + 1,
-                        )?));
-                    } else {
-                        // Content controls (w:sdt), bookmarks and revision
-                        // marks live here. Keep them verbatim rather than
-                        // dropping the subtree, which used to delete every
-                        // paragraph wrapped in a content control.
-                        content.push(CellContent::Unsupported(capture_raw_element(
-                            reader, e, context,
-                        )?));
-                    }
-                }
-                Ok(Event::Empty(ref e)) => {
-                    if matches_word_element(e, context, b"tcPr") {
-                        properties = Some(CT_TcPr::default());
-                    } else if matches_word_element(e, context, b"p") {
-                        content.push(CellContent::Paragraph(CT_P::new()));
-                    } else if matches_word_element(e, context, b"tbl") {
-                        content.push(CellContent::Table(CT_Tbl::new()));
-                    } else {
-                        content.push(CellContent::Unsupported(capture_raw_empty_element(
-                            e, context,
-                        )?));
-                    }
-                }
-                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"tc") => {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:tc".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(CT_Tc {
-            properties,
-            content,
-        })
+        let element = parse_reader_element(reader, context, Some(W_NS), "tc", [])?;
+        Self::from_strict_xml(element, 1)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        self.to_xml_with_context(writer, &NamespaceContext::default())
+        self.to_xml_with_context(
+            writer,
+            &NamespaceContext::new([("w".to_string(), W_NS.to_string())]),
+        )
     }
 
     pub(crate) fn to_xml_with_context<W: std::io::Write>(
@@ -1501,6 +1389,8 @@ impl Default for CT_Tc {
 /// `CT_Row` — A table row containing cells.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CT_Row {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     pub properties: Option<CT_TrPr>,
     pub cells: Vec<CT_Tc>,
     /// Raw XML for children we do not model, tagged with the cell index they
@@ -1512,10 +1402,53 @@ pub struct CT_Row {
 impl CT_Row {
     pub fn new() -> Self {
         CT_Row {
+            completeness: StrictXmlCompleteness::default(),
             properties: None,
             cells: Vec::new(),
             extra_xml: Vec::new(),
         }
+    }
+
+    pub(crate) fn from_strict_xml(element: StrictXmlElement, model_depth: usize) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut row = Self::new();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let kind = if child.is_named(Some(W_NS), "trPr") {
+                    Some("trPr")
+                } else if child.is_named(Some(W_NS), "tc") {
+                    Some("tc")
+                } else {
+                    None
+                };
+                let child = take_strict_element(cursor, index, "table row child")?;
+                match kind {
+                    Some("trPr") => {
+                        let properties = CT_TrPr::from_strict_xml(child)?;
+                        descendants.push(properties.completeness.clone());
+                        row.properties = Some(properties);
+                    }
+                    Some("tc") => {
+                        let cell = CT_Tc::from_strict_xml(child, model_depth)?;
+                        descendants.push(cell.completeness.clone());
+                        row.cells.push(cell);
+                    }
+                    None => {
+                        descendants.push(unmodeled_element_completeness(child.clone()));
+                        row.extra_xml
+                            .push((row.cells.len(), child.into_raw_xml().bytes().to_vec()));
+                    }
+                    Some(_) => unreachable!(),
+                }
+            }
+            Ok(row)
+        })?;
+        let (mut row, leftovers) = parsed.into_parts();
+        row.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(row)
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
@@ -1526,67 +1459,8 @@ impl CT_Row {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
-        Self::from_xml_with_context_at_depth(reader, context, 1)
-    }
-
-    fn from_xml_with_context_at_depth(
-        reader: &mut Reader<&[u8]>,
-        context: &NamespaceContext,
-        model_depth: usize,
-    ) -> Result<Self> {
-        let mut properties = None;
-        let mut cells = Vec::new();
-        let mut extra_xml = Vec::new();
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    if matches_word_element(e, context, b"trPr") {
-                        let child_context = context.with_element(e);
-                        properties = Some(CT_TrPr::from_xml_with_context(reader, &child_context)?);
-                    } else if matches_word_element(e, context, b"tc") {
-                        let child_context = context.with_element(e);
-                        cells.push(CT_Tc::from_xml_with_context_at_depth(
-                            reader,
-                            &child_context,
-                            model_depth,
-                        )?);
-                    } else {
-                        // A cell wrapped in a content control used to be
-                        // dropped here, leaving a row with no cells at all.
-                        extra_xml.push((cells.len(), capture_element(reader, e)?));
-                    }
-                }
-                Ok(Event::Empty(ref e)) => {
-                    if matches_word_element(e, context, b"trPr") {
-                        properties = Some(CT_TrPr::default());
-                    } else if matches_word_element(e, context, b"tc") {
-                        cells.push(CT_Tc {
-                            properties: None,
-                            content: Vec::new(),
-                        });
-                    } else {
-                        extra_xml.push((cells.len(), capture_empty_element(e)?));
-                    }
-                }
-                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"tr") => {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:tr".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(CT_Row {
-            properties,
-            cells,
-            extra_xml,
-        })
+        let element = parse_reader_element(reader, context, Some(W_NS), "tr", [])?;
+        Self::from_strict_xml(element, 1)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -1626,6 +1500,8 @@ impl Default for CT_Row {
 /// `CT_Tbl` — A table element containing rows.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CT_Tbl {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     pub properties: Option<CT_TblPr>,
     pub grid: Option<CT_TblGrid>,
     pub rows: Vec<CT_Row>,
@@ -1638,11 +1514,65 @@ pub struct CT_Tbl {
 impl CT_Tbl {
     pub fn new() -> Self {
         CT_Tbl {
+            completeness: StrictXmlCompleteness::default(),
             properties: None,
             grid: None,
             rows: Vec::new(),
             extra_xml: Vec::new(),
         }
+    }
+
+    pub(crate) fn from_strict_xml(element: StrictXmlElement, model_depth: usize) -> Result<Self> {
+        if model_depth > MAX_MODEL_DEPTH {
+            return Err(model_depth_error());
+        }
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut table = Self::new();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let kind = if child.is_named(Some(W_NS), "tblPr") {
+                    Some("tblPr")
+                } else if child.is_named(Some(W_NS), "tblGrid") {
+                    Some("tblGrid")
+                } else if child.is_named(Some(W_NS), "tr") {
+                    Some("tr")
+                } else {
+                    None
+                };
+                let child = take_strict_element(cursor, index, "table child")?;
+                match kind {
+                    Some("tblPr") => {
+                        let properties = CT_TblPr::from_strict_xml(child)?;
+                        descendants.push(properties.completeness.clone());
+                        table.properties = Some(properties);
+                    }
+                    Some("tblGrid") => {
+                        let grid = CT_TblGrid::from_strict_xml(child)?;
+                        descendants.push(grid.completeness.clone());
+                        table.grid = Some(grid);
+                    }
+                    Some("tr") => {
+                        let row = CT_Row::from_strict_xml(child, model_depth)?;
+                        descendants.push(row.completeness.clone());
+                        table.rows.push(row);
+                    }
+                    None => {
+                        descendants.push(unmodeled_element_completeness(child.clone()));
+                        table
+                            .extra_xml
+                            .push((table.rows.len(), child.into_raw_xml().bytes().to_vec()));
+                    }
+                    Some(_) => unreachable!(),
+                }
+            }
+            Ok(table)
+        })?;
+        let (mut table, leftovers) = parsed.into_parts();
+        table.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(table)
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
@@ -1653,78 +1583,15 @@ impl CT_Tbl {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
-        Self::from_xml_with_context_at_depth(reader, context, 1)
-    }
-
-    fn from_xml_with_context_at_depth(
-        reader: &mut Reader<&[u8]>,
-        context: &NamespaceContext,
-        model_depth: usize,
-    ) -> Result<Self> {
-        if model_depth > MAX_MODEL_DEPTH {
-            return Err(model_depth_error());
-        }
-        let mut properties = None;
-        let mut grid = None;
-        let mut rows = Vec::new();
-        let mut extra_xml = Vec::new();
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    if matches_word_element(e, context, b"tblPr") {
-                        let child_context = context.with_element(e);
-                        properties = Some(CT_TblPr::from_xml_with_context(reader, &child_context)?);
-                    } else if matches_word_element(e, context, b"tblGrid") {
-                        let child_context = context.with_element(e);
-                        grid = Some(CT_TblGrid::from_xml_with_context(reader, &child_context)?);
-                    } else if matches_word_element(e, context, b"tr") {
-                        let child_context = context.with_element(e);
-                        rows.push(CT_Row::from_xml_with_context_at_depth(
-                            reader,
-                            &child_context,
-                            model_depth,
-                        )?);
-                    } else {
-                        // Rows wrapped in a content control used to be dropped
-                        // here, which silently deleted whole tables.
-                        extra_xml.push((rows.len(), capture_element(reader, e)?));
-                    }
-                }
-                Ok(Event::Empty(ref e)) => {
-                    if matches_word_element(e, context, b"tblPr") {
-                        properties = Some(CT_TblPr::default());
-                    } else if matches_word_element(e, context, b"tblGrid") {
-                        grid = Some(CT_TblGrid::default());
-                    } else if matches_word_element(e, context, b"tr") {
-                        rows.push(CT_Row::new());
-                    } else {
-                        extra_xml.push((rows.len(), capture_empty_element(e)?));
-                    }
-                }
-                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"tbl") => {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:tbl".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(CT_Tbl {
-            properties,
-            grid,
-            rows,
-            extra_xml,
-        })
+        let element = parse_reader_element(reader, context, Some(W_NS), "tbl", [])?;
+        Self::from_strict_xml(element, 1)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        self.to_xml_with_context(writer, &NamespaceContext::default())
+        self.to_xml_with_context(
+            writer,
+            &NamespaceContext::new([("w".to_string(), W_NS.to_string())]),
+        )
     }
 
     pub(crate) fn to_xml_with_context<W: std::io::Write>(
@@ -1896,13 +1763,13 @@ mod tests {
 
         let grid = table.grid.unwrap();
         assert_eq!(grid.columns.len(), 1);
-        assert!(grid.has_unmodeled_properties);
+        assert!(grid.has_unmodeled_properties());
 
         let table = parse_table(concat!(
             r#"<w:tblGrid><w:gridCol w:w="100" w:type="dxa"/></w:tblGrid>"#,
             r#"<w:tr><w:tc><w:p/></w:tc></w:tr>"#,
         ));
-        assert!(!table.grid.unwrap().has_unmodeled_properties);
+        assert!(!table.grid.unwrap().has_unmodeled_properties());
     }
 
     #[test]
@@ -2368,20 +2235,26 @@ mod tests {
             r#"<w:tc><w:tcPr><w:fitText/></w:tcPr><w:p/></w:tc></w:tr>"#,
         ));
 
-        assert!(table.properties.as_ref().unwrap().has_unmodeled_properties);
+        assert!(
+            table
+                .properties
+                .as_ref()
+                .unwrap()
+                .has_unmodeled_properties()
+        );
         assert!(
             table.rows[0]
                 .properties
                 .as_ref()
                 .unwrap()
-                .has_unmodeled_properties
+                .has_unmodeled_properties()
         );
         assert!(
             table.rows[0].cells[0]
                 .properties
                 .as_ref()
                 .unwrap()
-                .has_unmodeled_properties
+                .has_unmodeled_properties()
         );
     }
 
@@ -2395,16 +2268,22 @@ mod tests {
             r#"</w:tcPr><w:p/></w:tc></w:tr>"#,
         ));
 
-        assert!(table.properties.as_ref().unwrap().has_unmodeled_properties);
+        assert!(
+            table
+                .properties
+                .as_ref()
+                .unwrap()
+                .has_unmodeled_properties()
+        );
         assert!(
             table.rows[0]
                 .properties
                 .as_ref()
                 .unwrap()
-                .has_unmodeled_properties
+                .has_unmodeled_properties()
         );
         let cell_properties = table.rows[0].cells[0].properties.as_ref().unwrap();
-        assert!(cell_properties.has_unmodeled_properties);
+        assert!(cell_properties.has_unmodeled_properties());
         assert!(cell_properties.borders.as_ref().unwrap().is_empty());
     }
 
@@ -2418,20 +2297,26 @@ mod tests {
             r#"</w:tr>"#,
         ));
 
-        assert!(table.properties.as_ref().unwrap().has_unmodeled_properties);
+        assert!(
+            table
+                .properties
+                .as_ref()
+                .unwrap()
+                .has_unmodeled_properties()
+        );
         assert!(
             table.rows[0]
                 .properties
                 .as_ref()
                 .unwrap()
-                .has_unmodeled_properties
+                .has_unmodeled_properties()
         );
         assert!(
             table.rows[0].cells[0]
                 .properties
                 .as_ref()
                 .unwrap()
-                .has_unmodeled_properties
+                .has_unmodeled_properties()
         );
     }
 
@@ -2464,9 +2349,9 @@ mod tests {
 
         let error = CT_Tbl::from_xml(&mut reader).unwrap_err();
         assert!(
-            error
-                .to_string()
-                .contains("recognized model nesting exceeds 32 levels"),
+            error.to_string().contains(&format!(
+                "recognized model nesting exceeds {MAX_MODEL_DEPTH} levels"
+            )),
             "{error}"
         );
     }

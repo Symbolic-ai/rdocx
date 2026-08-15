@@ -10,18 +10,21 @@ use std::io::Write;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 
+use oxml_core::xml::{
+    StrictXmlCompleteness, StrictXmlCursor, StrictXmlElement, StrictXmlLeftovers, StrictXmlNode,
+    parse_reader_element,
+};
+
 use crate::drawing::CT_Drawing;
 use crate::error::{OxmlError, Result};
-use crate::namespace::{
-    MC_NS, R_NS, is_word_attribute, matches_namespace_element, matches_namespace_name,
-    matches_word_attribute, matches_word_element, matches_word_name,
-};
 #[cfg(test)]
-use crate::namespace::{W_NS, matches_local_name};
+use crate::namespace::matches_local_name;
+use crate::namespace::{MC_NS, R_NS, W_NS, is_word_attribute, matches_word_attribute};
 use crate::properties::{CT_PPr, CT_RPr};
-use crate::raw_xml::{NamespaceContext, RawXml, capture_raw_element, capture_raw_empty_element};
+use crate::raw_xml::{NamespaceContext, RawXml};
 
 const MAX_COMPOSITE_DEPTH: usize = 8;
+const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 
 /// `CT_Text` — the text content of a run.
 #[derive(Debug, Clone, PartialEq)]
@@ -102,6 +105,8 @@ pub enum RunContent {
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_snake_case)]
 pub struct CT_R {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     pub properties: Option<CT_RPr>,
     pub content: Vec<RunContent>,
 }
@@ -110,6 +115,7 @@ pub struct CT_R {
 impl CT_R {
     pub fn new(text: &str) -> Self {
         Self {
+            completeness: StrictXmlCompleteness::default(),
             properties: None,
             content: vec![RunContent::Text(CT_Text::new(text))],
         }
@@ -131,6 +137,140 @@ impl CT_R {
         result
     }
 
+    pub(crate) fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut run = Self {
+                completeness: StrictXmlCompleteness::default(),
+                properties: None,
+                content: Vec::new(),
+            };
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let kind = strict_run_child_kind(child);
+                let child = cursor
+                    .take_child(index)
+                    .and_then(StrictXmlNode::into_element)
+                    .ok_or_else(|| OxmlError::MissingElement("run child".to_string()))?;
+                let raw = child.clone().into_raw_xml();
+                let Some(kind) = kind else {
+                    descendants.push(unmodeled_element_completeness(child));
+                    run.content.push(RunContent::Unsupported(raw));
+                    continue;
+                };
+                let completeness = run.parse_strict_child(kind, child, raw)?;
+                descendants.push(completeness);
+            }
+            Ok(run)
+        })?;
+        let (mut run, leftovers) = parsed.into_parts();
+        run.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(run)
+    }
+
+    fn parse_strict_child(
+        &mut self,
+        kind: &str,
+        element: StrictXmlElement,
+        raw: RawXml,
+    ) -> Result<StrictXmlCompleteness> {
+        match kind {
+            "rPr" => {
+                let properties = CT_RPr::from_strict_xml(element)?;
+                let completeness = properties.completeness.clone();
+                self.properties = Some(properties);
+                Ok(completeness)
+            }
+            "t" => {
+                let (text, completeness) = parse_strict_text(element)?;
+                self.content.push(RunContent::Text(text));
+                Ok(completeness)
+            }
+            "tab" => {
+                let parsed = element.parse(|_| Ok(()))?;
+                let completeness = StrictXmlCompleteness::from_leftovers(parsed.leftovers);
+                if completeness.is_complete() {
+                    self.content.push(RunContent::Tab);
+                } else {
+                    self.content.push(RunContent::Unsupported(raw));
+                }
+                Ok(completeness)
+            }
+            "br" => {
+                let parsed =
+                    element.parse(|cursor| Ok(cursor.take_attribute(Some(W_NS), "type")))?;
+                let (break_type, leftovers) = parsed.into_parts();
+                let completeness = StrictXmlCompleteness::from_leftovers(leftovers);
+                let break_type = match break_type.as_deref() {
+                    None | Some("textWrapping") => Some(BreakType::Line),
+                    Some("page") => Some(BreakType::Page),
+                    Some("column") => Some(BreakType::Column),
+                    Some(_) => None,
+                };
+                if let Some(break_type) = break_type {
+                    self.content
+                        .push(RunContent::Break(ParsedWithRaw::from_parsed(
+                            break_type, raw,
+                        )));
+                } else {
+                    self.content.push(RunContent::Unsupported(raw));
+                }
+                Ok(completeness)
+            }
+            "footnoteReference" | "endnoteReference" => {
+                let parsed = element.parse(|cursor| {
+                    cursor
+                        .take_attribute(Some(W_NS), "id")
+                        .map(|value| value.parse::<i32>())
+                        .transpose()
+                        .map_err(Into::into)
+                })?;
+                let (id, leftovers) = parsed.into_parts();
+                let completeness = StrictXmlCompleteness::from_leftovers(leftovers);
+                match (kind, id) {
+                    ("footnoteReference", Some(id)) => self
+                        .content
+                        .push(RunContent::FootnoteRef(ParsedWithRaw::from_parsed(id, raw))),
+                    ("endnoteReference", Some(id)) => self
+                        .content
+                        .push(RunContent::EndnoteRef(ParsedWithRaw::from_parsed(id, raw))),
+                    _ => self.content.push(RunContent::Unsupported(raw)),
+                }
+                Ok(completeness)
+            }
+            "drawing" => {
+                let parsed = CT_Drawing::from_strict_xml(element)?;
+                let (drawing, leftovers) = parsed.into_parts();
+                let completeness = StrictXmlCompleteness::from_leftovers(leftovers);
+                if drawing.inline.is_some() || drawing.anchor.is_some() {
+                    self.content
+                        .push(RunContent::Drawing(ParsedWithRaw::from_parsed(
+                            drawing, raw,
+                        )));
+                    Ok(completeness)
+                } else {
+                    self.content.push(RunContent::Unsupported(raw.clone()));
+                    Ok(completeness)
+                }
+            }
+            "AlternateContent" => {
+                if let Some(drawing) = crate::drawing::parse_alternate_content_element(&element)? {
+                    self.content
+                        .push(RunContent::Drawing(ParsedWithRaw::from_parsed(
+                            drawing, raw,
+                        )));
+                    Ok(StrictXmlCompleteness::default())
+                } else {
+                    self.content.push(RunContent::Unsupported(raw));
+                    Ok(unmodeled_element_completeness(element))
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_context(reader, &NamespaceContext::default())
     }
@@ -139,139 +279,8 @@ impl CT_R {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
-        let mut properties = None;
-        let mut content = Vec::new();
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref element)) => {
-                    let name = element.name();
-                    if matches_word_element(element, context, b"rPr") {
-                        let property_context = context.with_element(element);
-                        properties =
-                            Some(CT_RPr::from_xml_with_context(reader, &property_context)?);
-                    } else if matches_word_element(element, context, b"t") {
-                        let preserve_space = element.attributes().flatten().any(|attribute| {
-                            attribute.key.as_ref() == b"xml:space"
-                                && attribute.value.as_ref() == b"preserve"
-                        });
-                        let text = crate::xml_text::decode_escaped(&reader.read_text(name)?)?;
-                        content.push(RunContent::Text(CT_Text {
-                            text,
-                            preserve_space,
-                        }));
-                    } else if matches_word_element(element, context, b"tab") {
-                        let raw = capture_raw_element(reader, element, context)?;
-                        if raw.has_child_content() {
-                            content.push(RunContent::Unsupported(raw));
-                        } else {
-                            content.push(RunContent::Tab);
-                        }
-                    } else if matches_word_element(element, context, b"br") {
-                        let raw = capture_raw_element(reader, element, context)?;
-                        if raw.has_child_content() {
-                            content.push(RunContent::Unsupported(raw));
-                        } else {
-                            parse_break(element, context, raw, &mut content)?;
-                        }
-                    } else if matches_word_element(element, context, b"footnoteReference") {
-                        let raw = capture_raw_element(reader, element, context)?;
-                        if raw.has_child_content() {
-                            content.push(RunContent::Unsupported(raw));
-                        } else {
-                            parse_note_reference_with_raw(
-                                element,
-                                context,
-                                true,
-                                raw,
-                                &mut content,
-                            );
-                        }
-                    } else if matches_word_element(element, context, b"endnoteReference") {
-                        let raw = capture_raw_element(reader, element, context)?;
-                        if raw.has_child_content() {
-                            content.push(RunContent::Unsupported(raw));
-                        } else {
-                            parse_note_reference_with_raw(
-                                element,
-                                context,
-                                false,
-                                raw,
-                                &mut content,
-                            );
-                        }
-                    } else if matches_word_element(element, context, b"drawing") {
-                        let raw = capture_raw_element(reader, element, context)?;
-                        if let Some(drawing) = parse_drawing(&raw)? {
-                            content.push(RunContent::Drawing(ParsedWithRaw::from_parsed(
-                                drawing, raw,
-                            )));
-                        } else {
-                            content.push(RunContent::Unsupported(raw));
-                        }
-                    } else if matches_mc_element(element, context, b"AlternateContent") {
-                        let raw = capture_raw_element(reader, element, context)?;
-                        if let Some(drawing) = crate::drawing::parse_alternate_content_with_context(
-                            raw.bytes(),
-                            raw.namespaces(),
-                        ) {
-                            content.push(RunContent::Drawing(ParsedWithRaw::from_parsed(
-                                drawing, raw,
-                            )));
-                        } else {
-                            content.push(RunContent::Unsupported(raw));
-                        }
-                    } else {
-                        content.push(RunContent::Unsupported(capture_raw_element(
-                            reader, element, context,
-                        )?));
-                    }
-                }
-                Ok(Event::Empty(ref element)) => {
-                    if matches_word_element(element, context, b"tab") {
-                        content.push(RunContent::Tab);
-                    } else if matches_word_element(element, context, b"t") {
-                        content.push(RunContent::Text(CT_Text {
-                            text: String::new(),
-                            preserve_space: element.attributes().flatten().any(|attribute| {
-                                attribute.key.as_ref() == b"xml:space"
-                                    && attribute.value.as_ref() == b"preserve"
-                            }),
-                        }));
-                    } else if matches_word_element(element, context, b"br") {
-                        let raw = capture_raw_empty_element(element, context)?;
-                        parse_break(element, context, raw, &mut content)?;
-                    } else if matches_word_element(element, context, b"footnoteReference") {
-                        parse_note_reference(element, context, true, &mut content)?;
-                    } else if matches_word_element(element, context, b"endnoteReference") {
-                        parse_note_reference(element, context, false, &mut content)?;
-                    } else if matches_word_element(element, context, b"rPr") {
-                        properties = Some(CT_RPr::default());
-                    } else {
-                        content.push(RunContent::Unsupported(capture_raw_empty_element(
-                            element, context,
-                        )?));
-                    }
-                }
-                Ok(Event::End(ref element))
-                    if matches_word_name(element.name().as_ref(), context, b"r") =>
-                {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:r".to_string()));
-                }
-                Err(error) => return Err(error.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(Self {
-            properties,
-            content,
-        })
+        let element = parse_reader_element(reader, context, Some(W_NS), "r", [])?;
+        Self::from_strict_xml(element)
     }
 
     pub fn to_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -335,6 +344,61 @@ impl CT_R {
     }
 }
 
+impl Default for CT_R {
+    fn default() -> Self {
+        Self {
+            completeness: StrictXmlCompleteness::default(),
+            properties: None,
+            content: Vec::new(),
+        }
+    }
+}
+
+fn strict_run_child_kind(element: &StrictXmlElement) -> Option<&'static str> {
+    [
+        (Some(W_NS), "rPr"),
+        (Some(W_NS), "t"),
+        (Some(W_NS), "tab"),
+        (Some(W_NS), "br"),
+        (Some(W_NS), "footnoteReference"),
+        (Some(W_NS), "endnoteReference"),
+        (Some(W_NS), "drawing"),
+        (Some(MC_NS), "AlternateContent"),
+    ]
+    .into_iter()
+    .find_map(|(namespace, local)| element.is_named(namespace, local).then_some(local))
+}
+
+fn parse_strict_text(element: StrictXmlElement) -> Result<(CT_Text, StrictXmlCompleteness)> {
+    let parsed = element.parse(|cursor| {
+        let preserve_space = cursor
+            .take_attribute(Some(XML_NS), "space")
+            .is_some_and(|value| value == "preserve");
+        let mut text = String::new();
+        for index in 0..cursor.child_slots() {
+            if !matches!(cursor.child(index), Some(StrictXmlNode::Text(_))) {
+                continue;
+            }
+            if let Some(StrictXmlNode::Text(value)) = cursor.take_child(index) {
+                text.push_str(&value);
+            }
+        }
+        Ok(CT_Text {
+            text,
+            preserve_space,
+        })
+    })?;
+    let (text, leftovers) = parsed.into_parts();
+    Ok((text, StrictXmlCompleteness::from_leftovers(leftovers)))
+}
+
+fn unmodeled_element_completeness(element: StrictXmlElement) -> StrictXmlCompleteness {
+    StrictXmlCompleteness::from_leftovers(StrictXmlLeftovers {
+        attributes: Vec::new(),
+        children: vec![StrictXmlNode::Element(Box::new(element))],
+    })
+}
+
 /// Ordered content within a hyperlink or simple field.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InlineChild {
@@ -371,6 +435,7 @@ pub struct CT_SimpleField {
     extra_attributes: Vec<(String, String)>,
     source_namespaces: NamespaceContext,
     raw_xml: Option<RawXml>,
+    completeness: StrictXmlCompleteness,
 }
 
 impl CT_SimpleField {
@@ -387,6 +452,7 @@ impl CT_SimpleField {
             extra_attributes: Vec::new(),
             source_namespaces: NamespaceContext::default(),
             raw_xml: None,
+            completeness: StrictXmlCompleteness::default(),
         }
     }
 
@@ -415,14 +481,19 @@ impl CT_SimpleField {
     /// Whether this field has a WordprocessingML attribute whose semantics
     /// are not represented by this type.
     pub fn has_unmodeled_semantic_attributes(&self) -> bool {
-        self.extra_attributes.iter().any(|(name, value)| {
-            let name = name.as_bytes();
-            if !is_word_attribute(name, &self.source_namespaces) {
-                return false;
-            }
-            !matches_word_attribute(name, &self.source_namespaces, b"dirty")
-                || parse_on_off_attribute(value).is_none()
-        })
+        self.completeness
+            .leftovers()
+            .attributes
+            .iter()
+            .any(|attribute| attribute.namespace_uri() == Some(W_NS))
+            || self.extra_attributes.iter().any(|(name, value)| {
+                let name = name.as_bytes();
+                if !is_word_attribute(name, &self.source_namespaces) {
+                    return false;
+                }
+                !matches_word_attribute(name, &self.source_namespaces, b"dirty")
+                    || parse_on_off_attribute(value).is_none()
+            })
     }
 
     pub fn children_mut(&mut self) -> &mut Vec<InlineChild> {
@@ -444,19 +515,35 @@ impl CT_SimpleField {
         count_inline_runs(&self.children)
     }
 
-    fn from_raw(raw_xml: RawXml) -> Result<Self> {
-        Self::from_raw_at_depth(raw_xml, 1)
-    }
-
-    fn from_raw_at_depth(raw_xml: RawXml, depth: usize) -> Result<Self> {
-        let parsed = parse_composite_children(&raw_xml, b"fldSimple", depth)?;
+    fn from_strict_xml(element: StrictXmlElement, depth: usize) -> Result<Self> {
+        if depth > MAX_COMPOSITE_DEPTH {
+            return Err(OxmlError::InvalidValue(format!(
+                "composite field nesting exceeds {MAX_COMPOSITE_DEPTH} levels"
+            )));
+        }
+        let raw_xml = element.clone().into_raw_xml();
+        let source_namespaces = raw_xml.namespaces().clone();
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let instruction = cursor
+                .take_attribute(Some(W_NS), "instr")
+                .unwrap_or_default();
+            let mut extra_attributes = Vec::new();
+            if let Some(dirty) = cursor.take_attribute(Some(W_NS), "dirty") {
+                extra_attributes.push(("w:dirty".to_string(), dirty));
+            }
+            let children = parse_strict_inline_children(cursor, depth, &mut descendants)?;
+            Ok((instruction, extra_attributes, children))
+        })?;
+        let ((instruction, extra_attributes, children), leftovers) = parsed.into_parts();
         Ok(Self {
-            field_type: parse_field_instruction(&parsed.instruction),
-            instruction: parsed.instruction,
-            children: parsed.children,
-            extra_attributes: parsed.extra_attributes,
-            source_namespaces: raw_xml.namespaces().clone(),
+            field_type: parse_field_instruction(&instruction),
+            instruction,
+            children,
+            extra_attributes,
+            source_namespaces,
             raw_xml: Some(raw_xml),
+            completeness: StrictXmlCompleteness::new(leftovers, descendants),
         })
     }
 
@@ -472,6 +559,7 @@ impl CT_SimpleField {
         for (name, value) in &self.extra_attributes {
             element.push_attribute((name.as_str(), value.as_str()));
         }
+        self.completeness.append_direct_attributes_to(&mut element);
         generated.write_event(Event::Start(element))?;
         for child in &self.children {
             child.to_xml(&mut generated, &self.source_namespaces)?;
@@ -492,6 +580,7 @@ pub struct CT_Hyperlink {
     extra_attributes: Vec<(String, String)>,
     source_namespaces: NamespaceContext,
     raw_xml: Option<RawXml>,
+    completeness: StrictXmlCompleteness,
 }
 
 impl CT_Hyperlink {
@@ -503,6 +592,7 @@ impl CT_Hyperlink {
             extra_attributes: Vec::new(),
             source_namespaces: NamespaceContext::default(),
             raw_xml: None,
+            completeness: StrictXmlCompleteness::default(),
         }
     }
 
@@ -531,19 +621,24 @@ impl CT_Hyperlink {
     /// Whether this hyperlink has a WordprocessingML attribute whose
     /// semantics are not represented by this type.
     pub fn has_unmodeled_semantic_attributes(&self) -> bool {
-        self.extra_attributes.iter().any(|(name, value)| {
-            let name = name.as_bytes();
-            if !is_word_attribute(name, &self.source_namespaces) {
-                return false;
-            }
-            if matches_word_attribute(name, &self.source_namespaces, b"tooltip")
-                || matches_word_attribute(name, &self.source_namespaces, b"docLocation")
-            {
-                return false;
-            }
-            !matches_word_attribute(name, &self.source_namespaces, b"history")
-                || parse_on_off_attribute(value).is_none()
-        })
+        self.completeness
+            .leftovers()
+            .attributes
+            .iter()
+            .any(|attribute| attribute.namespace_uri() == Some(W_NS))
+            || self.extra_attributes.iter().any(|(name, value)| {
+                let name = name.as_bytes();
+                if !is_word_attribute(name, &self.source_namespaces) {
+                    return false;
+                }
+                if matches_word_attribute(name, &self.source_namespaces, b"tooltip")
+                    || matches_word_attribute(name, &self.source_namespaces, b"docLocation")
+                {
+                    return false;
+                }
+                !matches_word_attribute(name, &self.source_namespaces, b"history")
+                    || parse_on_off_attribute(value).is_none()
+            })
     }
 
     pub fn children(&self) -> &[InlineChild] {
@@ -582,61 +677,31 @@ impl CT_Hyperlink {
         count_inline_runs(&self.children)
     }
 
-    fn from_raw(raw_xml: RawXml) -> Result<Self> {
-        let context = raw_xml.namespaces().clone();
-        let mut reader = Reader::from_reader(raw_xml.bytes());
-        reader.config_mut().trim_text(true);
-        let mut rel_id = None;
-        let mut anchor = None;
-        let mut extra_attributes = Vec::new();
-        let mut children = Vec::new();
-        let mut buf = Vec::new();
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref element))
-                    if matches_word_element(element, &context, b"hyperlink") =>
-                {
-                    let element_context = context.with_element(element);
-                    parse_hyperlink_attributes(
-                        element,
-                        &element_context,
-                        &mut rel_id,
-                        &mut anchor,
-                        &mut extra_attributes,
-                    )?;
-                    children =
-                        parse_inline_children(&mut reader, &element_context, b"hyperlink", 0)?;
-                    break;
+    fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let raw_xml = element.clone().into_raw_xml();
+        let source_namespaces = raw_xml.namespaces().clone();
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let rel_id = cursor.take_attribute(Some(R_NS), "id");
+            let anchor = cursor.take_attribute(Some(W_NS), "anchor");
+            let mut extra_attributes = Vec::new();
+            for local in ["tooltip", "docLocation", "history"] {
+                if let Some(value) = cursor.take_attribute(Some(W_NS), local) {
+                    extra_attributes.push((format!("w:{local}"), value));
                 }
-                Ok(Event::Empty(ref element))
-                    if matches_word_element(element, &context, b"hyperlink") =>
-                {
-                    let element_context = context.with_element(element);
-                    parse_hyperlink_attributes(
-                        element,
-                        &element_context,
-                        &mut rel_id,
-                        &mut anchor,
-                        &mut extra_attributes,
-                    )?;
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("w:hyperlink".to_string()));
-                }
-                Err(error) => return Err(error.into()),
-                _ => {}
             }
-            buf.clear();
-        }
-        drop(reader);
+            let children = parse_strict_inline_children(cursor, 0, &mut descendants)?;
+            Ok((rel_id, anchor, extra_attributes, children))
+        })?;
+        let ((rel_id, anchor, extra_attributes, children), leftovers) = parsed.into_parts();
         Ok(Self {
             rel_id,
             anchor,
             children,
             extra_attributes,
-            source_namespaces: raw_xml.namespaces().clone(),
+            source_namespaces,
             raw_xml: Some(raw_xml),
+            completeness: StrictXmlCompleteness::new(leftovers, descendants),
         })
     }
 
@@ -657,6 +722,7 @@ impl CT_Hyperlink {
         for (name, value) in &self.extra_attributes {
             element.push_attribute((name.as_str(), value.as_str()));
         }
+        self.completeness.append_direct_attributes_to(&mut element);
         generated.write_event(Event::Start(element))?;
         for child in &self.children {
             child.to_xml(&mut generated, &self.source_namespaces)?;
@@ -666,34 +732,6 @@ impl CT_Hyperlink {
             .write_to_with_context(writer.get_mut(), context)?;
         Ok(())
     }
-}
-
-fn parse_hyperlink_attributes(
-    element: &BytesStart<'_>,
-    context: &NamespaceContext,
-    rel_id: &mut Option<String>,
-    anchor: &mut Option<String>,
-    extra_attributes: &mut Vec<(String, String)>,
-) -> Result<()> {
-    for attribute in element.attributes() {
-        let attribute = attribute?;
-        let value = attribute
-            .normalized_value(quick_xml::XmlVersion::Implicit1_0)?
-            .into_owned();
-        if matches_namespace_name(attribute.key.as_ref(), context, b"r", R_NS, b"id") {
-            *rel_id = Some(value);
-        } else if matches_word_attribute(attribute.key.as_ref(), context, b"anchor") {
-            *anchor = Some(value);
-        } else if attribute.key.as_ref() != b"xmlns"
-            && !attribute.key.as_ref().starts_with(b"xmlns:")
-        {
-            extra_attributes.push((
-                String::from_utf8_lossy(attribute.key.as_ref()).into_owned(),
-                value,
-            ));
-        }
-    }
-    Ok(())
 }
 
 fn extra_word_attribute<'a>(
@@ -736,6 +774,8 @@ pub struct HyperlinkSpan {
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_snake_case)]
 pub struct CT_P {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     pub properties: Option<CT_PPr>,
     pub content: Vec<ParagraphChild>,
 }
@@ -744,6 +784,7 @@ pub struct CT_P {
 impl CT_P {
     pub fn new() -> Self {
         Self {
+            completeness: StrictXmlCompleteness::default(),
             properties: None,
             content: Vec::new(),
         }
@@ -845,6 +886,49 @@ impl CT_P {
         spans
     }
 
+    pub(crate) fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut paragraph = Self::new();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(_)) = cursor.child(index) else {
+                    continue;
+                };
+                let child = cursor
+                    .take_child(index)
+                    .and_then(StrictXmlNode::into_element)
+                    .ok_or_else(|| OxmlError::MissingElement("paragraph child".to_string()))?;
+                if child.is_named(Some(W_NS), "pPr") {
+                    let properties = CT_PPr::from_strict_xml(child)?;
+                    descendants.push(properties.completeness.clone());
+                    paragraph.properties = Some(properties);
+                } else if child.is_named(Some(W_NS), "r") {
+                    let run = CT_R::from_strict_xml(child)?;
+                    descendants.push(run.completeness.clone());
+                    paragraph.content.push(ParagraphChild::Run(run));
+                } else if child.is_named(Some(W_NS), "hyperlink") {
+                    let hyperlink = CT_Hyperlink::from_strict_xml(child)?;
+                    descendants.push(hyperlink.completeness.clone());
+                    paragraph.content.push(ParagraphChild::Hyperlink(hyperlink));
+                } else if child.is_named(Some(W_NS), "fldSimple") {
+                    let field = CT_SimpleField::from_strict_xml(child, 1)?;
+                    descendants.push(field.completeness.clone());
+                    paragraph.content.push(ParagraphChild::SimpleField(field));
+                } else {
+                    let completeness = unmodeled_element_completeness(child.clone());
+                    descendants.push(completeness);
+                    paragraph
+                        .content
+                        .push(ParagraphChild::Unsupported(child.into_raw_xml()));
+                }
+            }
+            Ok(paragraph)
+        })?;
+        let (mut paragraph, leftovers) = parsed.into_parts();
+        paragraph.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(paragraph)
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_context(reader, &NamespaceContext::default())
     }
@@ -853,71 +937,8 @@ impl CT_P {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
-        let mut properties = None;
-        let mut content = Vec::new();
-        let mut buf = Vec::new();
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref element)) => {
-                    if matches_word_element(element, context, b"pPr") {
-                        let property_context = context.with_element(element);
-                        properties =
-                            Some(CT_PPr::from_xml_with_context(reader, &property_context)?);
-                    } else if matches_word_element(element, context, b"r") {
-                        let child_context = context.with_element(element);
-                        content.push(ParagraphChild::Run(CT_R::from_xml_with_context(
-                            reader,
-                            &child_context,
-                        )?));
-                    } else if matches_word_element(element, context, b"hyperlink") {
-                        let raw = capture_raw_element(reader, element, context)?;
-                        content.push(ParagraphChild::Hyperlink(CT_Hyperlink::from_raw(raw)?));
-                    } else if matches_word_element(element, context, b"fldSimple") {
-                        let raw = capture_raw_element(reader, element, context)?;
-                        content.push(ParagraphChild::SimpleField(CT_SimpleField::from_raw(raw)?));
-                    } else {
-                        content.push(ParagraphChild::Unsupported(capture_raw_element(
-                            reader, element, context,
-                        )?));
-                    }
-                }
-                Ok(Event::Empty(ref element)) => {
-                    if matches_word_element(element, context, b"pPr") {
-                        properties = Some(CT_PPr::default());
-                    } else if matches_word_element(element, context, b"r") {
-                        content.push(ParagraphChild::Run(CT_R {
-                            properties: None,
-                            content: Vec::new(),
-                        }));
-                    } else if matches_word_element(element, context, b"hyperlink") {
-                        let raw = capture_raw_empty_element(element, context)?;
-                        content.push(ParagraphChild::Hyperlink(CT_Hyperlink::from_raw(raw)?));
-                    } else if matches_word_element(element, context, b"fldSimple") {
-                        let raw = capture_raw_empty_element(element, context)?;
-                        content.push(ParagraphChild::SimpleField(CT_SimpleField::from_raw(raw)?));
-                    } else {
-                        content.push(ParagraphChild::Unsupported(capture_raw_empty_element(
-                            element, context,
-                        )?));
-                    }
-                }
-                Ok(Event::End(ref element))
-                    if matches_word_name(element.name().as_ref(), context, b"p") =>
-                {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:p".to_string()));
-                }
-                Err(error) => return Err(error.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-        Ok(Self {
-            properties,
-            content,
-        })
+        let element = parse_reader_element(reader, context, Some(W_NS), "p", [])?;
+        Self::from_strict_xml(element)
     }
 
     pub fn to_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -954,263 +975,51 @@ impl Default for CT_P {
     }
 }
 
-fn parse_inline_children(
-    reader: &mut Reader<&[u8]>,
-    context: &NamespaceContext,
-    end_name: &[u8],
+fn parse_strict_inline_children(
+    cursor: &mut StrictXmlCursor,
     composite_depth: usize,
+    descendants: &mut Vec<StrictXmlCompleteness>,
 ) -> Result<Vec<InlineChild>> {
     let mut children = Vec::new();
-    let mut buf = Vec::new();
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref element)) if matches_word_element(element, context, b"r") => {
-                let child_context = context.with_element(element);
-                children.push(InlineChild::Run(CT_R::from_xml_with_context(
-                    reader,
-                    &child_context,
-                )?));
+    for index in 0..cursor.child_slots() {
+        let Some(StrictXmlNode::Element(element)) = cursor.child(index) else {
+            continue;
+        };
+        let kind = if element.is_named(Some(W_NS), "r") {
+            Some("r")
+        } else if element.is_named(Some(W_NS), "fldSimple") {
+            Some("fldSimple")
+        } else {
+            None
+        };
+        let element = cursor
+            .take_child(index)
+            .and_then(StrictXmlNode::into_element)
+            .ok_or_else(|| OxmlError::MissingElement("inline child".to_string()))?;
+        match kind {
+            Some("r") => {
+                let run = CT_R::from_strict_xml(element)?;
+                descendants.push(run.completeness.clone());
+                children.push(InlineChild::Run(run));
             }
-            Ok(Event::Start(ref element))
-                if matches_word_element(element, context, b"fldSimple") =>
-            {
+            Some("fldSimple") => {
                 if composite_depth >= MAX_COMPOSITE_DEPTH {
                     return Err(OxmlError::InvalidValue(format!(
                         "composite field nesting exceeds {MAX_COMPOSITE_DEPTH} levels"
                     )));
                 }
-                let raw = capture_raw_element(reader, element, context)?;
-                children.push(InlineChild::SimpleField(CT_SimpleField::from_raw_at_depth(
-                    raw,
-                    composite_depth + 1,
-                )?));
+                let field = CT_SimpleField::from_strict_xml(element, composite_depth + 1)?;
+                descendants.push(field.completeness.clone());
+                children.push(InlineChild::SimpleField(field));
             }
-            Ok(Event::Start(ref element)) => {
-                children.push(InlineChild::Unsupported(capture_raw_element(
-                    reader, element, context,
-                )?));
+            None => {
+                descendants.push(unmodeled_element_completeness(element.clone()));
+                children.push(InlineChild::Unsupported(element.into_raw_xml()));
             }
-            Ok(Event::Empty(ref element)) => {
-                if matches_word_element(element, context, b"r") {
-                    children.push(InlineChild::Run(CT_R {
-                        properties: None,
-                        content: Vec::new(),
-                    }));
-                } else if matches_word_element(element, context, b"fldSimple") {
-                    if composite_depth >= MAX_COMPOSITE_DEPTH {
-                        return Err(OxmlError::InvalidValue(format!(
-                            "composite field nesting exceeds {MAX_COMPOSITE_DEPTH} levels"
-                        )));
-                    }
-                    let raw = capture_raw_empty_element(element, context)?;
-                    children.push(InlineChild::SimpleField(CT_SimpleField::from_raw_at_depth(
-                        raw,
-                        composite_depth + 1,
-                    )?));
-                } else {
-                    children.push(InlineChild::Unsupported(capture_raw_empty_element(
-                        element, context,
-                    )?));
-                }
-            }
-            Ok(Event::End(ref element))
-                if matches_word_name(element.name().as_ref(), context, end_name) =>
-            {
-                break;
-            }
-            Ok(Event::Eof) => {
-                return Err(OxmlError::MissingElement(format!(
-                    "closing w:{}",
-                    String::from_utf8_lossy(end_name)
-                )));
-            }
-            Err(error) => return Err(error.into()),
-            _ => {}
+            Some(_) => unreachable!(),
         }
-        buf.clear();
     }
     Ok(children)
-}
-
-struct ParsedCompositeChildren {
-    instruction: String,
-    children: Vec<InlineChild>,
-    extra_attributes: Vec<(String, String)>,
-}
-
-fn parse_composite_children(
-    raw: &RawXml,
-    end_name: &[u8],
-    composite_depth: usize,
-) -> Result<ParsedCompositeChildren> {
-    let context = raw.namespaces().clone();
-    let mut reader = Reader::from_reader(raw.bytes());
-    reader.config_mut().trim_text(true);
-    let mut instruction = String::new();
-    let mut children = Vec::new();
-    let mut extra_attributes = Vec::new();
-    let mut buf = Vec::new();
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref element)) if matches_word_element(element, &context, end_name) => {
-                let element_context = context.with_element(element);
-                parse_field_attributes(
-                    element,
-                    &element_context,
-                    &mut instruction,
-                    &mut extra_attributes,
-                )?;
-                children = parse_inline_children(
-                    &mut reader,
-                    &element_context,
-                    end_name,
-                    composite_depth,
-                )?;
-                break;
-            }
-            Ok(Event::Empty(ref element)) if matches_word_element(element, &context, end_name) => {
-                let element_context = context.with_element(element);
-                parse_field_attributes(
-                    element,
-                    &element_context,
-                    &mut instruction,
-                    &mut extra_attributes,
-                )?;
-                break;
-            }
-            Ok(Event::Eof) => {
-                return Err(OxmlError::MissingElement(format!(
-                    "w:{}",
-                    String::from_utf8_lossy(end_name)
-                )));
-            }
-            Err(error) => return Err(error.into()),
-            _ => {}
-        }
-        buf.clear();
-    }
-    Ok(ParsedCompositeChildren {
-        instruction,
-        children,
-        extra_attributes,
-    })
-}
-
-fn parse_field_attributes(
-    element: &BytesStart<'_>,
-    context: &NamespaceContext,
-    instruction: &mut String,
-    extra_attributes: &mut Vec<(String, String)>,
-) -> Result<()> {
-    for attribute in element.attributes() {
-        let attribute = attribute?;
-        let value = attribute
-            .normalized_value(quick_xml::XmlVersion::Implicit1_0)?
-            .into_owned();
-        if matches_word_attribute(attribute.key.as_ref(), context, b"instr") {
-            *instruction = value;
-        } else if attribute.key.as_ref() != b"xmlns"
-            && !attribute.key.as_ref().starts_with(b"xmlns:")
-        {
-            extra_attributes.push((
-                String::from_utf8_lossy(attribute.key.as_ref()).into_owned(),
-                value,
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn parse_drawing(raw: &RawXml) -> Result<Option<CT_Drawing>> {
-    let mut reader = Reader::from_reader(raw.bytes());
-    reader.config_mut().trim_text(true);
-    let mut buf = Vec::new();
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref element))
-                if matches_word_element(element, raw.namespaces(), b"drawing") =>
-            {
-                return Ok(Some(CT_Drawing::from_xml_with_context(
-                    &mut reader,
-                    raw.namespaces(),
-                )?));
-            }
-            Ok(Event::Eof) => return Ok(None),
-            Err(error) => return Err(error.into()),
-            _ => {}
-        }
-        buf.clear();
-    }
-}
-
-fn parse_note_reference(
-    element: &BytesStart<'_>,
-    context: &NamespaceContext,
-    footnote: bool,
-    content: &mut Vec<RunContent>,
-) -> Result<()> {
-    let raw = capture_raw_empty_element(element, context)?;
-    parse_note_reference_with_raw(element, context, footnote, raw, content);
-    Ok(())
-}
-
-fn parse_note_reference_with_raw(
-    element: &BytesStart<'_>,
-    context: &NamespaceContext,
-    footnote: bool,
-    raw: RawXml,
-    content: &mut Vec<RunContent>,
-) {
-    let element_context = context.with_element(element);
-    let id = element
-        .attributes()
-        .flatten()
-        .find(|attribute| matches_word_attribute(attribute.key.as_ref(), &element_context, b"id"))
-        .and_then(|attribute| {
-            std::str::from_utf8(attribute.value.as_ref())
-                .ok()?
-                .parse::<i32>()
-                .ok()
-        });
-    match (footnote, id) {
-        (true, Some(id)) => {
-            content.push(RunContent::FootnoteRef(ParsedWithRaw::from_parsed(id, raw)))
-        }
-        (false, Some(id)) => {
-            content.push(RunContent::EndnoteRef(ParsedWithRaw::from_parsed(id, raw)))
-        }
-        (_, None) => content.push(RunContent::Unsupported(raw)),
-    }
-}
-
-fn parse_break(
-    element: &BytesStart<'_>,
-    context: &NamespaceContext,
-    raw: RawXml,
-    content: &mut Vec<RunContent>,
-) -> Result<()> {
-    let element_context = context.with_element(element);
-    let break_type = element
-        .attributes()
-        .flatten()
-        .find(|attribute| matches_word_attribute(attribute.key.as_ref(), &element_context, b"type"))
-        .map(|attribute| String::from_utf8_lossy(attribute.value.as_ref()).into_owned());
-    match break_type.as_deref() {
-        None | Some("textWrapping") => content.push(RunContent::Break(ParsedWithRaw::from_parsed(
-            BreakType::Line,
-            raw,
-        ))),
-        Some("page") => content.push(RunContent::Break(ParsedWithRaw::from_parsed(
-            BreakType::Page,
-            raw,
-        ))),
-        Some("column") => content.push(RunContent::Break(ParsedWithRaw::from_parsed(
-            BreakType::Column,
-            raw,
-        ))),
-        Some(_) => content.push(RunContent::Unsupported(raw)),
-    }
-    Ok(())
 }
 
 fn write_note_reference<W: Write>(writer: &mut Writer<W>, tag: &str, id: i32) -> Result<()> {
@@ -1326,14 +1135,6 @@ fn inline_run_mut(children: &mut [InlineChild], mut index: usize) -> Option<&mut
         }
     }
     None
-}
-
-fn matches_mc_element(
-    element: &BytesStart<'_>,
-    context: &NamespaceContext,
-    expected: &[u8],
-) -> bool {
-    matches_namespace_element(element, context, b"mc", MC_NS, expected)
 }
 
 fn parse_field_instruction(instruction: &str) -> FieldType {

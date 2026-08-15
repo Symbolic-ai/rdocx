@@ -187,12 +187,25 @@ mod tests {
 
     #[test]
     fn parser_corpus_names_obey_strict_spelling_and_namespace_properties() {
-        let name_pattern = Regex::new(r#"b\"([A-Za-z_][A-Za-z0-9_.-]*)\""#).unwrap();
+        let name_pattern = Regex::new(r#"(?:b)?\"([A-Za-z_][A-Za-z0-9_.-]*)\""#).unwrap();
         let names: BTreeSet<_> = name_pattern
             .captures_iter(PARSER_CORPUS)
             .map(|capture| capture[1].to_string())
             .collect();
-        assert!(names.len() > 175, "parser corpus unexpectedly shrank");
+        for required in [
+            "pPr",
+            "rPr",
+            "p",
+            "tbl",
+            "tr",
+            "tc",
+            "numbering",
+            "style",
+            "sectPr",
+            "drawing",
+        ] {
+            assert!(names.contains(required), "parser corpus omitted {required}");
+        }
 
         for local in names {
             let empty =

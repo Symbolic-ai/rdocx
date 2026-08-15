@@ -3,17 +3,15 @@
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
+use oxml_core::xml::{
+    StrictXmlCompleteness, StrictXmlCursor, StrictXmlDocument, StrictXmlElement,
+    StrictXmlLeftovers, StrictXmlNode, parse_reader_element,
+};
+
 use crate::error::{OxmlError, Result};
 use crate::header_footer::{HdrFtrRef, HdrFtrType};
-use crate::namespace::{
-    MC_NS, R_NS, W_NS, has_unmodeled_attributes, matches_namespace_attribute,
-    matches_word_attribute, matches_word_element, matches_word_name,
-};
-use crate::properties::get_val_attr_with_context;
-use crate::raw_xml::{
-    NamespaceContext, RawXml, capture_element, capture_empty_element, capture_raw_element,
-    capture_raw_empty_element,
-};
+use crate::namespace::{MC_NS, R_NS, W_NS};
+use crate::raw_xml::{NamespaceContext, RawXml};
 use crate::shared::{ST_OnOff, ST_PageOrientation, ST_SectionType};
 use crate::table::CT_Tbl;
 use crate::text::CT_P;
@@ -69,8 +67,8 @@ impl Default for CT_Columns {
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_snake_case)]
 pub struct CT_SectPr {
-    /// Whether this group contains properties the reader cannot fully model.
-    pub has_unmodeled_properties: bool,
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     /// Page width in twips
     pub page_width: Option<Twips>,
     /// Page height in twips
@@ -109,7 +107,7 @@ pub struct CT_SectPr {
 impl CT_SectPr {
     pub fn empty() -> Self {
         CT_SectPr {
-            has_unmodeled_properties: false,
+            completeness: StrictXmlCompleteness::default(),
             page_width: None,
             page_height: None,
             orientation: None,
@@ -132,7 +130,7 @@ impl CT_SectPr {
     /// Default US Letter page with 1-inch margins.
     pub fn default_letter() -> Self {
         CT_SectPr {
-            has_unmodeled_properties: false,
+            completeness: StrictXmlCompleteness::default(),
             page_width: Some(Twips(12240)),  // 8.5"
             page_height: Some(Twips(15840)), // 11"
             orientation: Some(ST_PageOrientation::Portrait),
@@ -155,7 +153,7 @@ impl CT_SectPr {
     /// Default A4 page with 1-inch margins.
     pub fn default_a4() -> Self {
         CT_SectPr {
-            has_unmodeled_properties: false,
+            completeness: StrictXmlCompleteness::default(),
             page_width: Some(Twips(11906)),  // 210mm
             page_height: Some(Twips(16838)), // 297mm
             orientation: Some(ST_PageOrientation::Portrait),
@@ -175,6 +173,102 @@ impl CT_SectPr {
         }
     }
 
+    pub(crate) fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut section = Self::empty();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let recognized = [
+                    "pgSz",
+                    "pgMar",
+                    "type",
+                    "titlePg",
+                    "cols",
+                    "headerReference",
+                    "footerReference",
+                ]
+                .into_iter()
+                .find(|local| child.is_named(Some(W_NS), local));
+                let Some(local) = recognized else {
+                    continue;
+                };
+                let child = take_strict_child(cursor, index, local)?;
+                let completeness = match local {
+                    "cols" => {
+                        let (columns, completeness) = parse_strict_columns(child)?;
+                        section.columns = Some(columns);
+                        completeness
+                    }
+                    "headerReference" => {
+                        let (reference, completeness) = parse_strict_header_footer_ref(child)?;
+                        section.header_refs.push(reference);
+                        completeness
+                    }
+                    "footerReference" => {
+                        let (reference, completeness) = parse_strict_header_footer_ref(child)?;
+                        section.footer_refs.push(reference);
+                        completeness
+                    }
+                    _ => section.parse_strict_property(local, child)?,
+                };
+                descendants.push(completeness);
+            }
+            Ok(section)
+        })?;
+        let (mut section, leftovers) = parsed.into_parts();
+        section.extra_xml = raw_child_bytes(&leftovers);
+        section.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(section)
+    }
+
+    fn parse_strict_property(
+        &mut self,
+        local: &str,
+        element: StrictXmlElement,
+    ) -> Result<StrictXmlCompleteness> {
+        let parsed = element.parse(|cursor| {
+            match local {
+                "pgSz" => {
+                    self.page_width = take_twips(cursor, "w")?;
+                    self.page_height = take_twips(cursor, "h")?;
+                    self.orientation = cursor
+                        .take_attribute(Some(W_NS), "orient")
+                        .map(|value| ST_PageOrientation::from_str(&value))
+                        .transpose()?;
+                }
+                "pgMar" => {
+                    self.margin_top = take_twips(cursor, "top")?;
+                    self.margin_right = take_twips(cursor, "right")?.or(take_twips(cursor, "end")?);
+                    self.margin_bottom = take_twips(cursor, "bottom")?;
+                    self.margin_left = take_twips(cursor, "left")?.or(take_twips(cursor, "start")?);
+                    self.gutter = take_twips(cursor, "gutter")?;
+                    self.header_distance = take_twips(cursor, "header")?;
+                    self.footer_distance = take_twips(cursor, "footer")?;
+                }
+                "type" => {
+                    self.section_type = cursor
+                        .take_attribute(Some(W_NS), "val")
+                        .map(|value| ST_SectionType::from_str(&value))
+                        .transpose()?;
+                }
+                "titlePg" => {
+                    let value = cursor.take_attribute(Some(W_NS), "val");
+                    self.title_pg = Some(ST_OnOff::from_str_or_default(value.as_deref()).is_on());
+                }
+                _ => unreachable!(),
+            }
+            Ok(())
+        })?;
+        Ok(StrictXmlCompleteness::from_leftovers(parsed.leftovers))
+    }
+
+    pub fn has_unmodeled_properties(&self) -> bool {
+        !self.completeness.is_complete()
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_context(reader, &NamespaceContext::default())
     }
@@ -183,259 +277,8 @@ impl CT_SectPr {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
-        let mut sect = CT_SectPr::empty();
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    if matches_word_element(e, context, b"headerReference") {
-                        sect.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[b"type"], &[b"id"])?;
-                        if let Some(reference) = Self::parse_header_footer_reference(e, context)? {
-                            sect.header_refs.push(reference);
-                        }
-                    } else if matches_word_element(e, context, b"footerReference") {
-                        sect.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[b"type"], &[b"id"])?;
-                        if let Some(reference) = Self::parse_header_footer_reference(e, context)? {
-                            sect.footer_refs.push(reference);
-                        }
-                    } else if matches_word_element(e, context, b"cols") {
-                        let (columns, has_unmodeled_properties) =
-                            Self::parse_cols_attrs(e, context)?;
-                        sect.has_unmodeled_properties |= has_unmodeled_properties;
-                        sect.columns = Some(columns);
-                    } else if !Self::parse_property_element(e, context, &mut sect)? {
-                        sect.has_unmodeled_properties = true;
-                        sect.extra_xml.push(capture_empty_element(e)?);
-                    }
-                }
-                Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    if matches_word_element(e, context, b"cols") {
-                        let (columns, has_unmodeled_properties) =
-                            Self::parse_cols_start(reader, e, context)?;
-                        sect.has_unmodeled_properties |= has_unmodeled_properties;
-                        sect.columns = Some(columns);
-                    } else if matches_word_element(e, context, b"headerReference") {
-                        sect.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[b"type"], &[b"id"])?;
-                        if let Some(reference) = Self::parse_header_footer_reference(e, context)? {
-                            sect.header_refs.push(reference);
-                        }
-                        reader.read_to_end_into(name, &mut Vec::new())?;
-                    } else if matches_word_element(e, context, b"footerReference") {
-                        sect.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[b"type"], &[b"id"])?;
-                        if let Some(reference) = Self::parse_header_footer_reference(e, context)? {
-                            sect.footer_refs.push(reference);
-                        }
-                        reader.read_to_end_into(name, &mut Vec::new())?;
-                    } else if Self::parse_property_element(e, context, &mut sect)? {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
-                    } else {
-                        sect.has_unmodeled_properties = true;
-                        sect.extra_xml.push(capture_element(reader, e)?);
-                    }
-                }
-                Ok(Event::End(ref e))
-                    if matches_word_name(e.name().as_ref(), context, b"sectPr") =>
-                {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:sectPr".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(sect)
-    }
-
-    fn parse_property_element(
-        element: &BytesStart<'_>,
-        context: &NamespaceContext,
-        sect: &mut CT_SectPr,
-    ) -> Result<bool> {
-        let element_context = context.with_element(element);
-        let allowed_word_attributes: &[&[u8]];
-        if matches_word_element(element, context, b"pgSz") {
-            for attribute in element.attributes() {
-                let attribute = attribute?;
-                let name = attribute.key.as_ref();
-                let value = std::str::from_utf8(&attribute.value)?;
-                if matches_word_attribute(name, &element_context, b"w") {
-                    sect.page_width = Some(Twips(value.parse()?));
-                } else if matches_word_attribute(name, &element_context, b"h") {
-                    sect.page_height = Some(Twips(value.parse()?));
-                } else if matches_word_attribute(name, &element_context, b"orient") {
-                    sect.orientation = Some(ST_PageOrientation::from_str(value)?);
-                }
-            }
-            allowed_word_attributes = &[b"w", b"h", b"orient"];
-        } else if matches_word_element(element, context, b"pgMar") {
-            for attribute in element.attributes() {
-                let attribute = attribute?;
-                let name = attribute.key.as_ref();
-                let value = std::str::from_utf8(&attribute.value)?;
-                if matches_word_attribute(name, &element_context, b"top") {
-                    sect.margin_top = Some(Twips(value.parse()?));
-                } else if matches_word_attribute(name, &element_context, b"right")
-                    || matches_word_attribute(name, &element_context, b"end")
-                {
-                    sect.margin_right = Some(Twips(value.parse()?));
-                } else if matches_word_attribute(name, &element_context, b"bottom") {
-                    sect.margin_bottom = Some(Twips(value.parse()?));
-                } else if matches_word_attribute(name, &element_context, b"left")
-                    || matches_word_attribute(name, &element_context, b"start")
-                {
-                    sect.margin_left = Some(Twips(value.parse()?));
-                } else if matches_word_attribute(name, &element_context, b"gutter") {
-                    sect.gutter = Some(Twips(value.parse()?));
-                } else if matches_word_attribute(name, &element_context, b"header") {
-                    sect.header_distance = Some(Twips(value.parse()?));
-                } else if matches_word_attribute(name, &element_context, b"footer") {
-                    sect.footer_distance = Some(Twips(value.parse()?));
-                }
-            }
-            allowed_word_attributes = &[
-                b"top", b"right", b"end", b"bottom", b"left", b"start", b"gutter", b"header",
-                b"footer",
-            ];
-        } else if matches_word_element(element, context, b"type") {
-            if let Some(value) = get_val_attr_with_context(element, &element_context)? {
-                sect.section_type = Some(ST_SectionType::from_str(&value)?);
-            }
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(element, context, b"titlePg") {
-            let value = get_val_attr_with_context(element, &element_context)?;
-            sect.title_pg = Some(ST_OnOff::from_str_or_default(value.as_deref()).is_on());
-            allowed_word_attributes = &[b"val"];
-        } else {
-            return Ok(false);
-        }
-        sect.has_unmodeled_properties |=
-            has_unmodeled_attributes(element, context, allowed_word_attributes, &[])?;
-        Ok(true)
-    }
-
-    fn parse_header_footer_reference(
-        element: &BytesStart<'_>,
-        context: &NamespaceContext,
-    ) -> Result<Option<HdrFtrRef>> {
-        let element_context = context.with_element(element);
-        let mut hdr_ftr_type = HdrFtrType::Default;
-        let mut rel_id = None;
-        for attribute in element.attributes() {
-            let attribute = attribute?;
-            let key = attribute.key.as_ref();
-            let value = std::str::from_utf8(&attribute.value)?;
-            if matches_word_attribute(key, &element_context, b"type") {
-                hdr_ftr_type = HdrFtrType::from_str(value);
-            } else if matches_namespace_attribute(key, &element_context, b"r", R_NS, b"id") {
-                rel_id = Some(value.to_string());
-            }
-        }
-        Ok(rel_id.map(|rel_id| HdrFtrRef {
-            hdr_ftr_type,
-            rel_id,
-        }))
-    }
-
-    fn parse_cols_attrs(e: &BytesStart, context: &NamespaceContext) -> Result<(CT_Columns, bool)> {
-        let element_context = context.with_element(e);
-        let mut cols = CT_Columns::default();
-        for attr in e.attributes() {
-            let attr = attr?;
-            let key = attr.key.as_ref();
-            let val_str = std::str::from_utf8(&attr.value)?;
-            if matches_word_attribute(key, &element_context, b"num") {
-                cols.num = Some(val_str.parse()?);
-            } else if matches_word_attribute(key, &element_context, b"space") {
-                cols.space = Some(Twips(val_str.parse()?));
-            } else if matches_word_attribute(key, &element_context, b"equalWidth") {
-                cols.equal_width = Some(val_str == "1" || val_str == "true");
-            } else if matches_word_attribute(key, &element_context, b"sep") {
-                cols.sep = Some(val_str == "1" || val_str == "true");
-            }
-        }
-        let has_unmodeled_properties =
-            has_unmodeled_attributes(e, context, &[b"num", b"space", b"equalWidth", b"sep"], &[])?;
-        Ok((cols, has_unmodeled_properties))
-    }
-
-    fn parse_cols_start(
-        reader: &mut Reader<&[u8]>,
-        e: &BytesStart,
-        context: &NamespaceContext,
-    ) -> Result<(CT_Columns, bool)> {
-        let (mut cols, mut has_unmodeled_properties) = Self::parse_cols_attrs(e, context)?;
-        let child_context = context.with_element(e);
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) if matches_word_element(e, &child_context, b"col") => {
-                    let mut width = None;
-                    let mut space = None;
-                    let column_context = child_context.with_element(e);
-                    for attr in e.attributes() {
-                        let attr = attr?;
-                        let key = attr.key.as_ref();
-                        let value = std::str::from_utf8(&attr.value)?;
-                        if matches_word_attribute(key, &column_context, b"w") {
-                            width = Some(Twips(value.parse()?));
-                        } else if matches_word_attribute(key, &column_context, b"space") {
-                            space = Some(Twips(value.parse()?));
-                        }
-                    }
-                    has_unmodeled_properties |=
-                        has_unmodeled_attributes(e, &child_context, &[b"w", b"space"], &[])?;
-                    cols.columns.push(CT_Column { width, space });
-                }
-                Ok(Event::Start(ref e)) if matches_word_element(e, &child_context, b"col") => {
-                    let mut width = None;
-                    let mut space = None;
-                    let column_context = child_context.with_element(e);
-                    for attribute in e.attributes() {
-                        let attribute = attribute?;
-                        let name = attribute.key.as_ref();
-                        let value = std::str::from_utf8(&attribute.value)?;
-                        if matches_word_attribute(name, &column_context, b"w") {
-                            width = Some(Twips(value.parse()?));
-                        } else if matches_word_attribute(name, &column_context, b"space") {
-                            space = Some(Twips(value.parse()?));
-                        }
-                    }
-                    has_unmodeled_properties |=
-                        has_unmodeled_attributes(e, &child_context, &[b"w", b"space"], &[])?;
-                    cols.columns.push(CT_Column { width, space });
-                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
-                }
-                Ok(Event::Empty(_)) => has_unmodeled_properties = true,
-                Ok(Event::Start(ref e)) => {
-                    has_unmodeled_properties = true;
-                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
-                }
-                Ok(Event::End(ref e))
-                    if matches_word_name(e.name().as_ref(), &child_context, b"cols") =>
-                {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:cols".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok((cols, has_unmodeled_properties))
+        let element = parse_reader_element(reader, context, Some(W_NS), "sectPr", [])?;
+        Self::from_strict_xml(element)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -581,10 +424,101 @@ impl CT_SectPr {
     }
 }
 
+fn take_strict_child(
+    cursor: &mut StrictXmlCursor,
+    index: usize,
+    local: &str,
+) -> Result<StrictXmlElement> {
+    cursor
+        .take_child(index)
+        .and_then(StrictXmlNode::into_element)
+        .ok_or_else(|| OxmlError::MissingElement(format!("w:{local}")))
+}
+
+fn take_twips(cursor: &mut StrictXmlCursor, local: &str) -> Result<Option<Twips>> {
+    cursor
+        .take_attribute(Some(W_NS), local)
+        .map(|value| value.parse().map(Twips))
+        .transpose()
+        .map_err(Into::into)
+}
+
+fn parse_strict_header_footer_ref(
+    element: StrictXmlElement,
+) -> Result<(HdrFtrRef, StrictXmlCompleteness)> {
+    let parsed = element.parse(|cursor| {
+        let hdr_ftr_type = cursor
+            .take_attribute(Some(W_NS), "type")
+            .map(|value| HdrFtrType::from_str(&value))
+            .unwrap_or(HdrFtrType::Default);
+        let rel_id = cursor
+            .take_attribute(Some(R_NS), "id")
+            .ok_or_else(|| OxmlError::MissingElement("r:id".to_string()))?;
+        Ok(HdrFtrRef {
+            hdr_ftr_type,
+            rel_id,
+        })
+    })?;
+    let (reference, leftovers) = parsed.into_parts();
+    Ok((reference, StrictXmlCompleteness::from_leftovers(leftovers)))
+}
+
+fn parse_strict_columns(element: StrictXmlElement) -> Result<(CT_Columns, StrictXmlCompleteness)> {
+    let mut descendants = Vec::new();
+    let parsed = element.parse(|cursor| {
+        let mut columns = CT_Columns::default();
+        if let Some(value) = cursor.take_attribute(Some(W_NS), "num") {
+            columns.num = Some(value.parse()?);
+        }
+        if let Some(space) = take_twips(cursor, "space")? {
+            columns.space = Some(space);
+        }
+        if let Some(value) = cursor.take_attribute(Some(W_NS), "equalWidth") {
+            columns.equal_width = Some(ST_OnOff::from_str_or_default(Some(&value)).is_on());
+        }
+        if let Some(value) = cursor.take_attribute(Some(W_NS), "sep") {
+            columns.sep = Some(ST_OnOff::from_str_or_default(Some(&value)).is_on());
+        }
+
+        for index in 0..cursor.child_slots() {
+            let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                continue;
+            };
+            if !child.is_named(Some(W_NS), "col") {
+                continue;
+            }
+            let child = take_strict_child(cursor, index, "col")?;
+            let parsed_column = child.parse(|cursor| {
+                Ok(CT_Column {
+                    width: take_twips(cursor, "w")?,
+                    space: take_twips(cursor, "space")?,
+                })
+            })?;
+            let (column, leftovers) = parsed_column.into_parts();
+            columns.columns.push(column);
+            descendants.push(StrictXmlCompleteness::from_leftovers(leftovers));
+        }
+        Ok(columns)
+    })?;
+    let (columns, leftovers) = parsed.into_parts();
+    Ok((columns, StrictXmlCompleteness::new(leftovers, descendants)))
+}
+
+fn raw_child_bytes(leftovers: &StrictXmlLeftovers) -> Vec<Vec<u8>> {
+    leftovers
+        .children
+        .iter()
+        .filter_map(|child| child.clone().into_element())
+        .map(|element| element.into_raw_xml().bytes().to_vec())
+        .collect()
+}
+
 /// `CT_Body` — The document body containing paragraphs, tables, and section properties.
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_snake_case)]
 pub struct CT_Body {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     /// Mixed content in document order, including section properties.
     pub content: Vec<BodyContent>,
 }
@@ -593,6 +527,7 @@ pub struct CT_Body {
 impl CT_Body {
     pub fn new() -> Self {
         CT_Body {
+            completeness: StrictXmlCompleteness::default(),
             content: vec![BodyContent::SectionProperties(CT_SectPr::default_letter())],
         }
     }
@@ -774,6 +709,64 @@ impl CT_Body {
         self.content.get_mut(position)
     }
 
+    fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut body = Self {
+                completeness: StrictXmlCompleteness::default(),
+                content: Vec::new(),
+            };
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let kind = if child.is_named(Some(W_NS), "p") {
+                    Some("p")
+                } else if child.is_named(Some(W_NS), "tbl") {
+                    Some("tbl")
+                } else if child.is_named(Some(W_NS), "sectPr") {
+                    Some("sectPr")
+                } else {
+                    None
+                };
+                let child = take_strict_child(cursor, index, "body child")?;
+                match kind {
+                    Some("p") => {
+                        let paragraph = CT_P::from_strict_xml(child)?;
+                        descendants.push(paragraph.completeness.clone());
+                        body.content.push(BodyContent::Paragraph(paragraph));
+                    }
+                    Some("tbl") => {
+                        let table = CT_Tbl::from_strict_xml(child, 1)?;
+                        descendants.push(table.completeness.clone());
+                        body.content.push(BodyContent::Table(table));
+                    }
+                    Some("sectPr") => {
+                        let properties = CT_SectPr::from_strict_xml(child)?;
+                        descendants.push(properties.completeness.clone());
+                        body.content
+                            .push(BodyContent::SectionProperties(properties));
+                    }
+                    None => {
+                        let raw = child.clone().into_raw_xml();
+                        descendants.push(StrictXmlCompleteness::from_leftovers(
+                            StrictXmlLeftovers {
+                                attributes: Vec::new(),
+                                children: vec![StrictXmlNode::Element(Box::new(child))],
+                            },
+                        ));
+                        body.content.push(BodyContent::RawXml(raw));
+                    }
+                    Some(_) => unreachable!(),
+                }
+            }
+            Ok(body)
+        })?;
+        let (mut body, leftovers) = parsed.into_parts();
+        body.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(body)
+    }
+
     fn content_position(&self, index: usize, allow_end: bool) -> Option<usize> {
         let count = self.content_count();
         if index < count {
@@ -798,67 +791,9 @@ impl CT_Body {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
-        let mut content = Vec::new();
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    if matches_word_element(e, context, b"p") {
-                        let child_context = context.with_element(e);
-                        content.push(BodyContent::Paragraph(CT_P::from_xml_with_context(
-                            reader,
-                            &child_context,
-                        )?));
-                    } else if matches_word_element(e, context, b"tbl") {
-                        let child_context = context.with_element(e);
-                        content.push(BodyContent::Table(CT_Tbl::from_xml_with_context(
-                            reader,
-                            &child_context,
-                        )?));
-                    } else if matches_word_element(e, context, b"sectPr") {
-                        let child_context = context.with_element(e);
-                        let mut properties =
-                            CT_SectPr::from_xml_with_context(reader, &child_context)?;
-                        properties.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        content.push(BodyContent::SectionProperties(properties));
-                    } else {
-                        // Capture unknown elements as raw XML
-                        content.push(BodyContent::RawXml(capture_raw_element(
-                            reader, e, context,
-                        )?));
-                    }
-                }
-                Ok(Event::Empty(ref e)) => {
-                    if matches_word_element(e, context, b"p") {
-                        content.push(BodyContent::Paragraph(CT_P::new()));
-                    } else if matches_word_element(e, context, b"tbl") {
-                        content.push(BodyContent::Table(CT_Tbl::new()));
-                    } else if matches_word_element(e, context, b"sectPr") {
-                        let mut properties = CT_SectPr::empty();
-                        properties.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        content.push(BodyContent::SectionProperties(properties));
-                    } else if !matches_word_element(e, context, b"body") {
-                        content.push(BodyContent::RawXml(capture_raw_empty_element(e, context)?));
-                    }
-                }
-                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"body") => {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:body".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(CT_Body { content })
+        let element = parse_reader_element(reader, context, Some(W_NS), "body", [])?;
+        Self::from_strict_xml(element)
     }
-
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         self.to_xml_with_context(writer, &NamespaceContext::default())
     }
@@ -896,6 +831,8 @@ impl Default for CT_Body {
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_snake_case)]
 pub struct CT_Document {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     pub body: CT_Body,
     /// Extra namespace declarations captured from the original document element.
     /// Each entry is (prefix, uri), e.g. ("xmlns:wp14", "http://...").
@@ -908,6 +845,7 @@ pub struct CT_Document {
 impl CT_Document {
     pub fn new() -> Self {
         CT_Document {
+            completeness: StrictXmlCompleteness::default(),
             body: CT_Body::new(),
             extra_namespaces: Vec::new(),
             background_xml: None,
@@ -916,97 +854,52 @@ impl CT_Document {
 
     /// Parse from XML bytes (the content of word/document.xml).
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
-        oxml_core::xml_validation::validate_document(xml)?;
-        let mut reader = Reader::from_reader(xml);
-        reader.config_mut().trim_text(true);
-
-        let mut body = None;
-        let mut extra_namespaces = Vec::new();
-        let mut background_xml = None;
-        let mut document_context = NamespaceContext::default();
-        let mut saw_document = false;
-        let mut saw_document_end = false;
-        let mut buf = Vec::new();
-
-        // Known namespace prefixes that we always emit ourselves
-        let known_ns: &[&[u8]] = &[b"xmlns:w", b"xmlns:r", b"xmlns:mc", b"xmlns"];
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    if matches_word_element(e, &NamespaceContext::default(), b"document") {
-                        if saw_document {
-                            return Err(OxmlError::UnexpectedElement(
-                                "duplicate w:document".to_string(),
-                            ));
-                        }
-                        saw_document = true;
-                        document_context = NamespaceContext::default().with_element(e);
-                        // Capture extra namespace declarations from the document element
-                        for attr in e.attributes().flatten() {
-                            let key = attr.key.as_ref();
-                            if (key.starts_with(b"xmlns:") || key == b"xmlns")
-                                && !known_ns.contains(&key)
-                            {
-                                let key_str = std::str::from_utf8(key).unwrap_or("").to_string();
-                                let val_str =
-                                    std::str::from_utf8(&attr.value).unwrap_or("").to_string();
-                                extra_namespaces.push((key_str, val_str));
-                            }
-                        }
-                        // Continue into document element
-                    } else if saw_document && matches_word_element(e, &document_context, b"body") {
-                        if body.is_some() {
-                            return Err(OxmlError::UnexpectedElement(
-                                "duplicate w:body".to_string(),
-                            ));
-                        }
-                        let body_context = document_context.with_element(e);
-                        body = Some(CT_Body::from_xml_with_context(&mut reader, &body_context)?);
-                    } else if saw_document
-                        && matches_word_element(e, &document_context, b"background")
-                    {
-                        background_xml = Some(capture_element(&mut reader, e)?);
-                    } else {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
-                    }
-                }
-                Ok(Event::Empty(ref e)) => {
-                    if saw_document && matches_word_element(e, &document_context, b"body") {
-                        if body.replace(CT_Body::new()).is_some() {
-                            return Err(OxmlError::UnexpectedElement(
-                                "duplicate w:body".to_string(),
-                            ));
-                        }
-                    } else if saw_document
-                        && matches_word_element(e, &document_context, b"background")
-                    {
-                        background_xml = Some(capture_empty_element(e)?);
-                    }
-                }
-                Ok(Event::End(ref e))
-                    if saw_document
-                        && matches_word_name(e.name().as_ref(), &document_context, b"document") =>
-                {
-                    saw_document_end = true;
-                    break;
-                }
-                Ok(Event::Eof) => break,
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        if !saw_document {
+        let root = StrictXmlDocument::parse(xml)?.into_root();
+        if !root.is_named(Some(W_NS), "document") {
             return Err(OxmlError::MissingElement("w:document".to_string()));
         }
-        if !saw_document_end {
-            return Err(OxmlError::MissingElement("closing w:document".to_string()));
-        }
-
-        Ok(CT_Document {
+        let extra_namespaces = root
+            .raw_xml()
+            .namespaces()
+            .bindings()
+            .iter()
+            .filter(|(prefix, _)| !matches!(prefix.as_str(), "w" | "r" | "mc"))
+            .map(|(prefix, uri)| {
+                let name = if prefix.is_empty() {
+                    "xmlns".to_string()
+                } else {
+                    format!("xmlns:{prefix}")
+                };
+                (name, uri.clone())
+            })
+            .collect();
+        let mut descendants = Vec::new();
+        let parsed = root.parse(|cursor| {
+            let mut body = None;
+            let mut background_xml = None;
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                if child.is_named(Some(W_NS), "body") && body.is_none() {
+                    let child = take_strict_child(cursor, index, "w:body")?;
+                    let parsed_body = CT_Body::from_strict_xml(child)?;
+                    descendants.push(parsed_body.completeness.clone());
+                    body = Some(parsed_body);
+                } else if child.is_named(Some(W_NS), "background") && background_xml.is_none() {
+                    let child = take_strict_child(cursor, index, "w:background")?;
+                    background_xml = Some(child.raw_xml().bytes().to_vec());
+                    descendants.push(StrictXmlCompleteness::from_leftovers(StrictXmlLeftovers {
+                        attributes: Vec::new(),
+                        children: vec![StrictXmlNode::Element(Box::new(child))],
+                    }));
+                }
+            }
+            Ok((body, background_xml))
+        })?;
+        let ((body, background_xml), leftovers) = parsed.into_parts();
+        Ok(Self {
+            completeness: StrictXmlCompleteness::new(leftovers, descendants),
             body: body.ok_or_else(|| OxmlError::MissingElement("w:body".to_string()))?,
             extra_namespaces,
             background_xml,
@@ -1471,7 +1364,7 @@ mod tests {
         let columns = section.columns.as_ref().unwrap();
         assert_eq!(columns.num, Some(2));
         assert_eq!(columns.columns[0].width, Some(Twips(5000)));
-        assert!(!section.has_unmodeled_properties);
+        assert!(!section.has_unmodeled_properties());
     }
 
     #[test]
@@ -1489,7 +1382,7 @@ mod tests {
         let section = parsed.body.sect_pr().unwrap();
         assert_eq!(section.page_width, None);
         assert_eq!(section.extra_xml.len(), 3);
-        assert!(section.has_unmodeled_properties);
+        assert!(section.has_unmodeled_properties());
     }
 
     #[test]
@@ -1506,6 +1399,6 @@ mod tests {
         let parsed = CT_Document::from_xml(xml.as_bytes()).unwrap();
         let section = parsed.body.sect_pr().unwrap();
         assert_eq!(section.page_width, Some(Twips(12240)));
-        assert!(section.has_unmodeled_properties);
+        assert!(section.has_unmodeled_properties());
     }
 }

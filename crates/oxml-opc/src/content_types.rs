@@ -2,13 +2,17 @@
 
 use std::collections::HashMap;
 
+use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer};
+
+use oxml_core::xml::{StrictXmlCursor, StrictXmlDocument, StrictXmlElement, StrictXmlNode};
 
 use crate::error::{OpcError, Result};
 
 pub const RELATIONSHIPS: &str = "application/vnd.openxmlformats-package.relationships+xml";
 pub const XML: &str = "application/xml";
+
+const CONTENT_TYPES_NS: &str = "http://schemas.openxmlformats.org/package/2006/content-types";
 
 pub const CORE_PROPERTIES: &str = "application/vnd.openxmlformats-package.core-properties+xml";
 pub const EXTENDED_PROPERTIES: &str =
@@ -73,73 +77,50 @@ pub struct ContentTypes {
 impl ContentTypes {
     /// Parse from XML bytes.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
-        let mut reader = Reader::from_reader(xml);
-        reader.config_mut().trim_text(true);
-
-        let mut defaults = HashMap::new();
-        let mut overrides = HashMap::new();
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => match e.name().as_ref() {
-                    b"Default" => {
-                        let mut ext = None;
-                        let mut ct = None;
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            match attr.key.as_ref() {
-                                b"Extension" => {
-                                    ext = Some(std::str::from_utf8(&attr.value)?.to_string());
-                                }
-                                b"ContentType" => {
-                                    ct = Some(std::str::from_utf8(&attr.value)?.to_string());
-                                }
-                                _ => {}
-                            }
-                        }
-                        match (ext, ct) {
-                            (Some(e), Some(c)) => {
-                                defaults.insert(e, c);
-                            }
-                            _ => return Err(OpcError::InvalidContentTypes),
-                        }
-                    }
-                    b"Override" => {
-                        let mut pn = None;
-                        let mut ct = None;
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            match attr.key.as_ref() {
-                                b"PartName" => {
-                                    pn = Some(std::str::from_utf8(&attr.value)?.to_string());
-                                }
-                                b"ContentType" => {
-                                    ct = Some(std::str::from_utf8(&attr.value)?.to_string());
-                                }
-                                _ => {}
-                            }
-                        }
-                        match (pn, ct) {
-                            (Some(p), Some(c)) => {
-                                overrides.insert(p, c);
-                            }
-                            _ => return Err(OpcError::InvalidContentTypes),
-                        }
-                    }
-                    _ => {}
-                },
-                Ok(Event::Eof) => break,
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
+        let root = StrictXmlDocument::parse(xml)
+            .map_err(|_| OpcError::InvalidContentTypes)?
+            .into_root();
+        if !root.is_named(Some(CONTENT_TYPES_NS), "Types") {
+            return Err(OpcError::InvalidContentTypes);
         }
-
-        Ok(ContentTypes {
-            defaults,
-            overrides,
-        })
+        let parsed = root
+            .parse(|cursor| {
+                let mut content_types = Self {
+                    defaults: HashMap::new(),
+                    overrides: HashMap::new(),
+                };
+                for index in 0..cursor.child_slots() {
+                    let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                        continue;
+                    };
+                    let kind = if child.is_named(Some(CONTENT_TYPES_NS), "Default") {
+                        Some("Default")
+                    } else if child.is_named(Some(CONTENT_TYPES_NS), "Override") {
+                        Some("Override")
+                    } else {
+                        None
+                    };
+                    let Some(kind) = kind else {
+                        continue;
+                    };
+                    let child = cursor
+                        .take_child(index)
+                        .and_then(StrictXmlNode::into_element)
+                        .ok_or_else(invalid_content_type_value)?;
+                    let (key, value) = parse_content_type(child, kind)?;
+                    if kind == "Default" {
+                        content_types.defaults.insert(key, value);
+                    } else {
+                        content_types.overrides.insert(key, value);
+                    }
+                }
+                Ok(content_types)
+            })
+            .map_err(|_| OpcError::InvalidContentTypes)?;
+        if !parsed.leftovers.is_empty() {
+            return Err(OpcError::InvalidContentTypes);
+        }
+        Ok(parsed.value)
     }
 
     /// Serialize to XML bytes.
@@ -226,6 +207,39 @@ impl ContentTypes {
     }
 }
 
+fn parse_content_type(
+    element: StrictXmlElement,
+    kind: &str,
+) -> oxml_core::Result<(String, String)> {
+    let parsed = element.parse(|cursor| parse_content_type_attributes(cursor, kind))?;
+    if !parsed.leftovers.is_empty() {
+        return Err(invalid_content_type_value());
+    }
+    Ok(parsed.value)
+}
+
+fn parse_content_type_attributes(
+    cursor: &mut StrictXmlCursor,
+    kind: &str,
+) -> oxml_core::Result<(String, String)> {
+    let key_name = if kind == "Default" {
+        "Extension"
+    } else {
+        "PartName"
+    };
+    let key = cursor
+        .take_attribute(None, key_name)
+        .ok_or_else(invalid_content_type_value)?;
+    let value = cursor
+        .take_attribute(None, "ContentType")
+        .ok_or_else(invalid_content_type_value)?;
+    Ok((key, value))
+}
+
+fn invalid_content_type_value() -> oxml_core::OxmlError {
+    oxml_core::OxmlError::InvalidValue("invalid content type XML".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,6 +286,28 @@ mod tests {
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
             )
         );
+    }
+
+    #[test]
+    fn spelling_and_prefix_do_not_change_content_type_semantics() {
+        let variants = [
+            br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>"#.as_slice(),
+            br#"<c:Types xmlns:c="http://schemas.openxmlformats.org/package/2006/content-types"><c:Default Extension="xml" ContentType="application/xml"></c:Default></c:Types>"#.as_slice(),
+        ];
+        let parsed = variants.map(ContentTypes::from_xml).map(Result::unwrap);
+        assert_eq!(parsed[0].defaults, parsed[1].defaults);
+        assert_eq!(parsed[0].overrides, parsed[1].overrides);
+    }
+
+    #[test]
+    fn foreign_or_unconsumed_content_type_semantics_are_rejected() {
+        for xml in [
+            br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types" xmlns:x="urn:foreign"><x:Default Extension="xml" ContentType="application/xml"/></Types>"#.as_slice(),
+            br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml" Extra="value"/></Types>"#.as_slice(),
+            br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"><Override PartName="/word/document.xml" ContentType="application/xml"/></Default></Types>"#.as_slice(),
+        ] {
+            assert!(ContentTypes::from_xml(xml).is_err(), "{xml:?}");
+        }
     }
 
     #[test]

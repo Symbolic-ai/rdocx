@@ -438,7 +438,7 @@ impl Document {
     pub fn has_unmodeled_section_properties(&self) -> bool {
         self.document.body.content.iter().any(|content| {
             section_properties_for_body_content(content)
-                .is_some_and(|properties| properties.has_unmodeled_properties)
+                .is_some_and(|properties| properties.has_unmodeled_properties())
         })
     }
 
@@ -705,6 +705,7 @@ impl Document {
         let run = CT_R {
             properties: None,
             content: vec![RunContent::Drawing(ParsedWithRaw::new(drawing))],
+            ..Default::default()
         };
 
         let mut p = CT_P::new();
@@ -774,6 +775,7 @@ impl Document {
         let run = CT_R {
             properties: None,
             content: vec![RunContent::Drawing(ParsedWithRaw::new(drawing))],
+            ..Default::default()
         };
 
         let mut p = CT_P::new();
@@ -805,6 +807,7 @@ impl Document {
         let run = CT_R {
             properties: None,
             content: vec![RunContent::Drawing(ParsedWithRaw::new(drawing))],
+            ..Default::default()
         };
 
         let mut p = CT_P::new();
@@ -1292,6 +1295,7 @@ impl Document {
             content: vec![RunContent::Drawing(ParsedWithRaw::new(CT_Drawing::inline(
                 inline,
             )))],
+            ..Default::default()
         };
 
         let mut p = CT_P::new();
@@ -1773,6 +1777,7 @@ impl Document {
             .get_or_insert_with(|| rdocx_oxml::numbering::CT_Numbering {
                 abstract_nums: Vec::new(),
                 nums: Vec::new(),
+                ..Default::default()
             });
 
         // Find max existing IDs to avoid collision
@@ -1937,6 +1942,7 @@ impl Document {
                 pos: Twips(self.text_width_twips()),
                 leader: Some(ST_TabLeader::Dot),
             }],
+            ..Default::default()
         };
 
         let mut toc_paragraphs: Vec<CT_P> = Vec::new();
@@ -1977,6 +1983,7 @@ impl Document {
             p.content.push(ParagraphChild::Run(CT_R {
                 properties: None,
                 content: vec![rdocx_oxml::text::RunContent::Tab],
+                ..Default::default()
             }));
 
             toc_paragraphs.push(p);
@@ -3414,7 +3421,15 @@ fn has_consistent_sfnt_header(data: &[u8]) -> bool {
 mod tests {
     use super::*;
     use crate::paragraph::Alignment;
+    use oxml_core::xml::{StrictXmlCompleteness, StrictXmlLeftovers, StrictXmlNode};
     use rdocx_oxml::units::{HalfPoint, Twips};
+
+    fn incomplete_completeness() -> StrictXmlCompleteness {
+        StrictXmlCompleteness::from_leftovers(StrictXmlLeftovers {
+            attributes: Vec::new(),
+            children: vec![StrictXmlNode::Text("unsupported".to_string())],
+        })
+    }
 
     fn reset_layout_invocations() {
         LAYOUT_INVOCATIONS.set(0);
@@ -3427,12 +3442,7 @@ mod tests {
     #[test]
     fn unmodeled_section_properties_are_exposed_by_the_reader_facade() {
         let mut document = Document::new();
-        document
-            .document
-            .body
-            .sect_pr_mut()
-            .unwrap()
-            .has_unmodeled_properties = true;
+        document.document.body.sect_pr_mut().unwrap().completeness = incomplete_completeness();
 
         assert!(document.has_unmodeled_section_properties());
     }
@@ -3450,7 +3460,7 @@ mod tests {
             .grid
             .as_mut()
             .unwrap()
-            .has_unmodeled_properties = true;
+            .completeness = incomplete_completeness();
 
         assert!(document.table(0).unwrap().has_unmodeled_properties());
     }
@@ -4198,6 +4208,7 @@ mod tests {
             content: vec![RunContent::Drawing(ParsedWithRaw::new(CT_Drawing::anchor(
                 anchor,
             )))],
+            ..Default::default()
         }));
         doc.document.body.add_paragraph(paragraph);
 
@@ -4248,8 +4259,8 @@ mod tests {
     fn numbering_level_exposes_unmodeled_properties() {
         let mut document = Document::new();
         document.add_numbered_list_item("numbered item", 0);
-        document.numbering.as_mut().unwrap().abstract_nums[0].levels[0].has_unmodeled_properties =
-            true;
+        document.numbering.as_mut().unwrap().abstract_nums[0].levels[0].completeness =
+            incomplete_completeness();
         let (num_id, level) = document.paragraph(0).unwrap().numbering().unwrap();
 
         assert!(

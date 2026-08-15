@@ -9,38 +9,41 @@ use std::io::Write;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
-use crate::error::{OxmlError, Result};
-use crate::namespace::{
-    W_NS, has_unmodeled_attributes, matches_word_attribute, matches_word_element, matches_word_name,
+use oxml_core::xml::{
+    StrictXmlCompleteness, StrictXmlCursor, StrictXmlDocument, StrictXmlElement,
+    StrictXmlLeftovers, StrictXmlNode, parse_reader_element,
 };
-use crate::properties::{CT_PPr, CT_RPr, get_val_attr_with_context};
-use crate::raw_xml::{NamespaceContext, capture_element, capture_empty_element};
+
+use crate::error::{OxmlError, Result};
+use crate::namespace::W_NS;
+use crate::properties::{CT_PPr, CT_RPr};
+use crate::raw_xml::NamespaceContext;
 use crate::shared::ST_Jc;
 use crate::styles::{CT_Styles, StyleType};
 
 const MAX_NUMBERING_LEVEL: u32 = 8;
 
-fn required_u32_attr(
-    element: &BytesStart<'_>,
-    context: &NamespaceContext,
-    local: &[u8],
-    path: &str,
-) -> Result<u32> {
-    for attribute in element.attributes() {
-        let attribute = attribute?;
-        if matches_word_attribute(attribute.key.as_ref(), context, local) {
-            return Ok(std::str::from_utf8(&attribute.value)?.parse()?);
-        }
-    }
-    Err(OxmlError::MissingElement(path.to_string()))
+fn take_element(
+    cursor: &mut StrictXmlCursor,
+    index: usize,
+    description: &str,
+) -> Result<StrictXmlElement> {
+    cursor
+        .take_child(index)
+        .and_then(StrictXmlNode::into_element)
+        .ok_or_else(|| OxmlError::MissingElement(description.to_string()))
 }
 
-fn required_numbering_level_attr(
-    element: &BytesStart<'_>,
-    context: &NamespaceContext,
-    path: &str,
-) -> Result<u32> {
-    let level = required_u32_attr(element, context, b"ilvl", path)?;
+fn required_strict_u32_attr(cursor: &mut StrictXmlCursor, local: &str, path: &str) -> Result<u32> {
+    cursor
+        .take_attribute(Some(W_NS), local)
+        .ok_or_else(|| OxmlError::MissingElement(path.to_string()))?
+        .parse()
+        .map_err(Into::into)
+}
+
+fn required_strict_level_attr(cursor: &mut StrictXmlCursor, path: &str) -> Result<u32> {
+    let level = required_strict_u32_attr(cursor, "ilvl", path)?;
     if level <= MAX_NUMBERING_LEVEL {
         Ok(level)
     } else {
@@ -48,6 +51,13 @@ fn required_numbering_level_attr(
             "{path} must be between 0 and {MAX_NUMBERING_LEVEL}, got {level}"
         )))
     }
+}
+
+fn unmodeled_element_completeness(element: StrictXmlElement) -> StrictXmlCompleteness {
+    StrictXmlCompleteness::from_leftovers(StrictXmlLeftovers {
+        attributes: Vec::new(),
+        children: vec![StrictXmlNode::Element(Box::new(element))],
+    })
 }
 
 fn write_extras_at<W: Write>(
@@ -109,6 +119,8 @@ impl ST_NumberFormat {
 /// `CT_Lvl` — A single level (0–8) in an abstract numbering definition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CT_Lvl {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     /// Level index (0–8)
     pub ilvl: u32,
     /// Starting number
@@ -125,14 +137,13 @@ pub struct CT_Lvl {
     pub ppr: Option<CT_PPr>,
     /// Run properties for the numbering symbol
     pub rpr: Option<CT_RPr>,
-    /// Whether this level contains properties the semantic model does not expose.
-    pub has_unmodeled_properties: bool,
 }
 
 #[allow(non_snake_case)]
 impl CT_Lvl {
     pub fn new(ilvl: u32) -> Self {
         CT_Lvl {
+            completeness: StrictXmlCompleteness::default(),
             ilvl,
             start: None,
             num_fmt: None,
@@ -141,102 +152,87 @@ impl CT_Lvl {
             p_style: None,
             ppr: None,
             rpr: None,
-            has_unmodeled_properties: false,
         }
+    }
+
+    fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let ilvl = required_strict_level_attr(cursor, "w:lvl/@w:ilvl")?;
+            let mut level = Self::new(ilvl);
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let local = [
+                    "start", "numFmt", "lvlText", "pStyle", "lvlJc", "pPr", "rPr",
+                ]
+                .into_iter()
+                .find(|local| child.is_named(Some(W_NS), local));
+                let Some(local) = local else {
+                    continue;
+                };
+                let child = take_element(cursor, index, local)?;
+                let completeness = match local {
+                    "pPr" => {
+                        let properties = CT_PPr::from_strict_xml(child)?;
+                        let completeness = properties.completeness.clone();
+                        level.ppr = Some(properties);
+                        completeness
+                    }
+                    "rPr" => {
+                        let properties = CT_RPr::from_strict_xml(child)?;
+                        let completeness = properties.completeness.clone();
+                        level.rpr = Some(properties);
+                        completeness
+                    }
+                    _ => {
+                        let parsed_value = child.parse(|cursor| {
+                            let value = cursor.take_attribute(Some(W_NS), "val");
+                            match local {
+                                "start" => {
+                                    level.start = value.map(|value| value.parse()).transpose()?;
+                                }
+                                "numFmt" => {
+                                    level.num_fmt =
+                                        value.map(|value| ST_NumberFormat::from_str(&value));
+                                }
+                                "lvlText" => level.lvl_text = value,
+                                "pStyle" => level.p_style = value,
+                                "lvlJc" => {
+                                    level.lvl_jc =
+                                        value.map(|value| ST_Jc::from_str(&value)).transpose()?;
+                                }
+                                _ => unreachable!(),
+                            }
+                            Ok(())
+                        })?;
+                        StrictXmlCompleteness::from_leftovers(parsed_value.leftovers)
+                    }
+                };
+                descendants.push(completeness);
+            }
+            Ok(level)
+        })?;
+        let (mut level, leftovers) = parsed.into_parts();
+        level.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(level)
+    }
+
+    pub fn has_unmodeled_properties(&self) -> bool {
+        !self.completeness.is_complete()
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>, ilvl: u32) -> Result<Self> {
-        Self::from_xml_with_context(reader, ilvl, &NamespaceContext::default())
-    }
-
-    fn from_xml_with_context(
-        reader: &mut Reader<&[u8]>,
-        ilvl: u32,
-        context: &NamespaceContext,
-    ) -> Result<Self> {
-        let mut lvl = CT_Lvl::new(ilvl);
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    let child_context = context.with_element(e);
-                    if matches_word_element(e, context, b"pPr") {
-                        lvl.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        let properties = CT_PPr::from_xml_with_context(reader, &child_context)?;
-                        lvl.has_unmodeled_properties |= properties.has_unmodeled_properties;
-                        lvl.ppr = Some(properties);
-                    } else if matches_word_element(e, context, b"rPr") {
-                        lvl.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        let properties = CT_RPr::from_xml_with_context(reader, &child_context)?;
-                        lvl.has_unmodeled_properties |= properties.has_unmodeled_properties;
-                        lvl.rpr = Some(properties);
-                    } else if Self::parse_value_element(e, context, &child_context, &mut lvl)? {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
-                    } else {
-                        lvl.has_unmodeled_properties = true;
-                        reader.read_to_end_into(name, &mut Vec::new())?;
-                    }
-                }
-                Ok(Event::Empty(ref e)) => {
-                    let child_context = context.with_element(e);
-                    if matches_word_element(e, context, b"pPr") {
-                        lvl.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        lvl.ppr = Some(CT_PPr::default());
-                    } else if matches_word_element(e, context, b"rPr") {
-                        lvl.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        lvl.rpr = Some(CT_RPr::default());
-                    } else if !Self::parse_value_element(e, context, &child_context, &mut lvl)? {
-                        lvl.has_unmodeled_properties = true;
-                    }
-                }
-                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"lvl") => {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:lvl".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(lvl)
-    }
-
-    fn parse_value_element(
-        element: &BytesStart<'_>,
-        context: &NamespaceContext,
-        element_context: &NamespaceContext,
-        lvl: &mut Self,
-    ) -> Result<bool> {
-        if matches_word_element(element, context, b"start") {
-            if let Some(val) = get_val_attr_with_context(element, element_context)? {
-                lvl.start = Some(val.parse()?);
-            }
-        } else if matches_word_element(element, context, b"numFmt") {
-            if let Some(val) = get_val_attr_with_context(element, element_context)? {
-                lvl.num_fmt = Some(ST_NumberFormat::from_str(&val));
-            }
-        } else if matches_word_element(element, context, b"lvlText") {
-            lvl.lvl_text = get_val_attr_with_context(element, element_context)?;
-        } else if matches_word_element(element, context, b"pStyle") {
-            lvl.p_style = get_val_attr_with_context(element, element_context)?;
-        } else if matches_word_element(element, context, b"lvlJc") {
-            if let Some(val) = get_val_attr_with_context(element, element_context)? {
-                lvl.lvl_jc = Some(ST_Jc::from_str(&val)?);
-            }
-        } else {
-            return Ok(false);
-        }
-        lvl.has_unmodeled_properties |= has_unmodeled_attributes(element, context, &[b"val"], &[])?;
-        Ok(true)
+        let context = NamespaceContext::default();
+        let element = parse_reader_element(
+            reader,
+            &context,
+            Some(W_NS),
+            "lvl",
+            [("w:ilvl".to_string(), ilvl.to_string())],
+        )?;
+        Self::from_strict_xml(element)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -288,9 +284,17 @@ impl CT_Lvl {
     }
 }
 
+impl Default for CT_Lvl {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
 /// `CT_AbstractNum` — An abstract numbering definition with up to 9 levels.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CT_AbstractNum {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     pub abstract_num_id: u32,
     pub levels: Vec<CT_Lvl>,
     /// Optional multi-level type hint
@@ -307,6 +311,7 @@ pub struct CT_AbstractNum {
 impl CT_AbstractNum {
     pub fn new(id: u32) -> Self {
         CT_AbstractNum {
+            completeness: StrictXmlCompleteness::default(),
             abstract_num_id: id,
             levels: Vec::new(),
             multi_level_type: None,
@@ -316,95 +321,81 @@ impl CT_AbstractNum {
         }
     }
 
-    pub fn from_xml(reader: &mut Reader<&[u8]>, abstract_num_id: u32) -> Result<Self> {
-        Self::from_xml_with_context(reader, abstract_num_id, &NamespaceContext::default())
-    }
-
-    fn from_xml_with_context(
-        reader: &mut Reader<&[u8]>,
-        abstract_num_id: u32,
-        context: &NamespaceContext,
-    ) -> Result<Self> {
-        let mut abs = CT_AbstractNum::new(abstract_num_id);
-        let mut modelled_index = 0;
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    let child_context = context.with_element(e);
-                    if matches_word_element(e, context, b"lvl") {
-                        let ilvl =
-                            required_numbering_level_attr(e, &child_context, "w:lvl/@w:ilvl")?;
-                        let mut level =
-                            CT_Lvl::from_xml_with_context(reader, ilvl, &child_context)?;
-                        level.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[b"ilvl"], &[])?;
-                        abs.levels.push(level);
-                        modelled_index += 1;
-                    } else if Self::parse_value_element(e, context, &child_context, &mut abs)? {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
-                        modelled_index += 1;
-                    } else {
-                        abs.extra_xml
-                            .push((modelled_index, capture_element(reader, e)?));
-                    }
-                }
-                Ok(Event::Empty(ref e)) => {
-                    let child_context = context.with_element(e);
-                    if Self::parse_value_element(e, context, &child_context, &mut abs)? {
-                        modelled_index += 1;
-                    } else if matches_word_element(e, context, b"lvl") {
-                        let ilvl =
-                            required_numbering_level_attr(e, &child_context, "w:lvl/@w:ilvl")?;
-                        let mut level = CT_Lvl::new(ilvl);
-                        level.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[b"ilvl"], &[])?;
-                        abs.levels.push(level);
-                        modelled_index += 1;
-                    } else {
-                        abs.extra_xml
-                            .push((modelled_index, capture_empty_element(e)?));
-                    }
-                }
-                Ok(Event::End(ref e))
-                    if matches_word_name(e.name().as_ref(), context, b"abstractNum") =>
+    fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let id = required_strict_u32_attr(
+                cursor,
+                "abstractNumId",
+                "w:abstractNum/@w:abstractNumId",
+            )?;
+            let mut abstract_num = Self::new(id);
+            let mut modeled_index = 0usize;
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let kind = if child.is_named(Some(W_NS), "lvl") {
+                    Some("lvl")
+                } else if child.is_named(Some(W_NS), "multiLevelType") {
+                    Some("multiLevelType")
+                } else if child.is_named(Some(W_NS), "styleLink")
+                    && abstract_num.style_link.is_none()
                 {
-                    break;
+                    Some("styleLink")
+                } else if child.is_named(Some(W_NS), "numStyleLink")
+                    && abstract_num.num_style_link.is_none()
+                {
+                    Some("numStyleLink")
+                } else {
+                    None
+                };
+                let child = take_element(cursor, index, "abstract numbering child")?;
+                match kind {
+                    Some("lvl") => {
+                        let level = CT_Lvl::from_strict_xml(child)?;
+                        descendants.push(level.completeness.clone());
+                        abstract_num.levels.push(level);
+                        modeled_index += 1;
+                    }
+                    Some(local) => {
+                        let parsed_value =
+                            child.parse(|cursor| Ok(cursor.take_attribute(Some(W_NS), "val")))?;
+                        let (value, leftovers) = parsed_value.into_parts();
+                        match local {
+                            "multiLevelType" => abstract_num.multi_level_type = value,
+                            "styleLink" => abstract_num.style_link = value,
+                            "numStyleLink" => abstract_num.num_style_link = value,
+                            _ => unreachable!(),
+                        }
+                        descendants.push(StrictXmlCompleteness::from_leftovers(leftovers));
+                        modeled_index += 1;
+                    }
+                    None => {
+                        descendants.push(unmodeled_element_completeness(child.clone()));
+                        abstract_num
+                            .extra_xml
+                            .push((modeled_index, child.into_raw_xml().bytes().to_vec()));
+                    }
                 }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement(
-                        "closing w:abstractNum".to_string(),
-                    ));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
             }
-            buf.clear();
-        }
-
-        Ok(abs)
+            Ok(abstract_num)
+        })?;
+        let (mut abstract_num, leftovers) = parsed.into_parts();
+        abstract_num.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(abstract_num)
     }
 
-    fn parse_value_element(
-        element: &BytesStart<'_>,
-        context: &NamespaceContext,
-        element_context: &NamespaceContext,
-        abs: &mut Self,
-    ) -> Result<bool> {
-        if matches_word_element(element, context, b"multiLevelType") {
-            abs.multi_level_type = get_val_attr_with_context(element, element_context)?;
-        } else if matches_word_element(element, context, b"styleLink") && abs.style_link.is_none() {
-            abs.style_link = get_val_attr_with_context(element, element_context)?;
-        } else if matches_word_element(element, context, b"numStyleLink")
-            && abs.num_style_link.is_none()
-        {
-            abs.num_style_link = get_val_attr_with_context(element, element_context)?;
-        } else {
-            return Ok(false);
-        }
-        Ok(true)
+    pub fn from_xml(reader: &mut Reader<&[u8]>, abstract_num_id: u32) -> Result<Self> {
+        let context = NamespaceContext::default();
+        let element = parse_reader_element(
+            reader,
+            &context,
+            Some(W_NS),
+            "abstractNum",
+            [("w:abstractNumId".to_string(), abstract_num_id.to_string())],
+        )?;
+        Self::from_strict_xml(element)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -451,9 +442,17 @@ impl CT_AbstractNum {
     }
 }
 
+impl Default for CT_AbstractNum {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
 /// `CT_Num` — A numbering instance that references an abstract numbering definition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CT_Num {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     pub num_id: u32,
     pub abstract_num_id: u32,
     pub level_overrides: Vec<CT_LvlOverride>,
@@ -462,82 +461,65 @@ pub struct CT_Num {
 /// An instance-specific numbering-level override.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CT_LvlOverride {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     pub ilvl: u32,
     pub start_override: Option<u32>,
     pub level: Option<CT_Lvl>,
 }
 
 impl CT_LvlOverride {
-    fn from_xml(reader: &mut Reader<&[u8]>, ilvl: u32, context: &NamespaceContext) -> Result<Self> {
-        let mut value = Self {
-            ilvl,
-            start_override: None,
-            level: None,
-        };
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) if matches_word_element(e, context, b"lvl") => {
-                    let child_context = context.with_element(e);
-                    let level_index =
-                        required_numbering_level_attr(e, &child_context, "w:lvl/@w:ilvl")?;
-                    let mut level =
-                        CT_Lvl::from_xml_with_context(reader, level_index, &child_context)?;
-                    level.has_unmodeled_properties |=
-                        has_unmodeled_attributes(e, context, &[b"ilvl"], &[])?;
+    fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let ilvl = required_strict_level_attr(cursor, "w:lvlOverride/@w:ilvl")?;
+            let mut value = Self {
+                completeness: StrictXmlCompleteness::default(),
+                ilvl,
+                start_override: None,
+                level: None,
+            };
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                if child.is_named(Some(W_NS), "startOverride") && value.start_override.is_none() {
+                    let child = take_element(cursor, index, "startOverride")?;
+                    let parsed_start = child.parse(|cursor| {
+                        cursor
+                            .take_attribute(Some(W_NS), "val")
+                            .map(|value| value.parse())
+                            .transpose()
+                            .map_err(Into::into)
+                    })?;
+                    let (start, leftovers) = parsed_start.into_parts();
+                    value.start_override = start;
+                    descendants.push(StrictXmlCompleteness::from_leftovers(leftovers));
+                } else if child.is_named(Some(W_NS), "lvl") && value.level.is_none() {
+                    let child = take_element(cursor, index, "lvl")?;
+                    let level = CT_Lvl::from_strict_xml(child)?;
+                    descendants.push(level.completeness.clone());
                     value.level = Some(level);
                 }
-                Ok(Event::Start(ref e)) if Self::parse_start_override(e, context, &mut value)? => {
-                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
-                }
-                Ok(Event::Start(ref e)) => {
-                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
-                }
-                Ok(Event::Empty(ref e)) if Self::parse_start_override(e, context, &mut value)? => {}
-                Ok(Event::Empty(ref e)) if matches_word_element(e, context, b"lvl") => {
-                    let child_context = context.with_element(e);
-                    let level_index =
-                        required_numbering_level_attr(e, &child_context, "w:lvl/@w:ilvl")?;
-                    let mut level = CT_Lvl::new(level_index);
-                    level.has_unmodeled_properties |=
-                        has_unmodeled_attributes(e, context, &[b"ilvl"], &[])?;
-                    value.level = Some(level);
-                }
-                Ok(Event::End(ref e))
-                    if matches_word_name(e.name().as_ref(), context, b"lvlOverride") =>
-                {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement(
-                        "closing w:lvlOverride".to_string(),
-                    ));
-                }
-                Err(error) => return Err(error.into()),
-                _ => {}
             }
-            buf.clear();
-        }
-
+            Ok(value)
+        })?;
+        let (mut value, leftovers) = parsed.into_parts();
+        value.completeness = StrictXmlCompleteness::new(leftovers, descendants);
         Ok(value)
     }
 
-    fn parse_start_override(
-        element: &BytesStart<'_>,
-        context: &NamespaceContext,
-        value: &mut Self,
-    ) -> Result<bool> {
-        if !matches_word_element(element, context, b"startOverride") {
-            return Ok(false);
-        }
-        let child_context = context.with_element(element);
-        if let Some(start) = get_val_attr_with_context(element, &child_context)? {
-            value.start_override = Some(start.parse()?);
-        }
-        Ok(true)
+    pub fn from_xml(reader: &mut Reader<&[u8]>, num_id: u32) -> Result<Self> {
+        let context = NamespaceContext::default();
+        let element = parse_reader_element(
+            reader,
+            &context,
+            Some(W_NS),
+            "num",
+            [("w:numId".to_string(), num_id.to_string())],
+        )?;
+        Self::from_strict_xml(element)
     }
-
     fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         let mut buf = itoa::Buffer::new();
         let mut start = BytesStart::new("w:lvlOverride");
@@ -558,83 +540,60 @@ impl CT_LvlOverride {
     }
 }
 
+impl Default for CT_LvlOverride {
+    fn default() -> Self {
+        Self {
+            completeness: StrictXmlCompleteness::default(),
+            ilvl: 0,
+            start_override: None,
+            level: None,
+        }
+    }
+}
+
 #[allow(non_snake_case)]
 impl CT_Num {
-    pub fn from_xml(reader: &mut Reader<&[u8]>, num_id: u32) -> Result<Self> {
-        Self::from_xml_with_context(reader, num_id, &NamespaceContext::default())
-    }
-
-    fn from_xml_with_context(
-        reader: &mut Reader<&[u8]>,
-        num_id: u32,
-        context: &NamespaceContext,
-    ) -> Result<Self> {
-        let mut abstract_num_id = None;
-        let mut level_overrides = Vec::new();
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    if matches_word_element(e, context, b"abstractNumId")
-                        && let Some(val) = get_val_attr_with_context(e, &context.with_element(e))?
-                    {
-                        abstract_num_id = Some(val.parse()?);
-                    } else if matches_word_element(e, context, b"lvlOverride") {
-                        let child_context = context.with_element(e);
-                        let ilvl = required_numbering_level_attr(
-                            e,
-                            &child_context,
-                            "w:lvlOverride/@w:ilvl",
-                        )?;
-                        level_overrides.push(CT_LvlOverride {
-                            ilvl,
-                            start_override: None,
-                            level: None,
-                        });
-                    }
+    fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let num_id = required_strict_u32_attr(cursor, "numId", "w:num/@w:numId")?;
+            let mut abstract_num_id = None;
+            let mut level_overrides = Vec::new();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                if child.is_named(Some(W_NS), "abstractNumId") && abstract_num_id.is_none() {
+                    let child = take_element(cursor, index, "abstractNumId")?;
+                    let parsed_id = child.parse(|cursor| {
+                        cursor
+                            .take_attribute(Some(W_NS), "val")
+                            .map(|value| value.parse())
+                            .transpose()
+                            .map_err(Into::into)
+                    })?;
+                    let (id, leftovers) = parsed_id.into_parts();
+                    abstract_num_id = id;
+                    descendants.push(StrictXmlCompleteness::from_leftovers(leftovers));
+                } else if child.is_named(Some(W_NS), "lvlOverride") {
+                    let child = take_element(cursor, index, "lvlOverride")?;
+                    let level_override = CT_LvlOverride::from_strict_xml(child)?;
+                    descendants.push(level_override.completeness.clone());
+                    level_overrides.push(level_override);
                 }
-                Ok(Event::Start(ref e)) => {
-                    let child_context = context.with_element(e);
-                    if matches_word_element(e, context, b"lvlOverride") {
-                        let ilvl = required_numbering_level_attr(
-                            e,
-                            &child_context,
-                            "w:lvlOverride/@w:ilvl",
-                        )?;
-                        level_overrides.push(CT_LvlOverride::from_xml(
-                            reader,
-                            ilvl,
-                            &child_context,
-                        )?);
-                    } else if matches_word_element(e, context, b"abstractNumId") {
-                        if let Some(val) = get_val_attr_with_context(e, &child_context)? {
-                            abstract_num_id = Some(val.parse()?);
-                        }
-                        reader.read_to_end_into(e.name(), &mut Vec::new())?;
-                    } else {
-                        reader.read_to_end_into(e.name(), &mut Vec::new())?;
-                    }
-                }
-                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"num") => {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:num".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
             }
-            buf.clear();
-        }
-
-        Ok(CT_Num {
-            num_id,
-            abstract_num_id: abstract_num_id.ok_or_else(|| {
-                OxmlError::MissingElement("w:num/w:abstractNumId/@w:val".to_string())
-            })?,
-            level_overrides,
-        })
+            Ok(Self {
+                completeness: StrictXmlCompleteness::default(),
+                num_id,
+                abstract_num_id: abstract_num_id.ok_or_else(|| {
+                    OxmlError::MissingElement("w:num/w:abstractNumId/@w:val".to_string())
+                })?,
+                level_overrides,
+            })
+        })?;
+        let (mut value, leftovers) = parsed.into_parts();
+        value.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(value)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -656,9 +615,22 @@ impl CT_Num {
     }
 }
 
+impl Default for CT_Num {
+    fn default() -> Self {
+        Self {
+            completeness: StrictXmlCompleteness::default(),
+            num_id: 0,
+            abstract_num_id: 0,
+            level_overrides: Vec::new(),
+        }
+    }
+}
+
 /// `CT_Numbering` — Root element of the numbering definitions part.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CT_Numbering {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     pub abstract_nums: Vec<CT_AbstractNum>,
     pub nums: Vec<CT_Num>,
 }
@@ -667,6 +639,7 @@ pub struct CT_Numbering {
 impl CT_Numbering {
     pub fn new() -> Self {
         CT_Numbering {
+            completeness: StrictXmlCompleteness::default(),
             abstract_nums: Vec::new(),
             nums: Vec::new(),
         }
@@ -674,117 +647,37 @@ impl CT_Numbering {
 
     /// Parse from XML bytes (the content of numbering.xml).
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
-        let mut reader = Reader::from_reader(xml);
-        reader.config_mut().trim_text(true);
-
-        let mut abstract_nums = Vec::new();
-        let mut nums = Vec::new();
-        let mut root_context = None;
-        let mut root_closed = false;
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    if root_context.is_none() && !root_closed {
-                        let document_context = NamespaceContext::default();
-                        if !matches_word_element(e, &document_context, b"numbering") {
-                            return Err(OxmlError::UnexpectedElement(
-                                String::from_utf8_lossy(name.as_ref()).into_owned(),
-                            ));
-                        }
-                        root_context = Some(document_context.with_element(e));
-                    } else if let Some(context) = root_context.as_ref()
-                        && matches_word_element(e, context, b"abstractNum")
-                    {
-                        let child_context = context.with_element(e);
-                        let id = required_u32_attr(
-                            e,
-                            &child_context,
-                            b"abstractNumId",
-                            "w:abstractNum/@w:abstractNumId",
-                        )?;
-                        abstract_nums.push(CT_AbstractNum::from_xml_with_context(
-                            &mut reader,
-                            id,
-                            &child_context,
-                        )?);
-                    } else if let Some(context) = root_context.as_ref()
-                        && matches_word_element(e, context, b"num")
-                    {
-                        let child_context = context.with_element(e);
-                        let id = required_u32_attr(e, &child_context, b"numId", "w:num/@w:numId")?;
-                        nums.push(CT_Num::from_xml_with_context(
-                            &mut reader,
-                            id,
-                            &child_context,
-                        )?);
-                    } else if root_context.is_some() {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
-                    } else {
-                        return Err(OxmlError::UnexpectedElement(
-                            String::from_utf8_lossy(name.as_ref()).into_owned(),
-                        ));
-                    }
-                }
-                Ok(Event::Empty(ref e)) => {
-                    let document_context = NamespaceContext::default();
-                    if root_context.is_none()
-                        && !root_closed
-                        && matches_word_element(e, &document_context, b"numbering")
-                    {
-                        root_closed = true;
-                    } else if let Some(context) = root_context.as_ref()
-                        && matches_word_element(e, context, b"abstractNum")
-                    {
-                        let child_context = context.with_element(e);
-                        let id = required_u32_attr(
-                            e,
-                            &child_context,
-                            b"abstractNumId",
-                            "w:abstractNum/@w:abstractNumId",
-                        )?;
-                        abstract_nums.push(CT_AbstractNum::new(id));
-                    } else if let Some(context) = root_context.as_ref()
-                        && matches_word_element(e, context, b"num")
-                    {
-                        let child_context = context.with_element(e);
-                        required_u32_attr(e, &child_context, b"numId", "w:num/@w:numId")?;
-                        return Err(OxmlError::MissingElement(
-                            "w:num/w:abstractNumId/@w:val".to_string(),
-                        ));
-                    } else if root_context.is_none() || root_closed {
-                        return Err(OxmlError::UnexpectedElement(
-                            String::from_utf8_lossy(e.name().as_ref()).into_owned(),
-                        ));
-                    }
-                }
-                Ok(Event::End(ref e)) => {
-                    let Some(context) = root_context.as_ref() else {
-                        return Err(OxmlError::UnexpectedElement(
-                            String::from_utf8_lossy(e.name().as_ref()).into_owned(),
-                        ));
-                    };
-                    if matches_word_name(e.name().as_ref(), context, b"numbering") {
-                        root_context = None;
-                        root_closed = true;
-                    }
-                }
-                Ok(Event::Eof) if root_closed => break,
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:numbering".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
+        let root = StrictXmlDocument::parse(xml)?.into_root();
+        if !root.is_named(Some(W_NS), "numbering") {
+            return Err(OxmlError::UnexpectedElement(
+                "expected w:numbering".to_string(),
+            ));
         }
 
-        Ok(CT_Numbering {
-            abstract_nums,
-            nums,
-        })
+        let mut descendants = Vec::new();
+        let parsed = root.parse(|cursor| {
+            let mut numbering = Self::new();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                if child.is_named(Some(W_NS), "abstractNum") {
+                    let child = take_element(cursor, index, "abstractNum")?;
+                    let value = CT_AbstractNum::from_strict_xml(child)?;
+                    descendants.push(value.completeness.clone());
+                    numbering.abstract_nums.push(value);
+                } else if child.is_named(Some(W_NS), "num") {
+                    let child = take_element(cursor, index, "num")?;
+                    let value = CT_Num::from_strict_xml(child)?;
+                    descendants.push(value.completeness.clone());
+                    numbering.nums.push(value);
+                }
+            }
+            Ok(numbering)
+        })?;
+        let (mut numbering, leftovers) = parsed.into_parts();
+        numbering.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(numbering)
     }
 
     /// Serialize to XML bytes.
@@ -885,6 +778,7 @@ impl CT_Numbering {
             num_id,
             abstract_num_id: abs_id,
             level_overrides: Vec::new(),
+            ..Default::default()
         });
 
         num_id
@@ -962,7 +856,7 @@ impl CT_Numbering {
         Some(EffectiveNumberingLevel {
             level,
             start,
-            has_unmodeled_properties: level.has_unmodeled_properties,
+            has_unmodeled_properties: level.has_unmodeled_properties(),
         })
     }
 
@@ -1014,7 +908,7 @@ impl CT_Numbering {
             return Some(EffectiveNumberingLevel {
                 level,
                 start,
-                has_unmodeled_properties: level.has_unmodeled_properties,
+                has_unmodeled_properties: level.has_unmodeled_properties(),
             });
         }
 
@@ -1023,7 +917,7 @@ impl CT_Numbering {
                 EffectiveNumberingLevel {
                     level,
                     start: level.start.unwrap_or(1),
-                    has_unmodeled_properties: level.has_unmodeled_properties,
+                    has_unmodeled_properties: level.has_unmodeled_properties(),
                 }
             } else {
                 let style_id = abstract_num.num_style_link.as_deref()?;

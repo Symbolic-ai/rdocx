@@ -3,14 +3,17 @@
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
+use oxml_core::xml::{
+    StrictXmlCompleteness, StrictXmlCursor, StrictXmlElement, StrictXmlNode, StrictXmlParsed,
+    parse_empty_started_element, parse_reader_element,
+};
+
 use crate::borders::{CT_PBdr, CT_Tabs};
 use crate::document::CT_SectPr;
 use crate::error::{OxmlError, Result};
+use crate::namespace::W_NS;
 #[cfg(test)]
 use crate::namespace::matches_local_name;
-use crate::namespace::{
-    has_unmodeled_attributes, matches_word_attribute, matches_word_element, matches_word_name,
-};
 use crate::raw_xml::NamespaceContext;
 use crate::shared::{ST_HighlightColor, ST_Jc, ST_OnOff, ST_Underline};
 use crate::units::{HalfPoint, Twips};
@@ -28,32 +31,20 @@ pub struct CT_Shd {
 
 impl CT_Shd {
     pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
-        Self::from_xml_attrs_with_context(e, &NamespaceContext::default())
+        let element = parse_empty_started_element(&NamespaceContext::default(), Some(W_NS), e)?;
+        Ok(Self::from_strict_xml(element)?.value)
     }
 
-    pub(crate) fn from_xml_attrs_with_context(
-        e: &BytesStart,
-        parent_context: &NamespaceContext,
-    ) -> Result<Self> {
-        let context = parent_context.with_element(e);
-        let mut val = "clear".to_string();
-        let mut color = None;
-        let mut fill = None;
-
-        for attr in e.attributes() {
-            let attr = attr?;
-            let key = attr.key.as_ref();
-            let v = std::str::from_utf8(&attr.value)?;
-            if matches_word_attribute(key, &context, b"val") {
-                val = v.to_string();
-            } else if matches_word_attribute(key, &context, b"color") {
-                color = Some(v.to_string());
-            } else if matches_word_attribute(key, &context, b"fill") {
-                fill = Some(v.to_string());
-            }
-        }
-
-        Ok(CT_Shd { val, color, fill })
+    pub(crate) fn from_strict_xml(element: StrictXmlElement) -> Result<StrictXmlParsed<Self>> {
+        element.parse(|cursor| {
+            Ok(Self {
+                val: cursor
+                    .take_attribute(Some(W_NS), "val")
+                    .unwrap_or_else(|| "clear".to_string()),
+                color: cursor.take_attribute(Some(W_NS), "color"),
+                fill: cursor.take_attribute(Some(W_NS), "fill"),
+            })
+        })
     }
 
     pub fn write_xml<W: std::io::Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
@@ -73,8 +64,8 @@ impl CT_Shd {
 /// `CT_PPr` — Paragraph properties.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CT_PPr {
-    /// Whether this group contained a Word property the reader does not model.
-    pub has_unmodeled_properties: bool,
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     /// Paragraph style ID (pStyle)
     pub style_id: Option<String>,
     /// Justification (jc)
@@ -129,6 +120,183 @@ pub struct CT_PPr {
 
 #[allow(non_snake_case)]
 impl CT_PPr {
+    pub(crate) fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut properties = Self::default();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let recognized = [
+                    "rPr",
+                    "numPr",
+                    "pBdr",
+                    "tabs",
+                    "sectPr",
+                    "pStyle",
+                    "jc",
+                    "spacing",
+                    "ind",
+                    "keepNext",
+                    "keepLines",
+                    "pageBreakBefore",
+                    "widowControl",
+                    "suppressAutoHyphens",
+                    "outlineLvl",
+                    "shd",
+                ]
+                .into_iter()
+                .find(|local| child.is_named(Some(W_NS), local));
+                let Some(local) = recognized else {
+                    continue;
+                };
+                let child = take_element_child(cursor, index, local)?;
+                let completeness = match local {
+                    "rPr" => {
+                        let run_properties = CT_RPr::from_strict_xml(child)?;
+                        let completeness = run_properties.completeness.clone();
+                        properties.rpr = Some(run_properties);
+                        completeness
+                    }
+                    "numPr" => properties.parse_strict_numbering(child)?,
+                    "pBdr" => {
+                        let borders = CT_PBdr::from_strict_xml(child)?;
+                        let completeness = borders.completeness.clone();
+                        properties.borders = Some(borders);
+                        completeness
+                    }
+                    "tabs" => {
+                        let tabs = CT_Tabs::from_strict_xml(child)?;
+                        let completeness = tabs.completeness.clone();
+                        properties.tabs = Some(tabs);
+                        completeness
+                    }
+                    "sectPr" => {
+                        let section = CT_SectPr::from_strict_xml(child)?;
+                        let completeness = section.completeness.clone();
+                        properties.sect_pr = Some(section);
+                        completeness
+                    }
+                    _ => properties.parse_strict_property(local, child)?,
+                };
+                descendants.push(completeness);
+            }
+            Ok(properties)
+        })?;
+        let (mut properties, leftovers) = parsed.into_parts();
+        properties.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(properties)
+    }
+
+    fn parse_strict_property(
+        &mut self,
+        local: &str,
+        element: StrictXmlElement,
+    ) -> Result<StrictXmlCompleteness> {
+        if local == "shd" {
+            let parsed = CT_Shd::from_strict_xml(element)?;
+            let (shading, leftovers) = parsed.into_parts();
+            self.shading = Some(shading);
+            return Ok(StrictXmlCompleteness::from_leftovers(leftovers));
+        }
+
+        let parsed = element.parse(|cursor| {
+            match local {
+                "pStyle" => self.style_id = cursor.take_attribute(Some(W_NS), "val"),
+                "jc" => {
+                    self.jc = cursor
+                        .take_attribute(Some(W_NS), "val")
+                        .map(|value| ST_Jc::from_str(&value))
+                        .transpose()?;
+                }
+                "spacing" => {
+                    self.space_before = take_twips_attribute(cursor, "before")?;
+                    self.space_after = take_twips_attribute(cursor, "after")?;
+                    self.line_spacing = take_twips_attribute(cursor, "line")?;
+                    self.line_rule = cursor.take_attribute(Some(W_NS), "lineRule");
+                    self.before_autospacing = cursor
+                        .take_attribute(Some(W_NS), "beforeAutospacing")
+                        .map(|value| value == "1" || value == "true");
+                    self.after_autospacing = cursor
+                        .take_attribute(Some(W_NS), "afterAutospacing")
+                        .map(|value| value == "1" || value == "true");
+                }
+                "ind" => {
+                    self.ind_left = take_twips_attribute(cursor, "left")?
+                        .or(take_twips_attribute(cursor, "start")?);
+                    self.ind_right = take_twips_attribute(cursor, "right")?
+                        .or(take_twips_attribute(cursor, "end")?);
+                    self.ind_first_line = take_twips_attribute(cursor, "firstLine")?;
+                    self.ind_hanging = take_twips_attribute(cursor, "hanging")?;
+                }
+                "keepNext" => self.keep_next = Some(parse_strict_toggle(cursor)),
+                "keepLines" => self.keep_lines = Some(parse_strict_toggle(cursor)),
+                "pageBreakBefore" => {
+                    self.page_break_before = Some(parse_strict_toggle(cursor));
+                }
+                "widowControl" => self.widow_control = Some(parse_strict_toggle(cursor)),
+                "suppressAutoHyphens" => {
+                    self.suppress_auto_hyphens = Some(parse_strict_toggle(cursor));
+                }
+                "outlineLvl" => {
+                    self.outline_lvl = cursor
+                        .take_attribute(Some(W_NS), "val")
+                        .map(|value| value.parse())
+                        .transpose()?;
+                }
+                _ => unreachable!(),
+            }
+            Ok(())
+        })?;
+        Ok(StrictXmlCompleteness::from_leftovers(parsed.leftovers))
+    }
+
+    fn parse_strict_numbering(
+        &mut self,
+        element: StrictXmlElement,
+    ) -> Result<StrictXmlCompleteness> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let local = if child.is_named(Some(W_NS), "ilvl") {
+                    Some("ilvl")
+                } else if child.is_named(Some(W_NS), "numId") {
+                    Some("numId")
+                } else {
+                    None
+                };
+                let Some(local) = local else {
+                    continue;
+                };
+                let child = take_element_child(cursor, index, local)?;
+                let parsed_value = child.parse(|cursor| {
+                    cursor
+                        .take_attribute(Some(W_NS), "val")
+                        .map(|value| value.parse())
+                        .transpose()
+                        .map_err(Into::into)
+                })?;
+                let (value, leftovers) = parsed_value.into_parts();
+                if local == "ilvl" {
+                    self.num_ilvl = value;
+                } else {
+                    self.num_id = value;
+                }
+                descendants.push(StrictXmlCompleteness::from_leftovers(leftovers));
+            }
+            Ok(())
+        })?;
+        Ok(StrictXmlCompleteness::new(parsed.leftovers, descendants))
+    }
+
+    pub fn has_unmodeled_properties(&self) -> bool {
+        !self.completeness.is_complete()
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_context(reader, &NamespaceContext::default())
     }
@@ -137,254 +305,8 @@ impl CT_PPr {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
-        let mut ppr = CT_PPr::default();
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    if matches_word_element(e, context, b"rPr") {
-                        ppr.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        let child_context = context.with_element(e);
-                        let rpr = CT_RPr::from_xml_with_context(reader, &child_context)?;
-                        ppr.has_unmodeled_properties |= rpr.has_unmodeled_properties;
-                        ppr.rpr = Some(rpr);
-                    } else if matches_word_element(e, context, b"numPr") {
-                        ppr.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        let child_context = context.with_element(e);
-                        Self::parse_num_pr(reader, &child_context, &mut ppr)?;
-                    } else if matches_word_element(e, context, b"pBdr") {
-                        ppr.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        let child_context = context.with_element(e);
-                        let (borders, has_unmodeled_properties) =
-                            CT_PBdr::from_xml_with_context_and_completeness(
-                                reader,
-                                &child_context,
-                            )?;
-                        ppr.has_unmodeled_properties |= has_unmodeled_properties;
-                        ppr.borders = Some(borders);
-                    } else if matches_word_element(e, context, b"tabs") {
-                        ppr.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        let child_context = context.with_element(e);
-                        let (tabs, has_unmodeled_properties) =
-                            CT_Tabs::from_xml_with_context_and_completeness(
-                                reader,
-                                &child_context,
-                            )?;
-                        ppr.has_unmodeled_properties |= has_unmodeled_properties;
-                        ppr.tabs = Some(tabs);
-                    } else if matches_word_element(e, context, b"sectPr") {
-                        let child_context = context.with_element(e);
-                        let mut sect_pr = CT_SectPr::from_xml_with_context(reader, &child_context)?;
-                        sect_pr.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        ppr.sect_pr = Some(sect_pr);
-                    } else {
-                        if !Self::parse_property_element(e, context, &mut ppr)? {
-                            ppr.has_unmodeled_properties = true;
-                        }
-                        reader.read_to_end_into(name, &mut Vec::new())?;
-                    }
-                }
-                Ok(Event::Empty(ref e)) => {
-                    if matches_word_element(e, context, b"rPr") {
-                        ppr.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        ppr.rpr = Some(CT_RPr::default());
-                    } else if matches_word_element(e, context, b"numPr") {
-                        ppr.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                    } else if matches_word_element(e, context, b"pBdr") {
-                        ppr.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        ppr.borders = Some(CT_PBdr::default());
-                    } else if matches_word_element(e, context, b"tabs") {
-                        ppr.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        ppr.tabs = Some(CT_Tabs::default());
-                    } else if matches_word_element(e, context, b"sectPr") {
-                        let mut sect_pr = CT_SectPr::empty();
-                        sect_pr.has_unmodeled_properties |=
-                            has_unmodeled_attributes(e, context, &[], &[])?;
-                        ppr.sect_pr = Some(sect_pr);
-                    } else if !Self::parse_property_element(e, context, &mut ppr)? {
-                        ppr.has_unmodeled_properties = true;
-                    }
-                }
-                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"pPr") => {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:pPr".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(ppr)
-    }
-
-    fn parse_property_element(
-        e: &BytesStart<'_>,
-        context: &NamespaceContext,
-        ppr: &mut CT_PPr,
-    ) -> Result<bool> {
-        let element_context = context.with_element(e);
-        let allowed_word_attributes: &[&[u8]];
-        if matches_word_element(e, context, b"pStyle") {
-            ppr.style_id = get_val_attr_with_context(e, &element_context)?;
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"jc") {
-            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
-                ppr.jc = Some(ST_Jc::from_str(&val)?);
-            }
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"spacing") {
-            for attr in e.attributes() {
-                let attr = attr?;
-                let key = attr.key.as_ref();
-                let val_str = std::str::from_utf8(&attr.value)?;
-                if matches_word_attribute(key, &element_context, b"before") {
-                    ppr.space_before = Some(Twips(val_str.parse()?));
-                } else if matches_word_attribute(key, &element_context, b"after") {
-                    ppr.space_after = Some(Twips(val_str.parse()?));
-                } else if matches_word_attribute(key, &element_context, b"line") {
-                    ppr.line_spacing = Some(Twips(val_str.parse()?));
-                } else if matches_word_attribute(key, &element_context, b"lineRule") {
-                    ppr.line_rule = Some(val_str.to_string());
-                } else if matches_word_attribute(key, &element_context, b"beforeAutospacing") {
-                    ppr.before_autospacing = Some(val_str == "1" || val_str == "true");
-                } else if matches_word_attribute(key, &element_context, b"afterAutospacing") {
-                    ppr.after_autospacing = Some(val_str == "1" || val_str == "true");
-                }
-            }
-            allowed_word_attributes = &[
-                b"before",
-                b"after",
-                b"line",
-                b"lineRule",
-                b"beforeAutospacing",
-                b"afterAutospacing",
-            ];
-        } else if matches_word_element(e, context, b"ind") {
-            for attr in e.attributes() {
-                let attr = attr?;
-                let key = attr.key.as_ref();
-                let val_str = std::str::from_utf8(&attr.value)?;
-                if matches_word_attribute(key, &element_context, b"left")
-                    || matches_word_attribute(key, &element_context, b"start")
-                {
-                    ppr.ind_left = Some(Twips(val_str.parse()?));
-                } else if matches_word_attribute(key, &element_context, b"right")
-                    || matches_word_attribute(key, &element_context, b"end")
-                {
-                    ppr.ind_right = Some(Twips(val_str.parse()?));
-                } else if matches_word_attribute(key, &element_context, b"firstLine") {
-                    ppr.ind_first_line = Some(Twips(val_str.parse()?));
-                } else if matches_word_attribute(key, &element_context, b"hanging") {
-                    ppr.ind_hanging = Some(Twips(val_str.parse()?));
-                }
-            }
-            allowed_word_attributes = &[
-                b"left",
-                b"start",
-                b"right",
-                b"end",
-                b"firstLine",
-                b"hanging",
-            ];
-        } else if matches_word_element(e, context, b"keepNext") {
-            ppr.keep_next = Some(parse_toggle(e, &element_context)?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"keepLines") {
-            ppr.keep_lines = Some(parse_toggle(e, &element_context)?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"pageBreakBefore") {
-            ppr.page_break_before = Some(parse_toggle(e, &element_context)?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"widowControl") {
-            ppr.widow_control = Some(parse_toggle(e, &element_context)?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"suppressAutoHyphens") {
-            ppr.suppress_auto_hyphens = Some(parse_toggle(e, &element_context)?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"outlineLvl") {
-            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
-                ppr.outline_lvl = Some(val.parse()?);
-            }
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"shd") {
-            ppr.shading = Some(CT_Shd::from_xml_attrs_with_context(e, context)?);
-            allowed_word_attributes = &[b"val", b"color", b"fill"];
-        } else {
-            return Ok(false);
-        }
-        ppr.has_unmodeled_properties |=
-            has_unmodeled_attributes(e, context, allowed_word_attributes, &[])?;
-        Ok(true)
-    }
-
-    fn parse_num_pr(
-        reader: &mut Reader<&[u8]>,
-        context: &NamespaceContext,
-        ppr: &mut CT_PPr,
-    ) -> Result<()> {
-        let mut buf = Vec::new();
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    if !Self::parse_num_property(e, context, ppr)? {
-                        ppr.has_unmodeled_properties = true;
-                    }
-                }
-                Ok(Event::Start(ref e)) => {
-                    if !Self::parse_num_property(e, context, ppr)? {
-                        ppr.has_unmodeled_properties = true;
-                    }
-                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
-                }
-                Ok(Event::End(ref e))
-                    if matches_word_name(e.name().as_ref(), context, b"numPr") =>
-                {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:numPr".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-        Ok(())
-    }
-
-    fn parse_num_property(
-        e: &BytesStart<'_>,
-        context: &NamespaceContext,
-        ppr: &mut CT_PPr,
-    ) -> Result<bool> {
-        let element_context = context.with_element(e);
-        if matches_word_element(e, context, b"ilvl") {
-            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
-                ppr.num_ilvl = Some(val.parse()?);
-            }
-        } else if matches_word_element(e, context, b"numId") {
-            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
-                ppr.num_id = Some(val.parse()?);
-            }
-        } else {
-            return Ok(false);
-        }
-        ppr.has_unmodeled_properties |= has_unmodeled_attributes(e, context, &[b"val"], &[])?;
-        Ok(true)
+        let element = parse_reader_element(reader, context, Some(W_NS), "pPr", [])?;
+        Self::from_strict_xml(element)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -555,7 +477,7 @@ impl CT_PPr {
     /// Merge another CT_PPr into this one (non-None fields override).
     /// Used for style inheritance.
     pub fn merge_from(&mut self, other: &CT_PPr) {
-        self.has_unmodeled_properties |= other.has_unmodeled_properties;
+        self.completeness.extend(other.completeness.clone());
         if other.style_id.is_some() {
             self.style_id = other.style_id.clone();
         }
@@ -632,8 +554,8 @@ impl CT_PPr {
 #[derive(Debug, Clone, Default, PartialEq)]
 #[allow(non_snake_case)]
 pub struct CT_RPr {
-    /// Whether this group contained a Word property the reader does not model.
-    pub has_unmodeled_properties: bool,
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     /// Character style ID (rStyle)
     pub style_id: Option<String>,
     /// Font name for ASCII range (rFonts/@w:ascii)
@@ -692,6 +614,146 @@ pub struct CT_RPr {
 
 #[allow(non_snake_case)]
 impl CT_RPr {
+    pub(crate) fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut properties = Self::default();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let recognized = [
+                    "rStyle",
+                    "rFonts",
+                    "b",
+                    "bCs",
+                    "i",
+                    "iCs",
+                    "u",
+                    "strike",
+                    "dstrike",
+                    "sz",
+                    "szCs",
+                    "color",
+                    "highlight",
+                    "caps",
+                    "smallCaps",
+                    "vertAlign",
+                    "spacing",
+                    "w",
+                    "position",
+                    "shd",
+                    "vanish",
+                ]
+                .into_iter()
+                .find(|local| child.is_named(Some(W_NS), local));
+                let Some(local) = recognized else {
+                    continue;
+                };
+                let child = take_element_child(cursor, index, local)?;
+                let completeness = properties.parse_strict_property(local, child)?;
+                descendants.push(completeness);
+            }
+            Ok(properties)
+        })?;
+        let (mut properties, leftovers) = parsed.into_parts();
+        properties.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(properties)
+    }
+
+    fn parse_strict_property(
+        &mut self,
+        local: &str,
+        element: StrictXmlElement,
+    ) -> Result<StrictXmlCompleteness> {
+        if local == "shd" {
+            let parsed = CT_Shd::from_strict_xml(element)?;
+            let (shading, leftovers) = parsed.into_parts();
+            self.shading = Some(shading);
+            return Ok(StrictXmlCompleteness::from_leftovers(leftovers));
+        }
+
+        let parsed = element.parse(|cursor| {
+            match local {
+                "rStyle" => self.style_id = cursor.take_attribute(Some(W_NS), "val"),
+                "rFonts" => {
+                    self.font_ascii = cursor.take_attribute(Some(W_NS), "ascii");
+                    self.font_hansi = cursor.take_attribute(Some(W_NS), "hAnsi");
+                    self.font_east_asia = cursor.take_attribute(Some(W_NS), "eastAsia");
+                    self.font_cs = cursor.take_attribute(Some(W_NS), "cs");
+                    self.font_ascii_theme = cursor.take_attribute(Some(W_NS), "asciiTheme");
+                    self.font_hansi_theme = cursor.take_attribute(Some(W_NS), "hAnsiTheme");
+                }
+                "b" => self.bold = Some(parse_strict_toggle(cursor)),
+                "bCs" => self.bold_cs = Some(parse_strict_toggle(cursor)),
+                "i" => self.italic = Some(parse_strict_toggle(cursor)),
+                "iCs" => self.italic_cs = Some(parse_strict_toggle(cursor)),
+                "u" => {
+                    self.underline = Some(
+                        cursor
+                            .take_attribute(Some(W_NS), "val")
+                            .map(|value| ST_Underline::from_str(&value))
+                            .transpose()?
+                            .unwrap_or(ST_Underline::Single),
+                    );
+                }
+                "strike" => self.strike = Some(parse_strict_toggle(cursor)),
+                "dstrike" => self.dstrike = Some(parse_strict_toggle(cursor)),
+                "sz" => {
+                    self.sz = cursor
+                        .take_attribute(Some(W_NS), "val")
+                        .map(|value| value.parse().map(HalfPoint))
+                        .transpose()?;
+                }
+                "szCs" => {
+                    self.sz_cs = cursor
+                        .take_attribute(Some(W_NS), "val")
+                        .map(|value| value.parse().map(HalfPoint))
+                        .transpose()?;
+                }
+                "color" => {
+                    self.color = cursor.take_attribute(Some(W_NS), "val");
+                    self.color_theme = cursor.take_attribute(Some(W_NS), "themeColor");
+                }
+                "highlight" => {
+                    self.highlight = cursor
+                        .take_attribute(Some(W_NS), "val")
+                        .map(|value| ST_HighlightColor::from_str(&value))
+                        .transpose()?;
+                }
+                "caps" => self.caps = Some(parse_strict_toggle(cursor)),
+                "smallCaps" => self.small_caps = Some(parse_strict_toggle(cursor)),
+                "vertAlign" => self.vert_align = cursor.take_attribute(Some(W_NS), "val"),
+                "spacing" => {
+                    self.spacing = cursor
+                        .take_attribute(Some(W_NS), "val")
+                        .map(|value| value.parse().map(Twips))
+                        .transpose()?;
+                }
+                "w" => {
+                    self.width_scale = cursor
+                        .take_attribute(Some(W_NS), "val")
+                        .map(|value| value.parse())
+                        .transpose()?;
+                }
+                "position" => {
+                    self.position = cursor
+                        .take_attribute(Some(W_NS), "val")
+                        .map(|value| value.parse())
+                        .transpose()?;
+                }
+                "vanish" => self.vanish = Some(parse_strict_toggle(cursor)),
+                _ => unreachable!(),
+            }
+            Ok(())
+        })?;
+        Ok(StrictXmlCompleteness::from_leftovers(parsed.leftovers))
+    }
+
+    pub fn has_unmodeled_properties(&self) -> bool {
+        !self.completeness.is_complete()
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_context(reader, &NamespaceContext::default())
     }
@@ -700,162 +762,8 @@ impl CT_RPr {
         reader: &mut Reader<&[u8]>,
         context: &NamespaceContext,
     ) -> Result<Self> {
-        let mut rpr = CT_RPr::default();
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    if !Self::parse_property_element(e, context, &mut rpr)? {
-                        rpr.has_unmodeled_properties = true;
-                    }
-                }
-                Ok(Event::Start(ref e)) => {
-                    if !Self::parse_property_element(e, context, &mut rpr)? {
-                        rpr.has_unmodeled_properties = true;
-                    }
-                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
-                }
-                Ok(Event::End(ref e)) if matches_word_name(e.name().as_ref(), context, b"rPr") => {
-                    break;
-                }
-                Ok(Event::Eof) => {
-                    return Err(OxmlError::MissingElement("closing w:rPr".to_string()));
-                }
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(rpr)
-    }
-
-    fn parse_property_element(
-        e: &BytesStart<'_>,
-        context: &NamespaceContext,
-        rpr: &mut CT_RPr,
-    ) -> Result<bool> {
-        let element_context = context.with_element(e);
-        let allowed_word_attributes: &[&[u8]];
-        if matches_word_element(e, context, b"rStyle") {
-            rpr.style_id = get_val_attr_with_context(e, &element_context)?;
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"rFonts") {
-            for attr in e.attributes() {
-                let attr = attr?;
-                let key = attr.key.as_ref();
-                let val = std::str::from_utf8(&attr.value)?.to_string();
-                if matches_word_attribute(key, &element_context, b"ascii") {
-                    rpr.font_ascii = Some(val);
-                } else if matches_word_attribute(key, &element_context, b"hAnsi") {
-                    rpr.font_hansi = Some(val);
-                } else if matches_word_attribute(key, &element_context, b"eastAsia") {
-                    rpr.font_east_asia = Some(val);
-                } else if matches_word_attribute(key, &element_context, b"cs") {
-                    rpr.font_cs = Some(val);
-                } else if matches_word_attribute(key, &element_context, b"asciiTheme") {
-                    rpr.font_ascii_theme = Some(val);
-                } else if matches_word_attribute(key, &element_context, b"hAnsiTheme") {
-                    rpr.font_hansi_theme = Some(val);
-                }
-            }
-            allowed_word_attributes = &[
-                b"ascii",
-                b"hAnsi",
-                b"eastAsia",
-                b"cs",
-                b"asciiTheme",
-                b"hAnsiTheme",
-            ];
-        } else if matches_word_element(e, context, b"b") {
-            rpr.bold = Some(parse_toggle(e, &element_context)?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"bCs") {
-            rpr.bold_cs = Some(parse_toggle(e, &element_context)?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"i") {
-            rpr.italic = Some(parse_toggle(e, &element_context)?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"iCs") {
-            rpr.italic_cs = Some(parse_toggle(e, &element_context)?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"u") {
-            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
-                rpr.underline = Some(ST_Underline::from_str(&val)?);
-            } else {
-                rpr.underline = Some(ST_Underline::Single);
-            }
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"strike") {
-            rpr.strike = Some(parse_toggle(e, &element_context)?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"dstrike") {
-            rpr.dstrike = Some(parse_toggle(e, &element_context)?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"sz") {
-            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
-                rpr.sz = Some(HalfPoint(val.parse()?));
-            }
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"szCs") {
-            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
-                rpr.sz_cs = Some(HalfPoint(val.parse()?));
-            }
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"color") {
-            for attr in e.attributes() {
-                let attr = attr?;
-                let key = attr.key.as_ref();
-                let v = std::str::from_utf8(&attr.value)?.to_string();
-                if matches_word_attribute(key, &element_context, b"val") {
-                    rpr.color = Some(v);
-                } else if matches_word_attribute(key, &element_context, b"themeColor") {
-                    rpr.color_theme = Some(v);
-                }
-            }
-            allowed_word_attributes = &[b"val", b"themeColor"];
-        } else if matches_word_element(e, context, b"highlight") {
-            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
-                rpr.highlight = Some(ST_HighlightColor::from_str(&val)?);
-            }
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"caps") {
-            rpr.caps = Some(parse_toggle(e, &element_context)?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"smallCaps") {
-            rpr.small_caps = Some(parse_toggle(e, &element_context)?);
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"vertAlign") {
-            rpr.vert_align = get_val_attr_with_context(e, &element_context)?;
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"spacing") {
-            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
-                rpr.spacing = Some(Twips(val.parse()?));
-            }
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"w") {
-            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
-                rpr.width_scale = Some(val.parse()?);
-            }
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"position") {
-            if let Some(val) = get_val_attr_with_context(e, &element_context)? {
-                rpr.position = Some(val.parse()?);
-            }
-            allowed_word_attributes = &[b"val"];
-        } else if matches_word_element(e, context, b"shd") {
-            rpr.shading = Some(CT_Shd::from_xml_attrs_with_context(e, context)?);
-            allowed_word_attributes = &[b"val", b"color", b"fill"];
-        } else if matches_word_element(e, context, b"vanish") {
-            rpr.vanish = Some(parse_toggle(e, &element_context)?);
-            allowed_word_attributes = &[b"val"];
-        } else {
-            return Ok(false);
-        }
-        rpr.has_unmodeled_properties |=
-            has_unmodeled_attributes(e, context, allowed_word_attributes, &[])?;
-        Ok(true)
+        let element = parse_reader_element(reader, context, Some(W_NS), "rPr", [])?;
+        Self::from_strict_xml(element)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -1025,7 +933,7 @@ impl CT_RPr {
     /// Merge another CT_RPr into this one (non-None fields override).
     /// Used for style inheritance.
     pub fn merge_from(&mut self, other: &CT_RPr) {
-        self.has_unmodeled_properties |= other.has_unmodeled_properties;
+        self.completeness.extend(other.completeness.clone());
         if other.style_id.is_some() {
             self.style_id = other.style_id.clone();
         }
@@ -1110,23 +1018,30 @@ impl CT_RPr {
     }
 }
 
-pub(crate) fn get_val_attr_with_context(
-    e: &BytesStart,
-    context: &NamespaceContext,
-) -> Result<Option<String>> {
-    for attr in e.attributes() {
-        let attr = attr?;
-        if matches_word_attribute(attr.key.as_ref(), context, b"val") {
-            return Ok(Some(std::str::from_utf8(&attr.value)?.to_string()));
-        }
-    }
-    Ok(None)
+/// Parse a toggle element (like `<w:b/>` or `<w:b w:val="false"/>`).
+
+fn parse_strict_toggle(cursor: &mut StrictXmlCursor) -> bool {
+    let value = cursor.take_attribute(Some(W_NS), "val");
+    ST_OnOff::from_str_or_default(value.as_deref()).is_on()
 }
 
-/// Parse a toggle element (like `<w:b/>` or `<w:b w:val="false"/>`).
-fn parse_toggle(e: &BytesStart, context: &NamespaceContext) -> Result<bool> {
-    let val = get_val_attr_with_context(e, context)?;
-    Ok(ST_OnOff::from_str_or_default(val.as_deref()).is_on())
+fn take_twips_attribute(cursor: &mut StrictXmlCursor, local: &str) -> Result<Option<Twips>> {
+    cursor
+        .take_attribute(Some(W_NS), local)
+        .map(|value| value.parse().map(Twips))
+        .transpose()
+        .map_err(Into::into)
+}
+
+fn take_element_child(
+    cursor: &mut StrictXmlCursor,
+    index: usize,
+    local: &str,
+) -> Result<StrictXmlElement> {
+    cursor
+        .take_child(index)
+        .and_then(StrictXmlNode::into_element)
+        .ok_or_else(|| OxmlError::MissingElement(format!("w:{local}")))
 }
 
 /// Write a toggle element.
@@ -1253,8 +1168,8 @@ mod tests {
         let ppr = parse_ppr(r#"<w:contextualSpacing/><x:ignored xmlns:x="urn:foreign"/>"#);
         let rpr = parse_rpr(r#"<w:rtl/><x:ignored xmlns:x="urn:foreign"/>"#);
 
-        assert!(ppr.has_unmodeled_properties);
-        assert!(rpr.has_unmodeled_properties);
+        assert!(ppr.has_unmodeled_properties());
+        assert!(rpr.has_unmodeled_properties());
     }
 
     #[test]
@@ -1264,8 +1179,8 @@ mod tests {
             r#"<w14:textOutline xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"/>"#,
         );
 
-        assert!(ppr.has_unmodeled_properties);
-        assert!(rpr.has_unmodeled_properties);
+        assert!(ppr.has_unmodeled_properties());
+        assert!(rpr.has_unmodeled_properties());
     }
 
     #[test]
@@ -1277,10 +1192,10 @@ mod tests {
         let rpr = parse_rpr(r#"<w:color w:val="FF0000" w:themeTint="80"/>"#);
 
         assert_eq!(ppr.space_before, Some(Twips(240)));
-        assert!(ppr.borders.unwrap().top.is_some());
-        assert!(ppr.has_unmodeled_properties);
+        assert!(ppr.borders.as_ref().unwrap().top.is_some());
+        assert!(ppr.has_unmodeled_properties());
         assert_eq!(rpr.color, Some("FF0000".to_string()));
-        assert!(rpr.has_unmodeled_properties);
+        assert!(rpr.has_unmodeled_properties());
     }
 
     #[test]

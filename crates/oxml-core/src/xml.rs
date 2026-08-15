@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use quick_xml::Writer;
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesCData, BytesDecl, BytesStart, Event};
 use quick_xml::reader::Reader;
@@ -43,6 +44,10 @@ pub struct StrictXmlAttribute {
 impl StrictXmlAttribute {
     pub fn value(&self) -> &str {
         &self.value
+    }
+
+    pub fn namespace_uri(&self) -> Option<&str> {
+        self.name.namespace_uri.as_deref()
     }
 
     pub fn is_named(&self, namespace_uri: Option<&str>, local: &str) -> bool {
@@ -98,6 +103,31 @@ impl StrictXmlElement {
 
     pub fn into_raw_xml(self) -> RawXml {
         self.raw_xml
+    }
+
+    pub fn raw_xml(&self) -> &RawXml {
+        &self.raw_xml
+    }
+
+    pub fn attribute(&self, namespace_uri: Option<&str>, local: &str) -> Option<&str> {
+        self.attributes
+            .iter()
+            .find(|attribute| attribute.is_named(namespace_uri, local))
+            .map(StrictXmlAttribute::value)
+    }
+
+    pub fn children(&self) -> &[StrictXmlNode] {
+        &self.children
+    }
+
+    pub fn text_content(&self) -> String {
+        self.children
+            .iter()
+            .filter_map(|child| match child {
+                StrictXmlNode::Text(text) => Some(text.as_str()),
+                StrictXmlNode::Element(_) => None,
+            })
+            .collect()
     }
 
     pub fn parse<T>(
@@ -157,6 +187,154 @@ impl StrictXmlDocument {
     }
 }
 
+/// Reconstruct and strictly parse the element whose start event was already
+/// consumed from `reader`.
+///
+/// Compatibility entry points in typed crates use this bridge while retaining
+/// their historical `Reader<&[u8]>` signatures. Event handling and namespace
+/// reconstruction remain confined to the strict substrate.
+pub fn parse_reader_element(
+    reader: &mut Reader<&[u8]>,
+    context: &NamespaceContext,
+    namespace_uri: Option<&str>,
+    local: &str,
+    attributes: impl IntoIterator<Item = (String, String)>,
+) -> Result<StrictXmlElement> {
+    let mut depth = 0usize;
+    let mut body = Writer::new(Vec::new());
+    let mut buffer = Vec::new();
+    let qualified_name = loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                depth = depth.checked_add(1).ok_or_else(|| {
+                    OxmlError::InvalidValue("XML fragment depth overflow".to_string())
+                })?;
+                body.write_event(Event::Start(element.into_owned()))?;
+            }
+            Event::End(element) if depth == 0 => {
+                let qualified_name = std::str::from_utf8(element.name().as_ref())?.to_string();
+                body.write_event(Event::End(element.into_owned()))?;
+                break qualified_name;
+            }
+            Event::End(element) => {
+                depth -= 1;
+                body.write_event(Event::End(element.into_owned()))?;
+            }
+            Event::Eof => {
+                return Err(OxmlError::MissingElement(format!("closing {local}")));
+            }
+            event => body.write_event(event.into_owned())?,
+        }
+        buffer.clear();
+    };
+    let mut output = Vec::new();
+    {
+        let mut writer = Writer::new(&mut output);
+        let mut start = BytesStart::new(qualified_name.as_str());
+        for (prefix, uri) in context.bindings() {
+            if prefix == "xml" {
+                continue;
+            }
+            let name = if prefix.is_empty() {
+                "xmlns".to_string()
+            } else {
+                format!("xmlns:{prefix}")
+            };
+            start.push_attribute((name.as_str(), uri.as_str()));
+        }
+        if let Some((prefix, _)) = qualified_name.split_once(':')
+            && context.namespace_uri(prefix).is_none()
+            && let Some(namespace_uri) = namespace_uri
+        {
+            let name = format!("xmlns:{prefix}");
+            start.push_attribute((name.as_str(), namespace_uri));
+        }
+        let attributes: Vec<_> = attributes.into_iter().collect();
+        for (name, value) in &attributes {
+            start.push_attribute((name.as_str(), value.as_str()));
+        }
+        writer.write_event(Event::Start(start))?;
+    }
+    output.extend_from_slice(&body.into_inner());
+    let root = StrictXmlDocument::parse(&output)?.into_root();
+    if !root.is_named(namespace_uri, local) {
+        return Err(OxmlError::UnexpectedElement(qualified_name));
+    }
+    Ok(root)
+}
+
+pub fn parse_reader_started_element(
+    reader: &mut Reader<&[u8]>,
+    context: &NamespaceContext,
+    namespace_uri: Option<&str>,
+    local: &str,
+    start: &BytesStart<'_>,
+) -> Result<StrictXmlElement> {
+    let context = context.try_with_element(start)?;
+    let mut attributes = Vec::new();
+    for attribute in start.attributes() {
+        let attribute = attribute?;
+        let name = std::str::from_utf8(attribute.key.as_ref())?;
+        if name == "xmlns" || name.starts_with("xmlns:") {
+            continue;
+        }
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())?
+            .into_owned();
+        attributes.push((name.to_string(), value));
+    }
+    parse_reader_element(reader, &context, namespace_uri, local, attributes)
+}
+
+/// Strictly parse an empty element supplied through a historical
+/// `BytesStart` compatibility API.
+pub fn parse_empty_started_element(
+    parent_context: &NamespaceContext,
+    namespace_uri: Option<&str>,
+    start: &BytesStart<'_>,
+) -> Result<StrictXmlElement> {
+    let context = parent_context.try_with_element(start)?;
+    let qualified_name = std::str::from_utf8(start.name().as_ref())?.to_string();
+    let mut output = Vec::new();
+    let mut writer = Writer::new(&mut output);
+    let mut element = BytesStart::new(qualified_name.as_str());
+    for (prefix, uri) in context.bindings() {
+        if prefix == "xml" {
+            continue;
+        }
+        let name = if prefix.is_empty() {
+            "xmlns".to_string()
+        } else {
+            format!("xmlns:{prefix}")
+        };
+        element.push_attribute((name.as_str(), uri.as_str()));
+    }
+    if let Some((prefix, _)) = qualified_name.split_once(':')
+        && context.namespace_uri(prefix).is_none()
+        && let Some(namespace_uri) = namespace_uri
+    {
+        let name = format!("xmlns:{prefix}");
+        element.push_attribute((name.as_str(), namespace_uri));
+    }
+    for attribute in start.attributes() {
+        let attribute = attribute?;
+        let name = std::str::from_utf8(attribute.key.as_ref())?;
+        if name == "xmlns" || name.starts_with("xmlns:") {
+            continue;
+        }
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())?
+            .into_owned();
+        element.push_attribute((name, value.as_str()));
+    }
+    writer.write_event(Event::Empty(element))?;
+    let root = StrictXmlDocument::parse(&output)?.into_root();
+    if root.raw_xml().name().namespace_uri.as_deref() != namespace_uri {
+        return Err(OxmlError::UnexpectedElement(qualified_name));
+    }
+    Ok(root)
+}
+
 /// Explicit unconsumed content returned by a typed element parser.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StrictXmlLeftovers {
@@ -173,9 +351,72 @@ pub struct StrictXmlParsed<T> {
     pub leftovers: StrictXmlLeftovers,
 }
 
+impl<T> StrictXmlParsed<T> {
+    pub fn into_parts(self) -> (T, StrictXmlLeftovers) {
+        (self.value, self.leftovers)
+    }
+}
+
 impl StrictXmlLeftovers {
     pub fn is_empty(&self) -> bool {
         self.attributes.is_empty() && self.children.is_empty()
+    }
+
+    pub fn append_attributes_to(&self, element: &mut BytesStart<'_>) {
+        for attribute in &self.attributes {
+            element.push_attribute((attribute.name.qualified.as_str(), attribute.value.as_str()));
+        }
+    }
+}
+
+/// Completeness derived from direct leftovers and already-parsed descendants.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StrictXmlCompleteness {
+    leftovers: StrictXmlLeftovers,
+    descendants: Vec<StrictXmlCompleteness>,
+}
+
+impl StrictXmlCompleteness {
+    pub fn new(
+        leftovers: StrictXmlLeftovers,
+        descendants: impl IntoIterator<Item = StrictXmlCompleteness>,
+    ) -> Self {
+        Self {
+            leftovers,
+            descendants: descendants.into_iter().collect(),
+        }
+    }
+
+    pub fn from_leftovers(leftovers: StrictXmlLeftovers) -> Self {
+        Self::new(leftovers, [])
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.leftovers.is_empty()
+            && self
+                .descendants
+                .iter()
+                .all(StrictXmlCompleteness::is_complete)
+    }
+
+    pub fn add_descendant(&mut self, descendant: StrictXmlCompleteness) {
+        self.descendants.push(descendant);
+    }
+
+    pub fn extend(&mut self, other: StrictXmlCompleteness) {
+        self.descendants.push(other);
+    }
+
+    pub fn leftovers(&self) -> &StrictXmlLeftovers {
+        &self.leftovers
+    }
+
+    pub fn descendants(&self) -> &[StrictXmlCompleteness] {
+        &self.descendants
+    }
+
+    pub fn append_direct_attributes_to(&self, element: &mut BytesStart<'_>) {
+        self.leftovers.append_attributes_to(element);
     }
 }
 
@@ -202,6 +443,14 @@ impl StrictXmlCursor {
             })
             .and_then(Option::take)
             .map(|attribute| attribute.value)
+    }
+
+    pub fn attribute(&self, namespace_uri: Option<&str>, local: &str) -> Option<&str> {
+        self.attributes.iter().find_map(|slot| {
+            slot.as_ref()
+                .filter(|attribute| attribute.is_named(namespace_uri, local))
+                .map(StrictXmlAttribute::value)
+        })
     }
 
     pub fn child(&self, index: usize) -> Option<&StrictXmlNode> {

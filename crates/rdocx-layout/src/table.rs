@@ -478,9 +478,11 @@ mod tests {
             document: rdocx_oxml::document::CT_Document {
                 body: rdocx_oxml::document::CT_Body {
                     content: Vec::new(),
+                    ..Default::default()
                 },
                 extra_namespaces: Vec::new(),
                 background_xml: None,
+                ..Default::default()
             },
             styles: styles.clone(),
             numbering: None,

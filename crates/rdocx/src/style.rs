@@ -49,6 +49,7 @@ impl StyleBuilder {
                 is_default: false,
                 ppr: None,
                 rpr: None,
+                ..Default::default()
             },
         }
     }
@@ -65,6 +66,7 @@ impl StyleBuilder {
                 is_default: false,
                 ppr: None,
                 rpr: None,
+                ..Default::default()
             },
         }
     }
@@ -138,6 +140,7 @@ mod tests {
                 color: Some("2E74B5".to_string()),
                 ..Default::default()
             }),
+            ..Default::default()
         });
 
         styles

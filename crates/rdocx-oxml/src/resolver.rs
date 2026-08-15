@@ -229,7 +229,7 @@ impl<'a> FormattingResolver<'a> {
 }
 
 fn apply_paragraph_values(target: &mut CT_PPr, source: &CT_PPr) {
-    target.has_unmodeled_properties |= source.has_unmodeled_properties;
+    target.completeness.extend(source.completeness.clone());
     macro_rules! apply {
         ($($field:ident),+ $(,)?) => {
             $(if source.$field.is_some() {
@@ -267,7 +267,7 @@ fn apply_paragraph_values(target: &mut CT_PPr, source: &CT_PPr) {
 }
 
 fn apply_direct_run_values(target: &mut CT_RPr, source: &CT_RPr) {
-    target.has_unmodeled_properties |= source.has_unmodeled_properties;
+    target.completeness.extend(source.completeness.clone());
     macro_rules! apply {
         ($($field:ident),+ $(,)?) => {
             $(if source.$field.is_some() {
@@ -333,6 +333,14 @@ mod tests {
     use crate::numbering::{CT_AbstractNum, CT_Lvl, CT_Num};
     use crate::styles::CT_DocDefaults;
     use crate::units::Twips;
+    use oxml_core::xml::{StrictXmlCompleteness, StrictXmlLeftovers, StrictXmlNode};
+
+    fn incomplete_completeness() -> StrictXmlCompleteness {
+        StrictXmlCompleteness::from_leftovers(StrictXmlLeftovers {
+            attributes: Vec::new(),
+            children: vec![StrictXmlNode::Text("unsupported".to_string())],
+        })
+    }
 
     fn style(style_id: &str, style_type: StyleType) -> CT_Style {
         CT_Style {
@@ -344,6 +352,7 @@ mod tests {
             is_default: false,
             ppr: None,
             rpr: None,
+            ..Default::default()
         }
     }
 
@@ -361,8 +370,10 @@ mod tests {
                     ..Default::default()
                 }),
                 ppr: None,
+                ..Default::default()
             }),
             styles: vec![paragraph_style],
+            ..Default::default()
         };
         let direct = CT_RPr {
             bold: Some(false),
@@ -380,16 +391,17 @@ mod tests {
     fn unmodeled_property_signals_survive_the_formatting_cascade() {
         let mut paragraph_style = style("Paragraph", StyleType::Paragraph);
         paragraph_style.ppr = Some(CT_PPr {
-            has_unmodeled_properties: true,
+            completeness: incomplete_completeness(),
             ..Default::default()
         });
         paragraph_style.rpr = Some(CT_RPr {
-            has_unmodeled_properties: true,
+            completeness: incomplete_completeness(),
             ..Default::default()
         });
         let styles = CT_Styles {
             doc_defaults: None,
             styles: vec![paragraph_style],
+            ..Default::default()
         };
         let direct = CT_PPr {
             style_id: Some("Paragraph".to_string()),
@@ -401,12 +413,12 @@ mod tests {
             resolver
                 .resolve_paragraph(Some(&direct))
                 .properties
-                .has_unmodeled_properties
+                .has_unmodeled_properties()
         );
         assert!(
             resolver
                 .resolve_run(Some(&direct), None)
-                .has_unmodeled_properties
+                .has_unmodeled_properties()
         );
     }
 
@@ -426,6 +438,7 @@ mod tests {
         let styles = CT_Styles {
             doc_defaults: None,
             styles: vec![base, derived],
+            ..Default::default()
         };
 
         let resolved =
@@ -445,6 +458,7 @@ mod tests {
         let styles = CT_Styles {
             doc_defaults: None,
             styles: vec![paragraph, character],
+            ..Default::default()
         };
         let resolved = FormattingResolver::new(&styles, None).resolve_run_sources(
             Some("Paragraph"),
@@ -465,6 +479,7 @@ mod tests {
         let styles = CT_Styles {
             doc_defaults: None,
             styles: vec![paragraph],
+            ..Default::default()
         };
         let direct = CT_PPr {
             style_id: Some("List".to_string()),
@@ -489,6 +504,7 @@ mod tests {
         let styles = CT_Styles {
             doc_defaults: None,
             styles: vec![paragraph],
+            ..Default::default()
         };
         let mut level = CT_Lvl::new(3);
         level.p_style = Some("Associated".to_string());
@@ -504,7 +520,9 @@ mod tests {
                 num_id: 7,
                 abstract_num_id: 2,
                 level_overrides: Vec::new(),
+                ..Default::default()
             }],
+            ..Default::default()
         };
         let direct = CT_PPr {
             style_id: Some("Associated".to_string()),
@@ -528,6 +546,7 @@ mod tests {
         let styles = CT_Styles {
             doc_defaults: None,
             styles: vec![base, derived],
+            ..Default::default()
         };
         let mut level = CT_Lvl::new(3);
         level.p_style = Some("Base".to_string());
@@ -539,7 +558,9 @@ mod tests {
                 num_id: 7,
                 abstract_num_id: 2,
                 level_overrides: Vec::new(),
+                ..Default::default()
             }],
+            ..Default::default()
         };
         let direct = CT_PPr {
             style_id: Some("Derived".to_string()),

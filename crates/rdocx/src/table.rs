@@ -127,6 +127,7 @@ impl<'a> Table<'a> {
             right: Some(edge.clone()),
             inside_h: Some(edge.clone()),
             inside_v: Some(edge),
+            ..Default::default()
         });
     }
 
@@ -149,6 +150,7 @@ impl<'a> Table<'a> {
             right: Some(right.as_twips()),
             bottom: Some(bottom.as_twips()),
             left: Some(left.as_twips()),
+            ..Default::default()
         });
     }
 
@@ -351,6 +353,7 @@ impl<'a> Cell<'a> {
         let run = CT_R {
             properties: None,
             content: vec![RunContent::Drawing(ParsedWithRaw::new(drawing))],
+            ..Default::default()
         };
         let mut p = CT_P::new();
         p.content.push(ParagraphChild::Run(run));
@@ -563,12 +566,12 @@ impl<'a> TableRef<'a> {
         self.inner
             .properties
             .as_ref()
-            .is_some_and(|properties| properties.has_unmodeled_properties)
+            .is_some_and(|properties| properties.has_unmodeled_properties())
             || self
                 .inner
                 .grid
                 .as_ref()
-                .is_some_and(|grid| grid.has_unmodeled_properties)
+                .is_some_and(|grid| grid.has_unmodeled_properties())
     }
 
     /// Get an immutable row reference.
@@ -702,7 +705,7 @@ impl<'a> RowRef<'a> {
         self.inner
             .properties
             .as_ref()
-            .is_some_and(|properties| properties.has_unmodeled_properties)
+            .is_some_and(|properties| properties.has_unmodeled_properties())
     }
 
     /// Number of table grid columns omitted before the first cell.
@@ -769,7 +772,7 @@ impl<'a> CellRef<'a> {
         self.inner
             .properties
             .as_ref()
-            .is_some_and(|properties| properties.has_unmodeled_properties)
+            .is_some_and(|properties| properties.has_unmodeled_properties())
     }
 
     /// Get the combined text of all paragraphs.
