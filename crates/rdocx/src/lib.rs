@@ -37,8 +37,9 @@ pub use error::{Error, Result};
 pub use oxml_core::Length;
 pub use oxml_opc::PackageReadLimits;
 pub use paragraph::{
-    Alignment, BorderStyle, HyperlinkRef, InlineContentRef, Paragraph, ParagraphBorderRef,
-    ParagraphContentRef, ParagraphRef, SectionBreak, SimpleFieldRef, TabAlignment, TabLeader,
+    Alignment, BorderStyle, HyperlinkRef, InlineContentRef, InsertionRef, Paragraph,
+    ParagraphBorderRef, ParagraphContentRef, ParagraphRef, SectionBreak, SimpleFieldRef,
+    TabAlignment, TabLeader,
 };
 pub use run::{
     BreakKind, DrawingKind, DrawingRef, DrawingRelationshipKind, FieldKind, Run, RunContentRef,

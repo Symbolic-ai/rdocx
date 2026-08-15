@@ -748,7 +748,75 @@ pub enum ParagraphChild {
     Run(CT_R),
     Hyperlink(CT_Hyperlink),
     SimpleField(CT_SimpleField),
+    Insertion(CT_RunTrackChange),
     Unsupported(RawXml),
+}
+
+/// Visible paragraph children carried by a tracked insertion.
+///
+/// The original subtree remains authoritative for serialization. The parsed
+/// children provide a borrowed reader view without detaching them from the
+/// source document's styles, relationships, or namespace context.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CT_RunTrackChange {
+    children: Vec<ParagraphChild>,
+    raw_xml: RawXml,
+}
+
+impl CT_RunTrackChange {
+    pub fn children(&self) -> &[ParagraphChild] {
+        &self.children
+    }
+
+    fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let raw_xml = element.clone().into_raw_xml();
+        let parsed = element.parse(|cursor| {
+            let mut children = Vec::new();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(element)) = cursor.child(index) else {
+                    continue;
+                };
+                let kind = if element.is_named(Some(W_NS), "r") {
+                    Some("r")
+                } else if element.is_named(Some(W_NS), "hyperlink") {
+                    Some("hyperlink")
+                } else if element.is_named(Some(W_NS), "fldSimple") {
+                    Some("fldSimple")
+                } else {
+                    None
+                };
+                let element = cursor
+                    .take_child(index)
+                    .and_then(StrictXmlNode::into_element)
+                    .ok_or_else(|| {
+                        OxmlError::MissingElement("tracked insertion child".to_string())
+                    })?;
+                let child = match kind {
+                    Some("r") => ParagraphChild::Run(CT_R::from_strict_xml(element)?),
+                    Some("hyperlink") => {
+                        ParagraphChild::Hyperlink(CT_Hyperlink::from_strict_xml(element)?)
+                    }
+                    Some("fldSimple") => {
+                        ParagraphChild::SimpleField(CT_SimpleField::from_strict_xml(element, 1)?)
+                    }
+                    None => ParagraphChild::Unsupported(element.into_raw_xml()),
+                    Some(_) => unreachable!(),
+                };
+                children.push(child);
+            }
+            Ok(children)
+        })?;
+        Ok(Self {
+            children: parsed.value,
+            raw_xml,
+        })
+    }
+
+    fn to_xml<W: Write>(&self, writer: &mut Writer<W>, context: &NamespaceContext) -> Result<()> {
+        self.raw_xml
+            .write_to_with_context(writer.get_mut(), context)?;
+        Ok(())
+    }
 }
 
 /// A compatibility projection over the ordered model.
@@ -787,7 +855,7 @@ impl CT_P {
                 ParagraphChild::Run(run) => run.text(),
                 ParagraphChild::Hyperlink(hyperlink) => hyperlink.text(),
                 ParagraphChild::SimpleField(field) => field.text(),
-                ParagraphChild::Unsupported(_) => String::new(),
+                ParagraphChild::Insertion(_) | ParagraphChild::Unsupported(_) => String::new(),
             })
             .collect()
     }
@@ -870,7 +938,7 @@ impl CT_P {
                 ParagraphChild::SimpleField(field) => {
                     run_index += count_inline_runs(field.children());
                 }
-                ParagraphChild::Unsupported(_) => {}
+                ParagraphChild::Insertion(_) | ParagraphChild::Unsupported(_) => {}
             }
         }
         spans
@@ -904,6 +972,9 @@ impl CT_P {
                     let field = CT_SimpleField::from_strict_xml(child, 1)?;
                     descendants.push(field.completeness.clone());
                     paragraph.content.push(ParagraphChild::SimpleField(field));
+                } else if child.is_named(Some(W_NS), "ins") {
+                    let insertion = CT_RunTrackChange::from_strict_xml(child)?;
+                    paragraph.content.push(ParagraphChild::Insertion(insertion));
                 } else {
                     let completeness = unmodeled_element_completeness(child.clone());
                     descendants.push(completeness);
@@ -949,6 +1020,7 @@ impl CT_P {
                 ParagraphChild::Run(run) => run.to_xml_with_context(writer, context)?,
                 ParagraphChild::Hyperlink(hyperlink) => hyperlink.to_xml(writer, context)?,
                 ParagraphChild::SimpleField(field) => field.to_xml(writer, context)?,
+                ParagraphChild::Insertion(insertion) => insertion.to_xml(writer, context)?,
                 ParagraphChild::Unsupported(raw) => {
                     raw.write_to_with_context(writer.get_mut(), context)?
                 }
@@ -1039,7 +1111,7 @@ fn collect_runs<'a>(child: &'a ParagraphChild, runs: &mut Vec<&'a CT_R>) {
         ParagraphChild::Run(run) => runs.push(run),
         ParagraphChild::Hyperlink(hyperlink) => collect_inline_runs(hyperlink.children(), runs),
         ParagraphChild::SimpleField(field) => collect_inline_runs(field.children(), runs),
-        ParagraphChild::Unsupported(_) => {}
+        ParagraphChild::Insertion(_) | ParagraphChild::Unsupported(_) => {}
     }
 }
 
@@ -1069,7 +1141,7 @@ fn count_paragraph_runs(child: &ParagraphChild) -> usize {
         ParagraphChild::Run(_) => 1,
         ParagraphChild::Hyperlink(hyperlink) => count_inline_runs(hyperlink.children()),
         ParagraphChild::SimpleField(field) => count_inline_runs(field.children()),
-        ParagraphChild::Unsupported(_) => 0,
+        ParagraphChild::Insertion(_) | ParagraphChild::Unsupported(_) => 0,
     }
 }
 
@@ -1078,7 +1150,7 @@ fn paragraph_run(child: &ParagraphChild, index: usize) -> Option<&CT_R> {
         ParagraphChild::Run(run) => (index == 0).then_some(run),
         ParagraphChild::Hyperlink(hyperlink) => inline_run(hyperlink.children(), index),
         ParagraphChild::SimpleField(field) => inline_run(field.children(), index),
-        ParagraphChild::Unsupported(_) => None,
+        ParagraphChild::Insertion(_) | ParagraphChild::Unsupported(_) => None,
     }
 }
 
@@ -1105,7 +1177,7 @@ fn paragraph_run_mut(child: &mut ParagraphChild, index: usize) -> Option<&mut CT
         ParagraphChild::Run(run) => (index == 0).then_some(run),
         ParagraphChild::Hyperlink(hyperlink) => inline_run_mut(hyperlink.children_mut(), index),
         ParagraphChild::SimpleField(field) => inline_run_mut(field.children_mut(), index),
-        ParagraphChild::Unsupported(_) => None,
+        ParagraphChild::Insertion(_) | ParagraphChild::Unsupported(_) => None,
     }
 }
 
@@ -1192,6 +1264,40 @@ mod tests {
             ParagraphChild::SimpleField(_)
         ));
         assert!(matches!(paragraph.content[4], ParagraphChild::Run(_)));
+    }
+
+    #[test]
+    fn tracked_insertions_expose_ordered_children_and_preserve_source_xml() {
+        let paragraph = parse_paragraph(concat!(
+            r#"<w:r><w:t>before</w:t></w:r>"#,
+            r#"<w:ins w:id="9" w:author="Editor" x:meta="keep" xmlns:x="urn:producer">"#,
+            r#"<w:r><w:t>inserted</w:t></w:r>"#,
+            r#"<w:hyperlink r:id="rId7"><w:r><w:t>link</w:t></w:r></w:hyperlink>"#,
+            r#"<w:fldSimple w:instr=" PAGE "><w:r><w:t>3</w:t></w:r></w:fldSimple>"#,
+            r#"<x:metadata>kept</x:metadata></w:ins>"#,
+            r#"<w:r><w:t>after</w:t></w:r>"#,
+        ));
+
+        let ParagraphChild::Insertion(insertion) = &paragraph.content[1] else {
+            panic!("expected tracked insertion")
+        };
+        assert!(matches!(insertion.children()[0], ParagraphChild::Run(_)));
+        let ParagraphChild::Hyperlink(link) = &insertion.children()[1] else {
+            panic!("expected hyperlink")
+        };
+        assert_eq!(link.rel_id(), Some("rId7"));
+        assert!(matches!(
+            insertion.children()[2],
+            ParagraphChild::SimpleField(_)
+        ));
+        assert!(matches!(
+            insertion.children()[3],
+            ParagraphChild::Unsupported(_)
+        ));
+
+        let xml = serialize(&paragraph);
+        assert!(xml.contains(r#"<w:ins w:id="9" w:author="Editor" x:meta="keep""#));
+        assert!(xml.contains(r#"<x:metadata>kept</x:metadata>"#));
     }
 
     #[test]

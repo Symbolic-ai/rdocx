@@ -2398,6 +2398,68 @@ fn ordered_paragraph_content_reports_simple_fields() {
 }
 
 #[test]
+fn tracked_insertions_keep_source_styles_relationships_and_child_order() {
+    let mut document = Document::new();
+    document.add_style(
+        StyleBuilder::paragraph("InsertedHidden", "Inserted Hidden").run_properties(CT_RPr {
+            bold: Some(true),
+            vanish: Some(true),
+            ..Default::default()
+        }),
+    );
+    let relationship_id =
+        document.add_hyperlink_relationship("https://example.com/tracked-insertion");
+    document.add_paragraph("seed").style("InsertedHidden");
+
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let replacement = format!(
+        concat!(
+            r#"<w:ins w:id="1" w:author="Editor" xmlns:x="urn:producer">"#,
+            r#"<w:r><w:t>inserted</w:t></w:r>"#,
+            r#"<w:hyperlink r:id="{relationship_id}"><w:r><w:t>link</w:t></w:r></w:hyperlink>"#,
+            r#"<w:fldSimple w:instr=" PAGE "><w:r><w:t>4</w:t></w:r></w:fldSimple>"#,
+            r#"<x:metadata>kept</x:metadata></w:ins>"#,
+        ),
+        relationship_id = relationship_id
+    );
+    let changed = xml.replace("<w:r>\n        <w:t>seed</w:t>\n      </w:r>", &replacement);
+    assert_ne!(changed, xml);
+
+    let bytes = replace_document_xml(&bytes, changed);
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let ParagraphContentRef::Insertion(insertion) = paragraph.content().next().unwrap() else {
+        panic!("expected tracked insertion")
+    };
+    let mut content = insertion.content();
+    let ParagraphContentRef::Run(run) = content.next().unwrap() else {
+        panic!("expected inserted run")
+    };
+    let properties = reopened.effective_run_properties(&paragraph, &run);
+    assert_eq!(properties.bold, Some(true));
+    assert_eq!(properties.vanish, Some(true));
+
+    let ParagraphContentRef::Hyperlink(link) = content.next().unwrap() else {
+        panic!("expected inserted hyperlink")
+    };
+    assert_eq!(
+        reopened.hyperlink_url(link.relationship_id().unwrap()),
+        Some("https://example.com/tracked-insertion".to_string())
+    );
+    assert!(matches!(
+        content.next().unwrap(),
+        ParagraphContentRef::SimpleField(_)
+    ));
+    assert!(matches!(
+        content.next().unwrap(),
+        ParagraphContentRef::UnsupportedXml(_)
+    ));
+    assert!(content.next().is_none());
+}
+
+#[test]
 fn paragraph_composites_expose_import_attributes() {
     let mut document = Document::new();
     document.add_paragraph("seed");

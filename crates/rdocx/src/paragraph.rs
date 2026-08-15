@@ -7,8 +7,8 @@ use rdocx_oxml::shared::{
     ST_Border, ST_Jc, ST_PageOrientation, ST_SectionType, ST_TabJc, ST_TabLeader,
 };
 use rdocx_oxml::text::{
-    BreakType, CT_Hyperlink, CT_P, CT_R, CT_SimpleField, FieldType, InlineChild, ParagraphChild,
-    ParsedWithRaw, RunContent,
+    BreakType, CT_Hyperlink, CT_P, CT_R, CT_RunTrackChange, CT_SimpleField, FieldType, InlineChild,
+    ParagraphChild, ParsedWithRaw, RunContent,
 };
 use rdocx_oxml::units::Twips;
 
@@ -153,6 +153,7 @@ pub enum ParagraphContentRef<'a> {
     Run(RunRef<'a>),
     Hyperlink(HyperlinkRef<'a>),
     SimpleField(SimpleFieldRef<'a>),
+    Insertion(InsertionRef<'a>),
     UnsupportedXml(UnsupportedXmlRef<'a>),
 }
 
@@ -161,6 +162,20 @@ pub enum InlineContentRef<'a> {
     Run(RunRef<'a>),
     SimpleField(SimpleFieldRef<'a>),
     UnsupportedXml(UnsupportedXmlRef<'a>),
+}
+
+/// An immutable tracked insertion whose visible children remain associated
+/// with the source document and paragraph.
+#[derive(Clone, Copy)]
+pub struct InsertionRef<'a> {
+    inner: &'a CT_RunTrackChange,
+}
+
+impl<'a> InsertionRef<'a> {
+    /// Iterate over the insertion's visible children in source XML order.
+    pub fn content(&self) -> impl Iterator<Item = ParagraphContentRef<'a>> {
+        self.inner.children().iter().map(paragraph_content_ref)
+    }
 }
 
 /// An immutable paragraph-level hyperlink.
@@ -249,6 +264,9 @@ fn paragraph_content_ref(child: &ParagraphChild) -> ParagraphContentRef<'_> {
         }
         ParagraphChild::SimpleField(field) => {
             ParagraphContentRef::SimpleField(SimpleFieldRef { inner: field })
+        }
+        ParagraphChild::Insertion(insertion) => {
+            ParagraphContentRef::Insertion(InsertionRef { inner: insertion })
         }
         ParagraphChild::Unsupported(raw) => {
             ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::new(raw))
@@ -955,7 +973,7 @@ impl<'a> ParagraphRef<'a> {
                 ParagraphChild::SimpleField(field) => {
                     run_index += field.run_count();
                 }
-                ParagraphChild::Unsupported(_) => {}
+                ParagraphChild::Insertion(_) | ParagraphChild::Unsupported(_) => {}
             }
         }
         spans

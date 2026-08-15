@@ -151,7 +151,7 @@ fn collect_paragraph_text(para: &CT_P, hyperlink_urls: &HashMap<String, String>)
             ParagraphChild::SimpleField(field) => {
                 out.push_str(&collect_inline_text(field.children()));
             }
-            ParagraphChild::Unsupported(_) => {}
+            ParagraphChild::Insertion(_) | ParagraphChild::Unsupported(_) => {}
         }
     }
     out

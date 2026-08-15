@@ -217,7 +217,7 @@ fn emit_paragraph_content(
             ParagraphChild::SimpleField(field) => {
                 emit_inline_children(out, field.children(), images, options);
             }
-            ParagraphChild::Unsupported(_) => {}
+            ParagraphChild::Insertion(_) | ParagraphChild::Unsupported(_) => {}
         }
     }
 }

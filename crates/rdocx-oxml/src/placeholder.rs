@@ -67,7 +67,9 @@ fn replace_literal_in_paragraph_children(
                     );
                 }
             }
-            ParagraphChild::Unsupported(_) | ParagraphChild::Run(_) => {}
+            ParagraphChild::Insertion(_)
+            | ParagraphChild::Unsupported(_)
+            | ParagraphChild::Run(_) => {}
         }
         index += 1;
     }
@@ -588,7 +590,9 @@ fn replace_regex_in_paragraph_children(
                         replace_regex_in_inline_children(field.children_mut(), re, replacement);
                 }
             }
-            ParagraphChild::Unsupported(_) | ParagraphChild::Run(_) => {}
+            ParagraphChild::Insertion(_)
+            | ParagraphChild::Unsupported(_)
+            | ParagraphChild::Run(_) => {}
         }
         index += 1;
     }

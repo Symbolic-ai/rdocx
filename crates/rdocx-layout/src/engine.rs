@@ -475,7 +475,7 @@ fn ordered_inline_items<'a>(para: &'a CT_P, input: &LayoutInput) -> Vec<OrderedI
             ParagraphChild::SimpleField(field) => {
                 items.push(OrderedInline::Field(field, None));
             }
-            ParagraphChild::Unsupported(_) => {}
+            ParagraphChild::Insertion(_) | ParagraphChild::Unsupported(_) => {}
         }
     }
     items
