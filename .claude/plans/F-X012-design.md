@@ -1,6 +1,6 @@
 # F-X012, Restore pinned CI toolchains
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S40
 **Size**: M
 **Depends on**: none
@@ -144,7 +144,7 @@ validation only.
 - [x] Add the authorized pinned LibreOffice installer to Test and MSRV.
 - [x] Add positive and mutation-sensitive workflow regressions.
 - [x] Prove the installers on macOS and disposable Ubuntu 24.04.
-- [ ] Run final clean-tree verification with all 28 hashes unchanged.
+- [x] Run final clean-tree verification with all 28 hashes unchanged.
 - [x] Obtain a fully green hosted pull-request CI run at the reviewed SHA.
 - [x] Obtain a clean independent microscope.
 

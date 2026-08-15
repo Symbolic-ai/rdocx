@@ -224,6 +224,7 @@ defended.
 | F-X009 | S39 | L | 4 | 1 | 2026-08-14 | Exact README coverage and usage examples for all 26 workspace packages |
 | F-X010 | S39 | S | 1 | 1 | 2026-08-14 | Published and verified the stable rdocx 0.6.0 family with rendered crate READMEs |
 | F-X011 | S39 | S | 1 | 1 | 2026-08-14 | Published and verified the complete rpptx 0.2.0 family with rendered crate READMEs |
+| F-X012 | S40 | M | 2 | 1 | 2026-08-15 | Pinned Poppler, Binaryen, uv, and LibreOffice CI toolchains |
 
 ## Velocity
 

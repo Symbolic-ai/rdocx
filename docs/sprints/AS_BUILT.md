@@ -5739,3 +5739,52 @@ uses the annotated tag that targets the reviewed SHA.
 `rpptx-v0.2.0` tags. Future incubating publication requires a fresh version and
 a separately approved `/release` invocation. PyPI and npm publication remain
 unauthorized.
+
+### F-X012, Restore pinned CI toolchains
+
+**Sprint.** S40
+**Completed.** 2026-08-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Hosted CI now provisions checksum-bound Poppler 26.01.0
+and LibreOffice 26.2.5.2 through shared installers with bounded streaming
+extraction and exact runtime identity checks. The broad Test and MSRV jobs pin
+uv 0.10.2, isolate its cache, use an 8 MiB test-thread stack, and run on Ubuntu
+24.04 with the complete LibreOffice runtime package set. The WASM job validates
+the official Binaryen 125 Linux identity after checksum verification.
+
+**Non-obvious choices.** Each installer refuses an already populated target
+prefix, so a version-looking binary cannot bypass provenance checks. Poppler
+builds only the three required tools from reviewed source. LibreOffice installs
+the checksum-bound core and Impress packages together with thirteen explicit
+Ubuntu runtime packages. Both paths fail closed on unsafe archives, resource
+ceilings, missing package members, or wrong executable identities.
+
+**Deviations from the design plan.** Hosted validation exposed two additional
+clean-runner requirements after the original Poppler and Binaryen correction.
+The approved plan was extended to pin uv and the stack budget, then to install
+the exact LibreOffice build and its Ubuntu runtime libraries. Nine microscope
+passes hardened the installer and workflow mutation contracts before the final
+clean review.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`, pinned rendering
+oracles and hosted gates. `docs/hld/14-development-backlog.md`, F-X012.
+`docs/hld/15-build-and-toolchain.md`, deterministic CI tool installation.
+
+**Tests.** Six focused workflow tests and all 46 workflow regressions pass.
+They exercise installer provenance, checksums, streaming member and byte
+ceilings, unsafe entries, exact runtime identities, required packages, job
+ordering, failure propagation, and successful short-circuit mutations. Hosted
+pull-request run `31853529961` passed all 14 jobs at reviewed commit
+`e96217f88b9dfd4612913787bc736f3627f73092`, including all 421 presentation
+fidelity slides and the LibreOffice viewer gates. Canonical `/verify --full`
+passes from the clean sprint tree, including exact 21-package dry-run archives,
+README examples, WASM targets, and supply-chain checks.
+
+**Hash harness.** Unchanged. All 28 entries match.
+
+**Notes for future sessions.** Keep the external tool versions, source URLs,
+checksums, archive bounds, runtime identities, and consumer-job assertions in
+one reviewed contract. A moving package-manager binary or a preinstalled tool
+is not equivalent evidence. The temporary hosted-validation pull request was
+closed without merge and its remote branch was deleted.
