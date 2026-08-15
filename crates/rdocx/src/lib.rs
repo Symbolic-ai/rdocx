@@ -27,19 +27,29 @@ pub mod paragraph;
 pub mod run;
 pub mod style;
 pub mod table;
+mod unsupported_xml;
 
 pub use document::{
-    AccessibilityIssue, Document, ImageInfo, IssueSeverity, LinkInfo, ListLevel, ListNumberFormat,
-    OutlineNode,
+    AccessibilityIssue, BodyContentRef, Document, ImageInfo, IssueSeverity, LinkInfo, ListLevel,
+    ListNumberFormat, NumberingLevel, OutlineNode,
 };
 pub use error::{Error, Result};
 pub use oxml_core::Length;
+pub use oxml_opc::PackageReadLimits;
 pub use paragraph::{
-    Alignment, BorderStyle, Paragraph, ParagraphRef, SectionBreak, TabAlignment, TabLeader,
+    Alignment, BorderStyle, HyperlinkRef, InlineContentRef, Paragraph, ParagraphBorderRef,
+    ParagraphContentRef, ParagraphRef, SectionBreak, SimpleFieldRef, TabAlignment, TabLeader,
 };
-pub use run::{Run, RunRef, UnderlineStyle};
+pub use run::{
+    BreakKind, DrawingKind, DrawingRef, DrawingRelationshipKind, FieldKind, Run, RunContentRef,
+    RunRef, UnderlineStyle,
+};
 pub use style::{Style, StyleBuilder};
-pub use table::{Cell, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment};
+pub use table::{
+    Cell, CellContentRef, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment,
+    VerticalMergeKind,
+};
+pub use unsupported_xml::UnsupportedXmlRef;
 
 #[cfg(test)]
 mod tests {

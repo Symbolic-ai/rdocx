@@ -9,7 +9,7 @@ use rdocx_html::{HtmlInput, HtmlOptions, ImageData, to_html_fragment, to_markdow
 use rdocx_oxml::document::CT_Document;
 use rdocx_oxml::properties::{CT_RPr, CT_Shd};
 use rdocx_oxml::styles::CT_Styles;
-use rdocx_oxml::text::{CT_P, CT_R, HyperlinkSpan};
+use rdocx_oxml::text::{CT_Hyperlink, CT_P, CT_R, ParagraphChild};
 
 fn input_from(doc: CT_Document, hyperlink_urls: HashMap<String, String>) -> HtmlInput {
     HtmlInput {
@@ -24,13 +24,9 @@ fn input_from(doc: CT_Document, hyperlink_urls: HashMap<String, String>) -> Html
 fn linked_paragraph(url: &str) -> HtmlInput {
     let mut doc = CT_Document::new();
     let mut p = CT_P::new();
-    p.runs.push(CT_R::new("click me"));
-    p.hyperlinks.push(HyperlinkSpan {
-        rel_id: Some("rId7".to_string()),
-        anchor: None,
-        run_start: 0,
-        run_end: 1,
-    });
+    let mut hyperlink = CT_Hyperlink::new(Some("rId7".to_string()), None);
+    hyperlink.add_run("click me");
+    p.add_hyperlink(hyperlink);
     doc.body.add_paragraph(p);
 
     input_from(doc, HashMap::from([("rId7".to_string(), url.to_string())]))
@@ -82,7 +78,7 @@ fn font_names_cannot_escape_the_style_attribute() {
         font_ascii: Some("Arial\" onmouseover=\"alert(1)".to_string()),
         ..Default::default()
     });
-    p.runs.push(run);
+    p.content.push(ParagraphChild::Run(run));
     doc.body.add_paragraph(p);
 
     let html = to_html_fragment(&input_from(doc, HashMap::new()), &HtmlOptions::default());
@@ -105,7 +101,7 @@ fn colours_must_be_hex_to_reach_the_output() {
         }),
         ..Default::default()
     });
-    p.runs.push(run);
+    p.content.push(ParagraphChild::Run(run));
     doc.body.add_paragraph(p);
 
     let html = to_html_fragment(&input_from(doc, HashMap::new()), &HtmlOptions::default());
@@ -124,7 +120,7 @@ fn valid_colours_are_preserved() {
         color: Some("FF0000".to_string()),
         ..Default::default()
     });
-    p.runs.push(run);
+    p.content.push(ParagraphChild::Run(run));
     doc.body.add_paragraph(p);
 
     let html = to_html_fragment(&input_from(doc, HashMap::new()), &HtmlOptions::default());
@@ -136,7 +132,7 @@ fn valid_colours_are_preserved() {
 fn image_content_type_is_escaped() {
     let mut doc = CT_Document::new();
     let mut p = CT_P::new();
-    p.runs.push(CT_R::new("caption"));
+    p.add_run("caption");
     doc.body.add_paragraph(p);
 
     let mut input = input_from(doc, HashMap::new());
@@ -156,8 +152,7 @@ fn image_content_type_is_escaped() {
 fn text_content_is_escaped() {
     let mut doc = CT_Document::new();
     let mut p = CT_P::new();
-    p.runs
-        .push(CT_R::new("<script>alert('xss')</script> & more"));
+    p.add_run("<script>alert('xss')</script> & more");
     doc.body.add_paragraph(p);
 
     let html = to_html_fragment(&input_from(doc, HashMap::new()), &HtmlOptions::default());

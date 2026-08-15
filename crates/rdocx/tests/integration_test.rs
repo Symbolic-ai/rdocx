@@ -1,19 +1,39 @@
 //! Integration tests for rdocx — end-to-end document creation and round-trip.
 
-use oxml_opc::OpcPackage;
 use oxml_opc::relationship::rel_types;
+use oxml_opc::{OpcPackage, PackageReadLimits};
 use rdocx::Document;
 use rdocx::paragraph::Alignment;
 use rdocx::table::VerticalAlignment;
 use rdocx::{
-    BorderStyle, Length, ListLevel, SectionBreak, StyleBuilder, TabAlignment, TabLeader,
-    UnderlineStyle,
+    BodyContentRef, BorderStyle, BreakKind, CellContentRef, DrawingKind, DrawingRelationshipKind,
+    FieldKind, Length, ListLevel, ListNumberFormat, ParagraphContentRef, RunContentRef,
+    SectionBreak, StyleBuilder, TabAlignment, TabLeader, UnderlineStyle, VerticalMergeKind,
 };
+use rdocx_oxml::properties::{CT_PPr, CT_RPr};
+use rdocx_oxml::shared::ST_Jc;
+use rdocx_oxml::units::Twips;
 
 fn document_xml(document: &mut Document) -> Vec<u8> {
     let bytes = document.to_bytes().unwrap();
     let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
     package.get_part("/word/document.xml").unwrap().to_vec()
+}
+
+fn replace_document_xml(bytes: &[u8], xml: String) -> Vec<u8> {
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    output.into_inner()
+}
+
+fn replace_numbering_xml(bytes: &[u8], xml: String) -> Vec<u8> {
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    package.set_part("/word/numbering.xml", xml.into_bytes());
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    output.into_inner()
 }
 
 const PNG_2_BY_3: &[u8] = &[
@@ -76,6 +96,125 @@ fn create_and_round_trip_simple_document() {
     let paras = doc2.paragraphs();
     assert_eq!(paras[0].text(), "Hello, World!");
     assert_eq!(paras[1].text(), "This is a test document.");
+}
+
+#[test]
+fn bounded_document_reader_rejects_package_expansion() {
+    let bytes = Document::new().to_bytes().unwrap();
+    let result = Document::from_bytes_with_limits(
+        &bytes,
+        PackageReadLimits {
+            max_entries: 1,
+            max_part_uncompressed_bytes: 1_024 * 1_024,
+            max_total_uncompressed_bytes: 2 * 1_024 * 1_024,
+        },
+    );
+    let error = match result {
+        Ok(_) => panic!("package limit should reject the document"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        rdocx::Error::Opc(oxml_opc::OpcError::PackageLimitExceeded {
+            kind: "entry count",
+            limit: 1
+        })
+    ));
+}
+
+#[test]
+fn valid_zip_with_truncated_document_xml_is_rejected() {
+    let bytes = Document::new().to_bytes().unwrap();
+    let truncated = concat!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+        r#"<w:body><w:p><w:r><w:t>partial</w:t></w:r></w:p>"#,
+    );
+    let bytes = replace_document_xml(&bytes, truncated.to_string());
+    assert!(Document::from_bytes(&bytes).is_err());
+}
+
+#[test]
+fn valid_zip_with_multiple_roots_or_duplicate_attributes_is_rejected() {
+    let mut document = Document::new();
+    document.add_paragraph("seed");
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let multiple_roots = format!(
+        r#"{xml}<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>"#
+    );
+    let duplicate_attributes = xml.replace(
+        "<w:r>\n        <w:t>seed</w:t>\n      </w:r>",
+        r#"<w:fldSimple w:instr=" PAGE " w:dirty="false" w:dirty="true"><w:r><w:t>1</w:t></w:r></w:fldSimple>"#,
+    );
+    assert_ne!(duplicate_attributes, xml);
+
+    for invalid in [multiple_roots, duplicate_attributes] {
+        let bytes = replace_document_xml(&bytes, invalid);
+        assert!(Document::from_bytes(&bytes).is_err());
+    }
+}
+
+#[test]
+fn dangling_styles_and_numbering_relationships_are_rejected() {
+    let mut document = Document::new();
+    document.add_bullet_list_item("item", 0);
+    let bytes = document.to_bytes().unwrap();
+
+    for part_name in ["/word/styles.xml", "/word/numbering.xml"] {
+        let mut package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        package.parts.remove(part_name);
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+
+        assert!(matches!(
+            Document::from_bytes(output.get_ref()),
+            Err(rdocx::Error::Opc(oxml_opc::OpcError::PartNotFound(ref missing)))
+                if missing == part_name
+        ));
+    }
+}
+
+#[test]
+fn document_reports_header_footer_and_section_layout_references() {
+    let mut document = Document::new();
+    assert!(!document.has_header_footer_references());
+
+    document.set_header("Visible header");
+    document.set_margins(
+        Length::inches(1.0),
+        Length::inches(1.0),
+        Length::inches(1.0),
+        Length::inches(1.0),
+    );
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+
+    assert!(reopened.has_header_footer_references());
+    assert!(reopened.has_section_layout_formatting());
+}
+
+#[test]
+fn hyperlink_url_rejects_internal_relationship_targets() {
+    let mut document = Document::new();
+    let rel_id = document.add_hyperlink_relationship("https://example.com");
+    document.add_paragraph("").add_hyperlink("link", &rel_id);
+    let bytes = document.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let relationship = package
+        .part_rels
+        .get_mut("/word/document.xml")
+        .unwrap()
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.id == rel_id)
+        .unwrap();
+    relationship.target_mode = None;
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+
+    let reopened = Document::from_bytes(&output.into_inner()).unwrap();
+    assert_eq!(reopened.hyperlink_url(&rel_id), None);
 }
 
 #[test]
@@ -282,6 +421,59 @@ fn facade_table_and_tristate_accessors_are_total() {
     assert_eq!(run.italic_value(), Some(true));
     assert_eq!(run.strike_value(), Some(false));
     assert_eq!(run.underline_code_value(), Some(10));
+}
+
+#[test]
+fn table_facade_exposes_vertical_merge_states() {
+    let mut document = Document::new();
+    let mut table = document.add_table(2, 1);
+    table.cell(0, 0).unwrap().set_v_merge_restart();
+    table.cell(1, 0).unwrap().set_v_merge_continue();
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let table = reopened.table(0).unwrap();
+    assert_eq!(
+        table.cell(0, 0).unwrap().v_merge(),
+        Some(VerticalMergeKind::Restart)
+    );
+    assert_eq!(
+        table.cell(1, 0).unwrap().v_merge(),
+        Some(VerticalMergeKind::Continue)
+    );
+}
+
+#[test]
+fn table_facade_reports_unsupported_children_and_row_grid_offsets() {
+    let mut document = Document::new();
+    document.add_table(1, 1);
+    let bytes = document.to_bytes().unwrap();
+    let xml = String::from_utf8(document_xml(&mut document)).unwrap();
+    let changed = xml
+        .replacen(
+            "</w:tblGrid>",
+            r#"</w:tblGrid><w:bookmarkStart w:id="1" w:name="table"/>"#,
+            1,
+        )
+        .replacen(
+            "<w:tr>",
+            concat!(
+                r#"<w:tr><w:trPr><w:gridBefore w:val="2"/>"#,
+                r#"<w:gridAfter w:val="1"/></w:trPr>"#,
+                r#"<w:bookmarkStart w:id="2" w:name="row"/>"#,
+            ),
+            1,
+        );
+    assert_ne!(changed, xml);
+
+    let reopened = Document::from_bytes(&replace_document_xml(&bytes, changed)).unwrap();
+    let table = reopened.table(0).unwrap();
+    let row = table.row(0).unwrap();
+
+    assert!(table.has_unsupported_content());
+    assert!(row.has_unsupported_content());
+    assert_eq!(row.grid_before(), Some(2));
+    assert_eq!(row.grid_after(), Some(1));
 }
 
 #[test]
@@ -973,6 +1165,25 @@ fn mixed_lists_round_trip() {
     assert_eq!(paras[1].text(), "Bullet 1");
     assert_eq!(paras[3].text(), "Transition");
     assert_eq!(paras[4].text(), "Step 1");
+}
+
+#[test]
+fn paragraph_facade_exposes_exact_bottom_border_facts() {
+    let mut document = Document::new();
+    document
+        .add_paragraph("")
+        .border_bottom(BorderStyle::Single, 8, "808080");
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let border = paragraph.bottom_border().unwrap();
+
+    assert_eq!(paragraph.border_count(), 1);
+    assert_eq!(border.style(), "single");
+    assert_eq!(border.size_eighths_pt(), Some(8));
+    assert_eq!(border.space_points(), Some(1));
+    assert_eq!(border.color(), Some("808080"));
 }
 
 #[test]
@@ -1993,4 +2204,539 @@ fn immutable_run_accessors_are_total() {
     assert_eq!(paragraph.run_count(), 2);
     assert_eq!(paragraph.run(1).unwrap().text(), " run");
     assert!(paragraph.run(2).is_none());
+}
+
+#[test]
+fn ordered_body_content_keeps_paragraphs_tables_and_unknown_xml_in_place() {
+    let mut document = Document::new();
+    document.add_paragraph("before");
+    document
+        .add_table(1, 1)
+        .cell(0, 0)
+        .unwrap()
+        .set_text("cell");
+    document.add_paragraph("after");
+
+    let bytes = document.to_bytes().unwrap();
+    let xml = String::from_utf8(
+        OpcPackage::from_reader(std::io::Cursor::new(&bytes))
+            .unwrap()
+            .get_part("/word/document.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let changed = xml.replacen(
+        "    </w:p>\n    <w:tbl>",
+        concat!(
+            "    </w:p>\n    <w:sdt><w:sdtContent><w:p><w:r><w:t>wrapped</w:t>",
+            "</w:r></w:p></w:sdtContent></w:sdt>\n    <w:tbl>"
+        ),
+        1,
+    );
+    assert_ne!(changed, xml);
+
+    let bytes = replace_document_xml(&bytes, changed);
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let content: Vec<_> = reopened.body_content().collect();
+    assert_eq!(content.len(), 4);
+    assert!(matches!(&content[0], BodyContentRef::Paragraph(p) if p.text() == "before"));
+    assert!(
+        matches!(&content[1], BodyContentRef::UnsupportedXml(raw) if String::from_utf8_lossy(raw).contains("wrapped"))
+    );
+    let BodyContentRef::UnsupportedXml(raw) = &content[1] else {
+        unreachable!()
+    };
+    assert_eq!(raw.qualified_name(), "w:sdt");
+    assert_eq!(raw.local_name(), "sdt");
+    assert_eq!(
+        raw.namespace_uri(),
+        Some("http://schemas.openxmlformats.org/wordprocessingml/2006/main")
+    );
+    assert_eq!(raw.namespace_uri_for_prefix("w"), raw.namespace_uri());
+    assert!(
+        matches!(&content[2], BodyContentRef::Table(table) if table.cell(0, 0).unwrap().text() == "cell")
+    );
+    assert!(matches!(&content[3], BodyContentRef::Paragraph(p) if p.text() == "after"));
+}
+
+#[test]
+fn ordered_run_content_keeps_unknown_xml_between_known_items() {
+    let mut document = Document::new();
+    document.add_paragraph("seed");
+
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let changed = xml.replace(
+        "<w:t>seed</w:t>",
+        concat!(
+            "<w:t>A</w:t><w:commentReference w:id=\"4\"/><w:tab/>",
+            "<w:br w:type=\"page\"/><w:footnoteReference w:id=\"7\"/>",
+            "<w:endnoteReference w:id=\"9\"/><w:t>B</w:t>"
+        ),
+    );
+    let bytes = replace_document_xml(&bytes, changed);
+    let mut reopened = Document::from_bytes(&bytes).unwrap();
+    {
+        let paragraph = reopened.paragraph(0).unwrap();
+        let run = paragraph.run(0).unwrap();
+        let content: Vec<_> = run.content().collect();
+
+        assert!(matches!(&content[0], RunContentRef::Text("A")));
+        assert!(
+            matches!(&content[1], RunContentRef::UnsupportedXml(raw) if String::from_utf8_lossy(raw).contains("commentReference"))
+        );
+        assert!(matches!(&content[2], RunContentRef::Tab));
+        assert!(matches!(&content[3], RunContentRef::Break(BreakKind::Page)));
+        assert!(matches!(&content[4], RunContentRef::FootnoteReference(7)));
+        assert!(matches!(&content[5], RunContentRef::EndnoteReference(9)));
+        assert!(matches!(&content[6], RunContentRef::Text("B")));
+    }
+    let round_trip_xml = String::from_utf8(document_xml(&mut reopened)).unwrap();
+    let text_a = round_trip_xml.find("<w:t>A</w:t>").unwrap();
+    let unknown = round_trip_xml.find("commentReference").unwrap();
+    let tab = round_trip_xml.find("<w:tab/>").unwrap();
+    assert!(text_a < unknown && unknown < tab);
+}
+
+#[test]
+fn ordered_run_content_reports_inline_drawings() {
+    let mut document = Document::new();
+    document
+        .add_picture_auto(PNG_2_BY_3, "two-by-three.png")
+        .unwrap();
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let run = paragraph.run(0).unwrap();
+    let drawing = run
+        .content()
+        .find_map(|item| match item {
+            RunContentRef::Drawing(drawing) => Some(drawing),
+            _ => None,
+        })
+        .expect("inline drawing");
+
+    assert!(drawing.is_inline());
+    assert!(!drawing.is_anchor());
+    assert!(!drawing.relationship_id().unwrap().is_empty());
+    assert_eq!(
+        reopened
+            .image_data(drawing.relationship_id().unwrap())
+            .unwrap(),
+        PNG_2_BY_3
+    );
+}
+
+#[test]
+fn ordered_run_content_distinguishes_linked_images() {
+    let mut document = Document::new();
+    document
+        .add_picture_auto(PNG_2_BY_3, "two-by-three.png")
+        .unwrap();
+
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let changed = xml.replacen("r:embed=", "r:link=", 1);
+    assert_ne!(changed, xml);
+
+    let bytes = replace_document_xml(&bytes, changed);
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let run = paragraph.run(0).unwrap();
+    let drawing = run
+        .content()
+        .find_map(|content| match content {
+            RunContentRef::Drawing(drawing) => Some(drawing),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(drawing.kind(), DrawingKind::Image);
+    assert_eq!(
+        drawing.relationship_kind(),
+        Some(DrawingRelationshipKind::Linked)
+    );
+    assert_eq!(reopened.images().len(), 1);
+    assert_eq!(
+        reopened.images()[0].relationship_kind,
+        DrawingRelationshipKind::Linked
+    );
+}
+
+#[test]
+fn ordered_paragraph_content_reports_simple_fields() {
+    let mut document = Document::new();
+    document.add_paragraph("seed");
+
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let changed = xml.replace(
+        "<w:r>\n        <w:t>seed</w:t>\n      </w:r>",
+        concat!(
+            "<w:fldSimple w:instr=\" PAGE \"><w:r><w:t>1</w:t></w:r>",
+            "</w:fldSimple>"
+        ),
+    );
+    assert_ne!(changed, xml);
+
+    let bytes = replace_document_xml(&bytes, changed);
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let field = paragraph
+        .content()
+        .find_map(|content| match content {
+            ParagraphContentRef::SimpleField(field) => Some(field),
+            _ => None,
+        })
+        .expect("simple field");
+    assert_eq!(field.kind(), FieldKind::Page);
+    assert_eq!(field.cached_text(), "1");
+}
+
+#[test]
+fn paragraph_composites_expose_import_attributes() {
+    let mut document = Document::new();
+    document.add_paragraph("seed");
+
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let changed = xml.replace(
+        "<w:r>\n        <w:t>seed</w:t>\n      </w:r>",
+        concat!(
+            "<w:hyperlink r:id=\"rId99\" w:tooltip=\"Open\" w:docLocation=\"section\" w:history=\"1\"><w:r><w:t>link</w:t></w:r></w:hyperlink>",
+            "<w:fldSimple w:instr=\" PAGE \" w:dirty=\"true\"><w:r><w:t>1</w:t></w:r></w:fldSimple>"
+        ),
+    );
+    assert_ne!(changed, xml);
+
+    let bytes = replace_document_xml(&bytes, changed);
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let mut content = paragraph.content();
+    let ParagraphContentRef::Hyperlink(link) = content.next().unwrap() else {
+        panic!("expected hyperlink")
+    };
+    assert_eq!(link.tooltip(), Some("Open"));
+    assert_eq!(link.doc_location(), Some("section"));
+    assert!(!link.has_unmodeled_semantic_attributes());
+
+    let ParagraphContentRef::SimpleField(field) = content.next().unwrap() else {
+        panic!("expected simple field")
+    };
+    assert_eq!(field.dirty(), Some(true));
+    assert!(!field.has_unmodeled_semantic_attributes());
+}
+
+#[test]
+fn hyperlink_spans_count_runs_nested_inside_simple_fields() {
+    let mut document = Document::new();
+    document.add_paragraph("seed");
+
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let changed = xml.replace(
+        "<w:r>\n        <w:t>seed</w:t>\n      </w:r>",
+        concat!(
+            "<w:hyperlink r:id=\"rId99\"><w:r><w:t>A</w:t></w:r>",
+            "<w:fldSimple w:instr=\" PAGE \"><w:r><w:t>B</w:t></w:r>",
+            "<w:fldSimple w:instr=\" NUMPAGES \"><w:r><w:t>C</w:t></w:r></w:fldSimple>",
+            "</w:fldSimple></w:hyperlink><w:r><w:t>D</w:t></w:r>"
+        ),
+    );
+    assert_ne!(changed, xml);
+
+    let bytes = replace_document_xml(&bytes, changed);
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    assert_eq!(paragraph.run_count(), 4);
+    assert_eq!(paragraph.hyperlink_spans(), vec![(0, 3, Some("rId99"))]);
+}
+
+#[test]
+fn ordered_cell_content_keeps_unknown_xml_between_paragraphs() {
+    let mut document = Document::new();
+    let mut table = document.add_table(1, 1);
+    let mut cell = table.cell(0, 0).unwrap();
+    cell.remove_first_empty_paragraph();
+    cell.add_paragraph("first");
+    cell.add_paragraph("second");
+
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let changed = xml.replacen(
+        "          </w:p>\n          <w:p>",
+        concat!(
+            "          </w:p>\n          <w:sdt><w:sdtContent><w:p><w:r><w:t>wrapped</w:t>",
+            "</w:r></w:p></w:sdtContent></w:sdt>\n          <w:p>"
+        ),
+        1,
+    );
+    assert_ne!(changed, xml);
+
+    let bytes = replace_document_xml(&bytes, changed);
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let table = reopened.table(0).unwrap();
+    let cell = table.cell(0, 0).unwrap();
+    let content: Vec<_> = cell.content().collect();
+    assert_eq!(content.len(), 3);
+    assert!(matches!(&content[0], CellContentRef::Paragraph(p) if p.text() == "first"));
+    assert!(
+        matches!(&content[1], CellContentRef::UnsupportedXml(raw) if String::from_utf8_lossy(raw).contains("wrapped"))
+    );
+    assert!(matches!(&content[2], CellContentRef::Paragraph(p) if p.text() == "second"));
+}
+
+#[test]
+fn numbering_level_reports_each_levels_format_and_start() {
+    let mut document = Document::new();
+    let num_id =
+        document.add_list_definition(&[ListLevel::bullet(), ListLevel::decimal().start(3)]);
+    document.add_paragraph("nested").numbering(num_id, 1);
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let bullet = reopened.numbering_level(num_id, 0).unwrap();
+    let ordered = reopened.numbering_level(num_id, 1).unwrap();
+
+    assert_eq!(bullet.level, 0);
+    assert_eq!(bullet.format, ListNumberFormat::Bullet);
+    assert_eq!(bullet.start, 1);
+    assert_eq!(ordered.level, 1);
+    assert_eq!(ordered.format, ListNumberFormat::Decimal);
+    assert_eq!(ordered.start, 3);
+    assert_eq!(ordered.level_text, Some("%2."));
+    let paragraph = reopened.paragraph(0).unwrap();
+    let properties = reopened.effective_paragraph_properties(&paragraph);
+    assert_eq!(properties.num_id, Some(num_id));
+    assert_eq!(properties.num_ilvl, Some(1));
+    assert_eq!(properties.ind_left, Some(Twips(1440)));
+    assert_eq!(properties.ind_hanging, Some(Twips(360)));
+    assert!(reopened.numbering_level(num_id, 9).is_none());
+    assert!(reopened.numbering_level(u32::MAX, 0).is_none());
+}
+
+#[test]
+fn numbering_level_resolves_num_style_link() {
+    let mut document = Document::new();
+    document.add_list_definition(&[ListLevel::decimal()]);
+    document.add_paragraph("linked").set_numbering(8, 0);
+    let bytes = document.to_bytes().unwrap();
+
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    package.set_part(
+        "/word/numbering.xml",
+        br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:abstractNum w:abstractNumId="1"><w:numStyleLink w:val="LinkedNumbering"/></w:abstractNum>
+          <w:abstractNum w:abstractNumId="2"><w:styleLink w:val="LinkedNumbering"/><w:lvl w:ilvl="0"><w:start w:val="4"/><w:numFmt w:val="bullet"/><w:lvlText w:val="-"/></w:lvl></w:abstractNum>
+          <w:num w:numId="8"><w:abstractNumId w:val="1"/></w:num>
+          <w:num w:numId="9"><w:abstractNumId w:val="2"/></w:num>
+        </w:numbering>"#
+            .to_vec(),
+    );
+    package.set_part(
+        "/word/styles.xml",
+        br#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:style w:type="numbering" w:styleId="LinkedNumbering"><w:pPr><w:numPr><w:numId w:val="9"/></w:numPr></w:pPr></w:style>
+        </w:styles>"#
+            .to_vec(),
+    );
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+
+    let reopened = Document::from_bytes(output.get_ref()).unwrap();
+    let level = reopened.numbering_level(8, 0).unwrap();
+    assert_eq!(level.format, ListNumberFormat::Bullet);
+    assert_eq!(level.start, 4);
+    assert_eq!(reopened.paragraph(0).unwrap().numbering(), Some((8, 0)));
+}
+
+#[test]
+fn effective_formatting_merges_defaults_styles_and_direct_overrides() {
+    let mut document = Document::new();
+    document.add_style(
+        StyleBuilder::paragraph("ImportBase", "Import Base")
+            .paragraph_properties(CT_PPr {
+                ind_left: Some(Twips(720)),
+                ..Default::default()
+            })
+            .run_properties(CT_RPr {
+                bold: Some(true),
+                ..Default::default()
+            }),
+    );
+    document.add_style(
+        StyleBuilder::paragraph("ImportDerived", "Import Derived")
+            .based_on("ImportBase")
+            .paragraph_properties(CT_PPr {
+                space_after: Some(Twips(240)),
+                ..Default::default()
+            })
+            .run_properties(CT_RPr {
+                italic: Some(true),
+                ..Default::default()
+            }),
+    );
+    document.add_style(
+        StyleBuilder::character("ImportCode", "Import Code").run_properties(CT_RPr {
+            color: Some("123456".to_string()),
+            ..Default::default()
+        }),
+    );
+    document
+        .add_paragraph("")
+        .style("ImportDerived")
+        .alignment(Alignment::Center)
+        .add_run("formatted")
+        .style("ImportCode")
+        .bold(false);
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let run = paragraph.run(0).unwrap();
+    let paragraph_properties = reopened.effective_paragraph_properties(&paragraph);
+    let run_properties = reopened.effective_run_properties(&paragraph, &run);
+
+    assert_eq!(paragraph_properties.ind_left, Some(Twips(720)));
+    assert_eq!(paragraph_properties.space_after, Some(Twips(240)));
+    assert_eq!(paragraph_properties.jc, Some(ST_Jc::Center));
+    assert_eq!(run_properties.font_ascii.as_deref(), Some("Calibri"));
+    assert_eq!(run_properties.bold, Some(false));
+    assert_eq!(run_properties.italic, Some(true));
+    assert_eq!(run_properties.color.as_deref(), Some("123456"));
+}
+
+#[test]
+fn paragraph_styles_override_numbering_level_properties() {
+    let mut document = Document::new();
+    let num_id = document.add_list_definition(&[ListLevel::decimal()]);
+    document.add_style(
+        StyleBuilder::paragraph("StyledList", "Styled List").paragraph_properties(CT_PPr {
+            ind_left: Some(Twips(1440)),
+            ..Default::default()
+        }),
+    );
+    document
+        .add_paragraph("styled")
+        .style("StyledList")
+        .numbering(num_id, 0);
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let properties = reopened.effective_paragraph_properties(&paragraph);
+    assert_eq!(properties.ind_left, Some(Twips(1440)));
+    assert_eq!(properties.ind_hanging, Some(Twips(360)));
+}
+
+#[test]
+fn direct_num_id_zero_removes_style_numbering() {
+    let mut document = Document::new();
+    let num_id = document.add_list_definition(&[ListLevel::decimal()]);
+    document.add_style(
+        StyleBuilder::paragraph("InheritedList", "Inherited List").paragraph_properties(CT_PPr {
+            num_id: Some(num_id),
+            num_ilvl: Some(0),
+            ..Default::default()
+        }),
+    );
+    document
+        .add_paragraph("not a list item")
+        .style("InheritedList")
+        .numbering(0, 0);
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let properties = reopened.effective_paragraph_properties(&paragraph);
+    assert_eq!(properties.num_id, Some(0));
+    assert_eq!(properties.num_ilvl, Some(0));
+}
+
+#[test]
+fn effective_run_properties_apply_style_toggles_then_direct_values() {
+    let mut document = Document::new();
+    document.add_style(
+        StyleBuilder::paragraph("ToggleParagraph", "Toggle Paragraph").run_properties(CT_RPr {
+            bold: Some(true),
+            italic: Some(true),
+            ..Default::default()
+        }),
+    );
+    document.add_style(
+        StyleBuilder::character("ToggleCharacter", "Toggle Character").run_properties(CT_RPr {
+            bold: Some(true),
+            italic: Some(false),
+            ..Default::default()
+        }),
+    );
+    let mut paragraph = document.add_paragraph("").style("ToggleParagraph");
+    paragraph.add_run("styles").style("ToggleCharacter");
+    paragraph
+        .add_run("direct")
+        .style("ToggleCharacter")
+        .bold(true);
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let style_only = paragraph.run(0).unwrap();
+    let direct = paragraph.run(1).unwrap();
+    let style_only_properties = reopened.effective_run_properties(&paragraph, &style_only);
+    let direct_properties = reopened.effective_run_properties(&paragraph, &direct);
+
+    assert_eq!(style_only_properties.bold, Some(false));
+    assert_eq!(style_only_properties.italic, Some(true));
+    assert_eq!(direct_properties.bold, Some(true));
+}
+
+#[test]
+fn style_associated_numbering_level_and_instance_override_are_effective() {
+    let mut document = Document::new();
+    let num_id = document.add_list_definition(&[ListLevel::decimal(), ListLevel::decimal()]);
+    document.add_style(
+        StyleBuilder::paragraph("AssociatedStyle", "Associated Style").paragraph_properties(
+            CT_PPr {
+                num_id: Some(num_id),
+                ..Default::default()
+            },
+        ),
+    );
+    document
+        .add_paragraph("associated")
+        .style("AssociatedStyle");
+
+    let bytes = document.to_bytes().unwrap();
+    let numbering_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="0">
+    <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl>
+    <w:lvl w:ilvl="1"><w:start w:val="2"/><w:numFmt w:val="decimalZero"/><w:pStyle w:val="AssociatedStyle"/><w:lvlText w:val="%2."/><w:pPr><w:ind w:left="1440" w:hanging="360"/></w:pPr></w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="{num_id}"><w:abstractNumId w:val="0"/><w:lvlOverride w:ilvl="1"><w:startOverride w:val="7"/></w:lvlOverride></w:num>
+</w:numbering>"#
+    );
+    let bytes = replace_numbering_xml(&bytes, numbering_xml);
+    let reopened = Document::from_bytes(&bytes).unwrap();
+
+    let level = reopened.numbering_level(num_id, 1).unwrap();
+    assert_eq!(
+        level.format,
+        ListNumberFormat::Other("decimalZero".to_string())
+    );
+    assert_eq!(level.format_name, "decimalZero");
+    assert_eq!(level.start, 7);
+    let paragraph = reopened.paragraph(0).unwrap();
+    let properties = reopened.effective_paragraph_properties(&paragraph);
+    assert_eq!(properties.num_id, Some(num_id));
+    assert_eq!(properties.num_ilvl, Some(1));
+    assert_eq!(properties.ind_left, Some(Twips(1440)));
 }

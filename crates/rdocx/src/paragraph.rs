@@ -6,11 +6,15 @@ use rdocx_oxml::properties::{CT_PPr, CT_Shd};
 use rdocx_oxml::shared::{
     ST_Border, ST_Jc, ST_PageOrientation, ST_SectionType, ST_TabJc, ST_TabLeader,
 };
-use rdocx_oxml::text::{BreakType, CT_P, CT_R, HyperlinkSpan, RunContent};
+use rdocx_oxml::text::{
+    BreakType, CT_Hyperlink, CT_P, CT_R, CT_SimpleField, FieldType, InlineChild, ParagraphChild,
+    ParsedWithRaw, RunContent,
+};
 use rdocx_oxml::units::Twips;
 
 use crate::Length;
-use crate::run::{Run, RunRef};
+use crate::UnsupportedXmlRef;
+use crate::run::{FieldKind, Run, RunRef};
 
 /// Paragraph alignment options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +75,34 @@ impl BorderStyle {
     }
 }
 
+/// An immutable paragraph border edge.
+#[derive(Debug, Clone, Copy)]
+pub struct ParagraphBorderRef<'a> {
+    inner: &'a CT_BorderEdge,
+}
+
+impl ParagraphBorderRef<'_> {
+    /// The OOXML border style name.
+    pub fn style(self) -> &'static str {
+        self.inner.val.to_str()
+    }
+
+    /// Border width in eighths of a point.
+    pub fn size_eighths_pt(self) -> Option<u32> {
+        self.inner.sz
+    }
+
+    /// Space between the border and content in points.
+    pub fn space_points(self) -> Option<u32> {
+        self.inner.space
+    }
+
+    /// Border color, normally a six-digit RGB hex value or `auto`.
+    pub fn color(&self) -> Option<&str> {
+        self.inner.color.as_deref()
+    }
+}
+
 /// Tab stop alignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabAlignment {
@@ -116,10 +148,136 @@ pub struct Paragraph<'a> {
     pub(crate) inner: &'a mut CT_P,
 }
 
+/// One direct child of a paragraph, in source XML order.
+pub enum ParagraphContentRef<'a> {
+    Run(RunRef<'a>),
+    Hyperlink(HyperlinkRef<'a>),
+    SimpleField(SimpleFieldRef<'a>),
+    UnsupportedXml(UnsupportedXmlRef<'a>),
+}
+
+/// One child within a hyperlink or simple field.
+pub enum InlineContentRef<'a> {
+    Run(RunRef<'a>),
+    SimpleField(SimpleFieldRef<'a>),
+    UnsupportedXml(UnsupportedXmlRef<'a>),
+}
+
+/// An immutable paragraph-level hyperlink.
+#[derive(Clone, Copy)]
+pub struct HyperlinkRef<'a> {
+    inner: &'a CT_Hyperlink,
+}
+
+impl<'a> HyperlinkRef<'a> {
+    pub fn relationship_id(&self) -> Option<&'a str> {
+        self.inner.rel_id()
+    }
+
+    pub fn anchor(&self) -> Option<&'a str> {
+        self.inner.anchor()
+    }
+
+    pub fn tooltip(&self) -> Option<&'a str> {
+        self.inner.tooltip()
+    }
+
+    pub fn doc_location(&self) -> Option<&'a str> {
+        self.inner.doc_location()
+    }
+
+    pub fn has_unmodeled_semantic_attributes(&self) -> bool {
+        self.inner.has_unmodeled_semantic_attributes()
+    }
+
+    pub fn text(&self) -> String {
+        self.inner.text()
+    }
+
+    pub fn content(&self) -> impl Iterator<Item = InlineContentRef<'a>> {
+        self.inner.children().iter().map(inline_content_ref)
+    }
+}
+
+/// An immutable paragraph-level simple field.
+#[derive(Clone, Copy)]
+pub struct SimpleFieldRef<'a> {
+    inner: &'a CT_SimpleField,
+}
+
+impl<'a> SimpleFieldRef<'a> {
+    pub fn kind(&self) -> FieldKind<'a> {
+        match self.inner.field_type() {
+            FieldType::Page => FieldKind::Page,
+            FieldType::NumPages => FieldKind::NumPages,
+            FieldType::Other(instruction) => FieldKind::Other(instruction),
+        }
+    }
+
+    pub fn instruction(&self) -> &'a str {
+        self.inner.instruction()
+    }
+
+    pub fn cached_text(&self) -> String {
+        self.inner.text()
+    }
+
+    pub fn content(&self) -> impl Iterator<Item = InlineContentRef<'a>> {
+        self.inner.children().iter().map(inline_content_ref)
+    }
+
+    /// Whether Word stored cached result children for this field.
+    pub fn has_cached_content(&self) -> bool {
+        self.inner.has_cached_content()
+    }
+
+    /// Whether Word marked the cached result as stale.
+    pub fn dirty(&self) -> Option<bool> {
+        self.inner.dirty()
+    }
+
+    pub fn has_unmodeled_semantic_attributes(&self) -> bool {
+        self.inner.has_unmodeled_semantic_attributes()
+    }
+}
+
+fn paragraph_content_ref(child: &ParagraphChild) -> ParagraphContentRef<'_> {
+    match child {
+        ParagraphChild::Run(run) => ParagraphContentRef::Run(RunRef { inner: run }),
+        ParagraphChild::Hyperlink(hyperlink) => {
+            ParagraphContentRef::Hyperlink(HyperlinkRef { inner: hyperlink })
+        }
+        ParagraphChild::SimpleField(field) => {
+            ParagraphContentRef::SimpleField(SimpleFieldRef { inner: field })
+        }
+        ParagraphChild::Unsupported(raw) => {
+            ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::new(raw))
+        }
+    }
+}
+
+fn inline_content_ref(child: &InlineChild) -> InlineContentRef<'_> {
+    match child {
+        InlineChild::Run(run) => InlineContentRef::Run(RunRef { inner: run }),
+        InlineChild::SimpleField(field) => {
+            InlineContentRef::SimpleField(SimpleFieldRef { inner: field })
+        }
+        InlineChild::Unsupported(raw) => {
+            InlineContentRef::UnsupportedXml(UnsupportedXmlRef::new(raw))
+        }
+    }
+}
+
 impl<'a> Paragraph<'a> {
     /// Get the combined text of all runs.
     pub fn text(&self) -> String {
         self.inner.text()
+    }
+
+    /// Iterate over runs, hyperlinks, fields, and unsupported XML without
+    /// flattening their containment or reconstructing their source order.
+    pub fn content(&self) -> impl Iterator<Item = ParagraphContentRef<'_>> {
+        self.inner.content.iter().map(paragraph_content_ref)
     }
 
     /// Append a footnote reference run (`<w:footnoteReference w:id="..."/>`).
@@ -127,23 +285,22 @@ impl<'a> Paragraph<'a> {
     pub fn add_footnote_ref(&mut self, id: i32) {
         use rdocx_oxml::text::{CT_R, RunContent};
         let mut r = CT_R::new("");
-        r.content = vec![RunContent::FootnoteRef { id }];
-        self.inner.runs.push(r);
+        r.content = vec![RunContent::FootnoteRef(ParsedWithRaw::new(id))];
+        self.inner.content.push(ParagraphChild::Run(r));
     }
 
     /// Add a run with the given text and return a mutable reference for chaining.
     pub fn add_run(&mut self, text: &str) -> Run<'_> {
-        self.inner.runs.push(CT_R::new(text));
         Run {
-            inner: self.inner.runs.last_mut().unwrap(),
+            inner: self.inner.add_run(text),
         }
     }
 
     /// Add a line break in its own run.
     pub fn add_line_break(&mut self) {
         let mut run = CT_R::new("");
-        run.content = vec![RunContent::Break(BreakType::Line)];
-        self.inner.runs.push(run);
+        run.content = vec![RunContent::Break(ParsedWithRaw::new(BreakType::Line))];
+        self.inner.content.push(ParagraphChild::Run(run));
     }
 
     /// Add a run wrapped in an external hyperlink relationship.
@@ -153,37 +310,33 @@ impl<'a> Paragraph<'a> {
     /// allows the hyperlink text to receive the same direct formatting as any
     /// other run.
     pub fn add_hyperlink(&mut self, text: &str, relationship_id: &str) -> Run<'_> {
-        let run_start = self.inner.runs.len();
-        self.inner.runs.push(CT_R::new(text));
-        self.inner.hyperlinks.push(HyperlinkSpan {
-            rel_id: Some(relationship_id.to_string()),
-            anchor: None,
-            run_start,
-            run_end: run_start + 1,
-        });
-        Run {
-            inner: self.inner.runs.last_mut().unwrap(),
-        }
+        let mut hyperlink = CT_Hyperlink::new(Some(relationship_id.to_string()), None);
+        hyperlink.add_run(text);
+        let hyperlink = self.inner.add_hyperlink(hyperlink);
+        let Some(InlineChild::Run(run)) = hyperlink.children_mut().last_mut() else {
+            unreachable!()
+        };
+        Run { inner: run }
     }
 
     /// Get the number of runs in this paragraph.
     pub fn run_count(&self) -> usize {
-        self.inner.runs.len()
+        self.inner.run_count()
     }
 
     /// Get an immutable run by index.
     pub fn run(&self, index: usize) -> Option<RunRef<'_>> {
-        self.inner.runs.get(index).map(|inner| RunRef { inner })
+        self.inner.run(index).map(|inner| RunRef { inner })
     }
 
     /// Get a mutable run by index.
     pub fn run_mut(&mut self, index: usize) -> Option<Run<'_>> {
-        self.inner.runs.get_mut(index).map(|inner| Run { inner })
+        self.inner.run_mut(index).map(|inner| Run { inner })
     }
 
     /// Get an iterator over immutable run references.
     pub fn runs(&self) -> impl Iterator<Item = RunRef<'_>> {
-        self.inner.runs.iter().map(|r| RunRef { inner: r })
+        self.inner.runs().into_iter().map(|inner| RunRef { inner })
     }
 
     /// Set the paragraph alignment.
@@ -519,6 +672,7 @@ impl<'a> Paragraph<'a> {
             right: Some(edge),
             between: None,
             bar: None,
+            ..Default::default()
         });
     }
 
@@ -551,10 +705,7 @@ impl<'a> Paragraph<'a> {
 
     /// Add a tab stop in place.
     pub fn set_add_tab_stop(&mut self, alignment: TabAlignment, position: Length) {
-        let tabs = self
-            .ensure_ppr()
-            .tabs
-            .get_or_insert_with(|| CT_Tabs { tabs: Vec::new() });
+        let tabs = self.ensure_ppr().tabs.get_or_insert_with(CT_Tabs::default);
         tabs.tabs.push(CT_TabStop {
             val: alignment.to_st(),
             pos: position.as_twips(),
@@ -581,10 +732,7 @@ impl<'a> Paragraph<'a> {
         position: Length,
         leader: TabLeader,
     ) {
-        let tabs = self
-            .ensure_ppr()
-            .tabs
-            .get_or_insert_with(|| CT_Tabs { tabs: Vec::new() });
+        let tabs = self.ensure_ppr().tabs.get_or_insert_with(CT_Tabs::default);
         tabs.tabs.push(CT_TabStop {
             val: alignment.to_st(),
             pos: position.as_twips(),
@@ -711,14 +859,19 @@ impl<'a> ParagraphRef<'a> {
         self.inner.text()
     }
 
+    /// Iterate over the paragraph's direct children in source XML order.
+    pub fn content(&self) -> impl Iterator<Item = ParagraphContentRef<'a>> {
+        self.inner.content.iter().map(paragraph_content_ref)
+    }
+
     /// Get the number of runs in this paragraph.
     pub fn run_count(&self) -> usize {
-        self.inner.runs.len()
+        self.inner.run_count()
     }
 
     /// Get an immutable run by index.
     pub fn run(&self, index: usize) -> Option<RunRef<'_>> {
-        self.inner.runs.get(index).map(|inner| RunRef { inner })
+        self.inner.run(index).map(|inner| RunRef { inner })
     }
 
     /// Get the paragraph style ID, if set.
@@ -789,18 +942,31 @@ impl<'a> ParagraphRef<'a> {
     /// Hyperlink spans in this paragraph as (run_start, run_end, rel_id).
     /// Resolve rel_id to a URL with `Document::hyperlink_url`.
     pub fn hyperlink_spans(&self) -> Vec<(usize, usize, Option<&str>)> {
-        self.inner
-            .hyperlinks
-            .iter()
-            .map(|h| (h.run_start, h.run_end, h.rel_id.as_deref()))
-            .collect()
+        let mut spans = Vec::new();
+        let mut run_index = 0;
+        for child in &self.inner.content {
+            match child {
+                ParagraphChild::Run(_) => run_index += 1,
+                ParagraphChild::Hyperlink(hyperlink) => {
+                    let start = run_index;
+                    run_index += hyperlink.run_count();
+                    spans.push((start, run_index, hyperlink.rel_id()));
+                }
+                ParagraphChild::SimpleField(field) => {
+                    run_index += field.run_count();
+                }
+                ParagraphChild::Unsupported(_) => {}
+            }
+        }
+        spans
     }
 
     /// Get list numbering as (num_id, level) if this paragraph is a list
     /// item. Resolve bullet-vs-numbered via `Document::numbering_is_bullet`.
     pub fn numbering(&self) -> Option<(u32, u32)> {
         let ppr = self.inner.properties.as_ref()?;
-        Some((ppr.num_id?, ppr.num_ilvl.unwrap_or(0)))
+        let num_id = ppr.num_id?;
+        (num_id != 0).then_some((num_id, ppr.num_ilvl.unwrap_or(0)))
     }
 
     /// Get the alignment, if set.
@@ -860,7 +1026,7 @@ impl<'a> ParagraphRef<'a> {
 
     /// Get an iterator over immutable run references.
     pub fn runs(&self) -> impl Iterator<Item = RunRef<'_>> {
-        self.inner.runs.iter().map(|r| RunRef { inner: r })
+        self.inner.runs().into_iter().map(|inner| RunRef { inner })
     }
 
     /// Check if paragraph has borders.
@@ -871,6 +1037,42 @@ impl<'a> ParagraphRef<'a> {
             .and_then(|ppr| ppr.borders.as_ref())
             .map(|b| !b.is_empty())
             .unwrap_or(false)
+    }
+
+    /// Get the direct bottom border, if present.
+    pub fn bottom_border(&self) -> Option<ParagraphBorderRef<'_>> {
+        self.inner
+            .properties
+            .as_ref()?
+            .borders
+            .as_ref()?
+            .bottom
+            .as_ref()
+            .map(|inner| ParagraphBorderRef { inner })
+    }
+
+    /// Count direct paragraph border edges.
+    pub fn border_count(&self) -> usize {
+        let Some(borders) = self
+            .inner
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.borders.as_ref())
+        else {
+            return 0;
+        };
+
+        [
+            borders.top.as_ref(),
+            borders.bottom.as_ref(),
+            borders.left.as_ref(),
+            borders.right.as_ref(),
+            borders.between.as_ref(),
+            borders.bar.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .count()
     }
 
     /// Get the number of tab stops defined.

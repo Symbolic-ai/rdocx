@@ -523,6 +523,7 @@ version = "0.2.0"
 name = "oxml-opc"
 version = "0.2.0"
 dependencies = [
+ "oxml-core",
  "quick-xml",
  "thiserror",
  "zip",

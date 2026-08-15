@@ -1,9 +1,14 @@
 //! Parsing and writing of `.rels` relationship files.
 
+use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer};
+
+use oxml_core::xml::{StrictXmlCursor, StrictXmlDocument, StrictXmlNode};
 
 use crate::error::{OpcError, Result};
+
+const PACKAGE_RELATIONSHIPS_NS: &str =
+    "http://schemas.openxmlformats.org/package/2006/relationships";
 
 /// Well-known OOXML relationship types.
 pub mod rel_types {
@@ -100,65 +105,36 @@ impl Relationships {
 
     /// Parse from XML bytes.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
-        let mut reader = Reader::from_reader(xml);
-        reader.config_mut().trim_text(true);
-
-        let mut items = Vec::new();
-        let mut max_id: u32 = 0;
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) if e.name().as_ref() == b"Relationship" => {
-                    let mut id = None;
-                    let mut rel_type = None;
-                    let mut target = None;
-                    let mut target_mode = None;
-
-                    for attr in e.attributes() {
-                        let attr = attr?;
-                        match attr.key.as_ref() {
-                            b"Id" => {
-                                let val = std::str::from_utf8(&attr.value)?.to_string();
-                                // Extract numeric suffix for next_id tracking
-                                if let Some(num_str) = val.strip_prefix("rId")
-                                    && let Ok(n) = num_str.parse::<u32>()
-                                {
-                                    max_id = max_id.max(n);
-                                }
-                                id = Some(val);
-                            }
-                            b"Type" => {
-                                rel_type = Some(std::str::from_utf8(&attr.value)?.to_string());
-                            }
-                            b"Target" => {
-                                target = Some(std::str::from_utf8(&attr.value)?.to_string());
-                            }
-                            b"TargetMode" => {
-                                target_mode = Some(std::str::from_utf8(&attr.value)?.to_string());
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    match (id, rel_type, target) {
-                        (Some(id), Some(rel_type), Some(target)) => {
-                            items.push(Relationship {
-                                id,
-                                rel_type,
-                                target,
-                                target_mode,
-                            });
-                        }
-                        _ => return Err(OpcError::InvalidRelationship),
-                    }
-                }
-                Ok(Event::Eof) => break,
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
+        let document = StrictXmlDocument::parse(xml).map_err(|_| OpcError::InvalidRelationship)?;
+        let root = document.into_root();
+        if !root.is_named(Some(PACKAGE_RELATIONSHIPS_NS), "Relationships") {
+            return Err(OpcError::InvalidRelationship);
         }
+
+        let parsed = root
+            .parse(|cursor| {
+                let mut items = Vec::new();
+                let mut max_id = 0;
+                for index in 0..cursor.child_slots() {
+                    let Some(StrictXmlNode::Element(element)) = cursor.child(index) else {
+                        continue;
+                    };
+                    if !element.is_named(Some(PACKAGE_RELATIONSHIPS_NS), "Relationship") {
+                        continue;
+                    }
+                    let element = cursor
+                        .take_child(index)
+                        .and_then(StrictXmlNode::into_element)
+                        .ok_or_else(invalid_relationship_value)?;
+                    items.push(parse_relationship(element, &mut max_id)?);
+                }
+                Ok((items, max_id))
+            })
+            .map_err(|_| OpcError::InvalidRelationship)?;
+        if !parsed.leftovers.is_empty() {
+            return Err(OpcError::InvalidRelationship);
+        }
+        let (items, max_id) = parsed.value;
 
         Ok(Relationships {
             items,
@@ -285,6 +261,50 @@ impl Relationships {
     }
 }
 
+fn parse_relationship(
+    element: oxml_core::xml::StrictXmlElement,
+    max_id: &mut u32,
+) -> oxml_core::Result<Relationship> {
+    let parsed = element.parse(|cursor| parse_relationship_attributes(cursor, max_id))?;
+    if !parsed.leftovers.is_empty() {
+        return Err(invalid_relationship_value());
+    }
+    Ok(parsed.value)
+}
+
+fn parse_relationship_attributes(
+    cursor: &mut StrictXmlCursor,
+    max_id: &mut u32,
+) -> oxml_core::Result<Relationship> {
+    let id = cursor
+        .take_attribute(None, "Id")
+        .ok_or_else(invalid_relationship_value)?;
+    let rel_type = cursor
+        .take_attribute(None, "Type")
+        .ok_or_else(invalid_relationship_value)?;
+    let target = cursor
+        .take_attribute(None, "Target")
+        .ok_or_else(invalid_relationship_value)?;
+    let target_mode = cursor.take_attribute(None, "TargetMode");
+
+    if let Some(number) = id
+        .strip_prefix("rId")
+        .and_then(|value| value.parse::<u32>().ok())
+    {
+        *max_id = (*max_id).max(number);
+    }
+    Ok(Relationship {
+        id,
+        rel_type,
+        target,
+        target_mode,
+    })
+}
+
+fn invalid_relationship_value() -> oxml_core::OxmlError {
+    oxml_core::OxmlError::InvalidValue("invalid relationship XML".to_string())
+}
+
 fn next_relationship_number(current: u32) -> u32 {
     current.checked_add(1).unwrap_or(1).max(1)
 }
@@ -396,6 +416,18 @@ mod tests {
     }
 
     #[test]
+    fn relationship_targets_are_xml_decoded() {
+        let xml = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://example.test/type" Target="https://example.test/?a=1&amp;b=2" TargetMode="External"/></Relationships>"#;
+
+        let relationships = Relationships::from_xml(xml).unwrap();
+
+        assert_eq!(
+            relationships.items[0].target,
+            "https://example.test/?a=1&b=2"
+        );
+    }
+
+    #[test]
     fn find_by_type() {
         let mut rels = Relationships::new();
         rels.add(rel_types::DOCUMENT, "word/document.xml");
@@ -438,5 +470,50 @@ mod tests {
         assert_eq!(relationships.add("type-two", "two.xml"), "rId2");
         relationships.add_with_id("rId4294967295", "type-max", "replacement.xml");
         assert_eq!(relationships.add("type-three", "three.xml"), "rId3");
+    }
+
+    #[test]
+    fn namespace_equivalent_expanded_relationships_are_parsed() {
+        let xml = br#"<r:Relationships xmlns:r="http://schemas.openxmlformats.org/package/2006/relationships">
+          <r:Relationship Id="rId7" Type="type-a" Target="a.xml"></r:Relationship>
+        </r:Relationships>"#;
+
+        let relationships = Relationships::from_xml(xml).unwrap();
+        assert_eq!(relationships.items.len(), 1);
+        assert_eq!(relationships.items[0].id, "rId7");
+    }
+
+    #[test]
+    fn relationship_spelling_and_prefix_do_not_change_semantics() {
+        let variants = [
+            br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId7" Type="type-a" Target="a.xml"/></Relationships>"#.as_slice(),
+            br#"<r:Relationships xmlns:r="http://schemas.openxmlformats.org/package/2006/relationships"><r:Relationship Id="rId7" Type="type-a" Target="a.xml"></r:Relationship></r:Relationships>"#.as_slice(),
+        ];
+
+        let parsed = variants
+            .map(Relationships::from_xml)
+            .map(|result| result.unwrap().items);
+        assert_eq!(parsed[0], parsed[1]);
+    }
+
+    #[test]
+    fn foreign_or_unconsumed_relationship_semantics_are_rejected() {
+        for xml in [
+            br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" xmlns:x="urn:foreign"><x:Relationship Id="rId1" Type="t" Target="a"/></Relationships>"#.as_slice(),
+            br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="t" Target="a" Extra="value"/></Relationships>"#.as_slice(),
+            br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="t" Target="a"><Relationship Id="rId2" Type="t" Target="b"/></Relationship></Relationships>"#.as_slice(),
+        ] {
+            assert!(Relationships::from_xml(xml).is_err(), "{xml:?}");
+        }
+    }
+
+    #[test]
+    fn malformed_relationship_parts_are_rejected() {
+        for xml in [
+            br#"<Relationships><Relationship Id="rId1" Type="t" Target="a"/></Relationships>"#.as_slice(),
+            br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="t" Target="a"/>"#.as_slice(),
+        ] {
+            assert!(Relationships::from_xml(xml).is_err());
+        }
     }
 }

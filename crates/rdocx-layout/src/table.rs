@@ -341,6 +341,7 @@ fn layout_cell_content(
                     }
                 }
             }
+            CellContent::Unsupported(_) => {}
         }
     }
     Ok(blocks)
@@ -360,6 +361,7 @@ mod tests {
                 CT_TblGridCol { width: Twips(2880) }, // 2 inches = 144pt
                 CT_TblGridCol { width: Twips(2880) },
             ],
+            ..Default::default()
         };
 
         // 288pt total in a 468pt text column: the author asked for a narrow
@@ -379,6 +381,7 @@ mod tests {
                 CT_TblGridCol { width: Twips(7200) }, // 5 inches = 360pt
                 CT_TblGridCol { width: Twips(7200) },
             ],
+            ..Default::default()
         };
 
         // 720pt total will not fit a 468pt column, so scale it down.
@@ -407,6 +410,7 @@ mod tests {
                 CT_TblGridCol { width: Twips(0) },
                 CT_TblGridCol { width: Twips(0) },
             ],
+            ..Default::default()
         };
         let widths = compute_column_widths(Some(&grid), 468.0, &tbl);
         assert_eq!(widths.len(), 3);
@@ -439,6 +443,7 @@ mod tests {
         let mut outer = CT_Tbl::new();
         outer.grid = Some(CT_TblGrid {
             columns: vec![CT_TblGridCol { width: Twips(4680) }], // 3.25"
+            ..Default::default()
         });
 
         let mut outer_row = CT_Row::new();
@@ -452,6 +457,7 @@ mod tests {
                 CT_TblGridCol { width: Twips(2000) },
                 CT_TblGridCol { width: Twips(2000) },
             ],
+            ..Default::default()
         });
         let mut nr = CT_Row::new();
         let mut nc1 = CT_Tc::new();
@@ -472,10 +478,11 @@ mod tests {
             document: rdocx_oxml::document::CT_Document {
                 body: rdocx_oxml::document::CT_Body {
                     content: Vec::new(),
-                    sect_pr: None,
+                    ..Default::default()
                 },
                 extra_namespaces: Vec::new(),
                 background_xml: None,
+                ..Default::default()
             },
             styles: styles.clone(),
             numbering: None,

@@ -5,11 +5,12 @@ use rdocx_oxml::properties::CT_Shd;
 use rdocx_oxml::shared::ST_Jc;
 use rdocx_oxml::table::{
     CT_Row, CT_Tbl, CT_TblBorders, CT_TblCellMar, CT_TblPr, CT_TblWidth, CT_Tc, CT_TcPr, CT_TrPr,
-    ST_VerticalJc, VMerge,
+    CellContent as OxmlCellContent, ST_VerticalJc, VMerge,
 };
 use rdocx_oxml::text::CT_P;
 
 use crate::Length;
+use crate::UnsupportedXmlRef;
 use crate::paragraph::{Paragraph, ParagraphRef};
 
 /// Vertical alignment within a table cell.
@@ -18,6 +19,13 @@ pub enum VerticalAlignment {
     Top,
     Center,
     Bottom,
+}
+
+/// Vertical merge state for an immutable cell view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerticalMergeKind {
+    Restart,
+    Continue,
 }
 
 impl VerticalAlignment {
@@ -119,6 +127,7 @@ impl<'a> Table<'a> {
             right: Some(edge.clone()),
             inside_h: Some(edge.clone()),
             inside_v: Some(edge),
+            ..Default::default()
         });
     }
 
@@ -141,6 +150,7 @@ impl<'a> Table<'a> {
             right: Some(right.as_twips()),
             bottom: Some(bottom.as_twips()),
             left: Some(left.as_twips()),
+            ..Default::default()
         });
     }
 
@@ -348,7 +358,7 @@ impl<'a> Cell<'a> {
             }
         });
         if let Some(para) = first_para {
-            para.runs.clear();
+            para.content.clear();
             if !text.is_empty() {
                 para.add_run(text);
             }
@@ -385,18 +395,17 @@ impl<'a> Cell<'a> {
     pub fn add_picture(&mut self, rel_id: &str, width: Length, height: Length) {
         use rdocx_oxml::drawing::{CT_Drawing, CT_Inline};
         use rdocx_oxml::table::CellContent;
-        use rdocx_oxml::text::{CT_R, RunContent};
+        use rdocx_oxml::text::{CT_R, ParagraphChild, ParsedWithRaw, RunContent};
 
         let inline = CT_Inline::new(rel_id, width.to_emu(), height.to_emu());
         let drawing = CT_Drawing::inline(inline);
         let run = CT_R {
-            alt_drawings: Vec::new(),
             properties: None,
-            content: vec![RunContent::Drawing(drawing)],
-            extra_xml: Vec::new(),
+            content: vec![RunContent::Drawing(ParsedWithRaw::new(drawing))],
+            ..Default::default()
         };
         let mut p = CT_P::new();
-        p.runs.push(run);
+        p.content.push(ParagraphChild::Run(run));
         self.inner.content.push(CellContent::Paragraph(p));
     }
 
@@ -544,6 +553,7 @@ impl<'a> Cell<'a> {
             columns: (0..cols)
                 .map(|_| CT_TblGridCol { width: col_width })
                 .collect(),
+            ..Default::default()
         };
 
         let mut tbl = CT_Tbl::new();
@@ -595,6 +605,24 @@ impl<'a> TableRef<'a> {
             .unwrap_or(0)
     }
 
+    /// Whether the table contains child elements the facade does not model.
+    pub fn has_unsupported_content(&self) -> bool {
+        !self.inner.extra_xml.is_empty()
+    }
+
+    /// Whether table properties contain Word formatting the reader does not model.
+    pub fn has_unmodeled_properties(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.has_unmodeled_properties())
+            || self
+                .inner
+                .grid
+                .as_ref()
+                .is_some_and(|grid| grid.has_unmodeled_properties())
+    }
+
     /// Get an immutable row reference.
     pub fn row(&self, index: usize) -> Option<RowRef<'_>> {
         self.inner.rows.get(index).map(|r| RowRef { inner: r })
@@ -637,6 +665,72 @@ impl<'a> TableRef<'a> {
         let width = self.inner.properties.as_ref()?.width.as_ref()?;
         (width.width_type == "dxa").then(|| Length::twips(width.w))
     }
+
+    /// Whether an explicit table width is present in any supported unit.
+    pub fn has_width(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.width.is_some())
+    }
+
+    /// Whether explicit table borders are present.
+    pub fn has_borders(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.borders.as_ref())
+            .is_some_and(|borders| !borders.is_empty())
+    }
+
+    /// Get the table shading fill color, if set.
+    pub fn shading_fill(&self) -> Option<&str> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.shading.as_ref())
+            .and_then(|shading| shading.fill.as_deref())
+    }
+
+    /// Whether explicit table shading is present.
+    pub fn has_shading(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.shading.is_some())
+    }
+
+    /// Whether the table declares a fixed or autofit layout mode.
+    pub fn has_layout(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.layout.is_some())
+    }
+
+    /// Whether the table declares default cell margins.
+    pub fn has_cell_margins(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.cell_margin.is_some())
+    }
+
+    /// Whether the table declares an explicit indentation.
+    pub fn has_indent(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.indent.is_some())
+    }
+
+    /// Whether conditional table-style look flags are present.
+    pub fn has_style_look(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.look.is_some())
+    }
 }
 
 /// An immutable reference to a table row.
@@ -648,6 +742,35 @@ impl<'a> RowRef<'a> {
     /// Get the number of cells.
     pub fn cell_count(&self) -> usize {
         self.inner.cells.len()
+    }
+
+    /// Whether the row contains child elements the facade does not model.
+    pub fn has_unsupported_content(&self) -> bool {
+        !self.inner.extra_xml.is_empty()
+    }
+
+    /// Whether row properties contain Word formatting the reader does not model.
+    pub fn has_unmodeled_properties(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.has_unmodeled_properties())
+    }
+
+    /// Number of table grid columns omitted before the first cell.
+    pub fn grid_before(&self) -> Option<u32> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.grid_before)
+    }
+
+    /// Number of table grid columns omitted after the last cell.
+    pub fn grid_after(&self) -> Option<u32> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.grid_after)
     }
 
     /// Get a cell reference by index.
@@ -663,6 +786,18 @@ impl<'a> RowRef<'a> {
             .and_then(|pr| pr.header)
             .unwrap_or(false)
     }
+
+    /// Whether the row carries formatting that is not represented in the
+    /// projected table schema.
+    pub fn has_formatting(&self) -> bool {
+        self.inner.properties.as_ref().is_some_and(|properties| {
+            properties.height.is_some()
+                || properties.height_rule.is_some()
+                || properties.jc.is_some()
+                || properties.cant_split.is_some()
+                || properties.cnf_style.is_some()
+        })
+    }
 }
 
 /// An immutable reference to a table cell.
@@ -670,10 +805,42 @@ pub struct CellRef<'a> {
     pub(crate) inner: &'a CT_Tc,
 }
 
+/// One item inside a table cell, in document order.
+pub enum CellContentRef<'a> {
+    /// A cell paragraph.
+    Paragraph(ParagraphRef<'a>),
+    /// A nested table.
+    Table(TableRef<'a>),
+    /// A preserved cell child the facade does not model.
+    UnsupportedXml(UnsupportedXmlRef<'a>),
+}
+
 impl<'a> CellRef<'a> {
+    /// Whether cell properties contain Word formatting the reader does not model.
+    pub fn has_unmodeled_properties(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.has_unmodeled_properties())
+    }
+
     /// Get the combined text of all paragraphs.
     pub fn text(&self) -> String {
         self.inner.text()
+    }
+
+    /// Iterate over paragraphs, nested tables, and unsupported XML in their
+    /// original order.
+    pub fn content(&self) -> impl Iterator<Item = CellContentRef<'_>> {
+        self.inner.content.iter().map(|content| match content {
+            OxmlCellContent::Paragraph(paragraph) => {
+                CellContentRef::Paragraph(ParagraphRef { inner: paragraph })
+            }
+            OxmlCellContent::Table(table) => CellContentRef::Table(TableRef { inner: table }),
+            OxmlCellContent::Unsupported(raw) => {
+                CellContentRef::UnsupportedXml(UnsupportedXmlRef::new(raw))
+            }
+        })
     }
 
     /// Get paragraph references.
@@ -703,17 +870,37 @@ impl<'a> CellRef<'a> {
         (width.width_type == "dxa").then(|| Length::twips(width.w))
     }
 
+    /// Whether an explicit cell width is present in any supported unit.
+    pub fn has_width(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.width.is_some())
+    }
+
     /// Get the grid span, if set.
     pub fn grid_span(&self) -> Option<u32> {
         self.inner.properties.as_ref().and_then(|pr| pr.grid_span)
     }
 
-    /// Get the vertical merge state, if set.
-    pub fn v_merge(&self) -> Option<&VMerge> {
+    /// Whether the cell uses the legacy horizontal-merge property.
+    pub fn has_horizontal_merge(&self) -> bool {
         self.inner
             .properties
             .as_ref()
-            .and_then(|pr| pr.v_merge.as_ref())
+            .is_some_and(|properties| properties.h_merge.is_some())
+    }
+
+    /// Get the vertical merge state, if set.
+    pub fn v_merge(&self) -> Option<VerticalMergeKind> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|pr| pr.v_merge)
+            .map(|merge| match merge {
+                VMerge::Restart => VerticalMergeKind::Restart,
+                VMerge::Continue => VerticalMergeKind::Continue,
+            })
     }
 
     /// Get the shading fill color, if set.
@@ -725,6 +912,23 @@ impl<'a> CellRef<'a> {
             .and_then(|shd| shd.fill.as_deref())
     }
 
+    /// Whether explicit cell shading is present.
+    pub fn has_shading(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.shading.is_some())
+    }
+
+    /// Whether explicit cell borders are present.
+    pub fn has_borders(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.borders.as_ref())
+            .is_some_and(|borders| !borders.is_empty())
+    }
+
     /// Get the vertical alignment, if set.
     pub fn vertical_alignment(&self) -> Option<VerticalAlignment> {
         self.inner
@@ -732,6 +936,30 @@ impl<'a> CellRef<'a> {
             .as_ref()
             .and_then(|pr| pr.v_align)
             .map(VerticalAlignment::from_st)
+    }
+
+    /// Whether an explicit no-wrap toggle is present.
+    pub fn has_wrapping_formatting(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.no_wrap.is_some())
+    }
+
+    /// Whether an explicit text direction is present.
+    pub fn has_text_direction(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.text_direction.is_some())
+    }
+
+    /// Whether conditional table-style flags are present on this cell.
+    pub fn has_conditional_formatting(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.cnf_style.is_some())
     }
 }
 
@@ -756,6 +984,7 @@ mod tests {
                     width: Twips(3_000),
                 },
             ],
+            ..Default::default()
         });
         let mut row = CT_Row::new();
         let mut spanning_cell = CT_Tc::new();
@@ -791,6 +1020,7 @@ mod tests {
                     width: Twips(2_000),
                 },
             ],
+            ..Default::default()
         });
         inner.properties = Some(CT_TblPr {
             width: Some(CT_TblWidth::dxa(3_000)),

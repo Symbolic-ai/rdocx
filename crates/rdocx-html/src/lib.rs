@@ -77,7 +77,7 @@ pub fn to_markdown(input: &HtmlInput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rdocx_oxml::document::{BodyContent, CT_Document};
+    use rdocx_oxml::document::CT_Document;
     use rdocx_oxml::styles::CT_Styles;
     use rdocx_oxml::text::CT_P;
 
@@ -156,7 +156,7 @@ mod tests {
         cell.content = vec![rdocx_oxml::table::CellContent::Paragraph(p)];
         row.cells.push(cell);
         tbl.rows.push(row);
-        doc.body.content.push(BodyContent::Table(tbl));
+        doc.body.add_table(tbl);
 
         let input = HtmlInput {
             document: doc,
@@ -205,7 +205,7 @@ mod tests {
             italic: Some(true),
             ..Default::default()
         });
-        p.runs.push(r);
+        p.content.push(rdocx_oxml::text::ParagraphChild::Run(r));
         doc.body.add_paragraph(p);
 
         let input = HtmlInput {

@@ -2,10 +2,14 @@
 
 use rdocx_oxml::document::{BodyContent, CT_SectPr};
 use rdocx_oxml::header_footer::HdrFtrType;
+#[cfg(test)]
 use rdocx_oxml::properties::CT_PPr;
+use rdocx_oxml::resolver::FormattingResolver;
 use rdocx_oxml::shared::ST_HighlightColor;
 use rdocx_oxml::styles::CT_Styles;
-use rdocx_oxml::text::{BreakType, CT_P, FieldType, RunContent};
+use rdocx_oxml::text::{
+    BreakType, CT_P, CT_R, CT_SimpleField, FieldType, InlineChild, ParagraphChild, RunContent,
+};
 
 use crate::block::{self, LayoutBlock, ParagraphBlock};
 use crate::convert;
@@ -58,8 +62,7 @@ impl Engine {
         let final_sect_pr = input
             .document
             .body
-            .sect_pr
-            .as_ref()
+            .sect_pr()
             .cloned()
             .unwrap_or_else(CT_SectPr::default_letter);
 
@@ -452,6 +455,50 @@ fn detect_heading_level(para: &CT_P, styles: &CT_Styles) -> Option<u32> {
     None
 }
 
+enum OrderedInline<'a> {
+    Run(&'a CT_R, Option<String>),
+    Field(&'a CT_SimpleField, Option<String>),
+}
+
+fn ordered_inline_items<'a>(para: &'a CT_P, input: &LayoutInput) -> Vec<OrderedInline<'a>> {
+    let mut items = Vec::new();
+    for child in &para.content {
+        match child {
+            ParagraphChild::Run(run) => items.push(OrderedInline::Run(run, None)),
+            ParagraphChild::Hyperlink(hyperlink) => {
+                let url = hyperlink
+                    .rel_id()
+                    .and_then(|rel_id| input.hyperlink_urls.get(rel_id))
+                    .cloned();
+                collect_ordered_inline(hyperlink.children(), url, &mut items);
+            }
+            ParagraphChild::SimpleField(field) => {
+                items.push(OrderedInline::Field(field, None));
+            }
+            ParagraphChild::Unsupported(_) => {}
+        }
+    }
+    items
+}
+
+fn collect_ordered_inline<'a>(
+    children: &'a [InlineChild],
+    hyperlink_url: Option<String>,
+    items: &mut Vec<OrderedInline<'a>>,
+) {
+    for child in children {
+        match child {
+            InlineChild::Run(run) => {
+                items.push(OrderedInline::Run(run, hyperlink_url.clone()));
+            }
+            InlineChild::SimpleField(field) => {
+                items.push(OrderedInline::Field(field, hyperlink_url.clone()));
+            }
+            InlineChild::Unsupported(_) => {}
+        }
+    }
+}
+
 /// Lay out a single paragraph into a ParagraphBlock.
 pub fn layout_paragraph(
     para: &CT_P,
@@ -462,34 +509,11 @@ pub fn layout_paragraph(
     fm: &mut FontManager,
     num_state: &mut NumberingState,
 ) -> Result<ParagraphBlock> {
-    // Resolve paragraph properties
     let para_style_id = para.properties.as_ref().and_then(|p| p.style_id.as_deref());
-
-    let resolved_ppr = style_resolver::resolve_paragraph_properties(para_style_id, styles);
-
-    let mut effective_ppr = resolved_ppr;
-
-    // A numbering level carries paragraph properties of its own, mainly the
-    // indentation for that level. They sit between the style and direct
-    // formatting, so merge them before the direct properties rather than
-    // after. Without this every level of a list draws at the same indent.
-    let direct_ppr = para.properties.as_ref();
-    let list_num_id = direct_ppr.and_then(|p| p.num_id).or(effective_ppr.num_id);
-    let list_ilvl = direct_ppr
-        .and_then(|p| p.num_ilvl)
-        .or(effective_ppr.num_ilvl)
-        .unwrap_or(0);
-    if let (Some(num_id), Some(numbering)) = (list_num_id, input.numbering.as_ref())
-        && let Some(lvl_ppr) =
-            style_resolver::level_paragraph_properties(num_id, list_ilvl, numbering)
-    {
-        merge_direct_ppr(&mut effective_ppr, lvl_ppr);
-    }
-
-    // Merge direct paragraph properties
-    if let Some(direct_ppr) = direct_ppr {
-        merge_direct_ppr(&mut effective_ppr, direct_ppr);
-    }
+    let formatting = FormattingResolver::new(styles, input.numbering.as_ref());
+    let effective_ppr = formatting
+        .resolve_paragraph(para.properties.as_ref())
+        .properties;
 
     // Convert paragraph properties to layout values
     let space_before = effective_ppr.space_before.map(|t| t.to_pt()).unwrap_or(0.0);
@@ -514,13 +538,18 @@ pub fn layout_paragraph(
     let mut inline_items = Vec::new();
 
     // Handle numbering marker
-    if let (Some(num_id), Some(numbering)) = (effective_ppr.num_id, input.numbering.as_ref()) {
+    if let (Some(num_id), Some(numbering)) = (effective_ppr.num_id, input.numbering.as_ref())
+        && num_id != 0
+    {
         let ilvl = effective_ppr.num_ilvl.unwrap_or(0);
-        if let Some(marker) = style_resolver::generate_marker(num_id, ilvl, numbering, num_state) {
+        if let Some(marker) =
+            style_resolver::generate_marker_with_styles(num_id, ilvl, numbering, styles, num_state)
+        {
             // Shape the marker text
             let marker_rpr = marker.marker_rpr;
             let marker_font_size = marker_rpr.sz.map(|hp| hp.to_pt()).unwrap_or_else(|| {
-                style_resolver::resolve_run_properties(para_style_id, None, styles)
+                formatting
+                    .resolve_run_sources(para_style_id, None, None)
                     .sz
                     .map(|hp| hp.to_pt())
                     .unwrap_or(11.0)
@@ -574,33 +603,21 @@ pub fn layout_paragraph(
         }
     }
 
-    // Build hyperlink URL map: run index → URL
-    let mut run_hyperlink_url: std::collections::HashMap<usize, String> =
-        std::collections::HashMap::new();
-    for hl in &para.hyperlinks {
-        if let Some(ref rel_id) = hl.rel_id
-            && let Some(url) = input.hyperlink_urls.get(rel_id)
-        {
-            for run_idx in hl.run_start..hl.run_end {
-                run_hyperlink_url.insert(run_idx, url.clone());
-            }
-        }
-    }
+    // Process the paragraph's real ordered children. Fields and hyperlinks
+    // are not reconstructed from synthetic runs or positional spans.
+    let empty_run = CT_R {
+        properties: None,
+        content: Vec::new(),
+        ..Default::default()
+    };
+    for item in ordered_inline_items(para, input) {
+        let (run, field_type, current_hyperlink_url) = match item {
+            OrderedInline::Run(run, url) => (run, None, url),
+            OrderedInline::Field(field, url) => (&empty_run, Some(field.field_type()), url),
+        };
 
-    // Process runs
-    for (run_idx, run) in para.runs.iter().enumerate() {
-        let current_hyperlink_url = run_hyperlink_url.get(&run_idx).cloned();
-
-        let run_style_id = run.properties.as_ref().and_then(|p| p.style_id.as_deref());
-
-        let resolved_rpr =
-            style_resolver::resolve_run_properties(para_style_id, run_style_id, styles);
-
-        // Merge direct run properties
-        let mut effective_rpr = resolved_rpr;
-        if let Some(ref direct_rpr) = run.properties {
-            effective_rpr.merge_from(direct_rpr);
-        }
+        let effective_rpr =
+            formatting.resolve_run(para.properties.as_ref(), run.properties.as_ref());
 
         // Skip hidden text
         if effective_rpr.vanish == Some(true) {
@@ -654,6 +671,38 @@ pub fn layout_paragraph(
             fm.resolve_font_for_text(font_family.as_deref(), bold, italic, &run.text())?;
         let metrics = fm.metrics(font_id, font_size)?;
 
+        if let Some(field_type) = field_type {
+            let placeholder = "99";
+            let field_kind = match field_type {
+                FieldType::Page => FieldKind::Page,
+                FieldType::NumPages => FieldKind::NumPages,
+                FieldType::Other(_) => continue,
+            };
+            let shaped = fm.shape_text(font_id, placeholder, font_size)?;
+            inline_items.push(InlineItem::Text(TextSegment {
+                text: placeholder.to_string(),
+                font_id,
+                font_size,
+                glyph_ids: shaped.glyph_ids,
+                advances: shaped.advances,
+                width: shaped.width,
+                ascent: metrics.ascent,
+                descent: metrics.descent,
+                line_gap: 0.0,
+                color,
+                bold,
+                italic,
+                underline: None,
+                strike: false,
+                dstrike: false,
+                highlight: None,
+                baseline_offset,
+                hyperlink_url: current_hyperlink_url.clone(),
+                field_kind: Some(field_kind),
+                footnote_id: None,
+            }));
+        }
+
         for content in &run.content {
             match content {
                 RunContent::Text(ct_text) => {
@@ -704,57 +753,28 @@ pub fn layout_paragraph(
                 RunContent::Tab => {
                     inline_items.push(InlineItem::Tab);
                 }
-                RunContent::Break(bt) => match bt {
+                RunContent::Break(parsed) => match *parsed.value() {
                     BreakType::Line => inline_items.push(InlineItem::LineBreak),
                     BreakType::Page => inline_items.push(InlineItem::PageBreak),
                     BreakType::Column => inline_items.push(InlineItem::ColumnBreak),
                 },
                 RunContent::Drawing(drawing) => {
-                    if let Some(ref inline) = drawing.inline {
+                    if let Some(ref inline) = drawing.value().inline {
+                        let Some(relationship_id) = inline.relationship_id() else {
+                            continue;
+                        };
                         let width = inline.extent_cx.to_pt();
                         let height = inline.extent_cy.to_pt();
                         inline_items.push(InlineItem::Image {
                             width,
                             height,
-                            media_id: media.id_for_relationship(&inline.embed_id),
+                            media_id: media.id_for_relationship(relationship_id),
                         });
                     }
                 }
-                RunContent::Field { field_type } => {
-                    // Shape a placeholder ("99") for estimated width
-                    let placeholder = "99";
-                    let fk = match field_type {
-                        FieldType::Page => FieldKind::Page,
-                        FieldType::NumPages => FieldKind::NumPages,
-                        FieldType::Other(_) => continue, // skip unsupported fields
-                    };
-                    let shaped = fm.shape_text(font_id, placeholder, font_size)?;
-                    inline_items.push(InlineItem::Text(TextSegment {
-                        text: placeholder.to_string(),
-                        font_id,
-                        font_size,
-                        glyph_ids: shaped.glyph_ids,
-                        advances: shaped.advances,
-                        width: shaped.width,
-                        ascent: metrics.ascent,
-                        descent: metrics.descent,
-                        line_gap: 0.0,
-                        color,
-                        bold,
-                        italic,
-                        underline: None,
-                        strike: false,
-                        dstrike: false,
-                        highlight: None,
-                        baseline_offset,
-                        hyperlink_url: None,
-                        field_kind: Some(fk),
-                        footnote_id: None,
-                    }));
-                }
-                RunContent::FootnoteRef { id } | RunContent::EndnoteRef { id } => {
+                RunContent::FootnoteRef(note) | RunContent::EndnoteRef(note) => {
                     // Render as superscript number
-                    let marker = id.to_string();
+                    let marker = note.value().to_string();
                     let sup_size = font_size * 0.58;
                     let sup_offset = font_size * 0.33; // raise baseline
                     let shaped = fm.shape_text(font_id, &marker, sup_size)?;
@@ -779,9 +799,10 @@ pub fn layout_paragraph(
                         baseline_offset: sup_offset,
                         hyperlink_url: None,
                         field_kind: None,
-                        footnote_id: Some(*id),
+                        footnote_id: Some(*note.value()),
                     }));
                 }
+                RunContent::Unsupported(_) => {}
             }
         }
     }
@@ -828,14 +849,14 @@ fn collect_anchored_drawings(
 ) -> Result<Vec<block::AnchoredDrawing>> {
     let mut out = Vec::new();
 
-    // Drawings written plainly, and drawings recovered from an
-    // mc:AlternateContent block, are both anchored the same way.
-    for run in &para.runs {
-        let plain = run.content.iter().filter_map(|rc| match rc {
-            RunContent::Drawing(d) => Some(d),
+    // Plain drawings and drawings recovered from mc:AlternateContent are the
+    // same ordered run child; the raw wrapper controls how they serialize.
+    for run in para.runs() {
+        let drawings = run.content.iter().filter_map(|content| match content {
+            RunContent::Drawing(drawing) => Some(drawing.value()),
             _ => None,
         });
-        for drawing in plain.chain(run.alt_drawings.iter()) {
+        for drawing in drawings {
             let Some(anchor) = drawing.anchor.as_ref() else {
                 continue;
             };
@@ -843,7 +864,8 @@ fn collect_anchored_drawings(
             // A picture also carries a pic:spPr, so a parsed shape alone does
             // not mean this is a shape. An embed id is what makes it a
             // picture, and that takes precedence.
-            let shape = if anchor.embed_id.is_empty() {
+            let relationship_id = anchor.relationship_id();
+            let shape = if relationship_id.is_none() {
                 anchor.shape.as_ref()
             } else {
                 None
@@ -870,9 +892,9 @@ fn collect_anchored_drawings(
                         text,
                     }
                 }
-                None if anchor.embed_id.is_empty() => continue,
+                None if relationship_id.is_none() => continue,
                 None => block::AnchoredContent::Image {
-                    media_id: media.id_for_relationship(&anchor.embed_id),
+                    media_id: media.id_for_relationship(relationship_id.unwrap()),
                 },
             };
 
@@ -889,65 +911,6 @@ fn collect_anchored_drawings(
         }
     }
     Ok(out)
-}
-
-/// Merge direct paragraph properties (only fields explicitly set in the XML).
-fn merge_direct_ppr(effective: &mut CT_PPr, direct: &CT_PPr) {
-    // Don't merge style_id — that was already used for resolution
-    if direct.jc.is_some() {
-        effective.jc = direct.jc;
-    }
-    if direct.space_before.is_some() {
-        effective.space_before = direct.space_before;
-    }
-    if direct.space_after.is_some() {
-        effective.space_after = direct.space_after;
-    }
-    if direct.line_spacing.is_some() {
-        effective.line_spacing = direct.line_spacing;
-    }
-    if direct.line_rule.is_some() {
-        effective.line_rule = direct.line_rule.clone();
-    }
-    if direct.ind_left.is_some() {
-        effective.ind_left = direct.ind_left;
-    }
-    if direct.ind_right.is_some() {
-        effective.ind_right = direct.ind_right;
-    }
-    if direct.ind_first_line.is_some() {
-        effective.ind_first_line = direct.ind_first_line;
-    }
-    if direct.ind_hanging.is_some() {
-        effective.ind_hanging = direct.ind_hanging;
-    }
-    if direct.keep_next.is_some() {
-        effective.keep_next = direct.keep_next;
-    }
-    if direct.keep_lines.is_some() {
-        effective.keep_lines = direct.keep_lines;
-    }
-    if direct.page_break_before.is_some() {
-        effective.page_break_before = direct.page_break_before;
-    }
-    if direct.widow_control.is_some() {
-        effective.widow_control = direct.widow_control;
-    }
-    if direct.borders.is_some() {
-        effective.borders = direct.borders.clone();
-    }
-    if direct.tabs.is_some() {
-        effective.tabs = direct.tabs.clone();
-    }
-    if direct.shading.is_some() {
-        effective.shading = direct.shading.clone();
-    }
-    if direct.num_id.is_some() {
-        effective.num_id = direct.num_id;
-    }
-    if direct.num_ilvl.is_some() {
-        effective.num_ilvl = direct.num_ilvl;
-    }
 }
 
 /// Convert section properties to page geometry.
@@ -1253,8 +1216,8 @@ mod tests {
         let input = make_input_with_text("");
         let mut paragraph = CT_P::new();
         paragraph.add_run("").content = vec![RunContent::Drawing(
-            rdocx_oxml::drawing::CT_Drawing::anchor(rdocx_oxml::drawing::CT_Anchor::background(
-                "", 914_400, 914_400,
+            rdocx_oxml::text::ParsedWithRaw::new(rdocx_oxml::drawing::CT_Drawing::anchor(
+                rdocx_oxml::drawing::CT_Anchor::background("", 914_400, 914_400),
             )),
         )];
         let mut font_manager = FontManager::new();

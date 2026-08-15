@@ -61,12 +61,16 @@ impl TextValue {
                 .read_event_into(&mut buffer)
                 .map_err(OxmlError::from)?
             {
-                Event::Text(value) => text.value.push_str(&decode_plain(&value)),
+                Event::Text(value) => text
+                    .value
+                    .push_str(&decode_plain(&value).map_err(OxmlError::from)?),
                 Event::CData(value) => {
                     let value = std::str::from_utf8(value.as_ref()).map_err(OxmlError::from)?;
                     text.value.push_str(value);
                 }
-                Event::GeneralRef(value) => text.value.push_str(&resolve_entity(&value)),
+                Event::GeneralRef(value) => text
+                    .value
+                    .push_str(&resolve_entity(&value).map_err(OxmlError::from)?),
                 Event::End(element) if matches_local_name(element.name().as_ref(), b"t") => {
                     if text.space == TextSpace::Default
                         && (text.value.chars().next().is_some_and(char::is_whitespace)

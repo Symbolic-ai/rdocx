@@ -7,7 +7,7 @@ use rdocx_oxml::numbering::CT_Numbering;
 use rdocx_oxml::properties::CT_PPr;
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Tbl, CellContent};
-use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent};
+use rdocx_oxml::text::{BreakType, CT_P, CT_R, InlineChild, ParagraphChild, RunContent};
 
 /// Emit the full body content as Markdown.
 pub(crate) fn emit_markdown(
@@ -26,7 +26,7 @@ pub(crate) fn emit_markdown(
             BodyContent::Table(tbl) => {
                 emit_table(&mut out, tbl, hyperlink_urls);
             }
-            BodyContent::RawXml(_) => {}
+            BodyContent::SectionProperties(_) | BodyContent::RawXml(_) => {}
         }
     }
 
@@ -60,7 +60,11 @@ fn detect_heading_level(ppr: Option<&CT_PPr>, styles: &CT_Styles) -> Option<u32>
 }
 
 /// Detect if a paragraph is a list item. Returns (is_ordered, ilvl).
-fn detect_list(para: &CT_P, numbering: Option<&CT_Numbering>) -> Option<(bool, u32)> {
+fn detect_list(
+    para: &CT_P,
+    styles: &CT_Styles,
+    numbering: Option<&CT_Numbering>,
+) -> Option<(bool, u32)> {
     let ppr = para.properties.as_ref()?;
     let num_id = ppr.num_id?;
     let ilvl = ppr.num_ilvl.unwrap_or(0);
@@ -71,18 +75,9 @@ fn detect_list(para: &CT_P, numbering: Option<&CT_Numbering>) -> Option<(bool, u
 
     let numbering = numbering?;
 
-    let abstract_id = numbering
-        .nums
-        .iter()
-        .find(|n| n.num_id == num_id)
-        .map(|n| n.abstract_num_id)?;
-
-    let abstract_num = numbering
-        .abstract_nums
-        .iter()
-        .find(|a| a.abstract_num_id == abstract_id)?;
-
-    let level = abstract_num.levels.iter().find(|l| l.ilvl == ilvl)?;
+    let level = numbering
+        .get_effective_level_with_styles(num_id, ilvl, styles)?
+        .level;
 
     let is_ordered = !matches!(
         level.num_fmt,
@@ -101,7 +96,7 @@ fn emit_paragraph(
     hyperlink_urls: &HashMap<String, String>,
 ) {
     let heading_level = detect_heading_level(para.properties.as_ref(), styles);
-    let list_info = detect_list(para, numbering);
+    let list_info = detect_list(para, styles, numbering);
 
     // Collect inline text for the paragraph
     let text = collect_paragraph_text(para, hyperlink_urls);
@@ -137,65 +132,42 @@ fn emit_paragraph(
 /// Collect all text from a paragraph, applying inline formatting.
 fn collect_paragraph_text(para: &CT_P, hyperlink_urls: &HashMap<String, String>) -> String {
     let mut out = String::new();
-
-    // Build hyperlink map
-    let mut hyperlink_map: HashMap<usize, &str> = HashMap::new();
-    for hl in &para.hyperlinks {
-        // Markdown renderers turn `[text](javascript:...)` into a live link too,
-        // so the same scheme allowlist applies here.
-        if let Some(rel_id) = &hl.rel_id
-            && let Some(url) = hyperlink_urls
-                .get(rel_id)
-                .map(String::as_str)
-                .and_then(crate::sanitize::safe_url)
-        {
-            for i in hl.run_start..hl.run_end {
-                hyperlink_map.insert(i, url);
+    for child in &para.content {
+        match child {
+            ParagraphChild::Run(run) => out.push_str(&collect_run_text(run)),
+            ParagraphChild::Hyperlink(hyperlink) => {
+                let text = collect_inline_text(hyperlink.children());
+                let url = hyperlink
+                    .rel_id()
+                    .and_then(|rel_id| hyperlink_urls.get(rel_id))
+                    .map(String::as_str)
+                    .and_then(crate::sanitize::safe_url);
+                if let Some(url) = url {
+                    out.push_str(&format!("[{text}]({url})"));
+                } else {
+                    out.push_str(&text);
+                }
             }
+            ParagraphChild::SimpleField(field) => {
+                out.push_str(&collect_inline_text(field.children()));
+            }
+            ParagraphChild::Unsupported(_) => {}
         }
     }
+    out
+}
 
-    // Track link state to group consecutive runs in same link
-    let mut current_link: Option<&str> = None;
-    let mut link_text = String::new();
-
-    for (run_idx, run) in para.runs.iter().enumerate() {
-        let in_link = hyperlink_map.get(&run_idx).copied();
-
-        // Handle link transitions
-        match (current_link, in_link) {
-            (Some(url), None) => {
-                // Close link
-                out.push_str(&format!("[{}]({})", link_text, url));
-                link_text.clear();
-                current_link = None;
+fn collect_inline_text(children: &[InlineChild]) -> String {
+    let mut out = String::new();
+    for child in children {
+        match child {
+            InlineChild::Run(run) => out.push_str(&collect_run_text(run)),
+            InlineChild::SimpleField(field) => {
+                out.push_str(&collect_inline_text(field.children()));
             }
-            (Some(old_url), Some(new_url)) if old_url != new_url => {
-                // Close old, start new
-                out.push_str(&format!("[{}]({})", link_text, old_url));
-                link_text.clear();
-                current_link = Some(new_url);
-            }
-            (None, Some(url)) => {
-                current_link = Some(url);
-            }
-            _ => {}
-        }
-
-        let run_text = collect_run_text(run);
-
-        if current_link.is_some() {
-            link_text.push_str(&run_text);
-        } else {
-            out.push_str(&run_text);
+            InlineChild::Unsupported(_) => {}
         }
     }
-
-    // Close any remaining link
-    if let Some(url) = current_link {
-        out.push_str(&format!("[{}]({})", link_text, url));
-    }
-
     out
 }
 
@@ -207,15 +179,15 @@ fn collect_run_text(run: &CT_R) -> String {
         match content {
             RunContent::Text(t) => raw.push_str(&t.text),
             RunContent::Tab => raw.push('\t'),
-            RunContent::Break(bt) => match bt {
+            RunContent::Break(parsed) => match *parsed.value() {
                 BreakType::Line => raw.push_str("  \n"),
                 BreakType::Page => raw.push_str("\n---\n"),
                 BreakType::Column => raw.push_str("  \n"),
             },
             RunContent::Drawing(_)
-            | RunContent::Field { .. }
-            | RunContent::FootnoteRef { .. }
-            | RunContent::EndnoteRef { .. } => {}
+            | RunContent::FootnoteRef(_)
+            | RunContent::EndnoteRef(_)
+            | RunContent::Unsupported(_) => {}
         }
     }
 
@@ -320,6 +292,7 @@ fn collect_cell_text(
             CellContent::Table(_) => {
                 parts.push("(nested table)".to_string());
             }
+            CellContent::Unsupported(_) => {}
         }
     }
 

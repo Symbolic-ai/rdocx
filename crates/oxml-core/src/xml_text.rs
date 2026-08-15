@@ -10,6 +10,7 @@
 //! [`Event::Text`]: quick_xml::events::Event::Text
 
 use quick_xml::Reader;
+use quick_xml::errors::IllFormedError;
 use quick_xml::escape::unescape;
 use quick_xml::events::{BytesRef, BytesText, Event};
 use quick_xml::name::QName;
@@ -18,15 +19,9 @@ use quick_xml::name::QName;
 ///
 /// Use this for spans produced by [`Reader::read_text`], which returns the raw
 /// markup between the tags — entities in it are *not* pre-resolved.
-pub fn decode_escaped(text: &BytesText<'_>) -> String {
-    let Ok(raw) = text.decode() else {
-        return String::new();
-    };
-    match unescape(&raw) {
-        Ok(unescaped) => unescaped.into_owned(),
-        // Malformed or unknown entity: keep the raw text rather than losing it.
-        Err(_) => raw.into_owned(),
-    }
+pub fn decode_escaped(text: &BytesText<'_>) -> quick_xml::Result<String> {
+    let raw = text.decode()?;
+    Ok(unescape(&raw)?.into_owned())
 }
 
 /// Decode an [`Event::Text`] payload, which quick-xml has already stripped of
@@ -34,23 +29,18 @@ pub fn decode_escaped(text: &BytesText<'_>) -> String {
 ///
 /// [`Event::GeneralRef`]: quick_xml::events::Event::GeneralRef
 /// [`Event::Text`]: quick_xml::events::Event::Text
-pub fn decode_plain(text: &BytesText<'_>) -> String {
-    text.decode().map(|c| c.into_owned()).unwrap_or_default()
+pub fn decode_plain(text: &BytesText<'_>) -> quick_xml::Result<String> {
+    Ok(text.decode()?.into_owned())
 }
 
 /// Resolve a single entity reference event to the text it stands for.
 ///
 /// Handles numeric references (`&#65;`, `&#x41;`) and the five XML predefined
-/// entities. An unresolvable reference is reproduced verbatim (`&name;`) so it
-/// survives a round trip instead of vanishing.
-pub fn resolve_entity(entity: &BytesRef<'_>) -> String {
-    let Ok(name) = entity.decode() else {
-        return String::new();
-    };
-    match unescape(&format!("&{name};")) {
-        Ok(resolved) => resolved.into_owned(),
-        Err(_) => format!("&{name};"),
-    }
+/// entities. An unresolvable reference is an error because replacing visible
+/// text with an empty or invented value would be lossy.
+pub fn resolve_entity(entity: &BytesRef<'_>) -> quick_xml::Result<String> {
+    let name = entity.decode()?;
+    Ok(unescape(&format!("&{name};"))?.into_owned())
 }
 
 /// Read the full text content of the element that `start_name` opened,
@@ -63,7 +53,10 @@ pub fn resolve_entity(entity: &BytesRef<'_>) -> String {
 /// [`Event::CData`]: quick_xml::events::Event::CData
 /// [`Event::GeneralRef`]: quick_xml::events::Event::GeneralRef
 /// [`Event::Text`]: quick_xml::events::Event::Text
-pub fn read_element_text(reader: &mut Reader<&[u8]>, start_name: QName<'_>) -> String {
+pub fn read_element_text(
+    reader: &mut Reader<&[u8]>,
+    start_name: QName<'_>,
+) -> quick_xml::Result<String> {
     let end = start_name.as_ref().to_vec();
     let mut out = String::new();
     let mut buf = Vec::new();
@@ -80,46 +73,50 @@ pub fn read_element_text(reader: &mut Reader<&[u8]>, start_name: QName<'_>) -> S
         previous
     };
 
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
-                if e.name().as_ref() == end {
-                    depth += 1;
-                }
-            }
-            Ok(Event::End(ref e)) => {
-                if e.name().as_ref() == end {
-                    depth -= 1;
-                    if depth == 0 {
-                        break;
+    let result = (|| -> quick_xml::Result<String> {
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref e)) => {
+                    if e.name().as_ref() == end {
+                        depth += 1;
                     }
                 }
-            }
-            Ok(Event::Text(ref e)) => out.push_str(&decode_plain(e)),
-            Ok(Event::CData(ref e)) => {
-                if let Ok(decoded) = e.decode() {
-                    out.push_str(&decoded);
+                Ok(Event::End(ref e)) => {
+                    if e.name().as_ref() == end {
+                        depth -= 1;
+                        if depth == 0 {
+                            break Ok(out);
+                        }
+                    }
                 }
+                Ok(Event::Text(ref e)) => out.push_str(&decode_plain(e)?),
+                Ok(Event::CData(ref e)) => out.push_str(&e.decode()?),
+                Ok(Event::GeneralRef(ref e)) => out.push_str(&resolve_entity(e)?),
+                Ok(Event::Eof) => {
+                    break Err(IllFormedError::MissingEndTag(
+                        String::from_utf8_lossy(&end).into_owned(),
+                    )
+                    .into());
+                }
+                Err(error) => break Err(error),
+                _ => {}
             }
-            Ok(Event::GeneralRef(ref e)) => out.push_str(&resolve_entity(e)),
-            Ok(Event::Eof) | Err(_) => break,
-            _ => {}
+            buf.clear();
         }
-        buf.clear();
-    }
+    })();
 
     let config = reader.config_mut();
     config.trim_text_start = trim_start;
     config.trim_text_end = trim_end;
 
-    out
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn text_of(xml: &str) -> String {
+    fn text_of(xml: &str) -> quick_xml::Result<String> {
         let mut reader = Reader::from_str(xml);
         let mut buf = Vec::new();
         loop {
@@ -127,7 +124,8 @@ mod tests {
                 Ok(Event::Start(ref e)) if e.name().as_ref() == b"t" => {
                     return read_element_text(&mut reader, e.name());
                 }
-                Ok(Event::Eof) => return String::new(),
+                Ok(Event::Eof) => return Ok(String::new()),
+                Err(error) => return Err(error),
                 _ => {}
             }
         }
@@ -135,10 +133,10 @@ mod tests {
 
     #[test]
     fn entities_survive_text_accumulation() {
-        assert_eq!(text_of("<t>a &amp; b</t>"), "a & b");
-        assert_eq!(text_of("<t>&lt;tag&gt;</t>"), "<tag>");
-        assert_eq!(text_of("<t>&#65;&#x42;</t>"), "AB");
-        assert_eq!(text_of("<t>plain</t>"), "plain");
+        assert_eq!(text_of("<t>a &amp; b</t>").unwrap(), "a & b");
+        assert_eq!(text_of("<t>&lt;tag&gt;</t>").unwrap(), "<tag>");
+        assert_eq!(text_of("<t>&#65;&#x42;</t>").unwrap(), "AB");
+        assert_eq!(text_of("<t>plain</t>").unwrap(), "plain");
     }
 
     #[test]
@@ -150,7 +148,7 @@ mod tests {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     assert_eq!(
-                        read_element_text(&mut reader, e.name()),
+                        read_element_text(&mut reader, e.name()).unwrap(),
                         "Title & Co. <tagged>"
                     );
                     // The caller's trim setting must be restored.
@@ -164,8 +162,26 @@ mod tests {
     }
 
     #[test]
-    fn unknown_entity_is_preserved_verbatim() {
-        assert_eq!(text_of("<t>a &nbsp; b</t>"), "a &nbsp; b");
+    fn unknown_entity_is_rejected() {
+        assert!(text_of("<t>a &nbsp; b</t>").is_err());
+    }
+
+    #[test]
+    fn undecodable_visible_text_is_rejected() {
+        let xml = b"<t>before\xffafter</t>";
+        let mut reader = Reader::from_reader(xml.as_slice());
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref element)) => {
+                    assert!(read_element_text(&mut reader, element.name()).is_err());
+                    return;
+                }
+                Ok(Event::Eof) => panic!("no start tag"),
+                _ => {}
+            }
+            buf.clear();
+        }
     }
 
     #[test]
@@ -177,7 +193,7 @@ mod tests {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let span = reader.read_text(e.name()).unwrap();
-                    assert_eq!(decode_escaped(&span), "a & b");
+                    assert_eq!(decode_escaped(&span).unwrap(), "a & b");
                     return;
                 }
                 Ok(Event::Eof) => panic!("no start tag"),
@@ -189,8 +205,8 @@ mod tests {
     #[test]
     fn xml_text_handles_cdata_mixed_nested_and_general_refs() {
         assert_eq!(
-            text_of("<t>start<![CDATA[<raw>]]><n>nested &amp; text</n>end&nbsp;</t>"),
-            "start<raw>nested & textend&nbsp;"
+            text_of("<t>start<![CDATA[<raw>]]><n>nested &amp; text</n>end</t>").unwrap(),
+            "start<raw>nested & textend"
         );
     }
 }

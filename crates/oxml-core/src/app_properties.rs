@@ -216,7 +216,7 @@ impl AppProperties {
                                 property.tag()
                             )));
                         }
-                        let text = read_element_text(&mut reader, element.name());
+                        let text = read_element_text(&mut reader, element.name())?;
                         properties.set_text(property, text)?;
                         properties.child_order.push(ChildOrder::Known(property));
                     } else {

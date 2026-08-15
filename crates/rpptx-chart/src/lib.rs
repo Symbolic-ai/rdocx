@@ -4779,7 +4779,11 @@ fn parse_text_element(
                         .map_err(OxmlError::from)?
                     {
                         Event::Text(text) => {
-                            value.push_str(&decode_plain(&text));
+                            value.push_str(
+                                &decode_plain(&text)
+                                    .map_err(OxmlError::from)
+                                    .map_err(ChartError::from)?,
+                            );
                             seen_text = true;
                         }
                         Event::CData(text) => {
@@ -4792,7 +4796,11 @@ fn parse_text_element(
                             seen_text = true;
                         }
                         Event::GeneralRef(reference) => {
-                            value.push_str(&resolve_entity(&reference));
+                            value.push_str(
+                                &resolve_entity(&reference)
+                                    .map_err(OxmlError::from)
+                                    .map_err(ChartError::from)?,
+                            );
                             seen_text = true;
                         }
                         event @ (Event::Comment(_) | Event::PI(_)) => {

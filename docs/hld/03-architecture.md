@@ -59,10 +59,13 @@ churn. The edge runs `oxml-drawing → rdocx-oxml`, never the reverse.
 
 ## Why these seams
 
-**`oxml-opc` does not depend on `oxml-core`.** It has its own small local-name
-handling. Staying independent means it is publishable first and consumable
-alone. `rdocx-wasm` consumes the complete `rdocx` facade rather than using this
-lower-level seam as a second document model.
+**`oxml-opc` depends narrowly on `oxml-core`.** Relationship and content-type
+part readers use the shared strict XML substrate so package metadata follows
+the same namespace, completeness, and budget rules as semantic OOXML parts.
+ZIP access, package paths, and package mutation remain local to `oxml-opc`.
+It remains independently consumable at the package layer. `rdocx-wasm`
+consumes the complete `rdocx` facade rather than using this lower-level seam as
+a second document model.
 
 **`oxml-media` has no dependencies at all.** It owns byte sniffing, image header
 probing, and intrinsic EMU sizing through its local `NativeSize` value. It

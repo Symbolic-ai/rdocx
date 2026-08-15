@@ -3,11 +3,26 @@
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
+use oxml_core::xml::{
+    StrictXmlCompleteness, StrictXmlCursor, StrictXmlDocument, StrictXmlElement, StrictXmlNode,
+    parse_reader_element, parse_reader_started_element,
+};
+
 use crate::error::{OxmlError, Result};
-use crate::namespace::{W_NS, matches_local_name};
-use crate::numbering::{parse_scoped_ppr, word_prefixes_at};
-use crate::properties::{CT_PPr, CT_RPr, is_word_element};
-use crate::raw_xml::capture_element;
+use crate::namespace::W_NS;
+use crate::properties::{CT_PPr, CT_RPr};
+use crate::raw_xml::NamespaceContext;
+
+fn take_element(
+    cursor: &mut StrictXmlCursor,
+    index: usize,
+    description: &str,
+) -> Result<StrictXmlElement> {
+    cursor
+        .take_child(index)
+        .and_then(StrictXmlNode::into_element)
+        .ok_or_else(|| OxmlError::MissingElement(description.to_string()))
+}
 
 /// The type of a style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +58,8 @@ impl StyleType {
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_snake_case)]
 pub struct CT_Style {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     pub style_id: String,
     pub style_type: StyleType,
     pub name: Option<String>,
@@ -55,84 +72,89 @@ pub struct CT_Style {
 
 #[allow(non_snake_case)]
 impl CT_Style {
-    pub fn from_xml(reader: &mut Reader<&[u8]>, attrs: &BytesStart) -> Result<Self> {
-        let prefixes = word_prefixes_at(attrs, &["w".to_string()])?;
-        Self::from_xml_with_prefixes(reader, attrs, &prefixes)
+    fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let style_id = cursor
+                .take_attribute(Some(W_NS), "styleId")
+                .unwrap_or_default();
+            let style_type = cursor
+                .take_attribute(Some(W_NS), "type")
+                .map(|value| StyleType::from_str(&value))
+                .transpose()?
+                .unwrap_or(StyleType::Paragraph);
+            let is_default = match cursor.attribute(Some(W_NS), "default") {
+                Some("1" | "true") => {
+                    cursor.take_attribute(Some(W_NS), "default");
+                    true
+                }
+                Some("0" | "false") => {
+                    cursor.take_attribute(Some(W_NS), "default");
+                    false
+                }
+                _ => false,
+            };
+            let mut style = Self {
+                completeness: StrictXmlCompleteness::default(),
+                style_id,
+                style_type,
+                name: None,
+                based_on: None,
+                next_style: None,
+                is_default,
+                ppr: None,
+                rpr: None,
+            };
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let local = ["name", "basedOn", "next", "pPr", "rPr"]
+                    .into_iter()
+                    .find(|local| child.is_named(Some(W_NS), local));
+                let Some(local) = local else {
+                    continue;
+                };
+                let child = take_element(cursor, index, local)?;
+                let completeness = match local {
+                    "pPr" => {
+                        let properties = CT_PPr::from_strict_xml(child)?;
+                        let completeness = properties.completeness.clone();
+                        style.ppr = Some(properties);
+                        completeness
+                    }
+                    "rPr" => {
+                        let properties = CT_RPr::from_strict_xml(child)?;
+                        let completeness = properties.completeness.clone();
+                        style.rpr = Some(properties);
+                        completeness
+                    }
+                    _ => {
+                        let parsed_value =
+                            child.parse(|cursor| Ok(cursor.take_attribute(Some(W_NS), "val")))?;
+                        let (value, leftovers) = parsed_value.into_parts();
+                        match local {
+                            "name" => style.name = value,
+                            "basedOn" => style.based_on = value,
+                            "next" => style.next_style = value,
+                            _ => unreachable!(),
+                        }
+                        StrictXmlCompleteness::from_leftovers(leftovers)
+                    }
+                };
+                descendants.push(completeness);
+            }
+            Ok(style)
+        })?;
+        let (mut style, leftovers) = parsed.into_parts();
+        style.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(style)
     }
 
-    fn from_xml_with_prefixes(
-        reader: &mut Reader<&[u8]>,
-        attrs: &BytesStart,
-        word_prefixes: &[String],
-    ) -> Result<Self> {
-        let mut style_id = String::new();
-        let mut style_type = StyleType::Paragraph;
-        let mut is_default = false;
-
-        for attr in attrs.attributes() {
-            let attr = attr?;
-            let key = attr.key.as_ref();
-            if matches_local_name(key, b"styleId") {
-                style_id = std::str::from_utf8(&attr.value)?.to_string();
-            } else if matches_local_name(key, b"type") {
-                style_type = StyleType::from_str(std::str::from_utf8(&attr.value)?)?;
-            } else if matches_local_name(key, b"default") {
-                is_default = std::str::from_utf8(&attr.value)? == "1"
-                    || std::str::from_utf8(&attr.value)? == "true";
-            }
-        }
-
-        let mut name = None;
-        let mut based_on = None;
-        let mut next_style = None;
-        let mut ppr = None;
-        let mut rpr = None;
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    let ename = e.name();
-                    if matches_local_name(ename.as_ref(), b"name") {
-                        name = get_val_attr(e)?;
-                    } else if matches_local_name(ename.as_ref(), b"basedOn") {
-                        based_on = get_val_attr(e)?;
-                    } else if matches_local_name(ename.as_ref(), b"next") {
-                        next_style = get_val_attr(e)?;
-                    }
-                }
-                Ok(Event::Start(ref e)) => {
-                    let ename = e.name();
-                    let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if is_word_element(ename.as_ref(), b"pPr", &prefixes) {
-                        let raw = capture_element(reader, e)?;
-                        ppr = Some(parse_scoped_ppr(&raw, &prefixes)?);
-                    } else if matches_local_name(ename.as_ref(), b"rPr") {
-                        rpr = Some(CT_RPr::from_xml(reader)?);
-                    } else {
-                        reader.read_to_end_into(ename, &mut Vec::new())?;
-                    }
-                }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"style") => {
-                    break;
-                }
-                Ok(Event::Eof) => break,
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(CT_Style {
-            style_id,
-            style_type,
-            name,
-            based_on,
-            next_style,
-            is_default,
-            ppr,
-            rpr,
-        })
+    pub fn from_xml(reader: &mut Reader<&[u8]>, attrs: &BytesStart) -> Result<Self> {
+        let context = NamespaceContext::default().with_element(attrs);
+        let element = parse_reader_started_element(reader, &context, Some(W_NS), "style", attrs)?;
+        Self::from_strict_xml(element)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -174,111 +196,94 @@ impl CT_Style {
     }
 }
 
+impl Default for CT_Style {
+    fn default() -> Self {
+        Self {
+            completeness: StrictXmlCompleteness::default(),
+            style_id: String::new(),
+            style_type: StyleType::Paragraph,
+            name: None,
+            based_on: None,
+            next_style: None,
+            is_default: false,
+            ppr: None,
+            rpr: None,
+        }
+    }
+}
+
 /// `CT_DocDefaults` — Document-level default properties.
 #[derive(Debug, Clone, Default, PartialEq)]
 #[allow(non_snake_case)]
 pub struct CT_DocDefaults {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     pub rpr: Option<CT_RPr>,
     pub ppr: Option<CT_PPr>,
 }
 
 #[allow(non_snake_case)]
 impl CT_DocDefaults {
-    pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
-        Self::from_xml_with_prefixes(reader, &["w".to_string()])
-    }
-
-    fn from_xml_with_prefixes(
-        reader: &mut Reader<&[u8]>,
-        word_prefixes: &[String],
-    ) -> Result<Self> {
-        let mut defaults = CT_DocDefaults::default();
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if matches_local_name(name.as_ref(), b"rPrDefault") {
-                        // Read into rPrDefault, expecting rPr child
-                        defaults.rpr = Self::parse_pr_default(reader, b"rPrDefault")?;
-                    } else if matches_local_name(name.as_ref(), b"pPrDefault") {
-                        defaults.ppr = Self::parse_ppr_default(reader, &prefixes)?;
-                    } else {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
+    fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let mut descendants = Vec::new();
+        let parsed = element.parse(|cursor| {
+            let mut defaults = Self::default();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                let local = if child.is_named(Some(W_NS), "rPrDefault") {
+                    Some("rPrDefault")
+                } else if child.is_named(Some(W_NS), "pPrDefault") {
+                    Some("pPrDefault")
+                } else {
+                    None
+                };
+                let Some(local) = local else {
+                    continue;
+                };
+                let wrapper = take_element(cursor, index, local)?;
+                let mut wrapper_descendants = Vec::new();
+                let parsed_wrapper = wrapper.parse(|cursor| {
+                    for index in 0..cursor.child_slots() {
+                        let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                            continue;
+                        };
+                        let matches = (local == "rPrDefault" && child.is_named(Some(W_NS), "rPr"))
+                            || (local == "pPrDefault" && child.is_named(Some(W_NS), "pPr"));
+                        if !matches {
+                            continue;
+                        }
+                        let child = take_element(cursor, index, "default properties")?;
+                        if local == "rPrDefault" {
+                            let properties = CT_RPr::from_strict_xml(child)?;
+                            wrapper_descendants.push(properties.completeness.clone());
+                            defaults.rpr = Some(properties);
+                        } else {
+                            let properties = CT_PPr::from_strict_xml(child)?;
+                            wrapper_descendants.push(properties.completeness.clone());
+                            defaults.ppr = Some(properties);
+                        }
+                        break;
                     }
-                }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"docDefaults") => {
-                    break;
-                }
-                Ok(Event::Eof) => break,
-                Err(e) => return Err(e.into()),
-                _ => {}
+                    Ok(())
+                })?;
+                descendants.push(StrictXmlCompleteness::new(
+                    parsed_wrapper.leftovers,
+                    wrapper_descendants,
+                ));
             }
-            buf.clear();
-        }
-
+            Ok(defaults)
+        })?;
+        let (mut defaults, leftovers) = parsed.into_parts();
+        defaults.completeness = StrictXmlCompleteness::new(leftovers, descendants);
         Ok(defaults)
     }
 
-    fn parse_pr_default(reader: &mut Reader<&[u8]>, end_tag: &[u8]) -> Result<Option<CT_RPr>> {
-        let mut rpr = None;
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"rPr") {
-                        rpr = Some(CT_RPr::from_xml(reader)?);
-                    } else {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
-                    }
-                }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), end_tag) => {
-                    break;
-                }
-                Ok(Event::Eof) => break,
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(rpr)
-    }
-
-    fn parse_ppr_default(
-        reader: &mut Reader<&[u8]>,
-        word_prefixes: &[String],
-    ) -> Result<Option<CT_PPr>> {
-        let mut ppr = None;
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if is_word_element(name.as_ref(), b"pPr", &prefixes) {
-                        let raw = capture_element(reader, e)?;
-                        ppr = Some(parse_scoped_ppr(&raw, &prefixes)?);
-                    } else {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
-                    }
-                }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"pPrDefault") => {
-                    break;
-                }
-                Ok(Event::Eof) => break,
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(ppr)
+    pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        let context = NamespaceContext::default();
+        let element = parse_reader_element(reader, &context, Some(W_NS), "docDefaults", [])?;
+        Self::from_strict_xml(element)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -305,6 +310,8 @@ impl CT_DocDefaults {
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_snake_case)]
 pub struct CT_Styles {
+    #[doc(hidden)]
+    pub completeness: StrictXmlCompleteness,
     pub doc_defaults: Option<CT_DocDefaults>,
     pub styles: Vec<CT_Style>,
 }
@@ -313,6 +320,7 @@ pub struct CT_Styles {
 impl CT_Styles {
     pub fn new() -> Self {
         CT_Styles {
+            completeness: StrictXmlCompleteness::default(),
             doc_defaults: None,
             styles: Vec::new(),
         }
@@ -320,44 +328,34 @@ impl CT_Styles {
 
     /// Parse from XML bytes (the content of word/styles.xml).
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
-        let mut reader = Reader::from_reader(xml);
-        reader.config_mut().trim_text(true);
-
-        let mut doc_defaults = None;
-        let mut styles = Vec::new();
-        let mut buf = Vec::new();
-        let mut word_prefixes = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    let prefixes = word_prefixes_at(e, &word_prefixes)?;
-                    if matches_local_name(name.as_ref(), b"docDefaults") {
-                        doc_defaults = Some(CT_DocDefaults::from_xml_with_prefixes(
-                            &mut reader,
-                            &prefixes,
-                        )?);
-                    } else if matches_local_name(name.as_ref(), b"style") {
-                        styles.push(CT_Style::from_xml_with_prefixes(&mut reader, e, &prefixes)?);
-                    } else if matches_local_name(name.as_ref(), b"styles") {
-                        // Root element, continue
-                        word_prefixes = prefixes;
-                    } else {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
-                    }
-                }
-                Ok(Event::Eof) => break,
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
+        let root = StrictXmlDocument::parse(xml)?.into_root();
+        if !root.is_named(Some(W_NS), "styles") {
+            return Err(OxmlError::MissingElement("w:styles".to_string()));
         }
-
-        Ok(CT_Styles {
-            doc_defaults,
-            styles,
-        })
+        let mut descendants = Vec::new();
+        let parsed = root.parse(|cursor| {
+            let mut styles = Self::new();
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                if child.is_named(Some(W_NS), "docDefaults") && styles.doc_defaults.is_none() {
+                    let child = take_element(cursor, index, "docDefaults")?;
+                    let defaults = CT_DocDefaults::from_strict_xml(child)?;
+                    descendants.push(defaults.completeness.clone());
+                    styles.doc_defaults = Some(defaults);
+                } else if child.is_named(Some(W_NS), "style") {
+                    let child = take_element(cursor, index, "style")?;
+                    let style = CT_Style::from_strict_xml(child)?;
+                    descendants.push(style.completeness.clone());
+                    styles.styles.push(style);
+                }
+            }
+            Ok(styles)
+        })?;
+        let (mut styles, leftovers) = parsed.into_parts();
+        styles.completeness = StrictXmlCompleteness::new(leftovers, descendants);
+        Ok(styles)
     }
 
     /// Serialize to XML bytes.
@@ -416,6 +414,7 @@ impl CT_Styles {
             is_default: true,
             ppr: None,
             rpr: None,
+            ..Default::default()
         };
 
         let heading1 = CT_Style {
@@ -440,6 +439,7 @@ impl CT_Styles {
                 color: Some("2F5496".to_string()),
                 ..Default::default()
             }),
+            ..Default::default()
         };
 
         let doc_defaults = CT_DocDefaults {
@@ -458,11 +458,13 @@ impl CT_Styles {
                 line_rule: Some("auto".to_string()),
                 ..Default::default()
             }),
+            ..Default::default()
         };
 
         CT_Styles {
             doc_defaults: Some(doc_defaults),
             styles: vec![normal, heading1],
+            ..Default::default()
         }
     }
 }
@@ -471,17 +473,6 @@ impl Default for CT_Styles {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Extract the `w:val` attribute from an element.
-fn get_val_attr(e: &BytesStart) -> Result<Option<String>> {
-    for attr in e.attributes() {
-        let attr = attr?;
-        if matches_local_name(attr.key.as_ref(), b"val") {
-            return Ok(Some(std::str::from_utf8(&attr.value)?.to_string()));
-        }
-    }
-    Ok(None)
 }
 
 #[cfg(test)]
@@ -513,6 +504,26 @@ mod tests {
     }
 
     #[test]
+    fn styles_require_word_namespaces_and_qualified_attributes() {
+        let xml = format!(
+            r#"<z:styles xmlns:z="{W_NS}" xmlns:x="urn:foreign">
+              <x:style z:styleId="Foreign"><x:name z:val="Foreign"/></x:style>
+              <z:style styleId="Unqualified" type="paragraph"><z:name val="Ignored"/></z:style>
+              <z:style z:styleId="Accepted" z:type="paragraph"><z:name z:val="Accepted"/></z:style>
+            </z:styles>"#
+        );
+
+        let styles = CT_Styles::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(styles.styles.len(), 2);
+        assert!(styles.get_by_id("Foreign").is_none());
+        assert!(styles.get_by_id("Unqualified").is_none());
+        assert_eq!(
+            styles.get_by_id("Accepted").unwrap().name.as_deref(),
+            Some("Accepted")
+        );
+    }
+
+    #[test]
     fn aliased_style_paragraph_properties_use_ancestor_namespace_scope() {
         let xml = format!(
             r#"<q:styles xmlns:q="{W_NS}" xmlns:ext="urn:producer"><q:style q:type="paragraph" q:styleId="Alias"><q:pPr><ext:jc ext:val="right"/><q:jc q:val="center"/></q:pPr></q:style></q:styles>"#
@@ -523,72 +534,8 @@ mod tests {
     }
 
     #[test]
-    fn direct_style_parser_uses_supplied_start_ancestor_scope() {
-        let xml = format!(
-            r#"<outer xmlns:ext="urn:producer"><q:style xmlns:q="{W_NS}" q:type="paragraph" q:styleId="Direct"><ext:pPr><ext:jc ext:val="right"/></ext:pPr><q:pPr><ext:jc ext:val="right"/><q:jc q:val="center"/></q:pPr></q:style></outer>"#
-        );
-        let mut reader = Reader::from_str(&xml);
-        let mut buf = Vec::new();
-        let parsed = loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref element)) if element.local_name().as_ref() == b"style" => {
-                    break CT_Style::from_xml(&mut reader, element).unwrap();
-                }
-                Ok(Event::Eof) => panic!("missing style"),
-                event => {
-                    event.unwrap();
-                }
-            }
-            buf.clear();
-        };
-        assert_eq!(
-            parsed.ppr.as_ref().unwrap().jc,
-            Some(crate::shared::ST_Jc::Center)
-        );
-    }
-
-    #[test]
-    fn direct_style_parser_does_not_promote_foreign_start_prefix() {
-        let xml = r#"<outer><ext:style xmlns:ext="urn:producer" ext:type="paragraph" ext:styleId="Foreign"><ext:pPr><ext:jc ext:val="right"/></ext:pPr></ext:style></outer>"#;
-        let mut reader = Reader::from_str(xml);
-        let mut buf = Vec::new();
-        let parsed = loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref element)) if element.local_name().as_ref() == b"style" => {
-                    break CT_Style::from_xml(&mut reader, element).unwrap();
-                }
-                Ok(Event::Eof) => panic!("missing style"),
-                event => {
-                    event.unwrap();
-                }
-            }
-            buf.clear();
-        };
-        assert!(parsed.ppr.is_none());
-    }
-
-    #[test]
-    fn direct_style_parser_accepts_default_word_namespace() {
-        let xml = format!(
-            r#"<outer xmlns:ext="urn:producer"><style xmlns="{W_NS}" xmlns:w="{W_NS}" w:type="paragraph" w:styleId="Direct"><ext:pPr><ext:jc ext:val="right"/></ext:pPr><pPr><ext:jc ext:val="right"/><jc w:val="center"/></pPr></style></outer>"#
-        );
-        let mut reader = Reader::from_str(&xml);
-        let mut buf = Vec::new();
-        let parsed = loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref element)) if element.local_name().as_ref() == b"style" => {
-                    break CT_Style::from_xml(&mut reader, element).unwrap();
-                }
-                Ok(Event::Eof) => panic!("missing style"),
-                event => {
-                    event.unwrap();
-                }
-            }
-            buf.clear();
-        };
-        assert_eq!(
-            parsed.ppr.as_ref().unwrap().jc,
-            Some(crate::shared::ST_Jc::Center)
-        );
+    fn truncated_styles_are_rejected() {
+        let xml = format!(r#"<w:styles xmlns:w="{W_NS}"><w:style w:styleId="Normal">"#);
+        assert!(CT_Styles::from_xml(xml.as_bytes()).is_err());
     }
 }

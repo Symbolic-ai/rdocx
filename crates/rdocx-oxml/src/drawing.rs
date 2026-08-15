@@ -3,9 +3,16 @@
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 
-use crate::error::Result;
+use oxml_core::xml::{
+    StrictXmlCursor, StrictXmlDocument, StrictXmlElement, StrictXmlNode, StrictXmlParsed,
+    parse_reader_element, parse_reader_started_element,
+};
+
+use crate::error::{OxmlError, Result};
+#[cfg(test)]
 use crate::namespace::matches_local_name;
-use crate::raw_xml::capture_element;
+use crate::namespace::{MC_NS, R_NS, W_NS};
+use crate::raw_xml::NamespaceContext;
 use crate::units::Emu;
 
 /// Namespaces used in drawing markup.
@@ -14,6 +21,46 @@ pub mod drawing_ns {
     pub const A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
     pub const PIC: &str = "http://schemas.openxmlformats.org/drawingml/2006/picture";
     pub const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    pub const WPS: &str = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
+}
+
+fn child_elements(element: &StrictXmlElement) -> impl Iterator<Item = &StrictXmlElement> {
+    element
+        .children()
+        .iter()
+        .filter_map(StrictXmlNode::as_element)
+}
+
+fn find_descendant<'a>(
+    element: &'a StrictXmlElement,
+    namespace: Option<&str>,
+    local: &str,
+) -> Option<&'a StrictXmlElement> {
+    child_elements(element).find_map(|child| {
+        child
+            .is_named(namespace, local)
+            .then_some(child)
+            .or_else(|| find_descendant(child, namespace, local))
+    })
+}
+
+fn direct_child<'a>(
+    element: &'a StrictXmlElement,
+    namespace: Option<&str>,
+    local: &str,
+) -> Option<&'a StrictXmlElement> {
+    child_elements(element).find(|child| child.is_named(namespace, local))
+}
+
+fn take_element(
+    cursor: &mut StrictXmlCursor,
+    index: usize,
+    description: &str,
+) -> Result<StrictXmlElement> {
+    cursor
+        .take_child(index)
+        .and_then(StrictXmlNode::into_element)
+        .ok_or_else(|| OxmlError::MissingElement(description.to_string()))
 }
 
 /// Horizontal relative-from for anchor positioning.
@@ -127,6 +174,8 @@ pub struct CT_Anchor {
     pub wrap: WrapType,
     /// Relationship ID referencing the image part.
     pub embed_id: String,
+    /// Relationship ID referencing an externally linked image.
+    pub link_id: Option<String>,
     /// Z-order relative height.
     pub relative_height: u32,
     /// Optional description/alt text.
@@ -165,32 +214,23 @@ pub struct CT_Shape {
 /// The caller keeps the raw bytes for write back, so whatever comes out of
 /// here must not be serialised again or the element ends up duplicated.
 pub fn parse_alternate_content(raw: &[u8]) -> Option<CT_Drawing> {
-    let mut reader = Reader::from_reader(raw);
-    reader.config_mut().trim_text(true);
-    let mut buf = Vec::new();
-    let mut in_choice = false;
+    let root = StrictXmlDocument::parse(raw).ok()?.into_root();
+    parse_alternate_content_element(&root).ok().flatten()
+}
 
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
-                let name = e.name();
-                let local = name.as_ref();
-                if matches_local_name(local, b"Choice") {
-                    in_choice = true;
-                } else if in_choice && matches_local_name(local, b"drawing") {
-                    return CT_Drawing::from_xml(&mut reader).ok();
-                }
-            }
-            Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"Choice") => {
-                in_choice = false;
-            }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
-        }
-        buf.clear();
+pub(crate) fn parse_alternate_content_element(
+    element: &StrictXmlElement,
+) -> Result<Option<CT_Drawing>> {
+    if !element.is_named(Some(MC_NS), "AlternateContent") {
+        return Ok(None);
     }
-    None
+    let Some(choice) = direct_child(element, Some(MC_NS), "Choice") else {
+        return Ok(None);
+    };
+    let Some(drawing) = find_descendant(choice, Some(W_NS), "drawing") else {
+        return Ok(None);
+    };
+    Ok(Some(CT_Drawing::from_strict_xml(drawing.clone())?.value))
 }
 
 /// Pull the preset geometry and solid fill out of a captured `wps:spPr`.
@@ -198,88 +238,142 @@ pub fn parse_alternate_content(raw: &[u8]) -> Option<CT_Drawing> {
 /// The fill has to be told apart from the outline colour. Both are written as
 /// `a:srgbClr`, and the outline sits inside `a:ln`, so anything at or below an
 /// `a:ln` is skipped.
-fn parse_shape_props(raw: &[u8]) -> (Option<String>, Option<String>) {
-    let mut reader = Reader::from_reader(raw);
-    reader.config_mut().trim_text(true);
-    let mut buf = Vec::new();
-    let mut preset = None;
-    let mut fill = None;
-    let mut ln_depth = 0usize;
-    let mut in_solid_fill = false;
+fn strict_extent(element: &StrictXmlElement) -> Result<(Emu, Emu)> {
+    let Some(extent) = direct_child(element, Some(drawing_ns::WP), "extent") else {
+        return Ok((Emu(0), Emu(0)));
+    };
+    Ok((
+        Emu(extent.attribute(None, "cx").unwrap_or("0").parse()?),
+        Emu(extent.attribute(None, "cy").unwrap_or("0").parse()?),
+    ))
+}
 
-    // Only a Start can open a scope. A self-closing a:ln or a:solidFill has no
-    // children, so it must not change the depth or the fill flag.
-    loop {
-        let event = reader.read_event_into(&mut buf);
-        match event {
-            Ok(Event::Start(ref e)) => {
-                let name = e.name();
-                let local = name.as_ref();
-                if matches_local_name(local, b"ln") {
-                    ln_depth += 1;
-                } else if matches_local_name(local, b"solidFill") {
-                    in_solid_fill = true;
-                } else if matches_local_name(local, b"prstGeom") {
-                    for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"prst" {
-                            preset = std::str::from_utf8(&attr.value).ok().map(str::to_string);
-                        }
-                    }
-                } else if matches_local_name(local, b"srgbClr")
-                    && in_solid_fill
-                    && ln_depth == 0
-                    && fill.is_none()
-                {
-                    // srgbClr can carry children such as a:alpha, so it turns
-                    // up as a Start as well as an Empty.
-                    for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"val" {
-                            fill = std::str::from_utf8(&attr.value).ok().map(str::to_string);
-                        }
-                    }
-                }
-            }
-            Ok(Event::Empty(ref e)) => {
-                let name = e.name();
-                let local = name.as_ref();
-                if matches_local_name(local, b"prstGeom") {
-                    for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"prst" {
-                            preset = std::str::from_utf8(&attr.value).ok().map(str::to_string);
-                        }
-                    }
-                } else if matches_local_name(local, b"srgbClr")
-                    && in_solid_fill
-                    && ln_depth == 0
-                    && fill.is_none()
-                {
-                    for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"val" {
-                            fill = std::str::from_utf8(&attr.value).ok().map(str::to_string);
-                        }
-                    }
-                }
-            }
-            Ok(Event::End(ref e)) => {
-                let name = e.name();
-                let local = name.as_ref();
-                if matches_local_name(local, b"ln") {
-                    ln_depth = ln_depth.saturating_sub(1);
-                } else if matches_local_name(local, b"solidFill") {
-                    in_solid_fill = false;
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
+fn strict_drawing_identity(
+    element: &StrictXmlElement,
+) -> (String, Option<String>, Option<String>, Option<String>) {
+    let blip = find_descendant(element, Some(drawing_ns::A), "blip");
+    let embed_id = blip
+        .and_then(|element| element.attribute(Some(R_NS), "embed"))
+        .unwrap_or_default()
+        .to_string();
+    let link_id = blip
+        .and_then(|element| element.attribute(Some(R_NS), "link"))
+        .map(str::to_string);
+    let doc_properties = direct_child(element, Some(drawing_ns::WP), "docPr");
+    let description = doc_properties
+        .and_then(|element| element.attribute(None, "descr"))
+        .map(str::to_string);
+    let name = doc_properties
+        .and_then(|element| element.attribute(None, "name"))
+        .map(str::to_string);
+    (embed_id, link_id, description, name)
+}
+
+fn strict_position(element: &StrictXmlElement, local: &str) -> Result<Option<(String, Emu)>> {
+    let Some(position) = direct_child(element, Some(drawing_ns::WP), local) else {
+        return Ok(None);
+    };
+    let relative_from = position
+        .attribute(None, "relativeFrom")
+        .unwrap_or("page")
+        .to_string();
+    let offset = direct_child(position, Some(drawing_ns::WP), "posOffset")
+        .map(StrictXmlElement::text_content)
+        .unwrap_or_default();
+    Ok(Some((
+        relative_from,
+        Emu(offset.trim().parse().unwrap_or(0)),
+    )))
+}
+
+fn strict_shape(element: &StrictXmlElement) -> Result<Option<CT_Shape>> {
+    let Some(shape_root) = find_descendant(element, Some(drawing_ns::WPS), "wsp") else {
+        return Ok(None);
+    };
+    let shape_properties = find_descendant(shape_root, Some(drawing_ns::WPS), "spPr");
+    let preset = shape_properties
+        .and_then(|properties| find_descendant(properties, Some(drawing_ns::A), "prstGeom"))
+        .and_then(|geometry| geometry.attribute(None, "prst"))
+        .map(str::to_string);
+    let solid_fill = shape_properties.and_then(find_shape_fill);
+    let mut text = Vec::new();
+    if let Some(text_box) = find_descendant(shape_root, Some(W_NS), "txbxContent") {
+        for paragraph in child_elements(text_box).filter(|child| child.is_named(Some(W_NS), "p")) {
+            text.push(crate::text::CT_P::from_strict_xml(paragraph.clone())?);
         }
-        buf.clear();
     }
+    Ok(Some(CT_Shape {
+        preset,
+        solid_fill,
+        text,
+    }))
+}
 
-    (preset, fill)
+fn find_shape_fill(element: &StrictXmlElement) -> Option<String> {
+    for child in child_elements(element) {
+        if child.is_named(Some(drawing_ns::A), "ln") {
+            continue;
+        }
+        if child.is_named(Some(drawing_ns::A), "solidFill")
+            && let Some(color) = find_descendant(child, Some(drawing_ns::A), "srgbClr")
+                .and_then(|color| color.attribute(None, "val"))
+        {
+            return Some(color.to_string());
+        }
+        if let Some(color) = find_shape_fill(child) {
+            return Some(color);
+        }
+    }
+    None
 }
 
 impl CT_Anchor {
+    fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let raw_xml = Some(element.raw_xml().bytes().to_vec());
+        let behind_doc = matches!(element.attribute(None, "behindDoc"), Some("1" | "true"));
+        let relative_height = element
+            .attribute(None, "relativeHeight")
+            .unwrap_or("0")
+            .parse()
+            .unwrap_or(0);
+        let (extent_cx, extent_cy) = strict_extent(&element)?;
+        let (embed_id, link_id, description, name) = strict_drawing_identity(&element);
+        let (pos_h_relative_from, pos_h_offset) = strict_position(&element, "positionH")?
+            .map(|(relative_from, offset)| (ST_RelativeFromH::from_str(&relative_from), offset))
+            .unwrap_or((ST_RelativeFromH::Page, Emu(0)));
+        let (pos_v_relative_from, pos_v_offset) = strict_position(&element, "positionV")?
+            .map(|(relative_from, offset)| (ST_RelativeFromV::from_str(&relative_from), offset))
+            .unwrap_or((ST_RelativeFromV::Page, Emu(0)));
+        let shape = strict_shape(&element)?;
+        Ok(Self {
+            behind_doc,
+            pos_h_offset,
+            pos_h_relative_from,
+            pos_v_offset,
+            pos_v_relative_from,
+            extent_cx,
+            extent_cy,
+            wrap: WrapType::None,
+            embed_id,
+            link_id,
+            relative_height,
+            description,
+            name,
+            raw_xml,
+            shape,
+        })
+    }
+
+    pub fn relationship_id(&self) -> Option<&str> {
+        (!self.embed_id.is_empty())
+            .then_some(self.embed_id.as_str())
+            .or(self.link_id.as_deref())
+    }
+
+    pub fn is_linked(&self) -> bool {
+        self.embed_id.is_empty() && self.link_id.is_some()
+    }
+
     /// Create an anchor for a full-page background image.
     pub fn background(embed_id: &str, page_width_emu: i64, page_height_emu: i64) -> Self {
         CT_Anchor {
@@ -292,6 +386,7 @@ impl CT_Anchor {
             extent_cy: Emu(page_height_emu),
             wrap: WrapType::None,
             embed_id: embed_id.to_string(),
+            link_id: None,
             relative_height: 0,
             description: Some("Background".to_string()),
             name: Some("Background".to_string()),
@@ -301,225 +396,19 @@ impl CT_Anchor {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>, start: &BytesStart) -> Result<Self> {
-        let mut behind_doc = false;
-        let mut relative_height = 0u32;
-
-        // Parse attributes from the <wp:anchor> start tag
-        for attr in start.attributes() {
-            let attr = attr?;
-            let key = attr.key.as_ref();
-            let val = std::str::from_utf8(&attr.value)?;
-            if key == b"behindDoc" {
-                behind_doc = val == "1" || val == "true";
-            } else if key == b"relativeHeight" {
-                relative_height = val.parse().unwrap_or(0);
-            }
-        }
-
-        let mut pos_h_offset = Emu(0);
-        let mut pos_h_relative_from = ST_RelativeFromH::Page;
-        let mut pos_v_offset = Emu(0);
-        let mut pos_v_relative_from = ST_RelativeFromV::Page;
-        let mut extent_cx = Emu(0);
-        let mut extent_cy = Emu(0);
-        let mut embed_id = String::new();
-        let mut shape: Option<CT_Shape> = None;
-        let mut description = None;
-        let mut name = None;
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    let ename = e.name();
-                    if matches_local_name(ename.as_ref(), b"extent") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if key == b"cx" {
-                                extent_cx = Emu(val.parse()?);
-                            } else if key == b"cy" {
-                                extent_cy = Emu(val.parse()?);
-                            }
-                        }
-                    } else if matches_local_name(ename.as_ref(), b"docPr") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if key == b"descr" {
-                                description = Some(val.to_string());
-                            } else if key == b"name" {
-                                name = Some(val.to_string());
-                            }
-                        }
-                    } else if matches_local_name(ename.as_ref(), b"blip") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"embed") {
-                                embed_id = val.to_string();
-                            }
-                        }
-                    } else if matches_local_name(ename.as_ref(), b"simplePos") {
-                        // Ignore simplePos
-                    } else if matches_local_name(ename.as_ref(), b"wrapNone") {
-                        // Already default
-                    }
-                }
-                Ok(Event::Start(ref e)) => {
-                    let ename = e.name();
-                    if matches_local_name(ename.as_ref(), b"positionH") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            if attr.key.as_ref() == b"relativeFrom" {
-                                pos_h_relative_from =
-                                    ST_RelativeFromH::from_str(std::str::from_utf8(&attr.value)?);
-                            }
-                        }
-                        // Read child <wp:posOffset>
-                        let mut inner_buf = Vec::new();
-                        loop {
-                            match reader.read_event_into(&mut inner_buf) {
-                                Ok(Event::Start(ref ie))
-                                    if matches_local_name(ie.name().as_ref(), b"posOffset") =>
-                                {
-                                    let text = reader
-                                        .read_text(ie.name())
-                                        .map(|t| crate::xml_text::decode_escaped(&t))
-                                        .unwrap_or_default();
-                                    pos_h_offset = Emu(text.trim().parse().unwrap_or(0));
-                                }
-                                Ok(Event::End(ref ie))
-                                    if matches_local_name(ie.name().as_ref(), b"positionH") =>
-                                {
-                                    break;
-                                }
-                                Ok(Event::Eof) => break,
-                                Err(e) => return Err(e.into()),
-                                _ => {}
-                            }
-                            inner_buf.clear();
-                        }
-                    } else if matches_local_name(ename.as_ref(), b"positionV") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            if attr.key.as_ref() == b"relativeFrom" {
-                                pos_v_relative_from =
-                                    ST_RelativeFromV::from_str(std::str::from_utf8(&attr.value)?);
-                            }
-                        }
-                        let mut inner_buf = Vec::new();
-                        loop {
-                            match reader.read_event_into(&mut inner_buf) {
-                                Ok(Event::Start(ref ie))
-                                    if matches_local_name(ie.name().as_ref(), b"posOffset") =>
-                                {
-                                    let text = reader
-                                        .read_text(ie.name())
-                                        .map(|t| crate::xml_text::decode_escaped(&t))
-                                        .unwrap_or_default();
-                                    pos_v_offset = Emu(text.trim().parse().unwrap_or(0));
-                                }
-                                Ok(Event::End(ref ie))
-                                    if matches_local_name(ie.name().as_ref(), b"positionV") =>
-                                {
-                                    break;
-                                }
-                                Ok(Event::Eof) => break,
-                                Err(e) => return Err(e.into()),
-                                _ => {}
-                            }
-                            inner_buf.clear();
-                        }
-                    } else if matches_local_name(ename.as_ref(), b"spPr") {
-                        // Capture the shape properties and read geometry and
-                        // fill out of them separately, so the fill colour is
-                        // not confused with the outline colour.
-                        let raw = capture_element(reader, e)?;
-                        let (preset, solid_fill) = parse_shape_props(&raw);
-                        let s = shape.get_or_insert_with(CT_Shape::default);
-                        s.preset = preset;
-                        s.solid_fill = solid_fill;
-                    } else if matches_local_name(ename.as_ref(), b"txbxContent") {
-                        // A shape's text box holds ordinary w:p paragraphs.
-                        let mut inner_buf = Vec::new();
-                        let mut paragraphs = Vec::new();
-                        loop {
-                            match reader.read_event_into(&mut inner_buf) {
-                                Ok(Event::Start(ref ie))
-                                    if matches_local_name(ie.name().as_ref(), b"p") =>
-                                {
-                                    paragraphs.push(crate::text::CT_P::from_xml(reader)?);
-                                }
-                                Ok(Event::End(ref ie))
-                                    if matches_local_name(ie.name().as_ref(), b"txbxContent") =>
-                                {
-                                    break;
-                                }
-                                Ok(Event::Eof) => break,
-                                Err(e) => return Err(e.into()),
-                                _ => {}
-                            }
-                            inner_buf.clear();
-                        }
-                        shape.get_or_insert_with(CT_Shape::default).text = paragraphs;
-                    } else if matches_local_name(ename.as_ref(), b"blip") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"embed") {
-                                embed_id = val.to_string();
-                            }
-                        }
-                        reader.read_to_end_into(ename, &mut Vec::new())?;
-                    } else if matches_local_name(ename.as_ref(), b"docPr") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if key == b"descr" {
-                                description = Some(val.to_string());
-                            } else if key == b"name" {
-                                name = Some(val.to_string());
-                            }
-                        }
-                        reader.read_to_end_into(ename, &mut Vec::new())?;
-                    } else {
-                        // Continue into nested elements (graphic, graphicData, pic, etc.)
-                    }
-                }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"anchor") => {
-                    break;
-                }
-                Ok(Event::Eof) => break,
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(CT_Anchor {
-            behind_doc,
-            pos_h_offset,
-            pos_h_relative_from,
-            pos_v_offset,
-            pos_v_relative_from,
-            extent_cx,
-            extent_cy,
-            wrap: WrapType::None,
-            embed_id,
-            relative_height,
-            description,
-            name,
-            raw_xml: None, // Will be set by CT_Drawing::from_xml
-            shape,
-        })
+        let context = NamespaceContext::default().with_element(start);
+        Self::from_xml_with_context(reader, start, &context)
     }
 
+    fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        start: &BytesStart,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
+        let element =
+            parse_reader_started_element(reader, context, Some(drawing_ns::WP), "anchor", start)?;
+        Self::from_strict_xml(element)
+    }
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         // If we have raw XML from parsing, use it for perfect round-trip
         if let Some(ref raw) = self.raw_xml {
@@ -529,6 +418,8 @@ impl CT_Anchor {
 
         let mut buf = itoa::Buffer::new();
         let mut anchor = BytesStart::new("wp:anchor");
+        anchor.push_attribute(("xmlns:wp", drawing_ns::WP));
+        anchor.push_attribute(("xmlns:r", drawing_ns::R));
         anchor.push_attribute(("behindDoc", if self.behind_doc { "1" } else { "0" }));
         anchor.push_attribute(("simplePos", "0"));
         anchor.push_attribute(("relativeHeight", buf.format(self.relative_height)));
@@ -587,6 +478,7 @@ impl CT_Anchor {
         write_graphic_element(
             writer,
             &self.embed_id,
+            self.link_id.as_deref(),
             self.extent_cx,
             self.extent_cy,
             self.name.as_deref(),
@@ -606,6 +498,8 @@ pub struct CT_Inline {
     pub extent_cy: Emu,
     /// Relationship ID referencing the image part
     pub embed_id: String,
+    /// Relationship ID referencing an externally linked image.
+    pub link_id: Option<String>,
     /// Optional description/alt text
     pub description: Option<String>,
     /// Optional name
@@ -616,11 +510,37 @@ pub struct CT_Inline {
 }
 
 impl CT_Inline {
+    fn from_strict_xml(element: StrictXmlElement) -> Result<Self> {
+        let raw_xml = Some(element.raw_xml().bytes().to_vec());
+        let (extent_cx, extent_cy) = strict_extent(&element)?;
+        let (embed_id, link_id, description, name) = strict_drawing_identity(&element);
+        Ok(Self {
+            extent_cx,
+            extent_cy,
+            embed_id,
+            link_id,
+            description,
+            name,
+            raw_xml,
+        })
+    }
+
+    pub fn relationship_id(&self) -> Option<&str> {
+        (!self.embed_id.is_empty())
+            .then_some(self.embed_id.as_str())
+            .or(self.link_id.as_deref())
+    }
+
+    pub fn is_linked(&self) -> bool {
+        self.embed_id.is_empty() && self.link_id.is_some()
+    }
+
     pub fn new(embed_id: &str, width_emu: i64, height_emu: i64) -> Self {
         CT_Inline {
             extent_cx: Emu(width_emu),
             extent_cy: Emu(height_emu),
             embed_id: embed_id.to_string(),
+            link_id: None,
             description: None,
             name: None,
             raw_xml: None,
@@ -628,98 +548,16 @@ impl CT_Inline {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
-        let mut cx = Emu(0);
-        let mut cy = Emu(0);
-        let mut embed_id = String::new();
-        let mut description = None;
-        let mut name = None;
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) => {
-                    let ename = e.name();
-                    if matches_local_name(ename.as_ref(), b"extent") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if key == b"cx" {
-                                cx = Emu(val.parse()?);
-                            } else if key == b"cy" {
-                                cy = Emu(val.parse()?);
-                            }
-                        }
-                    } else if matches_local_name(ename.as_ref(), b"docPr") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if key == b"descr" {
-                                description = Some(val.to_string());
-                            } else if key == b"name" {
-                                name = Some(val.to_string());
-                            }
-                        }
-                    } else if matches_local_name(ename.as_ref(), b"blip") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"embed") {
-                                embed_id = val.to_string();
-                            }
-                        }
-                    }
-                }
-                Ok(Event::Start(ref e)) => {
-                    let ename = e.name();
-                    if matches_local_name(ename.as_ref(), b"blip") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"embed") {
-                                embed_id = val.to_string();
-                            }
-                        }
-                        reader.read_to_end_into(ename, &mut Vec::new())?;
-                    } else if matches_local_name(ename.as_ref(), b"docPr") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if key == b"descr" {
-                                description = Some(val.to_string());
-                            } else if key == b"name" {
-                                name = Some(val.to_string());
-                            }
-                        }
-                        reader.read_to_end_into(ename, &mut Vec::new())?;
-                    } else if !matches_local_name(ename.as_ref(), b"inline") {
-                        // Continue parsing nested elements (graphic, graphicData, pic, etc.)
-                    }
-                }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"inline") => {
-                    break;
-                }
-                Ok(Event::Eof) => break,
-                Err(e) => return Err(e.into()),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(CT_Inline {
-            extent_cx: cx,
-            extent_cy: cy,
-            embed_id,
-            description,
-            name,
-            raw_xml: None, // Will be set by CT_Drawing::from_xml
-        })
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
     }
 
+    fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
+        let element = parse_reader_element(reader, context, Some(drawing_ns::WP), "inline", [])?;
+        Self::from_strict_xml(element)
+    }
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         // If we have raw XML from parsing, use it for perfect round-trip
         if let Some(ref raw) = self.raw_xml {
@@ -730,6 +568,8 @@ impl CT_Inline {
         // wp:inline
         let mut buf = itoa::Buffer::new();
         let mut inline = BytesStart::new("wp:inline");
+        inline.push_attribute(("xmlns:wp", drawing_ns::WP));
+        inline.push_attribute(("xmlns:r", drawing_ns::R));
         inline.push_attribute(("distT", "0"));
         inline.push_attribute(("distB", "0"));
         inline.push_attribute(("distL", "0"));
@@ -755,6 +595,7 @@ impl CT_Inline {
         write_graphic_element(
             writer,
             &self.embed_id,
+            self.link_id.as_deref(),
             self.extent_cx,
             self.extent_cy,
             self.name.as_deref(),
@@ -770,6 +611,7 @@ impl CT_Inline {
 fn write_graphic_element<W: std::io::Write>(
     writer: &mut Writer<W>,
     embed_id: &str,
+    link_id: Option<&str>,
     cx: Emu,
     cy: Emu,
     name: Option<&str>,
@@ -799,7 +641,11 @@ fn write_graphic_element<W: std::io::Write>(
     // pic:blipFill
     writer.write_event(Event::Start(BytesStart::new("pic:blipFill")))?;
     let mut blip = BytesStart::new("a:blip");
-    blip.push_attribute(("r:embed", embed_id));
+    if !embed_id.is_empty() {
+        blip.push_attribute(("r:embed", embed_id));
+    } else if let Some(link_id) = link_id {
+        blip.push_attribute(("r:link", link_id));
+    }
     writer.write_event(Event::Empty(blip))?;
     writer.write_event(Event::Start(BytesStart::new("a:stretch")))?;
     writer.write_event(Event::Empty(BytesStart::new("a:fillRect")))?;
@@ -854,79 +700,45 @@ impl CT_Drawing {
         }
     }
 
-    pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
-        let mut inline = None;
-        let mut anchor = None;
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"inline") {
-                        // Capture full raw XML, then re-parse for structured fields
-                        let raw = capture_element(reader, e)?;
-                        let mut re_reader = Reader::from_reader(raw.as_slice());
-                        re_reader.config_mut().trim_text(true);
-                        // Skip to the <wp:inline> start
-                        let mut rbuf = Vec::new();
-                        loop {
-                            match re_reader.read_event_into(&mut rbuf) {
-                                Ok(Event::Start(ref ie))
-                                    if matches_local_name(ie.name().as_ref(), b"inline") =>
-                                {
-                                    let mut inl = CT_Inline::from_xml(&mut re_reader)?;
-                                    inl.raw_xml = Some(raw);
-                                    inline = Some(inl);
-                                    break;
-                                }
-                                Ok(Event::Eof) => break,
-                                Err(e) => return Err(e.into()),
-                                _ => {}
-                            }
-                            rbuf.clear();
-                        }
-                    } else if matches_local_name(name.as_ref(), b"anchor") {
-                        // Capture full raw XML, then re-parse for structured fields
-                        let raw = capture_element(reader, e)?;
-                        let mut re_reader = Reader::from_reader(raw.as_slice());
-                        re_reader.config_mut().trim_text(true);
-                        let mut rbuf = Vec::new();
-                        loop {
-                            match re_reader.read_event_into(&mut rbuf) {
-                                Ok(Event::Start(ref ie))
-                                    if matches_local_name(ie.name().as_ref(), b"anchor") =>
-                                {
-                                    let mut anc = CT_Anchor::from_xml(&mut re_reader, ie)?;
-                                    anc.raw_xml = Some(raw);
-                                    anchor = Some(anc);
-                                    break;
-                                }
-                                Ok(Event::Eof) => break,
-                                Err(e) => return Err(e.into()),
-                                _ => {}
-                            }
-                            rbuf.clear();
-                        }
-                    } else {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
-                    }
+    pub(crate) fn from_strict_xml(element: StrictXmlElement) -> Result<StrictXmlParsed<Self>> {
+        element.parse(|cursor| {
+            let mut drawing = Self {
+                inline: None,
+                anchor: None,
+            };
+            for index in 0..cursor.child_slots() {
+                let Some(StrictXmlNode::Element(child)) = cursor.child(index) else {
+                    continue;
+                };
+                if child.is_named(Some(drawing_ns::WP), "inline") && drawing.inline.is_none() {
+                    let child = take_element(cursor, index, "wp:inline")?;
+                    drawing.inline = Some(CT_Inline::from_strict_xml(child)?);
+                } else if child.is_named(Some(drawing_ns::WP), "anchor") && drawing.anchor.is_none()
+                {
+                    let child = take_element(cursor, index, "wp:anchor")?;
+                    drawing.anchor = Some(CT_Anchor::from_strict_xml(child)?);
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"drawing") => {
-                    break;
-                }
-                Ok(Event::Eof) => break,
-                Err(e) => return Err(e.into()),
-                _ => {}
             }
-            buf.clear();
-        }
-
-        Ok(CT_Drawing { inline, anchor })
+            Ok(drawing)
+        })
     }
 
+    pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    pub(crate) fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
+        let element = parse_reader_element(reader, context, Some(W_NS), "drawing", [])?;
+        Ok(Self::from_strict_xml(element)?.value)
+    }
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        let drawing = BytesStart::new("w:drawing");
+        let mut drawing = BytesStart::new("w:drawing");
+        drawing.push_attribute(("xmlns:w", W_NS));
+        drawing.push_attribute(("xmlns:wp", drawing_ns::WP));
+        drawing.push_attribute(("xmlns:r", drawing_ns::R));
         writer.write_event(Event::Start(drawing))?;
 
         if let Some(ref inl) = self.inline {
@@ -949,16 +761,16 @@ mod tests {
         let mut reader = Reader::from_str(xml);
         reader.config_mut().trim_text(true);
         let mut buf = Vec::new();
-        loop {
+        let context = loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) if matches_local_name(e.name().as_ref(), b"drawing") => {
-                    break;
+                    break NamespaceContext::default().with_element(e);
                 }
                 _ => {}
             }
             buf.clear();
-        }
-        CT_Drawing::from_xml(&mut reader).unwrap()
+        };
+        CT_Drawing::from_xml_with_context(&mut reader, &context).unwrap()
     }
 
     #[test]
@@ -967,6 +779,7 @@ mod tests {
             extent_cx: Emu(914400), // 1 inch
             extent_cy: Emu(457200), // 0.5 inch
             embed_id: "rId5".to_string(),
+            link_id: None,
             description: Some("A test image".to_string()),
             name: Some("TestPic".to_string()),
             raw_xml: None,
@@ -984,6 +797,44 @@ mod tests {
         assert_eq!(inl.extent_cx, Emu(914400));
         assert_eq!(inl.extent_cy, Emu(457200));
         assert_eq!(inl.embed_id, "rId5");
+    }
+
+    #[test]
+    fn parses_linked_inline_image_relationship() {
+        let drawing = parse_drawing(concat!(
+            r#"<w:drawing xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+            r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" "#,
+            r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" "#,
+            r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+            r#"<wp:inline><wp:extent cx="10" cy="20"/><a:graphic><a:blip r:link="rId7"/>"#,
+            r#"</a:graphic></wp:inline></w:drawing>"#,
+        ));
+        let inline = drawing.inline.unwrap();
+        assert!(inline.embed_id.is_empty());
+        assert_eq!(inline.link_id.as_deref(), Some("rId7"));
+        assert_eq!(inline.relationship_id(), Some("rId7"));
+        assert!(inline.is_linked());
+    }
+
+    #[test]
+    fn drawing_facts_use_resolved_namespaces_and_decoded_attributes() {
+        let drawing = parse_drawing(concat!(
+            r#"<w:drawing xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+            r#"xmlns:x="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" "#,
+            r#"xmlns:y="http://schemas.openxmlformats.org/drawingml/2006/main" "#,
+            r#"xmlns:q="http://schemas.openxmlformats.org/officeDocument/2006/relationships" "#,
+            r#"xmlns:foo="urn:foreign">"#,
+            r#"<foo:inline><foo:docPr descr="wrong"/><foo:blip q:embed="wrong"/></foo:inline>"#,
+            r#"<x:inline><x:extent cx="10" cy="20"/><foo:docPr descr="wrong"/>"#,
+            r#"<x:docPr descr="A &amp; B" name="Picture &quot;One&quot;"/>"#,
+            r#"<y:graphic><foo:blip q:embed="wrong"/><y:blip q:embed="rId5"/></y:graphic>"#,
+            r#"</x:inline></w:drawing>"#,
+        ));
+
+        let inline = drawing.inline.unwrap();
+        assert_eq!(inline.embed_id, "rId5");
+        assert_eq!(inline.description.as_deref(), Some("A & B"));
+        assert_eq!(inline.name.as_deref(), Some("Picture \"One\""));
     }
 
     #[test]

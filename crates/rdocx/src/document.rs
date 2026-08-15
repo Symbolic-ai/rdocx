@@ -7,25 +7,38 @@ use std::sync::{Arc, Mutex};
 use std::cell::Cell;
 
 use oxml_media::MediaNamer;
-use oxml_opc::OpcPackage;
 use oxml_opc::relationship::rel_types;
+use oxml_opc::{OpcPackage, PackageReadLimits};
 use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
 use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, CT_Inline};
 use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef, HdrFtrType};
 use rdocx_oxml::numbering::{CT_Numbering, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
+use rdocx_oxml::resolver::FormattingResolver;
 use rdocx_oxml::shared::{ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Tbl, CellContent};
-use rdocx_oxml::text::{CT_P, CT_R, RunContent};
+use rdocx_oxml::text::{CT_Hyperlink, CT_P, CT_R, ParagraphChild, ParsedWithRaw, RunContent};
 
 use rdocx_oxml::core_properties::CoreProperties;
 
 use crate::Length;
+use crate::UnsupportedXmlRef;
 use crate::error::{Error, Result};
 use crate::paragraph::{Paragraph, ParagraphRef};
-use crate::style::{self, Style, StyleBuilder};
+use crate::run::{DrawingRelationshipKind, RunRef};
+use crate::style::{Style, StyleBuilder};
 use crate::table::{Table, TableRef};
+
+/// One item inside the document body, in document order.
+pub enum BodyContentRef<'a> {
+    /// A body paragraph.
+    Paragraph(ParagraphRef<'a>),
+    /// A body table.
+    Table(TableRef<'a>),
+    /// A preserved body child the facade does not model.
+    UnsupportedXml(UnsupportedXmlRef<'a>),
+}
 
 /// A Word document (.docx file).
 ///
@@ -128,12 +141,22 @@ impl Document {
 
     /// Open a document from bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        Self::from_bytes_with_limits(bytes, PackageReadLimits::UNBOUNDED)
+    }
+
+    /// Open a document from bytes while bounding OPC archive expansion.
+    pub fn from_bytes_with_limits(bytes: &[u8], limits: PackageReadLimits) -> Result<Self> {
         let cursor = std::io::Cursor::new(bytes);
-        let package = OpcPackage::from_reader(cursor)?;
+        let package = OpcPackage::from_reader_with_limits(cursor, limits)?;
         Self::from_package(package)
     }
 
     fn from_package(package: OpcPackage) -> Result<Self> {
+        for (part_name, bytes) in &package.parts {
+            if part_name.ends_with(".xml") || part_name.ends_with(".rels") {
+                oxml_core::xml_validation::validate_document(bytes)?;
+            }
+        }
         let doc_part_name = package.main_document_part().ok_or(Error::NoDocumentPart)?;
 
         let doc_xml = package
@@ -150,21 +173,25 @@ impl Document {
 
         // Try to load styles, remembering where they came from.
         let styles_part_name = resolve_part(rel_types::STYLES);
-        let styles = match styles_part_name
-            .as_deref()
-            .and_then(|p| package.get_part(p))
-        {
-            Some(styles_xml) => CT_Styles::from_xml(styles_xml)?,
+        let styles = match styles_part_name.as_deref() {
+            Some(part_name) => {
+                let styles_xml = package
+                    .get_part(part_name)
+                    .ok_or_else(|| oxml_opc::OpcError::PartNotFound(part_name.to_string()))?;
+                CT_Styles::from_xml(styles_xml)?
+            }
             None => CT_Styles::new_default(),
         };
 
         // Try to load numbering definitions
         let numbering_part_name = resolve_part(rel_types::NUMBERING);
-        let numbering = match numbering_part_name
-            .as_deref()
-            .and_then(|p| package.get_part(p))
-        {
-            Some(num_xml) => Some(CT_Numbering::from_xml(num_xml)?),
+        let numbering = match numbering_part_name.as_deref() {
+            Some(part_name) => {
+                let numbering_xml = package
+                    .get_part(part_name)
+                    .ok_or_else(|| oxml_opc::OpcError::PartNotFound(part_name.to_string()))?;
+                Some(CT_Numbering::from_xml(numbering_xml)?)
+            }
             None => None,
         };
 
@@ -371,6 +398,50 @@ impl Document {
 
     // ---- Paragraph access ----
 
+    /// Iterate over paragraphs, tables, and unsupported XML in body order.
+    pub fn body_content(&self) -> impl Iterator<Item = BodyContentRef<'_>> {
+        self.document
+            .body
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                BodyContent::Paragraph(paragraph) => {
+                    Some(BodyContentRef::Paragraph(ParagraphRef { inner: paragraph }))
+                }
+                BodyContent::Table(table) => Some(BodyContentRef::Table(TableRef { inner: table })),
+                BodyContent::RawXml(raw) => {
+                    Some(BodyContentRef::UnsupportedXml(UnsupportedXmlRef::new(raw)))
+                }
+                BodyContent::SectionProperties(_) => None,
+            })
+    }
+
+    /// Whether any body section declares a header or footer relationship.
+    pub fn has_header_footer_references(&self) -> bool {
+        self.document.body.content.iter().any(|content| {
+            section_properties_for_body_content(content).is_some_and(|properties| {
+                !properties.header_refs.is_empty() || !properties.footer_refs.is_empty()
+            })
+        })
+    }
+
+    /// Whether any body section carries layout formatting that the semantic
+    /// body iterator does not expose as content.
+    pub fn has_section_layout_formatting(&self) -> bool {
+        self.document.body.content.iter().any(|content| {
+            section_properties_for_body_content(content).is_some_and(section_has_layout)
+        })
+    }
+
+    /// Whether any body section contains a property the reader cannot fully
+    /// model as semantic section formatting.
+    pub fn has_unmodeled_section_properties(&self) -> bool {
+        self.document.body.content.iter().any(|content| {
+            section_properties_for_body_content(content)
+                .is_some_and(|properties| properties.has_unmodeled_properties())
+        })
+    }
+
     /// Get immutable references to all paragraphs.
     pub fn paragraphs(&self) -> Vec<ParagraphRef<'_>> {
         self.document
@@ -436,10 +507,8 @@ impl Document {
         if !text.is_empty() {
             p.add_run(text);
         }
-        self.document.body.content.push(BodyContent::Paragraph(p));
-        match self.document.body.content.last_mut().unwrap() {
-            BodyContent::Paragraph(p) => Paragraph { inner: p },
-            _ => unreachable!(),
+        Paragraph {
+            inner: self.document.body.add_paragraph(p),
         }
     }
 
@@ -470,7 +539,7 @@ impl Document {
                         result.push('\n');
                     }
                 }
-                BodyContent::RawXml(_) => {}
+                BodyContent::SectionProperties(_) | BodyContent::RawXml(_) => {}
             }
         }
         result
@@ -531,6 +600,7 @@ impl Document {
             columns: (0..cols)
                 .map(|_| CT_TblGridCol { width: col_width })
                 .collect(),
+            ..Default::default()
         };
 
         let mut tbl = CT_Tbl::new();
@@ -548,10 +618,8 @@ impl Document {
             tbl.rows.push(row);
         }
 
-        self.document.body.content.push(BodyContent::Table(tbl));
-        match self.document.body.content.last_mut().unwrap() {
-            BodyContent::Table(t) => Table { inner: t },
-            _ => unreachable!(),
+        Table {
+            inner: self.document.body.add_table(tbl),
         }
     }
 
@@ -580,10 +648,8 @@ impl Document {
         if !text.is_empty() {
             p.add_run(text);
         }
-        self.document.body.insert_paragraph(index, p);
-        match &mut self.document.body.content[index] {
-            BodyContent::Paragraph(p) => Paragraph { inner: p },
-            _ => unreachable!(),
+        Paragraph {
+            inner: self.document.body.insert_paragraph(index, p),
         }
     }
 
@@ -606,6 +672,7 @@ impl Document {
             columns: (0..cols)
                 .map(|_| CT_TblGridCol { width: col_width })
                 .collect(),
+            ..Default::default()
         };
 
         let mut tbl = CT_Tbl::new();
@@ -623,10 +690,8 @@ impl Document {
             tbl.rows.push(row);
         }
 
-        self.document.body.insert_table(index, tbl);
-        match &mut self.document.body.content[index] {
-            BodyContent::Table(t) => Table { inner: t },
-            _ => unreachable!(),
+        Table {
+            inner: self.document.body.insert_table(index, tbl),
         }
     }
 
@@ -666,18 +731,15 @@ impl Document {
 
         let drawing = CT_Drawing::inline(inline);
         let run = CT_R {
-            alt_drawings: Vec::new(),
             properties: None,
-            content: vec![RunContent::Drawing(drawing)],
-            extra_xml: Vec::new(),
+            content: vec![RunContent::Drawing(ParsedWithRaw::new(drawing))],
+            ..Default::default()
         };
 
         let mut p = CT_P::new();
-        p.runs.push(run);
-        self.document.body.content.push(BodyContent::Paragraph(p));
-        match self.document.body.content.last_mut().unwrap() {
-            BodyContent::Paragraph(p) => Paragraph { inner: p },
-            _ => unreachable!(),
+        p.content.push(ParagraphChild::Run(run));
+        Paragraph {
+            inner: self.document.body.add_paragraph(p),
         }
     }
 
@@ -722,8 +784,7 @@ impl Document {
         let sect = self
             .document
             .body
-            .sect_pr
-            .as_ref()
+            .sect_pr()
             .cloned()
             .unwrap_or_else(CT_SectPr::default_letter);
         let page_width_emu = sect
@@ -740,18 +801,15 @@ impl Document {
         let anchor = CT_Anchor::background(&rel_id, page_width_emu, page_height_emu);
         let drawing = CT_Drawing::anchor(anchor);
         let run = CT_R {
-            alt_drawings: Vec::new(),
             properties: None,
-            content: vec![RunContent::Drawing(drawing)],
-            extra_xml: Vec::new(),
+            content: vec![RunContent::Drawing(ParsedWithRaw::new(drawing))],
+            ..Default::default()
         };
 
         let mut p = CT_P::new();
-        p.runs.push(run);
-        self.document.body.insert_paragraph(0, p);
-        match &mut self.document.body.content[0] {
-            BodyContent::Paragraph(p) => Paragraph { inner: p },
-            _ => unreachable!(),
+        p.content.push(ParagraphChild::Run(run));
+        Paragraph {
+            inner: self.document.body.insert_paragraph(0, p),
         }
     }
 
@@ -775,18 +833,15 @@ impl Document {
 
         let drawing = CT_Drawing::anchor(anchor);
         let run = CT_R {
-            alt_drawings: Vec::new(),
             properties: None,
-            content: vec![RunContent::Drawing(drawing)],
-            extra_xml: Vec::new(),
+            content: vec![RunContent::Drawing(ParsedWithRaw::new(drawing))],
+            ..Default::default()
         };
 
         let mut p = CT_P::new();
-        p.runs.push(run);
-        self.document.body.insert_paragraph(0, p);
-        match &mut self.document.body.content[0] {
-            BodyContent::Paragraph(p) => Paragraph { inner: p },
-            _ => unreachable!(),
+        p.content.push(ParagraphChild::Run(run));
+        Paragraph {
+            inner: self.document.body.insert_paragraph(0, p),
         }
     }
 
@@ -836,10 +891,46 @@ impl Document {
     /// Whether the given numbering definition renders as bullets (true)
     /// or numbers (false). None if the id is unknown.
     pub fn numbering_is_bullet(&self, num_id: u32) -> Option<bool> {
+        if num_id == 0 {
+            return None;
+        }
         let numbering = self.numbering.as_ref()?;
-        let abstract_num = numbering.get_abstract_num_for(num_id)?;
-        let fmt = abstract_num.levels.first()?.num_fmt?;
-        Some(fmt == rdocx_oxml::numbering::ST_NumberFormat::Bullet)
+        let fmt = numbering
+            .get_effective_level_with_styles(num_id, 0, &self.styles)?
+            .level
+            .num_fmt
+            .as_ref()?;
+        Some(fmt == &rdocx_oxml::numbering::ST_NumberFormat::Bullet)
+    }
+
+    /// Whether the document defines a page background that readers may render.
+    pub fn has_document_background(&self) -> bool {
+        self.document.background_xml.is_some()
+    }
+
+    /// Resolve one level of a numbering definition.
+    pub fn numbering_level(&self, num_id: u32, level: u32) -> Option<NumberingLevel<'_>> {
+        if num_id == 0 {
+            return None;
+        }
+        let numbering = self.numbering.as_ref()?;
+        let effective = numbering.get_effective_level_with_styles(num_id, level, &self.styles)?;
+        let definition = effective.level;
+        let format = definition.num_fmt.as_ref();
+        Some(NumberingLevel {
+            level: definition.ilvl,
+            format: format
+                .map(ListNumberFormat::from_st)
+                .unwrap_or(ListNumberFormat::Decimal),
+            format_name: format.map(ST_NumberFormat::to_str).unwrap_or("decimal"),
+            start: effective.start,
+            level_text: definition.lvl_text.as_deref(),
+            has_unmodeled_properties: effective.has_unmodeled_properties,
+            has_marker_presentation: definition
+                .rpr
+                .as_ref()
+                .is_some_and(|properties| properties != &CT_RPr::default()),
+        })
     }
 
     /// Append an external hyperlink to the last paragraph (creating one if
@@ -848,18 +939,15 @@ impl Document {
     pub fn append_hyperlink(&mut self, text: &str, url: &str) {
         let rel_id = self.add_hyperlink_relationship(url);
 
-        if !matches!(
-            self.document.body.content.last(),
-            Some(BodyContent::Paragraph(_))
-        ) {
-            self.document
-                .body
-                .content
-                .push(BodyContent::Paragraph(CT_P::new()));
+        if self.document.body.paragraphs().last().is_none() {
+            self.document.body.add_paragraph(CT_P::new());
         }
-        let Some(BodyContent::Paragraph(p)) = self.document.body.content.last_mut() else {
-            unreachable!();
-        };
+        let p = self
+            .document
+            .body
+            .paragraphs_mut()
+            .last()
+            .expect("paragraph was inserted");
         crate::Paragraph { inner: p }.add_hyperlink(text, &rel_id);
     }
 
@@ -879,10 +967,11 @@ impl Document {
     /// callers interleave plain runs with `append_hyperlink` calls.
     pub fn last_paragraph_mut(&mut self) -> Option<Paragraph<'_>> {
         self.invalidate_layout();
-        match self.document.body.content.last_mut() {
-            Some(BodyContent::Paragraph(p)) => Some(Paragraph { inner: p }),
-            _ => None,
-        }
+        self.document
+            .body
+            .paragraphs_mut()
+            .last()
+            .map(|inner| Paragraph { inner })
     }
 
     /// Fetch the raw bytes of an embedded image by its relationship ID.
@@ -899,7 +988,11 @@ impl Document {
         let rels = self.package.get_part_rels(&self.doc_part_name)?;
         rels.items
             .iter()
-            .find(|r| r.id == rel_id && r.rel_type == rel_types::HYPERLINK)
+            .find(|r| {
+                r.id == rel_id
+                    && r.rel_type == rel_types::HYPERLINK
+                    && r.target_mode.as_deref() == Some("External")
+            })
             .map(|r| r.target.clone())
     }
 
@@ -1226,14 +1319,15 @@ impl Document {
 
         let inline = CT_Inline::new(&img_rel_id, width.to_emu(), height.to_emu());
         let run = CT_R {
-            alt_drawings: Vec::new(),
             properties: None,
-            content: vec![RunContent::Drawing(CT_Drawing::inline(inline))],
-            extra_xml: Vec::new(),
+            content: vec![RunContent::Drawing(ParsedWithRaw::new(CT_Drawing::inline(
+                inline,
+            )))],
+            ..Default::default()
         };
 
         let mut p = CT_P::new();
-        p.runs.push(run);
+        p.content.push(ParagraphChild::Run(run));
         if let Some(color) = bg_color {
             p.properties = Some(CT_PPr {
                 shading: Some(CT_Shd {
@@ -1255,7 +1349,7 @@ impl Document {
     }
 
     fn get_header_footer_text(&self, is_header: bool, hdr_type: HdrFtrType) -> Option<String> {
-        let sect = self.document.body.sect_pr.as_ref()?;
+        let sect = self.document.body.sect_pr()?;
         let refs = if is_header {
             &sect.header_refs
         } else {
@@ -1297,8 +1391,8 @@ impl Document {
                 numbering
                     .get_abstract_num_for(n.num_id)
                     .map(|a| {
-                        a.levels.first().and_then(|l| l.num_fmt)
-                            == Some(rdocx_oxml::numbering::ST_NumberFormat::Bullet)
+                        a.levels.first().and_then(|l| l.num_fmt.as_ref())
+                            == Some(&rdocx_oxml::numbering::ST_NumberFormat::Bullet)
                     })
                     .unwrap_or(false)
             });
@@ -1320,10 +1414,8 @@ impl Document {
         };
         p.properties = Some(ppr);
 
-        self.document.body.content.push(BodyContent::Paragraph(p));
-        match self.document.body.content.last_mut().unwrap() {
-            BodyContent::Paragraph(p) => Paragraph { inner: p },
-            _ => unreachable!(),
+        Paragraph {
+            inner: self.document.body.add_paragraph(p),
         }
     }
 
@@ -1341,8 +1433,8 @@ impl Document {
                 numbering
                     .get_abstract_num_for(n.num_id)
                     .map(|a| {
-                        a.levels.first().and_then(|l| l.num_fmt)
-                            == Some(rdocx_oxml::numbering::ST_NumberFormat::Decimal)
+                        a.levels.first().and_then(|l| l.num_fmt.as_ref())
+                            == Some(&rdocx_oxml::numbering::ST_NumberFormat::Decimal)
                     })
                     .unwrap_or(false)
             });
@@ -1364,10 +1456,8 @@ impl Document {
         };
         p.properties = Some(ppr);
 
-        self.document.body.content.push(BodyContent::Paragraph(p));
-        match self.document.body.content.last_mut().unwrap() {
-            BodyContent::Paragraph(p) => Paragraph { inner: p },
-            _ => unreachable!(),
+        Paragraph {
+            inner: self.document.body.add_paragraph(p),
         }
     }
 
@@ -1448,7 +1538,16 @@ impl Document {
     /// Resolve the effective paragraph properties for a given style ID,
     /// walking the full inheritance chain (docDefaults → basedOn → ...).
     pub fn resolve_paragraph_properties(&self, style_id: Option<&str>) -> CT_PPr {
-        style::resolve_paragraph_properties(style_id, &self.styles)
+        FormattingResolver::new(&self.styles, self.numbering.as_ref())
+            .resolve_paragraph_style(style_id)
+    }
+
+    /// Resolve inherited, numbering-level, and direct properties for a
+    /// paragraph.
+    pub fn effective_paragraph_properties(&self, paragraph: &ParagraphRef<'_>) -> CT_PPr {
+        FormattingResolver::new(&self.styles, self.numbering.as_ref())
+            .resolve_paragraph(paragraph.inner.properties.as_ref())
+            .properties
     }
 
     /// Resolve the effective run properties for the given paragraph and character styles,
@@ -1458,23 +1557,36 @@ impl Document {
         para_style_id: Option<&str>,
         run_style_id: Option<&str>,
     ) -> CT_RPr {
-        style::resolve_run_properties(para_style_id, run_style_id, &self.styles)
+        FormattingResolver::new(&self.styles, self.numbering.as_ref()).resolve_run_sources(
+            para_style_id,
+            run_style_id,
+            None,
+        )
+    }
+
+    /// Resolve inherited and direct properties for one run in a paragraph.
+    pub fn effective_run_properties(
+        &self,
+        paragraph: &ParagraphRef<'_>,
+        run: &RunRef<'_>,
+    ) -> CT_RPr {
+        FormattingResolver::new(&self.styles, self.numbering.as_ref()).resolve_run(
+            paragraph.inner.properties.as_ref(),
+            run.inner.properties.as_ref(),
+        )
     }
 
     // ---- Section/Page setup ----
 
     /// Get the section properties (page size, margins).
     pub fn section_properties(&self) -> Option<&CT_SectPr> {
-        self.document.body.sect_pr.as_ref()
+        self.document.body.sect_pr()
     }
 
     /// Get a mutable reference to section properties, creating defaults if needed.
     pub fn section_properties_mut(&mut self) -> &mut CT_SectPr {
         self.invalidate_layout();
-        self.document
-            .body
-            .sect_pr
-            .get_or_insert_with(CT_SectPr::default_letter)
+        self.document.body.ensure_sect_pr()
     }
 
     /// Set page size.
@@ -1609,12 +1721,17 @@ impl Document {
         self.invalidate_layout();
         self.merge_styles(other);
 
-        let start_idx = self.document.body.content.len();
+        let num_offset = self.merge_numbering(other);
         for content in &other.document.body.content {
-            self.document.body.content.push(content.clone());
+            if matches!(content, BodyContent::SectionProperties(_)) {
+                continue;
+            }
+            let mut content = content.clone();
+            if let Some(offset) = num_offset {
+                Self::remap_num_ids(&mut content, offset);
+            }
+            self.document.body.add_content(content);
         }
-
-        self.remap_merged_numbering(other, start_idx);
     }
 
     /// Append the content of another document with a section break.
@@ -1644,7 +1761,7 @@ impl Document {
             sect_pr: Some(sect_pr),
             ..Default::default()
         });
-        self.document.body.content.push(BodyContent::Paragraph(p));
+        self.document.body.add_paragraph(p);
 
         self.append(other);
     }
@@ -1656,15 +1773,22 @@ impl Document {
         self.invalidate_layout();
         self.merge_styles(other);
 
-        let insert_at = index.min(self.document.body.content.len());
-        for (i, content) in other.document.body.content.iter().enumerate() {
+        let insert_at = index.min(self.document.body.content_count());
+        let num_offset = self.merge_numbering(other);
+        let mut inserted = 0;
+        for content in &other.document.body.content {
+            if matches!(content, BodyContent::SectionProperties(_)) {
+                continue;
+            }
+            let mut content = content.clone();
+            if let Some(offset) = num_offset {
+                Self::remap_num_ids(&mut content, offset);
+            }
             self.document
                 .body
-                .content
-                .insert(insert_at + i, content.clone());
+                .insert_content(insert_at + inserted, content);
+            inserted += 1;
         }
-
-        self.remap_merged_numbering(other, insert_at);
     }
 
     /// Merge styles from another document, avoiding duplicates.
@@ -1676,11 +1800,10 @@ impl Document {
         }
     }
 
-    /// Merge numbering from another document and remap IDs in the merged content.
-    /// `start_idx` is the index where the other document's content starts in self.
-    fn remap_merged_numbering(&mut self, other: &Document, start_idx: usize) {
+    /// Merge numbering from another document and return the numId offset for its content.
+    fn merge_numbering(&mut self, other: &Document) -> Option<u32> {
         let Some(other_numbering) = &other.numbering else {
-            return;
+            return None;
         };
 
         let numbering = self
@@ -1688,8 +1811,7 @@ impl Document {
             .get_or_insert_with(|| rdocx_oxml::numbering::CT_Numbering {
                 abstract_nums: Vec::new(),
                 nums: Vec::new(),
-                root_attributes: Vec::new(),
-                extra_xml: Vec::new(),
+                ..Default::default()
             });
 
         // Find max existing IDs to avoid collision
@@ -1719,12 +1841,7 @@ impl Document {
             numbering.nums.push(new_num);
         }
 
-        // Remap numId references in the merged content
-        let incoming_count = other.document.body.content.len();
-        for content in self.document.body.content[start_idx..start_idx + incoming_count].iter_mut()
-        {
-            Self::remap_num_ids(content, num_offset);
-        }
+        Some(num_offset)
     }
 
     /// Remap numId references in body content by adding an offset.
@@ -1736,7 +1853,7 @@ impl Document {
             BodyContent::Table(tbl) => {
                 Self::remap_table_num_ids(tbl, offset);
             }
-            BodyContent::RawXml(_) => {}
+            BodyContent::SectionProperties(_) | BodyContent::RawXml(_) => {}
         }
     }
 
@@ -1760,6 +1877,7 @@ impl Document {
                         rdocx_oxml::table::CellContent::Table(nested) => {
                             Self::remap_table_num_ids(nested, offset);
                         }
+                        rdocx_oxml::table::CellContent::Unsupported(_) => {}
                     }
                 }
             }
@@ -1781,7 +1899,6 @@ impl Document {
         self.invalidate_layout();
         use rdocx_oxml::borders::{CT_TabStop, CT_Tabs};
         use rdocx_oxml::shared::{ST_TabJc, ST_TabLeader};
-        use rdocx_oxml::text::HyperlinkSpan;
         use rdocx_oxml::units::Twips;
 
         let max_level = max_level.clamp(1, 9);
@@ -1821,8 +1938,7 @@ impl Document {
             }
         }
 
-        // Step 2: Insert bookmark markers at each heading paragraph (as raw XML in extra_xml)
-        // We insert bookmarkStart/bookmarkEnd as extra_xml at position 0 in the paragraph.
+        // Step 2: Insert bookmark markers as real ordered paragraph children.
         for heading in &headings {
             if let Some(BodyContent::Paragraph(p)) =
                 self.document.body.content.get_mut(heading.content_index)
@@ -1832,10 +1948,21 @@ impl Document {
                     heading.bookmark_name
                 );
                 let bm_end = format!("<w:bookmarkEnd w:id=\"{bookmark_id}\"/>");
-                // Insert at position 0 (before runs)
-                p.extra_xml.push((0, bm_start.into_bytes()));
-                // Insert at end (after runs)
-                p.extra_xml.push((p.runs.len(), bm_end.into_bytes()));
+                p.content.insert(
+                    0,
+                    ParagraphChild::Unsupported(rdocx_oxml::raw_xml::RawXml::from_bytes(
+                        bm_start.into_bytes(),
+                        b"w:bookmarkStart",
+                        Default::default(),
+                    )),
+                );
+                p.content.push(ParagraphChild::Unsupported(
+                    rdocx_oxml::raw_xml::RawXml::from_bytes(
+                        bm_end.into_bytes(),
+                        b"w:bookmarkEnd",
+                        Default::default(),
+                    ),
+                ));
                 bookmark_id += 1;
             }
         }
@@ -1850,6 +1977,7 @@ impl Document {
                 leader: Some(ST_TabLeader::Dot),
                 source_occurrence: None,
             }],
+            ..Default::default()
         };
 
         let mut toc_paragraphs: Vec<CT_P> = Vec::new();
@@ -1861,7 +1989,7 @@ impl Document {
             bold: Some(true),
             ..Default::default()
         });
-        title_p.runs.push(title_r);
+        title_p.content.push(ParagraphChild::Run(title_r));
         title_p.properties = Some(CT_PPr {
             space_after: Some(Twips(120)),
             ..Default::default()
@@ -1880,36 +2008,26 @@ impl Document {
                 ..Default::default()
             });
 
-            // Run with heading text
-            let text_run = CT_R::new(&heading.text);
-            p.runs.push(text_run);
+            // The heading text is owned by the hyperlink, followed by a
+            // top-level tab. Their containment cannot drift after mutation.
+            let mut hyperlink = CT_Hyperlink::new(None, Some(heading.bookmark_name.clone()));
+            hyperlink.add_run(&heading.text);
+            p.content.push(ParagraphChild::Hyperlink(hyperlink));
 
             // Tab run (separates text from page number)
-            p.runs.push(CT_R {
-                alt_drawings: Vec::new(),
+            p.content.push(ParagraphChild::Run(CT_R {
                 properties: None,
                 content: vec![rdocx_oxml::text::RunContent::Tab],
-                extra_xml: Vec::new(),
-            });
-
-            // Wrap the text run in a hyperlink to the bookmark
-            p.hyperlinks.push(HyperlinkSpan {
-                rel_id: None,
-                anchor: Some(heading.bookmark_name.clone()),
-                run_start: 0,
-                run_end: 1, // Just the text run, not the tab
-            });
+                ..Default::default()
+            }));
 
             toc_paragraphs.push(p);
         }
 
         // Step 4: Insert TOC paragraphs at the specified index
-        let insert_at = index.min(self.document.body.content.len());
+        let insert_at = index.min(self.document.body.content_count());
         for (i, p) in toc_paragraphs.into_iter().enumerate() {
-            self.document
-                .body
-                .content
-                .insert(insert_at + i, BodyContent::Paragraph(p));
+            self.document.body.insert_paragraph(insert_at + i, p);
         }
     }
 
@@ -1922,8 +2040,11 @@ impl Document {
             let BodyContent::Paragraph(p) = content else {
                 continue;
             };
-            for (_, raw) in &p.extra_xml {
-                let Ok(text) = std::str::from_utf8(raw) else {
+            for child in &p.content {
+                let ParagraphChild::Unsupported(raw) = child else {
+                    continue;
+                };
+                let Ok(text) = std::str::from_utf8(raw.bytes()) else {
                     continue;
                 };
                 for (_, after) in text.match_indices("_Toc") {
@@ -1948,7 +2069,7 @@ impl Document {
     fn text_width_twips(&self) -> i32 {
         const DEFAULT_TEXT_WIDTH: i32 = 9360;
 
-        let Some(sect) = self.document.body.sect_pr.as_ref() else {
+        let Some(sect) = self.document.body.sect_pr() else {
             return DEFAULT_TEXT_WIDTH;
         };
         let page_width = sect.page_width.map(|w| w.0).unwrap_or(12240);
@@ -2029,7 +2150,7 @@ impl Document {
                 BodyContent::Table(t) => {
                     count += placeholder::replace_in_table(t, placeholder, replacement);
                 }
-                BodyContent::RawXml(_) => {}
+                BodyContent::SectionProperties(_) | BodyContent::RawXml(_) => {}
             }
         }
         count
@@ -2060,7 +2181,7 @@ impl Document {
     /// Relationship IDs of the section's headers and footers, with a flag
     /// saying which kind each one is.
     fn header_footer_rel_ids(&self) -> Vec<(String, bool)> {
-        let Some(sect_pr) = self.document.body.sect_pr.as_ref() else {
+        let Some(sect_pr) = self.document.body.sect_pr() else {
             return Vec::new();
         };
         sect_pr
@@ -2115,7 +2236,7 @@ impl Document {
                 BodyContent::Table(t) => {
                     count += placeholder::replace_regex_in_table(t, re, replacement);
                 }
-                BodyContent::RawXml(_) => {}
+                BodyContent::SectionProperties(_) | BodyContent::RawXml(_) => {}
             }
         }
 
@@ -2206,7 +2327,7 @@ impl Document {
 
         // Collect part names for XML parts to process (text boxes/shapes)
         let mut xml_parts: Vec<String> = vec![self.doc_part_name.clone()];
-        if let Some(sect_pr) = self.document.body.sect_pr.as_ref()
+        if let Some(sect_pr) = self.document.body.sect_pr()
             && let Some(rels) = self.package.get_part_rels(&self.doc_part_name)
         {
             for href in &sect_pr.header_refs {
@@ -2656,28 +2777,37 @@ impl Document {
         let mut result = Vec::new();
 
         for content in &self.document.body.content {
-            Self::collect_images_from_content(content, &mut result);
+            self.collect_images_from_content(content, &mut result);
         }
         result
     }
 
-    fn collect_images_from_content(content: &BodyContent, result: &mut Vec<ImageInfo>) {
+    fn collect_images_from_content(&self, content: &BodyContent, result: &mut Vec<ImageInfo>) {
         match content {
-            BodyContent::Paragraph(p) => Self::collect_images_from_paragraph(p, result),
-            BodyContent::Table(tbl) => Self::collect_images_from_table(tbl, result),
-            BodyContent::RawXml(_) => {}
+            BodyContent::Paragraph(p) => self.collect_images_from_paragraph(p, result),
+            BodyContent::Table(tbl) => self.collect_images_from_table(tbl, result),
+            BodyContent::SectionProperties(_) | BodyContent::RawXml(_) => {}
         }
     }
 
-    fn collect_images_from_paragraph(p: &CT_P, result: &mut Vec<ImageInfo>) {
-        for run in &p.runs {
+    fn collect_images_from_paragraph(&self, p: &CT_P, result: &mut Vec<ImageInfo>) {
+        for run in p.runs() {
             for rc in &run.content {
                 let RunContent::Drawing(drawing) = rc else {
                     continue;
                 };
-                if let Some(inline) = &drawing.inline {
+                if let Some(inline) = &drawing.value().inline
+                    && let Some(relationship_id) = inline
+                        .relationship_id()
+                        .filter(|id| self.is_image_relationship(id))
+                {
                     result.push(ImageInfo {
-                        embed_id: inline.embed_id.clone(),
+                        embed_id: relationship_id.to_string(),
+                        relationship_kind: if inline.is_linked() {
+                            DrawingRelationshipKind::Linked
+                        } else {
+                            DrawingRelationshipKind::Embedded
+                        },
                         name: inline.name.clone(),
                         description: inline.description.clone(),
                         width_emu: inline.extent_cx.0,
@@ -2685,9 +2815,18 @@ impl Document {
                         is_anchor: false,
                     });
                 }
-                if let Some(anchor) = &drawing.anchor {
+                if let Some(anchor) = &drawing.value().anchor
+                    && let Some(relationship_id) = anchor
+                        .relationship_id()
+                        .filter(|id| self.is_image_relationship(id))
+                {
                     result.push(ImageInfo {
-                        embed_id: anchor.embed_id.clone(),
+                        embed_id: relationship_id.to_string(),
+                        relationship_kind: if anchor.is_linked() {
+                            DrawingRelationshipKind::Linked
+                        } else {
+                            DrawingRelationshipKind::Embedded
+                        },
                         name: anchor.name.clone(),
                         description: anchor.description.clone(),
                         width_emu: anchor.extent_cx.0,
@@ -2699,21 +2838,29 @@ impl Document {
         }
     }
 
-    fn collect_images_from_table(tbl: &CT_Tbl, result: &mut Vec<ImageInfo>) {
+    fn collect_images_from_table(&self, tbl: &CT_Tbl, result: &mut Vec<ImageInfo>) {
         use rdocx_oxml::table::CellContent;
 
         for row in &tbl.rows {
             for cell in &row.cells {
                 for cc in &cell.content {
                     match cc {
-                        CellContent::Paragraph(p) => Self::collect_images_from_paragraph(p, result),
+                        CellContent::Paragraph(p) => self.collect_images_from_paragraph(p, result),
                         CellContent::Table(nested) => {
-                            Self::collect_images_from_table(nested, result)
+                            self.collect_images_from_table(nested, result)
                         }
+                        CellContent::Unsupported(_) => {}
                     }
                 }
             }
         }
+    }
+
+    fn is_image_relationship(&self, relationship_id: &str) -> bool {
+        self.package
+            .get_part_rels(&self.doc_part_name)
+            .and_then(|relationships| relationships.get_by_id(relationship_id))
+            .is_some_and(|relationship| relationship.rel_type == rel_types::IMAGE)
     }
 
     /// Get information about all hyperlinks in the document.
@@ -2737,20 +2884,17 @@ impl Document {
         let mut result = Vec::new();
         for content in &self.document.body.content {
             if let BodyContent::Paragraph(p) = content {
-                for hl in &p.hyperlinks {
-                    // `HyperlinkSpan`'s bounds are public and can be set by
-                    // hand, so clamp rather than slice-panic on a bad range.
-                    let start = hl.run_start.min(p.runs.len());
-                    let end = hl.run_end.clamp(start, p.runs.len());
-                    let text: String = p.runs[start..end].iter().map(|r| r.text()).collect();
-
-                    let url = hl.rel_id.as_ref().and_then(|id| url_map.get(id)).cloned();
+                for child in &p.content {
+                    let ParagraphChild::Hyperlink(hyperlink) = child else {
+                        continue;
+                    };
+                    let url = hyperlink.rel_id().and_then(|id| url_map.get(id)).cloned();
 
                     result.push(LinkInfo {
-                        text,
+                        text: hyperlink.text(),
                         url,
-                        anchor: hl.anchor.clone(),
-                        rel_id: hl.rel_id.clone(),
+                        anchor: hyperlink.anchor().map(str::to_owned),
+                        rel_id: hyperlink.rel_id().map(str::to_owned),
                     });
                 }
             }
@@ -2774,7 +2918,7 @@ impl Document {
         match content {
             BodyContent::Paragraph(p) => p.text().split_whitespace().count(),
             BodyContent::Table(tbl) => Self::word_count_in_table(tbl),
-            BodyContent::RawXml(_) => 0,
+            BodyContent::SectionProperties(_) | BodyContent::RawXml(_) => 0,
         }
     }
 
@@ -2792,6 +2936,7 @@ impl Document {
                         CellContent::Table(nested) => {
                             count += Self::word_count_in_table(nested);
                         }
+                        CellContent::Unsupported(_) => {}
                     }
                 }
             }
@@ -2896,6 +3041,33 @@ impl Default for Document {
 ///
 /// Falls back to the absolute part name when the two live in different
 /// directories, which OPC also permits.
+fn section_properties_for_body_content(content: &BodyContent) -> Option<&CT_SectPr> {
+    match content {
+        BodyContent::Paragraph(paragraph) => paragraph
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.sect_pr.as_ref()),
+        BodyContent::SectionProperties(properties) => Some(properties),
+        BodyContent::Table(_) | BodyContent::RawXml(_) => None,
+    }
+}
+
+fn section_has_layout(properties: &CT_SectPr) -> bool {
+    properties.page_width.is_some()
+        || properties.page_height.is_some()
+        || properties.orientation.is_some()
+        || properties.margin_top.is_some()
+        || properties.margin_right.is_some()
+        || properties.margin_bottom.is_some()
+        || properties.margin_left.is_some()
+        || properties.gutter.is_some()
+        || properties.header_distance.is_some()
+        || properties.footer_distance.is_some()
+        || properties.section_type.is_some()
+        || properties.columns.is_some()
+        || properties.title_pg.is_some()
+}
+
 fn relative_target(source_part: &str, target_part: &str) -> String {
     let dir = match source_part.rfind('/') {
         Some(pos) => &source_part[..=pos],
@@ -2908,7 +3080,7 @@ fn relative_target(source_part: &str, target_part: &str) -> String {
 }
 
 /// Numbering format for one level of a custom list definition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListNumberFormat {
     Bullet,
     Decimal,
@@ -2917,10 +3089,26 @@ pub enum ListNumberFormat {
     LowerRoman,
     UpperRoman,
     Ordinal,
+    None,
+    Other(String),
 }
 
 impl ListNumberFormat {
-    fn to_st(self) -> ST_NumberFormat {
+    fn from_st(value: &ST_NumberFormat) -> Self {
+        match value {
+            ST_NumberFormat::Bullet => Self::Bullet,
+            ST_NumberFormat::Decimal => Self::Decimal,
+            ST_NumberFormat::LowerLetter => Self::LowerLetter,
+            ST_NumberFormat::UpperLetter => Self::UpperLetter,
+            ST_NumberFormat::LowerRoman => Self::LowerRoman,
+            ST_NumberFormat::UpperRoman => Self::UpperRoman,
+            ST_NumberFormat::Ordinal => Self::Ordinal,
+            ST_NumberFormat::None => Self::None,
+            ST_NumberFormat::Other(value) => Self::Other(value.clone()),
+        }
+    }
+
+    fn to_st(&self) -> ST_NumberFormat {
         match self {
             Self::Bullet => ST_NumberFormat::Bullet,
             Self::Decimal => ST_NumberFormat::Decimal,
@@ -2929,12 +3117,33 @@ impl ListNumberFormat {
             Self::LowerRoman => ST_NumberFormat::LowerRoman,
             Self::UpperRoman => ST_NumberFormat::UpperRoman,
             Self::Ordinal => ST_NumberFormat::Ordinal,
+            Self::None => ST_NumberFormat::None,
+            Self::Other(value) => ST_NumberFormat::Other(value.clone()),
         }
     }
 }
 
+/// Resolved metadata for one level of a numbering definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NumberingLevel<'a> {
+    /// The zero-based list level.
+    pub level: u32,
+    /// The marker format at this level.
+    pub format: ListNumberFormat,
+    /// The exact OOXML format name, including producer-defined values.
+    pub format_name: &'a str,
+    /// The first marker value, defaulting to one when Word omits it.
+    pub start: u32,
+    /// The Word level-text template or bullet glyph.
+    pub level_text: Option<&'a str>,
+    /// Whether the level contains Word numbering semantics the facade does not model.
+    pub has_unmodeled_properties: bool,
+    /// Whether the marker has run-level presentation properties.
+    pub has_marker_presentation: bool,
+}
+
 /// One level of a custom list definition for [`Document::add_list_definition`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListLevel {
     /// Numbering format for this level.
     pub format: ListNumberFormat,
@@ -2982,8 +3191,10 @@ pub struct OutlineNode {
 /// Information about an image in the document.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImageInfo {
-    /// The relationship ID for the embedded image.
+    /// Image relationship ID. This legacy field also contains linked-image IDs.
     pub embed_id: String,
+    /// Whether the relationship embeds package data or links externally.
+    pub relationship_kind: DrawingRelationshipKind,
     /// Optional name attribute.
     pub name: Option<String>,
     /// Optional description (alt text).
@@ -2994,6 +3205,13 @@ pub struct ImageInfo {
     pub height_emu: i64,
     /// Whether this is an anchored (floating) image vs inline.
     pub is_anchor: bool,
+}
+
+impl ImageInfo {
+    /// Relationship ID for either an embedded or linked image.
+    pub fn relationship_id(&self) -> &str {
+        &self.embed_id
+    }
 }
 
 /// Information about a hyperlink in the document.
@@ -3238,7 +3456,15 @@ fn has_consistent_sfnt_header(data: &[u8]) -> bool {
 mod tests {
     use super::*;
     use crate::paragraph::Alignment;
+    use oxml_core::xml::{StrictXmlCompleteness, StrictXmlLeftovers, StrictXmlNode};
     use rdocx_oxml::units::{HalfPoint, Twips};
+
+    fn incomplete_completeness() -> StrictXmlCompleteness {
+        StrictXmlCompleteness::from_leftovers(StrictXmlLeftovers {
+            attributes: Vec::new(),
+            children: vec![StrictXmlNode::Text("unsupported".to_string())],
+        })
+    }
 
     fn reset_layout_invocations() {
         LAYOUT_INVOCATIONS.set(0);
@@ -3246,6 +3472,32 @@ mod tests {
 
     fn layout_invocations() -> usize {
         LAYOUT_INVOCATIONS.get()
+    }
+
+    #[test]
+    fn unmodeled_section_properties_are_exposed_by_the_reader_facade() {
+        let mut document = Document::new();
+        document.document.body.sect_pr_mut().unwrap().completeness = incomplete_completeness();
+
+        assert!(document.has_unmodeled_section_properties());
+    }
+
+    #[test]
+    fn unmodeled_grid_properties_are_exposed_by_the_reader_facade() {
+        let mut document = Document::new();
+        document.add_table(1, 1);
+        document
+            .document
+            .body
+            .tables_mut()
+            .next()
+            .unwrap()
+            .grid
+            .as_mut()
+            .unwrap()
+            .completeness = incomplete_completeness();
+
+        assert!(document.table(0).unwrap().has_unmodeled_properties());
     }
 
     #[test]
@@ -3990,6 +4242,38 @@ mod tests {
     }
 
     #[test]
+    fn shapes_are_not_reported_as_images() {
+        let mut doc = Document::new();
+        let mut anchor = CT_Anchor::background("", 100, 100);
+        anchor.shape = Some(rdocx_oxml::drawing::CT_Shape {
+            preset: Some("rect".to_string()),
+            ..Default::default()
+        });
+        let mut paragraph = CT_P::new();
+        paragraph.content.push(ParagraphChild::Run(CT_R {
+            properties: None,
+            content: vec![RunContent::Drawing(ParsedWithRaw::new(CT_Drawing::anchor(
+                anchor,
+            )))],
+            ..Default::default()
+        }));
+        doc.document.body.add_paragraph(paragraph);
+
+        assert!(doc.images().is_empty());
+        let paragraph = doc.paragraph(0).unwrap();
+        let run = paragraph.run(0).unwrap();
+        let drawing = run
+            .content()
+            .find_map(|content| match content {
+                crate::RunContentRef::Drawing(drawing) => Some(drawing),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(drawing.kind(), crate::DrawingKind::Shape);
+        assert_eq!(drawing.relationship_id(), None);
+    }
+
+    #[test]
     fn numbering_getter_round_trips() {
         let mut doc = Document::new();
         doc.add_bullet_list_item("bullet item", 0);
@@ -4008,6 +4292,58 @@ mod tests {
         assert_eq!(doc2.numbering_is_bullet(num_id), Some(false));
 
         assert!(paras[2].numbering().is_none());
+    }
+
+    #[test]
+    fn document_background_presence_is_exposed() {
+        let mut document = Document::new();
+        assert!(!document.has_document_background());
+        document.document.background_xml = Some(b"<w:background/>".to_vec());
+        assert!(document.has_document_background());
+    }
+
+    #[test]
+    fn numbering_level_exposes_unmodeled_properties() {
+        let mut document = Document::new();
+        document.add_numbered_list_item("numbered item", 0);
+        document.numbering.as_mut().unwrap().abstract_nums[0].levels[0].completeness =
+            incomplete_completeness();
+        let (num_id, level) = document.paragraph(0).unwrap().numbering().unwrap();
+
+        assert!(
+            document
+                .numbering_level(num_id, level)
+                .unwrap()
+                .has_unmodeled_properties
+        );
+    }
+
+    #[test]
+    fn numbering_level_reports_marker_presentation() {
+        let mut document = Document::new();
+        document.add_numbered_list_item("numbered item", 0);
+        document.numbering.as_mut().unwrap().abstract_nums[0].levels[0].rpr = Some(CT_RPr {
+            bold: Some(true),
+            ..Default::default()
+        });
+        let (num_id, level) = document.paragraph(0).unwrap().numbering().unwrap();
+
+        assert!(
+            document
+                .numbering_level(num_id, level)
+                .unwrap()
+                .has_marker_presentation
+        );
+    }
+
+    #[test]
+    fn num_id_zero_is_not_exposed_as_a_list() {
+        let mut doc = Document::new();
+        doc.add_paragraph("not a list").set_numbering(0, 4);
+
+        assert_eq!(doc.paragraph(0).unwrap().numbering(), None);
+        assert_eq!(doc.numbering_is_bullet(0), None);
+        assert_eq!(doc.numbering_level(0, 4), None);
     }
 
     #[test]
@@ -4214,43 +4550,32 @@ mod tests {
 }
 
 #[cfg(test)]
-mod hyperlink_span_tests {
+mod ordered_hyperlink_tests {
     use super::*;
-    use rdocx_oxml::text::HyperlinkSpan;
 
-    /// `HyperlinkSpan`'s bounds are public, so a caller building the OXML model
-    /// by hand can hand us a range past the end of `runs`. `links()` used to
-    /// slice with it and panic.
     #[test]
-    fn links_clamps_out_of_range_spans() {
+    fn links_read_real_hyperlink_children() {
         let mut doc = Document::new();
         {
             let mut para = doc.add_paragraph("");
             para.add_run("one");
-            para.add_run("two");
+            para.add_hyperlink("two", "missing-rel");
         }
 
         let BodyContent::Paragraph(p) = &mut doc.document.body.content[0] else {
             unreachable!("just added a paragraph")
         };
-        p.hyperlinks.push(HyperlinkSpan {
-            rel_id: None,
-            anchor: Some("bookmark".to_string()),
-            run_start: 1,
-            run_end: 99,
-        });
-        p.hyperlinks.push(HyperlinkSpan {
-            rel_id: None,
-            anchor: Some("inverted".to_string()),
-            run_start: 5,
-            run_end: 1,
-        });
+        let mut internal = CT_Hyperlink::new(None, Some("bookmark".to_string()));
+        internal.add_run("three");
+        p.content.push(ParagraphChild::Hyperlink(internal));
 
         let links = doc.links();
 
         assert_eq!(links.len(), 2);
         assert_eq!(links[0].text, "two");
-        assert_eq!(links[1].text, "");
+        assert_eq!(links[0].rel_id.as_deref(), Some("missing-rel"));
+        assert_eq!(links[1].text, "three");
+        assert_eq!(links[1].anchor.as_deref(), Some("bookmark"));
     }
 }
 

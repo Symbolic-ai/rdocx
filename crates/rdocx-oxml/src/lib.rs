@@ -12,6 +12,7 @@ pub mod namespace;
 pub mod numbering;
 pub mod placeholder;
 pub mod properties;
+pub mod resolver;
 pub mod shared;
 pub mod styles;
 pub mod table;
@@ -26,10 +27,14 @@ pub use borders::{CT_BorderEdge, CT_PBdr, CT_TabStop, CT_Tabs};
 pub use document::{BodyContent, CT_Body, CT_Document, CT_SectPr};
 pub use numbering::{CT_AbstractNum, CT_Lvl, CT_Num, CT_Numbering, ST_NumberFormat};
 pub use properties::{CT_PPr, CT_RPr};
+pub use resolver::{FormattingResolver, ResolvedParagraph};
 pub use shared::{
     ST_Border, ST_Jc, ST_OnOff, ST_PageOrientation, ST_SectionType, ST_TabJc, ST_TabLeader,
 };
 pub use styles::{CT_DocDefaults, CT_Style, CT_Styles};
-pub use table::{CT_Row, CT_Tbl, CT_TblGrid, CT_TblPr, CT_Tc, CT_TcPr};
-pub use text::{CT_P, CT_R, CT_Text};
+pub use table::{CT_Row, CT_Tbl, CT_TblGrid, CT_TblPr, CT_Tc, CT_TcPr, CellContent};
+pub use text::{
+    BreakType, CT_Hyperlink, CT_P, CT_R, CT_SimpleField, CT_Text, FieldType, InlineChild,
+    ParagraphChild, ParsedWithRaw, RunContent,
+};
 pub use units::{Emu, HalfPoint, Twips};
