@@ -155,6 +155,43 @@ impl RawXml {
         &self.namespaces
     }
 
+    /// Whether the root contains nested elements or non-whitespace text.
+    /// Malformed preserved XML is treated as content so callers fail closed.
+    pub fn has_child_content(&self) -> bool {
+        let mut reader = Reader::from_reader(self.bytes.as_slice());
+        reader.config_mut().trim_text(false);
+        let mut saw_root = false;
+        let mut depth = 0usize;
+        let mut buffer = Vec::new();
+
+        loop {
+            match reader.read_event_into(&mut buffer) {
+                Ok(Event::Start(_)) if !saw_root => {
+                    saw_root = true;
+                    depth = 1;
+                }
+                Ok(Event::Empty(_)) if !saw_root => return false,
+                Ok(Event::Start(_) | Event::Empty(_)) => return true,
+                Ok(Event::Text(text)) if depth > 0 => {
+                    if !text.as_ref().iter().all(u8::is_ascii_whitespace) {
+                        return true;
+                    }
+                }
+                Ok(Event::CData(text)) if depth > 0 => {
+                    if !text.as_ref().iter().all(u8::is_ascii_whitespace) {
+                        return true;
+                    }
+                }
+                Ok(Event::GeneralRef(_)) if depth > 0 => return true,
+                Ok(Event::End(_)) if depth > 0 => depth -= 1,
+                Ok(Event::Eof) => return false,
+                Err(_) => return true,
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
     pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         writer.write_all(&self.bytes)
     }
@@ -538,6 +575,24 @@ mod tests {
             }
             buf.clear();
         }
+    }
+
+    #[test]
+    fn raw_xml_reports_only_semantic_child_content() {
+        let context = NamespaceContext::default();
+        let expanded_empty = RawXml::from_bytes(
+            b"<w:bookmarkStart> \n<!--kept--></w:bookmarkStart>".to_vec(),
+            b"w:bookmarkStart",
+            context.clone(),
+        );
+        let nested = RawXml::from_bytes(
+            b"<w:bookmarkStart><w:r><w:t>visible</w:t></w:r></w:bookmarkStart>".to_vec(),
+            b"w:bookmarkStart",
+            context,
+        );
+
+        assert!(!expanded_empty.has_child_content());
+        assert!(nested.has_child_content());
     }
 
     #[test]

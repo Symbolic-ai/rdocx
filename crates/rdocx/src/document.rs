@@ -152,6 +152,11 @@ impl Document {
     }
 
     fn from_package(package: OpcPackage) -> Result<Self> {
+        for (part_name, bytes) in &package.parts {
+            if part_name.ends_with(".xml") || part_name.ends_with(".rels") {
+                oxml_core::xml_validation::validate_document(bytes)?;
+            }
+        }
         let doc_part_name = package.main_document_part().ok_or(Error::NoDocumentPart)?;
 
         let doc_xml = package
@@ -865,6 +870,11 @@ impl Document {
             .num_fmt
             .as_ref()?;
         Some(fmt == &rdocx_oxml::numbering::ST_NumberFormat::Bullet)
+    }
+
+    /// Whether the document defines a page background that readers may render.
+    pub fn has_document_background(&self) -> bool {
+        self.document.background_xml.is_some()
     }
 
     /// Resolve one level of a numbering definition.
@@ -4224,6 +4234,14 @@ mod tests {
         assert_eq!(doc2.numbering_is_bullet(num_id), Some(false));
 
         assert!(paras[2].numbering().is_none());
+    }
+
+    #[test]
+    fn document_background_presence_is_exposed() {
+        let mut document = Document::new();
+        assert!(!document.has_document_background());
+        document.document.background_xml = Some(b"<w:background/>".to_vec());
+        assert!(document.has_document_background());
     }
 
     #[test]

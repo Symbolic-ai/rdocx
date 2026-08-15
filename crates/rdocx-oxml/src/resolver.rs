@@ -49,7 +49,8 @@ impl<'a> FormattingResolver<'a> {
                     .get_default(StyleType::Paragraph)
                     .map(|style| style.style_id.as_str())
             });
-        let style_properties = self.resolve_paragraph_style_values(style_id);
+        let style_chain = self.typed_style_chain(style_id, StyleType::Paragraph);
+        let style_properties = self.resolve_paragraph_style_values(&style_chain);
 
         // numId=0 is a removal operation. Select the winning source before
         // applying any properties so it cannot be mistaken for a real list.
@@ -70,11 +71,13 @@ impl<'a> FormattingResolver<'a> {
             if let Some(level) = direct_level {
                 return numbering.get_effective_level_with_styles(num_id, level, self.styles);
             }
-            style_id
-                .and_then(|style_id| {
+            style_chain
+                .iter()
+                .rev()
+                .find_map(|style| {
                     numbering.get_effective_level_for_style_with_styles(
                         num_id,
-                        style_id,
+                        &style.style_id,
                         self.styles,
                     )
                 })
@@ -189,9 +192,9 @@ impl<'a> FormattingResolver<'a> {
         self.resolve_paragraph(direct.as_ref()).properties
     }
 
-    fn resolve_paragraph_style_values(&self, style_id: Option<&str>) -> CT_PPr {
+    fn resolve_paragraph_style_values(&self, style_chain: &[&CT_Style]) -> CT_PPr {
         let mut properties = CT_PPr::default();
-        for style in self.typed_style_chain(style_id, StyleType::Paragraph) {
+        for style in style_chain {
             if let Some(style_properties) = &style.ppr {
                 apply_paragraph_values(&mut properties, style_properties);
             }
@@ -511,5 +514,42 @@ mod tests {
             FormattingResolver::new(&styles, Some(&numbering)).resolve_paragraph(Some(&direct));
         assert_eq!(resolved.properties.num_ilvl, Some(3));
         assert_eq!(resolved.properties.ind_left, Some(Twips(900)));
+    }
+
+    #[test]
+    fn inherited_numbering_searches_the_applied_style_chain_for_p_style() {
+        let mut base = style("Base", StyleType::Paragraph);
+        base.ppr = Some(CT_PPr {
+            num_id: Some(7),
+            ..Default::default()
+        });
+        let mut derived = style("Derived", StyleType::Paragraph);
+        derived.based_on = Some("Base".to_string());
+        let styles = CT_Styles {
+            doc_defaults: None,
+            styles: vec![base, derived],
+        };
+        let mut level = CT_Lvl::new(3);
+        level.p_style = Some("Base".to_string());
+        let mut abstract_num = CT_AbstractNum::new(2);
+        abstract_num.levels.push(level);
+        let numbering = CT_Numbering {
+            abstract_nums: vec![abstract_num],
+            nums: vec![CT_Num {
+                num_id: 7,
+                abstract_num_id: 2,
+                level_overrides: Vec::new(),
+            }],
+        };
+        let direct = CT_PPr {
+            style_id: Some("Derived".to_string()),
+            ..Default::default()
+        };
+
+        let resolved =
+            FormattingResolver::new(&styles, Some(&numbering)).resolve_paragraph(Some(&direct));
+
+        assert_eq!(resolved.properties.num_id, Some(7));
+        assert_eq!(resolved.properties.num_ilvl, Some(3));
     }
 }

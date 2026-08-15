@@ -135,6 +135,28 @@ fn valid_zip_with_truncated_document_xml_is_rejected() {
 }
 
 #[test]
+fn valid_zip_with_multiple_roots_or_duplicate_attributes_is_rejected() {
+    let mut document = Document::new();
+    document.add_paragraph("seed");
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let multiple_roots = format!(
+        r#"{xml}<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>"#
+    );
+    let duplicate_attributes = xml.replace(
+        "<w:r>\n        <w:t>seed</w:t>\n      </w:r>",
+        r#"<w:fldSimple w:instr=" PAGE " w:dirty="false" w:dirty="true"><w:r><w:t>1</w:t></w:r></w:fldSimple>"#,
+    );
+    assert_ne!(duplicate_attributes, xml);
+
+    for invalid in [multiple_roots, duplicate_attributes] {
+        let bytes = replace_document_xml(&bytes, invalid);
+        assert!(Document::from_bytes(&bytes).is_err());
+    }
+}
+
+#[test]
 fn dangling_styles_and_numbering_relationships_are_rejected() {
     let mut document = Document::new();
     document.add_bullet_list_item("item", 0);

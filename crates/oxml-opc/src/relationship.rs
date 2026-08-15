@@ -312,9 +312,11 @@ fn parse_relationship(element: &BytesStart<'_>, max_id: &mut u32) -> Result<Rela
 
     for attr in element.attributes() {
         let attr = attr?;
+        let value = attr
+            .normalized_value(quick_xml::XmlVersion::Implicit1_0)?
+            .into_owned();
         match attr.key.as_ref() {
             b"Id" => {
-                let value = std::str::from_utf8(&attr.value)?.to_string();
                 if let Some(num_str) = value.strip_prefix("rId")
                     && let Ok(number) = num_str.parse::<u32>()
                 {
@@ -322,11 +324,9 @@ fn parse_relationship(element: &BytesStart<'_>, max_id: &mut u32) -> Result<Rela
                 }
                 id = Some(value);
             }
-            b"Type" => rel_type = Some(std::str::from_utf8(&attr.value)?.to_string()),
-            b"Target" => target = Some(std::str::from_utf8(&attr.value)?.to_string()),
-            b"TargetMode" => {
-                target_mode = Some(std::str::from_utf8(&attr.value)?.to_string());
-            }
+            b"Type" => rel_type = Some(value),
+            b"Target" => target = Some(value),
+            b"TargetMode" => target_mode = Some(value),
             _ => {}
         }
     }
@@ -450,6 +450,18 @@ mod tests {
         assert_eq!(parsed.items[0].id, "rId1");
         assert_eq!(parsed.items[0].target, "word/document.xml");
         assert_eq!(parsed.items[1].id, "rId2");
+    }
+
+    #[test]
+    fn relationship_targets_are_xml_decoded() {
+        let xml = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://example.test/type" Target="https://example.test/?a=1&amp;b=2" TargetMode="External"/></Relationships>"#;
+
+        let relationships = Relationships::from_xml(xml).unwrap();
+
+        assert_eq!(
+            relationships.items[0].target,
+            "https://example.test/?a=1&b=2"
+        );
     }
 
     #[test]

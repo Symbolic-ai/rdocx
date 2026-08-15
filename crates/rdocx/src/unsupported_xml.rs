@@ -48,6 +48,12 @@ impl<'a> UnsupportedXmlRef<'a> {
             .iter()
             .map(|(prefix, uri)| (prefix.as_str(), uri.as_str()))
     }
+
+    /// Whether the preserved element contains nested elements or
+    /// non-whitespace text.
+    pub fn has_child_content(self) -> bool {
+        self.inner.has_child_content()
+    }
 }
 
 impl AsRef<[u8]> for UnsupportedXmlRef<'_> {

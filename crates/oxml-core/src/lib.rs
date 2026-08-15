@@ -9,6 +9,7 @@ pub mod raw_xml;
 pub mod units;
 pub mod xml;
 pub mod xml_text;
+pub mod xml_validation;
 
 pub use error::{OxmlError, Result};
 pub use length::Length;

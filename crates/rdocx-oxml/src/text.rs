@@ -12,12 +12,12 @@ use quick_xml::{Reader, Writer};
 
 use crate::drawing::CT_Drawing;
 use crate::error::{OxmlError, Result};
-#[cfg(test)]
-use crate::namespace::W_NS;
 use crate::namespace::{
-    MC_NS, R_NS, is_word_attribute, matches_local_name, matches_namespace_element,
-    matches_namespace_name, matches_word_attribute, matches_word_element, matches_word_name,
+    MC_NS, R_NS, is_word_attribute, matches_namespace_element, matches_namespace_name,
+    matches_word_attribute, matches_word_element, matches_word_name,
 };
+#[cfg(test)]
+use crate::namespace::{W_NS, matches_local_name};
 use crate::properties::{CT_PPr, CT_RPr};
 use crate::raw_xml::{NamespaceContext, RawXml, capture_raw_element, capture_raw_empty_element};
 
@@ -162,20 +162,48 @@ impl CT_R {
                             preserve_space,
                         }));
                     } else if matches_word_element(element, context, b"tab") {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
-                        content.push(RunContent::Tab);
+                        let raw = capture_raw_element(reader, element, context)?;
+                        if raw.has_child_content() {
+                            content.push(RunContent::Unsupported(raw));
+                        } else {
+                            content.push(RunContent::Tab);
+                        }
                     } else if matches_word_element(element, context, b"br") {
                         let raw = capture_raw_element(reader, element, context)?;
-                        parse_break(element, context, raw, &mut content)?;
+                        if raw.has_child_content() {
+                            content.push(RunContent::Unsupported(raw));
+                        } else {
+                            parse_break(element, context, raw, &mut content)?;
+                        }
                     } else if matches_word_element(element, context, b"footnoteReference") {
                         let raw = capture_raw_element(reader, element, context)?;
-                        parse_note_reference_with_raw(element, context, true, raw, &mut content);
+                        if raw.has_child_content() {
+                            content.push(RunContent::Unsupported(raw));
+                        } else {
+                            parse_note_reference_with_raw(
+                                element,
+                                context,
+                                true,
+                                raw,
+                                &mut content,
+                            );
+                        }
                     } else if matches_word_element(element, context, b"endnoteReference") {
                         let raw = capture_raw_element(reader, element, context)?;
-                        parse_note_reference_with_raw(element, context, false, raw, &mut content);
+                        if raw.has_child_content() {
+                            content.push(RunContent::Unsupported(raw));
+                        } else {
+                            parse_note_reference_with_raw(
+                                element,
+                                context,
+                                false,
+                                raw,
+                                &mut content,
+                            );
+                        }
                     } else if matches_word_element(element, context, b"drawing") {
                         let raw = capture_raw_element(reader, element, context)?;
-                        if let Some(drawing) = parse_drawing(raw.bytes())? {
+                        if let Some(drawing) = parse_drawing(&raw)? {
                             content.push(RunContent::Drawing(ParsedWithRaw::from_parsed(
                                 drawing, raw,
                             )));
@@ -184,8 +212,10 @@ impl CT_R {
                         }
                     } else if matches_mc_element(element, context, b"AlternateContent") {
                         let raw = capture_raw_element(reader, element, context)?;
-                        if let Some(drawing) = crate::drawing::parse_alternate_content(raw.bytes())
-                        {
+                        if let Some(drawing) = crate::drawing::parse_alternate_content_with_context(
+                            raw.bytes(),
+                            raw.namespaces(),
+                        ) {
                             content.push(RunContent::Drawing(ParsedWithRaw::from_parsed(
                                 drawing, raw,
                             )));
@@ -573,7 +603,7 @@ impl CT_Hyperlink {
                         &mut rel_id,
                         &mut anchor,
                         &mut extra_attributes,
-                    );
+                    )?;
                     children =
                         parse_inline_children(&mut reader, &element_context, b"hyperlink", 0)?;
                     break;
@@ -588,7 +618,7 @@ impl CT_Hyperlink {
                         &mut rel_id,
                         &mut anchor,
                         &mut extra_attributes,
-                    );
+                    )?;
                     break;
                 }
                 Ok(Event::Eof) => {
@@ -644,21 +674,26 @@ fn parse_hyperlink_attributes(
     rel_id: &mut Option<String>,
     anchor: &mut Option<String>,
     extra_attributes: &mut Vec<(String, String)>,
-) {
-    for attribute in element.attributes().flatten() {
+) -> Result<()> {
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let value = attribute
+            .normalized_value(quick_xml::XmlVersion::Implicit1_0)?
+            .into_owned();
         if matches_namespace_name(attribute.key.as_ref(), context, b"r", R_NS, b"id") {
-            *rel_id = Some(String::from_utf8_lossy(attribute.value.as_ref()).into_owned());
+            *rel_id = Some(value);
         } else if matches_word_attribute(attribute.key.as_ref(), context, b"anchor") {
-            *anchor = Some(String::from_utf8_lossy(attribute.value.as_ref()).into_owned());
+            *anchor = Some(value);
         } else if attribute.key.as_ref() != b"xmlns"
             && !attribute.key.as_ref().starts_with(b"xmlns:")
         {
             extra_attributes.push((
                 String::from_utf8_lossy(attribute.key.as_ref()).into_owned(),
-                String::from_utf8_lossy(attribute.value.as_ref()).into_owned(),
+                value,
             ));
         }
     }
+    Ok(())
 }
 
 fn extra_word_attribute<'a>(
@@ -1024,7 +1059,7 @@ fn parse_composite_children(
                     &element_context,
                     &mut instruction,
                     &mut extra_attributes,
-                );
+                )?;
                 children = parse_inline_children(
                     &mut reader,
                     &element_context,
@@ -1040,7 +1075,7 @@ fn parse_composite_children(
                     &element_context,
                     &mut instruction,
                     &mut extra_attributes,
-                );
+                )?;
                 break;
             }
             Ok(Event::Eof) => {
@@ -1066,31 +1101,39 @@ fn parse_field_attributes(
     context: &NamespaceContext,
     instruction: &mut String,
     extra_attributes: &mut Vec<(String, String)>,
-) {
-    for attribute in element.attributes().flatten() {
+) -> Result<()> {
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let value = attribute
+            .normalized_value(quick_xml::XmlVersion::Implicit1_0)?
+            .into_owned();
         if matches_word_attribute(attribute.key.as_ref(), context, b"instr") {
-            *instruction = String::from_utf8_lossy(attribute.value.as_ref()).into_owned();
+            *instruction = value;
         } else if attribute.key.as_ref() != b"xmlns"
             && !attribute.key.as_ref().starts_with(b"xmlns:")
         {
             extra_attributes.push((
                 String::from_utf8_lossy(attribute.key.as_ref()).into_owned(),
-                String::from_utf8_lossy(attribute.value.as_ref()).into_owned(),
+                value,
             ));
         }
     }
+    Ok(())
 }
 
-fn parse_drawing(raw: &[u8]) -> Result<Option<CT_Drawing>> {
-    let mut reader = Reader::from_reader(raw);
+fn parse_drawing(raw: &RawXml) -> Result<Option<CT_Drawing>> {
+    let mut reader = Reader::from_reader(raw.bytes());
     reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref element))
-                if matches_local_name(element.name().as_ref(), b"drawing") =>
+                if matches_word_element(element, raw.namespaces(), b"drawing") =>
             {
-                return Ok(Some(CT_Drawing::from_xml(&mut reader)?));
+                return Ok(Some(CT_Drawing::from_xml_with_context(
+                    &mut reader,
+                    raw.namespaces(),
+                )?));
             }
             Ok(Event::Eof) => return Ok(None),
             Err(error) => return Err(error.into()),
@@ -1376,7 +1419,7 @@ mod tests {
     #[test]
     fn composite_attributes_expose_import_semantics() {
         let paragraph = parse_paragraph(concat!(
-            r#"<w:hyperlink r:id="rId5" w:tooltip="Open" w:docLocation="section" w:history="1" x:meta="kept" xmlns:x="urn:producer"><w:r><w:t>link</w:t></w:r></w:hyperlink>"#,
+            r#"<w:hyperlink r:id="rId5" w:tooltip="Open &amp; inspect" w:docLocation="section&quot;one" w:history="1" x:meta="kept" xmlns:x="urn:producer"><w:r><w:t>link</w:t></w:r></w:hyperlink>"#,
             r#"<w:hyperlink r:id="rId6" w:tgtFrame="_blank"><w:r><w:t>target</w:t></w:r></w:hyperlink>"#,
             r#"<w:fldSimple w:instr=" PAGE " w:dirty="on"><w:r><w:t>12</w:t></w:r></w:fldSimple>"#,
             r#"<w:fldSimple w:instr=" PAGE " w:fldLock="1"><w:r><w:t>13</w:t></w:r></w:fldSimple>"#,
@@ -1385,8 +1428,8 @@ mod tests {
         let ParagraphChild::Hyperlink(link) = &paragraph.content[0] else {
             panic!("expected hyperlink")
         };
-        assert_eq!(link.tooltip(), Some("Open"));
-        assert_eq!(link.doc_location(), Some("section"));
+        assert_eq!(link.tooltip(), Some("Open & inspect"));
+        assert_eq!(link.doc_location(), Some("section\"one"));
         assert!(!link.has_unmodeled_semantic_attributes());
 
         let ParagraphChild::Hyperlink(link) = &paragraph.content[1] else {
@@ -1405,6 +1448,19 @@ mod tests {
         };
         assert_eq!(field.dirty(), None);
         assert!(field.has_unmodeled_semantic_attributes());
+    }
+
+    #[test]
+    fn expanded_run_leaf_with_nested_content_stays_unsupported() {
+        let paragraph = parse_paragraph(
+            r#"<w:r><w:tab><w:r><w:t>visible</w:t></w:r></w:tab><w:br></w:br></w:r>"#,
+        );
+        let ParagraphChild::Run(run) = &paragraph.content[0] else {
+            panic!("expected run")
+        };
+
+        assert!(matches!(run.content[0], RunContent::Unsupported(_)));
+        assert!(matches!(run.content[1], RunContent::Break(_)));
     }
 
     #[test]

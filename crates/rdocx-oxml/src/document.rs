@@ -916,6 +916,7 @@ impl CT_Document {
 
     /// Parse from XML bytes (the content of word/document.xml).
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
+        oxml_core::xml_validation::validate_document(xml)?;
         let mut reader = Reader::from_reader(xml);
         reader.config_mut().trim_text(true);
 
@@ -1098,6 +1099,20 @@ impl Default for CT_Document {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_trailing_roots_and_duplicate_attributes() {
+        for xml in [
+            format!(
+                r#"<w:document xmlns:w="{W_NS}"><w:body/></w:document><w:document xmlns:w="{W_NS}"><w:body/></w:document>"#
+            ),
+            format!(
+                r#"<w:document xmlns:w="{W_NS}"><w:body><w:p w:rsidR="1" w:rsidR="2"/></w:body></w:document>"#
+            ),
+        ] {
+            assert!(CT_Document::from_xml(xml.as_bytes()).is_err());
+        }
+    }
 
     #[test]
     fn round_trip_document() {

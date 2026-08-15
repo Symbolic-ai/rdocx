@@ -4,8 +4,11 @@ use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::error::Result;
-use crate::namespace::matches_local_name;
-use crate::raw_xml::capture_element;
+use crate::namespace::{
+    MC_NS, R_NS, matches_local_name, matches_namespace_attribute, matches_namespace_element,
+    matches_namespace_name, matches_word_name,
+};
+use crate::raw_xml::{NamespaceContext, capture_element};
 use crate::units::Emu;
 
 /// Namespaces used in drawing markup.
@@ -167,24 +170,40 @@ pub struct CT_Shape {
 /// The caller keeps the raw bytes for write back, so whatever comes out of
 /// here must not be serialised again or the element ends up duplicated.
 pub fn parse_alternate_content(raw: &[u8]) -> Option<CT_Drawing> {
+    parse_alternate_content_with_context(raw, &NamespaceContext::default())
+}
+
+pub(crate) fn parse_alternate_content_with_context(
+    raw: &[u8],
+    context: &NamespaceContext,
+) -> Option<CT_Drawing> {
     let mut reader = Reader::from_reader(raw);
     reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
     let mut in_choice = false;
+    let mut contexts = vec![context.clone()];
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
-                let name = e.name();
-                let local = name.as_ref();
-                if matches_local_name(local, b"Choice") {
+                let parent = contexts.last().expect("namespace root");
+                let child = parent.with_element(e);
+                if matches_namespace_element(e, parent, b"mc", MC_NS, b"Choice") {
                     in_choice = true;
-                } else if in_choice && matches_local_name(local, b"drawing") {
-                    return CT_Drawing::from_xml(&mut reader).ok();
+                } else if in_choice && crate::namespace::matches_word_element(e, parent, b"drawing")
+                {
+                    return CT_Drawing::from_xml_with_context(&mut reader, &child).ok();
                 }
+                contexts.push(child);
             }
-            Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"Choice") => {
-                in_choice = false;
+            Ok(Event::End(ref e)) => {
+                let current = contexts.last().expect("namespace root");
+                if matches_namespace_name(e.name().as_ref(), current, b"mc", MC_NS, b"Choice") {
+                    in_choice = false;
+                }
+                if contexts.len() > 1 {
+                    contexts.pop();
+                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -314,6 +333,15 @@ impl CT_Anchor {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>, start: &BytesStart) -> Result<Self> {
+        let context = NamespaceContext::default().with_element(start);
+        Self::from_xml_with_context(reader, start, &context)
+    }
+
+    fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        start: &BytesStart,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut behind_doc = false;
         let mut relative_height = 0u32;
 
@@ -321,7 +349,7 @@ impl CT_Anchor {
         for attr in start.attributes() {
             let attr = attr?;
             let key = attr.key.as_ref();
-            let val = std::str::from_utf8(&attr.value)?;
+            let val = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0)?;
             if key == b"behindDoc" {
                 behind_doc = val == "1" || val == "true";
             } else if key == b"relativeHeight" {
@@ -341,35 +369,29 @@ impl CT_Anchor {
         let mut description = None;
         let mut name = None;
         let mut buf = Vec::new();
+        let mut contexts = vec![context.clone()];
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
                     let ename = e.name();
-                    if matches_local_name(ename.as_ref(), b"extent") {
+                    let parent = contexts.last().expect("namespace root");
+                    if matches_wp_element(e, parent, b"extent") {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
+                            let val = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0)?;
                             if key == b"cx" {
                                 extent_cx = Emu(val.parse()?);
                             } else if key == b"cy" {
                                 extent_cy = Emu(val.parse()?);
                             }
                         }
-                    } else if matches_local_name(ename.as_ref(), b"docPr") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if key == b"descr" {
-                                description = Some(val.to_string());
-                            } else if key == b"name" {
-                                name = Some(val.to_string());
-                            }
-                        }
-                    } else if matches_local_name(ename.as_ref(), b"blip") {
-                        parse_blip_relationships(e, &mut embed_id, &mut link_id)?;
+                    } else if matches_wp_element(e, parent, b"docPr") {
+                        parse_drawing_description(e, &mut description, &mut name)?;
+                    } else if matches_a_element(e, parent, b"blip") {
+                        let element_context = parent.with_element(e);
+                        parse_blip_relationships(e, &element_context, &mut embed_id, &mut link_id)?;
                     } else if matches_local_name(ename.as_ref(), b"simplePos") {
                         // Ignore simplePos
                     } else if matches_local_name(ename.as_ref(), b"wrapNone") {
@@ -378,12 +400,16 @@ impl CT_Anchor {
                 }
                 Ok(Event::Start(ref e)) => {
                     let ename = e.name();
-                    if matches_local_name(ename.as_ref(), b"positionH") {
+                    let parent = contexts.last().expect("namespace root");
+                    let child = parent.with_element(e);
+                    if matches_wp_element(e, parent, b"positionH") {
                         for attr in e.attributes() {
                             let attr = attr?;
                             if attr.key.as_ref() == b"relativeFrom" {
-                                pos_h_relative_from =
-                                    ST_RelativeFromH::from_str(std::str::from_utf8(&attr.value)?);
+                                pos_h_relative_from = ST_RelativeFromH::from_str(
+                                    attr.normalized_value(quick_xml::XmlVersion::Implicit1_0)?
+                                        .as_ref(),
+                                );
                             }
                         }
                         // Read child <wp:posOffset>
@@ -409,12 +435,14 @@ impl CT_Anchor {
                             }
                             inner_buf.clear();
                         }
-                    } else if matches_local_name(ename.as_ref(), b"positionV") {
+                    } else if matches_wp_element(e, parent, b"positionV") {
                         for attr in e.attributes() {
                             let attr = attr?;
                             if attr.key.as_ref() == b"relativeFrom" {
-                                pos_v_relative_from =
-                                    ST_RelativeFromV::from_str(std::str::from_utf8(&attr.value)?);
+                                pos_v_relative_from = ST_RelativeFromV::from_str(
+                                    attr.normalized_value(quick_xml::XmlVersion::Implicit1_0)?
+                                        .as_ref(),
+                                );
                             }
                         }
                         let mut inner_buf = Vec::new();
@@ -471,27 +499,24 @@ impl CT_Anchor {
                             inner_buf.clear();
                         }
                         shape.get_or_insert_with(CT_Shape::default).text = paragraphs;
-                    } else if matches_local_name(ename.as_ref(), b"blip") {
-                        parse_blip_relationships(e, &mut embed_id, &mut link_id)?;
+                    } else if matches_a_element(e, parent, b"blip") {
+                        parse_blip_relationships(e, &child, &mut embed_id, &mut link_id)?;
                         reader.read_to_end_into(ename, &mut Vec::new())?;
-                    } else if matches_local_name(ename.as_ref(), b"docPr") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if key == b"descr" {
-                                description = Some(val.to_string());
-                            } else if key == b"name" {
-                                name = Some(val.to_string());
-                            }
-                        }
+                    } else if matches_wp_element(e, parent, b"docPr") {
+                        parse_drawing_description(e, &mut description, &mut name)?;
                         reader.read_to_end_into(ename, &mut Vec::new())?;
                     } else {
                         // Continue into nested elements (graphic, graphicData, pic, etc.)
+                        contexts.push(child);
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"anchor") => {
-                    break;
+                Ok(Event::End(ref e)) => {
+                    if matches_wp_name(e.name().as_ref(), context, b"anchor") {
+                        break;
+                    }
+                    if contexts.len() > 1 {
+                        contexts.pop();
+                    }
                 }
                 Ok(Event::Eof) => break,
                 Err(e) => return Err(e.into()),
@@ -641,6 +666,13 @@ impl CT_Inline {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut cx = Emu(0);
         let mut cy = Emu(0);
         let mut embed_id = String::new();
@@ -648,60 +680,51 @@ impl CT_Inline {
         let mut description = None;
         let mut name = None;
         let mut buf = Vec::new();
+        let mut contexts = vec![context.clone()];
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
-                    let ename = e.name();
-                    if matches_local_name(ename.as_ref(), b"extent") {
+                    let parent = contexts.last().expect("namespace root");
+                    if matches_wp_element(e, parent, b"extent") {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
+                            let val = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0)?;
                             if key == b"cx" {
                                 cx = Emu(val.parse()?);
                             } else if key == b"cy" {
                                 cy = Emu(val.parse()?);
                             }
                         }
-                    } else if matches_local_name(ename.as_ref(), b"docPr") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if key == b"descr" {
-                                description = Some(val.to_string());
-                            } else if key == b"name" {
-                                name = Some(val.to_string());
-                            }
-                        }
-                    } else if matches_local_name(ename.as_ref(), b"blip") {
-                        parse_blip_relationships(e, &mut embed_id, &mut link_id)?;
+                    } else if matches_wp_element(e, parent, b"docPr") {
+                        parse_drawing_description(e, &mut description, &mut name)?;
+                    } else if matches_a_element(e, parent, b"blip") {
+                        let element_context = parent.with_element(e);
+                        parse_blip_relationships(e, &element_context, &mut embed_id, &mut link_id)?;
                     }
                 }
                 Ok(Event::Start(ref e)) => {
                     let ename = e.name();
-                    if matches_local_name(ename.as_ref(), b"blip") {
-                        parse_blip_relationships(e, &mut embed_id, &mut link_id)?;
+                    let parent = contexts.last().expect("namespace root");
+                    let child = parent.with_element(e);
+                    if matches_a_element(e, parent, b"blip") {
+                        parse_blip_relationships(e, &child, &mut embed_id, &mut link_id)?;
                         reader.read_to_end_into(ename, &mut Vec::new())?;
-                    } else if matches_local_name(ename.as_ref(), b"docPr") {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
-                            if key == b"descr" {
-                                description = Some(val.to_string());
-                            } else if key == b"name" {
-                                name = Some(val.to_string());
-                            }
-                        }
+                    } else if matches_wp_element(e, parent, b"docPr") {
+                        parse_drawing_description(e, &mut description, &mut name)?;
                         reader.read_to_end_into(ename, &mut Vec::new())?;
-                    } else if !matches_local_name(ename.as_ref(), b"inline") {
-                        // Continue parsing nested elements (graphic, graphicData, pic, etc.)
+                    } else {
+                        contexts.push(child);
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"inline") => {
-                    break;
+                Ok(Event::End(ref e)) => {
+                    if matches_wp_name(e.name().as_ref(), context, b"inline") {
+                        break;
+                    }
+                    if contexts.len() > 1 {
+                        contexts.pop();
+                    }
                 }
                 Ok(Event::Eof) => break,
                 Err(e) => return Err(e.into()),
@@ -770,19 +793,54 @@ impl CT_Inline {
 
 fn parse_blip_relationships(
     element: &BytesStart<'_>,
+    context: &NamespaceContext,
     embed_id: &mut String,
     link_id: &mut Option<String>,
 ) -> Result<()> {
     for attribute in element.attributes() {
         let attribute = attribute?;
-        let value = std::str::from_utf8(&attribute.value)?;
-        if matches_local_name(attribute.key.as_ref(), b"embed") {
-            *embed_id = value.to_string();
-        } else if matches_local_name(attribute.key.as_ref(), b"link") {
-            *link_id = Some(value.to_string());
+        let value = attribute
+            .normalized_value(quick_xml::XmlVersion::Implicit1_0)?
+            .into_owned();
+        if matches_namespace_attribute(attribute.key.as_ref(), context, b"r", R_NS, b"embed") {
+            *embed_id = value;
+        } else if matches_namespace_attribute(attribute.key.as_ref(), context, b"r", R_NS, b"link")
+        {
+            *link_id = Some(value);
         }
     }
     Ok(())
+}
+
+fn parse_drawing_description(
+    element: &BytesStart<'_>,
+    description: &mut Option<String>,
+    name: &mut Option<String>,
+) -> Result<()> {
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let value = attribute
+            .normalized_value(quick_xml::XmlVersion::Implicit1_0)?
+            .into_owned();
+        if attribute.key.as_ref() == b"descr" {
+            *description = Some(value);
+        } else if attribute.key.as_ref() == b"name" {
+            *name = Some(value);
+        }
+    }
+    Ok(())
+}
+
+fn matches_wp_element(element: &BytesStart<'_>, context: &NamespaceContext, local: &[u8]) -> bool {
+    matches_namespace_element(element, context, b"wp", drawing_ns::WP, local)
+}
+
+fn matches_wp_name(name: &[u8], context: &NamespaceContext, local: &[u8]) -> bool {
+    matches_namespace_name(name, context, b"wp", drawing_ns::WP, local)
+}
+
+fn matches_a_element(element: &BytesStart<'_>, context: &NamespaceContext, local: &[u8]) -> bool {
+    matches_namespace_element(element, context, b"a", drawing_ns::A, local)
 }
 
 /// Write the `a:graphic` > `a:graphicData` > `pic:pic` structure (shared by inline and anchor).
@@ -879,6 +937,13 @@ impl CT_Drawing {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_context(reader, &NamespaceContext::default())
+    }
+
+    pub(crate) fn from_xml_with_context(
+        reader: &mut Reader<&[u8]>,
+        context: &NamespaceContext,
+    ) -> Result<Self> {
         let mut inline = None;
         let mut anchor = None;
         let mut buf = Vec::new();
@@ -887,7 +952,7 @@ impl CT_Drawing {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"inline") {
+                    if matches_wp_element(e, context, b"inline") {
                         // Capture full raw XML, then re-parse for structured fields
                         let raw = capture_element(reader, e)?;
                         let mut re_reader = Reader::from_reader(raw.as_slice());
@@ -897,9 +962,13 @@ impl CT_Drawing {
                         loop {
                             match re_reader.read_event_into(&mut rbuf) {
                                 Ok(Event::Start(ref ie))
-                                    if matches_local_name(ie.name().as_ref(), b"inline") =>
+                                    if matches_wp_element(ie, context, b"inline") =>
                                 {
-                                    let mut inl = CT_Inline::from_xml(&mut re_reader)?;
+                                    let inline_context = context.with_element(ie);
+                                    let mut inl = CT_Inline::from_xml_with_context(
+                                        &mut re_reader,
+                                        &inline_context,
+                                    )?;
                                     inl.raw_xml = Some(raw);
                                     inline = Some(inl);
                                     break;
@@ -910,7 +979,7 @@ impl CT_Drawing {
                             }
                             rbuf.clear();
                         }
-                    } else if matches_local_name(name.as_ref(), b"anchor") {
+                    } else if matches_wp_element(e, context, b"anchor") {
                         // Capture full raw XML, then re-parse for structured fields
                         let raw = capture_element(reader, e)?;
                         let mut re_reader = Reader::from_reader(raw.as_slice());
@@ -919,9 +988,14 @@ impl CT_Drawing {
                         loop {
                             match re_reader.read_event_into(&mut rbuf) {
                                 Ok(Event::Start(ref ie))
-                                    if matches_local_name(ie.name().as_ref(), b"anchor") =>
+                                    if matches_wp_element(ie, context, b"anchor") =>
                                 {
-                                    let mut anc = CT_Anchor::from_xml(&mut re_reader, ie)?;
+                                    let anchor_context = context.with_element(ie);
+                                    let mut anc = CT_Anchor::from_xml_with_context(
+                                        &mut re_reader,
+                                        ie,
+                                        &anchor_context,
+                                    )?;
                                     anc.raw_xml = Some(raw);
                                     anchor = Some(anc);
                                     break;
@@ -936,7 +1010,9 @@ impl CT_Drawing {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"drawing") => {
+                Ok(Event::End(ref e))
+                    if matches_word_name(e.name().as_ref(), context, b"drawing") =>
+                {
                     break;
                 }
                 Ok(Event::Eof) => break,
@@ -973,16 +1049,16 @@ mod tests {
         let mut reader = Reader::from_str(xml);
         reader.config_mut().trim_text(true);
         let mut buf = Vec::new();
-        loop {
+        let context = loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) if matches_local_name(e.name().as_ref(), b"drawing") => {
-                    break;
+                    break NamespaceContext::default().with_element(e);
                 }
                 _ => {}
             }
             buf.clear();
-        }
-        CT_Drawing::from_xml(&mut reader).unwrap()
+        };
+        CT_Drawing::from_xml_with_context(&mut reader, &context).unwrap()
     }
 
     #[test]
@@ -1026,6 +1102,27 @@ mod tests {
         assert_eq!(inline.link_id.as_deref(), Some("rId7"));
         assert_eq!(inline.relationship_id(), Some("rId7"));
         assert!(inline.is_linked());
+    }
+
+    #[test]
+    fn drawing_facts_use_resolved_namespaces_and_decoded_attributes() {
+        let drawing = parse_drawing(concat!(
+            r#"<w:drawing xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+            r#"xmlns:x="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" "#,
+            r#"xmlns:y="http://schemas.openxmlformats.org/drawingml/2006/main" "#,
+            r#"xmlns:q="http://schemas.openxmlformats.org/officeDocument/2006/relationships" "#,
+            r#"xmlns:foo="urn:foreign">"#,
+            r#"<foo:inline><foo:docPr descr="wrong"/><foo:blip q:embed="wrong"/></foo:inline>"#,
+            r#"<x:inline><x:extent cx="10" cy="20"/><foo:docPr descr="wrong"/>"#,
+            r#"<x:docPr descr="A &amp; B" name="Picture &quot;One&quot;"/>"#,
+            r#"<y:graphic><foo:blip q:embed="wrong"/><y:blip q:embed="rId5"/></y:graphic>"#,
+            r#"</x:inline></w:drawing>"#,
+        ));
+
+        let inline = drawing.inline.unwrap();
+        assert_eq!(inline.embed_id, "rId5");
+        assert_eq!(inline.description.as_deref(), Some("A & B"));
+        assert_eq!(inline.name.as_deref(), Some("Picture \"One\""));
     }
 
     #[test]
