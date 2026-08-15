@@ -1300,9 +1300,18 @@ versions, published artifacts, and rendering baselines remain unchanged.
 Test and MSRV also install exact uv 0.10.2 through the reviewed official setup
 action, isolate its cache, and run their corpus tests with an explicit 8 MiB
 Rust test-thread stack.
+They run on Ubuntu 24.04 and install LibreOffice 26.2.5.2 from the reviewed official Linux x86-64
+archive before the full workspace suite. The shared installer verifies SHA-256
+`2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e`,
+uses bounded streaming extraction, refuses populated prefixes, and checks the
+exact reviewed build identity before the three `rpptx-chart` viewer gates run.
+The installer also declares the exact Ubuntu runtime-library package set needed
+to execute that official build.
 **Test gate**: behavioral regressions execute every source, resource, runtime,
 and prefix guard. Workflow mutations reject missing, conditional,
 failure-tolerant, or successfully short-circuited installer steps and reject a
 weakened Binaryen checksum or identity gate. They also reject uv action,
-version, cache, or stack drift. Full verification and a hosted pull-request CI
-run at the reviewed SHA pass with all 28 hashes unchanged.
+version, cache, or stack drift. The same contract rejects LibreOffice version,
+checksum, bound, runtime, ordering, or consumer-step drift. Full verification
+and a hosted pull-request CI run at the reviewed SHA pass with all 28 hashes
+unchanged.

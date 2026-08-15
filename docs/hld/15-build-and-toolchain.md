@@ -363,6 +363,18 @@ uses only its runner-temporary uv cache, and runs the broad workspace suite with
 available on a clean Ubuntu host. The stack budget is scoped to these two
 corpus-heavy jobs and does not alter product runtime behavior.
 
+The same two clean Ubuntu 24.04 jobs install LibreOffice 26.2.5.2 from the official
+Linux x86-64 Debian archive before the workspace suite. The archive SHA-256 is
+`2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e`.
+The installer streams under fixed download, member, and expanded-byte bounds,
+rejects unsafe entries and any populated `/opt/libreoffice26.2` prefix, then
+requires exact identity
+`LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb`.
+It installs the explicit Ubuntu NSS, NSPR, D-Bus, Cairo, GLib, X11, CUPS,
+font, and Kerberos runtime-library set needed by that official build. This
+makes the unconditional `rpptx-chart` viewer tests self-contained without
+changing the separate macOS Presentation fidelity setup.
+
 **A prose and generated-skill job.** It runs `scripts/prose_check.py` and
 `scripts/sync_agent_skills.py --check` as separate steps, so voice-rule or
 adapter drift fails before integration.

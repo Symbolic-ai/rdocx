@@ -208,6 +208,15 @@ LibreOffice 26.2.5.2 with build
 part of the asserted command because a default PDF export omits five corpus
 slides.
 
+Clean Ubuntu 24.04 workspace jobs install that exact LibreOffice build from the
+official Linux x86-64 Debian archive with reviewed SHA-256
+`2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e`.
+The installer bounds the download, archive member count, and expanded bytes,
+rejects unsafe members and populated prefixes, and checks the exact runtime
+identity before the `rpptx-chart` viewer gates execute. The installer supplies
+the explicit NSS, NSPR, D-Bus, Cairo, GLib, X11, CUPS, font, and Kerberos
+runtime libraries required by the official build.
+
 The harness decodes both PNGs through the existing strict decoder and computes
 global luminance SSIM after compositing RGBA over white. It uses population
 variance and covariance with the standard 8-bit constants `K1=0.01`,

@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts import readme_doctests
+from scripts import install_pinned_libreoffice
 from scripts import install_pinned_poppler
 from scripts import sprint_workflow as workflow
 
@@ -136,6 +137,62 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertIn("safe_extract", installer)
         self.assertIn("-DENABLE_UTILS=ON", installer)
         self.assertIn('expected = f"{tool} version {POPLER_VERSION}"', installer)
+
+    def assert_pinned_libreoffice_installer_contract(self, installer: str) -> None:
+        self.assertIn('LIBREOFFICE_VERSION = "26.2.5.2"', installer)
+        self.assertIn(
+            'LIBREOFFICE_SHA256 = "2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e"',
+            installer,
+        )
+        self.assertIn(
+            '"https://download.documentfoundation.org/libreoffice/stable/26.2.5/"',
+            installer,
+        )
+        self.assertIn("MAX_DOWNLOAD_BYTES = 224 * 1024 * 1024", installer)
+        self.assertIn("MAX_ARCHIVE_MEMBERS = 256", installer)
+        self.assertIn("MAX_EXTRACTED_BYTES = 256 * 1024 * 1024", installer)
+        self.assertIn('INSTALL_ROOT = Path("/opt/libreoffice26.2")', installer)
+        self.assertEqual(
+            install_pinned_libreoffice.SYSTEM_RUNTIME_PACKAGES,
+            (
+                "libcairo2",
+                "libcups2t64",
+                "libdbus-1-3",
+                "libfontconfig1",
+                "libfreetype6",
+                "libglib2.0-0t64",
+                "libgssapi-krb5-2",
+                "libnspr4",
+                "libnss3",
+                "libx11-6",
+                "libx11-xcb1",
+                "libxext6",
+                "libxinerama1",
+            ),
+        )
+        self.assertIn("safe_extract", installer)
+        self.assertIn("apt-get", installer)
+        self.assertIn("--no-install-recommends", installer)
+        self.assertIn(
+            '"LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb"',
+            installer,
+        )
+        self.assertIn('os.environ.get("GITHUB_PATH")', installer)
+
+    def assert_libreoffice_consumers_contract(self, ci: str) -> None:
+        for job_name in ("test", "msrv"):
+            job = self.yaml_block(ci, f"  {job_name}:")
+            self.assertIn("runs-on: ubuntu-24.04", job)
+            install = self.yaml_step(job, "Install pinned LibreOffice 26.2.5.2")
+            self.assertEqual(
+                self.yaml_direct_lines(install, 8),
+                ("run: python3 scripts/install_pinned_libreoffice.py",),
+            )
+            test_step = self.yaml_step(job, "Run full workspace suite")
+            self.assertLess(job.index(install), job.index(test_step))
+            self.assertNotIn("continue-on-error", install)
+            self.assert_no_success_short_circuit(self.operative_lines(install))
+        self.assertEqual(ci.count("python3 scripts/install_pinned_libreoffice.py"), 2)
 
     def assert_poppler_consumers_contract(self, ci: str) -> None:
         consumers = {
@@ -410,6 +467,258 @@ class SprintWorkflowTests(unittest.TestCase):
         for label, mutated in mutations.items():
             with self.subTest(mutation=label), self.assertRaises(AssertionError):
                 self.assert_pinned_poppler_installer_contract(mutated)
+
+    def test_workspace_viewer_jobs_install_pinned_libreoffice(self) -> None:
+        installer_path = workflow.REPO / "scripts/install_pinned_libreoffice.py"
+        self.assertTrue(
+            installer_path.is_file(),
+            "F-X012 requires one pinned Linux LibreOffice installer",
+        )
+        installer = installer_path.read_text(encoding="utf-8")
+        self.assert_pinned_libreoffice_installer_contract(installer)
+
+        mutations = {
+            "wrong-version": installer.replace("26.2.5.2", "26.2.6.0"),
+            "wrong-checksum": installer.replace(
+                "2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e",
+                "0" * 64,
+            ),
+            "missing-member-bound": installer.replace(
+                "MAX_ARCHIVE_MEMBERS = 256",
+                "MAX_ARCHIVE_MEMBERS = len(members)",
+            ),
+            "recommended-packages": installer.replace(
+                '"--no-install-recommends",', '"--install-recommends",'
+            ),
+        }
+        for label, mutated in mutations.items():
+            with self.subTest(installer_mutation=label), self.assertRaises(
+                AssertionError
+            ):
+                self.assert_pinned_libreoffice_installer_contract(mutated)
+
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_libreoffice_consumers_contract(ci)
+        for job_name in ("test", "msrv"):
+            job = self.yaml_block(ci, f"  {job_name}:")
+            install = self.yaml_step(job, "Install pinned LibreOffice 26.2.5.2")
+            for label, mutated_install in {
+                "missing": "",
+                "if-false": install.replace(
+                    "        run:", "        if: false\n        run:", 1
+                ),
+                "continue-on-error": install.replace(
+                    "        run:",
+                    "        continue-on-error: true\n        run:",
+                    1,
+                ),
+                "exit-zero": install.replace(
+                    "        run: python3",
+                    "        run: exit 0\n          python3",
+                    1,
+                ),
+            }.items():
+                mutated = ci.replace(install, mutated_install, 1)
+                with self.subTest(job=job_name, mutation=label), self.assertRaises(
+                    AssertionError
+                ):
+                    self.assert_libreoffice_consumers_contract(mutated)
+
+    def test_pinned_libreoffice_installer_enforces_runtime_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch.object(
+                install_pinned_libreoffice.urllib.request,
+                "urlopen",
+                return_value=io.BytesIO(b"not the reviewed LibreOffice source"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "SHA-256"):
+                    install_pinned_libreoffice.download_archive(root / "wrong.tar.gz")
+
+            with (
+                patch.object(install_pinned_libreoffice, "MAX_DOWNLOAD_BYTES", 8),
+                patch.object(
+                    install_pinned_libreoffice.urllib.request,
+                    "urlopen",
+                    return_value=io.BytesIO(b"x" * 9),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "download bound"):
+                    install_pinned_libreoffice.download_archive(root / "large.tar.gz")
+
+            archive_path = root / "too-many.tar.gz"
+            with tarfile.open(archive_path, mode="w:gz") as archive:
+                for index in range(
+                    install_pinned_libreoffice.MAX_ARCHIVE_MEMBERS + 1
+                ):
+                    member = tarfile.TarInfo(
+                        f"{install_pinned_libreoffice.ARCHIVE_ROOT}/member-{index}"
+                    )
+                    member.size = 0
+                    archive.addfile(member, io.BytesIO())
+            with patch.object(
+                tarfile.TarFile,
+                "getmembers",
+                side_effect=AssertionError("unbounded member-table allocation"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "member-count"):
+                    install_pinned_libreoffice.safe_extract(
+                        archive_path,
+                        root / "extract",
+                    )
+
+            unsafe_archive = root / "unsafe.tar.gz"
+            with tarfile.open(unsafe_archive, mode="w:gz") as archive:
+                member = tarfile.TarInfo(
+                    f"{install_pinned_libreoffice.ARCHIVE_ROOT}/../../escape"
+                )
+                member.size = 0
+                archive.addfile(member, io.BytesIO())
+            with self.assertRaisesRegex(RuntimeError, "unsafe path"):
+                install_pinned_libreoffice.safe_extract(
+                    unsafe_archive,
+                    root / "unsafe-extract",
+                )
+
+            unsupported_archive = root / "unsupported.tar.gz"
+            with tarfile.open(unsupported_archive, mode="w:gz") as archive:
+                member = tarfile.TarInfo(
+                    f"{install_pinned_libreoffice.ARCHIVE_ROOT}/unsupported"
+                )
+                member.type = tarfile.SYMTYPE
+                member.linkname = "target"
+                archive.addfile(member)
+            with self.assertRaisesRegex(RuntimeError, "non-file entry"):
+                install_pinned_libreoffice.safe_extract(
+                    unsupported_archive,
+                    root / "unsupported-extract",
+                )
+
+            core_package = (
+                f"libobasis26.2-core_{install_pinned_libreoffice.LIBREOFFICE_VERSION}"
+                "-2_amd64.deb"
+            )
+            impress_package = (
+                f"libreoffice26.2-impress_{install_pinned_libreoffice.LIBREOFFICE_VERSION}"
+                "-2_amd64.deb"
+            )
+            for missing, present in (
+                ("libobasis26.2-core", impress_package),
+                ("libreoffice26.2-impress", core_package),
+            ):
+                incomplete_archive = root / f"missing-{missing}.tar.gz"
+                with tarfile.open(incomplete_archive, mode="w:gz") as archive:
+                    member = tarfile.TarInfo(
+                        f"{install_pinned_libreoffice.ARCHIVE_ROOT}/DEBS/{present}"
+                    )
+                    member.size = 0
+                    archive.addfile(member, io.BytesIO())
+                with self.subTest(missing=missing), self.assertRaisesRegex(
+                    RuntimeError, f"missing {missing}"
+                ):
+                    install_pinned_libreoffice.safe_extract(
+                        incomplete_archive,
+                        root / f"missing-{missing}-extract",
+                    )
+
+            oversized_member = tarfile.TarInfo(
+                f"{install_pinned_libreoffice.ARCHIVE_ROOT}/oversized"
+            )
+            oversized_member.size = (
+                install_pinned_libreoffice.MAX_EXTRACTED_BYTES + 1
+            )
+            with patch.object(
+                install_pinned_libreoffice.tarfile,
+                "open",
+                return_value=contextlib.nullcontext((oversized_member,)),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "extracted-size"):
+                    install_pinned_libreoffice.safe_extract(
+                        root / "unused.tar.gz",
+                        root / "oversized-extract",
+                    )
+
+            fake_soffice = root / "soffice"
+            fake_soffice.write_text("not used", encoding="utf-8")
+            wrong_identity = subprocess.CompletedProcess(
+                [str(fake_soffice), "--version"],
+                0,
+                stdout="LibreOffice 99.0.0\n",
+                stderr="",
+            )
+            with patch.object(
+                install_pinned_libreoffice.subprocess,
+                "run",
+                return_value=wrong_identity,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "unexpected LibreOffice"):
+                    install_pinned_libreoffice.verify_soffice(fake_soffice)
+
+            populated = root / "populated-prefix"
+            populated.mkdir()
+            with (
+                patch.object(install_pinned_libreoffice, "INSTALL_ROOT", populated),
+                patch.object(install_pinned_libreoffice.platform, "system", return_value="Linux"),
+                patch.object(install_pinned_libreoffice.platform, "machine", return_value="x86_64"),
+                patch.object(
+                    install_pinned_libreoffice,
+                    "download_archive",
+                    side_effect=AssertionError("populated prefix must fail first"),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "prefix must be absent"):
+                    install_pinned_libreoffice.install()
+
+            deb_root = root / "complete" / "DEBS"
+            deb_root.mkdir(parents=True)
+            for package in (core_package, impress_package):
+                (deb_root / package).write_bytes(b"package")
+            events: list[str] = []
+
+            def record_download(_destination: Path) -> None:
+                events.append("download")
+
+            def record_install(command: list[str], *, check: bool) -> None:
+                self.assertTrue(check)
+                self.assertEqual(command[:5], ["sudo", "apt-get", "install", "--yes", "--no-install-recommends"])
+                for package in install_pinned_libreoffice.SYSTEM_RUNTIME_PACKAGES:
+                    self.assertIn(package, command)
+                self.assertIn(str(deb_root / core_package), command)
+                self.assertIn(str(deb_root / impress_package), command)
+                events.append("install")
+
+            with (
+                patch.object(install_pinned_libreoffice, "INSTALL_ROOT", root / "absent"),
+                patch.object(install_pinned_libreoffice.platform, "system", return_value="Linux"),
+                patch.object(install_pinned_libreoffice.platform, "machine", return_value="x86_64"),
+                patch.dict(os.environ, {"RUNNER_TEMP": str(root)}),
+                patch.object(install_pinned_libreoffice, "download_archive", side_effect=record_download),
+                patch.object(
+                    install_pinned_libreoffice,
+                    "safe_extract",
+                    side_effect=lambda _archive, _destination: (
+                        events.append("extract") or deb_root
+                    ),
+                ),
+                patch.object(install_pinned_libreoffice.subprocess, "run", side_effect=record_install),
+                patch.object(
+                    install_pinned_libreoffice,
+                    "verify_soffice",
+                    side_effect=lambda: events.append("verify"),
+                ),
+                patch.object(
+                    install_pinned_libreoffice,
+                    "expose_soffice",
+                    side_effect=lambda: events.append("expose"),
+                ),
+            ):
+                install_pinned_libreoffice.install()
+            self.assertEqual(
+                events,
+                ["download", "extract", "install", "verify", "expose"],
+            )
 
     def test_pinned_poppler_installer_enforces_its_runtime_guards(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -18,7 +18,7 @@ env:
 jobs:
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -37,6 +37,8 @@ jobs:
             libfontconfig1-dev libfreetype-dev libjpeg-turbo8-dev \
             libpng-dev libtiff-dev libopenjp2-7-dev liblcms2-dev zlib1g-dev
           python3 scripts/install_pinned_poppler.py
+      - name: Install pinned LibreOffice 26.2.5.2
+        run: python3 scripts/install_pinned_libreoffice.py
       - name: Fetch pinned presentation corpus
         run: python3 scripts/fetch_pptx_corpus.py
       - name: Run full workspace suite
@@ -367,7 +369,7 @@ jobs:
 
   msrv:
     name: MSRV (1.93)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
@@ -388,6 +390,8 @@ jobs:
             libfontconfig1-dev libfreetype-dev libjpeg-turbo8-dev \
             libpng-dev libtiff-dev libopenjp2-7-dev liblcms2-dev zlib1g-dev
           python3 scripts/install_pinned_poppler.py
+      - name: Install pinned LibreOffice 26.2.5.2
+        run: python3 scripts/install_pinned_libreoffice.py
       - name: Fetch pinned presentation corpus
         run: python3 scripts/fetch_pptx_corpus.py
       - name: Run full workspace suite
