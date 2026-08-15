@@ -1,3 +1,3 @@
-//! Deprecated compatibility shim for the shared OOXML PDF backend.
+#![doc = include_str!("../README.md")]
 
 pub use oxml_pdf::*;

@@ -102,12 +102,33 @@ jobs:
           else
             "$typing_python" -m mypy.stubtest rpptx
           fi
-      - name: Install musllinux wheel
+      - name: Install and test musllinux wheel
         if: matrix.platform.install == 'musl'
         shell: bash
         run: |
-          docker run --rm -v "$PWD/dist:/dist:ro" python:3.9-alpine \
-            sh -c "python -m venv /tmp/wheel-venv && /tmp/wheel-venv/bin/pip install /dist/${{ matrix.package.distribution }}-*.whl && /tmp/wheel-venv/bin/python -c 'import ${{ matrix.package.module }}'"
+          docker run --rm \
+            -v "$PWD:/workspace:ro" \
+            -v "$PWD/dist:/dist:ro" \
+            -w /workspace \
+            -e PACKAGE_DISTRIBUTION="${{ matrix.package.distribution }}" \
+            -e PACKAGE_MODULE="${{ matrix.package.module }}" \
+            python:3.9-alpine \
+            sh -euxc '
+              python -m venv /tmp/wheel-venv
+              venv_python=/tmp/wheel-venv/bin/python
+              "$venv_python" -m pip install --upgrade pip
+              "$venv_python" -m pip install /dist/${PACKAGE_DISTRIBUTION}-*.whl pytest python-docx==1.2.0 python-pptx==1.0.2
+              "$venv_python" -c "import ${PACKAGE_MODULE}"
+              if [ "$PACKAGE_DISTRIBUTION" = rdocx ]; then
+                "$venv_python" -m pytest \
+                  crates/rdocx-py/tests/test_core.py \
+                  crates/rdocx-py/tests/test_formatting_tables.py \
+                  crates/rdocx-py/tests/test_shared.py \
+                  crates/rdocx-py/tests/test_python_docx_parity.py
+              else
+                "$venv_python" -m pytest crates/rpptx-py/tests/test_documented_examples.py
+              fi
+            '
       - name: Upload wheel
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

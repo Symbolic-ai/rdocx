@@ -1,6 +1,7 @@
 [package]
 name = "rpptx-py"
 description = "Python bindings for rpptx"
+readme = "README.md"
 version.workspace = true
 publish = false
 edition.workspace = true
@@ -28,5 +29,5 @@ extension-module = ["pyo3/extension-module"]
 [dependencies]
 oxml-py-support = { workspace = true }
 pyo3 = { workspace = true }
-rpptx = { workspace = true }
+rpptx = { workspace = true, features = ["default-template", "render", "system-fonts"] }
 smallvec = { workspace = true }

@@ -238,7 +238,6 @@ pub(crate) fn parse_alternate_content_element(
 /// The fill has to be told apart from the outline colour. Both are written as
 /// `a:srgbClr`, and the outline sits inside `a:ln`, so anything at or below an
 /// `a:ln` is skipped.
-
 fn strict_extent(element: &StrictXmlElement) -> Result<(Emu, Emu)> {
     let Some(extent) = direct_child(element, Some(drawing_ns::WP), "extent") else {
         return Ok((Emu(0), Emu(0)));

@@ -106,6 +106,52 @@ fn python_binding_facade_accessors_are_total_and_immutable() {
     assert!(frame.paragraph(1).is_none());
 }
 
+#[test]
+fn facade_replacement_counts_same_run_cross_run_group_and_table_matches() {
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(0).unwrap();
+        shape.set_text("same target").unwrap();
+        let mut frame = shape.text_frame().unwrap();
+        let mut paragraph = frame.paragraph_mut(0).unwrap();
+        paragraph.add_run(" and cross ");
+        paragraph.add_run("target");
+
+        let mut table = slide.shape_mut(2).unwrap().into_table_mut().unwrap();
+        table.cell_mut(0, 0).unwrap().set_text("table target");
+
+        let mut group = slide.shape_mut(3).unwrap();
+        group
+            .child_mut(0)
+            .unwrap()
+            .set_text("nested target")
+            .unwrap();
+    }
+
+    assert_eq!(presentation.replace_text("target", "done"), 4);
+    let slide = presentation.slide(0).unwrap();
+    assert_eq!(
+        slide.shape(0).unwrap().text().unwrap(),
+        "same done and cross done"
+    );
+    assert_eq!(
+        slide
+            .shape(2)
+            .unwrap()
+            .table()
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .text(),
+        "table done"
+    );
+    assert_eq!(
+        slide.shape(3).unwrap().child(0).unwrap().text().unwrap(),
+        "nested done"
+    );
+}
+
 fn presentation_with_authored_chart() -> Presentation {
     let mut presentation = Presentation::new().expect("open bundled template");
     presentation.add_slide(0).expect("add chart slide");
@@ -3727,12 +3773,22 @@ fn rpptx_is_an_explicit_publication_candidate() {
     let workspace = include_str!("../../../Cargo.toml");
     let manifest = include_str!("../Cargo.toml");
     assert!(workspace.contains("\"crates/rpptx\""));
-    assert!(workspace.contains("rpptx = { path = \"crates/rpptx\", version = \"0.1.2\" }"));
+    assert!(workspace.contains(
+        "rpptx = { path = \"crates/rpptx\", version = \"0.2.0\", default-features = false }"
+    ));
     assert!(manifest.contains("name = \"rpptx\""));
-    assert!(manifest.contains("version = \"0.1.2\""));
+    assert!(manifest.contains("version = \"0.2.0\""));
     assert!(manifest.contains("publish = true"));
-    assert!(manifest.contains("default = [\"default-template\"]"));
+    assert!(manifest.contains("default = [\"default-template\", \"render\", \"system-fonts\"]"));
     assert!(manifest.contains("default-template = []"));
+    assert!(manifest.contains(
+        "render = [\"dep:miniz_oxide\", \"dep:oxml-pdf\", \"dep:rpptx-layout\", \"dep:rpptx-render\"]"
+    ));
+    assert!(
+        manifest.contains(
+            "system-fonts = [\"oxml-layout/system-fonts\", \"rpptx-render?/system-fonts\"]"
+        )
+    );
 }
 
 #[test]
@@ -4701,10 +4757,31 @@ fn deterministic_render(bytes: &[u8]) -> Vec<u8> {
 }
 
 fn render_presentation_package(bytes: &[u8]) -> oxml_layout::LayoutResult {
-    let package = open_opc(bytes, "F-112 deterministic render");
-    render_deck_example::render_package(&package, Path::new("F-128 integration package"))
+    Presentation::from_bytes(bytes)
+        .expect("F-112 deterministic render package")
+        .render_deterministic()
         .unwrap()
-        .layout
+        .1
+}
+
+#[test]
+fn corpus_example_and_facade_rendering_are_identical() {
+    let mut presentation = Presentation::new().expect("create presentation");
+    presentation.add_slide(0).expect("add slide");
+    let bytes = presentation.to_bytes().expect("serialize presentation");
+    let package = open_opc(&bytes, "F-142 example parity");
+    let example = render_deck_example::render_package(&package, Path::new("F-142 parity"))
+        .expect("example render");
+    let (_, facade) = Presentation::from_bytes(&bytes)
+        .expect("open facade")
+        .render_deterministic()
+        .expect("facade render");
+
+    assert_eq!(
+        oxml_pdf::render_to_pdf(&example.layout),
+        oxml_pdf::render_to_pdf(&facade)
+    );
+    assert_eq!(example.input.slides.len(), facade.pages.len());
 }
 
 fn presentation_with_three_dimensional_chart_fallback(preview: Option<(&[u8], &str)>) -> Vec<u8> {

@@ -1,7 +1,8 @@
 [package]
 name = "rpptx-oxml"
 description = "PresentationML object model and round-trip serialization"
-version = "0.1.2"
+readme = "README.md"
+version = "0.2.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

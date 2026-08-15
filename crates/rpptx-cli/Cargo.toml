@@ -1,0 +1,34 @@
+[package]
+name = "rpptx-cli"
+description = "CLI tool for inspecting, converting, and manipulating PPTX files"
+readme = "README.md"
+version = "0.2.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["pptx", "powerpoint", "ooxml", "presentation"]
+categories = ["command-line-utilities", "parser-implementations"]
+publish = true
+
+[package.metadata.release]
+shared-version = "incubating"
+tag-name = "rpptx-v{{version}}"
+
+[[bin]]
+name = "rpptx"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+clap.workspace = true
+oxml-cli-support.workspace = true
+oxml-pdf.workspace = true
+rpptx = { workspace = true, features = ["render"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+oxml-opc.workspace = true
+rpptx = { workspace = true, features = ["default-template", "render"] }

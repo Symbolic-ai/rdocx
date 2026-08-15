@@ -11,9 +11,7 @@ use oxml_core::xml::{
 use crate::borders::{CT_PBdr, CT_Tabs};
 use crate::document::CT_SectPr;
 use crate::error::{OxmlError, Result};
-use crate::namespace::W_NS;
-#[cfg(test)]
-use crate::namespace::matches_local_name;
+use crate::namespace::{W_NS, matches_local_name};
 use crate::raw_xml::NamespaceContext;
 use crate::shared::{ST_HighlightColor, ST_Jc, ST_OnOff, ST_Underline};
 use crate::units::{HalfPoint, Twips};
@@ -335,8 +333,21 @@ impl CT_PPr {
         if let Some(widow) = self.widow_control {
             write_toggle(writer, "w:widowControl", widow)?;
         }
-        if let Some(suppress) = self.suppress_auto_hyphens {
-            write_toggle(writer, "w:suppressAutoHyphens", suppress)?;
+
+        // numPr
+        if self.num_id.is_some() || self.num_ilvl.is_some() {
+            writer.write_event(Event::Start(BytesStart::new("w:numPr")))?;
+            if let Some(ilvl) = self.num_ilvl {
+                let mut e = BytesStart::new("w:ilvl");
+                e.push_attribute(("w:val", buf.format(ilvl)));
+                writer.write_event(Event::Empty(e))?;
+            }
+            if let Some(num_id) = self.num_id {
+                let mut e = BytesStart::new("w:numId");
+                e.push_attribute(("w:val", buf.format(num_id)));
+                writer.write_event(Event::Empty(e))?;
+            }
+            writer.write_event(Event::End(BytesEnd::new("w:numPr")))?;
         }
 
         // pBdr
@@ -356,20 +367,8 @@ impl CT_PPr {
             tabs.to_xml(writer)?;
         }
 
-        // numPr
-        if self.num_id.is_some() || self.num_ilvl.is_some() {
-            writer.write_event(Event::Start(BytesStart::new("w:numPr")))?;
-            if let Some(ilvl) = self.num_ilvl {
-                let mut e = BytesStart::new("w:ilvl");
-                e.push_attribute(("w:val", buf.format(ilvl)));
-                writer.write_event(Event::Empty(e))?;
-            }
-            if let Some(num_id) = self.num_id {
-                let mut e = BytesStart::new("w:numId");
-                e.push_attribute(("w:val", buf.format(num_id)));
-                writer.write_event(Event::Empty(e))?;
-            }
-            writer.write_event(Event::End(BytesEnd::new("w:numPr")))?;
+        if let Some(suppress) = self.suppress_auto_hyphens {
+            write_toggle(writer, "w:suppressAutoHyphens", suppress)?;
         }
 
         // spacing
@@ -828,14 +827,14 @@ impl CT_RPr {
         if let Some(small_caps) = self.small_caps {
             write_toggle(writer, "w:smallCaps", small_caps)?;
         }
-        if let Some(vanish) = self.vanish {
-            write_toggle(writer, "w:vanish", vanish)?;
-        }
         if let Some(strike) = self.strike {
             write_toggle(writer, "w:strike", strike)?;
         }
         if let Some(dstrike) = self.dstrike {
             write_toggle(writer, "w:dstrike", dstrike)?;
+        }
+        if let Some(vanish) = self.vanish {
+            write_toggle(writer, "w:vanish", vanish)?;
         }
 
         if let Some(ref color) = self.color {
@@ -874,26 +873,26 @@ impl CT_RPr {
             writer.write_event(Event::Empty(e))?;
         }
 
-        if let Some(underline) = self.underline {
-            let mut e = BytesStart::new("w:u");
-            e.push_attribute(("w:val", underline.to_str()));
-            writer.write_event(Event::Empty(e))?;
-        }
-
         if let Some(ref highlight) = self.highlight {
             let mut e = BytesStart::new("w:highlight");
             e.push_attribute(("w:val", highlight.to_str()));
             writer.write_event(Event::Empty(e))?;
         }
 
-        if let Some(ref vert_align) = self.vert_align {
-            let mut e = BytesStart::new("w:vertAlign");
-            e.push_attribute(("w:val", vert_align.as_str()));
+        if let Some(underline) = self.underline {
+            let mut e = BytesStart::new("w:u");
+            e.push_attribute(("w:val", underline.to_str()));
             writer.write_event(Event::Empty(e))?;
         }
 
         if let Some(ref shd) = self.shading {
             shd.write_xml(writer, "w:shd")?;
+        }
+
+        if let Some(ref vert_align) = self.vert_align {
+            let mut e = BytesStart::new("w:vertAlign");
+            e.push_attribute(("w:val", vert_align.as_str()));
+            writer.write_event(Event::Empty(e))?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:rPr")))?;
@@ -1019,10 +1018,22 @@ impl CT_RPr {
 }
 
 /// Parse a toggle element (like `<w:b/>` or `<w:b w:val="false"/>`).
-
 fn parse_strict_toggle(cursor: &mut StrictXmlCursor) -> bool {
     let value = cursor.take_attribute(Some(W_NS), "val");
     ST_OnOff::from_str_or_default(value.as_deref()).is_on()
+}
+
+fn is_word_name(name: &[u8], word_prefixes: &[String]) -> bool {
+    let Some(separator) = name.iter().position(|byte| *byte == b':') else {
+        return word_prefixes.iter().any(String::is_empty);
+    };
+    word_prefixes
+        .iter()
+        .any(|prefix| prefix.as_bytes() == &name[..separator])
+}
+
+pub(crate) fn is_word_element(name: &[u8], local: &[u8], word_prefixes: &[String]) -> bool {
+    matches_local_name(name, local) && is_word_name(name, word_prefixes)
 }
 
 fn take_twips_attribute(cursor: &mut StrictXmlCursor, local: &str) -> Result<Option<Twips>> {
@@ -1131,6 +1142,31 @@ mod tests {
         assert_eq!(tabs.tabs.len(), 2);
         assert_eq!(tabs.tabs[0].pos, Twips(720));
         assert_eq!(tabs.tabs[1].leader, Some(crate::shared::ST_TabLeader::Dot));
+    }
+
+    #[test]
+    fn canonical_ppr_ignores_foreign_same_local_containers() {
+        let xml = r#"<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:ext="urn:producer"><w:tabs><ext:tab ext:val="right" ext:pos="100"/><w:tab w:val="left" w:pos="720"/></w:tabs><ext:tabs><ext:tab ext:val="right" ext:pos="99"/></ext:tabs><ext:rPr><ext:b/></ext:rPr></w:pPr>"#;
+        let mut reader = Reader::from_str(xml);
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(_)) => break,
+                Ok(Event::Eof) => panic!("missing pPr start"),
+                _ => {}
+            }
+            buf.clear();
+        }
+        let context = NamespaceContext::new([
+            ("w".to_string(), W_NS.to_string()),
+            ("ext".to_string(), "urn:producer".to_string()),
+        ]);
+        let ppr = CT_PPr::from_xml_with_context(&mut reader, &context).unwrap();
+        let tabs = ppr.tabs.unwrap();
+        assert_eq!(tabs.tabs.len(), 1);
+        assert_eq!(tabs.tabs[0].pos, Twips(720));
+        assert_eq!(tabs.tabs[0].source_occurrence, Some(0));
+        assert!(ppr.rpr.is_none());
     }
 
     #[test]

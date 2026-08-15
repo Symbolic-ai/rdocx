@@ -1,6 +1,4 @@
-//! DOCX-to-HTML and DOCX-to-Markdown conversion.
-//!
-//! Works directly from semantic OXML types — no layout engine needed.
+#![doc = include_str!("../README.md")]
 
 mod css;
 mod emitter;

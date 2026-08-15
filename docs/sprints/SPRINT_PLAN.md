@@ -5,7 +5,7 @@ are dependency and review boundaries, not fixed two-week containers. Sprint
 clocks start at the first `/start-feature` of that sprint, not at a fixed
 calendar date.
 
-36 numbered sprints plus two deferred cutover sprints across 13 milestones,
+40 numbered sprints plus two deferred cutover sprints across 13 milestones,
 roughly 390 developer-days. The sizing rationale and compression options are in
 `docs/hld/14-development-backlog.md`.
 
@@ -546,7 +546,7 @@ reused.
 F-139 fixes a shipped defect that silently discards every package part except
 two. F-140 is why it will not happen again.
 
-#### Sprint S36, CLIs and publication
+#### Sprint S36, CLIs and local packaging
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -554,10 +554,85 @@ two. F-140 is why it will not happen again.
 | F-144 | rpptx-cli                                    | L |
 | F-145 | rpptx-cli thumbnail and outline              | M |
 | F-146 | npm publication                              | S |
+| F-X001 | rdocx-cli tests                             | M |
+| F-X002 | README example correctness                  | S |
+| F-X003 | Deduplicate the sample generators           | S |
+| F-X004 | Fix the shared temp path in the test suite  | S |
 
-**This is the v1 release gate.**
+**This is the v1 implementation gate.** The CLI and local package surfaces are
+complete. Registry publication is explicitly deferred. The expanded
+incubating Rust family requires a fresh version and reviewed release through
+F-X006. npm registry publication requires a separate future story.
+
+#### Sprint S37, Expanded Rust family release
+
+**Goal**: prepare a fresh common incubating version and publish the complete
+14-package Rust family through the reviewed release workflow after separate
+final approval.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X006 | Tag the expanded rpptx family               | S |
+
+#### Sprint S38, Contributor integration and stable release
+
+**Goal**: land PR 25 with its contributor credit intact, harden the new Word
+composition APIs against package and table-geometry regressions, and make the
+stable crate family documentation useful at the point of publication. Prepare
+and publish the complete stable family at the breaking pre-1.0 0.5.0 boundary
+only after the integrated result passes review and receives separate release
+approval.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X007 | Integrate PR 25 and stable crate documentation | L |
+| F-X008 | Tag v0.5.0                                      | S |
+
+F-X008 depends on F-X007. The GitHub PR is merged into the sprint branch so
+the contributor remains credited in the pull request and merge record. Only
+`/close-sprint` later merges the reviewed sprint to `main`.
+
+#### Sprint S39, Workspace crate documentation and next-minor releases
+
+**Goal**: every one of the 26 Cargo workspace packages declares a useful
+README. Each README explains the crate's role, intended audience, relationship
+to neighbouring packages, and includes a concrete example in the language or
+command surface that users actually consume. Publish those READMEs for every
+crates.io-eligible package through separate next-minor stable and incubating
+release tags.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X009 | README coverage for every workspace crate | L |
+| F-X010 | Tag v0.6.0 | S |
+| F-X011 | Tag rpptx-v0.2.0 | S |
+
+The existing README runner becomes an exact 26-package contract. Published
+archives must each contain one intended README, while unpublished Python and
+WASM packages receive accurate local usage examples without gaining any new
+publication authority. F-X010 publishes the seven stable crates first. F-X011
+then publishes the fourteen incubating crates. Each tag has its own full
+verification, clean review, and immediate release approval boundary.
+
+#### Sprint S40, Restore pinned CI toolchains
+
+**Goal**: restore a green hosted CI baseline after runner and package-manager
+updates exposed unpinned or incorrectly validated external tools. Keep the
+reviewed Poppler 26.01.0 rendering oracle and Binaryen 125 optimizer boundary
+without changing product output or recorded rendering baselines.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X012 | Restore pinned CI toolchains | M |
+
+The story installs checksum-pinned Poppler 26.01.0 for every job that executes
+its oracle-dependent tests, validates the official Binaryen 125 Linux version
+string, and proves the complete pull-request workflow on a hosted runner. It
+does not change a crate, release version, published package, or rendering
+baseline.
 
 ## Cross-cutting
 
-F-X001 through F-X004 are opportunistic and unscheduled. Pull one into a sprint
-when it becomes relevant, or when a sprint has capacity.
+F-X001 through F-X004 are scheduled in S36 as the final cross-cutting v1
+hardening wave. F-X007 and F-X008 handle the external Word contribution and
+its stable-family release without rewriting the completed milestone history.

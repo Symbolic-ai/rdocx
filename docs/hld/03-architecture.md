@@ -63,6 +63,9 @@ churn. The edge runs `oxml-drawing → rdocx-oxml`, never the reverse.
 part readers use the shared strict XML substrate so package metadata follows
 the same namespace, completeness, and budget rules as semantic OOXML parts.
 ZIP access, package paths, and package mutation remain local to `oxml-opc`.
+It remains independently consumable at the package layer. `rdocx-wasm`
+consumes the complete `rdocx` facade rather than using this lower-level seam as
+a second document model.
 
 **`oxml-media` has no dependencies at all.** It owns byte sniffing, image header
 probing, and intrinsic EMU sizing through its local `NativeSize` value. It
@@ -122,13 +125,27 @@ entry points.
 
 ## Versioning
 
-The 12 implemented shared and PowerPoint publication candidates carry an
-explicit common incubating version of 0.1.2 in their manifests and workspace
-pins. The released `rdocx-*` crates continue to use the separate workspace
-version. Version preparation and manifest eligibility do not authorize
-publication. Registry publication for this family is authorized only when
-`/release rpptx-v0.1.2` reaches its exact reviewed SHA and receives the
-separate final approval at the external mutation boundary.
+The 14 implemented shared and PowerPoint publication candidates use the
+explicit common incubating version 0.2.0 in their manifests and workspace
+pins. The complete 14-package family is published at 0.2.0 from the annotated
+`rpptx-v0.2.0` tag at its reviewed sprint SHA. The released `rdocx-*` crates
+continue to use the separate workspace version. Version preparation and
+manifest eligibility do not authorize publication. Every release still
+requires `/release` at an exact reviewed SHA and separate final approval at
+the external mutation boundary. `oxml-cli-support` is the format-neutral owner
+of range parsing, JSON envelope, and output-path contracts. It has no
+dependency on either document family, while CLI binaries depend inward on it.
+
+The immutable `rpptx-v0.1.2` release contains the earlier 12-package family.
+`oxml-cli-support` and `rpptx-cli` remain unpublished at 0.1.2. The complete
+14-package family is published at the immutable 0.1.3 and 0.2.0 boundaries. No
+existing tag or registry version was moved or overwritten.
+
+The `rpptx` facade owns formatting-preserving presentation text replacement.
+`Presentation::replace_text` applies literal, non-recursive replacement across
+contiguous regular runs in ordinary shapes, nested groups, and table cells.
+Fields, breaks, and selected alternate-content fallbacks remain traversal
+boundaries so the facade preserves their unmodelled or separately typed XML.
 
 `rpptx-*` crates carry their own `keywords` and `categories`, because the
 workspace values say `["docx", "word"]` which would be wrong on a presentation
@@ -171,6 +188,11 @@ Python binding re-resolve lazy index paths without allocating paragraph
 snapshots, clearing layout caches for reads, or reaching through private OOXML
 fields.
 
+`Document::text` traverses body paragraphs and table cells in document order.
+The WASM binding uses that additive facade accessor for its existing `getText`
+method and otherwise owns one complete `Document`. It never reaches into
+`rdocx-oxml` or maintains a second package representation.
+
 The same direct lookup rule covers document tables and paragraphs nested in
 table cells. `Document::table` and `Document::table_mut` are total, and cell
 handles provide paragraph counts plus immutable and mutable lookup. Run and
@@ -185,6 +207,12 @@ shape trees, placeholders, text frames, paragraphs, regular runs, tables and
 cells. Consuming mutable accessors transfer a facade borrow into its nested
 handle, which lets the Python binding re-resolve a path without exposing
 PresentationML internals or storing a Rust borrow in a pyclass.
+
+The facade also owns package-to-render-input assembly. Its deterministic render
+entry points resolve the current package once and return either the shared
+render input and layout or a complete PDF. The corpus example and
+`rpptx-wasm` call that boundary, so neither binding nor development tooling
+maintains a second PresentationML package interpretation path.
 
 Every consuming formatting builder on `Paragraph`, `Run`, `Table`, `Row`, and
 `Cell` has a non-consuming `set_*` twin because a `mut self -> Self` builder

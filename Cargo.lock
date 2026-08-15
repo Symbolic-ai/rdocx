@@ -80,6 +80,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
+name = "async-trait"
+version = "0.1.92"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -115,6 +126,22 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "cast"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
+
+[[package]]
+name = "cc"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d262e149917187838d5b42777c8253bcb64500067342904e7d429499a6f277e"
+dependencies = [
+ "find-msvc-tools",
+ "shlex",
 ]
 
 [[package]]
@@ -210,6 +237,12 @@ checksum = "1e6853b52649d4ac5c0bd02320cddc5ba956bdb407c4b75a2c6b75bf51500f8c"
 dependencies = [
  "simd-adler32",
 ]
+
+[[package]]
+name = "find-msvc-tools"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26b73573e6edcd2af0cdf47bd6cb58f0b3839491263c314eaad1ccf24430e1de"
 
 [[package]]
 name = "flate2"
@@ -380,6 +413,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "minicov"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4869b6a491569605d66d3952bcdf03df789e5b536e5f0cf7758a7f08a55ae24d"
+dependencies = [
+ "cc",
+ "walkdir",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -399,12 +442,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "nu-ansi-term"
+version = "0.50.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
+ "libm",
 ]
 
 [[package]]
@@ -420,8 +473,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "oorandom"
+version = "11.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
+
+[[package]]
+name = "oxml-cli-support"
+version = "0.2.0"
+dependencies = [
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "oxml-core"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "quick-xml",
  "thiserror",
@@ -429,7 +496,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-drawing"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "oxml-core",
  "oxml-opc",
@@ -439,7 +506,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-layout"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "fontdb",
  "harfrust",
@@ -450,11 +517,11 @@ dependencies = [
 
 [[package]]
 name = "oxml-media"
-version = "0.1.2"
+version = "0.2.0"
 
 [[package]]
 name = "oxml-opc"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "oxml-core",
  "quick-xml",
@@ -464,7 +531,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-pdf"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "miniz_oxide 0.9.1",
  "oxml-layout",
@@ -478,7 +545,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-py-support"
-version = "0.4.1"
+version = "0.6.0"
 dependencies = [
  "oxml-core",
  "smallvec",
@@ -487,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-sml"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "oxml-opc",
  "quick-xml",
@@ -626,7 +693,7 @@ dependencies = [
 
 [[package]]
 name = "rdocx"
-version = "0.4.1"
+version = "0.6.0"
 dependencies = [
  "oxml-core",
  "oxml-layout",
@@ -642,9 +709,10 @@ dependencies = [
 
 [[package]]
 name = "rdocx-cli"
-version = "0.4.1"
+version = "0.6.0"
 dependencies = [
  "clap",
+ "oxml-cli-support",
  "oxml-opc",
  "rdocx",
  "rdocx-oxml",
@@ -653,14 +721,14 @@ dependencies = [
 
 [[package]]
 name = "rdocx-html"
-version = "0.4.1"
+version = "0.6.0"
 dependencies = [
  "rdocx-oxml",
 ]
 
 [[package]]
 name = "rdocx-layout"
-version = "0.4.1"
+version = "0.6.0"
 dependencies = [
  "oxml-layout",
  "rdocx-oxml",
@@ -669,14 +737,14 @@ dependencies = [
 
 [[package]]
 name = "rdocx-opc"
-version = "0.4.1"
+version = "0.6.0"
 dependencies = [
  "oxml-opc",
 ]
 
 [[package]]
 name = "rdocx-oxml"
-version = "0.4.1"
+version = "0.6.0"
 dependencies = [
  "itoa",
  "oxml-core",
@@ -687,14 +755,14 @@ dependencies = [
 
 [[package]]
 name = "rdocx-pdf"
-version = "0.4.1"
+version = "0.6.0"
 dependencies = [
  "oxml-pdf",
 ]
 
 [[package]]
 name = "rdocx-py"
-version = "0.4.1"
+version = "0.6.0"
 dependencies = [
  "oxml-layout",
  "oxml-py-support",
@@ -705,13 +773,13 @@ dependencies = [
 
 [[package]]
 name = "rdocx-wasm"
-version = "0.4.1"
+version = "0.6.0"
 dependencies = [
  "js-sys",
  "oxml-opc",
- "rdocx-html",
- "rdocx-oxml",
+ "rdocx",
  "wasm-bindgen",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -772,7 +840,7 @@ checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
 name = "rpptx"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "miniz_oxide 0.9.1",
  "oxml-core",
@@ -791,7 +859,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-chart"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "oxml-core",
  "oxml-drawing",
@@ -803,8 +871,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rpptx-cli"
+version = "0.2.0"
+dependencies = [
+ "clap",
+ "oxml-cli-support",
+ "oxml-opc",
+ "oxml-pdf",
+ "rpptx",
+ "serde_json",
+]
+
+[[package]]
 name = "rpptx-layout"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "oxml-drawing",
  "oxml-layout",
@@ -815,7 +895,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-oxml"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "oxml-core",
  "oxml-drawing",
@@ -825,7 +905,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-py"
-version = "0.4.1"
+version = "0.6.0"
 dependencies = [
  "oxml-py-support",
  "pyo3",
@@ -835,7 +915,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-render"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "oxml-drawing",
  "oxml-layout",
@@ -844,6 +924,17 @@ dependencies = [
  "rpptx-layout",
  "rpptx-oxml",
  "tiny-skia",
+]
+
+[[package]]
+name = "rpptx-wasm"
+version = "0.2.0"
+dependencies = [
+ "js-sys",
+ "oxml-opc",
+ "rpptx",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -865,12 +956,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "same-file"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
+dependencies = [
+ "winapi-util",
+]
+
+[[package]]
 name = "serde"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]
@@ -905,6 +1006,12 @@ dependencies = [
  "serde_core",
  "zmij",
 ]
+
+[[package]]
+name = "shlex"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "simd-adler32"
@@ -1096,6 +1203,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "walkdir"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
+dependencies = [
+ "same-file",
+ "winapi-util",
+]
+
+[[package]]
 name = "wasm-bindgen"
 version = "0.2.126"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1106,6 +1223,16 @@ dependencies = [
  "rustversion",
  "wasm-bindgen-macro",
  "wasm-bindgen-shared",
+]
+
+[[package]]
+name = "wasm-bindgen-futures"
+version = "0.4.76"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c62df1340f32221cb9c54d6a27b030e3dba64361d4a95bed55f9aacb44da291d"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1138,6 +1265,54 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc1b4cb0cc549fcf58d7dfc081778139b3d283a081644e833e84682ad71cea24"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "wasm-bindgen-test"
+version = "0.3.76"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a0d555ca874445df8d314f94f5c948a4e74e5418f332c89f660a3d8310a96f4"
+dependencies = [
+ "async-trait",
+ "cast",
+ "js-sys",
+ "libm",
+ "minicov",
+ "nu-ansi-term",
+ "num-traits",
+ "oorandom",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test-macro",
+ "wasm-bindgen-test-shared",
+]
+
+[[package]]
+name = "wasm-bindgen-test-macro"
+version = "0.3.76"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94eb68555b95bcea5e8cf4abe280b529049479fa995bfc23734af96a6aedc120"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "wasm-bindgen-test-shared"
+version = "0.2.126"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c31d56021e873866c968588ed85ccdf56db5c426e44afdb4618c39895104b920"
+
+[[package]]
+name = "winapi-util"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
+dependencies = [
+ "windows-sys",
 ]
 
 [[package]]

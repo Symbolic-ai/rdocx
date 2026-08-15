@@ -12,17 +12,25 @@ use std::path::Path;
 use oxml_core::OxmlError;
 pub use oxml_core::core_properties::CoreProperties;
 pub use oxml_core::units::{Angle, Emu};
+#[cfg(feature = "render")]
+use oxml_drawing::color::ColorMap;
 pub use oxml_drawing::fill::Fill;
 pub use oxml_drawing::line::CT_LineProperties;
 use oxml_drawing::shape_props::CT_ShapeProperties;
+#[cfg(feature = "render")]
+use oxml_drawing::table::CT_TableStyleList;
 use oxml_drawing::table::{CT_Table, CT_TableCell, CT_TableCellProperties, CT_TableProperties};
 use oxml_drawing::text::{CT_RegularTextRun, CT_TextBody, CT_TextParagraph, TextRun};
 pub use oxml_drawing::text::{
     CT_TextCharacterProperties, CT_TextParagraphProperties, TextBullet, TextBulletCharacter,
     TextBulletChoice, TextFont,
 };
+#[cfg(feature = "render")]
+use oxml_drawing::theme::CT_OfficeStyleSheet;
 use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
 use oxml_layout::MediaId;
+#[cfg(feature = "render")]
+use oxml_layout::{Color, FontManager, LayoutResult, PageFrame, PositionedElement, Rect};
 use oxml_media::{ImageFormat, MediaNamer, probe, resolve};
 use oxml_opc::content_types;
 use oxml_opc::relationship::{Relationship, rel_types};
@@ -32,6 +40,11 @@ use rpptx_chart::{
     Axis, AxisData, AxisId, AxisKind, AxisPosition, BarDirection, BarGrouping, CT_ChartSpace,
     CT_Legend, CT_PlotArea, Grouping, NumericData, Plot, RadarStyle, ScatterStyle, Series,
     StringRef,
+};
+#[cfg(feature = "render")]
+use rpptx_layout::{
+    ChartResource, FlattenedItem, ResolveCtx, ScopedChartResources, ScopedHyperlinkTargets,
+    ScopedMediaIds,
 };
 use rpptx_oxml::connector::CT_ConnectionShape;
 use rpptx_oxml::graphic_frame::{CT_GraphicFrame, GraphicDataPayload};
@@ -44,6 +57,10 @@ use rpptx_oxml::shape_tree::{
     CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild, rewrite_shape_ids,
 };
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout};
+#[cfg(feature = "render")]
+use rpptx_oxml::slide_parts::{CT_SlideMaster, ColorMapOverrideKind};
+#[cfg(feature = "render")]
+use rpptx_render::{MediaData, RenderInput, layout_presentation_with_font_manager};
 use thiserror::Error;
 
 #[cfg(feature = "default-template")]
@@ -173,6 +190,10 @@ pub enum Error {
 
     #[error("adjustment {name} requires a finite value")]
     NonFiniteAdjustmentValue { name: String },
+
+    #[cfg(feature = "render")]
+    #[error("presentation render failed: {message}")]
+    Render { message: String },
 }
 
 /// A package or presentation invariant that would make a saved deck unsafe.
@@ -478,6 +499,19 @@ impl Presentation {
         let mut output = Cursor::new(Vec::new());
         package.write_to(&mut output)?;
         Ok(output.into_inner())
+    }
+
+    /// Resolves and lays out the current presentation with deterministic fonts.
+    #[cfg(feature = "render")]
+    pub fn render_deterministic(&self) -> Result<(RenderInput, LayoutResult)> {
+        assemble_render_input(&self.staged_package()?)
+    }
+
+    /// Renders the current presentation to a complete deterministic PDF.
+    #[cfg(feature = "render")]
+    pub fn to_pdf_deterministic(&self) -> Result<Vec<u8>> {
+        let (_, layout) = self.render_deterministic()?;
+        Ok(oxml_pdf::render_to_pdf(&layout))
     }
 
     fn staged_package(&self) -> Result<OpcPackage> {
@@ -821,6 +855,28 @@ impl Presentation {
     /// Iterates slides in `p:sldIdLst` order.
     pub fn slides(&self) -> impl ExactSizeIterator<Item = SlideRef<'_>> {
         self.slides.iter().map(slide_ref)
+    }
+
+    /// Replaces literal text across regular DrawingML runs in every editable shape.
+    ///
+    /// Replacement text retains the formatting and opaque run content of the
+    /// first matched run. Unmatched prefixes and suffixes stay in their
+    /// original runs. Groups and table cells are traversed recursively, while
+    /// preserved alternate-content branches remain untouched.
+    pub fn replace_text(&mut self, placeholder: &str, value: &str) -> usize {
+        if placeholder.is_empty() {
+            return 0;
+        }
+        self.slides
+            .iter_mut()
+            .map(|record| {
+                replace_text_in_children(
+                    &mut record.slide.common_slide_data.shape_tree.children,
+                    placeholder,
+                    value,
+                )
+            })
+            .sum()
     }
 
     /// Returns the optional slide dimensions in EMUs.
@@ -2410,6 +2466,14 @@ pub struct ShapeRef<'a> {
     child: &'a ShapeTreeChild,
 }
 
+impl PartialEq for ShapeRef<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.child, other.child)
+    }
+}
+
+impl Eq for ShapeRef<'_> {}
+
 fn shape_ref(child: &ShapeTreeChild) -> ShapeRef<'_> {
     ShapeRef { child }
 }
@@ -3585,6 +3649,641 @@ fn collect_text(children: &[ShapeTreeChild], output: &mut Vec<String>) {
         }
         collect_text(shape.child_slice(), output);
     }
+}
+
+fn replace_text_in_children(
+    children: &mut [ShapeTreeChild],
+    placeholder: &str,
+    value: &str,
+) -> usize {
+    let mut count = 0;
+    for child in children {
+        match child {
+            ShapeTreeChild::Shape(shape) => {
+                if let Some(body) = &mut shape.text_body {
+                    count += replace_text_in_body(body, placeholder, value);
+                }
+            }
+            ShapeTreeChild::GraphicFrame(frame) => {
+                if let Some(table) = frame.graphic_data.table_mut() {
+                    for row in &mut table.rows {
+                        for cell in &mut row.cells {
+                            if let Some(body) = &mut cell.text_body {
+                                count += replace_text_in_body(body, placeholder, value);
+                            }
+                        }
+                    }
+                }
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                count += replace_text_in_children(&mut group.children, placeholder, value);
+            }
+            ShapeTreeChild::Picture(_)
+            | ShapeTreeChild::Connector(_)
+            | ShapeTreeChild::AlternateContent(_) => {}
+        }
+    }
+    count
+}
+
+fn replace_text_in_body(body: &mut CT_TextBody, placeholder: &str, value: &str) -> usize {
+    let mut count = 0;
+    for index in 0..body.paragraph_count() {
+        if let Some(paragraph) = body.paragraph_mut(index) {
+            count += replace_text_in_paragraph(paragraph, placeholder, value);
+        }
+    }
+    count
+}
+
+fn replace_text_in_paragraph(
+    paragraph: &mut CT_TextParagraph,
+    placeholder: &str,
+    value: &str,
+) -> usize {
+    let mut count = 0;
+    let mut segment_start = 0;
+    while segment_start < paragraph.runs.len() {
+        while segment_start < paragraph.runs.len()
+            && !matches!(paragraph.runs[segment_start], TextRun::Run(_))
+        {
+            segment_start += 1;
+        }
+        let mut segment_end = segment_start;
+        while segment_end < paragraph.runs.len()
+            && matches!(paragraph.runs[segment_end], TextRun::Run(_))
+        {
+            segment_end += 1;
+        }
+        count += replace_text_in_run_segment(
+            &mut paragraph.runs[segment_start..segment_end],
+            placeholder,
+            value,
+        );
+        segment_start = segment_end.saturating_add(1);
+    }
+    count
+}
+
+fn replace_text_in_run_segment(runs: &mut [TextRun], placeholder: &str, value: &str) -> usize {
+    let mut text = String::new();
+    let mut ranges = Vec::with_capacity(runs.len());
+    for run in runs.iter() {
+        let TextRun::Run(run) = run else {
+            unreachable!("run segments contain only regular runs")
+        };
+        let start = text.len();
+        text.push_str(&run.text.value);
+        ranges.push((start, text.len()));
+    }
+    let matches = text
+        .match_indices(placeholder)
+        .map(|(start, _)| (start, start + placeholder.len()))
+        .collect::<Vec<_>>();
+
+    for &(match_start, match_end) in matches.iter().rev() {
+        let start_run = ranges
+            .iter()
+            .position(|&(_, end)| match_start < end)
+            .expect("non-empty match has a starting run");
+        let end_run = ranges
+            .iter()
+            .position(|&(start, end)| match_end > start && match_end <= end)
+            .expect("non-empty match has an ending run");
+        let start_offset = match_start - ranges[start_run].0;
+        let end_offset = match_end - ranges[end_run].0;
+
+        if start_run == end_run {
+            let TextRun::Run(run) = &mut runs[start_run] else {
+                unreachable!("run segments contain only regular runs")
+            };
+            run.text
+                .value
+                .replace_range(start_offset..end_offset, value);
+            continue;
+        }
+
+        let TextRun::Run(first) = &mut runs[start_run] else {
+            unreachable!("run segments contain only regular runs")
+        };
+        let first_len = first.text.value.len();
+        first
+            .text
+            .value
+            .replace_range(start_offset..first_len, value);
+        for run in &mut runs[start_run + 1..end_run] {
+            let TextRun::Run(run) = run else {
+                unreachable!("run segments contain only regular runs")
+            };
+            run.set_text("");
+        }
+        let TextRun::Run(last) = &mut runs[end_run] else {
+            unreachable!("run segments contain only regular runs")
+        };
+        last.text.value.replace_range(..end_offset, "");
+    }
+    matches.len()
+}
+
+#[cfg(feature = "render")]
+fn assemble_render_input(package: &OpcPackage) -> Result<(RenderInput, LayoutResult)> {
+    let presentation_part = package
+        .main_document_part()
+        .ok_or(Error::MissingMainDocument)?;
+    let presentation = CT_Presentation::from_xml(required_part(package, &presentation_part)?)
+        .map_err(|error| Error::MalformedPart {
+            part_name: presentation_part.clone(),
+            message: error.to_string(),
+        })?;
+    let default_text_style = presentation.default_text_style.clone().unwrap_or_default();
+    let size = presentation
+        .slide_size
+        .as_ref()
+        .map_or((720.0, 540.0), |size| {
+            (size.cx.0 as f64 / 12_700.0, size.cy.0 as f64 / 12_700.0)
+        });
+    let table_styles = render_table_styles(package, &presentation_part)?;
+    let presentation_relationships = package
+        .get_part_rels(&presentation_part)
+        .ok_or_else(|| render_failure("presentation relationships are missing"))?;
+
+    let mut media = HashMap::new();
+    let mut font_manager = FontManager::new_deterministic()
+        .map_err(|error| render_failure(format!("deterministic fonts: {error}")))?;
+    let mut resolved_slides = Vec::with_capacity(presentation.slide_ids.len());
+    for slide_id in &presentation.slide_ids {
+        let slide_relationship = presentation_relationships
+            .get_by_id(&slide_id.relationship_id)
+            .ok_or_else(|| Error::MissingRelationship {
+                source_part: presentation_part.clone(),
+                relationship_id: slide_id.relationship_id.clone(),
+            })?;
+        require_relationship_type(&presentation_part, slide_relationship, rel_types::SLIDE)?;
+        reject_external(&presentation_part, slide_relationship)?;
+        let slide_part =
+            OpcPackage::resolve_rel_target(&presentation_part, &slide_relationship.target);
+        let layout_part = render_related_part(package, &slide_part, rel_types::SLIDE_LAYOUT)?;
+        let master_part = render_related_part(package, &layout_part, rel_types::SLIDE_MASTER)?;
+        let theme_part = render_related_part(package, &master_part, rel_types::THEME)?;
+        let slide = CT_Slide::from_xml(required_part(package, &slide_part)?).map_err(|error| {
+            Error::MalformedPart {
+                part_name: slide_part.clone(),
+                message: error.to_string(),
+            }
+        })?;
+        let layout =
+            CT_SlideLayout::from_xml(required_part(package, &layout_part)?).map_err(|error| {
+                Error::MalformedPart {
+                    part_name: layout_part.clone(),
+                    message: error.to_string(),
+                }
+            })?;
+        let master =
+            CT_SlideMaster::from_xml(required_part(package, &master_part)?).map_err(|error| {
+                Error::MalformedPart {
+                    part_name: master_part.clone(),
+                    message: error.to_string(),
+                }
+            })?;
+        let theme = CT_OfficeStyleSheet::from_xml(required_part(package, &theme_part)?).map_err(
+            |error| Error::MalformedPart {
+                part_name: theme_part.clone(),
+                message: error.to_string(),
+            },
+        )?;
+        let color_map = render_effective_color_map(&master, &layout, &slide);
+        let mut context = ResolveCtx::new(
+            &theme,
+            color_map,
+            &master,
+            &layout,
+            &slide,
+            &default_text_style,
+        );
+        if let Some(styles) = table_styles.as_ref() {
+            context = context.with_table_styles(styles);
+        }
+        let source_count = context
+            .flatten()
+            .into_iter()
+            .filter(|item| render_source_shape_has_bounds(&context, item))
+            .count();
+        let (slide_media, slide_hyperlinks, slide_charts) = render_scoped_resources(
+            package,
+            [&slide_part, &layout_part, &master_part],
+            &mut media,
+        )?;
+        let resolved = context
+            .resolve_slide_with_chart_resources(
+                size,
+                &slide_media,
+                &slide_hyperlinks,
+                &slide_charts,
+                &mut font_manager,
+            )
+            .map_err(|error| render_failure(format!("{slide_part}: {error}")))?;
+        if source_count != resolved.shapes.len() {
+            return Err(render_failure(format!(
+                "{slide_part}: dropped bounded source shape, source {source_count}, resolved {}",
+                resolved.shapes.len()
+            )));
+        }
+        resolved_slides.push(resolved);
+    }
+
+    let input = RenderInput {
+        slides: resolved_slides,
+        media,
+        fonts: Vec::new(),
+        metadata: None,
+    };
+    let layout = layout_presentation_with_font_manager(&input, font_manager)
+        .map_err(|error| render_failure(error.to_string()))?;
+    if layout.pages.len() != input.slides.len() {
+        return Err(render_failure(format!(
+            "rendered {} pages for {} slides",
+            layout.pages.len(),
+            input.slides.len()
+        )));
+    }
+    Ok((input, layout))
+}
+
+#[cfg(feature = "render")]
+fn render_failure(message: impl Into<String>) -> Error {
+    Error::Render {
+        message: message.into(),
+    }
+}
+
+#[cfg(feature = "render")]
+fn render_table_styles(
+    package: &OpcPackage,
+    presentation_part: &str,
+) -> Result<Option<CT_TableStyleList>> {
+    let Some(relationship) = package
+        .get_part_rels(presentation_part)
+        .and_then(|relationships| relationships.get_by_type(rel_types::TABLE_STYLES))
+    else {
+        return Ok(None);
+    };
+    let target = OpcPackage::resolve_rel_target(presentation_part, &relationship.target);
+    CT_TableStyleList::from_xml(required_part(package, &target)?)
+        .map(Some)
+        .map_err(|error| Error::MalformedPart {
+            part_name: target,
+            message: error.to_string(),
+        })
+}
+
+#[cfg(feature = "render")]
+fn render_scoped_resources(
+    package: &OpcPackage,
+    parts: [&str; 3],
+    deck_media: &mut HashMap<MediaId, MediaData>,
+) -> Result<(ScopedMediaIds, ScopedHyperlinkTargets, ScopedChartResources)> {
+    let slide = render_part_resources(package, parts[0], deck_media)?;
+    let layout = render_part_resources(package, parts[1], deck_media)?;
+    let master = render_part_resources(package, parts[2], deck_media)?;
+    Ok((
+        ScopedMediaIds {
+            slide: slide.media_ids,
+            layout: layout.media_ids,
+            master: master.media_ids,
+            media_content_types: deck_media
+                .iter()
+                .map(|(media_id, media)| (*media_id, media.content_type.clone()))
+                .collect(),
+        },
+        ScopedHyperlinkTargets {
+            slide: slide.hyperlinks,
+            layout: layout.hyperlinks,
+            master: master.hyperlinks,
+        },
+        ScopedChartResources {
+            slide: slide.charts,
+            layout: layout.charts,
+            master: master.charts,
+        },
+    ))
+}
+
+#[cfg(feature = "render")]
+struct RenderPartResources {
+    media_ids: HashMap<String, MediaId>,
+    hyperlinks: HashMap<String, String>,
+    charts: HashMap<String, ChartResource>,
+}
+
+#[cfg(feature = "render")]
+fn render_part_resources(
+    package: &OpcPackage,
+    source_part: &str,
+    deck_media: &mut HashMap<MediaId, MediaData>,
+) -> Result<RenderPartResources> {
+    let mut media_ids = HashMap::new();
+    let mut hyperlinks = HashMap::new();
+    let mut charts = HashMap::new();
+    let Some(relationships) = package.get_part_rels(source_part) else {
+        return Ok(RenderPartResources {
+            media_ids,
+            hyperlinks,
+            charts,
+        });
+    };
+    for relationship in &relationships.items {
+        let external = relationship
+            .target_mode
+            .as_deref()
+            .is_some_and(|mode| mode.eq_ignore_ascii_case("external"));
+        if relationship.rel_type == rel_types::HYPERLINK && external {
+            hyperlinks.insert(relationship.id.clone(), relationship.target.clone());
+        }
+        if relationship.rel_type == rel_types::CHART {
+            let resource = if external {
+                ChartResource::External(relationship.target.clone())
+            } else {
+                let target = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+                match package.get_part(&target) {
+                    Some(bytes) => CT_ChartSpace::from_xml(bytes)
+                        .map(|chart| ChartResource::Parsed(Box::new(chart)))
+                        .unwrap_or_else(|error| ChartResource::Invalid(error.to_string())),
+                    None => ChartResource::MissingTarget(target),
+                }
+            };
+            charts.insert(relationship.id.clone(), resource);
+        }
+        if relationship.rel_type != rel_types::IMAGE || external {
+            continue;
+        }
+        let target = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+        let Some(bytes) = package.get_part(&target) else {
+            continue;
+        };
+        let content_type = package
+            .content_types
+            .content_type_for(&target)
+            .unwrap_or("application/octet-stream")
+            .to_owned();
+        if !render_compatible_media(bytes, &content_type) {
+            continue;
+        }
+        let media_id = MediaId::from_bytes(bytes);
+        deck_media.entry(media_id).or_insert_with(|| MediaData {
+            bytes: bytes.to_vec(),
+            content_type,
+        });
+        media_ids.insert(relationship.id.clone(), media_id);
+    }
+    Ok(RenderPartResources {
+        media_ids,
+        hyperlinks,
+        charts,
+    })
+}
+
+#[cfg(feature = "render")]
+fn render_compatible_media(bytes: &[u8], content_type: &str) -> bool {
+    let format = match ImageFormat::sniff(bytes) {
+        Some(ImageFormat::Png) if content_type.eq_ignore_ascii_case("image/png") => {
+            ImageFormat::Png
+        }
+        Some(ImageFormat::Jpeg)
+            if content_type.eq_ignore_ascii_case("image/jpeg")
+                || content_type.eq_ignore_ascii_case("image/jpg") =>
+        {
+            ImageFormat::Jpeg
+        }
+        _ => return false,
+    };
+    if !render_media_within_decode_bounds(bytes, format) {
+        return false;
+    }
+    let Some(info) = probe(bytes).filter(|info| info.width_px > 0 && info.height_px > 0) else {
+        return false;
+    };
+    if format == ImageFormat::Jpeg && (info.bit_depth != 8 || info.channels != 3) {
+        return false;
+    }
+    let width = f64::from(info.width_px);
+    let height = f64::from(info.height_px);
+    let media_id = MediaId::from_bytes(bytes);
+    [Color::BLACK, Color::WHITE].into_iter().any(|background| {
+        let background_element = PositionedElement::FilledRect {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height,
+            },
+            color: background,
+        };
+        let baseline = LayoutResult::new(
+            vec![PageFrame::new(
+                1,
+                width,
+                height,
+                vec![background_element.clone()],
+            )],
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        let candidate = LayoutResult::new(
+            vec![PageFrame::new(
+                1,
+                width,
+                height,
+                vec![
+                    background_element,
+                    PositionedElement::Image {
+                        rect: Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width,
+                            height,
+                        },
+                        data: bytes.to_vec(),
+                        content_type: content_type.to_owned(),
+                        media_id,
+                    },
+                ],
+            )],
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        oxml_pdf::render_page_to_png(&baseline, 0, 72.0)
+            .zip(oxml_pdf::render_page_to_png(&candidate, 0, 72.0))
+            .is_some_and(|(baseline, candidate)| baseline != candidate)
+    })
+}
+
+#[cfg(feature = "render")]
+const MAX_RENDER_PREVIEW_BYTES: usize = 16 * 1024 * 1024;
+#[cfg(feature = "render")]
+const MAX_RENDER_PREVIEW_DECODED_BYTES: usize = 16 * 1024 * 1024;
+
+#[cfg(feature = "render")]
+fn render_media_within_decode_bounds(bytes: &[u8], format: ImageFormat) -> bool {
+    if bytes.len() > MAX_RENDER_PREVIEW_BYTES {
+        return false;
+    }
+    let Some(info) = probe(bytes) else {
+        return false;
+    };
+    let Some(pixel_bytes) = usize::try_from(info.width_px)
+        .ok()
+        .and_then(|width| width.checked_mul(info.height_px as usize))
+        .and_then(|pixels| pixels.checked_mul(4))
+    else {
+        return false;
+    };
+    if pixel_bytes > MAX_RENDER_PREVIEW_DECODED_BYTES {
+        return false;
+    }
+    if format != ImageFormat::Png {
+        return true;
+    }
+    let Some(expected) = usize::try_from(info.width_px)
+        .ok()
+        .and_then(|width| width.checked_mul(info.channels as usize))
+        .and_then(|stride| stride.checked_add(1))
+        .and_then(|row| row.checked_mul(info.height_px as usize))
+        .filter(|expected| *expected <= MAX_RENDER_PREVIEW_DECODED_BYTES)
+    else {
+        return false;
+    };
+    let mut idat = Vec::new();
+    let mut offset = 33usize;
+    while offset < bytes.len() {
+        let Some(length_bytes) = bytes.get(offset..offset.saturating_add(4)) else {
+            return false;
+        };
+        let length = u32::from_be_bytes(length_bytes.try_into().unwrap()) as usize;
+        let Some(kind_start) = offset.checked_add(4) else {
+            return false;
+        };
+        let Some(payload_start) = kind_start.checked_add(4) else {
+            return false;
+        };
+        let Some(payload_end) = payload_start.checked_add(length) else {
+            return false;
+        };
+        let Some(chunk_end) = payload_end.checked_add(4) else {
+            return false;
+        };
+        let (Some(kind), Some(payload), Some(_)) = (
+            bytes.get(kind_start..payload_start),
+            bytes.get(payload_start..payload_end),
+            bytes.get(payload_end..chunk_end),
+        ) else {
+            return false;
+        };
+        if kind == b"IDAT" {
+            if idat.len().saturating_add(payload.len()) > MAX_RENDER_PREVIEW_BYTES {
+                return false;
+            }
+            idat.extend_from_slice(payload);
+        }
+        if kind == b"IEND" {
+            break;
+        }
+        offset = chunk_end;
+    }
+    !idat.is_empty()
+        && miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&idat, expected)
+            .is_ok_and(|decoded| decoded.len() >= expected)
+}
+
+#[cfg(feature = "render")]
+fn render_source_shape_has_bounds(context: &ResolveCtx<'_>, item: &FlattenedItem<'_>) -> bool {
+    let FlattenedItem::Shape { child, .. } = item else {
+        return false;
+    };
+    match child {
+        ShapeTreeChild::Shape(shape) => context
+            .effective_xfrm(shape)
+            .as_ref()
+            .is_some_and(render_transform_has_bounds),
+        ShapeTreeChild::Picture(picture) => context
+            .effective_picture_xfrm(picture)
+            .as_ref()
+            .is_some_and(render_transform_has_bounds),
+        ShapeTreeChild::GraphicFrame(frame) => render_transform_has_bounds(&frame.transform),
+        ShapeTreeChild::Connector(connector) => connector
+            .shape_properties
+            .transform
+            .as_ref()
+            .is_some_and(render_connector_transform_has_bounds),
+        ShapeTreeChild::AlternateContent(alternate) => alternate
+            .chart_choice()
+            .is_some_and(|frame| render_transform_has_bounds(&frame.transform)),
+        ShapeTreeChild::GroupShape(_) => false,
+    }
+}
+
+#[cfg(feature = "render")]
+fn render_transform_has_bounds(transform: &CT_Transform2D) -> bool {
+    transform
+        .extent
+        .is_some_and(|extent| extent.cx.0 > 0 && extent.cy.0 > 0)
+}
+
+#[cfg(feature = "render")]
+fn render_connector_transform_has_bounds(transform: &CT_Transform2D) -> bool {
+    transform.extent.is_some_and(|extent| {
+        extent.cx.0 >= 0 && extent.cy.0 >= 0 && (extent.cx.0 > 0 || extent.cy.0 > 0)
+    })
+}
+
+#[cfg(feature = "render")]
+fn render_effective_color_map(
+    master: &CT_SlideMaster,
+    layout: &CT_SlideLayout,
+    slide: &CT_Slide,
+) -> ColorMap {
+    match slide
+        .color_map_override
+        .as_ref()
+        .or(layout.color_map_override.as_ref())
+    {
+        Some(override_value) => match &override_value.kind {
+            ColorMapOverrideKind::Master => master.color_map.clone(),
+            ColorMapOverrideKind::Override(map) => map.clone(),
+        },
+        None => master.color_map.clone(),
+    }
+}
+
+#[cfg(feature = "render")]
+fn render_related_part(
+    package: &OpcPackage,
+    source_part: &str,
+    relationship_type: &str,
+) -> Result<String> {
+    let relationship = package
+        .get_part_rels(source_part)
+        .and_then(|relationships| relationships.get_by_type(relationship_type))
+        .ok_or_else(|| {
+            render_failure(format!(
+                "{source_part}: missing relationship {relationship_type}"
+            ))
+        })?;
+    if relationship
+        .target_mode
+        .as_deref()
+        .is_some_and(|mode| mode.eq_ignore_ascii_case("external"))
+    {
+        return Err(Error::ExternalRelationship {
+            source_part: source_part.to_owned(),
+            relationship_id: relationship.id.clone(),
+        });
+    }
+    Ok(OpcPackage::resolve_rel_target(
+        source_part,
+        &relationship.target,
+    ))
 }
 
 #[cfg(test)]

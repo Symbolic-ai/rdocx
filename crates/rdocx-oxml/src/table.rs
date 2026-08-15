@@ -1674,6 +1674,73 @@ mod tests {
     }
 
     #[test]
+    fn aliased_table_cell_paragraph_properties_keep_root_scope() {
+        let xml = format!(
+            r#"<q:tbl xmlns:q="{}" xmlns:ext="urn:producer"><q:tr><q:tc><ext:p><ext:pPr><ext:jc ext:val="right"/></ext:pPr></ext:p><q:p><q:pPr><ext:jc ext:val="right"/><q:jc q:val="center"/></q:pPr><q:r><q:t>Cell</q:t></q:r></q:p></q:tc></q:tr></q:tbl>"#,
+            crate::namespace::W_NS
+        );
+        let mut reader = Reader::from_str(&xml);
+        let mut buf = Vec::new();
+        let table = loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref element)) if element.local_name().as_ref() == b"tbl" => {
+                    let context = NamespaceContext::new([
+                        ("q".to_string(), W_NS.to_string()),
+                        ("ext".to_string(), "urn:producer".to_string()),
+                    ]);
+                    break CT_Tbl::from_xml_with_context(&mut reader, &context).unwrap();
+                }
+                Ok(Event::Eof) => panic!("missing table"),
+                event => {
+                    event.unwrap();
+                }
+            }
+            buf.clear();
+        };
+        let paragraphs = table.rows[0].cells[0].paragraphs();
+        assert_eq!(paragraphs.len(), 1);
+        assert_eq!(paragraphs[0].text(), "Cell");
+        assert_eq!(
+            paragraphs[0].properties.as_ref().unwrap().jc,
+            Some(ST_Jc::Center)
+        );
+    }
+
+    #[test]
+    fn default_namespace_table_cell_properties_keep_root_scope() {
+        let xml = format!(
+            r#"<tbl xmlns="{0}" xmlns:w="{0}" xmlns:ext="urn:producer"><tr><tc><ext:p><ext:pPr><ext:jc ext:val="right"/></ext:pPr></ext:p><p><pPr><ext:jc ext:val="right"/><jc w:val="center"/></pPr><r><t>Cell</t></r></p></tc></tr></tbl>"#,
+            crate::namespace::W_NS
+        );
+        let mut reader = Reader::from_str(&xml);
+        let mut buf = Vec::new();
+        let table = loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref element)) if element.local_name().as_ref() == b"tbl" => {
+                    let context = NamespaceContext::new([
+                        (String::new(), W_NS.to_string()),
+                        ("w".to_string(), W_NS.to_string()),
+                        ("ext".to_string(), "urn:producer".to_string()),
+                    ]);
+                    break CT_Tbl::from_xml_with_context(&mut reader, &context).unwrap();
+                }
+                Ok(Event::Eof) => panic!("missing table"),
+                event => {
+                    event.unwrap();
+                }
+            }
+            buf.clear();
+        };
+        let paragraphs = table.rows[0].cells[0].paragraphs();
+        assert_eq!(paragraphs.len(), 1);
+        assert_eq!(paragraphs[0].text(), "Cell");
+        assert_eq!(
+            paragraphs[0].properties.as_ref().unwrap().jc,
+            Some(ST_Jc::Center)
+        );
+    }
+
+    #[test]
     fn parse_cell_merge() {
         let tbl = parse_table(
             r#"<w:tblGrid><w:gridCol w:w="2500"/><w:gridCol w:w="2500"/></w:tblGrid>

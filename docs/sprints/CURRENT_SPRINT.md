@@ -1,57 +1,42 @@
-# Current Sprint, S34
+# Current Sprint, S40
 
-**Milestone**: M13 Bindings and tooling.
+**Milestone**: X Cross-cutting.
 
-**Goal**: Make the Python packages ready for typed use, parity validation,
-cross-platform wheel production, and continuous integration. Complete the
-rdocx compatibility evidence, reuse the validated path machinery for rpptx,
-then make wheel and PR automation enforce the resulting package contract.
+**Goal**: restore a green hosted CI baseline after runner and package-manager
+updates exposed unpinned or incorrectly validated external tools. Preserve the
+reviewed Poppler 26.01.0 rendering oracle and Binaryen 125 optimizer boundary
+without changing product output or recorded rendering baselines.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for the shared Python-support boundary and the
-  permitted `rdocx-py` and `rpptx-py` dependency directions.
-- `docs/hld/10-bindings-spec.md`, for the hand-written stubs, `py.typed`, mixed
-  package layout, parity suite, wheel matrix, tag namespace, and PR-time job.
-- `docs/hld/12-testing-strategy.md`, for Python parity coverage and the binding
-  exclusions required by workspace Rust gates.
-- `docs/hld/13-risks-and-open-questions.md`, for the index-path aliasing risk
-  that the reused presentation handles must preserve.
-- `docs/hld/14-development-backlog.md`, for F-134 through F-138 dependencies
-  and their named acceptance gates.
-- `docs/hld/15-build-and-toolchain.md`, for abi3-py39, mixed-package version
-  alignment, PyPI OIDC publication, and binding-safe CI behavior.
+- `docs/hld/12-testing-strategy.md`, for the exact Poppler rendering oracle and
+  output-stability gates.
+- `docs/hld/14-development-backlog.md`, for the F-X012 scope and hosted CI
+  acceptance gate.
+- `docs/hld/15-build-and-toolchain.md`, for deterministic external-tool
+  installation and CI job ownership.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-136 | rpptx-py | L | done | - |
-| F-134 | Type stubs and py.typed | M | done | - |
-| F-135 | python-docx parity suite | M | done | - |
-| F-137 | wheels.yml | M | done | - |
-| F-138 | PR-time Python job | S | done | - |
+| F-X012 | Restore pinned CI toolchains | M | done | - |
 
 ## Sequencing note
 
-Rows are listed in dependency order, not by F-ID. F-136 first reuses completed
-F-129 and F-116. F-134 follows F-136 so both Python packages receive one typed
-contract. F-135 then validates the settled rdocx surface without changing it.
-F-137 follows F-134 and F-136 so both typed packages enter the wheel matrix.
-F-138 follows F-137 and exercises the same build paths on pull requests.
+There is one CI restoration story. It first pins and validates the shared
+external tools, then runs the complete hosted workflow so platform-specific
+failures are covered before sprint closure.
 
 ## Definition of done for this sprint
 
-- `mypy --strict` and `stubtest` pass against installed packages carrying
-  `py.typed`.
-- Every pinned python-docx 1.2.0 example inside the approved S33 surface runs
-  with only the package namespace changed, and two-way round trips preserve
-  normalized content.
-- The seven pinned python-pptx 1.0.2 Getting Started examples run with only the
-  package namespace changed through path-based `rpptx-py` handles.
-- `wheels.yml` builds and installs the abi3-py39 target matrix through the
-  `py-v*` OIDC publication path.
-- The PR-time Python job builds the extension and runs pytest, and a binding
-  test failure makes the job fail.
-- Binding-focused gates pass with the required Rust workspace exclusions, and
-  existing deterministic document and rendering outputs do not regress.
+- Every CI job that executes a Poppler-dependent gate installs and verifies
+  Poppler 26.01.0 from the checksum-pinned source.
+- The WASM job accepts only the exact official Binaryen 125 Linux version
+  identity after verifying the reviewed archive checksum.
+- The workflow contract rejects missing pins, omitted jobs, weakened version
+  checks, and package-manager drift.
+- `/verify --full` passes with all 28 deterministic hashes unchanged.
+- A hosted pull-request CI run at the reviewed SHA completes every job
+  successfully.
+- No crate, release version, package publication, or rendering baseline changes.

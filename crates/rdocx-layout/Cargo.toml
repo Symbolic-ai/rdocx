@@ -1,6 +1,7 @@
 [package]
 name = "rdocx-layout"
 description = "Layout engine for converting DOCX flow model to positioned frames"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,7 +16,11 @@ categories.workspace = true
 shared-version = "workspace"
 tag-name = "v{{version}}"
 
+[features]
+default = ["system-fonts"]
+system-fonts = ["oxml-layout/system-fonts"]
+
 [dependencies]
-oxml-layout = { workspace = true }
+oxml-layout = { workspace = true, default-features = false }
 rdocx-oxml = { workspace = true }
 unicode-linebreak = { workspace = true }

@@ -1,7 +1,8 @@
 [package]
 name = "oxml-pdf"
 description = "Format-neutral PDF renderer for staged OOXML layout output"
-version = "0.1.2"
+readme = "README.md"
+version = "0.2.0"
 publish = true
 edition.workspace = true
 license.workspace = true
@@ -17,7 +18,7 @@ shared-version = "incubating"
 tag-name = "rpptx-v{{version}}"
 
 [dependencies]
-oxml-layout = { workspace = true }
+oxml-layout = { workspace = true, default-features = false }
 oxml-media = { workspace = true }
 pdf-writer = { workspace = true }
 subsetter = { workspace = true }

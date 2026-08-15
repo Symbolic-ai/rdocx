@@ -1,6 +1,7 @@
 [package]
 name = "rdocx-py"
 description = "Python bindings for rdocx"
+readme = "README.md"
 version.workspace = true
 publish = false
 edition.workspace = true
@@ -28,7 +29,7 @@ extension-module = ["pyo3/extension-module"]
 [dependencies]
 oxml-py-support = { workspace = true }
 pyo3 = { workspace = true }
-rdocx = { workspace = true }
+rdocx = { workspace = true, features = ["system-fonts"] }
 smallvec = { workspace = true }
 
 [dev-dependencies]

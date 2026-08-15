@@ -1,7 +1,8 @@
 [package]
 name = "rpptx-render"
 description = "Presentation rendering bridge from rpptx models to shared output"
-version = "0.1.2"
+readme = "README.md"
+version = "0.2.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -16,9 +17,13 @@ publish = true
 shared-version = "incubating"
 tag-name = "rpptx-v{{version}}"
 
+[features]
+default = ["system-fonts"]
+system-fonts = ["oxml-layout/system-fonts"]
+
 [dependencies]
 oxml-drawing.workspace = true
-oxml-layout.workspace = true
+oxml-layout = { workspace = true, default-features = false }
 oxml-media.workspace = true
 rpptx-layout.workspace = true
 rpptx-oxml.workspace = true

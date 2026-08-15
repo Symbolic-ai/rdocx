@@ -22,6 +22,9 @@ The core focus is **DOCX**: a high-level, python-docx-inspired API for building 
 - **Headers & footers** with first-page support and per-section overrides
 - **Styles** — paragraph and character styles, theme color resolution
 - **Lists** with automatic numbering ID management
+- **Custom lists** with independent definitions, per-level number formats, and
+  configurable starting values
+- **Composable links and line breaks** inside paragraphs and table cells
 - **Template engine** with placeholder replacement (plain text and regex)
 - **TOC generation** with internal hyperlinks and dot-leader tabs
 - **Document merging** with style deduplication and numbering remapping
@@ -42,21 +45,23 @@ The core focus is **DOCX**: a high-level, python-docx-inspired API for building 
 
 ```toml
 [dependencies]
-rdocx = "0.4"
+rdocx = "0.6"
 ```
 
-To include bundled metric-compatible fonts (Carlito, Caladea, Liberation family):
+Bundled metric-compatible fonts are always available through the deterministic
+rendering methods. The default feature adds system font discovery. Disable it
+when an application should use only deterministic bundled fonts:
 
 ```toml
 [dependencies]
-rdocx-layout = { version = "0.4", features = ["bundled-fonts"] }
+rdocx = { version = "0.6", default-features = false }
 ```
 
 ## Quick Start
 
 ### Create a document
 
-```rust
+```rust,no_run
 use rdocx::{Document, Length};
 
 let mut doc = Document::new();
@@ -75,7 +80,7 @@ doc.save("output.docx").unwrap();
 
 ### Read a document
 
-```rust
+```rust,no_run
 use rdocx::Document;
 
 let doc = Document::open("report.docx").unwrap();
@@ -85,8 +90,14 @@ for para in doc.paragraphs() {
 }
 
 for table in doc.tables() {
-    for row in table.rows() {
-        for cell in row.cells() {
+    for row_index in 0..table.row_count() {
+        let Some(row) = table.row(row_index) else {
+            continue;
+        };
+        for cell_index in 0..row.cell_count() {
+            let Some(cell) = row.cell(cell_index) else {
+                continue;
+            };
             print!("{}\t", cell.text());
         }
         println!();
@@ -96,7 +107,7 @@ for table in doc.tables() {
 
 ### Convert to PDF
 
-```rust
+```rust,no_run
 use rdocx::Document;
 
 let doc = Document::open("report.docx").unwrap();
@@ -108,7 +119,7 @@ let pdf_bytes = doc.to_pdf().unwrap();
 
 ### Convert to HTML / Markdown
 
-```rust
+```rust,no_run
 use rdocx::Document;
 
 let doc = Document::open("report.docx").unwrap();
@@ -119,7 +130,7 @@ let markdown = doc.to_markdown();
 
 ### Template replacement
 
-```rust
+```rust,no_run
 use rdocx::Document;
 use std::collections::HashMap;
 
@@ -135,7 +146,7 @@ doc.save("filled.docx").unwrap();
 
 ### Merge documents
 
-```rust
+```rust,no_run
 use rdocx::{Document, SectionBreak};
 
 let mut doc = Document::open("part1.docx").unwrap();
@@ -144,6 +155,53 @@ let part2 = Document::open("part2.docx").unwrap();
 doc.append_with_break(&part2, SectionBreak::NextPage);
 doc.save("combined.docx").unwrap();
 ```
+
+### Custom lists, links, and fixed table columns
+
+```rust,no_run
+use rdocx::{Document, Length, ListLevel};
+
+let mut doc = Document::new();
+let list_id = doc.add_list_definition(&[
+    ListLevel::bullet(),
+    ListLevel::decimal().start(3),
+]);
+
+doc.add_paragraph("A bullet").set_numbering(list_id, 0);
+doc.add_paragraph("Starts at three")
+    .set_numbering(list_id, 1);
+
+let relationship_id = doc.add_hyperlink_relationship("https://docs.rs/rdocx");
+let mut paragraph = doc.add_paragraph("");
+paragraph
+    .add_hyperlink("rdocx API documentation", &relationship_id)
+    .bold(true);
+paragraph.add_line_break();
+paragraph.add_run("Continue on a new line.");
+
+let mut table = doc.add_table(1, 2);
+assert!(table.set_column_width(0, Length::inches(2.0)));
+assert!(table.set_column_width(1, Length::inches(3.0)));
+
+doc.save("authoring.docx")?;
+# Ok::<(), rdocx::Error>(())
+```
+
+## Stable crate family
+
+Most applications should depend only on `rdocx`. The companion crates expose
+lower-level boundaries for tools that already own parsed WordprocessingML or
+layout data.
+
+| Crate | Use it when |
+|---|---|
+| [`rdocx`](https://docs.rs/rdocx) | Creating, reading, editing, or rendering complete DOCX packages |
+| [`rdocx-oxml`](https://docs.rs/rdocx-oxml) | Working directly with typed WordprocessingML elements |
+| [`rdocx-layout`](https://docs.rs/rdocx-layout) | Paginating an already assembled `LayoutInput` |
+| [`rdocx-html`](https://docs.rs/rdocx-html) | Converting parsed Word content to HTML or Markdown |
+| [`rdocx-cli`](https://crates.io/crates/rdocx-cli) | Inspecting, converting, validating, or rendering documents from a shell |
+| [`rdocx-opc`](https://docs.rs/rdocx-opc) | Maintaining legacy imports while migrating to `oxml-opc` |
+| [`rdocx-pdf`](https://docs.rs/rdocx-pdf) | Maintaining legacy imports while migrating to `oxml-pdf` |
 
 ## CLI
 
@@ -161,14 +219,14 @@ rdocx inspect report.docx
 rdocx text report.docx
 
 # Convert to PDF
-rdocx convert report.docx -o report.pdf
+rdocx convert report.docx --to pdf -o report.pdf
 
 # Convert to HTML or Markdown
-rdocx convert report.docx -o report.html
-rdocx convert report.docx -o report.md
+rdocx convert report.docx --to html -o report.html
+rdocx convert report.docx --to md -o report.md
 
 # Find and replace text
-rdocx replace report.docx --find "Draft" --replace "Final" -o final.docx
+rdocx replace report.docx --placeholder "Draft" --value "Final" -o final.docx
 
 # Diff two documents
 rdocx diff v1.docx v2.docx

@@ -49,6 +49,11 @@ defended.
 | S32.2 | M6 | 8 | 8 | 0 | 10 | 8 | Completed M6 by publishing the shared 0.1.2 family, cutting released rdocx consumers over to shared facades and backends, and documenting the migration. All package archives verified below 10 MiB and all 28 hashes remained unchanged |
 | S33 | M13 | 5 | 5 | 0 | 13 | 5 | Established shared Python path and revision support, lazy rdocx handles, formatting, tables, Python-compatible values and errors, and GIL-detached rendering. The cp39-abi3 wheel passed 31 tests, all 28 hashes remained unchanged, and no package was published |
 | S34 | M13 | 5 | 5 | 0 | 11 | 5 | Completed typed Python packages, bidirectional python-docx and python-pptx parity, six-target wheel automation, and pull-request binding CI. The hosted every-platform M13 gate remains for later M13 work, all 28 hashes remained unchanged, and no package was published |
+| S35 | M13 | 4 | 4 | 0 | 9 | 4 | Completed facade-backed Word and presentation WASM packages, browser PDF export, and two-package WASM CI. Hosted wheels installed and passed parity on every M13 target, all 28 hashes remained unchanged, and no package was published |
+| S36 | M13, X | 8 | 8 | 0 | 13 | 8 | Completed both v1 CLIs, local npm package assembly, README doctests, sample-generator deduplication, and concurrent test isolation. All 28 hashes remained unchanged, and no Rust or npm package was published |
+| S37 | M13, X | 1 | 1 | 0 | 1 | 1 | Published and verified the complete 14-package rpptx 0.1.3 family through the reviewed release workflow. The M13 hosted wheel gate remains satisfied, all 28 hashes remained unchanged, and no npm package was published |
+| S38 | X | 2 | 2 | 0 | 5 | 2 | Integrated PR 25 with Jon Stokes credited, added compile-checked documentation for every stable crate, and published the seven-package stable rdocx 0.5.0 family. All 28 hashes remained unchanged, and no incubating, WASM, Python, or npm package was published |
+| S39 | X | 3 | 3 | 0 | 6 | 3 | Added compile-checked README coverage for all 26 workspace crates, published the seven-package stable rdocx 0.6.0 family, and published the complete 14-package rpptx 0.2.0 family. Every crates.io README rendered, all 28 hashes remained unchanged, and no WASM, Python, npm, or PyPI package was published |
 
 ## Completed features
 
@@ -201,6 +206,25 @@ defended.
 | F-136 | S34 | L | 4 | 1 | 2026-08-13 | Lazy rpptx bindings with strict global stale-handle semantics |
 | F-137 | S34 | M | 2 | 1 | 2026-08-13 | Two-package abi3 wheel matrix and tag-only trusted publication workflow |
 | F-138 | S34 | S | 1 | 1 | 2026-08-13 | Pull-request Python binding build and test job |
+| F-139 | S35 | L | 4 | 1 | 2026-08-13 | Facade-backed rdocx WASM with complete package preservation |
+| F-140 | S35 | S | 1 | 1 | 2026-08-13 | Two-package locked WASM target and Node CI gates |
+| F-141 | S35 | M | 2 | 1 | 2026-08-13 | Browser PDF export with embedded bundled fonts |
+| F-142 | S35 | M | 2 | 1 | 2026-08-13 | Bounded facade-backed rpptx WASM profiles |
+| F-143 | S36 | S | 1 | 1 | 2026-08-13 | Shared bounded range, output-path, and JSON-envelope CLI support |
+| F-144 | S36 | L | 4 | 1 | 2026-08-13 | Complete deterministic rpptx command-line interface |
+| F-145 | S36 | M | 2 | 1 | 2026-08-13 | Fixed-width thumbnail and recursive outline commands |
+| F-146 | S36 | S | 1 | 1 | Locally packable and installable scoped WASM npm tarballs |
+| F-X001 | S36 | M | 2 | 1 | Seven command-level rdocx-cli integration gates |
+| F-X002 | S36 | S | 1 | 1 | Six compiled README examples and canonical rustdoc runner |
+| F-X003 | S36 | S | 1 | 1 | One canonical sample generator with unchanged outputs |
+| F-X004 | S36 | S | 1 | 1 | Process-unique integration-test output paths |
+| F-X006 | S37 | S | 1 | 1 | Published and verified the complete rpptx 0.1.3 family |
+| F-X007 | S38 | L | 4 | 1 | 2026-08-14 | Integrated PR 25, stable crate READMEs, and package-preserving numbering XML |
+| F-X008 | S38 | S | 1 | 1 | 2026-08-14 | Published and verified the stable rdocx 0.5.0 family |
+| F-X009 | S39 | L | 4 | 1 | 2026-08-14 | Exact README coverage and usage examples for all 26 workspace packages |
+| F-X010 | S39 | S | 1 | 1 | 2026-08-14 | Published and verified the stable rdocx 0.6.0 family with rendered crate READMEs |
+| F-X011 | S39 | S | 1 | 1 | 2026-08-14 | Published and verified the complete rpptx 0.2.0 family with rendered crate READMEs |
+| F-X012 | S40 | M | 2 | 1 | 2026-08-15 | Pinned Poppler, Binaryen, uv, and LibreOffice CI toolchains |
 
 ## Velocity
 
@@ -250,6 +274,12 @@ five working days.
 | S32.2 | 8 | 8 | 5.00 |
 | S33 | 5 | 5 | 5.00 |
 | S34 | 5 | 5 | 5.00 |
+| S35 | 4 | 4 | 5.00 |
+| S36 | 8 | 8 | 5.00 |
+| S37 | 1 | 1 | 5.00 |
+| S38 | 2 | 2 | 5.00 |
+| S39 | 3 | 3 | 5.00 |
+| S40 | 1 | 1 | 5.00 |
 
 ## Escalation record
 
@@ -289,3 +319,8 @@ was done about it. Empty is the expected state.
 | 2026-08-11 | Sprint estimate variance exceeded 30 percent | S32.1 | Record 4 actual days against 7 estimated and reforecast 29 pending stories at the observed five stories per active week to about 6 active weeks, retaining dependency-defined sprint boundaries |
 | 2026-08-12 | Sprint estimate variance exceeded 30 percent | S33 | Record 5 actual days against 13 estimated and reforecast 17 pending stories at the observed five stories per active week to about 4 active weeks, retaining dependency-defined sprint boundaries |
 | 2026-08-13 | Sprint estimate variance exceeded 30 percent | S34 | Record 5 actual days against 11 estimated and reforecast 12 pending stories at the observed five stories per active week to about 3 active weeks, retaining dependency-defined sprint boundaries |
+| 2026-08-13 | Sprint estimate variance exceeded 30 percent | S35 | Record 4 actual days against 9 estimated and reforecast 8 pending stories at the observed five stories per active week to about 2 active weeks, retaining dependency-defined sprint boundaries |
+| 2026-08-13 | Sprint estimate variance exceeded 30 percent | S36 | Record 8 actual days against 13 estimated, retain one pending fresh-version release story, and reforecast it as the remaining active sprint |
+| 2026-08-14 | Sprint estimate variance exceeded 30 percent | S38 | Record 2 actual days against 5 estimated. The externally contributed implementation reduced authoring work, while eighteen review passes established the required package-preserving numbering boundary before release |
+| 2026-08-14 | Sprint estimate variance exceeded 30 percent | S39 | Record 3 actual days against 6 estimated. Documentation automation and the established release workflow reduced delivery time while preserving exact package, registry, and rendered README verification |
+| 2026-08-15 | Sprint estimate variance exceeded 30 percent | S40 | Record 1 actual day against 2 estimated. Reusing the bounded installer across hosted jobs reduced delivery time while preserving the exact pinned-tool and full-workflow evidence |

@@ -59,6 +59,7 @@ Presentation::slide_size(&self) -> Option<(Emu, Emu)>;
 Presentation::set_slide_size(&mut self, width: Emu, height: Emu) -> Result<()>;
 Presentation::core_properties(&self) -> Option<&CoreProperties>;
 Presentation::core_properties_mut(&mut self) -> &mut CoreProperties;
+Presentation::replace_text(&mut self, placeholder: &str, value: &str) -> usize;
 Presentation::save_as_show(&self, path: impl AsRef<Path>) -> Result<()>;
 SlideRef::hidden(&self) -> bool;
 SlideRef::has_explicit_background(&self) -> bool;
@@ -76,6 +77,13 @@ content type, and part on save.
 slide order. A slide exposes its producer id, optional `p:cSld` name, immediate
 z-order shapes, recursive visible text, and optional speaker-note text. Indexed
 access returns `Option` and does not panic.
+
+`replace_text` performs literal, non-recursive replacement across contiguous
+regular runs in ordinary shapes, nested groups, and table cells. A match keeps
+the first matched run's formatting and leaves an unmatched suffix in the last
+matched run's formatting. Fields, breaks, and selected alternate-content
+fallbacks are boundaries. An empty placeholder changes nothing and returns
+zero. The returned count is the number of replaced matches.
 
 The public facade also exposes total title and placeholder lookup and immutable
 text-frame, paragraph and regular-run handles. Repeatable shape lookup covers
@@ -123,7 +131,9 @@ typed model continue to use the normal preservation path.
 group members and the selected `mc:Fallback` view are exposed through child
 iteration. Ordinary shapes return their text-body text. Table frames return
 row-major cell text with tabs between cells and newlines between rows. Other
-shape kinds have no direct text.
+shape kinds have no direct text. `ShapeRef` equality is node identity. Two
+handles compare equal only when they borrow the same underlying shape-tree
+child, rather than when separate shapes happen to contain equal XML.
 
 `slide_mut(index)` exposes a borrowed `SlideMut` handle. Its `shape(index)`
 method retains read access, while `shape_mut(index)` returns a `ShapeMut` for an

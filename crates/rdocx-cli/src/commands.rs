@@ -2,7 +2,9 @@
 
 use std::path::Path;
 
+use oxml_cli_support::{default_output_path, json_envelope};
 use rdocx::Document;
+use serde_json::{Value, json};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -31,19 +33,7 @@ pub fn inspect(file: &Path, json: bool) -> Result<()> {
     }
 
     if json {
-        let obj = serde_json::json!({
-            "file": file.display().to_string(),
-            "paragraphs": paragraph_count,
-            "tables": table_count,
-            "content_elements": content_count,
-            "metadata": {
-                "title": title,
-                "author": author,
-                "subject": subject,
-                "keywords": keywords,
-            },
-            "styles_used": style_ids,
-        });
+        let obj = inspect_json(file, &doc, style_ids)?;
         println!("{}", serde_json::to_string_pretty(&obj)?);
     } else {
         println!("File: {}", file.display());
@@ -81,29 +71,29 @@ pub fn inspect(file: &Path, json: bool) -> Result<()> {
     Ok(())
 }
 
+fn inspect_json(file: &Path, doc: &Document, style_ids: Vec<String>) -> Result<Value> {
+    Ok(json_envelope(json!({
+        "file": file.display().to_string(),
+        "paragraphs": doc.paragraph_count(),
+        "tables": doc.table_count(),
+        "content_elements": doc.content_count(),
+        "metadata": {
+            "title": doc.title(),
+            "author": doc.author(),
+            "subject": doc.subject(),
+            "keywords": doc.keywords(),
+        },
+        "styles_used": style_ids,
+    }))?)
+}
+
 /// Extract plain text from a DOCX file.
 ///
 /// Body paragraphs and table cell text are both emitted, in document order —
 /// printing only `paragraphs()` would silently drop everything inside tables.
 pub fn text(file: &Path) -> Result<()> {
     let doc = Document::open(file)?;
-
-    for para in doc.paragraphs() {
-        println!("{}", para.text());
-    }
-    for table in doc.tables() {
-        for row_idx in 0..table.row_count() {
-            let Some(row) = table.row(row_idx) else {
-                continue;
-            };
-            let cells: Vec<String> = (0..row.cell_count())
-                .filter_map(|i| row.cell(i))
-                .map(|c| c.text().replace('\n', " "))
-                .collect();
-            println!("{}", cells.join("\t"));
-        }
-    }
-
+    print!("{}", doc.text());
     Ok(())
 }
 
@@ -129,7 +119,7 @@ pub fn convert(
 
     let output_path = match output {
         Some(p) => p.to_path_buf(),
-        None => file.with_extension(default_ext),
+        None => default_output_path(file, default_ext),
     };
 
     match to {
@@ -306,7 +296,7 @@ pub fn render(file: &Path, output_dir: Option<&Path>, dpi: f64, page: Option<usi
 
     if let Some(page_idx) = page {
         let png = doc
-            .render_page_to_png(page_idx, dpi)?
+            .render_page_to_png_deterministic(page_idx, dpi)?
             .ok_or_else(|| format!("Page {page_idx} not found"))?;
         let out_path = out_dir.join(format!("{stem}_page{}.png", page_idx + 1));
         std::fs::write(&out_path, &png)?;
@@ -317,18 +307,19 @@ pub fn render(file: &Path, output_dir: Option<&Path>, dpi: f64, page: Option<usi
             png.len()
         );
     } else {
-        let pages = doc.render_all_pages(dpi)?;
-        for (i, png) in pages.iter().enumerate() {
-            let out_path = out_dir.join(format!("{stem}_page{}.png", i + 1));
-            std::fs::write(&out_path, png)?;
+        let mut page_count = 0;
+        while let Some(png) = doc.render_page_to_png_deterministic(page_count, dpi)? {
+            let out_path = out_dir.join(format!("{stem}_page{}.png", page_count + 1));
+            std::fs::write(&out_path, &png)?;
             println!(
                 "Page {} -> {} ({} bytes)",
-                i + 1,
+                page_count + 1,
                 out_path.display(),
                 png.len()
             );
+            page_count += 1;
         }
-        println!("Rendered {} page(s) at {dpi} DPI", pages.len());
+        println!("Rendered {page_count} page(s) at {dpi} DPI");
     }
 
     Ok(())
@@ -435,4 +426,57 @@ pub fn validate(file: &Path) -> Result<bool> {
     }
 
     Ok(errors.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inspect_json_uses_the_shared_schema_one_envelope() {
+        let document = Document::new();
+        let styles = vec!["Heading1".to_owned(), "Normal".to_owned()];
+        let value = inspect_json(Path::new("input.docx"), &document, styles.clone()).unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "schema": 1,
+                "file": "input.docx",
+                "paragraphs": document.paragraph_count(),
+                "tables": document.table_count(),
+                "content_elements": document.content_count(),
+                "metadata": {
+                    "title": document.title(),
+                    "author": document.author(),
+                    "subject": document.subject(),
+                    "keywords": document.keywords(),
+                },
+                "styles_used": styles,
+            })
+        );
+    }
+
+    #[test]
+    fn convert_without_output_uses_the_default_extension_path() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let input = std::env::temp_dir().join(format!(
+            "rdocx_cli_default_convert_{}_{unique}.docx",
+            std::process::id()
+        ));
+        let expected_output = input.with_extension("md");
+        let mut document = Document::new();
+        document.add_paragraph("Default path regression");
+        document.save(&input).unwrap();
+
+        convert(&input, "md", None, 96, None).unwrap();
+
+        let converted = std::fs::read_to_string(&expected_output);
+        std::fs::remove_file(input).unwrap();
+        std::fs::remove_file(expected_output).ok();
+        assert_eq!(converted.unwrap(), "Default path regression\n\n");
+    }
 }

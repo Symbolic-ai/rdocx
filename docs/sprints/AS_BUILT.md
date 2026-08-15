@@ -5067,3 +5067,724 @@ WASM and dependency isolation, and the integrated full gate passed.
 
 **Notes for future sessions.** Keep the pull-request job least privilege and
 make any new package test failure propagate without a conditional or fallback.
+
+### F-139, Rewrite rdocx-wasm
+
+**Sprint.** S35
+**Completed.** 2026-08-13
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `WasmDocument` now owns one real `rdocx::Document` and
+delegates its established JavaScript surface to the facade. DOCX byte round
+trips retain the complete package, ordered text comes through the additive
+facade getter, and generated Node tests exercise the actual JavaScript byte
+boundary. The native Word and presentation paths retain system-font discovery
+through explicit feature forwarding, while the WASM graph disables it and
+keeps bundled fonts available.
+
+**Non-obvious choices.** Workspace rendering dependencies are defaults-off so
+each concrete consumer selects its graph. Native consumers opt into
+`system-fonts`, while `rdocx-wasm` does not. The wrapper keeps the existing
+JavaScript names, maps concrete facade errors to string-valued `JsValue`s, and
+does not maintain a second package model or add byte aliases.
+
+**Deviations from the design plan.** Microscope remediation added exact
+generated-JavaScript reflection, restored presentation system-font defaults,
+and strengthened the root workspace manifest sensitivity. The approved facade
+ownership, public surface, and HLD impact did not change.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `document_with_images_headers_and_numbering_round_trips_every_part_intact`,
+`document_text_preserves_body_and_table_order`,
+`wasm_round_trip_preserves_the_complete_package_in_node`, native and WASM
+feature-contract mutations, no-default gates, package and publication checks,
+and the integrated full gate at `fecfd0a` passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep the WASM package as a facade consumer.
+Feature isolation depends on defaults-off workspace edges and explicit native
+opt-ins, while bundled font bytes remain unconditional.
+
+### F-140, wasm CI job
+
+**Sprint.** S35
+**Completed.** 2026-08-13
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The pull-request WASM job now target-checks both facade
+wrappers with the locked graph and runs both inline Node suites. It installs
+exact Node 24.11.1 and wasm-pack 0.15.0, and a structured workflow contract
+enforces package coverage, step order, immutable action pins, least privilege,
+and ordinary failure propagation.
+
+**Non-obvious choices.** The operative setup-node pin is the reviewed v6.5.0
+commit. Both Node suites run as separate commands without conditions,
+`continue-on-error`, fallback success, or listing-only substitutions. The
+incubating cargo-release preparation group includes unpublished `rpptx-wasm`,
+while the crates.io allowlist remains limited to published packages.
+
+**Deviations from the design plan.** Microscope remediation corrected the
+setup-node release label in the testing HLD and added independent provenance
+sensitivity. The approved two-package workflow and HLD scope did not change.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `test_wasm_pr_job_checks_both_targets_and_runs_node_tests`,
+`test_wasm_pr_job_rejects_skipped_or_weakened_gates`, setup-node provenance
+and release-family mutations, locked wasm32 checks, both complete Node suites,
+a real propagated Node failure, and the integrated full gate at `fecfd0a`
+passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep action annotations aligned with their
+immutable commits. Any new WASM package must receive an executable Node gate,
+not only a target check.
+
+### F-141, to_pdf in the browser
+
+**Sprint.** S35
+**Completed.** 2026-08-13
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `WasmDocument.toPdf` now returns bytes directly from the
+normal `rdocx::Document::to_pdf` facade. A generated-JavaScript Node regression
+adds text through the public binding, calls `toPdf` reflectively, and requires
+a complete PDF with a Type 0 font, an embedded TrueType stream, and bundled
+Carlito.
+
+**Non-obvious choices.** There is no deterministic alias or WASM-only renderer.
+The wrapper's defaults-off graph makes the normal facade path browser-safe by
+excluding host discovery while retaining unconditional bundled fonts.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `to_pdf_in_node_returns_a_complete_pdf_with_an_embedded_bundled_font`
+proved the generated `toPdf` name, `Uint8Array` boundary, `%PDF-` through
+`%%EOF`, `/Subtype /Type0`, `/FontFile2`, and Carlito. The two-test Node suite,
+feature-isolation contract, font and rendering riders, mutation sensitivity,
+and the integrated full gate at `fecfd0a` passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Browser PDF behavior belongs to the normal
+facade method under the WASM feature graph. Do not fork layout or PDF assembly
+inside the binding.
+
+### F-142, rpptx-wasm
+
+**Sprint.** S35
+**Completed.** 2026-08-13
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The workspace now contains an unpublished `rpptx-wasm`
+package backed by one real `rpptx::Presentation`. Its bounded default profile
+constructs, opens, serializes, counts, and mutates presentations without the
+renderer. The opt-in `render` profile adds only `toPdf`. Package-to-render
+assembly moved from the corpus example into the owning facade, and the example
+now delegates to that single deterministic path.
+
+**Non-obvious choices.** Native `rpptx` defaults retain template, rendering,
+and system fonts, while the wrapper selects a bundled-template-only facade and
+adds deterministic rendering explicitly. The exact optimized normal-default
+artifact is 519,060 decimal gzip bytes, below the 1,000,000-byte gate. The
+size check binds reviewed wasm-pack, wasm-opt, and deterministic gzip arguments
+to the freshly built artifact.
+
+**Deviations from the design plan.** Microscope remediation bound the size gate
+to the current artifact, hardened normal-default and render feature contracts,
+and strengthened facade-to-example parity and rendering completeness. The
+approved profiles, facade boundary, and HLD impact did not change.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `default_profile_is_under_one_megabyte_and_round_trips_a_deck`,
+`wasm_presentation_uses_the_real_facade_in_node`,
+`render_profile_returns_a_complete_pdf`, facade-to-example render parity,
+default and render dependency graphs, exact 519,060-byte size and mutation
+sensitivity, publication riders, and the integrated full gate at `fecfd0a`
+passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep rendering optional for the wrapper and
+package interpretation in the facade. Re-run the exact optimized size gate
+whenever the normal-default dependency graph changes.
+
+### F-143, oxml-cli-support
+
+**Sprint.** S36
+**Completed.** 2026-08-13
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The publishable, currently unpublished
+`oxml-cli-support` crate owns bounded
+one-based range parsing, default output-path construction, and the schema-one
+JSON envelope shared by both command-line tools. `rdocx-cli` now uses the
+shared output-path and JSON helpers without changing its command surface.
+
+**Non-obvious choices.** Range parsing charges requested expansion work before
+deduplication and accepts exactly 100,000 requested values. This prevents large
+or overlapping ranges from amplifying memory or CPU work while retaining
+sorted and deduplicated results.
+
+**Deviations from the design plan.** Review added the explicit materialization
+and cumulative-work bounds, the exact accepted boundary, and full compatibility
+coverage for every existing rdocx inspect field and default conversion path.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Seven shared helper tests, two rdocx-cli compatibility tests,
+oversized and overlapping range mutations, the 21-package publication dry run,
+dependency-direction checks, and the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep format-neutral command plumbing in this
+crate and charge range work before materializing user input.
+
+### F-144, rpptx-cli
+
+**Sprint.** S36
+**Completed.** 2026-08-13
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The publishable, currently unpublished `rpptx-cli` binary
+provides `inspect`,
+`text`, `convert`, `diff`, `replace`, `validate`, and `render`. It consumes the
+real presentation facade and shared CLI support, preserves package content and
+run formatting during replacement, and uses deterministic rendering for PDF
+and PNG output.
+
+**Non-obvious choices.** Raster commands reject more than 8,000,000 pixels per
+page. PNG conversion preflights every page and then renders, writes, and drops
+one encoded page at a time. Text diff retains its established LCS behavior but
+rejects matrices above 1,000,000 cells before allocation.
+
+**Deviations from the design plan.** Review added complete core metadata to
+plain inspect output, zero-slide PNG failure, bounded DPI and diff resources,
+streaming multi-slide PNG output, and verified corpus provision for both clean
+CI jobs.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/06-presentationml-model.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Fourteen command integrations, all 50 pinned corpus decks, the
+same-run, cross-run, grouped, and table replacement matrix, resource-boundary
+mutations, deterministic rendering checks, workflow regressions, and the
+integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep OOXML ownership in the facade. New CLI
+operations must remain bounded before allocating or collecting output.
+
+### F-145, rpptx-cli thumbnail and outline
+
+**Sprint.** S36
+**Completed.** 2026-08-13
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `rpptx thumbnail` renders slide one to a deterministic PNG
+at exactly 320 pixels wide with proportional height. `rpptx outline` prints
+each slide title once and recursively emits textual paragraphs in shape order
+with two spaces per paragraph level.
+
+**Non-obvious choices.** Outline title suppression compares the actual
+`ShapeRef` node identity through additive `PartialEq` and `Eq` implementations.
+This remains total for field-only titles and does not depend on collapsed
+placeholder indexes. Paragraph line breaks normalize to printable spaces.
+
+**Deviations from the design plan.** Review exposed unindexed placeholder and
+field-only title cases. The user approved the bounded equality trait addition,
+and the owning facade HLD was added to the exact work list before completion.
+
+**Spec sections touched.** `docs/hld/06-presentationml-model.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Fourteen CLI integrations cover portrait aspect ratio, output-path
+precedence, grouped text, paragraph levels, embedded breaks, unindexed
+placeholders, field-only titles, all 50 corpus decks, targeted mutations, and
+the integrated full gate.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Compare facade handles by their defined node
+identity when exact shape suppression is required. Do not infer identity from
+placeholder indexes or text.
+
+### F-146, npm publication
+
+**Sprint.** S36
+**Completed.** 2026-08-13
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The CI WASM job can build local bundler packages, run
+`npm pack`, and install `@tensorbee/rdocx-wasm` and
+`@tensorbee/rpptx-wasm` into separate fresh consumers. The packages contain
+their scoped metadata, WebAssembly binary, JavaScript glue, and public type
+declarations. No registry publication path or authority was added.
+
+**Non-obvious choices.** Both manifests use wasm-opt 125 with `-Oz`,
+`--enable-bulk-memory`, and `--enable-nontrapping-float-to-int`. CI downloads
+the reviewed official Binaryen asset and verifies its SHA-256 before use.
+Fresh installs disable scripts, audits, and funding calls.
+
+**Deviations from the design plan.** Actual Rust output required the approved
+third wasm-opt feature flag. The user also approved installing exact wasm-opt
+125 because wasm-pack otherwise falls back to a different bundled version.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Local bundler builds, two scoped tarballs, separate fresh installs,
+package inventories, installed imports, both locked WASM checks, both Node
+suites, 36 workflow regressions, dependency isolation, and the integrated full
+gate passed. No package was published.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Treat real npm publication as a separate
+reviewed story with explicit authority. Keep this path local and install-only.
+
+### F-X001, rdocx-cli tests
+
+**Sprint.** S36
+**Completed.** 2026-08-13
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** One integration binary invokes all seven `rdocx-cli`
+commands through `std::process::Command` with isolated in-code fixtures. The
+text command now uses facade document-order text, and both render branches use
+the bundled-font deterministic facade.
+
+**Non-obvious choices.** The tests bind visible font output byte-for-byte to
+the deterministic renderer for both selected-page and all-page paths. Their
+temporary workspaces combine process identity with a local counter.
+
+**Deviations from the design plan.** Review exposed interleaved body-order and
+system-font rendering defects in the product. The approved plan was revised to
+include those bounded command fixes and exactly three HLD files.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** Seven command integrations, misspelled-command and false-validation
+mutations, interleaved paragraph and table text, deterministic selected and
+all-page rendering mutations, golden PNG checks, and the integrated full gate
+passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep one command integration entrypoint and
+bind rendering tests to the deterministic facade rather than host coincidence.
+
+### F-X002, README example correctness
+
+**Sprint.** S36
+**Completed.** 2026-08-13
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** All six root README Rust examples compile as `no_run`
+rustdoc tests. The table example uses the real indexed row and cell APIs. One
+canonical Python runner obtains the exact locked rdocx rlib through Cargo JSON
+and invokes rustdoc with warnings denied.
+
+**Non-obvious choices.** README remains the only snippet source. The CI docs
+job and canonical full verification call the same runner, which prevents drift
+without duplicating examples into crate documentation.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The runner compiled six examples, a disposable `rows()` and
+`cells()` mutation failed with E0599, output scans remained clean, CI and
+generated-adapter contracts passed, and the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Keep README as the snippet source and discover
+the actual locked rlib rather than assuming a target filename.
+
+### F-X003, Deduplicate the sample generators
+
+**Sprint.** S36
+**Completed.** 2026-08-13
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The obsolete `generate_samples` example was deleted.
+`generate_all_samples` is now the single source for every document and output
+consumed by the hash and golden-image harnesses.
+
+**Non-obvious choices.** This is a behavior-neutral deletion. The surviving
+generator was not rewritten, and no baseline was recorded or moved.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** None.
+
+**Tests.** All 28 deterministic hashes, all seven golden PNG buffers, every
+example compile, the canonical seven-sample inventory, a missing-contract
+mutation, repository invocation search, and the integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Add sample artifacts only through
+`generate_all_samples` and prove the full deterministic inventory.
+
+### F-X004, Fix the shared temp path in the test suite
+
+**Sprint.** S36
+**Completed.** 2026-08-13
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The rdocx file round-trip integration uses an output name
+containing the test process ID, so concurrent test processes do not share one
+fixed path.
+
+**Non-obvious choices.** The regression asserts the exact process identity in
+the filename. No production helper or new dependency was introduced for a
+single test-isolation correction.
+
+**Deviations from the design plan.** None. Microscope pass 1 was clean.
+
+**Spec sections touched.** None.
+
+**Tests.** The exact test failed under the former fixed-name mutation, two
+concurrent invocations passed, the complete rdocx suite passed, and the
+integrated full gate passed.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Test files that can be created concurrently
+must include process identity or use an isolated workspace.
+
+### F-X006, Tag the expanded rpptx family
+
+**Sprint.** S37
+**Completed.** 2026-08-14
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The complete 14-package shared and PowerPoint family is
+published on crates.io at 0.1.3 through `rpptx-v0.1.3`. The release adds
+`oxml-cli-support` and `rpptx-cli` to the earlier 12-package family while
+keeping unpublished `rpptx-wasm` in the 0.1.3 local preparation group.
+
+**Non-obvious choices.** The release used the smallest fresh patch version
+above immutable 0.1.2. The annotated tag peels to reviewed sprint SHA
+`805680ab8a6dadd4d4247471a81cbb21b88a3196`. The workflow published only the
+14-package incubating allowlist and created the matching GitHub release. No
+npm package was published. The user gave separate final approval at that
+reviewed SHA immediately before the sprint branch push, annotated tag
+creation, tag push, and publication workflow.
+
+**Deviations from the design plan.** Full verification exposed stale release
+prose that required font assets in both `rdocx-layout` and `oxml-layout`.
+The reviewed correction names `oxml-layout` as the sole owner of 20 TTF files
+and four legal files, forbids duplication in `rdocx-layout`, and retains the
+`rpptx` default presentation asset check.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Full verification passed at the reviewed release SHA. GitHub Actions
+run `31762653847` completed successfully for tag `rpptx-v0.1.3`, including the
+incubating publication and GitHub release jobs. All 14 packages resolve from
+crates.io at 0.1.3, and every owner check reports `mantissaman (Atul Sharma)`.
+The remote annotated tag peels to the reviewed SHA.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Preserve the immutable 0.1.2 and 0.1.3 tags.
+Future Rust-family publication must use a fresh version and a separately
+approved `/release` invocation. npm publication remains unauthorized.
+
+### F-X007, Integrate PR 25 and stable crate documentation
+
+**Sprint.** S38
+**Completed.** 2026-08-14
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** PR 25's custom-list, hyperlink, hard-break, and fixed-table
+authoring APIs are integrated with side-effect-free rejection and synchronized
+table geometry. All seven stable crates now carry package-specific README
+documentation with twelve compile-checked Rust examples. Numbering mutation
+preserves unmodelled XML through namespace-aware parsing, typed property
+overlays, deterministic prefix allocation, and tab-stop occurrence provenance.
+
+**Non-obvious choices.** The contributor's commits and GitHub credit remain
+intact. The public numbering preservation fields use the approved breaking
+pre-1.0 boundary for v0.5.0. Stable archive checks use the complete local patch
+graph so every package is evaluated against the integrated workspace rather
+than an older immutable registry dependency.
+
+**Deviations from the design plan.** The reviewed remediation expanded from
+the two initial hardening fixes and README work to a complete raw-numbering
+preservation model. This was required to uphold the repository's unmodelled XML
+contract, and the user approved the breaking pre-1.0 v0.5.0 boundary.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Canonical non-fast verification passed. Focused list rejection,
+table geometry, raw-numbering round-trip, namespace projection, and bounded
+tab-overlay gates passed. A safe table-width mutation made the named gate fail
+before byte-identical restoration. The 21-package workspace dry run passed,
+all seven stable archives included their intended README, and every archive
+was below 10 MiB.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** F-X008 owns v0.5.0 preparation and publication
+through the separate release workflow. No stable crate was published by this
+story. Preserve Jon Stokes's `@jonstokes` credit in the PR and merge record.
+
+### F-X008, Tag v0.5.0
+
+**Sprint.** S38
+**Completed.** 2026-08-14
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The exact seven-package stable rdocx family is published
+on crates.io at 0.5.0 through `v0.5.0`. The eleven-package shared-version group
+is coherent at 0.5.0 while unpublished WASM, Python, and support packages
+remain outside the crates.io allowlist. The 15-package incubating preparation
+group remains at 0.1.3, with its 14 published crates unchanged.
+
+**Non-obvious choices.** The user gave separate final approval at reviewed SHA
+`01bd2379097344120f5e1dba0c36882d95af88a6`. Annotated tag object
+`5cbf51479ba0f8ae383684b57b2e7ca68eca01d4` peels to that exact SHA. Workflow
+run `31815290384` published only the stable family. Stable publication job
+`94815375298` succeeded, the incubating step was skipped, and GitHub Release
+job `94817628637` succeeded. No incubating, WASM, Python, or npm package was
+published.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/11-migration-plan.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The stable and incubating metadata preflights, release workflow
+contract, README examples, exact patched 21-package dry run, archive inventory,
+WASM checks, dependency graph, and `cargo deny` passed at the reviewed release
+SHA. All seven 0.5.0 packages were downloaded independently from crates.io,
+and every owner check reports `mantissaman`. The matching
+[GitHub release](https://github.com/tensorbee/rdocx/releases/tag/v0.5.0)
+targets the reviewed SHA. PR 25 contributor credit and its merge note remain
+intact.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Preserve the immutable 0.4.1 and 0.5.0 tags.
+Future stable publication must use a fresh version and a separately approved
+`/release` invocation. PyPI and npm publication remain unauthorized.
+
+### F-X009, README coverage for every workspace crate
+
+**Sprint.** S39
+**Completed.** 2026-08-14
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Every one of the 26 Cargo workspace packages now explicitly
+declares a distinct README. Eighteen focused crate-local documents were added,
+and the existing package guides were audited and strengthened. Every README
+states package purpose, direct-use guidance, neighbouring package relationships,
+publication status, and a concrete example for its Rust, CLI, Python, or
+JavaScript surface.
+
+**Non-obvious choices.** The root README remains the high-level `rdocx` package
+guide. The runner derives package and publication inventories from Cargo
+metadata, then obtains primary and companion libraries from one Cargo build
+graph. This keeps the `oxml-pdf` example bound to the exact `oxml-layout`
+instance used by the renderer. Existing crates.io releases are immutable, so
+new README pages appear there only when the affected crate receives a new
+published version.
+
+**Deviations from the design plan.** None. Microscope pass 1 found that eleven
+initial examples showed dependency installation without demonstrating use.
+The final implementation replaced them with real public API examples and
+strengthened the exact gate before clean pass 2.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`, README example
+correctness. `docs/hld/14-development-backlog.md`, F-X009. `docs/hld/15-build-and-toolchain.md`,
+workspace package READMEs in the docs job.
+
+**Tests.** `python3 scripts/readme_doctests.py` validates 26 distinct declared
+README sources, compiles 26 Rust examples across 20 library READMEs, validates
+six CLI, Python, and JavaScript examples, and byte-compares the README in all
+21 publishable archives with its declared source. A package-specific API
+mutation failed the exact gate before byte-identical restoration. Canonical
+non-fast verification passed, including changed-package tests, workspace tests,
+WASM checks, warnings-denied rustdoc, and the README archive gate.
+
+**Hash harness.** Unchanged. All 28 entries match.
+
+**Notes for future sessions.** A dependency declaration is installation, not a
+usage example. The README gate deliberately requires package-specific surface
+text and compiles every applicable Rust block. Unpublished packages have
+documentation but gain no publication authority.
+
+### F-X010, Tag v0.6.0
+
+**Sprint.** S39
+**Completed.** 2026-08-14
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The eleven-package shared-version train moved coherently
+to 0.6.0. The exact seven-package stable family, `rdocx-opc`, `rdocx-oxml`,
+`rdocx-layout`, `rdocx-html`, `rdocx-pdf`, `rdocx`, and `rdocx-cli`, is
+published on crates.io at 0.6.0. The four other train members remain
+unpublished, and the incubating family remains at 0.1.3.
+
+**Non-obvious choices.** The user gave separate immediate approval at reviewed
+SHA `96cac2a9256351ad03ab3f9499fcc9ed5d48adf2`. Annotated tag object
+`2279fd3b4a9183e458c2b7449e5714536c305dfd` peels to that exact SHA. Workflow
+run `31830892682` published only the stable allowlist. Publication job
+`94866033898` and GitHub Release job `94868199553` succeeded. No incubating,
+WASM, Python, npm, or PyPI package was published.
+
+**Deviations from the design plan.** None. Microscope pass 1 strengthened the
+README archive gate to require the exact local patch set. Pass 2 reconciled the
+two compatibility shims with the coherent stable release train. Pass 3 was
+clean.
+
+**Spec sections touched.** `docs/hld/11-migration-plan.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Full verification passed at the reviewed SHA, including all 38
+workflow tests, 26 README sources, 26 Rust examples, 21 archive README checks,
+the exact 21-package dry run, WASM checks, archive assets, and `cargo deny`.
+All seven 0.6.0 packages download independently from crates.io under sole owner
+`mantissaman`. Every crates.io README endpoint returns non-empty rendered HTML,
+and the matching
+[GitHub release](https://github.com/tensorbee/rdocx/releases/tag/v0.6.0)
+targets the annotated tag at the reviewed SHA.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Preserve the immutable `v0.6.0` tag. F-X011
+owns the separate incubating 0.2.0 preparation and must obtain its own clean
+review and immediate `/release rpptx-v0.2.0` approval. PyPI and npm publication
+remain unauthorized.
+
+### F-X011, Tag rpptx-v0.2.0
+
+**Sprint.** S39
+**Completed.** 2026-08-14
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The fifteen-package incubating preparation train moved
+coherently to 0.2.0. The exact fourteen-package crates.io family is published
+at 0.2.0. `rpptx-wasm` moved with the local train and remains unpublished. The
+stable family remains at 0.6.0.
+
+**Non-obvious choices.** The user gave separate immediate approval at reviewed
+SHA `1b13dbe4a5454f1d1629ff8915287b26daa10ed0`. Annotated tag object
+`0d9ce33258988377751d7f10fec43e0096f014d0` peels to that exact SHA. Workflow
+run `31836554504` published only the incubating allowlist. Publication job
+`94884015713` and GitHub Release job `94887859113` succeeded. No stable, WASM,
+Python, npm, or PyPI package was published.
+
+**Deviations from the design plan.** None. Microscope pass 1 and all three
+sprint-review passes were clean.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, versioning.
+`docs/hld/14-development-backlog.md`, F-X011.
+`docs/hld/15-build-and-toolchain.md`, the incubating release family and release
+process.
+
+**Tests.** Full verification passed at the reviewed SHA, including all 38
+workflow tests, 26 README sources, 26 Rust examples, 21 archive README checks,
+the exact 21-package dry run, WASM checks, archive assets, and `cargo deny`.
+All fourteen 0.2.0 packages download independently from crates.io under sole
+owner `mantissaman`. Every crates.io README endpoint returns non-empty rendered
+HTML, and the matching
+[GitHub release](https://github.com/tensorbee/rdocx/releases/tag/rpptx-v0.2.0)
+uses the annotated tag that targets the reviewed SHA.
+
+**Hash harness.** Unchanged. All 28 integrated entries match.
+
+**Notes for future sessions.** Preserve the immutable `rpptx-v0.1.3` and
+`rpptx-v0.2.0` tags. Future incubating publication requires a fresh version and
+a separately approved `/release` invocation. PyPI and npm publication remain
+unauthorized.
+
+### F-X012, Restore pinned CI toolchains
+
+**Sprint.** S40
+**Completed.** 2026-08-15
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Hosted CI now provisions checksum-bound Poppler 26.01.0
+and LibreOffice 26.2.5.2 through shared installers with bounded streaming
+extraction and exact runtime identity checks. The broad Test and MSRV jobs pin
+uv 0.10.2, isolate its cache, use an 8 MiB test-thread stack, and run on Ubuntu
+24.04 with the complete LibreOffice runtime package set. The WASM job validates
+the official Binaryen 125 Linux identity after checksum verification.
+
+**Non-obvious choices.** Each installer refuses an already populated target
+prefix, so a version-looking binary cannot bypass provenance checks. Poppler
+builds only the three required tools from reviewed source. LibreOffice installs
+the checksum-bound core and Impress packages together with thirteen explicit
+Ubuntu runtime packages. Both paths fail closed on unsafe archives, resource
+ceilings, missing package members, or wrong executable identities.
+
+**Deviations from the design plan.** Hosted validation exposed two additional
+clean-runner requirements after the original Poppler and Binaryen correction.
+The approved plan was extended to pin uv and the stack budget, then to install
+the exact LibreOffice build and its Ubuntu runtime libraries. Nine microscope
+passes hardened the installer and workflow mutation contracts before the final
+clean review.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`, pinned rendering
+oracles and hosted gates. `docs/hld/14-development-backlog.md`, F-X012.
+`docs/hld/15-build-and-toolchain.md`, deterministic CI tool installation.
+
+**Tests.** Six focused workflow tests and all 46 workflow regressions pass.
+They exercise installer provenance, checksums, streaming member and byte
+ceilings, unsafe entries, exact runtime identities, required packages, job
+ordering, failure propagation, and successful short-circuit mutations. Hosted
+pull-request run `31853529961` passed all 14 jobs at reviewed commit
+`e96217f88b9dfd4612913787bc736f3627f73092`, including all 421 presentation
+fidelity slides and the LibreOffice viewer gates. Canonical `/verify --full`
+passes from the clean sprint tree, including exact 21-package dry-run archives,
+README examples, WASM targets, and supply-chain checks.
+
+**Hash harness.** Unchanged. All 28 entries match.
+
+**Notes for future sessions.** Keep the external tool versions, source URLs,
+checksums, archive bounds, runtime identities, and consumer-job assertions in
+one reviewed contract. A moving package-manager binary or a preinstalled tool
+is not equivalent evidence. The temporary hosted-validation pull request was
+closed without merge and its remote branch was deleted.

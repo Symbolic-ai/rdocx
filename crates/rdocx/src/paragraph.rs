@@ -375,23 +375,32 @@ impl<'a> Paragraph<'a> {
     /// shared definitions behind `add_bullet_list_item` /
     /// `add_numbered_list_item`); `level` is the 0-based indentation level.
     pub fn numbering(mut self, num_id: u32, level: u32) -> Self {
-        self.set_numbering(num_id, level);
+        let _ = self.set_numbering(num_id, level);
         self
     }
 
     /// Attach this paragraph to a list definition in place.
-    pub fn set_numbering(&mut self, num_id: u32, level: u32) {
-        self.set_numbering_value(Some((num_id, level)));
+    ///
+    /// Returns `false` without mutation when `level` is outside Word's
+    /// supported range of 0 through 8.
+    pub fn set_numbering(&mut self, num_id: u32, level: u32) -> bool {
+        self.set_numbering_value(Some((num_id, level)))
     }
 
     /// Set or clear this paragraph's list numbering.
-    pub fn set_numbering_value(&mut self, numbering: Option<(u32, u32)>) {
+    ///
+    /// Returns `false` without mutation for an out-of-range level.
+    pub fn set_numbering_value(&mut self, numbering: Option<(u32, u32)>) -> bool {
+        if numbering.is_some_and(|(_, level)| level > 8) {
+            return false;
+        }
         if numbering.is_none() && self.inner.properties.is_none() {
-            return;
+            return true;
         }
         let ppr = self.ensure_ppr();
         ppr.num_id = numbering.map(|(num_id, _)| num_id);
         ppr.num_ilvl = numbering.map(|(_, level)| level);
+        true
     }
 
     /// Set space before the paragraph.
@@ -701,6 +710,7 @@ impl<'a> Paragraph<'a> {
             val: alignment.to_st(),
             pos: position.as_twips(),
             leader: None,
+            source_occurrence: None,
         });
     }
 
@@ -727,6 +737,7 @@ impl<'a> Paragraph<'a> {
             val: alignment.to_st(),
             pos: position.as_twips(),
             leader: Some(leader.to_st()),
+            source_occurrence: None,
         });
     }
 

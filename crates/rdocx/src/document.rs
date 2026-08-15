@@ -17,7 +17,7 @@ use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::resolver::FormattingResolver;
 use rdocx_oxml::shared::{ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::CT_Styles;
-use rdocx_oxml::table::CT_Tbl;
+use rdocx_oxml::table::{CT_Tbl, CellContent};
 use rdocx_oxml::text::{CT_Hyperlink, CT_P, CT_R, ParagraphChild, ParsedWithRaw, RunContent};
 
 use rdocx_oxml::core_properties::CoreProperties;
@@ -515,6 +515,34 @@ impl Document {
     /// Get the number of paragraphs.
     pub fn paragraph_count(&self) -> usize {
         self.document.body.paragraphs().count()
+    }
+
+    /// Get the plain text of body paragraphs and table cells in document order.
+    pub fn text(&self) -> String {
+        let mut result = String::new();
+        for content in &self.document.body.content {
+            match content {
+                BodyContent::Paragraph(paragraph) => {
+                    result.push_str(&paragraph.text());
+                    result.push('\n');
+                }
+                BodyContent::Table(table) => {
+                    for row in &table.rows {
+                        for cell in &row.cells {
+                            for content in &cell.content {
+                                if let CellContent::Paragraph(paragraph) = content {
+                                    result.push_str(&paragraph.text());
+                                    result.push('\t');
+                                }
+                            }
+                        }
+                        result.push('\n');
+                    }
+                }
+                BodyContent::SectionProperties(_) | BodyContent::RawXml(_) => {}
+            }
+        }
+        result
     }
 
     /// Get a mutable reference to a paragraph by index (among paragraphs only).
@@ -1445,7 +1473,8 @@ impl Document {
     ///
     /// `levels[i]` configures level `i`; deeper unspecified levels fall back
     /// to the standard template rotation for the last specified format's
-    /// family. An empty slice produces the standard numbered template.
+    /// family. An empty slice produces the standard numbered template. Word
+    /// supports nine levels, so entries after index eight are ignored.
     ///
     /// ```no_run
     /// use rdocx::{Document, ListLevel};
@@ -1462,6 +1491,7 @@ impl Document {
         self.invalidate_layout();
         let levels: Vec<(ST_NumberFormat, Option<u32>)> = levels
             .iter()
+            .take(9)
             .map(|level| (level.format.to_st(), level.start))
             .collect();
         self.ensure_numbering().add_list(&levels)
@@ -1472,9 +1502,13 @@ impl Document {
     ///
     /// Returns `false` when `num_id` is unknown or `level` is out of range.
     pub fn set_list_level(&mut self, num_id: u32, level: u32, spec: ListLevel) -> bool {
-        self.invalidate_layout();
-        self.ensure_numbering()
-            .set_list_level(num_id, level, spec.format.to_st(), spec.start)
+        let updated = self.numbering.as_mut().is_some_and(|numbering| {
+            numbering.set_list_level(num_id, level, spec.format.to_st(), spec.start)
+        });
+        if updated {
+            self.invalidate_layout();
+        }
+        updated
     }
 
     // ---- Style access ----
@@ -1941,6 +1975,7 @@ impl Document {
                 val: ST_TabJc::Right,
                 pos: Twips(self.text_width_twips()),
                 leader: Some(ST_TabLeader::Dot),
+                source_occurrence: None,
             }],
             ..Default::default()
         };
@@ -2369,8 +2404,8 @@ impl Document {
     ///
     /// Font resolution order:
     /// 1. Fonts embedded in the DOCX file (word/fonts/)
-    /// 2. System fonts
-    /// 3. Bundled fonts (if `bundled-fonts` feature is enabled)
+    /// 2. System fonts when the default `system-fonts` feature is enabled
+    /// 3. Always-available bundled metric-compatible fonts
     pub fn to_pdf(&self) -> Result<Vec<u8>> {
         let layout = self.cached_layout()?;
         Ok(oxml_pdf::render_to_pdf(&layout))
@@ -2396,8 +2431,8 @@ impl Document {
     /// Font resolution order:
     /// 1. User-provided fonts (this parameter)
     /// 2. Fonts embedded in the DOCX file (word/fonts/)
-    /// 3. System fonts
-    /// 4. Bundled fonts (if `bundled-fonts` feature is enabled)
+    /// 3. System fonts when the default `system-fonts` feature is enabled
+    /// 4. Always-available bundled metric-compatible fonts
     pub fn to_pdf_with_fonts(&self, font_files: &[(&str, &[u8])]) -> Result<Vec<u8>> {
         let mut input = self.build_layout_input();
         for (family, data) in font_files {
@@ -3682,6 +3717,18 @@ mod tests {
     }
 
     #[test]
+    fn document_text_preserves_body_and_table_order() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Before");
+        let mut table = doc.add_table(1, 2);
+        table.cell(0, 0).unwrap().set_text("Left");
+        table.cell(0, 1).unwrap().set_text("Right");
+        doc.add_paragraph("After");
+
+        assert_eq!(doc.text(), "Before\nLeft\tRight\t\nAfter\n");
+    }
+
+    #[test]
     fn paragraph_formatting() {
         let mut doc = Document::new();
         doc.add_paragraph("Centered").alignment(Alignment::Center);
@@ -4388,6 +4435,44 @@ mod tests {
         assert_eq!(
             reopened.hyperlink_url(spans[0].2.expect("relationship id")),
             Some("https://example.com/table".to_string())
+        );
+    }
+
+    #[test]
+    fn rejected_list_level_update_does_not_materialize_numbering() {
+        let mut doc = Document::new();
+        assert!(doc.numbering.is_none());
+
+        assert!(!doc.set_list_level(999, 1, ListLevel::decimal()));
+
+        assert!(
+            doc.numbering.is_none(),
+            "a rejected setter must not add an empty numbering part"
+        );
+    }
+
+    #[test]
+    fn custom_list_and_paragraph_numbering_enforce_the_nine_level_contract() {
+        let mut doc = Document::new();
+        let levels = vec![ListLevel::decimal(); 10];
+        let num_id = doc.add_list_definition(&levels);
+        assert_eq!(
+            doc.numbering.as_ref().unwrap().abstract_nums[0]
+                .levels
+                .len(),
+            9
+        );
+
+        let mut paragraph = doc.add_paragraph("item");
+        assert!(!paragraph.set_numbering(num_id, 9));
+        assert_eq!(
+            paragraph.inner.properties.as_ref().and_then(|p| p.num_id),
+            None
+        );
+        assert!(paragraph.set_numbering(num_id, 8));
+        assert_eq!(
+            paragraph.inner.properties.as_ref().unwrap().num_ilvl,
+            Some(8)
         );
     }
 

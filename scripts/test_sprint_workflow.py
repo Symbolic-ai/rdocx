@@ -7,12 +7,16 @@ import io
 import json
 import os
 import subprocess
+import tarfile
 import tempfile
 import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from scripts import readme_doctests
+from scripts import install_pinned_libreoffice
+from scripts import install_pinned_poppler
 from scripts import sprint_workflow as workflow
 
 
@@ -49,6 +53,17 @@ class SprintWorkflowTests(unittest.TestCase):
             for line in block.splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         )
+
+    def yaml_mapping_key_count(self, source: str, key: str) -> int:
+        count = 0
+        for line in source.splitlines():
+            stripped = line.strip().split(" #", 1)[0].rstrip()
+            if not stripped or stripped.startswith("#") or ":" not in stripped:
+                continue
+            candidate = stripped.split(":", 1)[0].strip().strip("'\"").strip()
+            if candidate == key:
+                count += 1
+        return count
 
     def yaml_steps(self, job: str) -> tuple[str, ...]:
         steps = self.yaml_block(job, "    steps:")
@@ -107,6 +122,148 @@ class SprintWorkflowTests(unittest.TestCase):
                     token in ("exit", "return") and tokens[index + 1] == "0",
                     line,
                 )
+
+    def assert_pinned_poppler_installer_contract(self, installer: str) -> None:
+        self.assertIn('POPLER_VERSION = "26.01.0"', installer)
+        self.assertIn(
+            'POPLER_SHA256 = "1cb944a4b88847f5fb6551683bc799db59f04990f5d8be07aba2acbf38601089"',
+            installer,
+        )
+        self.assertIn("MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024", installer)
+        self.assertIn("MAX_ARCHIVE_MEMBERS = 2_048", installer)
+        self.assertIn("MAX_EXTRACTED_BYTES = 64 * 1024 * 1024", installer)
+        for tool in ("pdftoppm", "pdfinfo", "pdftotext"):
+            self.assertIn(tool, installer)
+        self.assertIn("safe_extract", installer)
+        self.assertIn("-DENABLE_UTILS=ON", installer)
+        self.assertIn('expected = f"{tool} version {POPLER_VERSION}"', installer)
+
+    def assert_pinned_libreoffice_installer_contract(self, installer: str) -> None:
+        self.assertIn('LIBREOFFICE_VERSION = "26.2.5.2"', installer)
+        self.assertIn(
+            'LIBREOFFICE_SHA256 = "2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e"',
+            installer,
+        )
+        self.assertIn(
+            '"https://download.documentfoundation.org/libreoffice/stable/26.2.5/"',
+            installer,
+        )
+        self.assertIn("MAX_DOWNLOAD_BYTES = 224 * 1024 * 1024", installer)
+        self.assertIn("MAX_ARCHIVE_MEMBERS = 256", installer)
+        self.assertIn("MAX_EXTRACTED_BYTES = 256 * 1024 * 1024", installer)
+        self.assertIn('INSTALL_ROOT = Path("/opt/libreoffice26.2")', installer)
+        self.assertEqual(
+            install_pinned_libreoffice.SYSTEM_RUNTIME_PACKAGES,
+            (
+                "libcairo2",
+                "libcups2t64",
+                "libdbus-1-3",
+                "libfontconfig1",
+                "libfreetype6",
+                "libglib2.0-0t64",
+                "libgssapi-krb5-2",
+                "libnspr4",
+                "libnss3",
+                "libx11-6",
+                "libx11-xcb1",
+                "libxext6",
+                "libxinerama1",
+            ),
+        )
+        self.assertIn("safe_extract", installer)
+        self.assertIn("apt-get", installer)
+        self.assertIn("--no-install-recommends", installer)
+        self.assertIn(
+            '"LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb"',
+            installer,
+        )
+        self.assertIn('os.environ.get("GITHUB_PATH")', installer)
+
+    def assert_libreoffice_consumers_contract(self, ci: str) -> None:
+        for job_name in ("test", "msrv"):
+            job = self.yaml_block(ci, f"  {job_name}:")
+            self.assertIn("runs-on: ubuntu-24.04", job)
+            install = self.yaml_step(job, "Install pinned LibreOffice 26.2.5.2")
+            self.assertEqual(
+                self.yaml_direct_lines(install, 8),
+                ("run: python3 scripts/install_pinned_libreoffice.py",),
+            )
+            test_step = self.yaml_step(job, "Run full workspace suite")
+            self.assertLess(job.index(install), job.index(test_step))
+            self.assertNotIn("continue-on-error", install)
+            self.assert_no_success_short_circuit(self.operative_lines(install))
+        self.assertEqual(ci.count("python3 scripts/install_pinned_libreoffice.py"), 2)
+
+    def assert_poppler_consumers_contract(self, ci: str) -> None:
+        consumers = {
+            "test": "cargo test --workspace",
+            "python-bindings": "Run full Python binding suite",
+            "presentation-fidelity": "Run all-slide SSIM trend and completeness gate",
+            "msrv": "cargo test --workspace",
+        }
+        for job_name, use_marker in consumers.items():
+            job = self.yaml_block(ci, f"  {job_name}:")
+            step = self.yaml_step(job, "Install pinned Poppler 26.01.0")
+            self.assertEqual(
+                self.yaml_direct_lines(step, 8),
+                ("shell: bash", "run: |"),
+            )
+            lines = self.yaml_run_lines(step)
+            self.assertIn("python3 scripts/install_pinned_poppler.py", lines)
+            self.assert_no_success_short_circuit(lines)
+            self.assertLess(job.index(step), job.index(use_marker))
+            self.assertFalse(
+                any(
+                    "continue-on-error:" in line
+                    for line in self.operative_lines(job)
+                )
+            )
+        self.assertEqual(ci.count("python3 scripts/install_pinned_poppler.py"), 4)
+        self.assertNotIn("brew install poppler", ci)
+        self.assertNotIn("apt-get install poppler-utils", ci)
+
+    def assert_workspace_oracle_environment_contract(self, ci: str) -> None:
+        setup_action = (
+            "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d"
+        )
+        for job_name in ("test", "msrv"):
+            job = self.yaml_block(ci, f"  {job_name}:")
+            steps = self.yaml_steps(job)
+            setup_steps = tuple(
+                step
+                for step in steps
+                if self.yaml_step_actions(step) == (setup_action,)
+            )
+            self.assertEqual(len(setup_steps), 1, job_name)
+            setup = setup_steps[0]
+            self.assertEqual(
+                self.yaml_direct_lines(setup, 8),
+                (f"uses: {setup_action}", "with:"),
+            )
+            setup_with = self.yaml_block(setup, "        with:")
+            self.assertEqual(
+                self.yaml_direct_lines(setup_with, 10),
+                ('version: "0.10.2"', "enable-cache: false"),
+            )
+
+            test_step = self.yaml_step(job, "Run full workspace suite")
+            self.assertEqual(
+                self.yaml_direct_lines(test_step, 8),
+                ("env:", "run: >-"),
+            )
+            environment = self.yaml_block(test_step, "        env:")
+            self.assertEqual(
+                self.yaml_direct_lines(environment, 10),
+                (
+                    'UV_CACHE_DIR: "${{ runner.temp }}/uv-cache"',
+                    'RUST_MIN_STACK: "8388608"',
+                ),
+            )
+            self.assertIn("cargo test --workspace", test_step)
+            self.assert_no_success_short_circuit(self.operative_lines(test_step))
+            self.assertLess(job.index(setup), job.index(test_step))
+            self.assertNotIn("continue-on-error", setup + test_step)
+        self.assertEqual(self.yaml_mapping_key_count(ci, "RUST_MIN_STACK"), 2)
 
     def assert_python_pr_job_contract(self, ci: str) -> None:
         triggers = self.yaml_block(ci, "on:")
@@ -171,7 +328,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "step:1",
             "step:2",
             "Set up Python 3.12",
-            "Install pinned Poppler",
+            "Install pinned Poppler 26.01.0",
             "Create isolated binding environment",
             "Build Python extension",
             "Run full Python binding suite",
@@ -215,8 +372,16 @@ class SprintWorkflowTests(unittest.TestCase):
             ('python-version: "3.12.9"',),
         )
 
-        poppler = self.yaml_step(job, "Install pinned Poppler")
-        self.assertEqual(self.yaml_run_lines(poppler), ("brew install poppler",))
+        poppler = self.yaml_step(job, "Install pinned Poppler 26.01.0")
+        self.assertEqual(
+            self.yaml_run_lines(poppler),
+            (
+                "brew install \\",
+                "cmake ninja pkg-config fontconfig freetype jpeg-turbo \\",
+                "libpng libtiff little-cms2 openjpeg",
+                "python3 scripts/install_pinned_poppler.py",
+            ),
+        )
 
         environment = self.yaml_step(job, "Create isolated binding environment")
         self.assertEqual(
@@ -274,6 +439,527 @@ class SprintWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assert_python_pr_job_contract(ci)
+
+    def test_pinned_poppler_installer_contract(self) -> None:
+        installer_path = workflow.REPO / "scripts/install_pinned_poppler.py"
+        self.assertTrue(
+            installer_path.is_file(),
+            "F-X012 requires one shared pinned Poppler installer",
+        )
+        installer = installer_path.read_text(encoding="utf-8")
+        self.assert_pinned_poppler_installer_contract(installer)
+
+        mutations = {
+            "wrong-version": installer.replace("26.01.0", "26.02.0"),
+            "wrong-checksum": installer.replace(
+                "1cb944a4b88847f5fb6551683bc799db59f04990f5d8be07aba2acbf38601089",
+                "0" * 64,
+            ),
+            "missing-member-bound": installer.replace(
+                "MAX_ARCHIVE_MEMBERS = 2_048",
+                "MAX_ARCHIVE_MEMBERS = len(members)",
+            ),
+            "missing-runtime-identity": installer.replace(
+                'expected = f"{tool} version {POPLER_VERSION}"',
+                'expected = tool',
+            ),
+        }
+        for label, mutated in mutations.items():
+            with self.subTest(mutation=label), self.assertRaises(AssertionError):
+                self.assert_pinned_poppler_installer_contract(mutated)
+
+    def test_workspace_viewer_jobs_install_pinned_libreoffice(self) -> None:
+        installer_path = workflow.REPO / "scripts/install_pinned_libreoffice.py"
+        self.assertTrue(
+            installer_path.is_file(),
+            "F-X012 requires one pinned Linux LibreOffice installer",
+        )
+        installer = installer_path.read_text(encoding="utf-8")
+        self.assert_pinned_libreoffice_installer_contract(installer)
+
+        mutations = {
+            "wrong-version": installer.replace("26.2.5.2", "26.2.6.0"),
+            "wrong-checksum": installer.replace(
+                "2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e",
+                "0" * 64,
+            ),
+            "missing-member-bound": installer.replace(
+                "MAX_ARCHIVE_MEMBERS = 256",
+                "MAX_ARCHIVE_MEMBERS = len(members)",
+            ),
+            "recommended-packages": installer.replace(
+                '"--no-install-recommends",', '"--install-recommends",'
+            ),
+        }
+        for label, mutated in mutations.items():
+            with self.subTest(installer_mutation=label), self.assertRaises(
+                AssertionError
+            ):
+                self.assert_pinned_libreoffice_installer_contract(mutated)
+
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_libreoffice_consumers_contract(ci)
+        for job_name in ("test", "msrv"):
+            job = self.yaml_block(ci, f"  {job_name}:")
+            install = self.yaml_step(job, "Install pinned LibreOffice 26.2.5.2")
+            for label, mutated_install in {
+                "missing": "",
+                "if-false": install.replace(
+                    "        run:", "        if: false\n        run:", 1
+                ),
+                "continue-on-error": install.replace(
+                    "        run:",
+                    "        continue-on-error: true\n        run:",
+                    1,
+                ),
+                "exit-zero": install.replace(
+                    "        run: python3",
+                    "        run: exit 0\n          python3",
+                    1,
+                ),
+            }.items():
+                mutated = ci.replace(install, mutated_install, 1)
+                with self.subTest(job=job_name, mutation=label), self.assertRaises(
+                    AssertionError
+                ):
+                    self.assert_libreoffice_consumers_contract(mutated)
+
+    def test_pinned_libreoffice_installer_enforces_runtime_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch.object(
+                install_pinned_libreoffice.urllib.request,
+                "urlopen",
+                return_value=io.BytesIO(b"not the reviewed LibreOffice source"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "SHA-256"):
+                    install_pinned_libreoffice.download_archive(root / "wrong.tar.gz")
+
+            with (
+                patch.object(install_pinned_libreoffice, "MAX_DOWNLOAD_BYTES", 8),
+                patch.object(
+                    install_pinned_libreoffice.urllib.request,
+                    "urlopen",
+                    return_value=io.BytesIO(b"x" * 9),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "download bound"):
+                    install_pinned_libreoffice.download_archive(root / "large.tar.gz")
+
+            archive_path = root / "too-many.tar.gz"
+            with tarfile.open(archive_path, mode="w:gz") as archive:
+                for index in range(
+                    install_pinned_libreoffice.MAX_ARCHIVE_MEMBERS + 1
+                ):
+                    member = tarfile.TarInfo(
+                        f"{install_pinned_libreoffice.ARCHIVE_ROOT}/member-{index}"
+                    )
+                    member.size = 0
+                    archive.addfile(member, io.BytesIO())
+            with patch.object(
+                tarfile.TarFile,
+                "getmembers",
+                side_effect=AssertionError("unbounded member-table allocation"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "member-count"):
+                    install_pinned_libreoffice.safe_extract(
+                        archive_path,
+                        root / "extract",
+                    )
+
+            unsafe_archive = root / "unsafe.tar.gz"
+            with tarfile.open(unsafe_archive, mode="w:gz") as archive:
+                member = tarfile.TarInfo(
+                    f"{install_pinned_libreoffice.ARCHIVE_ROOT}/../../escape"
+                )
+                member.size = 0
+                archive.addfile(member, io.BytesIO())
+            with self.assertRaisesRegex(RuntimeError, "unsafe path"):
+                install_pinned_libreoffice.safe_extract(
+                    unsafe_archive,
+                    root / "unsafe-extract",
+                )
+
+            unsupported_archive = root / "unsupported.tar.gz"
+            with tarfile.open(unsupported_archive, mode="w:gz") as archive:
+                member = tarfile.TarInfo(
+                    f"{install_pinned_libreoffice.ARCHIVE_ROOT}/unsupported"
+                )
+                member.type = tarfile.SYMTYPE
+                member.linkname = "target"
+                archive.addfile(member)
+            with self.assertRaisesRegex(RuntimeError, "non-file entry"):
+                install_pinned_libreoffice.safe_extract(
+                    unsupported_archive,
+                    root / "unsupported-extract",
+                )
+
+            core_package = (
+                f"libobasis26.2-core_{install_pinned_libreoffice.LIBREOFFICE_VERSION}"
+                "-2_amd64.deb"
+            )
+            impress_package = (
+                f"libreoffice26.2-impress_{install_pinned_libreoffice.LIBREOFFICE_VERSION}"
+                "-2_amd64.deb"
+            )
+            for missing, present in (
+                ("libobasis26.2-core", impress_package),
+                ("libreoffice26.2-impress", core_package),
+            ):
+                incomplete_archive = root / f"missing-{missing}.tar.gz"
+                with tarfile.open(incomplete_archive, mode="w:gz") as archive:
+                    member = tarfile.TarInfo(
+                        f"{install_pinned_libreoffice.ARCHIVE_ROOT}/DEBS/{present}"
+                    )
+                    member.size = 0
+                    archive.addfile(member, io.BytesIO())
+                with self.subTest(missing=missing), self.assertRaisesRegex(
+                    RuntimeError, f"missing {missing}"
+                ):
+                    install_pinned_libreoffice.safe_extract(
+                        incomplete_archive,
+                        root / f"missing-{missing}-extract",
+                    )
+
+            oversized_member = tarfile.TarInfo(
+                f"{install_pinned_libreoffice.ARCHIVE_ROOT}/oversized"
+            )
+            oversized_member.size = (
+                install_pinned_libreoffice.MAX_EXTRACTED_BYTES + 1
+            )
+            with patch.object(
+                install_pinned_libreoffice.tarfile,
+                "open",
+                return_value=contextlib.nullcontext((oversized_member,)),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "extracted-size"):
+                    install_pinned_libreoffice.safe_extract(
+                        root / "unused.tar.gz",
+                        root / "oversized-extract",
+                    )
+
+            fake_soffice = root / "soffice"
+            fake_soffice.write_text("not used", encoding="utf-8")
+            wrong_identity = subprocess.CompletedProcess(
+                [str(fake_soffice), "--version"],
+                0,
+                stdout="LibreOffice 99.0.0\n",
+                stderr="",
+            )
+            with patch.object(
+                install_pinned_libreoffice.subprocess,
+                "run",
+                return_value=wrong_identity,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "unexpected LibreOffice"):
+                    install_pinned_libreoffice.verify_soffice(fake_soffice)
+
+            populated = root / "populated-prefix"
+            populated.mkdir()
+            with (
+                patch.object(install_pinned_libreoffice, "INSTALL_ROOT", populated),
+                patch.object(install_pinned_libreoffice.platform, "system", return_value="Linux"),
+                patch.object(install_pinned_libreoffice.platform, "machine", return_value="x86_64"),
+                patch.object(
+                    install_pinned_libreoffice,
+                    "download_archive",
+                    side_effect=AssertionError("populated prefix must fail first"),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "prefix must be absent"):
+                    install_pinned_libreoffice.install()
+
+            deb_root = root / "complete" / "DEBS"
+            deb_root.mkdir(parents=True)
+            for package in (core_package, impress_package):
+                (deb_root / package).write_bytes(b"package")
+            events: list[str] = []
+
+            def record_download(_destination: Path) -> None:
+                events.append("download")
+
+            def record_install(command: list[str], *, check: bool) -> None:
+                self.assertTrue(check)
+                self.assertEqual(command[:5], ["sudo", "apt-get", "install", "--yes", "--no-install-recommends"])
+                for package in install_pinned_libreoffice.SYSTEM_RUNTIME_PACKAGES:
+                    self.assertIn(package, command)
+                self.assertIn(str(deb_root / core_package), command)
+                self.assertIn(str(deb_root / impress_package), command)
+                events.append("install")
+
+            with (
+                patch.object(install_pinned_libreoffice, "INSTALL_ROOT", root / "absent"),
+                patch.object(install_pinned_libreoffice.platform, "system", return_value="Linux"),
+                patch.object(install_pinned_libreoffice.platform, "machine", return_value="x86_64"),
+                patch.dict(os.environ, {"RUNNER_TEMP": str(root)}),
+                patch.object(install_pinned_libreoffice, "download_archive", side_effect=record_download),
+                patch.object(
+                    install_pinned_libreoffice,
+                    "safe_extract",
+                    side_effect=lambda _archive, _destination: (
+                        events.append("extract") or deb_root
+                    ),
+                ),
+                patch.object(install_pinned_libreoffice.subprocess, "run", side_effect=record_install),
+                patch.object(
+                    install_pinned_libreoffice,
+                    "verify_soffice",
+                    side_effect=lambda: events.append("verify"),
+                ),
+                patch.object(
+                    install_pinned_libreoffice,
+                    "expose_soffice",
+                    side_effect=lambda: events.append("expose"),
+                ),
+            ):
+                install_pinned_libreoffice.install()
+            self.assertEqual(
+                events,
+                ["download", "extract", "install", "verify", "expose"],
+            )
+
+    def test_pinned_poppler_installer_enforces_its_runtime_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            with patch.object(
+                install_pinned_poppler.urllib.request,
+                "urlopen",
+                return_value=io.BytesIO(b"not the reviewed Poppler source"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "SHA-256"):
+                    install_pinned_poppler.download_archive(root / "poppler.tar.xz")
+
+            with patch.object(
+                install_pinned_poppler.urllib.request,
+                "urlopen",
+                return_value=io.BytesIO(
+                    b"x" * (install_pinned_poppler.MAX_DOWNLOAD_BYTES + 1)
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "download bound"):
+                    install_pinned_poppler.download_archive(root / "too-large.tar.xz")
+
+            archive_path = root / "too-many-members.tar.xz"
+            with tarfile.open(archive_path, mode="w:xz") as archive:
+                for index in range(install_pinned_poppler.MAX_ARCHIVE_MEMBERS + 1):
+                    member = tarfile.TarInfo(f"poppler-26.01.0/member-{index}")
+                    member.size = 0
+                    archive.addfile(member, io.BytesIO())
+            with patch.object(
+                tarfile.TarFile,
+                "getmembers",
+                side_effect=AssertionError("unbounded member-table allocation"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "member-count"):
+                    install_pinned_poppler.safe_extract(
+                        archive_path,
+                        root / "extract",
+                    )
+
+            oversized_member = tarfile.TarInfo("poppler-26.01.0/oversized")
+            oversized_member.size = install_pinned_poppler.MAX_EXTRACTED_BYTES + 1
+            with patch.object(
+                install_pinned_poppler.tarfile,
+                "open",
+                return_value=contextlib.nullcontext((oversized_member,)),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "extracted-size"):
+                    install_pinned_poppler.safe_extract(
+                        root / "unused.tar.xz",
+                        root / "oversized-extract",
+                    )
+
+            for wrong_tool in install_pinned_poppler.TOOLS:
+                prefix = root / f"wrong-{wrong_tool}"
+                binary_root = prefix / "bin"
+                binary_root.mkdir(parents=True)
+                for tool in install_pinned_poppler.TOOLS:
+                    version = "99.0.0" if tool == wrong_tool else "26.01.0"
+                    executable = binary_root / tool
+                    executable.write_text(
+                        f"#!/bin/sh\necho '{tool} version {version}' >&2\n",
+                        encoding="utf-8",
+                    )
+                    executable.chmod(0o755)
+                with self.subTest(wrong_tool=wrong_tool), self.assertRaisesRegex(
+                    RuntimeError,
+                    f"unexpected {wrong_tool} identity",
+                ):
+                    install_pinned_poppler.verify_tools(prefix)
+
+    def test_pinned_poppler_installer_rejects_a_populated_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            prefix = Path(temp) / "populated"
+            binary_root = prefix / "bin"
+            binary_root.mkdir(parents=True)
+            for tool in install_pinned_poppler.TOOLS:
+                executable = binary_root / tool
+                executable.write_text(
+                    f"#!/bin/sh\necho '{tool} version 26.01.0' >&2\n",
+                    encoding="utf-8",
+                )
+                executable.chmod(0o755)
+            with patch.object(
+                install_pinned_poppler,
+                "download_archive",
+                side_effect=AssertionError("download must not be bypassed"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "prefix must be empty"):
+                    install_pinned_poppler.build(prefix)
+
+    def test_every_poppler_consumer_uses_the_pinned_installer(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_poppler_consumers_contract(ci)
+        for job_name in ("test", "python-bindings", "presentation-fidelity", "msrv"):
+            marker = f"  {job_name}:"
+            job = self.yaml_block(ci, marker)
+            step = self.yaml_step(job, "Install pinned Poppler 26.01.0")
+            mutated_job = job.replace(
+                "          python3 scripts/install_pinned_poppler.py\n", "", 1
+            )
+            mutated = ci.replace(job, mutated_job, 1)
+            with self.subTest(missing_consumer=job_name), self.assertRaises(
+                AssertionError
+            ):
+                self.assert_poppler_consumers_contract(mutated)
+            for policy in ("if: false", "continue-on-error: true"):
+                weakened_step = step.replace(
+                    "        shell: bash\n",
+                    f"        {policy}\n        shell: bash\n",
+                    1,
+                )
+                weakened = ci.replace(step, weakened_step, 1)
+                with self.subTest(job=job_name, policy=policy), self.assertRaises(
+                    AssertionError
+                ):
+                    self.assert_poppler_consumers_contract(weakened)
+            short_circuited_step = step.replace(
+                "        run: |\n",
+                "        run: |\n          exit 0\n",
+                1,
+            )
+            short_circuited = ci.replace(step, short_circuited_step, 1)
+            with self.subTest(job=job_name, policy="exit 0"), self.assertRaises(
+                AssertionError
+            ):
+                self.assert_poppler_consumers_contract(short_circuited)
+
+    def test_workspace_oracle_jobs_pin_uv_cache_and_stack(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_workspace_oracle_environment_contract(ci)
+        mutations = {
+            "global-stack": ci.replace(
+                "  CARGO_TERM_COLOR: always\n",
+                "  CARGO_TERM_COLOR: always\n  RUST_MIN_STACK: \"8388608\"\n",
+                1,
+            ),
+            "global-quoted-stack": ci.replace(
+                "  CARGO_TERM_COLOR: always\n",
+                "  CARGO_TERM_COLOR: always\n  \"RUST_MIN_STACK\": \"8388608\"\n",
+                1,
+            ),
+            "global-spaced-stack": ci.replace(
+                "  CARGO_TERM_COLOR: always\n",
+                "  CARGO_TERM_COLOR: always\n  RUST_MIN_STACK : \"8388608\"\n",
+                1,
+            ),
+            "global-quoted-spaced-stack": ci.replace(
+                "  CARGO_TERM_COLOR: always\n",
+                "  CARGO_TERM_COLOR: always\n  \"RUST_MIN_STACK\" : \"8388608\"\n",
+                1,
+            ),
+        }
+        for job_name in ("test", "msrv"):
+            job = self.yaml_block(ci, f"  {job_name}:")
+            test_step = self.yaml_step(job, "Run full workspace suite")
+            mutations.update(
+                {
+                    f"{job_name}-wrong-action": ci.replace(
+                        job,
+                        job.replace(
+                            "astral-sh/setup-uv@"
+                            "20cfd1bf945f4377ade1205e4dbc17946fc9a30d",
+                            "astral-sh/setup-uv@main",
+                            1,
+                        ),
+                        1,
+                    ),
+                    f"{job_name}-wrong-uv-version": ci.replace(
+                        job,
+                        job.replace(
+                            'version: "0.10.2"', 'version: "latest"', 1
+                        ),
+                        1,
+                    ),
+                    f"{job_name}-shared-home-cache": ci.replace(
+                        job,
+                        job.replace(
+                            'UV_CACHE_DIR: "${{ runner.temp }}/uv-cache"',
+                            'UV_CACHE_DIR: "~/.cache/uv"',
+                            1,
+                        ),
+                        1,
+                    ),
+                    f"{job_name}-default-stack": ci.replace(
+                        job,
+                        job.replace(
+                            '          RUST_MIN_STACK: "8388608"\n', "", 1
+                        ),
+                        1,
+                    ),
+                    f"{job_name}-exit-zero": ci.replace(
+                        test_step,
+                        test_step.replace(
+                            "        run: >-\n",
+                            "        run: >-\n          exit 0\n",
+                            1,
+                        ),
+                        1,
+                    ),
+                }
+            )
+        for label, mutated in mutations.items():
+            with self.subTest(mutation=label), self.assertRaises(AssertionError):
+                self.assert_workspace_oracle_environment_contract(mutated)
+
+    def test_wasm_job_accepts_the_official_binaryen_125_identity(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        job = self.yaml_block(ci, "  wasm:")
+        install = self.yaml_step(job, "Install wasm-opt 125")
+        self.assertIn(
+            'wasm-opt version 125 (version_125)',
+            "\n".join(self.yaml_run_lines(install)),
+        )
+
+    def test_workspace_test_jobs_fetch_the_pinned_presentation_corpus(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        for job_name in ("test", "msrv"):
+            with self.subTest(job=job_name):
+                job = self.yaml_block(ci, f"  {job_name}:")
+                fetch = self.yaml_step(job, "Fetch pinned presentation corpus")
+                self.assertEqual(
+                    self.yaml_direct_lines(fetch, 8),
+                    ("run: python3 scripts/fetch_pptx_corpus.py",),
+                )
+                test_steps = tuple(
+                    step
+                    for step in self.yaml_steps(job)
+                    if "cargo test --workspace" in step
+                )
+                self.assertEqual(len(test_steps), 1)
+                self.assertLess(job.index(fetch), job.index(test_steps[0]))
+                self.assertNotIn("continue-on-error", fetch)
 
     def test_python_pr_job_rejects_failure_swallowing_and_incomplete_cells(
         self,
@@ -469,10 +1155,491 @@ class SprintWorkflowTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(AssertionError):
                 self.assert_python_pr_job_contract(mutated)
 
+    def assert_wasm_pr_job_contract(self, ci: str) -> None:
+        triggers = self.yaml_block(ci, "on:")
+        trigger_keys = tuple(
+            line.split(":", 1)[0]
+            for line in self.yaml_direct_lines(triggers, 2)
+        )
+        self.assertEqual(trigger_keys, ("push", "pull_request", "schedule"))
+        pull_request = self.yaml_block(triggers, "  pull_request:")
+        self.assertEqual(self.yaml_direct_lines(pull_request, 4), ())
+
+        root_permissions = self.yaml_block(ci, "permissions:")
+        self.assertEqual(
+            self.yaml_direct_lines(root_permissions, 2),
+            ("contents: read",),
+        )
+        operative_ci = self.operative_lines(ci)
+        self.assertFalse(any("id-token:" in line for line in operative_ci))
+        self.assertFalse(any("write-all" in line for line in operative_ci))
+
+        job = self.yaml_block(ci, "  wasm:")
+        self.assertEqual(
+            self.yaml_direct_lines(job, 4),
+            ("name: WASM", "runs-on: ubuntu-latest", "steps:"),
+        )
+        self.assertFalse(
+            any("continue-on-error:" in line for line in self.operative_lines(job))
+        )
+
+        steps = self.yaml_steps(job)
+        identities = tuple(
+            self.yaml_step_identity(step, position)
+            for position, step in enumerate(steps)
+        )
+        self.assertEqual(
+            identities,
+            (
+                "step:0",
+                "step:1",
+                "step:2",
+                "Set up Node 24.11.1",
+                "Install wasm-pack 0.15.0",
+                "Install wasm-opt 125",
+                "Check WASM targets",
+                "Run WASM Node tests",
+                "Build and install local WASM packages",
+            ),
+        )
+
+        action_contract = (
+            (
+                steps[0],
+                "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+            ),
+            (
+                steps[1],
+                "dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c",
+            ),
+            (
+                steps[2],
+                "Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4",
+            ),
+        )
+        for action_step, expected_action in action_contract:
+            self.assertEqual(self.yaml_step_actions(action_step), (expected_action,))
+
+        rust_inputs = self.yaml_block(steps[1], "        with:")
+        self.assertEqual(
+            self.yaml_direct_lines(rust_inputs, 10),
+            ("targets: wasm32-unknown-unknown",),
+        )
+        self.assertEqual(self.yaml_direct_lines(steps[0], 8), ())
+        self.assertEqual(self.yaml_direct_lines(steps[2], 8), ())
+
+        node = self.yaml_step(job, "Set up Node 24.11.1")
+        self.assertEqual(
+            self.yaml_step_actions(node),
+            (
+                "actions/setup-node@"
+                "249970729cb0ef3589644e2896645e5dc5ba9c38",
+            ),
+        )
+        self.assertEqual(
+            self.yaml_direct_lines(node, 8),
+            (
+                "uses: actions/setup-node@"
+                "249970729cb0ef3589644e2896645e5dc5ba9c38",
+                "with:",
+            ),
+        )
+        node_inputs = self.yaml_block(node, "        with:")
+        self.assertEqual(
+            self.yaml_direct_lines(node_inputs, 10),
+            ('node-version: "24.11.1"',),
+        )
+
+        install = self.yaml_step(job, "Install wasm-pack 0.15.0")
+        install_optimizer = self.yaml_step(job, "Install wasm-opt 125")
+        checks = self.yaml_step(job, "Check WASM targets")
+        node_tests = self.yaml_step(job, "Run WASM Node tests")
+        packages = self.yaml_step(job, "Build and install local WASM packages")
+        for command_step in (install, install_optimizer, checks, node_tests, packages):
+            self.assertEqual(
+                self.yaml_direct_lines(command_step, 8),
+                ("shell: bash", "run: |"),
+            )
+        install_lines = self.yaml_run_lines(install)
+        optimizer_lines = self.yaml_run_lines(install_optimizer)
+        check_lines = self.yaml_run_lines(checks)
+        node_test_lines = self.yaml_run_lines(node_tests)
+        self.assertEqual(
+            install_lines,
+            ("cargo install wasm-pack --version 0.15.0 --locked",),
+        )
+        self.assertEqual(
+            optimizer_lines,
+            (
+                'binaryen_archive="${RUNNER_TEMP}/binaryen-version_125-x86_64-linux.tar.gz"',
+                'binaryen_root="${RUNNER_TEMP}/binaryen-version_125"',
+                "curl --fail --location --silent --show-error "
+                '"https://github.com/WebAssembly/binaryen/releases/download/'
+                'version_125/binaryen-version_125-x86_64-linux.tar.gz" '
+                '--output "$binaryen_archive"',
+                'echo "7c3bc16599c8274a04d34a504fe4be2047884f900e0e2da2f6fb9cd667183be4  '
+                '$binaryen_archive" | sha256sum --check',
+                'mkdir -p "$binaryen_root"',
+                'tar --extract --gzip --file "$binaryen_archive" --directory '
+                '"$binaryen_root" --strip-components=1',
+                'echo "$binaryen_root/bin" >> "$GITHUB_PATH"',
+                'test "$("$binaryen_root/bin/wasm-opt" --version)" = '
+                '"wasm-opt version 125 (version_125)"',
+            ),
+        )
+        self.assertEqual(
+            check_lines,
+            (
+                "cargo check --locked --target wasm32-unknown-unknown -p rdocx-wasm",
+                "cargo check --locked --target wasm32-unknown-unknown -p rpptx-wasm",
+            ),
+        )
+        self.assertEqual(
+            node_test_lines,
+            (
+                "wasm-pack test --node crates/rdocx-wasm",
+                "wasm-pack test --node crates/rpptx-wasm",
+            ),
+        )
+        self.assert_no_success_short_circuit(
+            install_lines + optimizer_lines + check_lines + node_test_lines
+        )
+        package_lines = self.yaml_run_lines(packages)
+        for expected in (
+            'package_root="${RUNNER_TEMP}/wasm-packages"',
+            'tarball_root="${RUNNER_TEMP}/wasm-tarballs"',
+            'npm_cache="${RUNNER_TEMP}/npm-cache"',
+            "wasm-pack build --target bundler --scope tensorbee --release "
+            '--out-dir "$package_root/rdocx-wasm" crates/rdocx-wasm --locked',
+            "wasm-pack build --target bundler --scope tensorbee --release "
+            '--out-dir "$package_root/rpptx-wasm" crates/rpptx-wasm --locked',
+            'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
+            '"0.6.0" "rdocx_wasm"',
+            'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
+            '"0.2.0" "rpptx_wasm"',
+            "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
+            "--ignore-scripts --no-audit --no-fund --package-lock=false "
+            '"$tarball_root/$tarball"',
+        ):
+            self.assertEqual(package_lines.count(expected), 1, expected)
+        self.assertIn(
+            'npm pack "$package_dir" --cache "$npm_cache" --ignore-scripts '
+            '--pack-destination "$tarball_root"',
+            packages,
+        )
+        self.assertIn('import(\\"$expected_name\\")', packages)
+        self.assertIn('consumer_root="$(mktemp -d ', packages)
+        self.assertIn('manifest.name !== expectedName', packages)
+        self.assertIn('manifest.version !== expectedVersion', packages)
+        self.assertIn('${stem}_bg.wasm', packages)
+        self.assertIn('${stem}.js', packages)
+        self.assertIn('${stem}.d.ts', packages)
+        forbidden = (
+            "npm publish",
+            "npm login",
+            "npm adduser",
+            "npm token",
+            "wasm-pack publish",
+            "NODE_AUTH_TOKEN",
+            "NPM_TOKEN",
+            "--registry",
+            "id-token:",
+            "git tag",
+            "gh release",
+        )
+        operative_job = "\n".join(self.operative_lines(job))
+        for command in forbidden:
+            self.assertNotIn(command, operative_job)
+        self.assert_no_success_short_circuit(package_lines)
+        self.assertNotIn("|| true", job)
+        self.assertNotIn("set +e", job)
+
+    def assert_wasm_optimizer_metadata_contract(
+        self, manifest_overrides: dict[str, str] | None = None
+    ) -> None:
+        manifest_overrides = manifest_overrides or {}
+        expected = {
+            "wasm-opt": [
+                "-Oz",
+                "--enable-bulk-memory",
+                "--enable-nontrapping-float-to-int",
+            ]
+        }
+        for member in ("crates/rdocx-wasm", "crates/rpptx-wasm"):
+            manifest = tomllib.loads(
+                manifest_overrides.get(
+                    member,
+                    (workflow.REPO / member / "Cargo.toml").read_text(
+                        encoding="utf-8"
+                    ),
+                )
+            )
+            wasm_pack = manifest["package"].get("metadata", {}).get("wasm-pack", {})
+            release = wasm_pack.get("profile", {}).get("release")
+            self.assertEqual(
+                release,
+                expected,
+                member,
+            )
+
+    def test_wasm_pr_job_checks_both_targets_and_runs_node_tests(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_wasm_pr_job_contract(ci)
+
+    def test_wasm_packages_use_the_reviewed_release_optimizer(self) -> None:
+        self.assert_wasm_optimizer_metadata_contract()
+
+    def test_wasm_package_contract_rejects_optimizer_mutations(self) -> None:
+        for member in ("crates/rdocx-wasm", "crates/rpptx-wasm"):
+            manifest = (workflow.REPO / member / "Cargo.toml").read_text(
+                encoding="utf-8"
+            )
+            mutations = {
+                "missing-bulk-memory": manifest.replace(
+                    '["-Oz", "--enable-bulk-memory", '
+                    '"--enable-nontrapping-float-to-int"]',
+                    '["-Oz", "--enable-nontrapping-float-to-int"]',
+                    1,
+                ),
+                "missing-nontrapping-float-to-int": manifest.replace(
+                    '["-Oz", "--enable-bulk-memory", '
+                    '"--enable-nontrapping-float-to-int"]',
+                    '["-Oz", "--enable-bulk-memory"]',
+                    1,
+                ),
+                "wrong-size-level": manifest.replace(
+                    '["-Oz", "--enable-bulk-memory", '
+                    '"--enable-nontrapping-float-to-int"]',
+                    '["-Os", "--enable-bulk-memory", '
+                    '"--enable-nontrapping-float-to-int"]',
+                    1,
+                ),
+            }
+            for name, mutated in mutations.items():
+                self.assertNotEqual(mutated, manifest, f"{member}:{name}")
+                with self.subTest(member=member, name=name), self.assertRaises(
+                    AssertionError
+                ):
+                    self.assert_wasm_optimizer_metadata_contract({member: mutated})
+
+    def assert_wasm_setup_node_provenance_contract(
+        self, ci: str, testing_hld: str
+    ) -> None:
+        reviewed_sha = "249970729cb0ef3589644e2896645e5dc5ba9c38"
+        reviewed_tag = "v6.5.0"
+        job = self.yaml_block(ci, "  wasm:")
+        provenance_line = (
+            f"        uses: actions/setup-node@{reviewed_sha} # {reviewed_tag}"
+        )
+        self.assertEqual(job.count(provenance_line), 1)
+        self.assertIn(f"setup-node {reviewed_tag}", testing_hld)
+        self.assertNotIn("setup-node v6.1.0", testing_hld)
+
+    def test_wasm_setup_node_provenance_matches_the_testing_hld(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        testing_hld = (workflow.REPO / "docs/hld/12-testing-strategy.md").read_text(
+            encoding="utf-8"
+        )
+        self.assert_wasm_setup_node_provenance_contract(ci, testing_hld)
+
+        mutations = {
+            "stale-workflow-comment": (
+                ci.replace(
+                    "249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0",
+                    "249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.1.0",
+                    1,
+                ),
+                testing_hld,
+            ),
+            "stale-hld-label": (
+                ci,
+                testing_hld.replace("setup-node v6.5.0", "setup-node v6.1.0", 1),
+            ),
+        }
+        for name, (mutated_ci, mutated_hld) in mutations.items():
+            self.assertTrue(
+                mutated_ci != ci or mutated_hld != testing_hld,
+                name,
+            )
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_wasm_setup_node_provenance_contract(
+                    mutated_ci, mutated_hld
+                )
+
+    def test_wasm_pr_job_rejects_skipped_or_weakened_gates(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_wasm_pr_job_contract(ci)
+        wasm_job = self.yaml_block(ci, "  wasm:")
+
+        def mutate_job(old: str, new: str) -> str:
+            self.assertIn(old, wasm_job)
+            return ci.replace(wasm_job, wasm_job.replace(old, new, 1), 1)
+
+        mutations = {
+            "missing-pull-request-trigger": ci.replace(
+                "  pull_request:\n", "", 1
+            ),
+            "commented-pull-request-trigger": ci.replace(
+                "  pull_request:\n", "  # pull_request:\n", 1
+            ),
+            "root-contents-write": ci.replace(
+                "  contents: read\n", "  contents: write\n", 1
+            ),
+            "root-id-token-write": ci.replace(
+                "  contents: read\n",
+                "  contents: read\n  id-token: write\n",
+                1,
+            ),
+            "job-condition": mutate_job(
+                "    name: WASM\n", "    name: WASM\n    if: true\n"
+            ),
+            "wrong-checkout-sha": mutate_job(
+                "de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+                "0000000000000000000000000000000000000000",
+            ),
+            "wrong-rust-toolchain-sha": mutate_job(
+                "4360b52568e2003a75bf9bc1d59f33a8e3fc893c",
+                "0000000000000000000000000000000000000000",
+            ),
+            "wrong-rust-cache-sha": mutate_job(
+                "c19371144df3bb44fab255c43d04cbc2ab54d1c4",
+                "0000000000000000000000000000000000000000",
+            ),
+            "wrong-setup-node-sha": mutate_job(
+                "249970729cb0ef3589644e2896645e5dc5ba9c38",
+                "0000000000000000000000000000000000000000",
+            ),
+            "wrong-node-version": mutate_job("24.11.1", "24"),
+            "unlocked-wasm-pack-install": mutate_job(
+                "cargo install wasm-pack --version 0.15.0 --locked",
+                "cargo install wasm-pack --version 0.15.0",
+            ),
+            "floating-wasm-pack-version": mutate_job(
+                "cargo install wasm-pack --version 0.15.0 --locked",
+                "cargo install wasm-pack --locked",
+            ),
+            "wrong-wasm-opt-version": mutate_job(
+                "binaryen-version_125-x86_64-linux.tar.gz",
+                "binaryen-version_124-x86_64-linux.tar.gz",
+            ),
+            "wrong-wasm-opt-checksum": mutate_job(
+                "7c3bc16599c8274a04d34a504fe4be2047884f900e0e2da2f6fb9cd667183be4",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            ),
+            "missing-wasm-opt-version-check": mutate_job(
+                '          test "$("$binaryen_root/bin/wasm-opt" --version)" = '
+                '"wasm-opt version 125 (version_125)"\n',
+                "",
+            ),
+            "unlocked-target-check": mutate_job(
+                "cargo check --locked --target wasm32-unknown-unknown -p rdocx-wasm",
+                "cargo check --target wasm32-unknown-unknown -p rdocx-wasm",
+            ),
+            "missing-rdocx-target-check": mutate_job(
+                "          cargo check --locked --target wasm32-unknown-unknown -p rdocx-wasm\n",
+                "",
+            ),
+            "missing-rpptx-target-check": mutate_job(
+                "          cargo check --locked --target wasm32-unknown-unknown -p rpptx-wasm\n",
+                "",
+            ),
+            "missing-rdocx-node-test": mutate_job(
+                "          wasm-pack test --node crates/rdocx-wasm\n", ""
+            ),
+            "missing-rpptx-node-test": mutate_job(
+                "          wasm-pack test --node crates/rpptx-wasm\n", ""
+            ),
+            "missing-node-runner": mutate_job(
+                "wasm-pack test --node crates/rdocx-wasm",
+                "wasm-pack test crates/rdocx-wasm",
+            ),
+            "listing-only-node-test": mutate_job(
+                "wasm-pack test --node crates/rdocx-wasm",
+                "wasm-pack test --node crates/rdocx-wasm -- --list",
+            ),
+            "check-condition": mutate_job(
+                "      - name: Check WASM targets\n",
+                "      - name: Check WASM targets\n        if: true\n",
+            ),
+            "node-test-condition": mutate_job(
+                "      - name: Run WASM Node tests\n",
+                "      - name: Run WASM Node tests\n        if: true\n",
+            ),
+            "continue-on-error": mutate_job(
+                "      - name: Run WASM Node tests\n",
+                "      - name: Run WASM Node tests\n"
+                "        continue-on-error: true\n",
+            ),
+            "successful-fallback": mutate_job(
+                "wasm-pack test --node crates/rdocx-wasm",
+                "wasm-pack test --node crates/rdocx-wasm || true",
+            ),
+            "early-success": mutate_job(
+                "        run: |\n"
+                "          wasm-pack test --node crates/rdocx-wasm",
+                "        run: |\n"
+                "          exit 0\n"
+                "          wasm-pack test --node crates/rdocx-wasm",
+            ),
+            "missing-rdocx-package": mutate_job(
+                "          wasm-pack build --target bundler --scope tensorbee "
+                "--release --out-dir \"$package_root/rdocx-wasm\" "
+                "crates/rdocx-wasm --locked\n",
+                "",
+            ),
+            "wrong-package-target": mutate_job(
+                "wasm-pack build --target bundler",
+                "wasm-pack build --target nodejs",
+            ),
+            "wrong-package-scope": mutate_job(
+                "--scope tensorbee --release",
+                "--scope other --release",
+            ),
+            "unlocked-package-build": mutate_job(
+                "crates/rdocx-wasm --locked",
+                "crates/rdocx-wasm",
+            ),
+            "missing-clean-install": mutate_job(
+                "          npm install --prefix \"$consumer_root\" --cache "
+                "\"$npm_cache\" --ignore-scripts --no-audit --no-fund "
+                "--package-lock=false \"$tarball_root/$tarball\"\n",
+                "",
+            ),
+            "registry-authentication": mutate_job(
+                "      - name: Build and install local WASM packages\n",
+                "      - name: Build and install local WASM packages\n"
+                "        env:\n"
+                "          NPM_TOKEN: forbidden\n",
+            ),
+            "npm-publish-authority": mutate_job(
+                '          assert_inventory "$package_dir" "$expected_name" '
+                '"$expected_version" "$stem"\n',
+                '          assert_inventory "$package_dir" "$expected_name" '
+                '"$expected_version" "$stem"\n'
+                '          npm publish "$package_dir"\n',
+            ),
+            "release-tag-authority": mutate_job(
+                "      - name: Build and install local WASM packages\n",
+                "      - name: Build and install local WASM packages\n"
+                "        env:\n"
+                "          RELEASE_COMMAND: git tag v0.0.0\n",
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, ci, name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_wasm_pr_job_contract(mutated)
+
     def assert_wheels_workflow_contract(self, workflow_bytes: bytes) -> None:
         self.assertEqual(
             hashlib.sha256(workflow_bytes).hexdigest(),
-            "db89119b10d04baee6011f21513f9e7a191e39bb8b2f7715857a52217f6325ac",
+            "56491248b4ffa7ea40abe75b04a16fcfd5c24744d16ccb9a8c6f7110d39be35a",
         )
         wheels = workflow_bytes.decode("utf-8", errors="strict")
         expected_packages = (
@@ -690,7 +1857,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 ("if: matrix.platform.install == 'native'",),
             )
         musllinux_install = self.yaml_step(
-            build_wheels, "Install musllinux wheel"
+            build_wheels, "Install and test musllinux wheel"
         )
         musllinux_conditions = tuple(
             line
@@ -779,12 +1946,33 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(
             musllinux_run,
             (
-                'docker run --rm -v "$PWD/dist:/dist:ro" python:3.9-alpine \\',
-                'sh -c "python -m venv /tmp/wheel-venv && '
-                "/tmp/wheel-venv/bin/pip install "
-                "/dist/${{ matrix.package.distribution }}-*.whl && "
-                "/tmp/wheel-venv/bin/python -c 'import "
-                '${{ matrix.package.module }}\'"',
+                "docker run --rm " + chr(92),
+                '-v "$PWD:/workspace:ro" ' + chr(92),
+                '-v "$PWD/dist:/dist:ro" ' + chr(92),
+                "-w /workspace " + chr(92),
+                '-e PACKAGE_DISTRIBUTION="${{ matrix.package.distribution }}" '
+                + chr(92),
+                '-e PACKAGE_MODULE="${{ matrix.package.module }}" ' + chr(92),
+                "python:3.9-alpine " + chr(92),
+                "sh -euxc '",
+                "python -m venv /tmp/wheel-venv",
+                "venv_python=/tmp/wheel-venv/bin/python",
+                '"$venv_python" -m pip install --upgrade pip',
+                '"$venv_python" -m pip install '
+                "/dist/${PACKAGE_DISTRIBUTION}-*.whl pytest "
+                "python-docx==1.2.0 python-pptx==1.0.2",
+                '"$venv_python" -c "import ${PACKAGE_MODULE}"',
+                'if [ "$PACKAGE_DISTRIBUTION" = rdocx ]; then',
+                '"$venv_python" -m pytest ' + chr(92),
+                "crates/rdocx-py/tests/test_core.py " + chr(92),
+                "crates/rdocx-py/tests/test_formatting_tables.py " + chr(92),
+                "crates/rdocx-py/tests/test_shared.py " + chr(92),
+                "crates/rdocx-py/tests/test_python_docx_parity.py",
+                "else",
+                '"$venv_python" -m pytest '
+                "crates/rpptx-py/tests/test_documented_examples.py",
+                "fi",
+                "'",
             ),
         )
 
@@ -795,6 +1983,17 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertIn("crates/rdocx-py/tests/test_python_docx_parity.py", native_install)
         self.assertIn(
             "crates/rpptx-py/tests/test_documented_examples.py", native_install
+        )
+        self.assertIn(
+            'if [ "$PACKAGE_DISTRIBUTION" = rdocx ]; then', musllinux_install
+        )
+        self.assertIn(
+            "crates/rdocx-py/tests/test_python_docx_parity.py",
+            musllinux_install,
+        )
+        self.assertIn(
+            "crates/rpptx-py/tests/test_documented_examples.py",
+            musllinux_install,
         )
         self.assertEqual(typing.count(distribution_branch), 1)
         self.assertIn('"$typing_python" -m mypy.stubtest rdocx\n', typing)
@@ -1123,8 +2322,21 @@ class SprintWorkflowTests(unittest.TestCase):
             "Validate wheel metadata",
             "Install and test native wheel",
             "Validate installed typing surface",
-            "Install musllinux wheel",
+            "Install and test musllinux wheel",
             "Validate complete publication set",
+        )
+        musllinux_step = self.yaml_step(
+            wheels, "Install and test musllinux wheel"
+        )
+        musllinux_parity_start = musllinux_step.index(
+            '              if [ "$PACKAGE_DISTRIBUTION" = rdocx ]; then\n'
+        )
+        musllinux_parity_end = musllinux_step.index(
+            "            '\n", musllinux_parity_start
+        )
+        musllinux_import_only_step = (
+            musllinux_step[:musllinux_parity_start]
+            + musllinux_step[musllinux_parity_end:]
         )
         early_success_mutations = tuple(
             (
@@ -1573,6 +2785,12 @@ class SprintWorkflowTests(unittest.TestCase):
                 "musllinux-if-false",
                 wheels.replace(
                     "if: matrix.platform.install == 'musl'", "if: false", 1
+                ),
+            ),
+            (
+                "musllinux-import-only",
+                wheels.replace(
+                    musllinux_step, musllinux_import_only_step, 1
                 ),
             ),
             (
@@ -2082,6 +3300,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-opc",
             "oxml-pdf",
             "oxml-sml",
+            "oxml-cli-support",
             "rdocx",
             "rdocx-cli",
             "rdocx-html",
@@ -2090,6 +3309,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "rdocx-oxml",
             "rdocx-pdf",
             "rpptx",
+            "rpptx-cli",
             "rpptx-chart",
             "rpptx-layout",
             "rpptx-oxml",
@@ -2107,7 +3327,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 f"--config 'patch.crates-io.{package}.path=\"crates/{package}\"'"
             )
             self.assertEqual(block.count(config), 1, package)
-        self.assertEqual(block.count("--config 'patch.crates-io."), 19)
+        self.assertEqual(block.count("--config 'patch.crates-io."), 21)
         self.assertNotIn("--no-verify", block)
         self.assertNotIn("continue-on-error", block)
 
@@ -2129,11 +3349,13 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-drawing",
             "oxml-pdf",
             "oxml-sml",
+            "oxml-cli-support",
             "rpptx-oxml",
             "rpptx-chart",
             "rpptx-layout",
             "rpptx-render",
             "rpptx",
+            "rpptx-cli",
         )
 
         self.assertIn('tags: ["v*", "rpptx-v*"]', publish)
@@ -2311,6 +3533,175 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(wasm["package"]["version"], {"workspace": True})
         self.assertFalse(wasm["package"]["publish"])
 
+    def test_stable_release_family_is_prepared_at_0_6_0(self) -> None:
+        expected_version = "0.6.0"
+        stable_members = (
+            "oxml-py-support",
+            "rpptx-py",
+            "rdocx-opc",
+            "rdocx-oxml",
+            "rdocx",
+            "rdocx-layout",
+            "rdocx-pdf",
+            "rdocx-html",
+            "rdocx-py",
+            "rdocx-cli",
+            "rdocx-wasm",
+        )
+        stable_pins = (
+            "oxml-py-support",
+            "rpptx-py",
+            "rdocx-opc",
+            "rdocx-oxml",
+            "rdocx",
+            "rdocx-layout",
+            "rdocx-pdf",
+            "rdocx-html",
+            "rdocx-py",
+        )
+        stable_publishable = {
+            "rdocx-opc",
+            "rdocx-oxml",
+            "rdocx-layout",
+            "rdocx-html",
+            "rdocx-pdf",
+            "rdocx",
+            "rdocx-cli",
+        }
+        incubating_members = (
+            "oxml-core",
+            "oxml-drawing",
+            "oxml-layout",
+            "oxml-media",
+            "oxml-opc",
+            "oxml-pdf",
+            "oxml-sml",
+            "oxml-cli-support",
+            "rpptx",
+            "rpptx-cli",
+            "rpptx-chart",
+            "rpptx-layout",
+            "rpptx-oxml",
+            "rpptx-render",
+            "rpptx-wasm",
+        )
+
+        root_text = (workflow.REPO / "Cargo.toml").read_text(encoding="utf-8")
+        root = tomllib.loads(root_text)
+        workspace = root["workspace"]
+        self.assertEqual(workspace["package"]["version"], expected_version)
+        dependencies = workspace["dependencies"]
+        for name in stable_pins:
+            self.assertEqual(dependencies[name]["version"], expected_version, name)
+
+        lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
+        lock_versions = {
+            package["name"]: package["version"]
+            for package in lock["package"]
+            if package["name"] in stable_members
+        }
+        self.assertEqual(set(lock_versions), set(stable_members))
+        for name in stable_members:
+            self.assertEqual(lock_versions[name], expected_version, name)
+
+        publishable = set()
+        for name in stable_members:
+            manifest = tomllib.loads(
+                (workflow.REPO / f"crates/{name}/Cargo.toml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(manifest["package"]["version"], {"workspace": True})
+            if manifest["package"].get("publish", True):
+                publishable.add(name)
+        self.assertEqual(publishable, stable_publishable)
+
+        for name in ("rdocx-py", "rpptx-py"):
+            pyproject = tomllib.loads(
+                (workflow.REPO / f"crates/{name}/pyproject.toml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(pyproject["project"]["version"], expected_version, name)
+
+        migration = (
+            workflow.REPO / "docs/hld/11-migration-plan.md"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("then stop publishing", migration)
+        self.assertIn(
+            "Both deprecated shims continue to publish with each coherent "
+            "stable train",
+            migration,
+        )
+
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertEqual(
+            ci.count(
+                'verify_package "$package_root/rdocx-wasm" '
+                '"@tensorbee/rdocx-wasm" "0.6.0" "rdocx_wasm"'
+            ),
+            1,
+        )
+        wasm_source = (workflow.REPO / "crates/rdocx-wasm/src/lib.rs").read_text(
+            encoding="utf-8"
+        )
+        for dependency in ("rdocx", "rdocx-layout"):
+            self.assertEqual(
+                wasm_source.count(
+                    f'{dependency} = {{ path = \\"crates/{dependency}\\", '
+                    f'version = \\"{expected_version}\\", '
+                    'default-features = false }'
+                ),
+                1,
+                dependency,
+            )
+
+        readme_requirements = {
+            "README.md": ('rdocx = "0.6"', 'version = "0.6"'),
+            "crates/rdocx-cli/README.md": ("--version '^0.6'",),
+            "crates/rdocx-html/README.md": ('rdocx-html = "0.6"',),
+            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.6"',),
+            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.6"',),
+            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.6"',),
+            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.6"',),
+        }
+        for path, requirements in readme_requirements.items():
+            text = (workflow.REPO / path).read_text(encoding="utf-8")
+            for requirement in requirements:
+                self.assertIn(requirement, text, path)
+
+        for name in incubating_members:
+            manifest = tomllib.loads(
+                (workflow.REPO / f"crates/{name}/Cargo.toml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(manifest["package"]["version"], "0.2.0", name)
+            self.assertIs(
+                manifest["package"].get("publish", True),
+                name != "rpptx-wasm",
+                name,
+            )
+
+    def test_readme_archive_gate_rejects_a_missing_local_patch(self) -> None:
+        metadata = readme_doctests.cargo_metadata()
+        self.assertIsNotNone(metadata)
+        packages = metadata["packages"]
+        self.assertTrue(readme_doctests.validate_local_patches(packages))
+
+        without_oxml_core = tuple(
+            patch_entry
+            for patch_entry in readme_doctests.LOCAL_PATCHES
+            if patch_entry[0] != "oxml-core"
+        )
+        errors = io.StringIO()
+        with (
+            patch.object(readme_doctests, "LOCAL_PATCHES", without_oxml_core),
+            contextlib.redirect_stderr(errors),
+        ):
+            self.assertFalse(readme_doctests.validate_inventory())
+        self.assertIn("('oxml-core', 'crates/oxml-core')", errors.getvalue())
+
     def test_stable_release_family_has_lockstep_preparation_metadata(self) -> None:
         stable_packages = (
             "rdocx-opc",
@@ -2353,11 +3744,13 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-opc",
             "oxml-pdf",
             "oxml-sml",
+            "oxml-cli-support",
             "rpptx-oxml",
             "rpptx-layout",
             "rpptx-render",
             "rpptx-chart",
             "rpptx",
+            "rpptx-cli",
         )
 
         for name in incubating_packages:
@@ -2370,7 +3763,7 @@ class SprintWorkflowTests(unittest.TestCase):
             self.assertEqual(release["shared-version"], "incubating")
             self.assertEqual(release["tag-name"], "rpptx-v{{version}}")
 
-    def test_incubating_release_family_is_prepared_at_0_1_2(self) -> None:
+    def test_incubating_release_family_is_prepared_at_0_2_0(self) -> None:
         incubating_packages = (
             "oxml-core",
             "oxml-opc",
@@ -2379,23 +3772,27 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-drawing",
             "oxml-pdf",
             "oxml-sml",
+            "oxml-cli-support",
             "rpptx-oxml",
             "rpptx-chart",
             "rpptx-layout",
             "rpptx-render",
             "rpptx",
+            "rpptx-cli",
         )
-        expected_version = "0.1.2"
+        preparation_packages = (*incubating_packages, "rpptx-wasm")
+        expected_version = "0.2.0"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
+        self.assertEqual(root["workspace"]["package"]["version"], "0.6.0")
         dependencies = root["workspace"]["dependencies"]
         lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
         lock_versions = {
             package["name"]: package["version"]
             for package in lock["package"]
-            if package["name"] in incubating_packages
+            if package["name"] in preparation_packages
         }
 
-        self.assertEqual(set(lock_versions), set(incubating_packages))
+        self.assertEqual(set(lock_versions), set(preparation_packages))
         for name in incubating_packages:
             manifest = tomllib.loads(
                 (workflow.REPO / f"crates/{name}/Cargo.toml").read_text(
@@ -2404,10 +3801,45 @@ class SprintWorkflowTests(unittest.TestCase):
             )
             self.assertEqual(manifest["package"]["version"], expected_version, name)
             self.assertTrue(manifest["package"].get("description", "").strip(), name)
+            self.assertTrue(manifest["package"].get("publish", True), name)
             self.assertEqual(dependencies[name]["version"], expected_version, name)
             self.assertEqual(lock_versions[name], expected_version, name)
 
-    def test_release_preparation_metadata_cannot_mutate_external_state(self) -> None:
+        wasm = tomllib.loads(
+            (workflow.REPO / "crates/rpptx-wasm/Cargo.toml").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(wasm["package"]["version"], expected_version)
+        self.assertFalse(wasm["package"]["publish"])
+        self.assertNotIn("rpptx-wasm", dependencies)
+        self.assertEqual(lock_versions["rpptx-wasm"], expected_version)
+
+        readme_requirements = {
+            "crates/oxml-core/README.md": ('oxml-core = "0.2.0"',),
+            "crates/oxml-drawing/README.md": ('oxml-drawing = "0.2.0"',),
+            "crates/oxml-layout/README.md": ('version = "0.2.0"',),
+            "crates/oxml-media/README.md": ('oxml-media = "0.2.0"',),
+            "crates/oxml-opc/README.md": ('oxml-opc = "0.2.0"',),
+            "crates/oxml-pdf/README.md": (
+                'oxml-pdf = "0.2.0"',
+                'oxml-layout = "0.2.0"',
+            ),
+            "crates/rpptx-chart/README.md": ('rpptx-chart = "0.2.0"',),
+            "crates/rpptx-cli/README.md": ("--version '^0.2.0'",),
+            "crates/rpptx-layout/README.md": ('rpptx-layout = "0.2.0"',),
+            "crates/rpptx-oxml/README.md": ('rpptx-oxml = "0.2.0"',),
+            "crates/rpptx-render/README.md": ('rpptx-render = "0.2.0"',),
+        }
+        for path, requirements in readme_requirements.items():
+            text = (workflow.REPO / path).read_text(encoding="utf-8")
+            for requirement in requirements:
+                self.assertIn(requirement, text, path)
+
+    def assert_release_preparation_metadata_contract(
+        self, manifest_overrides: dict[str, str] | None = None
+    ) -> None:
+        manifest_overrides = manifest_overrides or {}
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
         release = root["workspace"]["metadata"]["release"]
 
@@ -2419,16 +3851,126 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertFalse(release["push"])
         self.assertNotIn("pre-release-replacements", release)
 
-        family_counts = {"workspace": 0, "incubating": 0}
+        family_members = {"workspace": [], "incubating": []}
+        manifests = {}
         for member in root["workspace"]["members"]:
-            manifest = tomllib.loads(
-                (workflow.REPO / member / "Cargo.toml").read_text(encoding="utf-8")
+            manifest_text = manifest_overrides.get(
+                member,
+                (workflow.REPO / member / "Cargo.toml").read_text(encoding="utf-8"),
             )
+            manifest = tomllib.loads(manifest_text)
+            manifests[member] = manifest
             family = manifest["package"]["metadata"]["release"]["shared-version"]
-            self.assertIn(family, family_counts)
-            family_counts[family] += 1
+            self.assertIn(family, family_members)
+            family_members[family].append(member)
 
-        self.assertEqual(family_counts, {"workspace": 11, "incubating": 12})
+        self.assertEqual(
+            tuple(family_members["workspace"]),
+            (
+                "crates/oxml-py-support",
+                "crates/rpptx-py",
+                "crates/rdocx-opc",
+                "crates/rdocx-oxml",
+                "crates/rdocx",
+                "crates/rdocx-layout",
+                "crates/rdocx-pdf",
+                "crates/rdocx-html",
+                "crates/rdocx-py",
+                "crates/rdocx-cli",
+                "crates/rdocx-wasm",
+            ),
+        )
+        self.assertEqual(
+            tuple(family_members["incubating"]),
+            (
+                "crates/oxml-core",
+                "crates/oxml-drawing",
+                "crates/oxml-layout",
+                "crates/oxml-media",
+                "crates/oxml-opc",
+                "crates/oxml-pdf",
+                "crates/oxml-sml",
+                "crates/oxml-cli-support",
+                "crates/rpptx",
+                "crates/rpptx-cli",
+                "crates/rpptx-chart",
+                "crates/rpptx-layout",
+                "crates/rpptx-oxml",
+                "crates/rpptx-render",
+                "crates/rpptx-wasm",
+            ),
+        )
+
+        family_counts = {
+            family: len(members) for family, members in family_members.items()
+        }
+        self.assertEqual(family_counts, {"workspace": 11, "incubating": 15})
+
+        wasm_package = manifests["crates/rpptx-wasm"]["package"]
+        self.assertEqual(wasm_package["name"], "rpptx-wasm")
+        self.assertEqual(wasm_package["version"], "0.2.0")
+        self.assertTrue(wasm_package.get("description", "").strip())
+        self.assertFalse(wasm_package["publish"])
+        self.assertEqual(
+            wasm_package["metadata"]["release"],
+            {
+                "shared-version": "incubating",
+                "tag-name": "rpptx-v{{version}}",
+            },
+        )
+
+        dependencies = root["workspace"]["dependencies"]
+        self.assertNotIn("rpptx-wasm", dependencies)
+        lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
+        wasm_lock_versions = tuple(
+            package["version"]
+            for package in lock["package"]
+            if package["name"] == "rpptx-wasm"
+        )
+        self.assertEqual(wasm_lock_versions, ("0.2.0",))
+
+    def test_release_preparation_metadata_cannot_mutate_external_state(self) -> None:
+        self.assert_release_preparation_metadata_contract()
+
+    def test_release_preparation_metadata_rejects_a_wasm_family_mutation(
+        self,
+    ) -> None:
+        member = "crates/rpptx-wasm"
+        manifest = (workflow.REPO / member / "Cargo.toml").read_text(
+            encoding="utf-8"
+        )
+        mutated = manifest.replace(
+            'shared-version = "incubating"',
+            'shared-version = "workspace"',
+            1,
+        )
+        self.assertNotEqual(mutated, manifest)
+        with self.assertRaises(AssertionError):
+            self.assert_release_preparation_metadata_contract({member: mutated})
+
+    def test_release_preparation_metadata_rejects_wasm_tag_and_version_mutations(
+        self,
+    ) -> None:
+        member = "crates/rpptx-wasm"
+        manifest = (workflow.REPO / member / "Cargo.toml").read_text(
+            encoding="utf-8"
+        )
+        mutations = {
+            "stable-tag-template": manifest.replace(
+                'tag-name = "rpptx-v{{version}}"',
+                'tag-name = "v{{version}}"',
+                1,
+            ),
+            "workspace-version": manifest.replace(
+                'version = "0.2.0"',
+                "version.workspace = true",
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, manifest, name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_release_preparation_metadata_contract({member: mutated})
 
     def test_release_command_is_the_only_release_tag_authority(self) -> None:
         release = (workflow.REPO / ".claude/commands/release.md").read_text(
@@ -2454,13 +3996,23 @@ class SprintWorkflowTests(unittest.TestCase):
             normalized_release,
         )
         self.assertIn(
-            "The exact 12-package incubating set is `oxml-core`, `oxml-opc`, "
+            "The exact 14-package incubating set is `oxml-core`, `oxml-opc`, "
             "`oxml-media`, `oxml-layout`, `oxml-drawing`, `oxml-pdf`, "
-            "`oxml-sml`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`, "
-            "`rpptx-render`, and `rpptx`.",
+            "`oxml-sml`, `oxml-cli-support`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`, "
+            "`rpptx-render`, `rpptx`, and `rpptx-cli`.",
             normalized_release,
         )
         self.assertIn("go or no-go immediately", normalized_release)
+        self.assertIn(
+            "The `oxml-layout` archive must contain its complete bundled TTF "
+            "and legal-file inventory. The `rdocx-layout` archive must not "
+            "duplicate those assets.",
+            normalized_release,
+        )
+        self.assertNotIn(
+            "The `rdocx-layout` and `oxml-layout` archives must contain",
+            normalized_release,
+        )
         self.assertIn(
             "Create one annotated tag for the requested argument",
             normalized_release,
@@ -2482,6 +4034,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-drawing",
             "oxml-pdf",
             "oxml-sml",
+            "oxml-cli-support",
             "rpptx-oxml",
             "rpptx-chart",
             "rpptx-layout",
@@ -2573,20 +4126,28 @@ class SprintWorkflowTests(unittest.TestCase):
         publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
             encoding="utf-8"
         )
-        metadata_check = (
-            "python3 -m unittest "
+        stable_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_incubating_release_family_is_prepared_at_0_1_2"
+            "test_stable_release_family_is_prepared_at_0_6_0"
+        )
+        incubating_check = (
+            "scripts.test_sprint_workflow.SprintWorkflowTests."
+            "test_incubating_release_family_is_prepared_at_0_2_0"
+        )
+        metadata_command = (
+            "python3 -m unittest "
+            f"{stable_check} {incubating_check}"
         )
 
         self.assert_publish_preflight_contract(publish)
-        self.assertEqual(publish.count(metadata_check), 1)
+        self.assertEqual(publish.count(metadata_command), 1)
+        self.assertLess(publish.index(stable_check), publish.index(incubating_check))
         self.assertLess(
             publish.index("python3 scripts/hash_harness.py --check"),
-            publish.index(metadata_check),
+            publish.index(metadata_command),
         )
         self.assertLess(
-            publish.index(metadata_check),
+            publish.index(metadata_command),
             publish.index("cargo publish --workspace --dry-run"),
         )
         self.assertLess(

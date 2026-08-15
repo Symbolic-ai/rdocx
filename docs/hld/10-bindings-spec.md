@@ -187,6 +187,46 @@ intentionally stales every pre-write handle and collection. Pure-Python
 `Length`, `Inches`, `Pt` and the required `MSO_SHAPE` members keep native
 inheritance outside the limited ABI.
 
+## Native Word facade stability
+
+The public `rdocx` facade is the common source for native, Python, WASM, and
+CLI consumers. Custom lists are created with `Document::add_list_definition`
+from up to nine `ListLevel` values. Each value selects a `ListNumberFormat` and
+an optional start number. Later slice entries are ignored because Word exposes
+exactly nine levels. Paragraph numbering stores an explicit list ID and a
+zero-based level from 0 through 8. Its in-place setters return `false` without
+mutation for a larger value. `Document::set_list_level` can redefine an
+existing level without rebuilding the document. A rejected redefinition is
+side-effect free.
+
+Paragraph mutation supports explicit hard breaks and hyperlinks backed by a
+document relationship. Table column mutation keeps the table width, grid
+column, and every covering cell width consistent. A cell with `gridSpan`
+receives the sum of its covered grid columns. Negative widths, invalid spans,
+and overflowing totals are rejected without mutation. These are additive
+stable APIs. Existing binding surfaces do not gain new methods implicitly, but
+their owned `rdocx::Document` remains package-preserving when native code uses
+the new operations.
+
+The stable Rust family moves to 0.5.0 for the numbering preservation model.
+`CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
+producer extensions survive typed mutations. Full struct literals written for
+0.4 must add the preservation fields, or callers should use the existing
+constructors. This is an intentional breaking pre-1.0 boundary. Python, WASM,
+and CLI consumers continue through the package-preserving facade and do not
+construct these low-level structs.
+
+`CT_TabStop` also exposes `source_occurrence: Option<usize>`. Parsed numbering
+tabs use this provenance to retain producer XML on the same occurrence after
+an edit, insertion, or removal. New tabs carry `None`, and semantic equality
+continues to compare only alignment, position, and leader. The public
+`CT_Tabs::from_xml_with_prefixes` parser accepts the in-scope WordprocessingML
+prefixes and tracks nested namespace shadows. Paragraph-property namespace
+context stays in one internal projection used by numbering, style, body,
+table-cell, header, footer, footnote, and endnote readers, so `CT_PPr` does not
+expose a partially contextual parser. Established aliased and default
+WordprocessingML inputs remain accepted outside numbering.
+
 ## Packaging
 
 **maturin, mixed Rust and Python layout**, so type stubs and enum shims have a
@@ -234,8 +274,9 @@ via OIDC, with no long-lived token in secrets. The workflow builds `rdocx` and
 `rpptx` across the six declared targets, produces one source distribution per
 package, and uploads each matrix product independently. Every native wheel is
 installed into a fresh environment for its compatible pytest, exact
-`mypy==2.3.0 --strict`, and `stubtest` gates. The musllinux wheel is installed
-and imported in a fresh Python 3.9 Alpine environment.
+`mypy==2.3.0 --strict`, and `stubtest` gates. Each musllinux wheel is installed
+in a fresh Python 3.9 Alpine environment and runs the same package parity suite
+as the native cells.
 
 The build jobs have only repository read permission. A separate publish job
 depends on all wheel and source-distribution jobs, requires exactly twelve
@@ -258,63 +299,102 @@ keeps python-docx out of runtime package dependencies.
 
 ## WASM
 
-### The existing crate is a fork, not a binding
-
-`rdocx-wasm` holds only `CT_Document` and `CT_Styles`. `from_bytes` stores
-`package_bytes` and immediately marks it `#[allow(dead_code)]`. `to_docx_bytes`
-discards it and rebuilds a package through `oxml_opc::OpcPackage` with the Word
-main part, content-type overrides, styles part, and styles relationship
-configured at this consumer boundary.
-
-Round-tripping any real document through it **silently destroys** every image
-and its relationships, headers and footers, numbering, settings, the theme, the
-font table, footnotes and endnotes, core and app properties, every content-type
-override, and every relationship except the styles one it re-adds. It has no
-tests, no CI job, and `publish = false`, so nothing has ever caught it.
-
-### The fix
+### The rdocx wrapper
 
 ```rust
 #[wasm_bindgen]
 pub struct WasmDocument { inner: rdocx::Document }
 ```
 
-Everything round-trips immediately, because `to_bytes` flushes into the
-**original** package. Three blockers and their answers:
+`fromBytes` delegates to `Document::from_bytes`, and `toDocxBytes` delegates to
+`Document::to_bytes`. The facade therefore flushes modeled changes into the
+original package. Images, headers, footers, numbering, settings, themes, font
+tables, notes, properties, content types, relationships, and opaque parts stay
+in the package rather than being reconstructed by the binding.
 
-- `Document::open` uses `std::fs`, so expose only `fromBytes` and `toBytes`.
-  `save()` is meaningless in a browser anyway.
-- `FontManager::new()` loads system fonts and `fontconfig` will not build for
-  `wasm32-unknown-unknown`. Add a `system-fonts` feature, default on, off for
-  wasm, with `bundled-fonts` on instead. **Then `to_pdf()` works in the
-  browser**, which is a genuinely compelling capability that is absent today.
-- Watch `getrandom` creep. The workspace already trims `zip` features to avoid
-  it.
+The constructor, `fromBytes`, `addParagraph`, `addHeading`,
+`addBoldParagraph`, `addTable`, `getText`, `paragraphCount`, `toDocxBytes`,
+`toPdf`, `toHtml`, `toHtmlFragment`, `toMarkdown`, and `replacePlaceholder`
+names remain stable. `toPdf` delegates to the normal `Document::to_pdf` facade
+and returns its bytes directly. `Document::open`, `save`, and a second
+deterministic PDF alias stay absent because browser callers supply and receive
+bytes and the WASM profile already excludes host font discovery.
 
-Keep the existing JS method names so current users do not break. The semantics
-only become correct.
+The `system-fonts` feature is default-on in `rdocx-layout` and `rdocx`, which
+preserves native behavior. `rdocx-wasm` disables `rdocx` defaults, while the
+bundled font data remains unconditional. The wasm32 graph therefore excludes
+host font discovery without inventing a second bundled-font feature.
 
-**The actual fix is the CI job**: `cargo check --target wasm32-unknown-unknown`
-plus `wasm-pack test --node`. The code drifted because nothing was watching.
+The R-class regression constructs a document with an image, header, and
+numbering, then checks the complete part, relationship, and content-type graph
+through `fromBytes` and `toDocxBytes`. The same contract is an inline
+`wasm-bindgen-test` for Node. The Node test reflectively calls those generated
+JavaScript members and crosses the `Uint8Array` boundary in both directions.
+A second inline Node test calls generated `addParagraph` and `toPdf` members,
+then requires a complete PDF with a Type 0 font, an embedded TrueType stream,
+and the bundled Carlito base font. Pull-request CI target-checks the wrapper
+with the locked workspace graph and runs both tests in Node.
 
-`rpptx-wasm` wraps the real facade from day one, never a mini-model, in two
-profiles: a default without rendering at roughly 600 KB gzipped, and a `render`
-build with the rasteriser and bundled fonts at several MB.
+`rpptx-wasm` owns one `rpptx::Presentation`, never a mini-model. Its default
+profile exposes the constructor, `fromBytes`, `toBytes`, `slideCount`, and
+`addSlide`. It includes the bundled default template but no renderer, PDF
+backend, rasteriser, or host font discovery. The `render` feature adds only
+`toPdf` and selects the facade's deterministic renderer. The optimized default
+artifact must remain below 1,000,000 bytes after deterministic gzip.
+Pull-request CI target-checks the default wrapper with the locked workspace
+graph and runs its package-preserving inline test in Node.
+
+The npm package names are `@tensorbee/rdocx-wasm` and
+`@tensorbee/rpptx-wasm`. Both use the bundler target, their Rust package
+versions, and release output optimized by exact wasm-opt 125 with `-Oz`,
+`--enable-bulk-memory`, and `--enable-nontrapping-float-to-int`. Pull-request
+CI creates local tarballs with `npm pack`, installs each tarball into a separate
+fresh consumer, and checks the installed WASM, JavaScript glue, public
+TypeScript declaration, and module import. This is an installation gate only.
+The job has no npm publication, registry authentication, token, OIDC, release,
+or tag authority.
 
 ## CLIs
 
-`rpptx-cli` mirrors `rdocx-cli`: `inspect`, `text`, `convert`, `diff`,
-`replace`, `validate`, `render`, using clap derive and `serde_json` for
-`--json`, including the pattern of dispatching `validate` separately so its exit
-code carries the verdict.
+`rpptx-cli` extends the seven-command `rdocx-cli` surface with `inspect`,
+`text`, `convert`, `diff`, `replace`, `validate`, `render`, `thumbnail`, and
+`outline`. It uses clap derive and `serde_json` for `--json`.
 
-Two presentation-specific additions: **`thumbnail`**, slide one at a fixed size,
-which is what every CMS wants, and **`outline`**, the title and bullet tree,
-which is ideal for LLM ingestion and is a genuine differentiator.
+`inspect` reports the file, slide and layout counts, slide size, core metadata,
+and each slide's identity, hidden state, and shape count. Its JSON form uses the
+shared schema-1 envelope. `text` emits slide text in presentation order.
+`convert` produces deterministic PDF or PNG output. Multi-slide PNG output uses
+one-based filename suffixes and renders one slide at a time. `diff` compares
+slide text with longest-common-subsequence semantics and rejects matrices above
+one million cells. `replace` delegates to the facade's literal,
+formatting-preserving text replacement. `validate` is dispatched separately so
+its exit status carries the verdict. `render` uses deterministic fonts and the
+shared one-based range grammar.
 
-`validate` is the highest-value command and pays for itself in the test suite by
-running across the corpus in CI.
+PNG rendering is limited to eight million pixels per slide for both `convert`
+and `render`. A zero-slide PNG conversion fails without creating output.
+The exact validation gate corrupts one relationship and requires a nonzero exit,
+then requires every verified pinned corpus deck to exit zero without skips.
 
-Shared plumbing, range parsing, output-path defaulting and the JSON envelope,
-lives in `oxml-cli-support` rather than being copy-pasted. **Version the JSON
-envelope from the first release**: `{"schema": 1, ...}`.
+`thumbnail` renders slide one with deterministic fonts at exactly 320 pixels
+wide and preserves the rendered page aspect ratio. Its output defaults through
+the shared extension helper. `outline` prints each slide title once, followed
+by non-title text paragraphs in recursive shape z-order. Tables use row-major
+cell order, paragraph levels add two spaces of indentation, empty text is
+omitted, and embedded paragraph breaks become spaces.
+
+Shared range parsing, output-path defaulting, and JSON envelope rules live in
+`oxml-cli-support`. Ranges are positive, one-based, comma-separated values and
+inclusive ranges. Parsing sorts and deduplicates the result, and rejects more
+than 100,000 requested values before expansion. The output helper replaces or
+adds only the requested extension. The envelope accepts an object without a
+caller-supplied `schema` field and adds the reserved top-level
+`{"schema": 1, ...}` contract.
+
+`rdocx-cli` uses the shared envelope for inspect JSON and the shared path helper
+for convert defaults. Its flags and zero-based `render --page` compatibility
+contract do not change. The `text` command emits paragraphs and table cells in
+document order through the facade plain-text representation. Both the selected
+page and all-page `render` paths use the bundled-font deterministic facade.
+The compiled seven-command surface is covered by one integration binary, with
+fixtures constructed in code and no command-only test dependency.

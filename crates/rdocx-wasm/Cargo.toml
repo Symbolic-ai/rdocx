@@ -1,6 +1,7 @@
 [package]
 name = "rdocx-wasm"
 description = "WebAssembly bindings for rdocx — DOCX creation, reading, and conversion in the browser"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,12 +17,17 @@ publish = false
 shared-version = "workspace"
 tag-name = "v{{version}}"
 
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-oxml-opc = { workspace = true }
-rdocx-oxml = { workspace = true }
-rdocx-html = { workspace = true }
+rdocx = { workspace = true, default-features = false }
 wasm-bindgen = { workspace = true }
+
+[dev-dependencies]
 js-sys = { workspace = true }
+oxml-opc = { workspace = true }
+wasm-bindgen-test = { workspace = true }

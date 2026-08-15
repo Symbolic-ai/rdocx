@@ -475,8 +475,6 @@ impl Default for CT_Styles {
     }
 }
 
-/// Extract the `w:val` attribute from an element.
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -523,6 +521,16 @@ mod tests {
             styles.get_by_id("Accepted").unwrap().name.as_deref(),
             Some("Accepted")
         );
+    }
+
+    #[test]
+    fn aliased_style_paragraph_properties_use_ancestor_namespace_scope() {
+        let xml = format!(
+            r#"<q:styles xmlns:q="{W_NS}" xmlns:ext="urn:producer"><q:style q:type="paragraph" q:styleId="Alias"><q:pPr><ext:jc ext:val="right"/><q:jc q:val="center"/></q:pPr></q:style></q:styles>"#
+        );
+        let parsed = CT_Styles::from_xml(xml.as_bytes()).unwrap();
+        let ppr = parsed.styles[0].ppr.as_ref().unwrap();
+        assert_eq!(ppr.jc, Some(crate::shared::ST_Jc::Center));
     }
 
     #[test]

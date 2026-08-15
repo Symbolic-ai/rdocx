@@ -1038,6 +1038,20 @@ mod tests {
     }
 
     #[test]
+    fn default_namespace_document_paragraph_properties_parse_in_scope() {
+        let xml = format!(
+            r#"<document xmlns="{W_NS}" xmlns:q="{W_NS}" xmlns:ext="urn:producer"><body><p><pPr><ext:jc ext:val="right"/><jc q:val="center"/></pPr><r><t>Scoped</t></r></p></body></document>"#
+        );
+        let parsed = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        let paragraph = parsed.body.paragraphs().next().unwrap();
+        assert_eq!(paragraph.text(), "Scoped");
+        assert_eq!(
+            paragraph.properties.as_ref().unwrap().jc,
+            Some(crate::shared::ST_Jc::Center)
+        );
+    }
+
+    #[test]
     fn raw_child_gains_a_binding_lost_with_its_regenerated_parent() {
         let xml = format!(
             r#"<w:document xmlns:w="{W_NS}"><w:body><w:p xmlns:x="urn:foreign"><x:item/></w:p></w:body></w:document>"#

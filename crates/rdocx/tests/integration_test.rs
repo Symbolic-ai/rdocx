@@ -284,7 +284,14 @@ fn round_trip_preserves_styles() {
 #[test]
 fn save_and_load_file() {
     let dir = std::env::temp_dir();
-    let path = dir.join("rdocx_test_output.docx");
+    let process_id = std::process::id().to_string();
+    let path = dir.join(format!("rdocx_test_output_{process_id}.docx"));
+    assert!(
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains(&process_id)),
+        "temporary output path must contain the test process ID"
+    );
 
     // Create and save
     let mut doc = Document::new();
@@ -837,6 +844,11 @@ fn table_column_width_updates_grid_and_cells() {
     assert!(!table.set_column_width(2, Length::twips(1_000)));
 
     let xml = String::from_utf8(document_xml(&mut doc)).unwrap();
+    assert_eq!(
+        xml.matches("<w:tblW w:w=\"5000\" w:type=\"dxa\"").count(),
+        1,
+        "the table width must equal the synchronized grid width"
+    );
     assert_eq!(xml.matches("<w:gridCol w:w=\"2000\"").count(), 1);
     assert_eq!(xml.matches("<w:gridCol w:w=\"3000\"").count(), 1);
     assert_eq!(xml.matches("<w:tcW w:w=\"2000\" w:type=\"dxa\"").count(), 2);

@@ -17,7 +17,7 @@ incrementally-testable slices so something verifiable lands every few days.
 
 ## Velocity assumption
 
-This backlog is **150 stories**. Summed by size it is roughly **390 developer-days**:
+This backlog is **162 stories**. Summed by size it is roughly **408 developer-days**:
 about 50 at S, 60 at M, 38 at L and 2 at XL.
 
 At a sustained solo pace that is **17 to 18 months**, not the nine to twelve
@@ -1085,17 +1085,20 @@ reviewed hosted dispatch supplies cross-platform execution evidence.
 **Test gate**: the job fails when a binding test fails.
 
 ### F-139, Rewrite rdocx-wasm (L)
-Wrap `rdocx::Document`. Keep the JS method names. Add the `system-fonts`
-feature.
+Wrap `rdocx::Document` and keep the existing JavaScript method names. The
+default-on `system-fonts` feature is forwarded through `rdocx-layout` and
+`rdocx`, while `rdocx-wasm` disables it and retains unconditional bundled font
+data. An inline Node regression exercises the same package-preserving contract
+as the native gate.
 **Depends on**: F-029.
 **Test gate**: a document with images, headers and numbering round-trips through
 `fromBytes` and `toDocxBytes` with every part intact. This is the R-class
 regression gate.
 
 ### F-140, wasm CI job (S)
-**Depends on**: F-139.
-**Test gate**: `cargo check --target wasm32-unknown-unknown` and
-`wasm-pack test --node` both run on PRs.
+**Depends on**: F-139, F-142.
+**Test gate**: locked `cargo check --target wasm32-unknown-unknown` and
+`wasm-pack test --node` run for both WASM packages on PRs.
 
 ### F-141, to_pdf in the browser (M)
 **Depends on**: F-139, F-001.
@@ -1119,26 +1122,37 @@ corpus.
 
 ### F-145, rpptx-cli thumbnail and outline (M)
 **Depends on**: F-144.
-**Test gate**: `thumbnail` produces a PNG of slide one, and `outline` prints the
-title and bullet tree.
+**Test gate**: `thumbnail` produces a proportional 320-pixel-wide PNG of slide
+one, and `outline` prints each title once followed by the recursive paragraph
+tree with stable level indentation.
 
 ### F-146, npm publication (S)
-`@tensorbee/rdocx-wasm` and `@tensorbee/rpptx-wasm`, which have no publish path
-today.
+`@tensorbee/rdocx-wasm` and `@tensorbee/rpptx-wasm` build as release bundler
+packages under exact checksum-pinned wasm-opt 125. Pull-request CI packs and
+installs both tarballs locally without registry credentials or publication
+authority.
 **Depends on**: F-140, F-142.
-**Test gate**: `npm pack` produces an installable tarball for each.
+**Test gate**: `npm pack` produces an installable tarball for each, and both
+installed packages retain their exact metadata, WASM, JavaScript glue,
+TypeScript declaration, and import.
 
 ---
 
 ## Cross-cutting
 
 ### F-X001, rdocx-cli tests (M)
-The binary is published and has zero tests.
-**Test gate**: one integration test per subcommand.
+The published binary has one compiled-executable integration test for each of
+its seven subcommands in a single test binary. Fixtures are constructed in
+code. Text extraction preserves document order, and both render branches use
+bundled-font deterministic output.
+**Test gate**: all seven named command integration tests pass, and the text,
+validation, and deterministic-render sensitivity mutations fail.
 
 ### F-X002, README example correctness (S)
-The read example uses `table.rows()` and `row.cells()`, neither of which exists.
-**Test gate**: README examples compile as doctests.
+All six root README Rust examples use `rust,no_run` and compile against the
+current `rdocx` rlib without executing filesystem writes. The read example uses
+the total indexed `row_count`, `row`, `cell_count`, and `cell` APIs.
+**Test gate**: `python3 scripts/readme_doctests.py` compiles all six examples.
 
 ### F-X003, Deduplicate the sample generators (S)
 `generate_all_samples.rs` and `generate_samples.rs` overlap substantially.
@@ -1158,3 +1172,146 @@ reviewed release tag before released rdocx consumers cut over.
 **Test gate**: all 12 incubating packages resolve from crates.io at 0.1.2 with
 the expected owner, and the GitHub release targets the newly reviewed sprint
 SHA.
+
+### F-X006, Tag the expanded rpptx family (S)
+Prepare the complete 14-package incubating family at 0.1.3, including
+`oxml-cli-support` and `rpptx-cli`, then publish it only through
+`/release rpptx-v0.1.3` after the command's separate final approval. The
+complete family is published at 0.1.3. The immutable `rpptx-v0.1.2` tag and
+its 12 published packages remain unchanged.
+**Depends on**: F-143, F-144, F-145.
+**Test gate**: all 14 incubating packages resolve from crates.io at 0.1.3 with
+the expected owner, and the GitHub release targets the reviewed sprint SHA.
+
+### F-X007, Integrate PR 25 and stable crate documentation (L)
+Integrate Jon Stokes's PR 25 through the sprint branch, retaining contributor
+credit in the GitHub merge record. The public Word facade gains custom list
+definitions, per-paragraph numbering, composable hard line breaks and
+hyperlinks, and fixed table-column widths. Rejected list updates remain
+side-effect free, and fixed table geometry keeps the table width, grid, and
+spanning cell widths consistent. Every stable crate has a package README that
+states when to use it, links to its API documentation, and includes a current
+example or a clear deprecation path. The README examples are compile-checked.
+Typed numbering edits preserve unsupported attributes and child XML in schema
+order across namespace aliases and collisions. Repeated tab stops carry public
+source-occurrence provenance so edits, insertions, removals, and explicit
+clears retain producer ownership in deterministic linear work. The public tab
+parser tracks namespace scopes and accepts both empty and expanded tab-stop
+elements. Preservation carriers extend one expanded-name `mc:Ignorable`
+attribute without duplicating it, using the actual property ancestor scope
+rather than a document-wide declaration list. Style, body, table-cell, header,
+footer, footnote, and endnote paragraph properties retain established aliased
+and default WordprocessingML parsing. Nested tab namespace scope has a normal
+64-element depth bound. These public model additions set the stable release
+boundary at 0.5.0.
+**Test gate**: the merged PR's focused round-trip suite passes against current
+`main`, the two rejected-state and table-geometry regressions pass, and every
+stable crate README example compiles against its packaged crate. Numbering
+round trips cover schema order, foreign namespace collisions, nested property
+markup, provenance-only replacement, repeated occurrence ownership, explicit
+clear carriers, namespace shadows, and expanded tab elements. The hash harness
+remains 28 of 28. The gate also covers direct style and paragraph boundaries,
+table cells, headers, notes, foreign same-local negatives, property-local
+compatibility scope, and bounded deep tab aliases. Stable package archives stay
+below 10 MiB, and the public migration examples compile.
+
+### F-X008, Tag v0.5.0 (S)
+The stable workspace package, nine internal pins, and eleven inherited
+lockfile packages are 0.5.0 after F-X007. The exact seven stable crates.io
+packages are published at 0.5.0 from the reviewed `v0.5.0` tag. The two Python
+project versions and `rdocx-wasm` inherit 0.5.0 without gaining publication
+authority. All 15 incubating manifests remain at 0.1.3, with exactly 14 in the
+incubating crates.io family and `rpptx-wasm` unpublished. `publish.yml` runs the
+exact stable and incubating metadata preflights before its patched 21-package
+workspace dry run. No incubating, WASM, Python, or npm package is part of the
+stable publication.
+**Depends on**: F-X007.
+**Test gate**: the stable metadata regression proves the workspace version,
+nine pins, eleven lock entries, two Python versions, WASM literals, README
+requirements, exact stable publication set, and unchanged incubating 0.1.3
+state. The workflow contract, 12 README examples, 28-entry hash harness, exact
+patched 21-package dry run, seven stable archive inventories, and `cargo deny`
+pass. All seven stable packages resolve independently from crates.io at 0.5.0
+under owner `mantissaman`, the GitHub release targets the reviewed sprint SHA,
+and the PR 25 contributor credit and merge note remain visible on GitHub.
+
+### F-X009, README coverage for every workspace crate (L)
+Every one of the 26 Cargo workspace packages declares a README. Each document
+states what the crate owns, when it should be used directly, its relationship
+to adjacent packages, and provides a concrete Rust, CLI, Python, or JavaScript
+example appropriate to that package. Internal and unpublished packages are
+labelled honestly and gain no publication authority. The README runner checks
+the exact workspace package set, required sections, manifest wiring, examples,
+and archive inventory.
+**Test gate**: `python3 scripts/readme_doctests.py` verifies exact README
+coverage for all 26 workspace packages, compiles 26 Rust examples, validates
+the CLI, Python, and JavaScript snippets, and proves all 21
+publishable archives contain the byte-identical declared README.
+
+### F-X010, Tag v0.6.0 (S)
+Prepare the complete stable train at the next minor version, 0.6.0. The eleven
+workspace-version packages move together, including the exact seven crates.io
+packages and the four unpublished Python and WASM support packages. Stable
+README dependency examples, metadata regressions, lock entries, Python project
+versions, and WASM contract literals move to 0.6.0. The incubating train remains
+at 0.1.3. The reviewed `/release v0.6.0` workflow publishes only the exact
+seven stable crates after full verification, a clean microscope, a clean
+sprint review, and separate immediate approval. No PyPI, npm, WASM, Python, or
+incubating publication is authorized.
+**Depends on**: F-X009.
+**Test gate**: the stable release regression proves the eleven-package train,
+nine internal pins, exact seven-package publication set, README requirements,
+lock entries, Python project versions, WASM literals, and unchanged incubating
+train. The exact 21-package dry run, README compilation and archive inventory,
+28-entry hash harness, and supply-chain gate pass. All seven crates resolve at
+0.6.0 under owner `mantissaman`, each crates.io README is present, and the
+annotated `v0.6.0` tag targets the reviewed sprint SHA.
+
+### F-X011, Tag rpptx-v0.2.0 (S)
+The complete incubating train is published at the next minor version, 0.2.0. The
+fourteen publishable `oxml-*` and `rpptx-*` packages move together with
+unpublished `rpptx-wasm`, their root dependency pins, lock entries, README
+dependency examples, source assertions, workflow regressions, and local WASM
+package version. The completed stable train remains at 0.6.0. Incubating 0.2.0
+was published only after full verification, a clean sprint review, and
+separate immediate approval. `/release rpptx-v0.2.0` published only the exact
+fourteen incubating crates. No npm, PyPI, Python, WASM, or stable package was
+published.
+**Depends on**: F-X010.
+**Test gate**: the incubating release regression proves the fifteen-package
+preparation group, fourteen internal pins, exact fourteen-package publication
+set, README requirements, lock entries, source and workflow assertions, and
+unchanged stable train. The exact 21-package dry run, README compilation and
+archive inventory, 28-entry hash harness, WASM package gate, and supply-chain
+gate pass. All fourteen crates resolve at 0.2.0 under owner `mantissaman`, each
+crates.io README is present, and the annotated tag targets the reviewed sprint
+SHA used by the successful GitHub release workflow.
+
+### F-X012, Restore pinned CI toolchains (M)
+Hosted CI installs the reviewed Poppler 26.01.0 rendering oracle from its exact
+source archive and SHA-256 rather than a moving package-manager version. The
+shared installer bounds download and streaming extraction resources, rejects
+unsafe archive members and populated prefixes, builds only the three required
+tools, and verifies each runtime identity. Test, MSRV, both Python binding rows,
+and Presentation fidelity invoke it unconditionally before use. The WASM job
+verifies the official Binaryen 125 Linux archive and exact
+`wasm-opt version 125 (version_125)` release identity. Product code, package
+versions, published artifacts, and rendering baselines remain unchanged.
+Test and MSRV also install exact uv 0.10.2 through the reviewed official setup
+action, isolate its cache, and run their corpus tests with an explicit 8 MiB
+Rust test-thread stack.
+They run on Ubuntu 24.04 and install LibreOffice 26.2.5.2 from the reviewed official Linux x86-64
+archive before the full workspace suite. The shared installer verifies SHA-256
+`2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e`,
+uses bounded streaming extraction, refuses populated prefixes, and checks the
+exact reviewed build identity before the three `rpptx-chart` viewer gates run.
+The installer also declares the exact Ubuntu runtime-library package set needed
+to execute that official build.
+**Test gate**: behavioral regressions execute every source, resource, runtime,
+and prefix guard. Workflow mutations reject missing, conditional,
+failure-tolerant, or successfully short-circuited installer steps and reject a
+weakened Binaryen checksum or identity gate. They also reject uv action,
+version, cache, or stack drift. The same contract rejects LibreOffice version,
+checksum, bound, runtime, ordering, or consumer-step drift. Full verification
+and a hosted pull-request CI run at the reviewed SHA pass with all 28 hashes
+unchanged.

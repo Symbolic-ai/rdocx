@@ -94,6 +94,25 @@ relationship. If that conventional part name is already occupied without the
 core-properties relationship, serialization returns an error before changing
 the package.
 
+The Word facade owns external hyperlink relationships at the document part
+boundary. `Document::add_hyperlink_relationship` allocates the relationship,
+and `Paragraph::add_hyperlink` writes a schema-ordered `w:hyperlink` that
+references it. The same paragraph writer emits explicit hard breaks as run
+content. Both operations use the existing package-preserving save path, so
+unmodelled parts and relationships remain intact.
+
+Numbering state is also fail-closed at this boundary. Updating a known list
+level marks the existing numbering model for serialization. Rejecting an
+unknown list identifier or an invalid level does not create an empty numbering
+part, relationship, or content-type entry. Numbering parsers retain namespace
+declarations and compatibility attributes from modelled containers. Unknown
+level children use their `CT_Lvl` schema slots, while abstract-definition,
+instance, and root children keep insertion-aware boundaries. Mutating or adding
+a definition therefore preserves producer extensions, identifiers, templates,
+and level overrides verbatim. Identifier allocation uses the next value after
+the maximum when available and the first unoccupied value when the maximum is
+`u32::MAX`.
+
 ## Part naming
 
 **Numeric suffixes are allocated after the greatest positive parsed suffix,

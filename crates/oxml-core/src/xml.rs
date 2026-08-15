@@ -370,11 +370,35 @@ impl StrictXmlLeftovers {
 }
 
 /// Completeness derived from direct leftovers and already-parsed descendants.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct StrictXmlCompleteness {
     leftovers: StrictXmlLeftovers,
     descendants: Vec<StrictXmlCompleteness>,
 }
+
+impl PartialEq for StrictXmlCompleteness {
+    fn eq(&self, other: &Self) -> bool {
+        fn collect_non_empty<'a>(
+            value: &'a StrictXmlCompleteness,
+            output: &mut Vec<&'a StrictXmlLeftovers>,
+        ) {
+            if !value.leftovers.is_empty() {
+                output.push(&value.leftovers);
+            }
+            for descendant in &value.descendants {
+                collect_non_empty(descendant, output);
+            }
+        }
+
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        collect_non_empty(self, &mut left);
+        collect_non_empty(other, &mut right);
+        left == right
+    }
+}
+
+impl Eq for StrictXmlCompleteness {}
 
 impl StrictXmlCompleteness {
     pub fn new(

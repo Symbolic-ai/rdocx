@@ -1,10 +1,12 @@
 //! Footnote and endnote elements: `CT_Footnotes`, `CT_Footnote`.
 
+use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer};
 
-use crate::error::Result;
-use crate::namespace::{W_NS, matches_local_name};
+use oxml_core::xml::{StrictXmlDocument, StrictXmlNode};
+
+use crate::error::{OxmlError, Result};
+use crate::namespace::W_NS;
 use crate::text::CT_P;
 
 /// A single footnote or endnote.
@@ -37,49 +39,37 @@ impl CT_Footnotes {
 
     /// Parse from XML bytes (the content of footnotes.xml).
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
-        let mut reader = Reader::from_reader(xml);
-        reader.config_mut().trim_text(true);
-
+        let root = StrictXmlDocument::parse(xml)?.into_root();
+        if !root.is_named(Some(W_NS), "footnotes") && !root.is_named(Some(W_NS), "endnotes") {
+            return Err(OxmlError::UnexpectedElement(
+                "expected w:footnotes or w:endnotes".to_string(),
+            ));
+        }
         let mut footnotes = Vec::new();
-        let mut buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"footnote")
-                        || matches_local_name(name.as_ref(), b"endnote")
-                    {
-                        let mut id: i32 = 0;
-                        for attr in e.attributes().flatten() {
-                            if matches_local_name(attr.key.as_ref(), b"id") {
-                                id = std::str::from_utf8(&attr.value)
-                                    .unwrap_or("0")
-                                    .parse()
-                                    .unwrap_or(0);
-                            }
-                        }
-
-                        // Skip separator/continuation footnotes (id 0 and -1)
-                        if id <= 0 {
-                            reader.read_to_end_into(name, &mut Vec::new())?;
-                        } else {
-                            let paragraphs = parse_footnote_content(&mut reader)?;
-                            footnotes.push(CT_Footnote { id, paragraphs });
-                        }
-                    } else if matches_local_name(name.as_ref(), b"footnotes")
-                        || matches_local_name(name.as_ref(), b"endnotes")
-                    {
-                        // Continue into the root element
-                    } else {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
-                    }
-                }
-                Ok(Event::Eof) => break,
-                Err(e) => return Err(e.into()),
-                _ => {}
+        for child in root.children() {
+            let StrictXmlNode::Element(note) = child else {
+                continue;
+            };
+            if !note.is_named(Some(W_NS), "footnote") && !note.is_named(Some(W_NS), "endnote") {
+                continue;
             }
-            buf.clear();
+            let id = note
+                .attribute(Some(W_NS), "id")
+                .map(str::parse)
+                .transpose()?
+                .unwrap_or(0);
+            if id <= 0 {
+                continue;
+            }
+            let paragraphs = note
+                .children()
+                .iter()
+                .filter_map(StrictXmlNode::as_element)
+                .filter(|element| element.is_named(Some(W_NS), "p"))
+                .cloned()
+                .map(CT_P::from_strict_xml)
+                .collect::<Result<Vec<_>>>()?;
+            footnotes.push(CT_Footnote { id, paragraphs });
         }
 
         Ok(CT_Footnotes { footnotes })
@@ -137,39 +127,6 @@ impl Default for CT_Footnotes {
     }
 }
 
-/// Parse the content of a single footnote/endnote (paragraphs until closing tag).
-fn parse_footnote_content(reader: &mut Reader<&[u8]>) -> Result<Vec<CT_P>> {
-    let mut paragraphs = Vec::new();
-    let mut buf = Vec::new();
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
-                let name = e.name();
-                if matches_local_name(name.as_ref(), b"p") {
-                    paragraphs.push(CT_P::from_xml(reader)?);
-                } else {
-                    reader.read_to_end_into(name, &mut Vec::new())?;
-                }
-            }
-            Ok(Event::End(ref e)) => {
-                let name = e.name();
-                if matches_local_name(name.as_ref(), b"footnote")
-                    || matches_local_name(name.as_ref(), b"endnote")
-                {
-                    break;
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(e) => return Err(e.into()),
-            _ => {}
-        }
-        buf.clear();
-    }
-
-    Ok(paragraphs)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,6 +175,38 @@ mod tests {
         let endnotes = CT_Footnotes::from_xml(xml).unwrap();
         assert_eq!(endnotes.footnotes.len(), 1);
         assert_eq!(endnotes.footnotes[0].id, 1);
+    }
+
+    #[test]
+    fn aliased_footnote_paragraph_properties_keep_root_scope() {
+        let xml = format!(
+            r#"<q:footnotes xmlns:q="{W_NS}" xmlns:ext="urn:producer"><ext:footnote ext:id="9"><ext:p/></ext:footnote><q:footnote q:id="1"><ext:p><ext:pPr><ext:jc ext:val="right"/></ext:pPr></ext:p><q:p><q:pPr><ext:jc ext:val="right"/><q:jc q:val="center"/></q:pPr><q:r><q:t>Note</q:t></q:r></q:p></q:footnote></q:footnotes>"#
+        );
+        let footnotes = CT_Footnotes::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(footnotes.footnotes.len(), 1);
+        assert_eq!(footnotes.footnotes[0].paragraphs.len(), 1);
+        let paragraph = &footnotes.footnotes[0].paragraphs[0];
+        assert_eq!(paragraph.text(), "Note");
+        assert_eq!(
+            paragraph.properties.as_ref().unwrap().jc,
+            Some(crate::shared::ST_Jc::Center)
+        );
+    }
+
+    #[test]
+    fn default_namespace_footnote_properties_keep_root_scope() {
+        let xml = format!(
+            r#"<footnotes xmlns="{W_NS}" xmlns:w="{W_NS}" xmlns:ext="urn:producer"><ext:footnote ext:id="9"><ext:p/></ext:footnote><footnote w:id="1"><ext:p><ext:pPr><ext:jc ext:val="right"/></ext:pPr></ext:p><p><pPr><ext:jc ext:val="right"/><jc w:val="center"/></pPr><r><t>Note</t></r></p></footnote></footnotes>"#
+        );
+        let footnotes = CT_Footnotes::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(footnotes.footnotes.len(), 1);
+        assert_eq!(footnotes.footnotes[0].paragraphs.len(), 1);
+        let paragraph = &footnotes.footnotes[0].paragraphs[0];
+        assert_eq!(paragraph.text(), "Note");
+        assert_eq!(
+            paragraph.properties.as_ref().unwrap().jc,
+            Some(crate::shared::ST_Jc::Center)
+        );
     }
 
     #[test]

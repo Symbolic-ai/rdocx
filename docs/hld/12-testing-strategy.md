@@ -208,6 +208,15 @@ LibreOffice 26.2.5.2 with build
 part of the asserted command because a default PDF export omits five corpus
 slides.
 
+Clean Ubuntu 24.04 workspace jobs install that exact LibreOffice build from the
+official Linux x86-64 Debian archive with reviewed SHA-256
+`2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e`.
+The installer bounds the download, archive member count, and expanded bytes,
+rejects unsafe members and populated prefixes, and checks the exact runtime
+identity before the `rpptx-chart` viewer gates execute. The installer supplies
+the explicit NSS, NSPR, D-Bus, Cairo, GLib, X11, CUPS, font, and Kerberos
+runtime libraries required by the official build.
+
 The harness decodes both PNGs through the existing strict decoder and computes
 global luminance SSIM after compositing RGBA over white. It uses population
 variance and covariance with the standard 8-bit constants `K1=0.01`,
@@ -387,21 +396,85 @@ pure-Python source in each installed wheel. Representative enum-input,
 return-type, inline-source, constructor, and member mutations must make those
 gates fail, so hand-written stubs cannot drift.
 
+The document WASM wrapper has a package-preservation Node gate and a PDF gate
+in its single defaults-off profile. The PDF gate calls generated `toPdf`
+through reflection and requires `%PDF-` through `%%EOF`, a Type 0 font, a
+`FontFile2` stream, and the bundled Carlito base font. This proves the public
+JavaScript name, complete output, and embedded fallback font at the generated
+boundary.
+
+The presentation WASM wrapper has one Node round-trip gate in its default
+profile and a second Node gate with `render` enabled. The first crosses the
+generated JavaScript `Uint8Array` boundary and proves that facade-owned slide
+mutation preserves the complete package. The second produces a complete PDF.
+The final normal-default artifact is built with exact wasm-pack 0.15.0,
+optimized with reviewed wasm-opt 125, compressed with `gzip -n -9`, and
+rejected at 1,000,000 decimal bytes. The wrapper manifest keeps render out of
+defaults while its facade dependency selects the bundled template explicitly.
+A padded artifact or render-enabled default must make the exact named size gate
+fail.
+
+The `rpptx` CLI integration gate corrupts a relationship and requires
+`validate` to exit nonzero. It then requires all 50 manifest decks to validate
+with a zero exit and never skips a missing corpus. The primary workspace-test
+job and the MSRV job fetch and verify the pinned corpus before running Cargo
+tests. Both jobs install exact uv 0.10.2 through the reviewed official setup
+action, isolate its cache under the runner temporary directory, and give Rust
+test threads an explicit 8 MiB stack for the largest corpus round trip. Command
+regressions also prove bounded DPI, bounded diff work, zero-slide PNG failure
+without output, and one-slide-at-a-time PNG conversion.
+The thumbnail and outline gate requires an exactly 320-pixel-wide proportional
+slide-one PNG and recursive paragraph output with stable level indentation.
+Regressions cover nonstandard aspect ratios, shared output defaulting, grouped
+text order, embedded paragraph-break normalization, and field-only title
+identity so the title appears exactly once.
+
+The `rdocx` CLI has one integration binary that invokes the compiled executable
+through `CARGO_BIN_EXE_rdocx`. Its seven tests cover `inspect`, `text`,
+`convert`, `diff`, `replace`, `validate`, and `render` with in-code DOCX and
+corrupt-package fixtures. The assertions bind schema 1, default paths, exact
+stdout, exit-status verdicts, output validity, replacement persistence,
+document-order text, and bundled-font deterministic render bytes. Process ID
+and an atomic counter isolate temporary workspaces across concurrent runs.
+
+All 26 workspace packages explicitly declare one distinct README. The root
+README is the high-level `rdocx` guide. Each crate-local document states the
+package purpose, direct-use guidance, adjacent package relationship,
+publication status, and a concrete Rust, CLI, Python, or JavaScript example.
+The compatibility shims direct users to their shared replacements.
+Internal binding and WASM crates state that they are not crates.io packages.
+
+`scripts/readme_doctests.py` validates the exact package-to-README inventory,
+the documented CLI argument names, Python and JavaScript surface names,
+deterministic feature guidance, and matching dependency and import names. It
+builds the applicable libraries with locked dependencies and Cargo JSON
+messages, locates each emitted rlib from one package build graph, and invokes
+rustdoc with the 2024 edition, warnings denied, the dependency search path, and
+every matching `--extern` binding. It compiles 26 Rust examples across the 20
+Rust-library READMEs. It also creates all 21 publishable archives and
+byte-compares their single packaged README with the declared source. Archive
+creation uses the same exact 21-package local source patch set as the release
+dry run, so a reviewed version can be checked before its internal dependencies
+exist on crates.io. The patches never enter an archive and upload nothing. The
+docs job and canonical non-fast verification call this same runner.
+The current stable 0.6.0 release also verifies every crates.io README endpoint
+returns non-empty rendered HTML after publication.
+
 ## What CI runs
 
 | Job | Command |
 |---|---|
-| test | `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` |
+| test | Install exact uv 0.10.2, fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack |
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
-| wasm | `cargo check --target wasm32-unknown-unknown -p rdocx-wasm` |
+| wasm | Locked `wasm32-unknown-unknown` checks, `wasm-pack test --node`, and local bundler pack and fresh-install gates for `rdocx-wasm` and `rpptx-wasm` |
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |
 | hash-harness | `python3 scripts/hash_harness.py --check` |
 | presentation-fidelity | Fetch the pinned corpus, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
 | clippy | `cargo clippy --workspace --all-targets --all-features --exclude rdocx-py --exclude rpptx-py -- -D warnings` |
 | fmt | `cargo fmt --all -- --check` |
-| doc | `cargo doc --workspace --no-deps --all-features --exclude rdocx-py --exclude rpptx-py` with `RUSTDOCFLAGS=-D warnings` |
+| doc | `cargo doc --workspace --no-deps --all-features --exclude rdocx-py --exclude rpptx-py` with `RUSTDOCFLAGS=-D warnings`, then `python3 scripts/readme_doctests.py` |
 | package-oxml-layout | Verify the exact font and legal-file inventory, then build and size-check the verified archive |
-| msrv | `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 |
+| msrv | Install exact uv 0.10.2, fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 with an isolated uv cache and 8 MiB Rust test-thread stack |
 | python-bindings | On pull requests, build each Python package with `maturin develop --locked` in its own Python 3.12.9 environment, then run its complete pytest directory |
 | supply-chain | `cargo-deny check` |
 | python-wheels | On manual dispatch or a `py-v*` tag, build six cp39-abi3 wheels for each Python package and one source distribution per package, then install and test every compatible artifact in a fresh environment |
@@ -411,15 +484,27 @@ The `--exclude` pair on every all-feature command is required, not cosmetic:
 interpreter, which is false for a test binary, and on Linux this is an
 unresolved-symbol link failure that is easy to misdiagnose.
 
+Every Poppler-dependent CI job builds the reviewed 26.01.0 command-line oracle
+from the official source archive. `scripts/install_pinned_poppler.py` enforces
+the exact source SHA-256, an 8 MiB download ceiling, streaming extraction with
+2,048-member and 64 MiB expanded-size ceilings, safe member paths and types,
+and exact runtime identities for `pdftoppm`, `pdfinfo`, and `pdftotext`. A
+successful run always starts with an empty prefix and rebuilds the reviewed
+source. Test, MSRV, both Python binding rows, and Presentation fidelity invoke
+the same unconditional failure-propagating installer before use. Platform
+package managers provide build dependencies only, never a moving Poppler
+binary package.
+
 The wheel workflow runs the installed `rdocx` suites except the
 Poppler-versioned rendering gate, which belongs to its pinned render job. It
 runs the installed `rpptx` documented-example and differential suite. Native
 cells also check the inline Python sources with exact `mypy==2.3.0 --strict`
 and run `stubtest` across every public and native-extension module. The
-musllinux cell proves a clean Python 3.9 Alpine import. Repository unit tests
+musllinux cells install into clean Python 3.9 Alpine environments and run the
+same package parity suites. Repository unit tests
 parse the exact two-package, six-target product and use negative mutations to
-prove that package, target, clean-install, artifact dependency, and tag-only
-OIDC requirements are sensitive before the hosted matrix runs.
+prove that package, target, clean-install, parity, artifact dependency, and
+tag-only OIDC requirements are sensitive before the hosted matrix runs.
 
 The pull-request binding job has one matrix row for `rdocx` and one for
 `rpptx`. It uses Python 3.12.9 with exact `maturin==1.13.3` and
@@ -437,12 +522,36 @@ setup-python v6.2.0, rust-cache v2.9.1, and the selected stable rust-toolchain
 revision are bound to full reviewed commit SHAs. Their operative input maps are
 exact and cannot be satisfied by comments.
 
+The pull-request WASM job uses exact Node 24.11.1 and wasm-pack 0.15.0. It
+installs the official Binaryen version 125 Linux archive only after verifying
+its pinned SHA-256, places that optimizer on `PATH`, and requires the exact
+official identity `wasm-opt version 125 (version_125)`. It target-checks both
+WASM packages with `--locked`, then runs both inline suites through
+`wasm-pack test --node`.
+
+Both manifests bind release optimization to `-Oz`,
+`--enable-bulk-memory`, and `--enable-nontrapping-float-to-int`. The last flag
+is required by nontrapping conversion operations emitted by the Rust 1.93
+standard library. CI builds the exact `@tensorbee/rdocx-wasm` and
+`@tensorbee/rpptx-wasm` release bundler packages with locked dependencies. Each
+package is packed locally, installed into a separate fresh consumer through an
+isolated npm cache with scripts disabled, and checked for its exact name,
+version, WASM, JavaScript glue, public declaration, and import. The steps are
+unconditional and propagate ordinary non-zero command status. Structured
+regressions reject optimizer, checksum, package, target, scope, locking,
+installation, authentication, publication, and tag mutations.
+
+The job retains root `contents: read` permission and has no npm publication,
+registry authentication, token, OIDC, release, or tag authority. Checkout
+v6.0.2, setup-node v6.5.0, rust-cache v2.9.1, and the selected stable
+rust-toolchain revision are bound to full reviewed commit SHAs.
+
 ## Gaps being closed
 
 Stated plainly, because they are why two shipped defects went unnoticed:
 
-- **`rdocx-cli` has zero tests** despite being a published binary.
-- **`rdocx-wasm` has zero behavioural tests.** Its target check now catches
-  compile drift, but it does not prove package-preserving round trips.
+- **Command-level output contracts need explicit coverage.** The published
+  `rdocx-cli` surface has one compiled-binary integration test for each of its
+  seven commands.
 - **PDF and PNG output is only checked for non-emptiness**, so layout
   regressions are invisible. The hash harness closes this.

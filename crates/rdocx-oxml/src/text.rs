@@ -102,7 +102,7 @@ pub enum RunContent {
 }
 
 /// `CT_R` — a run of text with uniform formatting.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 #[allow(non_snake_case)]
 pub struct CT_R {
     #[doc(hidden)]
@@ -341,16 +341,6 @@ impl CT_R {
         }
         writer.write_event(Event::End(BytesEnd::new("w:r")))?;
         Ok(())
-    }
-}
-
-impl Default for CT_R {
-    fn default() -> Self {
-        Self {
-            completeness: StrictXmlCompleteness::default(),
-            properties: None,
-            content: Vec::new(),
-        }
     }
 }
 
