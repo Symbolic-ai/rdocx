@@ -1,47 +1,42 @@
-# Current Sprint, S39
+# Current Sprint, S40
 
 **Milestone**: X Cross-cutting.
 
-**Goal**: every Cargo workspace package has documentation at its package
-boundary, and every crates.io-eligible package publishes that documentation at
-the next minor version through its exact release family.
+**Goal**: restore a green hosted CI baseline after runner and package-manager
+updates exposed unpinned or incorrectly validated external tools. Preserve the
+reviewed Poppler 26.01.0 rendering oracle and Binaryen 125 optimizer boundary
+without changing product output or recorded rendering baselines.
 
 ## Spec references
 
-- `docs/hld/12-testing-strategy.md`, for README compilation and package
-  inventory gates.
-- `docs/hld/11-migration-plan.md`, for the stable family release boundary.
-- `docs/hld/03-architecture.md`, for the incubating family version boundary.
-- `docs/hld/14-development-backlog.md`, for the exact F-X009, F-X010, and
-  F-X011 acceptance gates.
-- `docs/hld/15-build-and-toolchain.md`, for package metadata and publication
-  boundaries.
+- `docs/hld/12-testing-strategy.md`, for the exact Poppler rendering oracle and
+  output-stability gates.
+- `docs/hld/14-development-backlog.md`, for the F-X012 scope and hosted CI
+  acceptance gate.
+- `docs/hld/15-build-and-toolchain.md`, for deterministic external-tool
+  installation and CI job ownership.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X009 | README coverage for every workspace crate | L | done | |
-| F-X010 | Tag v0.6.0 | S | done | |
-| F-X011 | Tag rpptx-v0.2.0 | S | done | |
+| F-X012 | Restore pinned CI toolchains | M | done | - |
 
 ## Sequencing note
 
-The documentation story completes first. The stable train then moves to 0.6.0
-and publishes seven crates. After that release is verified, the incubating
-train moves to 0.2.0 and publishes fourteen crates. The five `publish = false`
-packages move with their local train but are not published.
+There is one CI restoration story. It first pins and validates the shared
+external tools, then runs the complete hosted workflow so platform-specific
+failures are covered before sprint closure.
 
 ## Definition of done for this sprint
 
-- All 26 workspace packages declare a README.
-- Every README states purpose, audience, package relationships, and a concrete
-  usage example.
-- Rust examples compile where applicable, and CLI, Python, and JavaScript
-  examples pass exact syntax and package-name contracts.
-- Every publishable archive contains exactly one intended README.
+- Every CI job that executes a Poppler-dependent gate installs and verifies
+  Poppler 26.01.0 from the checksum-pinned source.
+- The WASM job accepts only the exact official Binaryen 125 Linux version
+  identity after verifying the reviewed archive checksum.
+- The workflow contract rejects missing pins, omitted jobs, weakened version
+  checks, and package-manager drift.
 - `/verify --full` passes with all 28 deterministic hashes unchanged.
-- All seven stable crates publish at 0.6.0 and render their README on crates.io.
-- All fourteen incubating crates publish at 0.2.0 and render their README on
-  crates.io.
-- Python, WASM, npm, and PyPI publication authority remains unchanged.
+- A hosted pull-request CI run at the reviewed SHA completes every job
+  successfully.
+- No crate, release version, package publication, or rendering baseline changes.

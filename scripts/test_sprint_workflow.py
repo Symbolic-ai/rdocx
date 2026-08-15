@@ -7,6 +7,7 @@ import io
 import json
 import os
 import subprocess
+import tarfile
 import tempfile
 import tomllib
 import unittest
@@ -14,6 +15,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts import readme_doctests
+from scripts import install_pinned_libreoffice
+from scripts import install_pinned_poppler
 from scripts import sprint_workflow as workflow
 
 
@@ -50,6 +53,17 @@ class SprintWorkflowTests(unittest.TestCase):
             for line in block.splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         )
+
+    def yaml_mapping_key_count(self, source: str, key: str) -> int:
+        count = 0
+        for line in source.splitlines():
+            stripped = line.strip().split(" #", 1)[0].rstrip()
+            if not stripped or stripped.startswith("#") or ":" not in stripped:
+                continue
+            candidate = stripped.split(":", 1)[0].strip().strip("'\"").strip()
+            if candidate == key:
+                count += 1
+        return count
 
     def yaml_steps(self, job: str) -> tuple[str, ...]:
         steps = self.yaml_block(job, "    steps:")
@@ -108,6 +122,148 @@ class SprintWorkflowTests(unittest.TestCase):
                     token in ("exit", "return") and tokens[index + 1] == "0",
                     line,
                 )
+
+    def assert_pinned_poppler_installer_contract(self, installer: str) -> None:
+        self.assertIn('POPLER_VERSION = "26.01.0"', installer)
+        self.assertIn(
+            'POPLER_SHA256 = "1cb944a4b88847f5fb6551683bc799db59f04990f5d8be07aba2acbf38601089"',
+            installer,
+        )
+        self.assertIn("MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024", installer)
+        self.assertIn("MAX_ARCHIVE_MEMBERS = 2_048", installer)
+        self.assertIn("MAX_EXTRACTED_BYTES = 64 * 1024 * 1024", installer)
+        for tool in ("pdftoppm", "pdfinfo", "pdftotext"):
+            self.assertIn(tool, installer)
+        self.assertIn("safe_extract", installer)
+        self.assertIn("-DENABLE_UTILS=ON", installer)
+        self.assertIn('expected = f"{tool} version {POPLER_VERSION}"', installer)
+
+    def assert_pinned_libreoffice_installer_contract(self, installer: str) -> None:
+        self.assertIn('LIBREOFFICE_VERSION = "26.2.5.2"', installer)
+        self.assertIn(
+            'LIBREOFFICE_SHA256 = "2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e"',
+            installer,
+        )
+        self.assertIn(
+            '"https://download.documentfoundation.org/libreoffice/stable/26.2.5/"',
+            installer,
+        )
+        self.assertIn("MAX_DOWNLOAD_BYTES = 224 * 1024 * 1024", installer)
+        self.assertIn("MAX_ARCHIVE_MEMBERS = 256", installer)
+        self.assertIn("MAX_EXTRACTED_BYTES = 256 * 1024 * 1024", installer)
+        self.assertIn('INSTALL_ROOT = Path("/opt/libreoffice26.2")', installer)
+        self.assertEqual(
+            install_pinned_libreoffice.SYSTEM_RUNTIME_PACKAGES,
+            (
+                "libcairo2",
+                "libcups2t64",
+                "libdbus-1-3",
+                "libfontconfig1",
+                "libfreetype6",
+                "libglib2.0-0t64",
+                "libgssapi-krb5-2",
+                "libnspr4",
+                "libnss3",
+                "libx11-6",
+                "libx11-xcb1",
+                "libxext6",
+                "libxinerama1",
+            ),
+        )
+        self.assertIn("safe_extract", installer)
+        self.assertIn("apt-get", installer)
+        self.assertIn("--no-install-recommends", installer)
+        self.assertIn(
+            '"LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb"',
+            installer,
+        )
+        self.assertIn('os.environ.get("GITHUB_PATH")', installer)
+
+    def assert_libreoffice_consumers_contract(self, ci: str) -> None:
+        for job_name in ("test", "msrv"):
+            job = self.yaml_block(ci, f"  {job_name}:")
+            self.assertIn("runs-on: ubuntu-24.04", job)
+            install = self.yaml_step(job, "Install pinned LibreOffice 26.2.5.2")
+            self.assertEqual(
+                self.yaml_direct_lines(install, 8),
+                ("run: python3 scripts/install_pinned_libreoffice.py",),
+            )
+            test_step = self.yaml_step(job, "Run full workspace suite")
+            self.assertLess(job.index(install), job.index(test_step))
+            self.assertNotIn("continue-on-error", install)
+            self.assert_no_success_short_circuit(self.operative_lines(install))
+        self.assertEqual(ci.count("python3 scripts/install_pinned_libreoffice.py"), 2)
+
+    def assert_poppler_consumers_contract(self, ci: str) -> None:
+        consumers = {
+            "test": "cargo test --workspace",
+            "python-bindings": "Run full Python binding suite",
+            "presentation-fidelity": "Run all-slide SSIM trend and completeness gate",
+            "msrv": "cargo test --workspace",
+        }
+        for job_name, use_marker in consumers.items():
+            job = self.yaml_block(ci, f"  {job_name}:")
+            step = self.yaml_step(job, "Install pinned Poppler 26.01.0")
+            self.assertEqual(
+                self.yaml_direct_lines(step, 8),
+                ("shell: bash", "run: |"),
+            )
+            lines = self.yaml_run_lines(step)
+            self.assertIn("python3 scripts/install_pinned_poppler.py", lines)
+            self.assert_no_success_short_circuit(lines)
+            self.assertLess(job.index(step), job.index(use_marker))
+            self.assertFalse(
+                any(
+                    "continue-on-error:" in line
+                    for line in self.operative_lines(job)
+                )
+            )
+        self.assertEqual(ci.count("python3 scripts/install_pinned_poppler.py"), 4)
+        self.assertNotIn("brew install poppler", ci)
+        self.assertNotIn("apt-get install poppler-utils", ci)
+
+    def assert_workspace_oracle_environment_contract(self, ci: str) -> None:
+        setup_action = (
+            "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d"
+        )
+        for job_name in ("test", "msrv"):
+            job = self.yaml_block(ci, f"  {job_name}:")
+            steps = self.yaml_steps(job)
+            setup_steps = tuple(
+                step
+                for step in steps
+                if self.yaml_step_actions(step) == (setup_action,)
+            )
+            self.assertEqual(len(setup_steps), 1, job_name)
+            setup = setup_steps[0]
+            self.assertEqual(
+                self.yaml_direct_lines(setup, 8),
+                (f"uses: {setup_action}", "with:"),
+            )
+            setup_with = self.yaml_block(setup, "        with:")
+            self.assertEqual(
+                self.yaml_direct_lines(setup_with, 10),
+                ('version: "0.10.2"', "enable-cache: false"),
+            )
+
+            test_step = self.yaml_step(job, "Run full workspace suite")
+            self.assertEqual(
+                self.yaml_direct_lines(test_step, 8),
+                ("env:", "run: >-"),
+            )
+            environment = self.yaml_block(test_step, "        env:")
+            self.assertEqual(
+                self.yaml_direct_lines(environment, 10),
+                (
+                    'UV_CACHE_DIR: "${{ runner.temp }}/uv-cache"',
+                    'RUST_MIN_STACK: "8388608"',
+                ),
+            )
+            self.assertIn("cargo test --workspace", test_step)
+            self.assert_no_success_short_circuit(self.operative_lines(test_step))
+            self.assertLess(job.index(setup), job.index(test_step))
+            self.assertNotIn("continue-on-error", setup + test_step)
+        self.assertEqual(self.yaml_mapping_key_count(ci, "RUST_MIN_STACK"), 2)
 
     def assert_python_pr_job_contract(self, ci: str) -> None:
         triggers = self.yaml_block(ci, "on:")
@@ -172,7 +328,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "step:1",
             "step:2",
             "Set up Python 3.12",
-            "Install pinned Poppler",
+            "Install pinned Poppler 26.01.0",
             "Create isolated binding environment",
             "Build Python extension",
             "Run full Python binding suite",
@@ -216,8 +372,16 @@ class SprintWorkflowTests(unittest.TestCase):
             ('python-version: "3.12.9"',),
         )
 
-        poppler = self.yaml_step(job, "Install pinned Poppler")
-        self.assertEqual(self.yaml_run_lines(poppler), ("brew install poppler",))
+        poppler = self.yaml_step(job, "Install pinned Poppler 26.01.0")
+        self.assertEqual(
+            self.yaml_run_lines(poppler),
+            (
+                "brew install \\",
+                "cmake ninja pkg-config fontconfig freetype jpeg-turbo \\",
+                "libpng libtiff little-cms2 openjpeg",
+                "python3 scripts/install_pinned_poppler.py",
+            ),
+        )
 
         environment = self.yaml_step(job, "Create isolated binding environment")
         self.assertEqual(
@@ -275,6 +439,506 @@ class SprintWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assert_python_pr_job_contract(ci)
+
+    def test_pinned_poppler_installer_contract(self) -> None:
+        installer_path = workflow.REPO / "scripts/install_pinned_poppler.py"
+        self.assertTrue(
+            installer_path.is_file(),
+            "F-X012 requires one shared pinned Poppler installer",
+        )
+        installer = installer_path.read_text(encoding="utf-8")
+        self.assert_pinned_poppler_installer_contract(installer)
+
+        mutations = {
+            "wrong-version": installer.replace("26.01.0", "26.02.0"),
+            "wrong-checksum": installer.replace(
+                "1cb944a4b88847f5fb6551683bc799db59f04990f5d8be07aba2acbf38601089",
+                "0" * 64,
+            ),
+            "missing-member-bound": installer.replace(
+                "MAX_ARCHIVE_MEMBERS = 2_048",
+                "MAX_ARCHIVE_MEMBERS = len(members)",
+            ),
+            "missing-runtime-identity": installer.replace(
+                'expected = f"{tool} version {POPLER_VERSION}"',
+                'expected = tool',
+            ),
+        }
+        for label, mutated in mutations.items():
+            with self.subTest(mutation=label), self.assertRaises(AssertionError):
+                self.assert_pinned_poppler_installer_contract(mutated)
+
+    def test_workspace_viewer_jobs_install_pinned_libreoffice(self) -> None:
+        installer_path = workflow.REPO / "scripts/install_pinned_libreoffice.py"
+        self.assertTrue(
+            installer_path.is_file(),
+            "F-X012 requires one pinned Linux LibreOffice installer",
+        )
+        installer = installer_path.read_text(encoding="utf-8")
+        self.assert_pinned_libreoffice_installer_contract(installer)
+
+        mutations = {
+            "wrong-version": installer.replace("26.2.5.2", "26.2.6.0"),
+            "wrong-checksum": installer.replace(
+                "2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e",
+                "0" * 64,
+            ),
+            "missing-member-bound": installer.replace(
+                "MAX_ARCHIVE_MEMBERS = 256",
+                "MAX_ARCHIVE_MEMBERS = len(members)",
+            ),
+            "recommended-packages": installer.replace(
+                '"--no-install-recommends",', '"--install-recommends",'
+            ),
+        }
+        for label, mutated in mutations.items():
+            with self.subTest(installer_mutation=label), self.assertRaises(
+                AssertionError
+            ):
+                self.assert_pinned_libreoffice_installer_contract(mutated)
+
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_libreoffice_consumers_contract(ci)
+        for job_name in ("test", "msrv"):
+            job = self.yaml_block(ci, f"  {job_name}:")
+            install = self.yaml_step(job, "Install pinned LibreOffice 26.2.5.2")
+            for label, mutated_install in {
+                "missing": "",
+                "if-false": install.replace(
+                    "        run:", "        if: false\n        run:", 1
+                ),
+                "continue-on-error": install.replace(
+                    "        run:",
+                    "        continue-on-error: true\n        run:",
+                    1,
+                ),
+                "exit-zero": install.replace(
+                    "        run: python3",
+                    "        run: exit 0\n          python3",
+                    1,
+                ),
+            }.items():
+                mutated = ci.replace(install, mutated_install, 1)
+                with self.subTest(job=job_name, mutation=label), self.assertRaises(
+                    AssertionError
+                ):
+                    self.assert_libreoffice_consumers_contract(mutated)
+
+    def test_pinned_libreoffice_installer_enforces_runtime_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch.object(
+                install_pinned_libreoffice.urllib.request,
+                "urlopen",
+                return_value=io.BytesIO(b"not the reviewed LibreOffice source"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "SHA-256"):
+                    install_pinned_libreoffice.download_archive(root / "wrong.tar.gz")
+
+            with (
+                patch.object(install_pinned_libreoffice, "MAX_DOWNLOAD_BYTES", 8),
+                patch.object(
+                    install_pinned_libreoffice.urllib.request,
+                    "urlopen",
+                    return_value=io.BytesIO(b"x" * 9),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "download bound"):
+                    install_pinned_libreoffice.download_archive(root / "large.tar.gz")
+
+            archive_path = root / "too-many.tar.gz"
+            with tarfile.open(archive_path, mode="w:gz") as archive:
+                for index in range(
+                    install_pinned_libreoffice.MAX_ARCHIVE_MEMBERS + 1
+                ):
+                    member = tarfile.TarInfo(
+                        f"{install_pinned_libreoffice.ARCHIVE_ROOT}/member-{index}"
+                    )
+                    member.size = 0
+                    archive.addfile(member, io.BytesIO())
+            with patch.object(
+                tarfile.TarFile,
+                "getmembers",
+                side_effect=AssertionError("unbounded member-table allocation"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "member-count"):
+                    install_pinned_libreoffice.safe_extract(
+                        archive_path,
+                        root / "extract",
+                    )
+
+            unsafe_archive = root / "unsafe.tar.gz"
+            with tarfile.open(unsafe_archive, mode="w:gz") as archive:
+                member = tarfile.TarInfo(
+                    f"{install_pinned_libreoffice.ARCHIVE_ROOT}/../../escape"
+                )
+                member.size = 0
+                archive.addfile(member, io.BytesIO())
+            with self.assertRaisesRegex(RuntimeError, "unsafe path"):
+                install_pinned_libreoffice.safe_extract(
+                    unsafe_archive,
+                    root / "unsafe-extract",
+                )
+
+            unsupported_archive = root / "unsupported.tar.gz"
+            with tarfile.open(unsupported_archive, mode="w:gz") as archive:
+                member = tarfile.TarInfo(
+                    f"{install_pinned_libreoffice.ARCHIVE_ROOT}/unsupported"
+                )
+                member.type = tarfile.SYMTYPE
+                member.linkname = "target"
+                archive.addfile(member)
+            with self.assertRaisesRegex(RuntimeError, "non-file entry"):
+                install_pinned_libreoffice.safe_extract(
+                    unsupported_archive,
+                    root / "unsupported-extract",
+                )
+
+            core_package = (
+                f"libobasis26.2-core_{install_pinned_libreoffice.LIBREOFFICE_VERSION}"
+                "-2_amd64.deb"
+            )
+            impress_package = (
+                f"libreoffice26.2-impress_{install_pinned_libreoffice.LIBREOFFICE_VERSION}"
+                "-2_amd64.deb"
+            )
+            for missing, present in (
+                ("libobasis26.2-core", impress_package),
+                ("libreoffice26.2-impress", core_package),
+            ):
+                incomplete_archive = root / f"missing-{missing}.tar.gz"
+                with tarfile.open(incomplete_archive, mode="w:gz") as archive:
+                    member = tarfile.TarInfo(
+                        f"{install_pinned_libreoffice.ARCHIVE_ROOT}/DEBS/{present}"
+                    )
+                    member.size = 0
+                    archive.addfile(member, io.BytesIO())
+                with self.subTest(missing=missing), self.assertRaisesRegex(
+                    RuntimeError, f"missing {missing}"
+                ):
+                    install_pinned_libreoffice.safe_extract(
+                        incomplete_archive,
+                        root / f"missing-{missing}-extract",
+                    )
+
+            oversized_member = tarfile.TarInfo(
+                f"{install_pinned_libreoffice.ARCHIVE_ROOT}/oversized"
+            )
+            oversized_member.size = (
+                install_pinned_libreoffice.MAX_EXTRACTED_BYTES + 1
+            )
+            with patch.object(
+                install_pinned_libreoffice.tarfile,
+                "open",
+                return_value=contextlib.nullcontext((oversized_member,)),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "extracted-size"):
+                    install_pinned_libreoffice.safe_extract(
+                        root / "unused.tar.gz",
+                        root / "oversized-extract",
+                    )
+
+            fake_soffice = root / "soffice"
+            fake_soffice.write_text("not used", encoding="utf-8")
+            wrong_identity = subprocess.CompletedProcess(
+                [str(fake_soffice), "--version"],
+                0,
+                stdout="LibreOffice 99.0.0\n",
+                stderr="",
+            )
+            with patch.object(
+                install_pinned_libreoffice.subprocess,
+                "run",
+                return_value=wrong_identity,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "unexpected LibreOffice"):
+                    install_pinned_libreoffice.verify_soffice(fake_soffice)
+
+            populated = root / "populated-prefix"
+            populated.mkdir()
+            with (
+                patch.object(install_pinned_libreoffice, "INSTALL_ROOT", populated),
+                patch.object(install_pinned_libreoffice.platform, "system", return_value="Linux"),
+                patch.object(install_pinned_libreoffice.platform, "machine", return_value="x86_64"),
+                patch.object(
+                    install_pinned_libreoffice,
+                    "download_archive",
+                    side_effect=AssertionError("populated prefix must fail first"),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "prefix must be absent"):
+                    install_pinned_libreoffice.install()
+
+            deb_root = root / "complete" / "DEBS"
+            deb_root.mkdir(parents=True)
+            for package in (core_package, impress_package):
+                (deb_root / package).write_bytes(b"package")
+            events: list[str] = []
+
+            def record_download(_destination: Path) -> None:
+                events.append("download")
+
+            def record_install(command: list[str], *, check: bool) -> None:
+                self.assertTrue(check)
+                self.assertEqual(command[:5], ["sudo", "apt-get", "install", "--yes", "--no-install-recommends"])
+                for package in install_pinned_libreoffice.SYSTEM_RUNTIME_PACKAGES:
+                    self.assertIn(package, command)
+                self.assertIn(str(deb_root / core_package), command)
+                self.assertIn(str(deb_root / impress_package), command)
+                events.append("install")
+
+            with (
+                patch.object(install_pinned_libreoffice, "INSTALL_ROOT", root / "absent"),
+                patch.object(install_pinned_libreoffice.platform, "system", return_value="Linux"),
+                patch.object(install_pinned_libreoffice.platform, "machine", return_value="x86_64"),
+                patch.dict(os.environ, {"RUNNER_TEMP": str(root)}),
+                patch.object(install_pinned_libreoffice, "download_archive", side_effect=record_download),
+                patch.object(
+                    install_pinned_libreoffice,
+                    "safe_extract",
+                    side_effect=lambda _archive, _destination: (
+                        events.append("extract") or deb_root
+                    ),
+                ),
+                patch.object(install_pinned_libreoffice.subprocess, "run", side_effect=record_install),
+                patch.object(
+                    install_pinned_libreoffice,
+                    "verify_soffice",
+                    side_effect=lambda: events.append("verify"),
+                ),
+                patch.object(
+                    install_pinned_libreoffice,
+                    "expose_soffice",
+                    side_effect=lambda: events.append("expose"),
+                ),
+            ):
+                install_pinned_libreoffice.install()
+            self.assertEqual(
+                events,
+                ["download", "extract", "install", "verify", "expose"],
+            )
+
+    def test_pinned_poppler_installer_enforces_its_runtime_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            with patch.object(
+                install_pinned_poppler.urllib.request,
+                "urlopen",
+                return_value=io.BytesIO(b"not the reviewed Poppler source"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "SHA-256"):
+                    install_pinned_poppler.download_archive(root / "poppler.tar.xz")
+
+            with patch.object(
+                install_pinned_poppler.urllib.request,
+                "urlopen",
+                return_value=io.BytesIO(
+                    b"x" * (install_pinned_poppler.MAX_DOWNLOAD_BYTES + 1)
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "download bound"):
+                    install_pinned_poppler.download_archive(root / "too-large.tar.xz")
+
+            archive_path = root / "too-many-members.tar.xz"
+            with tarfile.open(archive_path, mode="w:xz") as archive:
+                for index in range(install_pinned_poppler.MAX_ARCHIVE_MEMBERS + 1):
+                    member = tarfile.TarInfo(f"poppler-26.01.0/member-{index}")
+                    member.size = 0
+                    archive.addfile(member, io.BytesIO())
+            with patch.object(
+                tarfile.TarFile,
+                "getmembers",
+                side_effect=AssertionError("unbounded member-table allocation"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "member-count"):
+                    install_pinned_poppler.safe_extract(
+                        archive_path,
+                        root / "extract",
+                    )
+
+            oversized_member = tarfile.TarInfo("poppler-26.01.0/oversized")
+            oversized_member.size = install_pinned_poppler.MAX_EXTRACTED_BYTES + 1
+            with patch.object(
+                install_pinned_poppler.tarfile,
+                "open",
+                return_value=contextlib.nullcontext((oversized_member,)),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "extracted-size"):
+                    install_pinned_poppler.safe_extract(
+                        root / "unused.tar.xz",
+                        root / "oversized-extract",
+                    )
+
+            for wrong_tool in install_pinned_poppler.TOOLS:
+                prefix = root / f"wrong-{wrong_tool}"
+                binary_root = prefix / "bin"
+                binary_root.mkdir(parents=True)
+                for tool in install_pinned_poppler.TOOLS:
+                    version = "99.0.0" if tool == wrong_tool else "26.01.0"
+                    executable = binary_root / tool
+                    executable.write_text(
+                        f"#!/bin/sh\necho '{tool} version {version}' >&2\n",
+                        encoding="utf-8",
+                    )
+                    executable.chmod(0o755)
+                with self.subTest(wrong_tool=wrong_tool), self.assertRaisesRegex(
+                    RuntimeError,
+                    f"unexpected {wrong_tool} identity",
+                ):
+                    install_pinned_poppler.verify_tools(prefix)
+
+    def test_pinned_poppler_installer_rejects_a_populated_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            prefix = Path(temp) / "populated"
+            binary_root = prefix / "bin"
+            binary_root.mkdir(parents=True)
+            for tool in install_pinned_poppler.TOOLS:
+                executable = binary_root / tool
+                executable.write_text(
+                    f"#!/bin/sh\necho '{tool} version 26.01.0' >&2\n",
+                    encoding="utf-8",
+                )
+                executable.chmod(0o755)
+            with patch.object(
+                install_pinned_poppler,
+                "download_archive",
+                side_effect=AssertionError("download must not be bypassed"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "prefix must be empty"):
+                    install_pinned_poppler.build(prefix)
+
+    def test_every_poppler_consumer_uses_the_pinned_installer(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_poppler_consumers_contract(ci)
+        for job_name in ("test", "python-bindings", "presentation-fidelity", "msrv"):
+            marker = f"  {job_name}:"
+            job = self.yaml_block(ci, marker)
+            step = self.yaml_step(job, "Install pinned Poppler 26.01.0")
+            mutated_job = job.replace(
+                "          python3 scripts/install_pinned_poppler.py\n", "", 1
+            )
+            mutated = ci.replace(job, mutated_job, 1)
+            with self.subTest(missing_consumer=job_name), self.assertRaises(
+                AssertionError
+            ):
+                self.assert_poppler_consumers_contract(mutated)
+            for policy in ("if: false", "continue-on-error: true"):
+                weakened_step = step.replace(
+                    "        shell: bash\n",
+                    f"        {policy}\n        shell: bash\n",
+                    1,
+                )
+                weakened = ci.replace(step, weakened_step, 1)
+                with self.subTest(job=job_name, policy=policy), self.assertRaises(
+                    AssertionError
+                ):
+                    self.assert_poppler_consumers_contract(weakened)
+            short_circuited_step = step.replace(
+                "        run: |\n",
+                "        run: |\n          exit 0\n",
+                1,
+            )
+            short_circuited = ci.replace(step, short_circuited_step, 1)
+            with self.subTest(job=job_name, policy="exit 0"), self.assertRaises(
+                AssertionError
+            ):
+                self.assert_poppler_consumers_contract(short_circuited)
+
+    def test_workspace_oracle_jobs_pin_uv_cache_and_stack(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_workspace_oracle_environment_contract(ci)
+        mutations = {
+            "global-stack": ci.replace(
+                "  CARGO_TERM_COLOR: always\n",
+                "  CARGO_TERM_COLOR: always\n  RUST_MIN_STACK: \"8388608\"\n",
+                1,
+            ),
+            "global-quoted-stack": ci.replace(
+                "  CARGO_TERM_COLOR: always\n",
+                "  CARGO_TERM_COLOR: always\n  \"RUST_MIN_STACK\": \"8388608\"\n",
+                1,
+            ),
+            "global-spaced-stack": ci.replace(
+                "  CARGO_TERM_COLOR: always\n",
+                "  CARGO_TERM_COLOR: always\n  RUST_MIN_STACK : \"8388608\"\n",
+                1,
+            ),
+            "global-quoted-spaced-stack": ci.replace(
+                "  CARGO_TERM_COLOR: always\n",
+                "  CARGO_TERM_COLOR: always\n  \"RUST_MIN_STACK\" : \"8388608\"\n",
+                1,
+            ),
+        }
+        for job_name in ("test", "msrv"):
+            job = self.yaml_block(ci, f"  {job_name}:")
+            test_step = self.yaml_step(job, "Run full workspace suite")
+            mutations.update(
+                {
+                    f"{job_name}-wrong-action": ci.replace(
+                        job,
+                        job.replace(
+                            "astral-sh/setup-uv@"
+                            "20cfd1bf945f4377ade1205e4dbc17946fc9a30d",
+                            "astral-sh/setup-uv@main",
+                            1,
+                        ),
+                        1,
+                    ),
+                    f"{job_name}-wrong-uv-version": ci.replace(
+                        job,
+                        job.replace(
+                            'version: "0.10.2"', 'version: "latest"', 1
+                        ),
+                        1,
+                    ),
+                    f"{job_name}-shared-home-cache": ci.replace(
+                        job,
+                        job.replace(
+                            'UV_CACHE_DIR: "${{ runner.temp }}/uv-cache"',
+                            'UV_CACHE_DIR: "~/.cache/uv"',
+                            1,
+                        ),
+                        1,
+                    ),
+                    f"{job_name}-default-stack": ci.replace(
+                        job,
+                        job.replace(
+                            '          RUST_MIN_STACK: "8388608"\n', "", 1
+                        ),
+                        1,
+                    ),
+                    f"{job_name}-exit-zero": ci.replace(
+                        test_step,
+                        test_step.replace(
+                            "        run: >-\n",
+                            "        run: >-\n          exit 0\n",
+                            1,
+                        ),
+                        1,
+                    ),
+                }
+            )
+        for label, mutated in mutations.items():
+            with self.subTest(mutation=label), self.assertRaises(AssertionError):
+                self.assert_workspace_oracle_environment_contract(mutated)
+
+    def test_wasm_job_accepts_the_official_binaryen_125_identity(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        job = self.yaml_block(ci, "  wasm:")
+        install = self.yaml_step(job, "Install wasm-opt 125")
+        self.assertIn(
+            'wasm-opt version 125 (version_125)',
+            "\n".join(self.yaml_run_lines(install)),
+        )
 
     def test_workspace_test_jobs_fetch_the_pinned_presentation_corpus(self) -> None:
         ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
@@ -619,8 +1283,8 @@ class SprintWorkflowTests(unittest.TestCase):
                 'tar --extract --gzip --file "$binaryen_archive" --directory '
                 '"$binaryen_root" --strip-components=1',
                 'echo "$binaryen_root/bin" >> "$GITHUB_PATH"',
-                '"$binaryen_root/bin/wasm-opt" --version | grep --fixed-strings '
-                '--line-regexp "wasm-opt version 125"',
+                'test "$("$binaryen_root/bin/wasm-opt" --version)" = '
+                '"wasm-opt version 125 (version_125)"',
             ),
         )
         self.assertEqual(
@@ -869,8 +1533,8 @@ class SprintWorkflowTests(unittest.TestCase):
                 "0000000000000000000000000000000000000000000000000000000000000000",
             ),
             "missing-wasm-opt-version-check": mutate_job(
-                "          \"$binaryen_root/bin/wasm-opt\" --version | grep "
-                "--fixed-strings --line-regexp \"wasm-opt version 125\"\n",
+                '          test "$("$binaryen_root/bin/wasm-opt" --version)" = '
+                '"wasm-opt version 125 (version_125)"\n',
                 "",
             ),
             "unlocked-target-check": mutate_job(

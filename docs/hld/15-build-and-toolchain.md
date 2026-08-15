@@ -304,7 +304,8 @@ crates with the locked workspace graph. It then runs both packages' inline Node
 regressions. It installs the official Binaryen version 125 Linux archive after
 checking exact SHA-256
 `7c3bc16599c8274a04d34a504fe4be2047884f900e0e2da2f6fb9cd667183be4`,
-places its `wasm-opt` on `PATH`, and verifies the exact version.
+places its `wasm-opt` on `PATH`, and verifies the exact official identity
+`wasm-opt version 125 (version_125)`.
 
 Both WASM manifests use release optimization arguments `-Oz`,
 `--enable-bulk-memory`, and `--enable-nontrapping-float-to-int`. The job builds
@@ -340,6 +341,39 @@ condition. Workflow permissions are exactly repository content read, with no
 OIDC token grant. Checkout v6.0.2, setup-python v6.2.0, rust-cache v2.9.1, and
 the selected stable rust-toolchain revision use reviewed full commit SHAs and
 exact input maps.
+
+**One checksum-pinned Poppler installer.**
+`scripts/install_pinned_poppler.py` downloads the official 26.01.0 source
+archive, verifies SHA-256
+`1cb944a4b88847f5fb6551683bc799db59f04990f5d8be07aba2acbf38601089`,
+and builds only `pdftoppm`, `pdfinfo`, and `pdftotext` in an isolated directory.
+It caps the download at 8 MiB and streams at most 2,048 safe archive members
+with at most 64 MiB of expanded content. A populated prefix fails closed, so a
+successful invocation cannot substitute unrelated binaries that print the
+right version. All three finished tools must report exact 26.01.0 identities.
+Test, MSRV, both Python binding rows, and Presentation fidelity use this single
+unconditional step before any oracle-dependent command. Package managers may
+install build prerequisites but do not install Poppler itself.
+
+**Pinned corpus-test runtime.** Test and MSRV install uv 0.10.2 with official
+`astral-sh/setup-uv` commit
+`20cfd1bf945f4377ade1205e4dbc17946fc9a30d`. Each job disables the action cache,
+uses only its runner-temporary uv cache, and runs the broad workspace suite with
+`RUST_MIN_STACK=8388608`. The pin makes the python-pptx oracle executable
+available on a clean Ubuntu host. The stack budget is scoped to these two
+corpus-heavy jobs and does not alter product runtime behavior.
+
+The same two clean Ubuntu 24.04 jobs install LibreOffice 26.2.5.2 from the official
+Linux x86-64 Debian archive before the workspace suite. The archive SHA-256 is
+`2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e`.
+The installer streams under fixed download, member, and expanded-byte bounds,
+rejects unsafe entries and any populated `/opt/libreoffice26.2` prefix, then
+requires exact identity
+`LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb`.
+It installs the explicit Ubuntu NSS, NSPR, D-Bus, Cairo, GLib, X11, CUPS,
+font, and Kerberos runtime-library set needed by that official build. This
+makes the unconditional `rpptx-chart` viewer tests self-contained without
+changing the separate macOS Presentation fidelity setup.
 
 **A prose and generated-skill job.** It runs `scripts/prose_check.py` and
 `scripts/sync_agent_skills.py --check` as separate steps, so voice-rule or

@@ -5,7 +5,7 @@ are dependency and review boundaries, not fixed two-week containers. Sprint
 clocks start at the first `/start-feature` of that sprint, not at a fixed
 calendar date.
 
-39 numbered sprints plus two deferred cutover sprints across 13 milestones,
+40 numbered sprints plus two deferred cutover sprints across 13 milestones,
 roughly 390 developer-days. The sizing rationale and compression options are in
 `docs/hld/14-development-backlog.md`.
 
@@ -613,6 +613,23 @@ WASM packages receive accurate local usage examples without gaining any new
 publication authority. F-X010 publishes the seven stable crates first. F-X011
 then publishes the fourteen incubating crates. Each tag has its own full
 verification, clean review, and immediate release approval boundary.
+
+#### Sprint S40, Restore pinned CI toolchains
+
+**Goal**: restore a green hosted CI baseline after runner and package-manager
+updates exposed unpinned or incorrectly validated external tools. Keep the
+reviewed Poppler 26.01.0 rendering oracle and Binaryen 125 optimizer boundary
+without changing product output or recorded rendering baselines.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X012 | Restore pinned CI toolchains | M |
+
+The story installs checksum-pinned Poppler 26.01.0 for every job that executes
+its oracle-dependent tests, validates the official Binaryen 125 Linux version
+string, and proves the complete pull-request workflow on a hosted runner. It
+does not change a crate, release version, published package, or rendering
+baseline.
 
 ## Cross-cutting
 

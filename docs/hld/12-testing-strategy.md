@@ -208,6 +208,15 @@ LibreOffice 26.2.5.2 with build
 part of the asserted command because a default PDF export omits five corpus
 slides.
 
+Clean Ubuntu 24.04 workspace jobs install that exact LibreOffice build from the
+official Linux x86-64 Debian archive with reviewed SHA-256
+`2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e`.
+The installer bounds the download, archive member count, and expanded bytes,
+rejects unsafe members and populated prefixes, and checks the exact runtime
+identity before the `rpptx-chart` viewer gates execute. The installer supplies
+the explicit NSS, NSPR, D-Bus, Cairo, GLib, X11, CUPS, font, and Kerberos
+runtime libraries required by the official build.
+
 The harness decodes both PNGs through the existing strict decoder and computes
 global luminance SSIM after compositing RGBA over white. It uses population
 variance and covariance with the standard 8-bit constants `K1=0.01`,
@@ -409,8 +418,11 @@ The `rpptx` CLI integration gate corrupts a relationship and requires
 `validate` to exit nonzero. It then requires all 50 manifest decks to validate
 with a zero exit and never skips a missing corpus. The primary workspace-test
 job and the MSRV job fetch and verify the pinned corpus before running Cargo
-tests. Command regressions also prove bounded DPI, bounded diff work,
-zero-slide PNG failure without output, and one-slide-at-a-time PNG conversion.
+tests. Both jobs install exact uv 0.10.2 through the reviewed official setup
+action, isolate its cache under the runner temporary directory, and give Rust
+test threads an explicit 8 MiB stack for the largest corpus round trip. Command
+regressions also prove bounded DPI, bounded diff work, zero-slide PNG failure
+without output, and one-slide-at-a-time PNG conversion.
 The thumbnail and outline gate requires an exactly 320-pixel-wide proportional
 slide-one PNG and recursive paragraph output with stable level indentation.
 Regressions cover nonstandard aspect ratios, shared output defaulting, grouped
@@ -452,7 +464,7 @@ returns non-empty rendered HTML after publication.
 
 | Job | Command |
 |---|---|
-| test | Fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` |
+| test | Install exact uv 0.10.2, fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack |
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
 | wasm | Locked `wasm32-unknown-unknown` checks, `wasm-pack test --node`, and local bundler pack and fresh-install gates for `rdocx-wasm` and `rpptx-wasm` |
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |
@@ -462,7 +474,7 @@ returns non-empty rendered HTML after publication.
 | fmt | `cargo fmt --all -- --check` |
 | doc | `cargo doc --workspace --no-deps --all-features --exclude rdocx-py --exclude rpptx-py` with `RUSTDOCFLAGS=-D warnings`, then `python3 scripts/readme_doctests.py` |
 | package-oxml-layout | Verify the exact font and legal-file inventory, then build and size-check the verified archive |
-| msrv | Fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 |
+| msrv | Install exact uv 0.10.2, fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 with an isolated uv cache and 8 MiB Rust test-thread stack |
 | python-bindings | On pull requests, build each Python package with `maturin develop --locked` in its own Python 3.12.9 environment, then run its complete pytest directory |
 | supply-chain | `cargo-deny check` |
 | python-wheels | On manual dispatch or a `py-v*` tag, build six cp39-abi3 wheels for each Python package and one source distribution per package, then install and test every compatible artifact in a fresh environment |
@@ -471,6 +483,17 @@ The `--exclude` pair on every all-feature command is required, not cosmetic:
 `pyo3/extension-module` tells the linker that Python symbols come from the host
 interpreter, which is false for a test binary, and on Linux this is an
 unresolved-symbol link failure that is easy to misdiagnose.
+
+Every Poppler-dependent CI job builds the reviewed 26.01.0 command-line oracle
+from the official source archive. `scripts/install_pinned_poppler.py` enforces
+the exact source SHA-256, an 8 MiB download ceiling, streaming extraction with
+2,048-member and 64 MiB expanded-size ceilings, safe member paths and types,
+and exact runtime identities for `pdftoppm`, `pdfinfo`, and `pdftotext`. A
+successful run always starts with an empty prefix and rebuilds the reviewed
+source. Test, MSRV, both Python binding rows, and Presentation fidelity invoke
+the same unconditional failure-propagating installer before use. Platform
+package managers provide build dependencies only, never a moving Poppler
+binary package.
 
 The wheel workflow runs the installed `rdocx` suites except the
 Poppler-versioned rendering gate, which belongs to its pinned render job. It
@@ -502,8 +525,9 @@ exact and cannot be satisfied by comments.
 The pull-request WASM job uses exact Node 24.11.1 and wasm-pack 0.15.0. It
 installs the official Binaryen version 125 Linux archive only after verifying
 its pinned SHA-256, places that optimizer on `PATH`, and requires the exact
-version string. It target-checks both WASM packages with `--locked`, then runs
-both inline suites through `wasm-pack test --node`.
+official identity `wasm-opt version 125 (version_125)`. It target-checks both
+WASM packages with `--locked`, then runs both inline suites through
+`wasm-pack test --node`.
 
 Both manifests bind release optimization to `-Oz`,
 `--enable-bulk-memory`, and `--enable-nontrapping-float-to-int`. The last flag

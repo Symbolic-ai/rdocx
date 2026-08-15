@@ -224,6 +224,7 @@ defended.
 | F-X009 | S39 | L | 4 | 1 | 2026-08-14 | Exact README coverage and usage examples for all 26 workspace packages |
 | F-X010 | S39 | S | 1 | 1 | 2026-08-14 | Published and verified the stable rdocx 0.6.0 family with rendered crate READMEs |
 | F-X011 | S39 | S | 1 | 1 | 2026-08-14 | Published and verified the complete rpptx 0.2.0 family with rendered crate READMEs |
+| F-X012 | S40 | M | 2 | 1 | 2026-08-15 | Pinned Poppler, Binaryen, uv, and LibreOffice CI toolchains |
 
 ## Velocity
 
@@ -278,6 +279,7 @@ five working days.
 | S37 | 1 | 1 | 5.00 |
 | S38 | 2 | 2 | 5.00 |
 | S39 | 3 | 3 | 5.00 |
+| S40 | 1 | 1 | 5.00 |
 
 ## Escalation record
 
@@ -321,3 +323,4 @@ was done about it. Empty is the expected state.
 | 2026-08-13 | Sprint estimate variance exceeded 30 percent | S36 | Record 8 actual days against 13 estimated, retain one pending fresh-version release story, and reforecast it as the remaining active sprint |
 | 2026-08-14 | Sprint estimate variance exceeded 30 percent | S38 | Record 2 actual days against 5 estimated. The externally contributed implementation reduced authoring work, while eighteen review passes established the required package-preserving numbering boundary before release |
 | 2026-08-14 | Sprint estimate variance exceeded 30 percent | S39 | Record 3 actual days against 6 estimated. Documentation automation and the established release workflow reduced delivery time while preserving exact package, registry, and rendered README verification |
+| 2026-08-15 | Sprint estimate variance exceeded 30 percent | S40 | Record 1 actual day against 2 estimated. Reusing the bounded installer across hosted jobs reduced delivery time while preserving the exact pinned-tool and full-workflow evidence |
