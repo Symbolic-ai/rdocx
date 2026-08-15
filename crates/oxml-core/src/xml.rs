@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesCData, BytesDecl, BytesStart, Event};
-use quick_xml::reader::NsReader;
+use quick_xml::reader::Reader;
 
 use crate::error::{OxmlError, Result};
-use crate::raw_xml::{NamespaceContext, RawXml, ResolvedName};
+use crate::raw_xml::{NamespaceContext, RawXml, ResolvedName, is_xml_name};
 use crate::xml_text;
 
 /// Default maximum element nesting accepted by the strict XML substrate.
@@ -246,9 +246,11 @@ enum DocumentPhase {
 }
 
 fn parse_strict_document(xml: &[u8], limits: StrictXmlLimits) -> Result<StrictXmlDocument> {
+    std::str::from_utf8(xml)?;
     let source: Arc<[u8]> = Arc::from(xml);
-    let mut reader = NsReader::from_reader(source.as_ref());
+    let mut reader = Reader::from_reader(source.as_ref());
     reader.config_mut().trim_text(false);
+    reader.config_mut().enable_all_checks(true);
     let mut stack: Vec<ElementBuilder> = Vec::new();
     let mut root = None;
     let mut saw_doctype = false;
@@ -400,8 +402,15 @@ fn parse_strict_document(xml: &[u8], limits: StrictXmlLimits) -> Result<StrictXm
                 saw_doctype = true;
                 phase = DocumentPhase::Prolog;
             }
-            Event::Comment(_) | Event::PI(_) => {
+            Event::Comment(_) => {
                 reserve_node(&mut node_count, limits.max_nodes)?;
+                if stack.is_empty() && phase == DocumentPhase::Start {
+                    phase = DocumentPhase::Prolog;
+                }
+            }
+            Event::PI(instruction) => {
+                reserve_node(&mut node_count, limits.max_nodes)?;
+                validate_processing_instruction(instruction.target())?;
                 if stack.is_empty() && phase == DocumentPhase::Start {
                     phase = DocumentPhase::Prolog;
                 }
@@ -509,7 +518,7 @@ fn accept_literal_whitespace(phase: &mut DocumentPhase, text: &str) -> Result<()
 
 fn validate_declaration(declaration: &BytesDecl<'_>) -> Result<()> {
     match declaration.version()?.as_ref() {
-        b"1.0" | b"1.1" => {}
+        b"1.0" => {}
         version => {
             return Err(OxmlError::InvalidValue(format!(
                 "unsupported XML version: {}",
@@ -518,7 +527,13 @@ fn validate_declaration(declaration: &BytesDecl<'_>) -> Result<()> {
         }
     }
     if let Some(encoding) = declaration.encoding() {
-        encoding?;
+        let encoding = encoding?;
+        if !encoding.as_ref().eq_ignore_ascii_case(b"UTF-8") {
+            return Err(OxmlError::InvalidValue(format!(
+                "unsupported XML encoding: {}",
+                String::from_utf8_lossy(encoding.as_ref())
+            )));
+        }
     }
     if let Some(standalone) = declaration.standalone() {
         match standalone?.as_ref() {
@@ -530,6 +545,16 @@ fn validate_declaration(declaration: &BytesDecl<'_>) -> Result<()> {
                 )));
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_processing_instruction(target: &[u8]) -> Result<()> {
+    let target = std::str::from_utf8(target)?;
+    if !is_xml_name(target) || target.eq_ignore_ascii_case("xml") {
+        return Err(OxmlError::InvalidValue(format!(
+            "invalid XML processing instruction target: {target}"
+        )));
     }
     Ok(())
 }
@@ -824,6 +849,29 @@ mod tests {
         ] {
             assert!(StrictXmlDocument::parse(xml).is_err(), "{xml:?}");
         }
+    }
+
+    #[test]
+    fn strict_xml_validates_encoding_comments_and_processing_instructions() {
+        for xml in [
+            b"<?xml version=\"1.1\"?><root/>".as_slice(),
+            b"<?xml version=\"1.0\" encoding=\"UTF-16\"?><root/>".as_slice(),
+            b"<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><root/>".as_slice(),
+            b"<root/><!--a--b-->".as_slice(),
+            b"<?XML value?><root/>".as_slice(),
+            b"<?1bad value?><root/>".as_slice(),
+            b"<root/><!--\xff-->".as_slice(),
+            b"<?target \xff?><root/>".as_slice(),
+            b"<!DOCTYPE root \xff><root/>".as_slice(),
+        ] {
+            assert!(StrictXmlDocument::parse(xml).is_err(), "{xml:?}");
+        }
+
+        StrictXmlDocument::parse(
+            b"<?xml version=\"1.0\" encoding=\"utf-8\"?><?xml-stylesheet href=\"x\"?><root/>",
+        )
+        .unwrap();
+        StrictXmlDocument::parse(b"<?a:b value?><root/>").unwrap();
     }
 
     #[test]

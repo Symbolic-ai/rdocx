@@ -335,6 +335,16 @@ fn is_ncname_continue(character: char) -> bool {
     )
 }
 
+pub(crate) fn is_xml_name(value: &str) -> bool {
+    let mut characters = value.chars();
+    characters
+        .next()
+        .is_some_and(|character| character == ':' || is_ncname_start(character))
+        && characters.all(|character| {
+            character == ':' || is_ncname_start(character) || is_ncname_continue(character)
+        })
+}
+
 /// An unmodelled XML subtree together with its source namespace context.
 #[derive(Debug, Clone)]
 pub struct RawXml {
