@@ -2,6 +2,8 @@
 
 use std::collections::HashSet;
 use std::io::Write;
+use std::ops::Range;
+use std::sync::{Arc, OnceLock};
 
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
@@ -10,6 +12,8 @@ use quick_xml::{Reader, Writer};
 use crate::error::{OxmlError, Result};
 
 const MAX_CAPTURE_DEPTH: usize = 64;
+const XML_NAMESPACE_URI: &str = "http://www.w3.org/XML/1998/namespace";
+const XMLNS_NAMESPACE_URI: &str = "http://www.w3.org/2000/xmlns/";
 
 /// The resolved identity of an XML element.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,22 +31,54 @@ pub struct ResolvedName {
 /// The empty string represents the default namespace. Keeping the complete
 /// in-scope set makes a preserved subtree self-describing even when its
 /// prefixes were declared by an ancestor outside the captured bytes.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct NamespaceContext {
-    bindings: Vec<(String, String)>,
+#[derive(Debug)]
+struct NamespaceFrame {
+    parent: Option<Arc<NamespaceFrame>>,
+    declarations: Vec<(String, String)>,
 }
+
+#[derive(Clone)]
+pub struct NamespaceContext {
+    frame: Arc<NamespaceFrame>,
+    flattened_bindings: Arc<OnceLock<Vec<(String, String)>>>,
+}
+
+impl Default for NamespaceContext {
+    fn default() -> Self {
+        Self {
+            frame: Arc::new(NamespaceFrame {
+                parent: None,
+                declarations: Vec::new(),
+            }),
+            flattened_bindings: Arc::new(OnceLock::new()),
+        }
+    }
+}
+
+impl std::fmt::Debug for NamespaceContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NamespaceContext")
+            .field("bindings", &self.bindings())
+            .finish()
+    }
+}
+
+impl PartialEq for NamespaceContext {
+    fn eq(&self, other: &Self) -> bool {
+        self.bindings() == other.bindings()
+    }
+}
+
+impl Eq for NamespaceContext {}
 
 impl NamespaceContext {
     pub fn new(bindings: impl IntoIterator<Item = (String, String)>) -> Self {
-        let mut context = Self::default();
-        for (prefix, uri) in bindings {
-            context.bind(prefix, uri);
-        }
-        context
+        Self::default().with_bindings(bindings.into_iter().collect())
     }
 
     pub fn with_element(&self, element: &BytesStart<'_>) -> Self {
-        let mut context = self.clone();
+        let mut declarations = Vec::new();
         for attribute in element.attributes().flatten() {
             let key = attribute.key.as_ref();
             let prefix = if key == b"xmlns" {
@@ -52,13 +88,13 @@ impl NamespaceContext {
                     .map(|value| String::from_utf8_lossy(value).into_owned())
             };
             if let Some(prefix) = prefix {
-                context.bind(
+                declarations.push((
                     prefix,
                     String::from_utf8_lossy(attribute.value.as_ref()).into_owned(),
-                );
+                ));
             }
         }
-        context
+        self.with_bindings(declarations)
     }
 
     /// Extend this context with namespace declarations from `element`.
@@ -67,25 +103,34 @@ impl NamespaceContext {
     /// attributes and decodes namespace values before installing them. An
     /// empty namespace value removes the binding for that scope.
     pub fn try_with_element(&self, element: &BytesStart<'_>) -> Result<Self> {
-        let mut context = self.clone();
+        let mut declarations = Vec::new();
         for attribute in element.attributes() {
             let attribute = attribute?;
             let key = attribute.key.as_ref();
-            let prefix = if key == b"xmlns" {
-                Some(String::new())
+            let declared_prefix = if key == b"xmlns" {
+                Some(None)
             } else {
                 key.strip_prefix(b"xmlns:")
-                    .map(|value| std::str::from_utf8(value).map(str::to_owned))
+                    .map(|value| {
+                        let prefix = std::str::from_utf8(value)?;
+                        if !is_ncname(prefix) || prefix == "xmlns" {
+                            return Err(OxmlError::InvalidValue(format!(
+                                "invalid XML namespace prefix: {prefix}"
+                            )));
+                        }
+                        Ok(Some(prefix.to_owned()))
+                    })
                     .transpose()?
             };
-            if let Some(prefix) = prefix {
+            if let Some(declared_prefix) = declared_prefix {
                 let uri = attribute
                     .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
                     .into_owned();
-                context.set_binding(prefix, uri);
+                validate_namespace_declaration(declared_prefix.as_deref(), &uri)?;
+                declarations.push((declared_prefix.unwrap_or_default(), uri));
             }
         }
-        Ok(context)
+        Ok(self.with_bindings(declarations))
     }
 
     /// Resolve an element name. An unprefixed element inherits the default
@@ -98,6 +143,14 @@ impl NamespaceContext {
     /// unprefixed attributes.
     pub fn resolve_attribute(&self, qualified_name: &[u8]) -> ResolvedName {
         self.resolve_name(qualified_name, false)
+    }
+
+    pub(crate) fn resolve_element_strict(&self, qualified_name: &[u8]) -> Result<ResolvedName> {
+        self.resolve_name_strict(qualified_name, true)
+    }
+
+    pub(crate) fn resolve_attribute_strict(&self, qualified_name: &[u8]) -> Result<ResolvedName> {
+        self.resolve_name_strict(qualified_name, false)
     }
 
     /// Resolve an element name.
@@ -125,53 +178,200 @@ impl NamespaceContext {
         }
     }
 
+    fn resolve_name_strict(
+        &self,
+        qualified_name: &[u8],
+        use_default_namespace: bool,
+    ) -> Result<ResolvedName> {
+        let qualified = std::str::from_utf8(qualified_name)?;
+        let (prefix, local) = parse_qname(qualified)?;
+        let namespace_uri = match prefix {
+            Some("xml") => Some(XML_NAMESPACE_URI),
+            Some(prefix) => Some(self.namespace_uri(prefix).ok_or_else(|| {
+                OxmlError::InvalidValue(format!("unbound XML prefix in {qualified}"))
+            })?),
+            None if use_default_namespace => self.namespace_uri(""),
+            None => None,
+        }
+        .map(str::to_owned);
+        Ok(ResolvedName {
+            qualified: qualified.to_string(),
+            local: local.to_string(),
+            namespace_uri,
+        })
+    }
+
     pub fn namespace_uri(&self, prefix: &str) -> Option<&str> {
-        self.bindings
-            .iter()
-            .find(|(candidate, _)| candidate == prefix)
-            .map(|(_, uri)| uri.as_str())
+        let mut frame = Some(self.frame.as_ref());
+        while let Some(current) = frame {
+            if let Some((_, uri)) = current
+                .declarations
+                .iter()
+                .rev()
+                .find(|(candidate, _)| candidate == prefix)
+            {
+                return (!uri.is_empty()).then_some(uri.as_str());
+            }
+            frame = current.parent.as_deref();
+        }
+        None
     }
 
     pub fn bindings(&self) -> &[(String, String)] {
-        &self.bindings
+        self.flattened_bindings.get_or_init(|| {
+            let mut frames = Vec::new();
+            let mut frame = Some(self.frame.as_ref());
+            while let Some(current) = frame {
+                frames.push(current);
+                frame = current.parent.as_deref();
+            }
+
+            let mut bindings = Vec::new();
+            for frame in frames.into_iter().rev() {
+                for (prefix, uri) in &frame.declarations {
+                    if uri.is_empty() {
+                        bindings.retain(|(candidate, _)| candidate != prefix);
+                    } else if let Some((_, current_uri)) = bindings
+                        .iter_mut()
+                        .find(|(candidate, _)| candidate == prefix)
+                    {
+                        *current_uri = uri.clone();
+                    } else {
+                        bindings.push((prefix.clone(), uri.clone()));
+                    }
+                }
+            }
+            bindings
+        })
     }
 
-    fn bind(&mut self, prefix: String, uri: String) {
-        if let Some((_, current_uri)) = self
-            .bindings
-            .iter_mut()
-            .find(|(candidate, _)| candidate == &prefix)
-        {
-            *current_uri = uri;
-        } else {
-            self.bindings.push((prefix, uri));
+    fn with_bindings(&self, declarations: Vec<(String, String)>) -> Self {
+        if declarations.is_empty() {
+            return self.clone();
         }
-    }
-
-    fn set_binding(&mut self, prefix: String, uri: String) {
-        if uri.is_empty() {
-            self.bindings.retain(|(candidate, _)| candidate != &prefix);
-        } else {
-            self.bind(prefix, uri);
+        Self {
+            frame: Arc::new(NamespaceFrame {
+                parent: Some(Arc::clone(&self.frame)),
+                declarations,
+            }),
+            flattened_bindings: Arc::new(OnceLock::new()),
         }
     }
 }
 
+fn validate_namespace_declaration(prefix: Option<&str>, uri: &str) -> Result<()> {
+    if uri == XMLNS_NAMESPACE_URI {
+        return Err(OxmlError::InvalidValue(
+            "the xmlns namespace URI cannot be declared".to_string(),
+        ));
+    }
+    match prefix {
+        Some("xml") if uri != XML_NAMESPACE_URI => Err(OxmlError::InvalidValue(
+            "the xml prefix must use its reserved namespace URI".to_string(),
+        )),
+        Some("xml") => Ok(()),
+        Some(_) if uri == XML_NAMESPACE_URI => Err(OxmlError::InvalidValue(
+            "only the xml prefix can use its reserved namespace URI".to_string(),
+        )),
+        Some(_) if uri.is_empty() => Err(OxmlError::InvalidValue(
+            "a prefixed XML namespace cannot be empty".to_string(),
+        )),
+        None if uri == XML_NAMESPACE_URI => Err(OxmlError::InvalidValue(
+            "the XML namespace URI cannot be the default namespace".to_string(),
+        )),
+        _ => Ok(()),
+    }
+}
+
+fn parse_qname(qualified: &str) -> Result<(Option<&str>, &str)> {
+    let mut parts = qualified.split(':');
+    let first = parts.next().unwrap_or_default();
+    let second = parts.next();
+    if parts.next().is_some() {
+        return Err(OxmlError::InvalidValue(format!(
+            "XML qualified name contains multiple colons: {qualified}"
+        )));
+    }
+    let (prefix, local) = second.map_or((None, first), |local| (Some(first), local));
+    if prefix.is_some_and(|prefix| !is_ncname(prefix)) || !is_ncname(local) {
+        return Err(OxmlError::InvalidValue(format!(
+            "invalid XML qualified name: {qualified}"
+        )));
+    }
+    Ok((prefix, local))
+}
+
+fn is_ncname(value: &str) -> bool {
+    let mut characters = value.chars();
+    characters.next().is_some_and(is_ncname_start)
+        && characters.all(|character| is_ncname_start(character) || is_ncname_continue(character))
+}
+
+fn is_ncname_start(character: char) -> bool {
+    matches!(
+        character,
+        'A'..='Z'
+            | '_'
+            | 'a'..='z'
+            | '\u{00c0}'..='\u{00d6}'
+            | '\u{00d8}'..='\u{00f6}'
+            | '\u{00f8}'..='\u{02ff}'
+            | '\u{0370}'..='\u{037d}'
+            | '\u{037f}'..='\u{1fff}'
+            | '\u{200c}'..='\u{200d}'
+            | '\u{2070}'..='\u{218f}'
+            | '\u{2c00}'..='\u{2fef}'
+            | '\u{3001}'..='\u{d7ff}'
+            | '\u{f900}'..='\u{fdcf}'
+            | '\u{fdf0}'..='\u{fffd}'
+            | '\u{10000}'..='\u{effff}'
+    )
+}
+
+fn is_ncname_continue(character: char) -> bool {
+    matches!(
+        character,
+        '-' | '.' | '0'..='9' | '\u{00b7}' | '\u{0300}'..='\u{036f}' | '\u{203f}'..='\u{2040}'
+    )
+}
+
 /// An unmodelled XML subtree together with its source namespace context.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct RawXml {
-    bytes: Vec<u8>,
+    source: Arc<[u8]>,
+    range: Range<usize>,
     name: ResolvedName,
     namespaces: NamespaceContext,
 }
 
 impl RawXml {
     pub fn new(bytes: Vec<u8>, name: ResolvedName, namespaces: NamespaceContext) -> Self {
+        let range = 0..bytes.len();
         Self {
-            bytes,
+            source: Arc::from(bytes),
+            range,
             name,
             namespaces,
         }
+    }
+
+    pub(crate) fn from_shared_source(
+        source: Arc<[u8]>,
+        range: Range<usize>,
+        name: ResolvedName,
+        namespaces: NamespaceContext,
+    ) -> Result<Self> {
+        if range.start > range.end || range.end > source.len() {
+            return Err(OxmlError::InvalidValue(
+                "raw XML source range is out of bounds".to_string(),
+            ));
+        }
+        Ok(Self {
+            source,
+            range,
+            name,
+            namespaces,
+        })
     }
 
     pub fn from_bytes(bytes: Vec<u8>, qualified_name: &[u8], namespaces: NamespaceContext) -> Self {
@@ -180,7 +380,12 @@ impl RawXml {
     }
 
     pub fn bytes(&self) -> &[u8] {
-        &self.bytes
+        &self.source[self.range.clone()]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_source_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.source, &other.source)
     }
 
     pub fn name(&self) -> &ResolvedName {
@@ -194,7 +399,7 @@ impl RawXml {
     /// Whether the root contains nested elements or non-whitespace text.
     /// Malformed preserved XML is treated as content so callers fail closed.
     pub fn has_child_content(&self) -> bool {
-        let mut reader = Reader::from_reader(self.bytes.as_slice());
+        let mut reader = Reader::from_reader(self.bytes());
         reader.config_mut().trim_text(false);
         let mut saw_root = false;
         let mut depth = 0usize;
@@ -229,7 +434,7 @@ impl RawXml {
     }
 
     pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        writer.write_all(&self.bytes)
+        writer.write_all(self.bytes())
     }
 
     /// Write the preserved subtree in an output namespace context.
@@ -243,7 +448,8 @@ impl RawXml {
         writer: &mut W,
         output_context: &NamespaceContext,
     ) -> std::io::Result<()> {
-        let mut reader = Reader::from_reader(self.bytes.as_slice());
+        let raw_xml = self.bytes();
+        let mut reader = Reader::from_reader(raw_xml);
         let mut buffer = Vec::new();
         let event = reader
             .read_event_into(&mut buffer)
@@ -253,33 +459,33 @@ impl RawXml {
         match event {
             Event::Start(element) => {
                 let mut element = element.into_owned();
-                add_inherited_namespaces(
-                    &mut element,
-                    &self.bytes,
-                    &self.namespaces,
-                    output_context,
-                );
+                add_inherited_namespaces(&mut element, raw_xml, &self.namespaces, output_context);
                 Writer::new(&mut *writer)
                     .write_event(Event::Start(element))
                     .map_err(std::io::Error::other)?;
-                writer.write_all(&self.bytes[consumed..])
+                writer.write_all(&raw_xml[consumed..])
             }
             Event::Empty(element) => {
                 let mut element = element.into_owned();
-                add_inherited_namespaces(
-                    &mut element,
-                    &self.bytes,
-                    &self.namespaces,
-                    output_context,
-                );
+                add_inherited_namespaces(&mut element, raw_xml, &self.namespaces, output_context);
                 Writer::new(writer)
                     .write_event(Event::Empty(element))
                     .map_err(std::io::Error::other)
             }
-            _ => writer.write_all(&self.bytes),
+            _ => writer.write_all(raw_xml),
         }
     }
 }
+
+impl PartialEq for RawXml {
+    fn eq(&self, other: &Self) -> bool {
+        self.bytes() == other.bytes()
+            && self.name == other.name
+            && self.namespaces == other.namespaces
+    }
+}
+
+impl Eq for RawXml {}
 
 fn add_inherited_namespaces(
     element: &mut BytesStart<'_>,

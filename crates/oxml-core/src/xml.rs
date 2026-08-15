@@ -1,9 +1,10 @@
 //! Shared OOXML namespace, attribute, and strict parsing helpers.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use quick_xml::XmlVersion;
-use quick_xml::events::{BytesCData, BytesStart, Event};
+use quick_xml::events::{BytesCData, BytesDecl, BytesStart, Event};
 use quick_xml::reader::NsReader;
 
 use crate::error::{OxmlError, Result};
@@ -40,10 +41,6 @@ pub struct StrictXmlAttribute {
 }
 
 impl StrictXmlAttribute {
-    pub fn name(&self) -> &ResolvedName {
-        &self.name
-    }
-
     pub fn value(&self) -> &str {
         &self.value
     }
@@ -57,7 +54,7 @@ impl StrictXmlAttribute {
 /// into adjacent decoded text nodes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StrictXmlNode {
-    Element(StrictXmlElement),
+    Element(Box<StrictXmlElement>),
     Text(String),
 }
 
@@ -71,7 +68,7 @@ impl StrictXmlNode {
 
     pub fn into_element(self) -> Option<StrictXmlElement> {
         match self {
-            Self::Element(element) => Some(element),
+            Self::Element(element) => Some(*element),
             Self::Text(_) => None,
         }
     }
@@ -95,44 +92,28 @@ pub struct StrictXmlElement {
 }
 
 impl StrictXmlElement {
-    pub fn name(&self) -> &ResolvedName {
-        &self.name
-    }
-
     pub fn is_named(&self, namespace_uri: Option<&str>, local: &str) -> bool {
         resolved_name_matches(&self.name, namespace_uri, local)
-    }
-
-    pub fn attributes(&self) -> &[StrictXmlAttribute] {
-        &self.attributes
-    }
-
-    pub fn attribute(&self, namespace_uri: Option<&str>, local: &str) -> Option<&str> {
-        self.attributes
-            .iter()
-            .find(|attribute| attribute.is_named(namespace_uri, local))
-            .map(StrictXmlAttribute::value)
-    }
-
-    pub fn children(&self) -> &[StrictXmlNode] {
-        &self.children
-    }
-
-    pub fn raw_xml(&self) -> &RawXml {
-        &self.raw_xml
     }
 
     pub fn into_raw_xml(self) -> RawXml {
         self.raw_xml
     }
 
-    pub fn into_cursor(self) -> StrictXmlCursor {
-        StrictXmlCursor {
+    pub fn parse<T>(
+        self,
+        parser: impl FnOnce(&mut StrictXmlCursor) -> Result<T>,
+    ) -> Result<StrictXmlParsed<T>> {
+        let mut cursor = StrictXmlCursor {
             name: self.name,
-            raw_xml: self.raw_xml,
             attributes: self.attributes.into_iter().map(Some).collect(),
             children: self.children.into_iter().map(Some).collect(),
-        }
+        };
+        let value = parser(&mut cursor)?;
+        Ok(StrictXmlParsed {
+            value,
+            leftovers: cursor.finish(),
+        })
     }
 }
 
@@ -142,7 +123,7 @@ impl PartialEq for StrictXmlElement {
             && self.attributes.len() == other.attributes.len()
             && self.attributes.iter().all(|attribute| {
                 other.attributes.iter().any(|candidate| {
-                    semantic_name_eq(attribute.name(), candidate.name())
+                    semantic_name_eq(&attribute.name, &candidate.name)
                         && attribute.value() == candidate.value()
                 })
             })
@@ -183,6 +164,15 @@ pub struct StrictXmlLeftovers {
     pub children: Vec<StrictXmlNode>,
 }
 
+/// The value produced by a typed parser and every semantic item it left
+/// unconsumed. Construction is owned by [`StrictXmlElement::parse`], so a
+/// successful typed parse cannot omit its leftovers result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StrictXmlParsed<T> {
+    pub value: T,
+    pub leftovers: StrictXmlLeftovers,
+}
+
 impl StrictXmlLeftovers {
     pub fn is_empty(&self) -> bool {
         self.attributes.is_empty() && self.children.is_empty()
@@ -194,18 +184,13 @@ impl StrictXmlLeftovers {
 #[derive(Debug)]
 pub struct StrictXmlCursor {
     name: ResolvedName,
-    raw_xml: RawXml,
     attributes: Vec<Option<StrictXmlAttribute>>,
     children: Vec<Option<StrictXmlNode>>,
 }
 
 impl StrictXmlCursor {
-    pub fn name(&self) -> &ResolvedName {
-        &self.name
-    }
-
-    pub fn raw_xml(&self) -> &RawXml {
-        &self.raw_xml
+    pub fn is_named(&self, namespace_uri: Option<&str>, local: &str) -> bool {
+        resolved_name_matches(&self.name, namespace_uri, local)
     }
 
     pub fn take_attribute(&mut self, namespace_uri: Option<&str>, local: &str) -> Option<String> {
@@ -231,7 +216,7 @@ impl StrictXmlCursor {
         self.children.len()
     }
 
-    pub fn finish(self) -> StrictXmlLeftovers {
+    fn finish(self) -> StrictXmlLeftovers {
         StrictXmlLeftovers {
             attributes: self.attributes.into_iter().flatten().collect(),
             children: self
@@ -252,13 +237,22 @@ struct ElementBuilder {
     start_offset: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DocumentPhase {
+    Start,
+    Prolog,
+    Root,
+    Epilog,
+}
+
 fn parse_strict_document(xml: &[u8], limits: StrictXmlLimits) -> Result<StrictXmlDocument> {
-    let mut reader = NsReader::from_reader(xml);
+    let source: Arc<[u8]> = Arc::from(xml);
+    let mut reader = NsReader::from_reader(source.as_ref());
     reader.config_mut().trim_text(false);
     let mut stack: Vec<ElementBuilder> = Vec::new();
     let mut root = None;
-    let mut saw_declaration = false;
     let mut saw_doctype = false;
+    let mut phase = DocumentPhase::Start;
     let mut node_count = 0usize;
     let mut buffer = Vec::new();
 
@@ -270,6 +264,7 @@ fn parse_strict_document(xml: &[u8], limits: StrictXmlLimits) -> Result<StrictXm
         match event {
             Event::Start(element) => {
                 reserve_node(&mut node_count, limits.max_nodes)?;
+                begin_root_if_needed(&stack, &mut phase)?;
                 let depth = stack.len().checked_add(1).ok_or_else(|| {
                     OxmlError::InvalidValue("XML nesting depth overflow".to_string())
                 })?;
@@ -279,16 +274,12 @@ fn parse_strict_document(xml: &[u8], limits: StrictXmlLimits) -> Result<StrictXm
                         limits.max_depth
                     )));
                 }
-                if stack.is_empty() && root.is_some() {
-                    return Err(OxmlError::UnexpectedElement(
-                        "multiple XML roots".to_string(),
-                    ));
-                }
                 let parent_context = stack
                     .last()
                     .map(|builder| &builder.context)
                     .cloned()
                     .unwrap_or_default();
+                reserve_attributes(&element, &mut node_count, limits.max_nodes)?;
                 let context = parent_context.try_with_element(&element)?;
                 let name = resolve_strict_element_name(&context, &element)?;
                 let attributes = parse_strict_attributes(&context, &element)?;
@@ -302,6 +293,8 @@ fn parse_strict_document(xml: &[u8], limits: StrictXmlLimits) -> Result<StrictXm
             }
             Event::Empty(element) => {
                 reserve_node(&mut node_count, limits.max_nodes)?;
+                let root_element = stack.is_empty();
+                begin_root_if_needed(&stack, &mut phase)?;
                 let depth = stack.len().checked_add(1).ok_or_else(|| {
                     OxmlError::InvalidValue("XML nesting depth overflow".to_string())
                 })?;
@@ -311,80 +304,107 @@ fn parse_strict_document(xml: &[u8], limits: StrictXmlLimits) -> Result<StrictXm
                         limits.max_depth
                     )));
                 }
-                if stack.is_empty() && root.is_some() {
-                    return Err(OxmlError::UnexpectedElement(
-                        "multiple XML roots".to_string(),
-                    ));
-                }
                 let parent_context = stack
                     .last()
                     .map(|builder| &builder.context)
                     .cloned()
                     .unwrap_or_default();
+                reserve_attributes(&element, &mut node_count, limits.max_nodes)?;
                 let context = parent_context.try_with_element(&element)?;
                 let name = resolve_strict_element_name(&context, &element)?;
                 let attributes = parse_strict_attributes(&context, &element)?;
                 let parsed = StrictXmlElement {
-                    raw_xml: RawXml::new(
-                        xml[start_offset..end_offset].to_vec(),
+                    raw_xml: RawXml::from_shared_source(
+                        Arc::clone(&source),
+                        start_offset..end_offset,
                         name.clone(),
                         context,
-                    ),
+                    )?,
                     name,
                     attributes,
                     children: Vec::new(),
                 };
                 append_element(&mut stack, &mut root, parsed)?;
+                if root_element {
+                    phase = DocumentPhase::Epilog;
+                }
             }
             Event::End(_) => {
                 let builder = stack.pop().ok_or_else(|| {
                     OxmlError::UnexpectedElement("closing element outside root".to_string())
                 })?;
+                let root_element = stack.is_empty();
                 let parsed = StrictXmlElement {
-                    raw_xml: RawXml::new(
-                        xml[builder.start_offset..end_offset].to_vec(),
+                    raw_xml: RawXml::from_shared_source(
+                        Arc::clone(&source),
+                        builder.start_offset..end_offset,
                         builder.name.clone(),
                         builder.context,
-                    ),
+                    )?,
                     name: builder.name,
                     attributes: builder.attributes,
                     children: builder.children,
                 };
                 append_element(&mut stack, &mut root, parsed)?;
+                if root_element {
+                    phase = DocumentPhase::Epilog;
+                }
             }
             Event::Text(text) => {
                 reserve_node(&mut node_count, limits.max_nodes)?;
                 let decoded = xml_text::decode_plain(&text)?;
-                append_text(&mut stack, root.is_some(), decoded)?;
+                if stack.is_empty() {
+                    accept_literal_whitespace(&mut phase, &decoded)?;
+                } else {
+                    append_text(&mut stack, decoded)?;
+                }
             }
             Event::CData(text) => {
                 reserve_node(&mut node_count, limits.max_nodes)?;
+                if stack.is_empty() {
+                    return Err(OxmlError::UnexpectedElement(
+                        "CDATA outside XML root".to_string(),
+                    ));
+                }
                 let decoded = decode_cdata(&text)?;
-                append_text(&mut stack, root.is_some(), decoded)?;
+                append_text(&mut stack, decoded)?;
             }
             Event::GeneralRef(reference) => {
                 reserve_node(&mut node_count, limits.max_nodes)?;
+                if stack.is_empty() {
+                    return Err(OxmlError::UnexpectedElement(
+                        "entity reference outside XML root".to_string(),
+                    ));
+                }
                 let decoded = xml_text::resolve_entity(&reference)?;
-                append_text(&mut stack, root.is_some(), decoded)?;
+                append_text(&mut stack, decoded)?;
             }
-            Event::Decl(_) => {
-                if !stack.is_empty() || root.is_some() || saw_declaration {
+            Event::Decl(declaration) => {
+                if phase != DocumentPhase::Start || !stack.is_empty() {
                     return Err(OxmlError::UnexpectedElement(
                         "misplaced XML declaration".to_string(),
                     ));
                 }
-                saw_declaration = true;
+                validate_declaration(&declaration)?;
+                phase = DocumentPhase::Prolog;
             }
             Event::DocType(_) => {
-                if !stack.is_empty() || root.is_some() || saw_doctype {
+                if !matches!(phase, DocumentPhase::Start | DocumentPhase::Prolog)
+                    || !stack.is_empty()
+                    || saw_doctype
+                {
                     return Err(OxmlError::UnexpectedElement(
                         "misplaced document type".to_string(),
                     ));
                 }
                 saw_doctype = true;
+                phase = DocumentPhase::Prolog;
             }
             Event::Comment(_) | Event::PI(_) => {
                 reserve_node(&mut node_count, limits.max_nodes)?;
+                if stack.is_empty() && phase == DocumentPhase::Start {
+                    phase = DocumentPhase::Prolog;
+                }
             }
             Event::Eof => break,
         }
@@ -414,9 +434,19 @@ fn resolve_strict_element_name(
     context: &NamespaceContext,
     element: &BytesStart<'_>,
 ) -> Result<ResolvedName> {
-    let name = context.resolve_element(element.name().as_ref());
-    reject_unbound_prefix(&name)?;
-    Ok(name)
+    context.resolve_element_strict(element.name().as_ref())
+}
+
+fn reserve_attributes(
+    element: &BytesStart<'_>,
+    node_count: &mut usize,
+    max_nodes: usize,
+) -> Result<()> {
+    for attribute in element.attributes() {
+        attribute?;
+        reserve_node(node_count, max_nodes)?;
+    }
+    Ok(())
 }
 
 fn parse_strict_attributes(
@@ -431,8 +461,7 @@ fn parse_strict_attributes(
         if qualified == b"xmlns" || qualified.starts_with(b"xmlns:") {
             continue;
         }
-        let name = resolve_strict_attribute_name(context, qualified);
-        reject_unbound_prefix(&name)?;
+        let name = context.resolve_attribute_strict(qualified)?;
         let semantic_name = (name.namespace_uri.clone(), name.local.clone());
         if !expanded_names.insert(semantic_name) {
             return Err(OxmlError::InvalidValue(format!(
@@ -448,20 +477,59 @@ fn parse_strict_attributes(
     Ok(parsed)
 }
 
-fn resolve_strict_attribute_name(context: &NamespaceContext, qualified: &[u8]) -> ResolvedName {
-    let mut name = context.resolve_attribute(qualified);
-    if qualified.starts_with(b"xml:") && name.namespace_uri.is_none() {
-        name.namespace_uri = Some("http://www.w3.org/XML/1998/namespace".to_string());
+fn begin_root_if_needed(stack: &[ElementBuilder], phase: &mut DocumentPhase) -> Result<()> {
+    if !stack.is_empty() {
+        return Ok(());
     }
-    name
+    if *phase == DocumentPhase::Epilog {
+        return Err(OxmlError::UnexpectedElement(
+            "multiple XML roots".to_string(),
+        ));
+    }
+    *phase = DocumentPhase::Root;
+    Ok(())
 }
 
-fn reject_unbound_prefix(name: &ResolvedName) -> Result<()> {
-    if name.qualified.contains(':') && name.namespace_uri.is_none() {
-        return Err(OxmlError::InvalidValue(format!(
-            "unbound XML prefix in {}",
-            name.qualified
+fn accept_literal_whitespace(phase: &mut DocumentPhase, text: &str) -> Result<()> {
+    if !text.chars().all(char::is_whitespace) {
+        let location = if *phase == DocumentPhase::Epilog {
+            "after"
+        } else {
+            "before"
+        };
+        return Err(OxmlError::UnexpectedElement(format!(
+            "non-whitespace text {location} XML root"
         )));
+    }
+    if *phase == DocumentPhase::Start {
+        *phase = DocumentPhase::Prolog;
+    }
+    Ok(())
+}
+
+fn validate_declaration(declaration: &BytesDecl<'_>) -> Result<()> {
+    match declaration.version()?.as_ref() {
+        b"1.0" | b"1.1" => {}
+        version => {
+            return Err(OxmlError::InvalidValue(format!(
+                "unsupported XML version: {}",
+                String::from_utf8_lossy(version)
+            )));
+        }
+    }
+    if let Some(encoding) = declaration.encoding() {
+        encoding?;
+    }
+    if let Some(standalone) = declaration.standalone() {
+        match standalone?.as_ref() {
+            b"yes" | b"no" => {}
+            value => {
+                return Err(OxmlError::InvalidValue(format!(
+                    "invalid XML standalone value: {}",
+                    String::from_utf8_lossy(value)
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -472,7 +540,9 @@ fn append_element(
     element: StrictXmlElement,
 ) -> Result<()> {
     if let Some(parent) = stack.last_mut() {
-        parent.children.push(StrictXmlNode::Element(element));
+        parent
+            .children
+            .push(StrictXmlNode::Element(Box::new(element)));
     } else if root.replace(element).is_some() {
         return Err(OxmlError::UnexpectedElement(
             "multiple XML roots".to_string(),
@@ -481,16 +551,10 @@ fn append_element(
     Ok(())
 }
 
-fn append_text(stack: &mut [ElementBuilder], root_closed: bool, text: String) -> Result<()> {
-    let Some(parent) = stack.last_mut() else {
-        if text.chars().all(char::is_whitespace) {
-            return Ok(());
-        }
-        let location = if root_closed { "after" } else { "before" };
-        return Err(OxmlError::UnexpectedElement(format!(
-            "non-whitespace text {location} XML root"
-        )));
-    };
+fn append_text(stack: &mut [ElementBuilder], text: String) -> Result<()> {
+    let parent = stack
+        .last_mut()
+        .ok_or_else(|| OxmlError::UnexpectedElement("text outside XML root".to_string()))?;
     if let Some(StrictXmlNode::Text(current)) = parent.children.last_mut() {
         current.push_str(&text);
     } else {
@@ -567,6 +631,28 @@ mod tests {
 
     use super::*;
 
+    fn take_only_element_child(document: StrictXmlDocument) -> StrictXmlElement {
+        let parsed = document
+            .into_root()
+            .parse(|cursor| {
+                let index = (0..cursor.child_slots())
+                    .find(|&index| {
+                        cursor
+                            .child(index)
+                            .and_then(StrictXmlNode::as_element)
+                            .is_some()
+                    })
+                    .ok_or_else(|| OxmlError::MissingElement("XML child".to_string()))?;
+                cursor
+                    .take_child(index)
+                    .and_then(StrictXmlNode::into_element)
+                    .ok_or_else(|| OxmlError::MissingElement("XML child".to_string()))
+            })
+            .unwrap();
+        assert!(parsed.leftovers.is_empty());
+        parsed.value
+    }
+
     #[test]
     fn local_names_match_with_or_without_a_prefix() {
         assert_eq!(local_name(b"w:document"), b"document");
@@ -613,8 +699,12 @@ mod tests {
             let expanded = StrictXmlDocument::parse(expanded.as_bytes()).unwrap();
 
             assert_eq!(empty, expanded, "property {local}");
-            let child = empty.root().children()[0].as_element().unwrap();
-            assert_eq!(child.attribute(Some("urn:word"), "val"), Some("A & B"));
+            let child = take_only_element_child(empty);
+            let parsed = child
+                .parse(|cursor| Ok(cursor.take_attribute(Some("urn:word"), "val")))
+                .unwrap();
+            assert_eq!(parsed.value.as_deref(), Some("A & B"));
+            assert!(parsed.leftovers.is_empty());
         }
     }
 
@@ -628,18 +718,8 @@ mod tests {
         .unwrap();
 
         assert_ne!(word, foreign);
-        assert!(
-            word.root().children()[0]
-                .as_element()
-                .unwrap()
-                .is_named(Some("urn:word"), "vanish")
-        );
-        assert!(
-            foreign.root().children()[0]
-                .as_element()
-                .unwrap()
-                .is_named(Some("urn:foreign"), "vanish")
-        );
+        assert!(take_only_element_child(word).is_named(Some("urn:word"), "vanish"));
+        assert!(take_only_element_child(foreign).is_named(Some("urn:foreign"), "vanish"));
     }
 
     #[test]
@@ -682,6 +762,94 @@ mod tests {
             )
             .is_err()
         );
+
+        StrictXmlDocument::parse_with_limits(
+            br#"<root><child/></root>"#,
+            StrictXmlLimits {
+                max_depth: 2,
+                max_nodes: 2,
+            },
+        )
+        .unwrap();
+
+        StrictXmlDocument::parse_with_limits(
+            br#"<root value="one"/>"#,
+            StrictXmlLimits {
+                max_depth: 1,
+                max_nodes: 2,
+            },
+        )
+        .unwrap();
+        assert!(
+            StrictXmlDocument::parse_with_limits(
+                br#"<root value="one"/>"#,
+                StrictXmlLimits {
+                    max_depth: 1,
+                    max_nodes: 1,
+                },
+            )
+            .is_err()
+        );
+
+        StrictXmlDocument::parse_with_limits(
+            br#"<root xmlns:w="urn:word"/>"#,
+            StrictXmlLimits {
+                max_depth: 1,
+                max_nodes: 2,
+            },
+        )
+        .unwrap();
+        assert!(
+            StrictXmlDocument::parse_with_limits(
+                br#"<root xmlns:w="urn:word"/>"#,
+                StrictXmlLimits {
+                    max_depth: 1,
+                    max_nodes: 1,
+                },
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn strict_xml_rejects_misplaced_declarations_and_epilog_content() {
+        for xml in [
+            b" \n<?xml version=\"1.0\"?><root/>".as_slice(),
+            b"<!--before--><?xml version=\"1.0\"?><root/>".as_slice(),
+            b"<?before value?><?xml version=\"1.0\"?><root/>".as_slice(),
+            b"<!DOCTYPE root><?xml version=\"1.0\"?><root/>".as_slice(),
+            b"<root/><![CDATA[ ]]>".as_slice(),
+            b"<root/>&#x20;".as_slice(),
+            b"<?xml version=\"1.0\" standalone=\"maybe\"?><root/>".as_slice(),
+        ] {
+            assert!(StrictXmlDocument::parse(xml).is_err(), "{xml:?}");
+        }
+    }
+
+    #[test]
+    fn strict_xml_validates_qnames_without_lossy_decoding() {
+        let implicit_xml = StrictXmlDocument::parse(br#"<xml:root/>"#).unwrap();
+        assert!(
+            implicit_xml
+                .root()
+                .is_named(Some("http://www.w3.org/XML/1998/namespace"), "root")
+        );
+
+        let unicode = StrictXmlDocument::parse("<élement/>".as_bytes()).unwrap();
+        assert!(unicode.root().is_named(None, "élement"));
+
+        for xml in [
+            br#"<w:a:b xmlns:w="urn:word"/>"#.as_slice(),
+            br#"<:bad/>"#.as_slice(),
+            br#"<bad:/>"#.as_slice(),
+            br#"<root xmlns:xml="urn:not-xml"/>"#.as_slice(),
+            br#"<root xmlns:other="http://www.w3.org/XML/1998/namespace"/>"#.as_slice(),
+            br#"<root xmlns:xmlns="urn:other"/>"#.as_slice(),
+            br#"<root xmlns:other=""/>"#.as_slice(),
+            b"<\xff/>".as_slice(),
+        ] {
+            assert!(StrictXmlDocument::parse(xml).is_err(), "{xml:?}");
+        }
     }
 
     #[test]
@@ -692,16 +860,20 @@ mod tests {
             </w:p>"#,
         )
         .unwrap();
-        let mut cursor = document.into_root().into_cursor();
+        let parsed = document
+            .into_root()
+            .parse(|cursor| {
+                assert_eq!(
+                    cursor.take_attribute(Some("urn:word"), "known"),
+                    Some("yes".to_string())
+                );
+                let run = cursor.take_child(1).unwrap().into_element().unwrap();
+                assert!(run.is_named(Some("urn:word"), "r"));
+                Ok(())
+            })
+            .unwrap();
 
-        assert_eq!(
-            cursor.take_attribute(Some("urn:word"), "known"),
-            Some("yes".to_string())
-        );
-        let run = cursor.take_child(1).unwrap().into_element().unwrap();
-        assert!(run.is_named(Some("urn:word"), "r"));
-
-        let leftovers = cursor.finish();
+        let leftovers = parsed.leftovers;
         assert_eq!(leftovers.attributes.len(), 1);
         assert_eq!(leftovers.attributes[0].value(), "kept");
         assert_eq!(leftovers.children.len(), 2);
@@ -712,11 +884,21 @@ mod tests {
     fn strict_xml_retains_original_subtree_bytes_for_leftovers() {
         let xml = br#"<root xmlns:x="urn:foreign"><x:child value="one"></x:child></root>"#;
         let document = StrictXmlDocument::parse(xml).unwrap();
-        let child = document.root().children()[0].as_element().unwrap();
+        let child = take_only_element_child(document);
 
         assert_eq!(
-            child.raw_xml().bytes(),
+            child.into_raw_xml().bytes(),
             br#"<x:child value="one"></x:child>"#
         );
+    }
+
+    #[test]
+    fn strict_xml_subtrees_share_one_source_allocation() {
+        let document = StrictXmlDocument::parse(br#"<root><child><leaf/></child></root>"#).unwrap();
+        let child = document.root.children[0].as_element().unwrap();
+        let leaf = child.children[0].as_element().unwrap();
+
+        assert!(document.root.raw_xml.shares_source_with(&child.raw_xml));
+        assert!(document.root.raw_xml.shares_source_with(&leaf.raw_xml));
     }
 }

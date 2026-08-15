@@ -15,6 +15,7 @@ shared-version = "incubating"
 tag-name = "rpptx-v{{version}}"
 
 [dependencies]
+oxml-core = { workspace = true }
 zip.workspace = true
 quick-xml.workspace = true
 thiserror.workspace = true
