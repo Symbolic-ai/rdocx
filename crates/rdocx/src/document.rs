@@ -926,6 +926,10 @@ impl Document {
             start: effective.start,
             level_text: definition.lvl_text.as_deref(),
             has_unmodeled_properties: effective.has_unmodeled_properties,
+            has_paragraph_presentation: definition
+                .ppr
+                .as_ref()
+                .is_some_and(|properties| properties != &CT_PPr::default()),
             has_marker_presentation: definition
                 .rpr
                 .as_ref()
@@ -3138,6 +3142,8 @@ pub struct NumberingLevel<'a> {
     pub level_text: Option<&'a str>,
     /// Whether the level contains Word numbering semantics the facade does not model.
     pub has_unmodeled_properties: bool,
+    /// Whether the level applies paragraph layout or presentation properties.
+    pub has_paragraph_presentation: bool,
     /// Whether the marker has run-level presentation properties.
     pub has_marker_presentation: bool,
 }
@@ -4334,6 +4340,37 @@ mod tests {
                 .unwrap()
                 .has_marker_presentation
         );
+    }
+
+    #[test]
+    fn numbering_level_separates_standard_presentation_from_unknown_semantics() {
+        let numbering = CT_Numbering::from_xml(
+            br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:abstractNum w:abstractNumId="0">
+                <w:lvl w:ilvl="0">
+                  <w:start w:val="1"/>
+                  <w:numFmt w:val="bullet"/>
+                  <w:lvlText w:val="&#xF0B7;"/>
+                  <w:pPr>
+                    <w:tabs><w:tab w:val="num" w:pos="360"/></w:tabs>
+                    <w:ind w:left="360" w:hanging="360"/>
+                  </w:pPr>
+                  <w:rPr>
+                    <w:rFonts w:ascii="Symbol" w:hAnsi="Symbol" w:hint="default"/>
+                  </w:rPr>
+                </w:lvl>
+              </w:abstractNum>
+              <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+            </w:numbering>"#,
+        )
+        .unwrap();
+        let mut document = Document::new();
+        document.numbering = Some(numbering);
+
+        let level = document.numbering_level(1, 0).unwrap();
+        assert!(!level.has_unmodeled_properties);
+        assert!(level.has_paragraph_presentation);
+        assert!(level.has_marker_presentation);
     }
 
     #[test]

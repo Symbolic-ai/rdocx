@@ -2237,6 +2237,42 @@ impl CT_Lvl {
         !self.completeness.is_complete()
     }
 
+    /// Whether this level contains unmodelled numbering semantics.
+    ///
+    /// Paragraph and run properties describe level layout and marker
+    /// presentation. They remain part of the lossless completeness contract,
+    /// but do not make the numbering definition itself semantically unknown.
+    pub fn has_unmodeled_numbering_semantics(&self) -> bool {
+        if !self.completeness.leftovers().is_empty() {
+            return true;
+        }
+
+        let mut incomplete_descendants = self
+            .completeness
+            .descendants()
+            .iter()
+            .filter(|descendant| !descendant.is_complete())
+            .collect::<Vec<_>>();
+
+        for presentation in [
+            self.ppr.as_ref().map(|properties| &properties.completeness),
+            self.rpr.as_ref().map(|properties| &properties.completeness),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|completeness| !completeness.is_complete())
+        {
+            if let Some(index) = incomplete_descendants
+                .iter()
+                .position(|descendant| *descendant == presentation)
+            {
+                incomplete_descendants.remove(index);
+            }
+        }
+
+        !incomplete_descendants.is_empty()
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>, ilvl: u32) -> Result<Self> {
         let context = NamespaceContext::default();
         let element = parse_reader_element(
@@ -3201,7 +3237,7 @@ impl CT_Numbering {
         Some(EffectiveNumberingLevel {
             level,
             start,
-            has_unmodeled_properties: level.has_unmodeled_properties(),
+            has_unmodeled_properties: level.has_unmodeled_numbering_semantics(),
         })
     }
 
@@ -3253,7 +3289,7 @@ impl CT_Numbering {
             return Some(EffectiveNumberingLevel {
                 level,
                 start,
-                has_unmodeled_properties: level.has_unmodeled_properties(),
+                has_unmodeled_properties: level.has_unmodeled_numbering_semantics(),
             });
         }
 
@@ -3262,7 +3298,7 @@ impl CT_Numbering {
                 EffectiveNumberingLevel {
                     level,
                     start: level.start.unwrap_or(1),
-                    has_unmodeled_properties: level.has_unmodeled_properties(),
+                    has_unmodeled_properties: level.has_unmodeled_numbering_semantics(),
                 }
             } else {
                 let style_id = abstract_num.num_style_link.as_deref()?;
@@ -3306,6 +3342,8 @@ impl CT_Numbering {
 pub struct EffectiveNumberingLevel<'a> {
     pub level: &'a CT_Lvl,
     pub start: u32,
+    /// Whether the level contains unmodelled numbering semantics.
+    /// Paragraph layout and marker run presentation are excluded.
     pub has_unmodeled_properties: bool,
 }
 
@@ -3648,7 +3686,14 @@ mod tests {
             <w:lvl w:ilvl="1" w:vendor="x"><w:numFmt w:val="decimal"/></w:lvl>
             <w:lvl w:ilvl="2"><w:numFmt w:val="decimal" w:vendor="x"/></w:lvl>
             <w:lvl w:ilvl="3"><w:numFmt w:val="decimal"/></w:lvl>
-            <w:lvl w:ilvl="4"><w:pPr/><w:rPr/></w:lvl>
+            <w:lvl w:ilvl="4">
+              <w:numFmt w:val="bullet"/>
+              <w:pPr>
+                <w:tabs><w:tab w:val="num" w:pos="360"/></w:tabs>
+                <w:ind w:left="360" w:hanging="360"/>
+              </w:pPr>
+              <w:rPr><w:rFonts w:ascii="Symbol" w:hAnsi="Symbol" w:hint="default"/></w:rPr>
+            </w:lvl>
           </w:abstractNum>
           <w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>
         </w:numbering>"#;
@@ -3673,6 +3718,13 @@ mod tests {
                 .get_effective_level(1, 4)
                 .unwrap()
                 .has_unmodeled_properties
+        );
+        assert!(
+            numbering
+                .get_effective_level(1, 4)
+                .unwrap()
+                .level
+                .has_unmodeled_properties()
         );
     }
 
