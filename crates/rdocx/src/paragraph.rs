@@ -326,9 +326,20 @@ impl<'a> Paragraph<'a> {
     /// Obtain `relationship_id` from
     /// [`crate::Document::add_hyperlink_relationship`]. Returning the run
     /// allows the hyperlink text to receive the same direct formatting as any
-    /// other run.
+    /// other run. `tooltip` becomes `w:tooltip` when present.
     pub fn add_hyperlink(&mut self, text: &str, relationship_id: &str) -> Run<'_> {
+        self.add_hyperlink_with_tooltip(text, relationship_id, None)
+    }
+
+    /// Add a hyperlink run and optionally set its hover tooltip.
+    pub fn add_hyperlink_with_tooltip(
+        &mut self,
+        text: &str,
+        relationship_id: &str,
+        tooltip: Option<&str>,
+    ) -> Run<'_> {
         let mut hyperlink = CT_Hyperlink::new(Some(relationship_id.to_string()), None);
+        hyperlink.set_tooltip(tooltip);
         hyperlink.add_run(text);
         let hyperlink = self.inner.add_hyperlink(hyperlink);
         let Some(InlineChild::Run(run)) = hyperlink.children_mut().last_mut() else {

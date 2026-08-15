@@ -4513,6 +4513,30 @@ mod tests {
     }
 
     #[test]
+    fn paragraph_hyperlink_writes_tooltip_and_table_indent() {
+        let mut doc = Document::new();
+        let relationship_id = doc.add_hyperlink_relationship("https://example.com");
+        doc.add_paragraph("").add_hyperlink_with_tooltip(
+            "linked",
+            &relationship_id,
+            Some("Example site"),
+        );
+        let mut table = doc.add_table(1, 1);
+        table.set_indent(Length::twips(720));
+
+        let bytes = doc.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let paragraph = &reopened.paragraphs()[0];
+        let crate::paragraph::ParagraphContentRef::Hyperlink(link) =
+            paragraph.content().next().expect("hyperlink child")
+        else {
+            panic!("expected hyperlink");
+        };
+        assert_eq!(link.tooltip(), Some("Example site"));
+        assert!(reopened.tables()[0].has_indent());
+    }
+
+    #[test]
     fn rejected_list_level_update_does_not_materialize_numbering() {
         let mut doc = Document::new();
         assert!(doc.numbering.is_none());

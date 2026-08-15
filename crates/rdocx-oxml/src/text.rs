@@ -659,6 +659,17 @@ impl CT_Hyperlink {
         self.raw_xml = None;
     }
 
+    /// Set the user-facing hover text stored as `w:tooltip`.
+    pub fn set_tooltip(&mut self, tooltip: Option<&str>) {
+        self.raw_xml = None;
+        self.extra_attributes
+            .retain(|(name, _)| name != "w:tooltip");
+        if let Some(tooltip) = tooltip {
+            self.extra_attributes
+                .push(("w:tooltip".to_string(), tooltip.to_string()));
+        }
+    }
+
     pub fn text(&self) -> String {
         self.children.iter().map(InlineChild::text).collect()
     }
@@ -1311,6 +1322,24 @@ mod tests {
         assert!(xml.contains(r#"w:history="1""#), "{xml}");
         assert!(xml.contains(r#"w:dirty="true""#), "{xml}");
         assert!(xml.contains(r#"<x:cache xmlns:x="urn:producer">kept</x:cache>"#));
+    }
+
+    #[test]
+    fn set_tooltip_writes_w_tooltip() {
+        let mut link = CT_Hyperlink::new(Some("rId5".to_string()), None);
+        link.set_tooltip(Some("Example site"));
+        link.add_run("linked");
+        let mut paragraph = CT_P::new();
+        paragraph.add_hyperlink(link);
+        let xml = serialize(&paragraph);
+        assert!(xml.contains(r#"w:tooltip="Example site""#), "{xml}");
+        assert_eq!(
+            match &paragraph.content[0] {
+                ParagraphChild::Hyperlink(link) => link.tooltip(),
+                _ => panic!("expected hyperlink"),
+            },
+            Some("Example site")
+        );
     }
 
     #[test]
