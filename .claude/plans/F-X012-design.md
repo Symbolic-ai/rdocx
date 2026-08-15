@@ -136,17 +136,17 @@ validation only.
 
 ## Implementation checklist
 
-- [ ] Record the five-job hosted failure set and focused workflow-test red.
-- [ ] Add the authorized Poppler installer with exact source and runtime checks.
-- [ ] Wire every Poppler consumer job to the shared installer.
-- [ ] Correct the official Binaryen 125 Linux identity assertion.
-- [ ] Pin uv and the corpus-test stack budget in Test and MSRV.
-- [ ] Add the authorized pinned LibreOffice installer to Test and MSRV.
-- [ ] Add positive and mutation-sensitive workflow regressions.
-- [ ] Prove the installer on macOS and disposable Ubuntu 24.04.
-- [ ] Run full verification with all 28 hashes unchanged.
-- [ ] Obtain a fully green hosted pull-request CI run at the reviewed SHA.
-- [ ] Obtain a clean independent microscope and sprint review.
+- [x] Record the five-job hosted failure set and focused workflow-test red.
+- [x] Add the authorized Poppler installer with exact source and runtime checks.
+- [x] Wire every Poppler consumer job to the shared installer.
+- [x] Correct the official Binaryen 125 Linux identity assertion.
+- [x] Pin uv and the corpus-test stack budget in Test and MSRV.
+- [x] Add the authorized pinned LibreOffice installer to Test and MSRV.
+- [x] Add positive and mutation-sensitive workflow regressions.
+- [x] Prove the installers on macOS and disposable Ubuntu 24.04.
+- [ ] Run final clean-tree verification with all 28 hashes unchanged.
+- [x] Obtain a fully green hosted pull-request CI run at the reviewed SHA.
+- [x] Obtain a clean independent microscope.
 
 ## Open questions
 
