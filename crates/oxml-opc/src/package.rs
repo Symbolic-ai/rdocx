@@ -1,7 +1,7 @@
 //! OPC Package reader and writer for ZIP-based OOXML packages.
 
 use std::collections::HashMap;
-use std::io::{Read, Seek, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use zip::ZipWriter;
@@ -11,6 +11,16 @@ use zip::write::SimpleFileOptions;
 use crate::content_types::ContentTypes;
 use crate::error::{OpcError, Result};
 use crate::relationship::{Relationships, rel_types};
+
+const EOCD_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
+const ZIP64_EOCD_LOCATOR_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x06, 0x07];
+const ZIP64_EOCD_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x06, 0x06];
+const MAX_ZIP_COMMENT_LEN: u64 = u16::MAX as u64;
+const EOCD_LEN: u64 = 22;
+const ZIP64_EOCD_LOCATOR_LEN: u64 = 20;
+const MIN_ZIP64_EOCD_LEN: u64 = 56;
+const ZIP_TAIL_LEN: u64 =
+    MAX_ZIP_COMMENT_LEN + EOCD_LEN + ZIP64_EOCD_LOCATOR_LEN + MIN_ZIP64_EOCD_LEN;
 
 /// A single part within the OPC package.
 #[derive(Debug, Clone)]
@@ -66,9 +76,19 @@ impl OpcPackage {
 
     /// Open an OPC package while bounding archive expansion.
     pub fn from_reader_with_limits<R: Read + Seek>(
-        reader: R,
+        mut reader: R,
         limits: PackageReadLimits,
     ) -> Result<Self> {
+        if limits.max_entries != usize::MAX {
+            let entry_count = pre_index_entry_count(&mut reader)?;
+            if entry_count > limits.max_entries as u64 {
+                return Err(OpcError::PackageLimitExceeded {
+                    kind: "entry count",
+                    limit: limits.max_entries as u64,
+                });
+            }
+        }
+
         let mut archive = ZipArchive::new(reader)?;
         if archive.len() > limits.max_entries {
             return Err(OpcError::PackageLimitExceeded {
@@ -304,6 +324,148 @@ impl OpcPackage {
     }
 }
 
+fn pre_index_entry_count<R: Read + Seek>(reader: &mut R) -> Result<u64> {
+    let file_len = reader.seek(SeekFrom::End(0))?;
+    if file_len < EOCD_LEN {
+        return Err(invalid_zip("end of central directory not found"));
+    }
+
+    let tail_len = file_len.min(ZIP_TAIL_LEN);
+    let tail_start = file_len - tail_len;
+    reader.seek(SeekFrom::Start(tail_start))?;
+    let mut tail = vec![0; tail_len as usize];
+    reader.read_exact(&mut tail)?;
+
+    let last_candidate = tail.len() - EOCD_LEN as usize;
+    let entry_count = (0..=last_candidate)
+        .rev()
+        .filter(|&offset| tail[offset..].starts_with(&EOCD_SIGNATURE))
+        .filter_map(|offset| eocd_entry_count(&tail, tail_start, file_len, offset))
+        .max();
+
+    entry_count.ok_or_else(|| invalid_zip("valid end of central directory not found"))
+}
+
+fn eocd_entry_count(tail: &[u8], tail_start: u64, file_len: u64, offset: usize) -> Option<u64> {
+    let eocd = tail.get(offset..offset.checked_add(EOCD_LEN as usize)?)?;
+    let comment_len = u64::from(read_u16(eocd, 20)?);
+    let absolute_offset = tail_start.checked_add(offset as u64)?;
+    if absolute_offset
+        .checked_add(EOCD_LEN)?
+        .checked_add(comment_len)?
+        != file_len
+    {
+        return None;
+    }
+
+    let disk_number = read_u16(eocd, 4)?;
+    let central_directory_disk = read_u16(eocd, 6)?;
+    if disk_number != 0 || central_directory_disk != 0 {
+        return None;
+    }
+
+    let entries_on_disk = read_u16(eocd, 8)?;
+    let total_entries = read_u16(eocd, 10)?;
+    let central_directory_size = read_u32(eocd, 12)?;
+    let central_directory_offset = read_u32(eocd, 16)?;
+    let uses_zip64 = entries_on_disk == u16::MAX
+        || total_entries == u16::MAX
+        || central_directory_size == u32::MAX
+        || central_directory_offset == u32::MAX;
+
+    if uses_zip64 {
+        return zip64_entry_count(tail, tail_start, absolute_offset);
+    }
+    if entries_on_disk != total_entries
+        || !central_directory_bounds_are_plausible(
+            absolute_offset,
+            u64::from(central_directory_offset),
+            u64::from(central_directory_size),
+        )
+    {
+        return None;
+    }
+
+    Some(u64::from(total_entries))
+}
+
+fn zip64_entry_count(tail: &[u8], tail_start: u64, eocd_offset: u64) -> Option<u64> {
+    let locator_offset = eocd_offset.checked_sub(ZIP64_EOCD_LOCATOR_LEN)?;
+    let locator = tail_slice(tail, tail_start, locator_offset, ZIP64_EOCD_LOCATOR_LEN)?;
+    if !locator.starts_with(&ZIP64_EOCD_LOCATOR_SIGNATURE)
+        || read_u32(locator, 4)? != 0
+        || read_u32(locator, 16)? != 1
+    {
+        return None;
+    }
+
+    let zip64_offset = read_u64(locator, 8)?;
+    let zip64 = tail_slice(tail, tail_start, zip64_offset, MIN_ZIP64_EOCD_LEN)?;
+    if !zip64.starts_with(&ZIP64_EOCD_SIGNATURE) {
+        return None;
+    }
+    let record_size = read_u64(zip64, 4)?;
+    if record_size < 44
+        || zip64_offset.checked_add(12)?.checked_add(record_size)? != locator_offset
+        || read_u32(zip64, 16)? != 0
+        || read_u32(zip64, 20)? != 0
+    {
+        return None;
+    }
+
+    let entries_on_disk = read_u64(zip64, 24)?;
+    let total_entries = read_u64(zip64, 32)?;
+    if entries_on_disk != total_entries
+        || !central_directory_bounds_are_plausible(
+            zip64_offset,
+            read_u64(zip64, 48)?,
+            read_u64(zip64, 40)?,
+        )
+    {
+        return None;
+    }
+
+    Some(total_entries)
+}
+
+fn central_directory_bounds_are_plausible(
+    directory_end: u64,
+    relative_directory_offset: u64,
+    directory_size: u64,
+) -> bool {
+    directory_end
+        .checked_sub(directory_size)
+        .is_some_and(|actual_directory_offset| relative_directory_offset <= actual_directory_offset)
+}
+
+fn tail_slice(tail: &[u8], tail_start: u64, absolute_offset: u64, len: u64) -> Option<&[u8]> {
+    let offset = usize::try_from(absolute_offset.checked_sub(tail_start)?).ok()?;
+    let len = usize::try_from(len).ok()?;
+    tail.get(offset..offset.checked_add(len)?)
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(
+        bytes.get(offset..offset.checked_add(2)?)?.try_into().ok()?,
+    ))
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(
+        bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?,
+    ))
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
+    Some(u64::from_le_bytes(
+        bytes.get(offset..offset.checked_add(8)?)?.try_into().ok()?,
+    ))
+}
+
+fn invalid_zip(detail: &'static str) -> OpcError {
+    OpcError::Zip(zip::result::ZipError::InvalidArchive(detail.into()))
+}
+
 impl Default for OpcPackage {
     fn default() -> Self {
         Self::new()
@@ -391,6 +553,13 @@ mod tests {
     use super::*;
 
     fn package_zip(entries: &[(&str, &[u8])]) -> std::io::Cursor<Vec<u8>> {
+        package_zip_with_comment(entries, &[])
+    }
+
+    fn package_zip_with_comment(
+        entries: &[(&str, &[u8])],
+        comment: &[u8],
+    ) -> std::io::Cursor<Vec<u8>> {
         let mut buffer = std::io::Cursor::new(Vec::new());
         {
             let mut zip = ZipWriter::new(&mut buffer);
@@ -399,10 +568,20 @@ mod tests {
                 zip.start_file(name, options).unwrap();
                 zip.write_all(data).unwrap();
             }
+            zip.set_raw_comment(comment.to_vec().into_boxed_slice())
+                .unwrap();
             zip.finish().unwrap();
         }
         buffer.set_position(0);
         buffer
+    }
+
+    fn fake_eocd(total_entries: u16) -> [u8; EOCD_LEN as usize] {
+        let mut eocd = [0; EOCD_LEN as usize];
+        eocd[..4].copy_from_slice(&EOCD_SIGNATURE);
+        eocd[8..10].copy_from_slice(&total_entries.to_le_bytes());
+        eocd[10..12].copy_from_slice(&total_entries.to_le_bytes());
+        eocd
     }
 
     const MINIMAL_CONTENT_TYPES: &[u8] =
@@ -434,6 +613,38 @@ mod tests {
                 limit: 1
             }
         ));
+    }
+
+    #[test]
+    fn later_eocd_signature_in_comment_cannot_hide_real_entry_count() {
+        let mut archive = package_zip_with_comment(
+            &[
+                ("[Content_Types].xml", MINIMAL_CONTENT_TYPES),
+                ("word/document.xml", b"<document/>"),
+            ],
+            &fake_eocd(1),
+        );
+
+        assert_eq!(pre_index_entry_count(&mut archive).unwrap(), 2);
+    }
+
+    #[test]
+    fn truncated_zip64_metadata_returns_an_error_without_panicking() {
+        let mut bytes = vec![0; 4 + ZIP64_EOCD_LOCATOR_LEN as usize + EOCD_LEN as usize];
+        bytes[..4].copy_from_slice(&ZIP64_EOCD_SIGNATURE);
+
+        let locator_offset = 4;
+        bytes[locator_offset..locator_offset + 4].copy_from_slice(&ZIP64_EOCD_LOCATOR_SIGNATURE);
+        bytes[locator_offset + 8..locator_offset + 16].copy_from_slice(&0_u64.to_le_bytes());
+        bytes[locator_offset + 16..locator_offset + 20].copy_from_slice(&1_u32.to_le_bytes());
+
+        let eocd_offset = locator_offset + ZIP64_EOCD_LOCATOR_LEN as usize;
+        bytes[eocd_offset..eocd_offset + 4].copy_from_slice(&EOCD_SIGNATURE);
+        bytes[eocd_offset + 8..eocd_offset + 12].fill(0xff);
+        bytes[eocd_offset + 12..eocd_offset + 20].fill(0xff);
+
+        let error = pre_index_entry_count(&mut std::io::Cursor::new(bytes)).unwrap_err();
+        assert!(matches!(error, OpcError::Zip(_)));
     }
 
     #[test]
