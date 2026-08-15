@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::io::Write;
 
+use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
@@ -58,6 +59,33 @@ impl NamespaceContext {
             }
         }
         context
+    }
+
+    /// Extend this context with namespace declarations from `element`.
+    ///
+    /// Unlike [`Self::with_element`], this strict variant propagates malformed
+    /// attributes and decodes namespace values before installing them. An
+    /// empty namespace value removes the binding for that scope.
+    pub fn try_with_element(&self, element: &BytesStart<'_>) -> Result<Self> {
+        let mut context = self.clone();
+        for attribute in element.attributes() {
+            let attribute = attribute?;
+            let key = attribute.key.as_ref();
+            let prefix = if key == b"xmlns" {
+                Some(String::new())
+            } else {
+                key.strip_prefix(b"xmlns:")
+                    .map(|value| std::str::from_utf8(value).map(str::to_owned))
+                    .transpose()?
+            };
+            if let Some(prefix) = prefix {
+                let uri = attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
+                    .into_owned();
+                context.set_binding(prefix, uri);
+            }
+        }
+        Ok(context)
     }
 
     /// Resolve an element name. An unprefixed element inherits the default
@@ -117,6 +145,14 @@ impl NamespaceContext {
             *current_uri = uri;
         } else {
             self.bindings.push((prefix, uri));
+        }
+    }
+
+    fn set_binding(&mut self, prefix: String, uri: String) {
+        if uri.is_empty() {
+            self.bindings.retain(|(candidate, _)| candidate != &prefix);
+        } else {
+            self.bind(prefix, uri);
         }
     }
 }

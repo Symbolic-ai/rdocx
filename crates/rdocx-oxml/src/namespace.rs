@@ -165,3 +165,50 @@ pub fn has_unmodeled_attributes(
     }
     Ok(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use oxml_core::xml::StrictXmlDocument;
+    use regex::Regex;
+
+    use super::W_NS;
+
+    const PARSER_CORPUS: &str = concat!(
+        include_str!("properties.rs"),
+        include_str!("text.rs"),
+        include_str!("table.rs"),
+        include_str!("numbering.rs"),
+        include_str!("styles.rs"),
+        include_str!("document.rs"),
+        include_str!("drawing.rs"),
+    );
+
+    #[test]
+    fn parser_corpus_names_obey_strict_spelling_and_namespace_properties() {
+        let name_pattern = Regex::new(r#"b\"([A-Za-z_][A-Za-z0-9_.-]*)\""#).unwrap();
+        let names: BTreeSet<_> = name_pattern
+            .captures_iter(PARSER_CORPUS)
+            .map(|capture| capture[1].to_string())
+            .collect();
+        assert!(names.len() > 175, "parser corpus unexpectedly shrank");
+
+        for local in names {
+            let empty =
+                format!(r#"<w:root xmlns:w="{W_NS}"><w:{local} w:val="A &amp; B"/></w:root>"#);
+            let expanded = format!(
+                r#"<x:root xmlns:x="{W_NS}"><x:{local} x:val="A &amp; B"></x:{local}></x:root>"#
+            );
+            let foreign = format!(
+                r#"<w:root xmlns:w="{W_NS}" xmlns:f="urn:foreign"><f:{local} f:val="A &amp; B"/></w:root>"#
+            );
+            let empty = StrictXmlDocument::parse(empty.as_bytes()).unwrap();
+            let expanded = StrictXmlDocument::parse(expanded.as_bytes()).unwrap();
+            let foreign = StrictXmlDocument::parse(foreign.as_bytes()).unwrap();
+
+            assert_eq!(empty, expanded, "spelling or prefix changed {local}");
+            assert_ne!(empty, foreign, "foreign namespace matched {local}");
+        }
+    }
+}
