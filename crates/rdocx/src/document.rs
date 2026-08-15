@@ -885,6 +885,10 @@ impl Document {
             start: effective.start,
             level_text: definition.lvl_text.as_deref(),
             has_unmodeled_properties: effective.has_unmodeled_properties,
+            has_marker_presentation: definition
+                .rpr
+                .as_ref()
+                .is_some_and(|properties| properties != &CT_RPr::default()),
         })
     }
 
@@ -3082,6 +3086,8 @@ pub struct NumberingLevel<'a> {
     pub level_text: Option<&'a str>,
     /// Whether the level contains Word numbering semantics the facade does not model.
     pub has_unmodeled_properties: bool,
+    /// Whether the marker has run-level presentation properties.
+    pub has_marker_presentation: bool,
 }
 
 /// One level of a custom list definition for [`Document::add_list_definition`].
@@ -4233,6 +4239,24 @@ mod tests {
                 .numbering_level(num_id, level)
                 .unwrap()
                 .has_unmodeled_properties
+        );
+    }
+
+    #[test]
+    fn numbering_level_reports_marker_presentation() {
+        let mut document = Document::new();
+        document.add_numbered_list_item("numbered item", 0);
+        document.numbering.as_mut().unwrap().abstract_nums[0].levels[0].rpr = Some(CT_RPr {
+            bold: Some(true),
+            ..Default::default()
+        });
+        let (num_id, level) = document.paragraph(0).unwrap().numbering().unwrap();
+
+        assert!(
+            document
+                .numbering_level(num_id, level)
+                .unwrap()
+                .has_marker_presentation
         );
     }
 

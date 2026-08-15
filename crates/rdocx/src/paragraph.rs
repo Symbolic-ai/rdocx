@@ -178,6 +178,18 @@ impl<'a> HyperlinkRef<'a> {
         self.inner.anchor()
     }
 
+    pub fn tooltip(&self) -> Option<&'a str> {
+        self.inner.tooltip()
+    }
+
+    pub fn doc_location(&self) -> Option<&'a str> {
+        self.inner.doc_location()
+    }
+
+    pub fn has_unmodeled_semantic_attributes(&self) -> bool {
+        self.inner.has_unmodeled_semantic_attributes()
+    }
+
     pub fn text(&self) -> String {
         self.inner.text()
     }
@@ -217,6 +229,15 @@ impl<'a> SimpleFieldRef<'a> {
     /// Whether Word stored cached result children for this field.
     pub fn has_cached_content(&self) -> bool {
         self.inner.has_cached_content()
+    }
+
+    /// Whether Word marked the cached result as stale.
+    pub fn dirty(&self) -> Option<bool> {
+        self.inner.dirty()
+    }
+
+    pub fn has_unmodeled_semantic_attributes(&self) -> bool {
+        self.inner.has_unmodeled_semantic_attributes()
     }
 }
 

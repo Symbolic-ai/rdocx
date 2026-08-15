@@ -488,15 +488,13 @@ impl CT_LvlOverride {
                         has_unmodeled_attributes(e, context, &[b"ilvl"], &[])?;
                     value.level = Some(level);
                 }
+                Ok(Event::Start(ref e)) if Self::parse_start_override(e, context, &mut value)? => {
+                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                }
                 Ok(Event::Start(ref e)) => {
                     reader.read_to_end_into(e.name(), &mut Vec::new())?;
                 }
-                Ok(Event::Empty(ref e)) if matches_word_element(e, context, b"startOverride") => {
-                    let child_context = context.with_element(e);
-                    if let Some(start) = get_val_attr_with_context(e, &child_context)? {
-                        value.start_override = Some(start.parse()?);
-                    }
-                }
+                Ok(Event::Empty(ref e)) if Self::parse_start_override(e, context, &mut value)? => {}
                 Ok(Event::Empty(ref e)) if matches_word_element(e, context, b"lvl") => {
                     let child_context = context.with_element(e);
                     let level_index =
@@ -523,6 +521,21 @@ impl CT_LvlOverride {
         }
 
         Ok(value)
+    }
+
+    fn parse_start_override(
+        element: &BytesStart<'_>,
+        context: &NamespaceContext,
+        value: &mut Self,
+    ) -> Result<bool> {
+        if !matches_word_element(element, context, b"startOverride") {
+            return Ok(false);
+        }
+        let child_context = context.with_element(element);
+        if let Some(start) = get_val_attr_with_context(element, &child_context)? {
+            value.start_override = Some(start.parse()?);
+        }
+        Ok(true)
     }
 
     fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -1301,6 +1314,26 @@ mod tests {
         assert!(round_trip.contains(r#"<w:numFmt w:val="decimalZero"/>"#));
         assert!(round_trip.contains(r#"<w:startOverride w:val="7"/>"#));
         assert!(round_trip.contains(r#"<w:numFmt w:val="chicago"/>"#));
+    }
+
+    #[test]
+    fn parses_empty_and_expanded_start_overrides() {
+        for start_override in [
+            r#"<w:startOverride w:val="7"/>"#,
+            r#"<w:startOverride w:val="7"></w:startOverride>"#,
+        ] {
+            let xml = format!(
+                r#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:abstractNum w:abstractNumId="4">
+                    <w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl>
+                  </w:abstractNum>
+                  <w:num w:numId="8"><w:abstractNumId w:val="4"/><w:lvlOverride w:ilvl="0">{start_override}</w:lvlOverride></w:num>
+                </w:numbering>"#
+            );
+
+            let numbering = CT_Numbering::from_xml(xml.as_bytes()).unwrap();
+            assert_eq!(numbering.get_effective_level(8, 0).unwrap().start, 7);
+        }
     }
 
     #[test]

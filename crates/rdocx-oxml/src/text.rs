@@ -15,8 +15,8 @@ use crate::error::{OxmlError, Result};
 #[cfg(test)]
 use crate::namespace::W_NS;
 use crate::namespace::{
-    MC_NS, R_NS, matches_local_name, matches_namespace_element, matches_namespace_name,
-    matches_word_attribute, matches_word_element, matches_word_name,
+    MC_NS, R_NS, is_word_attribute, matches_local_name, matches_namespace_element,
+    matches_namespace_name, matches_word_attribute, matches_word_element, matches_word_name,
 };
 use crate::properties::{CT_PPr, CT_RPr};
 use crate::raw_xml::{NamespaceContext, RawXml, capture_raw_element, capture_raw_empty_element};
@@ -376,6 +376,25 @@ impl CT_SimpleField {
         !self.children.is_empty()
     }
 
+    /// Whether Word marked the cached result as stale.
+    pub fn dirty(&self) -> Option<bool> {
+        extra_word_attribute(&self.extra_attributes, &self.source_namespaces, b"dirty")
+            .and_then(parse_on_off_attribute)
+    }
+
+    /// Whether this field has a WordprocessingML attribute whose semantics
+    /// are not represented by this type.
+    pub fn has_unmodeled_semantic_attributes(&self) -> bool {
+        self.extra_attributes.iter().any(|(name, value)| {
+            let name = name.as_bytes();
+            if !is_word_attribute(name, &self.source_namespaces) {
+                return false;
+            }
+            !matches_word_attribute(name, &self.source_namespaces, b"dirty")
+                || parse_on_off_attribute(value).is_none()
+        })
+    }
+
     pub fn children_mut(&mut self) -> &mut Vec<InlineChild> {
         self.raw_xml = None;
         &mut self.children
@@ -463,6 +482,38 @@ impl CT_Hyperlink {
 
     pub fn anchor(&self) -> Option<&str> {
         self.anchor.as_deref()
+    }
+
+    /// User-facing hover text stored on the hyperlink.
+    pub fn tooltip(&self) -> Option<&str> {
+        extra_word_attribute(&self.extra_attributes, &self.source_namespaces, b"tooltip")
+    }
+
+    /// Location within the hyperlink target.
+    pub fn doc_location(&self) -> Option<&str> {
+        extra_word_attribute(
+            &self.extra_attributes,
+            &self.source_namespaces,
+            b"docLocation",
+        )
+    }
+
+    /// Whether this hyperlink has a WordprocessingML attribute whose
+    /// semantics are not represented by this type.
+    pub fn has_unmodeled_semantic_attributes(&self) -> bool {
+        self.extra_attributes.iter().any(|(name, value)| {
+            let name = name.as_bytes();
+            if !is_word_attribute(name, &self.source_namespaces) {
+                return false;
+            }
+            if matches_word_attribute(name, &self.source_namespaces, b"tooltip")
+                || matches_word_attribute(name, &self.source_namespaces, b"docLocation")
+            {
+                return false;
+            }
+            !matches_word_attribute(name, &self.source_namespaces, b"history")
+                || parse_on_off_attribute(value).is_none()
+        })
     }
 
     pub fn children(&self) -> &[InlineChild] {
@@ -607,6 +658,24 @@ fn parse_hyperlink_attributes(
                 String::from_utf8_lossy(attribute.value.as_ref()).into_owned(),
             ));
         }
+    }
+}
+
+fn extra_word_attribute<'a>(
+    attributes: &'a [(String, String)],
+    context: &NamespaceContext,
+    expected_local: &[u8],
+) -> Option<&'a str> {
+    attributes.iter().find_map(|(name, value)| {
+        matches_word_attribute(name.as_bytes(), context, expected_local).then_some(value.as_str())
+    })
+}
+
+fn parse_on_off_attribute(value: &str) -> Option<bool> {
+    match value {
+        "true" | "1" | "on" => Some(true),
+        "false" | "0" | "off" => Some(false),
+        _ => None,
     }
 }
 
@@ -1302,6 +1371,40 @@ mod tests {
         assert!(xml.contains(r#"w:history="1""#), "{xml}");
         assert!(xml.contains(r#"w:dirty="true""#), "{xml}");
         assert!(xml.contains(r#"<x:cache xmlns:x="urn:producer">kept</x:cache>"#));
+    }
+
+    #[test]
+    fn composite_attributes_expose_import_semantics() {
+        let paragraph = parse_paragraph(concat!(
+            r#"<w:hyperlink r:id="rId5" w:tooltip="Open" w:docLocation="section" w:history="1" x:meta="kept" xmlns:x="urn:producer"><w:r><w:t>link</w:t></w:r></w:hyperlink>"#,
+            r#"<w:hyperlink r:id="rId6" w:tgtFrame="_blank"><w:r><w:t>target</w:t></w:r></w:hyperlink>"#,
+            r#"<w:fldSimple w:instr=" PAGE " w:dirty="on"><w:r><w:t>12</w:t></w:r></w:fldSimple>"#,
+            r#"<w:fldSimple w:instr=" PAGE " w:fldLock="1"><w:r><w:t>13</w:t></w:r></w:fldSimple>"#,
+        ));
+
+        let ParagraphChild::Hyperlink(link) = &paragraph.content[0] else {
+            panic!("expected hyperlink")
+        };
+        assert_eq!(link.tooltip(), Some("Open"));
+        assert_eq!(link.doc_location(), Some("section"));
+        assert!(!link.has_unmodeled_semantic_attributes());
+
+        let ParagraphChild::Hyperlink(link) = &paragraph.content[1] else {
+            panic!("expected hyperlink")
+        };
+        assert!(link.has_unmodeled_semantic_attributes());
+
+        let ParagraphChild::SimpleField(field) = &paragraph.content[2] else {
+            panic!("expected simple field")
+        };
+        assert_eq!(field.dirty(), Some(true));
+        assert!(!field.has_unmodeled_semantic_attributes());
+
+        let ParagraphChild::SimpleField(field) = &paragraph.content[3] else {
+            panic!("expected simple field")
+        };
+        assert_eq!(field.dirty(), None);
+        assert!(field.has_unmodeled_semantic_attributes());
     }
 
     #[test]

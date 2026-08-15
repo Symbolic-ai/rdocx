@@ -2364,6 +2364,41 @@ fn ordered_paragraph_content_reports_simple_fields() {
 }
 
 #[test]
+fn paragraph_composites_expose_import_attributes() {
+    let mut document = Document::new();
+    document.add_paragraph("seed");
+
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let changed = xml.replace(
+        "<w:r>\n        <w:t>seed</w:t>\n      </w:r>",
+        concat!(
+            "<w:hyperlink r:id=\"rId99\" w:tooltip=\"Open\" w:docLocation=\"section\" w:history=\"1\"><w:r><w:t>link</w:t></w:r></w:hyperlink>",
+            "<w:fldSimple w:instr=\" PAGE \" w:dirty=\"true\"><w:r><w:t>1</w:t></w:r></w:fldSimple>"
+        ),
+    );
+    assert_ne!(changed, xml);
+
+    let bytes = replace_document_xml(&bytes, changed);
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let mut content = paragraph.content();
+    let ParagraphContentRef::Hyperlink(link) = content.next().unwrap() else {
+        panic!("expected hyperlink")
+    };
+    assert_eq!(link.tooltip(), Some("Open"));
+    assert_eq!(link.doc_location(), Some("section"));
+    assert!(!link.has_unmodeled_semantic_attributes());
+
+    let ParagraphContentRef::SimpleField(field) = content.next().unwrap() else {
+        panic!("expected simple field")
+    };
+    assert_eq!(field.dirty(), Some(true));
+    assert!(!field.has_unmodeled_semantic_attributes());
+}
+
+#[test]
 fn hyperlink_spans_count_runs_nested_inside_simple_fields() {
     let mut document = Document::new();
     document.add_paragraph("seed");

@@ -99,6 +99,18 @@ pub fn matches_word_attribute(
     matches_namespace_attribute(name, context, W_PREFIX, W_NS, expected_local)
 }
 
+/// Whether an attribute belongs to the WordprocessingML namespace.
+pub fn is_word_attribute(name: &[u8], context: &NamespaceContext) -> bool {
+    let resolved = context.resolve_attribute(name);
+    match resolved.namespace_uri.as_deref() {
+        Some(uri) => uri == W_NS,
+        None => name
+            .iter()
+            .position(|byte| *byte == b':')
+            .is_some_and(|separator| &name[..separator] == W_PREFIX),
+    }
+}
+
 pub fn matches_word_element(
     element: &BytesStart<'_>,
     parent_context: &NamespaceContext,
