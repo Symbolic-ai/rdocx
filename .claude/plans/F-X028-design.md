@@ -1,6 +1,6 @@
 # F-X028, Repair the agent-facing documentation drift
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S44
 **Size**: M
 **Depends on**: none
@@ -46,11 +46,14 @@ system-font-discovery-off path. Regenerate the generated verify skill adapter.
 
 Extend the existing `scripts/test_sprint_workflow.py` rather than creating a
 new file. Add one structured contract helper that reads `CLAUDE.md`, the verify
-command, and workspace manifests. Assert that the cited crate paths exist,
-stated family versions match manifest truth, named features exist on their
-claimed packages, the font path and legal inventory resolve, and verify's
-package names are workspace members. Mutation cases will introduce a stale
-path, version, feature, and package name and prove that each is rejected.
+command, and workspace manifests. Assert that every governed repository path
+claim in both documents resolves, stated family versions match manifest truth,
+named features exist on their claimed packages, the font path and legal
+inventory resolve, and verify's package names are workspace members. Path
+validation handles intentional globs, placeholders, line suffixes, and
+generated-output roots explicitly. Mutation cases will introduce stale crate
+and non-crate paths, a stale verify path, version, feature, and package name and
+prove that each is rejected.
 
 ## Rejected alternatives
 
@@ -67,7 +70,7 @@ path, version, feature, and package name and prove that each is rejected.
 | Category | Test | Asserts |
 |---|---|---|
 | regression | `test_agent_facing_repository_claims_resolve_against_the_workspace` | Every governed path, version, feature, font inventory, and verify package claim resolves against current manifests and files |
-| regression | `test_agent_facing_claim_contract_rejects_stale_mutations` | Mutated path, stable version, feature, and package claims each fail the helper |
+| regression | `test_agent_facing_claim_contract_rejects_stale_mutations` | Mutated crate, non-crate, verify, stable version, feature, and package claims each fail the helper |
 
 The backlog test gate is **regression**: a test asserts that every path,
 version, and feature name `CLAUDE.md` and `.claude/commands/verify.md` cite
@@ -98,17 +101,21 @@ and a generated skill adapter do not alter rendered output.
 
 ## Implementation checklist
 
-- [ ] Add failing agent-facing contract tests and stale-mutation cases.
-- [ ] Correct `CLAUDE.md` versions, paths, feature language, and fixed-defect
+- [x] Add failing agent-facing contract tests and stale-mutation cases.
+- [x] Correct `CLAUDE.md` versions, paths, feature language, and fixed-defect
   guidance.
-- [ ] Correct the bindings packaging claim and release-train prose.
-- [ ] Correct verify's no-default-features package and explanation.
-- [ ] Regenerate the verify skill adapter.
-- [ ] Run focused tests, prose checking, and skill synchronization checks.
-- [ ] Inspect all manifest, lockfile, README, font, and version-carrier diffs
+- [x] Correct the bindings packaging claim and release-train prose.
+- [x] Correct verify's no-default-features package and explanation.
+- [x] Regenerate the verify skill adapter.
+- [x] Run focused tests, prose checking, and skill synchronization checks.
+- [x] Inspect all manifest, lockfile, README, font, and version-carrier diffs
   and require no unintended changes.
-- [ ] Run microscope and contribute the risk riders to the integrated full
+- [x] Run microscope and contribute the risk riders to the integrated full
   gate.
+- [x] Cover every governed repository path in `CLAUDE.md` and the verify
+  command, with explicit handling for intentional dynamic forms.
+- [x] Prove stale non-crate and verify path mutations fail, then re-review and
+  re-run the affected full gate.
 
 ## Open questions
 

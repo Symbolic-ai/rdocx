@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -4857,6 +4858,212 @@ class SprintWorkflowTests(unittest.TestCase):
                 self.assertEqual(
                     workflow.cmd_close_preflight(argparse.Namespace(sprint="S01")),
                     0,
+                )
+
+    def repository_path_claims(self, source: str) -> set[str]:
+        rooted = re.findall(
+            r"(?<![A-Za-z0-9_-])"
+            r"((?:\.agents|\.claude|\.github|crates|docs|samples|scripts|target|tools)"
+            r"(?:/[A-Za-z0-9_.<>{}*?$-]*)+)",
+            source,
+        )
+        standalone = re.findall(
+            r"(?<![/A-Za-z0-9_.-])"
+            r"([A-Za-z0-9*?][A-Za-z0-9_.*?-]*\."
+            r"(?:crate|json|lock|md|pptx|py|rs|sh|toml|tsv|ttf|yaml|yml)"
+            r"(?::[0-9]+(?:-[0-9]+)?)?)(?![A-Za-z0-9_.-])",
+            source,
+        )
+        return {claim.rstrip(".,:;)") for claim in rooted + standalone}
+
+    def assert_repository_path_claims_resolve(
+        self,
+        source: str,
+        *,
+        generated_claims: set[str],
+    ) -> set[str]:
+        claims = self.repository_path_claims(source)
+        self.assertTrue(claims)
+        tracked = subprocess.run(
+            ["git", "ls-files"],
+            cwd=workflow.REPO,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        tracked_names = {Path(path).name for path in tracked}
+        found_generated: set[str] = set()
+        for claim in claims:
+            path = re.sub(r":[0-9]+(?:-[0-9]+)?$", "", claim)
+            if path in generated_claims:
+                found_generated.add(path)
+                continue
+            if path.startswith(("samples/", "target/")):
+                self.fail(f"unrecognised generated path claim: {claim}")
+            if any(marker in path for marker in ("*", "?")):
+                self.assertTrue(tuple(workflow.REPO.glob(path)), claim)
+                continue
+            if any(marker in path for marker in ("<", "{", "$")):
+                static_prefix = re.split(r"[<{$]", path, maxsplit=1)[0].rstrip("/")
+                self.assertTrue(static_prefix, claim)
+                self.assertTrue((workflow.REPO / static_prefix).exists(), claim)
+                continue
+            if "/" in path:
+                self.assertTrue((workflow.REPO / path.rstrip("/")).exists(), claim)
+                continue
+            self.assertIn(path, tracked_names, claim)
+        self.assertEqual(found_generated, generated_claims)
+        return claims
+
+    def assert_agent_facing_repository_claims(
+        self,
+        *,
+        claude: str | None = None,
+        verify: str | None = None,
+    ) -> None:
+        if claude is None:
+            claude = (workflow.REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        if verify is None:
+            verify = (workflow.REPO / ".claude/commands/verify.md").read_text(
+                encoding="utf-8"
+            )
+        root = tomllib.loads(
+            (workflow.REPO / "Cargo.toml").read_text(encoding="utf-8")
+        )
+        workspace = root["workspace"]
+        workspace_version = workspace["package"]["version"]
+        packages: dict[str, tuple[Path, dict[str, object]]] = {}
+        for member in workspace["members"]:
+            member_path = workflow.REPO / member
+            manifest = tomllib.loads(
+                (member_path / "Cargo.toml").read_text(encoding="utf-8")
+            )
+            packages[manifest["package"]["name"]] = (member_path, manifest)
+
+        claude_paths = self.assert_repository_path_claims_resolve(
+            claude,
+            generated_claims={"samples/"},
+        )
+        verify_paths = self.assert_repository_path_claims_resolve(
+            verify,
+            generated_claims={"*.crate", "target/package"},
+        )
+        self.assertIn("docs/hld/00-vision.md", claude_paths)
+        self.assertIn(".github/workflows/publish.yml", verify_paths)
+        self.assertIn("scripts/hash_harness.py", verify_paths)
+
+        stated_versions = re.findall(
+            r"on\s+crates\.io at ([0-9]+\.[0-9]+\.[0-9]+)", claude
+        )
+        self.assertEqual(stated_versions, [workspace_version])
+        for name, (_, manifest) in packages.items():
+            if not name.startswith("rdocx") or name == "rdocx-py":
+                continue
+            version = manifest["package"]["version"]
+            effective_version = (
+                workspace_version
+                if isinstance(version, dict) and version.get("workspace")
+                else version
+            )
+            self.assertEqual(effective_version, workspace_version, name)
+
+        font_claims = re.findall(r"`(crates/[^`]+/fonts/)`", claude)
+        self.assertEqual(font_claims, ["crates/oxml-layout/fonts/"])
+        font_package = Path(font_claims[0]).parts[1]
+        font_path, font_manifest = packages[font_package]
+        features = font_manifest.get("features", {})
+        self.assertIn("system-fonts", features)
+        self.assertNotIn("bundled-fonts", features)
+        claimed_font_count = re.findall(r"([0-9]+) bundled TTFs", claude)
+        self.assertEqual(claimed_font_count, ["20"])
+        fonts = font_path / "fonts"
+        self.assertEqual(len(tuple(fonts.glob("*.ttf"))), int(claimed_font_count[0]))
+        for legal_file in (
+            "LICENSE-Caladea",
+            "NOTICE-Caladea",
+            "LICENSE-Carlito",
+            "LICENSE-Liberation",
+        ):
+            self.assertTrue((fonts / legal_file).is_file(), legal_file)
+
+        feature_claims = set(re.findall(r"`([a-z0-9-]+)` feature", claude))
+        self.assertIn("system-fonts", feature_claims)
+        available_features = {
+            feature
+            for _, manifest in packages.values()
+            for feature in manifest.get("features", {})
+        }
+        self.assertLessEqual(feature_claims, available_features)
+
+        verify_packages = re.findall(
+            r"(?:-p|--package) ([a-z0-9][a-z0-9-]+)", verify
+        )
+        self.assertTrue(verify_packages)
+        for package in verify_packages:
+            self.assertIn(package, packages)
+        no_default_packages = re.findall(
+            r"cargo test -p ([a-z0-9-]+) --no-default-features", verify
+        )
+        self.assertEqual(no_default_packages, ["oxml-layout"])
+
+    def test_agent_facing_repository_claims_resolve_against_the_workspace(
+        self,
+    ) -> None:
+        self.assert_agent_facing_repository_claims()
+
+    def test_agent_facing_claim_contract_rejects_stale_mutations(self) -> None:
+        claude = (workflow.REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        verify = (workflow.REPO / ".claude/commands/verify.md").read_text(
+            encoding="utf-8"
+        )
+        mutations = {
+            "path": (
+                claude.replace(
+                    "crates/oxml-layout/fonts/",
+                    "crates/rdocx-layout/fonts/",
+                    1,
+                ),
+                verify,
+            ),
+            "non-crates-path": (
+                claude.replace(
+                    "docs/hld/00-vision.md",
+                    "docs/hld/00-missing.md",
+                    1,
+                ),
+                verify,
+            ),
+            "verify-path": (
+                claude,
+                verify.replace(
+                    ".github/workflows/publish.yml",
+                    ".github/workflows/missing.yml",
+                    1,
+                ),
+            ),
+            "version": (
+                claude.replace("crates.io at 0.7.0", "crates.io at 0.2.0", 1),
+                verify,
+            ),
+            "feature": (
+                claude.replace("`system-fonts` feature", "`bundled-fonts` feature", 1),
+                verify,
+            ),
+            "package": (
+                claude,
+                verify.replace(
+                    "cargo test -p oxml-layout --no-default-features",
+                    "cargo test -p legacy-layout --no-default-features",
+                    1,
+                ),
+            ),
+        }
+        for name, (mutated_claude, mutated_verify) in mutations.items():
+            self.assertNotEqual((mutated_claude, mutated_verify), (claude, verify), name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_agent_facing_repository_claims(
+                    claude=mutated_claude,
+                    verify=mutated_verify,
                 )
 
 
