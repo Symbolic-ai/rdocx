@@ -29,8 +29,8 @@ regenerated, never hand-edited.
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
-| X, Cross-cutting (opportunistic)            | 28 | 24 | 1 | 3  |
-| **Total** | **182** | **178** | **1** | **3** |
+| X, Cross-cutting (opportunistic)            | 28 | 24 | 2 | 2  |
+| **Total** | **182** | **178** | **2** | **2** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -308,7 +308,7 @@ regenerated, never hand-edited.
 | F-X018 | Unknown enumerated values must not fail open | S43 | M | done |
 | F-X019 | Paragraph-relative later drawings should wrap | S43 | M | pending |
 | F-X020 | Refresh the dependency lockfile             | S42 | S | done |
-| F-X021 | Hash harness should cover PDF output       | S43 | M | pending |
+| F-X021 | Hash harness should cover PDF output       | S43 | M | in-progress |
 | F-X025 | /verify must run the release regressions   | S43 | S | pending |
 | F-X024 | Move the theme adapter into rdocx-oxml     | S42 | M | done |
 | F-X022 | Tag rpptx-v0.3.0                           | S42 | S | done |
