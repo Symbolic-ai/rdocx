@@ -71,8 +71,17 @@ The `rdocx` facade depends on it directly for collision-free Word media names,
 sniffed package metadata, and byte-first HTML and layout MIME inputs.
 
 **`oxml-layout` is where the format boundary genuinely falls.** Its
-output, font, and line modules are 100 percent docx-free: page frames,
-positioned elements, glyph runs, colours, fonts, and owned line parameters.
+output, font, and line modules hold page frames, positioned elements, glyph
+runs, colours, fonts, and owned line parameters, none of which name a document
+format.
+
+One construct is an exception and is called out rather than glossed. A text
+segment carries an optional `NoteRef`, a footnote or endnote reference, and
+notes are a WordprocessingML idea with no PresentationML counterpart. It sits
+here because a note reference has to survive line breaking, which is the shared
+code, and the alternative is a parallel segment type for one field. The pair
+`NoteStream` and `NoteRef` replaced an untyped `footnote_id` that had the same
+problem less visibly.
 `rdocx-layout` keeps its Word-specific input and converts paragraph alignment,
 tabs, leaders, underlines, spacing, wrapping, and twips in `convert.rs`. The
 converter also preserves Word's established glyph slicing and automatic line

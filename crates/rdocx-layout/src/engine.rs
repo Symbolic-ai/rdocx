@@ -2501,4 +2501,88 @@ mod tests {
             extents[0]
         );
     }
+
+    #[test]
+    fn a_split_paragraph_clearing_a_drawing_stays_inside_the_page() {
+        use rdocx_oxml::drawing::{
+            AnchorAlignH, AnchorAlignV, CT_Anchor, CT_Drawing, ST_RelativeFromH, ST_RelativeFromV,
+            WrapType,
+        };
+        use rdocx_oxml::text::CT_R;
+        use rdocx_oxml::units::Emu;
+
+        // A top-and-bottom drawing pushes the paragraph's content down, and the
+        // paragraph is long enough to split. The offset has to be counted where
+        // the split point is decided, or the last lines run off the page.
+        let emu = |pt: f64| Emu((pt * 12700.0) as i64);
+        let mut doc = rdocx_oxml::document::CT_Document::new();
+        let mut para = CT_P::new();
+        let mut body = String::new();
+        for index in 0..300 {
+            body.push_str(&format!("Sentence {index} of a very long paragraph. "));
+        }
+        para.add_run(&body);
+
+        let mut anchor = CT_Anchor::background("rId1", 0, 0);
+        anchor.extent_cx = emu(200.0);
+        anchor.extent_cy = emu(120.0);
+        anchor.behind_doc = false;
+        anchor.wrap = WrapType::TopAndBottom;
+        anchor.pos_h_relative_from = ST_RelativeFromH::Margin;
+        anchor.pos_h_align = Some(AnchorAlignH::Center);
+        anchor.pos_v_relative_from = ST_RelativeFromV::Margin;
+        anchor.pos_v_align = Some(AnchorAlignV::Top);
+        anchor.dist_b = emu(10.0);
+        let mut drawing_run = CT_R::new("");
+        drawing_run.content = vec![RunContent::Drawing(CT_Drawing {
+            inline: None,
+            anchor: Some(anchor),
+        })];
+        para.runs.push(drawing_run);
+        doc.body.add_paragraph(para);
+
+        let mut images = HashMap::new();
+        images.insert(
+            "rId1".to_string(),
+            ImageData {
+                data: vec![0u8; 8],
+                content_type: "image/png".to_string(),
+            },
+        );
+
+        let input = LayoutInput {
+            document: doc,
+            styles: CT_Styles::new_default(),
+            numbering: None,
+            headers: HashMap::new(),
+            footers: HashMap::new(),
+            images,
+            core_properties: None,
+            hyperlink_urls: HashMap::new(),
+            footnotes: None,
+            endnotes: None,
+            theme: None,
+            fonts: Vec::new(),
+        };
+
+        let mut engine = Engine::new();
+        let output = engine.layout(&input).expect("layout succeeds");
+        let geometry = sect_pr_to_geometry(&CT_SectPr::default_letter());
+        let bottom = geometry.page_height - geometry.margin_bottom;
+
+        assert!(output.pages.len() > 1, "the paragraph must split");
+        for (index, page) in output.pages.iter().enumerate() {
+            for element in &page.elements {
+                let PositionedElement::Text(run) = element else {
+                    continue;
+                };
+                assert!(
+                    run.origin.y <= bottom + 0.5,
+                    "page {} draws text at {}, past the bottom margin at {bottom}",
+                    index + 1,
+                    run.origin.y
+                );
+            }
+        }
+    }
 }

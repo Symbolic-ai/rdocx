@@ -1287,8 +1287,12 @@ fn paginate_paragraph(
             return;
         }
 
-        let lines_that_fit =
-            pager.count_lines_that_fit_with_notes(&para.lines, pager.cursor_y + space_before);
+        // The lines start below any drawing the paragraph must clear, so the
+        // counter has to be told where they actually begin.
+        let lines_that_fit = pager.count_lines_that_fit_with_notes(
+            &para.lines,
+            pager.cursor_y + space_before + para.content_offset_top,
+        );
 
         if para.widow_control && lines_that_fit < 2 {
             // Can't fit enough lines — move whole paragraph
@@ -1320,7 +1324,8 @@ fn paginate_paragraph(
     // If it doesn't fit and we're at the top, we must split line by line
     if total_needed > pager.available_height_for(&para.lines) && pager.cursor_y == 0.0 {
         // Paragraph is taller than a page; split line by line
-        let lines_that_fit = pager.count_lines_that_fit_with_notes(&para.lines, 0.0);
+        let lines_that_fit =
+            pager.count_lines_that_fit_with_notes(&para.lines, para.content_offset_top);
         if lines_that_fit > 0 && lines_that_fit < para.lines.len() {
             render_para_split(para, lines_that_fit, 0.0, pager);
             return;
@@ -1414,8 +1419,9 @@ fn render_para_split(para: &ParagraphBlock, split_at: usize, space_before: f64, 
     // Only the lines placed on this page count toward its notes. The rest of
     // the paragraph, and any note it references, belong to the next page.
     pager.claim_notes(&para.lines[..split_at]);
-    pager.ink_bottom =
-        pager.cursor_y + para.lines[..split_at].iter().map(|l| l.height).sum::<f64>();
+    pager.ink_bottom = pager.cursor_y
+        + para.content_offset_top
+        + para.lines[..split_at].iter().map(|l| l.height).sum::<f64>();
     pager.mark_content();
     pager.finish_page();
 

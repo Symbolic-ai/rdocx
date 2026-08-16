@@ -20,7 +20,7 @@ use crate::style_resolver::NumberingState;
 use oxml_layout::{Color, FontManager, LayoutLine, NoteRef, NoteStream, Result, TextSegment};
 
 /// Point size notes are set at.
-pub const NOTE_FONT_SIZE: f64 = 8.0;
+const NOTE_FONT_SIZE: f64 = 8.0;
 /// Horizontal space reserved for the marker, to the left of note text.
 ///
 /// Notes are both line-broken and drawn against this, so the two agree.
@@ -148,10 +148,6 @@ impl NoteRegistry {
     /// Whether either stream defined the rule drawn above a carried note.
     pub fn has_continuation_separator(&self) -> bool {
         self.continuation_separator
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.notes.is_empty()
     }
 }
 
