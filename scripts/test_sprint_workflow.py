@@ -1314,7 +1314,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm-pack build --target bundler --scope tensorbee --release "
             '--out-dir "$package_root/rpptx-wasm" crates/rpptx-wasm --locked',
             'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
-            '"0.6.0" "rdocx_wasm"',
+            '"0.7.0" "rdocx_wasm"',
             'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
             '"0.3.0" "rpptx_wasm"',
             "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
@@ -3533,8 +3533,8 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(wasm["package"]["version"], {"workspace": True})
         self.assertFalse(wasm["package"]["publish"])
 
-    def test_stable_release_family_is_prepared_at_0_6_0(self) -> None:
-        expected_version = "0.6.0"
+    def test_stable_release_family_is_prepared_at_0_7_0(self) -> None:
+        expected_version = "0.7.0"
         stable_members = (
             "oxml-py-support",
             "rpptx-py",
@@ -3638,7 +3638,7 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(
             ci.count(
                 'verify_package "$package_root/rdocx-wasm" '
-                '"@tensorbee/rdocx-wasm" "0.6.0" "rdocx_wasm"'
+                '"@tensorbee/rdocx-wasm" "0.7.0" "rdocx_wasm"'
             ),
             1,
         )
@@ -3783,7 +3783,7 @@ class SprintWorkflowTests(unittest.TestCase):
         preparation_packages = (*incubating_packages, "rpptx-wasm")
         expected_version = "0.3.0"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
-        self.assertEqual(root["workspace"]["package"]["version"], "0.6.0")
+        self.assertEqual(root["workspace"]["package"]["version"], "0.7.0")
         dependencies = root["workspace"]["dependencies"]
         lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
         lock_versions = {
@@ -4128,7 +4128,7 @@ class SprintWorkflowTests(unittest.TestCase):
         )
         stable_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_stable_release_family_is_prepared_at_0_6_0"
+            "test_stable_release_family_is_prepared_at_0_7_0"
         )
         incubating_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
