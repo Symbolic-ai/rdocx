@@ -1472,6 +1472,22 @@ unchanged incubating train at 0.3.0. The patched workspace dry run, archive
 inventory, README compilation and `cargo deny` pass, and all 28 hashes stay
 unchanged.
 
+### F-X025, /verify must run the release regressions (S)
+`/verify --full` runs formatting, lints, the workspace suite, the hash harness,
+the prose rules, the no-default-features path, the WASM targets, docs, packaging
+and the supply-chain check. It does not run
+`python3 -m unittest scripts.test_sprint_workflow`, which holds the release
+family preflights that `.github/workflows/publish.yml` invokes by name as the
+publication gate.
+
+S42 demonstrated the gap rather than theorised it. F-X022 moved every version
+carrier under `crates/`, passed the entire local gate, and still left the
+incubating preflight and the `ci.yml` WASM literal asserting the old version. It
+would have failed in CI at publication time.
+**Test gate**: regression. A deliberately stale version literal in
+`scripts/test_sprint_workflow.py` or a workflow file fails `/verify --full`,
+and a clean tree passes it.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this
