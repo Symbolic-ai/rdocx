@@ -2160,6 +2160,26 @@ happens, the work is the version split plus the `ci.yml` assertions at
 `scripts/test_sprint_workflow.py:1317-1319` and the lockfile package set the
 stable preflight asserts.
 
+### F-X031, Require the CI gate in branch protection (S)
+
+F-X029 creates an always-reporting `ci-gate` that represents the result of the
+path-filtered CI graph. S44 deliberately stops at the tracked workflow because
+changing GitHub branch protection is an external repository mutation. The gate
+names and planned product surface continue to evolve through the roadmap, so
+the required-check configuration is parked at its final boundary.
+
+In S62, inspect the reviewed workflow at the sprint head, confirm that
+`ci-gate` is still the one stable aggregate check, and configure the repository
+ruleset or classic branch protection to require that exact check. Do not remove
+existing protections without an explicit reviewed decision. Bind the evidence
+to the repository, branch pattern, ruleset or protection identifier, and the
+reviewed sprint SHA.
+
+**Depends on**: F-X029.
+**Test gate**: integration. A docs-only pull request reports a successful
+required `ci-gate` while the filtered expensive jobs stay skipped, and a
+selected failing job makes the required gate fail.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this

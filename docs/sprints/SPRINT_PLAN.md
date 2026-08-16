@@ -1018,10 +1018,16 @@ output and can never catch a disagreement with Word.
 | F-199 | Complex script shaping | L |
 | F-200 | Vertical and bidirectional text | M |
 | F-202 | Incremental layout | L |
+| F-X031 | Require the CI gate in branch protection | S |
 
 F-198 changes line breaking and therefore every line after the first hyphenated
 one, so it lands after the corpus exists to measure it. Expect a declared hash
 harness delta, and expect it to be large.
+
+F-X031 is deliberately parked at the roadmap boundary. F-X029 creates the
+stable repository-side `ci-gate` in S44. This final operational story makes it
+a required GitHub check only after the planned product work and gate names have
+settled.
 
 ## Cross-cutting
 
@@ -1031,3 +1037,5 @@ its stable-family release without rewriting the completed milestone history.
 F-X013 through F-X016 carry the surviving half of the external PR 2 rendering
 contribution, whose anchored-drawing placement was overtaken by the M7 anchor
 work before it could land.
+F-X031 carries the external branch-protection mutation deferred from F-X029 to
+the final planned sprint.
