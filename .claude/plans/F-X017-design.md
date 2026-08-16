@@ -76,8 +76,8 @@ pub fn get(&self, note: NoteRef, content_width: f64) -> Option<&NoteLayout>
 
 Call sites already hold the right width:
 
-- The nine `self.notes.get(..)` sites in `Pager`
-  (`paginator.rs:366, 370, 396, 414, 438, 658, 727`) pass
+- The eight `self.notes.get(..)` sites in `Pager`
+  (`paginator.rs:366, 370, 396, 414, 438, 658, 694, 727`) pass
   `self.geometry.content_width()`, which is the section being paginated.
 - `append_endnote_pages` (`paginator.rs:921, 949`) passes the final geometry's
   content width, which is the width it already draws endnotes at. Endnotes are
@@ -130,7 +130,11 @@ single-section half of the same gate, which is the second row.
 
 ## Risk routing
 
-Matched row: **Layout, pagination, line breaking, text shaping**.
+Matched rows: **Layout, pagination, line breaking, text shaping** and **Public
+API of a published crate**. The second was added during microscope pass 1, which
+recorded it as smell S2 after finding it undeclared.
+
+Layout:
 
 - Read `docs/hld/08-rendering-spec.md` before editing.
 - Deterministic font mode for every baseline. The new regression constructs its
@@ -138,6 +142,20 @@ Matched row: **Layout, pagination, line breaking, text shaping**.
   recorded image, so it needs no new baseline.
 - Re-record deliberately, never incidentally. This story expects no delta at
   all, so any harness movement is a defect and not a re-record prompt.
+
+Published API:
+
+- **Semver impact, breaking.** `crates/rdocx-layout/src/lib.rs:9` exports
+  `pub mod notes`, so `NoteRegistry::build` and `NoteRegistry::get` are public
+  surface of `rdocx-layout`, published at 0.7.0. `build` takes `&[f64]` where it
+  took `f64`, and `get` takes the width as a second parameter. An external
+  caller of either does not compile against the new version. Under 0.x that is a
+  minor bump, and the next `/release` states it.
+- No caller outside `rdocx-layout` exists in this workspace, which is why the
+  change compiles cleanly and why the impact has to be declared rather than
+  observed.
+- No surface is added that no story asked for. The two signatures that changed
+  are the two the story is about.
 
 ## Hash harness
 
@@ -148,15 +166,16 @@ single-width path changed, which is precisely what the second regression pins.
 
 ## Implementation checklist
 
-- [ ] Record the pre-change harness state
-- [ ] `NoteRegistry` keyed by `(NoteRef, width bits)`, `build` taking the widths
-- [ ] `get` taking the width, and the nine `Pager` call sites passing the
-      section's own content width
-- [ ] `append_endnote_pages` passing the final geometry's content width
-- [ ] `engine.rs` collecting section widths plus the final width
-- [ ] The four tests, added as modules to the existing entrypoint
-- [ ] Update `03-architecture.md`
-- [ ] `cargo test -p rdocx-layout`, `/microscope F-X017 --working`, `/verify`
+- [x] Record the pre-change harness state, 28 of 28
+- [x] `NoteRegistry` keyed by `(NoteRef, width bits)`, `build` taking the widths
+- [x] `get` taking the width, and the `Pager` call sites passing the section's
+      own content width
+- [x] `append_endnote_pages` passing the final geometry's content width
+- [x] `engine.rs` collecting the section widths
+- [x] The tests, added to the existing modules rather than a new binary
+- [x] Update `03-architecture.md`
+- [x] Declare the published-surface semver impact, per microscope S2
+- [x] `cargo test -p rdocx-layout`, `/microscope F-X017 --working`, `/verify`
 
 ## Open questions
 

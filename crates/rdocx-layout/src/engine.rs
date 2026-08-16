@@ -167,15 +167,23 @@ impl Engine {
             title_pg: final_title_pg,
         });
 
-        // Lay the notes out once, before pagination, so the paginator can
-        // reserve exactly the height it will later draw.
+        // Lay the notes out once per width, before pagination, so the paginator
+        // can reserve exactly the height it will later draw. A note is broken to
+        // the measure of the section carrying its reference, so every section's
+        // width is registered. The endnote pages that follow the last body page
+        // are drawn against `final_geometry`, which belongs to the section
+        // pushed just above and is therefore already in this list.
+        let content_widths: Vec<f64> = sections
+            .iter()
+            .map(|section| section.geometry.content_width())
+            .collect();
         let notes = NoteRegistry::build(
             input,
             styles,
             &media,
             &mut self.font_manager,
             &mut num_state,
-            final_geometry.content_width(),
+            &content_widths,
         )?;
 
         // Paginate across all sections
@@ -2584,5 +2592,195 @@ mod tests {
                 );
             }
         }
+    }
+
+    // F-X017, notes broken to their own section's width.
+
+    /// Text long enough to wrap at either measure under test, so a change of
+    /// measure changes the number of lines rather than nothing at all.
+    const NOTE_PROSE: &str = "A note long enough that the measure it is broken \
+        to decides how many lines it occupies, which is the whole point of \
+        breaking it to the width of the section that references it rather than \
+        to the width of whichever section happens to come last in the document.";
+
+    /// A document whose first section is `first_page_width` twips wide and
+    /// whose body-level final section is letter portrait. The first section
+    /// references note 1 and the second references note 2, and both notes carry
+    /// the same text, so a difference in their line counts is a difference in
+    /// the measure each was broken to.
+    fn make_two_section_input(first_page_width: i32, endnotes_instead: bool) -> LayoutInput {
+        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes, NoteType};
+        use rdocx_oxml::text::CT_R;
+        use rdocx_oxml::units::Twips;
+
+        let note_of = |id: i32| {
+            let mut note = CT_P::new();
+            note.add_run(NOTE_PROSE);
+            CT_Footnote {
+                id,
+                note_type: NoteType::Normal,
+                paragraphs: vec![note],
+            }
+        };
+        let reference = |id: i32| {
+            let mut run = CT_R::new("");
+            run.content = vec![if endnotes_instead {
+                RunContent::EndnoteRef { id }
+            } else {
+                RunContent::FootnoteRef { id }
+            }];
+            run
+        };
+
+        let mut first_sect = CT_SectPr::default_letter();
+        first_sect.page_width = Some(Twips(first_page_width));
+
+        let mut doc = rdocx_oxml::document::CT_Document::new();
+
+        // The paragraph carrying a sectPr is the one that ends its section.
+        let mut first = CT_P::new();
+        first.add_run("Body text in the first section");
+        first.runs.push(reference(1));
+        first.properties = Some(rdocx_oxml::properties::CT_PPr {
+            sect_pr: Some(first_sect),
+            ..Default::default()
+        });
+        doc.body.add_paragraph(first);
+
+        let mut second = CT_P::new();
+        second.add_run("Body text in the second section");
+        second.runs.push(reference(2));
+        doc.body.add_paragraph(second);
+        doc.body.sect_pr = Some(CT_SectPr::default_letter());
+
+        let stream = CT_Footnotes {
+            footnotes: vec![note_of(1), note_of(2)],
+        };
+        LayoutInput {
+            document: doc,
+            styles: CT_Styles::new_default(),
+            numbering: None,
+            headers: HashMap::new(),
+            footers: HashMap::new(),
+            images: HashMap::new(),
+            core_properties: None,
+            hyperlink_urls: HashMap::new(),
+            footnotes: (!endnotes_instead).then(|| stream.clone()),
+            endnotes: endnotes_instead.then_some(stream),
+            theme: None,
+            fonts: Vec::new(),
+        }
+    }
+
+    /// How many distinct baselines a page drew below its separator rule. A page
+    /// without notes gives zero.
+    ///
+    /// This is the note's line count plus one for each note drawn, because a
+    /// marker sits a rise above the line it belongs to and so has a baseline of
+    /// its own. Every use below compares two of these counts over documents
+    /// drawing the same number of notes, where the offset cancels.
+    fn note_baseline_count(page: &oxml_layout::output::PageFrame) -> usize {
+        let Some(separator_y) = separator_y_of(page) else {
+            return 0;
+        };
+        let mut baselines: Vec<f64> = page
+            .elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) if run.origin.y > separator_y => Some(run.origin.y),
+                _ => None,
+            })
+            .collect();
+        baselines.sort_by(|a, b| a.partial_cmp(b).expect("baselines are finite"));
+        baselines.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+        baselines.len()
+    }
+
+    #[test]
+    fn a_note_is_broken_to_the_width_of_its_own_section() {
+        // 17 inches wide against letter's 8.5, so the wide section's measure is
+        // unmistakably different rather than different by a rounding.
+        let output = Engine::new()
+            .layout(&make_two_section_input(24480, false))
+            .expect("layout succeeds");
+
+        let wide = note_baseline_count(&output.pages[0]);
+        let narrow = note_baseline_count(&output.pages[1]);
+
+        assert!(wide > 0 && narrow > 0, "both sections must draw their note");
+        assert!(
+            wide < narrow,
+            "the same note took {wide} lines in the wide section and {narrow} \
+             in the narrow one, so both were broken to one measure"
+        );
+    }
+
+    #[test]
+    fn a_single_section_document_lays_notes_out_exactly_as_before() {
+        // Two sections of identical geometry are the same document as one, so
+        // the width key must collapse them. Any difference here is the fix
+        // moving output it had no business moving.
+        let two = Engine::new()
+            .layout(&make_two_section_input(12240, false))
+            .expect("layout succeeds");
+
+        let single = Engine::new()
+            .layout(&make_input_with_footnote(&[NOTE_PROSE]))
+            .expect("layout succeeds");
+
+        assert_eq!(
+            note_baseline_count(&two.pages[0]),
+            note_baseline_count(&single.pages[0]),
+            "a note in a letter section stopped matching the same note in a \
+             single-section letter document"
+        );
+
+        // And the same document laid out twice is still the same document.
+        let again = Engine::new()
+            .layout(&make_input_with_footnote(&[NOTE_PROSE]))
+            .expect("layout succeeds");
+        assert_eq!(single.pages.len(), again.pages.len());
+        assert_eq!(single.pages[0].elements, again.pages[0].elements);
+    }
+
+    #[test]
+    fn an_endnote_is_broken_to_the_final_sections_width() {
+        // Endnotes are emitted after the last body page and drawn against the
+        // final section's geometry, so that is the measure they must be broken
+        // to even when the reference sits in a wider section.
+        let wide_first = Engine::new()
+            .layout(&make_two_section_input(24480, true))
+            .expect("layout succeeds");
+        let all_narrow = Engine::new()
+            .layout(&make_two_section_input(12240, true))
+            .expect("layout succeeds");
+
+        // Endnotes are emitted on their own pages after every body page, and
+        // this document has one short paragraph per section, so everything
+        // drawn after the second page is endnote content.
+        let endnote_lines = |output: &LayoutResult| {
+            output.pages[2..]
+                .iter()
+                .map(|page| {
+                    page.elements
+                        .iter()
+                        .filter(|element| matches!(element, PositionedElement::Text(_)))
+                        .count()
+                })
+                .sum::<usize>()
+        };
+
+        assert_eq!(wide_first.pages.len(), all_narrow.pages.len());
+        assert!(
+            all_narrow.pages.len() > 2,
+            "the endnotes must reach pages of their own"
+        );
+        assert!(endnote_lines(&all_narrow) > 0, "the endnotes must be drawn");
+        assert_eq!(
+            endnote_lines(&wide_first),
+            endnote_lines(&all_narrow),
+            "an endnote whose reference sits in a wide section was broken to \
+             that section rather than to the final one it is drawn in"
+        );
     }
 }

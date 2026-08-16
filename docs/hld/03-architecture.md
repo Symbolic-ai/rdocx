@@ -138,12 +138,21 @@ layout compares complete bytes, assigns deterministic alternate IDs when two
 compact keys collide, and is shared by the lower-level layout and pagination
 entry points.
 
-Footnotes and endnotes are laid out once into a `NoteRegistry` before
-pagination, and the paginator reserves, splits and draws them. Note placement is
-part of pagination rather than a pass that runs after it, because a page's body
-height depends on the note area it owes, and a note that does not fit continues
-on the following page. The registry pre-shapes each note's marker, so the
-paginator places notes without needing a mutable font manager.
+Footnotes and endnotes are laid out into a `NoteRegistry` before pagination, and
+the paginator reserves, splits and draws them. Note placement is part of
+pagination rather than a pass that runs after it, because a page's body height
+depends on the note area it owes, and a note that does not fit continues on the
+following page. The registry pre-shapes each note's marker, so the paginator
+places notes without needing a mutable font manager.
+
+Each note is laid out once per distinct section content width rather than once
+per document, and is looked up by the width of the section drawing it. A note is
+broken to the measure of the section carrying its reference, since that is the
+measure it is drawn at, and reserve and render therefore still read the same
+lines. A document whose sections share a page size registers one width and lays
+each note out once, which is the common case. Endnotes are measured against the
+final section, because they are emitted after the last body page and drawn
+against that section's geometry wherever their references sit.
 
 The paginator also reflows a paragraph around any floating drawing that wraps,
 because whether a drawing overlaps a line is only known once the paragraph has a

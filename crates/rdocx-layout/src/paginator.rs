@@ -363,11 +363,19 @@ impl<'a> Pager<'a> {
         }
         let carried_height: f64 = carried
             .iter()
-            .filter_map(|(id, first)| self.notes.get(*id).map(|note| note.height_from(*first)))
+            .filter_map(|(id, first)| {
+                self.notes
+                    .get(*id, self.geometry.content_width())
+                    .map(|note| note.height_from(*first))
+            })
             .sum();
         let fresh_height: f64 = fresh
             .iter()
-            .filter_map(|id| self.notes.get(*id).map(NoteLayout::height))
+            .filter_map(|id| {
+                self.notes
+                    .get(*id, self.geometry.content_width())
+                    .map(NoteLayout::height)
+            })
             .sum();
         NOTE_SEPARATOR_OFFSET + carried_height + fresh_height
     }
@@ -393,7 +401,7 @@ impl<'a> Pager<'a> {
         let mut fresh = self.page_note_ids.clone();
         for line in lines {
             for id in page_foot_notes_in_line(line) {
-                if self.notes.get(id).is_some()
+                if self.notes.get(id, self.geometry.content_width()).is_some()
                     && !fresh.contains(&id)
                     && !self.pending_notes.iter().any(|(pending, _)| *pending == id)
                 {
@@ -411,7 +419,7 @@ impl<'a> Pager<'a> {
     fn claim_notes(&mut self, lines: &[LayoutLine]) {
         for id in lines.iter().flat_map(page_foot_notes_in_line) {
             {
-                if self.notes.get(id).is_some()
+                if self.notes.get(id, self.geometry.content_width()).is_some()
                     && !self.page_note_ids.contains(&id)
                     && !self.pending_notes.iter().any(|(pending, _)| *pending == id)
                 {
@@ -435,7 +443,7 @@ impl<'a> Pager<'a> {
 
         for (index, line) in lines.iter().enumerate() {
             for id in page_foot_notes_in_line(line) {
-                if self.notes.get(id).is_some()
+                if self.notes.get(id, self.geometry.content_width()).is_some()
                     && !fresh.contains(&id)
                     && !self.pending_notes.iter().any(|(pending, _)| *pending == id)
                 {
@@ -655,7 +663,7 @@ impl<'a> Pager<'a> {
         let mut carried: Vec<(NoteRef, usize)> = Vec::new();
 
         for (id, first, continued) in queue {
-            let Some(note) = self.notes.get(id) else {
+            let Some(note) = self.notes.get(id, self.geometry.content_width()) else {
                 continue;
             };
             if !carried.is_empty() {
@@ -691,7 +699,9 @@ impl<'a> Pager<'a> {
         let total: f64 = placed
             .iter()
             .filter_map(|(id, first, count, _)| {
-                self.notes.get(*id).map(|n| n.height_of(*first, *count))
+                self.notes
+                    .get(*id, self.geometry.content_width())
+                    .map(|n| n.height_of(*first, *count))
             })
             .sum();
 
@@ -724,7 +734,7 @@ impl<'a> Pager<'a> {
 
         let mut cursor_y = separator_y + NOTE_SEPARATOR_OFFSET;
         for (id, first, count, continued) in placed {
-            let Some(note) = self.notes.get(id) else {
+            let Some(note) = self.notes.get(id, self.geometry.content_width()) else {
                 continue;
             };
             cursor_y += draw_note(
@@ -918,7 +928,7 @@ pub fn append_endnote_pages(
             if let PositionedElement::Text(run) = element
                 && let Some(note) = run.note
                 && note.stream == NoteStream::Endnote
-                && notes.get(note).is_some()
+                && notes.get(note, geometry.content_width()).is_some()
                 && !ordered.contains(&note)
             {
                 ordered.push(note);
@@ -946,7 +956,7 @@ pub fn append_endnote_pages(
     };
 
     for note_ref in ordered {
-        let Some(note) = notes.get(note_ref) else {
+        let Some(note) = notes.get(note_ref, geometry.content_width()) else {
             continue;
         };
 
