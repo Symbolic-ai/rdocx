@@ -30,14 +30,14 @@ regenerated, never hand-edited.
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
 | M14, Word collaboration layer                  | 9  | 0 | 0 | 9  |
-| M15, Charts beyond PowerPoint                  | 4  | 0 | 2 | 2  |
+| M15, Charts beyond PowerPoint                  | 4  | 0 | 3 | 1  |
 | M16, Document automation                       | 9  | 0 | 0 | 9  |
 | M17, Security and compliance                   | 7  | 0 | 0 | 7  |
 | M18, Format breadth                            | 8  | 0 | 0 | 8  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
 | X, Cross-cutting (opportunistic)            | 34 | 32 | 0 | 1  |
-| **Total** | **244** | **186** | **2** | **55** |
+| **Total** | **244** | **186** | **3** | **54** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -310,7 +310,7 @@ regenerated, never hand-edited.
 |------|-------|--------|------|--------|
 | F-156 | Extract oxml-chart                           | S45  | L | in-progress |
 | F-157 | Word chart part and embedded workbook        | S45  | M | in-progress |
-| F-158 | Document::add_chart                          | S45  | M | pending |
+| F-158 | Document::add_chart                          | S45  | M | in-progress |
 | F-159 | Chart rendering in the Word paginator        | S45  | M | pending |
 <!-- AUTOGEN:backlog-M15 END -->
 
