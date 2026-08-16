@@ -5788,3 +5788,67 @@ checksums, archive bounds, runtime identities, and consumer-job assertions in
 one reviewed contract. A moving package-manager binary or a preinstalled tool
 is not equivalent evidence. The temporary hosted-validation pull request was
 closed without merge and its remote branch was deleted.
+
+### F-X013a, Footnote line advance
+
+**Sprint.** S41
+**Completed.** 2026-08-16
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Footnote and endnote text drawn at the bottom of a page now
+advances across the line instead of drawing every segment at the same x. A note
+built from more than one run, which is what any note carrying mixed formatting
+or a hyperlink produces, was previously an unreadable stack of overprinted
+words. It now reads as a line of text. The same change made a second defect
+visible and fixed it: notes were line-broken at the full content width but drawn
+one marker indent to the right, so every note line overran the right margin by
+exactly that indent. A single `FOOTNOTE_INDENT` constant now feeds both the
+break width and the draw position, so the two cannot disagree.
+
+**Non-obvious choices.** The advance covers all four `LineItem` variants, not
+just the two that draw. A tab or an inline image inside a note is still not
+rendered, but it occupies width, and skipping its advance would pull everything
+after it to the left. The match is exhaustive, so a new variant fails to compile
+here rather than silently reintroducing the defect.
+
+The right-margin fix was taken into this story rather than deferred. It is one
+constant and one subtraction, it shares a root cause with the defect the story
+exists to fix, and deferring it would have shipped a story whose stated outcome
+is legible notes while leaving them running off the page.
+
+**Deviations from the design plan.** Two. The plan asserted that non-text line
+items do not advance in the body path, and that was wrong. `paginator.rs`
+advances for tabs and images, and the first microscope pass caught the claim.
+The plan also predicted a hash harness delta and there is none, for a reason
+worth recording: no corpus document contains a footnote at all, so the harness
+never exercises this code path.
+
+**Spec sections touched.** None. The story fixes a defect in rendering a
+construct the spec set already describes, and adds no surface.
+
+**Tests.** The gate is the pair of named regressions,
+`a_multi_segment_footnote_does_not_stack_its_segments_at_one_x` and
+`a_single_segment_footnote_keeps_its_original_position`. Three more were added:
+`footnote_segment_advance_matches_body_segment_advance`,
+`a_tab_inside_a_footnote_still_advances_the_text_after_it` for the defect the
+first review pass found, and `a_long_footnote_does_not_overrun_the_right_margin`
+for the width fix. Each was proven to fail against its own reverted code. The
+single-segment test is an intentional guard that passes both before and after.
+
+**Hash harness.** Unchanged. All 28 entries match, and that result carries no
+information about this story. None of the seven corpus documents contains a
+footnote, so `render_page_footnotes` is entirely unexercised by the harness. The
+evidence for this story is its regression tests plus an end-to-end render of
+`sample1.docx`, the document the external contribution used for its own before
+and after screenshots. Exactly one of that document's eight pages changed, the
+one carrying the footnote.
+
+**Notes for future sessions.** The harness blind spot matters beyond this
+story. F-X013b and F-X013c will both report a flat 28 of 28 for the same reason,
+and that must not be read as those stories having no output effect. Closing the
+gap means adding a corpus document with notes, which changes the baseline set
+and is its own decision. The remaining visible defect on that sample page is
+body text overlapping the note area, which is exactly what F-X013b addresses.
+The note path still ignores its paragraph's own indent and justification, which
+the body path honours. Two placement routines that drift apart is what produced
+this defect in the first place, and one shared routine is the durable answer.

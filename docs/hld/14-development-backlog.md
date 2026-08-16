@@ -1315,3 +1315,96 @@ version, cache, or stack drift. The same contract rejects LibreOffice version,
 checksum, bound, runtime, ordering, or consumer-step drift. Full verification
 and a hosted pull-request CI run at the reviewed SHA pass with all 28 hashes
 unchanged.
+
+### F-X013, Footnote and endnote placement (parent)
+Carries the footnote half of the external PR 2 contribution, whose
+anchored-drawing half was superseded by F-X007 and the M7 anchor work. Split
+into three children at design time, when fixing endnote placement and splitting
+oversized notes were both taken into scope. The parent closes when every child
+closes.
+
+### F-X013a, Footnote line advance (S)
+Footnote text advances horizontally across the segments of a line rather than
+drawing every segment at the same indent. A footnote assembled from several
+runs, which is what any footnote carrying mixed formatting produces, no longer
+collapses into an unreadable stack at a single x. The advance accumulates the
+segment width that line breaking already computed, so the fix introduces no new
+measurement.
+**Test gate**: regression, named as a sentence describing the failure it
+prevents. A footnote built from several differently formatted runs renders its
+segments at strictly increasing x, and a single-segment footnote is unmoved. The
+hash harness carries an expected delta for every baseline holding a
+multi-segment footnote, stated and justified in the commit.
+
+### F-X013b, Footnote reservation and splitting (L)
+Pagination reserves the height a page's notes occupy before body content fills
+the text area, so body text and the note area no longer overlap. A page reserves
+the separator offset once and each distinct note referenced by a line placed on
+that page once, which keeps a note with the page carrying its reference rather
+than with the paragraph that owns it. A note too tall for the space remaining
+splits at a line boundary and continues on the next page, so an oversized note
+can neither starve a page of body content nor stall pagination. Notes are laid
+out once into a shared height map that the reservation and the rendering pass
+both consume, so a reserved height and its rendered height cannot diverge.
+**Depends on**: F-X013a.
+**Test gate**: regression, named as sentences describing the failures they
+prevent. A page whose body fills the text area leaves the reserved note area
+clear. A note taller than its remaining space continues on the following page
+without repeating its marker. A page carrying two references to one note
+reserves that note once. The hash harness carries an expected delta for every
+baseline holding a note, stated and justified in the commit.
+
+### F-X013c, Endnotes at the document end (M)
+Endnote references stop rendering their note at the foot of the page that
+carries the reference. Endnotes collect into a document-end sequence rendered
+after the final body page in reference order, while footnotes keep their
+per-page placement. The layout carries the two note streams distinctly rather
+than a single identifier that a footnote and an endnote of the same number both
+match, which today resolves to whichever the footnote part happens to define.
+**Depends on**: F-X013b.
+**Test gate**: regression, named as sentences describing the failures they
+prevent. A document mixing footnotes and endnotes places each stream in its own
+region. A footnote and an endnote sharing a number resolve to their own note
+rather than both to the footnote. The hash harness carries an expected delta for
+every baseline holding an endnote, stated and justified in the commit.
+
+### F-X014, Kashida justification values (S)
+`ST_Jc` accepts `lowKashida`, `mediumKashida` and `highKashida`, mapping each to
+justified alignment instead of rejecting the value. A paragraph carrying one of
+the three Arabic justification settings lays out justified rather than losing
+the surrounding paragraph properties to a failed parse.
+**Test gate**: unit. The three values parse to the justified variant, and the
+existing invalid-value rejection still holds for an unknown string. The hash
+harness is unchanged, since no recorded baseline carries a kashida value.
+
+### F-X015, Anchored drawing wrap and alignment model (M)
+`CT_Anchor` carries the wrap mode, the four text-distance attributes and the
+optional horizontal and vertical alignment children, and `AnchoredDrawing`
+carries them into the layout model. `wrapSquare` and `wrapTopAndBottom` parse to
+distinct wrap modes rather than collapsing into `None`, which is what the
+currently parsed-but-unread `WrapType` does today. `distT`, `distB`, `distL` and
+`distR` round-trip through the serialiser. A `positionH` or `positionV` that
+names an alignment records that alignment alongside its offset. Placement and
+rendering are deliberately unchanged, so this story adds only the model surface
+that F-X016 consumes.
+**Test gate**: round-trip. Wrap modes, the four distances and both alignment
+axes survive a parse and serialise cycle, including a prefix-tolerant read. The
+hash harness is unchanged, which is what proves the story is model-only.
+
+### F-X016, Floating drawing placement and text wrapping (L)
+An anchored drawing whose position names an alignment resolves against its
+`relativeFrom` frame by that alignment rather than by a zero offset. Body text
+flows around a `wrapSquare` drawing, reserving the frame width plus the relevant
+text distance on the lines the drawing spans, and clears a `wrapTopAndBottom`
+drawing by starting below it. Reserved width is taken from the drawing frame and
+its `distL` or `distR`, not from a scan of image pixels, since pixel extents
+describe `wrapTight` and `wrapThrough` rather than `wrapSquare`. Line breaking
+gains a per-line width reservation that the paginator can vary once it knows
+where on the page the paragraph landed.
+**Depends on**: F-X015.
+**Test gate**: golden. A paragraph beside a left-aligned square-wrapped drawing
+breaks its lines at the reserved width, a right-aligned one reserves from the
+line end, and a top-and-bottom drawing pushes the following text below its
+bottom edge plus `distB`. Unwrapped and `wrapNone` drawings lay out exactly as
+before, which the hash harness proves by leaving every baseline without a
+wrapped drawing unchanged.

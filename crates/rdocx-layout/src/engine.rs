@@ -278,6 +278,13 @@ fn substitute_fields(
     }
 }
 
+/// Horizontal space reserved for the note marker, to the left of note text.
+///
+/// Note lines are both broken and drawn against this, so the two agree. Break
+/// at the full content width and draw one indent in, and every line overruns
+/// the right margin by exactly this much.
+const FOOTNOTE_INDENT: f64 = 12.0;
+
 /// Render footnote/endnote content at the bottom of each page.
 ///
 /// For each page, collects footnote IDs from glyph runs, then
@@ -326,7 +333,7 @@ fn render_page_footnotes(
                 for para in &footnote.paragraphs {
                     if let Ok(pb) = layout_paragraph(
                         para,
-                        geometry.content_width(),
+                        geometry.content_width() - FOOTNOTE_INDENT,
                         styles,
                         input,
                         media,
@@ -403,14 +410,27 @@ fn render_page_footnotes(
                 }
 
                 // Render footnote paragraph lines
-                let indent = 12.0; // Indent after marker
+                let indent = FOOTNOTE_INDENT;
                 for line in &pb.lines {
                     let line_baseline = cursor_y + line.ascent;
+                    // Advance across the line the way the body path does. A
+                    // fixed origin stacks every segment of a multi-run note on
+                    // top of itself.
+                    let mut x = geometry.margin_left + indent;
                     for item in &line.items {
-                        if let LineItem::Text(seg) | LineItem::Marker(seg) = item {
+                        // A tab or an inline image inside a note is not drawn
+                        // yet, but it still occupies width. Skipping its
+                        // advance would pull everything after it left.
+                        let (seg, advance) = match item {
+                            LineItem::Text(seg) | LineItem::Marker(seg) => (Some(seg), seg.width),
+                            LineItem::Tab { width, .. } | LineItem::Image { width, .. } => {
+                                (None, *width)
+                            }
+                        };
+                        if let Some(seg) = seg {
                             page.elements.push(PositionedElement::Text(GlyphRun {
                                 origin: Point {
-                                    x: geometry.margin_left + indent,
+                                    x,
                                     y: line_baseline - seg.baseline_offset,
                                 },
                                 font_id: seg.font_id,
@@ -425,6 +445,7 @@ fn render_page_footnotes(
                                 footnote_id: None,
                             }));
                         }
+                        x += advance;
                     }
                     cursor_y += line.height;
                 }
@@ -1476,5 +1497,254 @@ mod tests {
         // A4: 210mm = 595.3pt, 297mm = 841.9pt
         assert!((geom.page_width - 595.3).abs() < 0.5);
         assert!((geom.page_height - 841.9).abs() < 0.5);
+    }
+
+    // F-X013a, footnote line advance.
+
+    /// Build a document whose single body paragraph references footnote 1, and
+    /// whose footnote 1 is one paragraph made of `note_runs` separate runs.
+    fn make_input_with_footnote(note_runs: &[&str]) -> LayoutInput {
+        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes};
+        use rdocx_oxml::text::CT_R;
+
+        let mut doc = rdocx_oxml::document::CT_Document::new();
+        let mut body = CT_P::new();
+        body.add_run("Body text carrying a note");
+        let mut marker_run = CT_R::new("");
+        marker_run.content = vec![RunContent::FootnoteRef { id: 1 }];
+        body.runs.push(marker_run);
+        doc.body.add_paragraph(body);
+
+        let mut note = CT_P::new();
+        for text in note_runs {
+            note.add_run(text);
+        }
+
+        LayoutInput {
+            document: doc,
+            styles: CT_Styles::new_default(),
+            numbering: None,
+            headers: HashMap::new(),
+            footers: HashMap::new(),
+            images: HashMap::new(),
+            core_properties: None,
+            hyperlink_urls: HashMap::new(),
+            footnotes: Some(CT_Footnotes {
+                footnotes: vec![CT_Footnote {
+                    id: 1,
+                    paragraphs: vec![note],
+                }],
+            }),
+            endnotes: None,
+            theme: None,
+            fonts: Vec::new(),
+        }
+    }
+
+    /// The x origin of every glyph run sitting below the footnote separator,
+    /// in the order the renderer emitted them. The first is the note marker.
+    fn footnote_glyph_x(page: &oxml_layout::output::PageFrame) -> Vec<f64> {
+        let separator_y = page
+            .elements
+            .iter()
+            .find_map(|element| match element {
+                PositionedElement::Line { start, .. } => Some(start.y),
+                _ => None,
+            })
+            .expect("a page with a footnote draws a separator line");
+
+        page.elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) if run.origin.y > separator_y => Some(run.origin.x),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_multi_segment_footnote_does_not_stack_its_segments_at_one_x() {
+        let input = make_input_with_footnote(&["Alpha", "Beta", "Gamma"]);
+        let mut engine = Engine::new();
+        let output = engine.layout(&input).expect("layout succeeds");
+        let xs = footnote_glyph_x(&output.pages[0]);
+
+        assert!(
+            xs.len() >= 4,
+            "expected a marker and three note segments, got {xs:?}"
+        );
+        for pair in xs.windows(2) {
+            assert!(
+                pair[1] > pair[0],
+                "footnote segments must advance, got {xs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_single_segment_footnote_keeps_its_original_position() {
+        let input = make_input_with_footnote(&["Solitary"]);
+        let mut engine = Engine::new();
+        let output = engine.layout(&input).expect("layout succeeds");
+        let xs = footnote_glyph_x(&output.pages[0]);
+        let geometry = sect_pr_to_geometry(&CT_SectPr::default_letter());
+
+        // The marker sits at the left margin, the single segment one indent in.
+        assert_eq!(xs.len(), 2, "expected a marker and one segment, got {xs:?}");
+        assert!(
+            (xs[0] - geometry.margin_left).abs() < 0.01,
+            "marker at {xs:?}"
+        );
+        assert!(
+            (xs[1] - (geometry.margin_left + 12.0)).abs() < 0.01,
+            "segment at {xs:?}"
+        );
+    }
+
+    #[test]
+    fn a_long_footnote_does_not_overrun_the_right_margin() {
+        // Long enough to wrap, which is what exposes a break width that
+        // disagrees with the indent the note is drawn at.
+        let long = "In paged media, footnotes are usually displayed at the \
+                    bottom of the text. However, in ebooks, a better paradigm \
+                    is to make them clickable endnotes that the reader can \
+                    browse at leisure, which this sentence exists to force.";
+        let input = make_input_with_footnote(&[long]);
+        let mut engine = Engine::new();
+        let output = engine.layout(&input).expect("layout succeeds");
+        let page = &output.pages[0];
+        let geometry = sect_pr_to_geometry(&CT_SectPr::default_letter());
+        let right_margin = geometry.page_width - geometry.margin_right;
+
+        let separator_y = page
+            .elements
+            .iter()
+            .find_map(|element| match element {
+                PositionedElement::Line { start, .. } => Some(start.y),
+                _ => None,
+            })
+            .expect("a page with a footnote draws a separator line");
+
+        let mut wrapped = false;
+        let mut first_y = None;
+        for element in &page.elements {
+            let PositionedElement::Text(run) = element else {
+                continue;
+            };
+            if run.origin.y <= separator_y {
+                continue;
+            }
+            let first = *first_y.get_or_insert(run.origin.y);
+            if run.origin.y > first + 0.01 {
+                wrapped = true;
+            }
+            let right_edge = run.origin.x + run.advances.iter().sum::<f64>();
+            assert!(
+                right_edge <= right_margin + 0.01,
+                "note text reaches {right_edge}, past the right margin {right_margin}"
+            );
+        }
+        assert!(wrapped, "the note must wrap for this test to mean anything");
+    }
+
+    #[test]
+    fn a_tab_inside_a_footnote_still_advances_the_text_after_it() {
+        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes};
+        use rdocx_oxml::text::CT_R;
+
+        // Two notes differing only by a tab between their runs. The tab is not
+        // drawn, but it occupies width, so the run after it must shift right.
+        let build = |with_tab: bool| {
+            let mut doc = rdocx_oxml::document::CT_Document::new();
+            let mut body = CT_P::new();
+            body.add_run("Body");
+            let mut marker_run = CT_R::new("");
+            marker_run.content = vec![RunContent::FootnoteRef { id: 1 }];
+            body.runs.push(marker_run);
+            doc.body.add_paragraph(body);
+
+            let mut note = CT_P::new();
+            note.add_run("Alpha");
+            if with_tab {
+                let mut tab_run = CT_R::new("");
+                tab_run.content = vec![RunContent::Tab];
+                note.runs.push(tab_run);
+            }
+            note.add_run("Beta");
+
+            LayoutInput {
+                document: doc,
+                styles: CT_Styles::new_default(),
+                numbering: None,
+                headers: HashMap::new(),
+                footers: HashMap::new(),
+                images: HashMap::new(),
+                core_properties: None,
+                hyperlink_urls: HashMap::new(),
+                footnotes: Some(CT_Footnotes {
+                    footnotes: vec![CT_Footnote {
+                        id: 1,
+                        paragraphs: vec![note],
+                    }],
+                }),
+                endnotes: None,
+                theme: None,
+                fonts: Vec::new(),
+            }
+        };
+
+        let mut engine = Engine::new();
+        let plain = engine.layout(&build(false)).expect("layout succeeds");
+        let tabbed = engine.layout(&build(true)).expect("layout succeeds");
+
+        let plain_x = footnote_glyph_x(&plain.pages[0]);
+        let tabbed_x = footnote_glyph_x(&tabbed.pages[0]);
+
+        // Marker and both runs are drawn in each case. The tab draws nothing.
+        assert_eq!(plain_x.len(), 3, "plain note glyphs {plain_x:?}");
+        assert_eq!(tabbed_x.len(), 3, "tabbed note glyphs {tabbed_x:?}");
+        assert!(
+            tabbed_x[2] > plain_x[2] + 1.0,
+            "the run after a tab must shift right, plain {plain_x:?} tabbed {tabbed_x:?}"
+        );
+    }
+
+    #[test]
+    fn footnote_segment_advance_matches_body_segment_advance() {
+        let input = make_input_with_footnote(&["Alpha", "Beta", "Gamma"]);
+        let mut engine = Engine::new();
+        let output = engine.layout(&input).expect("layout succeeds");
+        let page = &output.pages[0];
+
+        let separator_y = page
+            .elements
+            .iter()
+            .find_map(|element| match element {
+                PositionedElement::Line { start, .. } => Some(start.y),
+                _ => None,
+            })
+            .expect("a page with a footnote draws a separator line");
+
+        // Gaps between consecutive note segments must equal the width of the
+        // segment that precedes them, which is what the body path advances by.
+        let notes: Vec<&GlyphRun> = page
+            .elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) if run.origin.y > separator_y => Some(run),
+                _ => None,
+            })
+            .skip(1) // the marker, which is positioned independently
+            .collect();
+
+        assert_eq!(notes.len(), 3, "expected three note segments");
+        for pair in notes.windows(2) {
+            let advance: f64 = pair[0].advances.iter().sum();
+            let gap = pair[1].origin.x - pair[0].origin.x;
+            assert!(
+                (gap - advance).abs() < 0.01,
+                "gap {gap} should equal preceding segment advance {advance}"
+            );
+        }
     }
 }
