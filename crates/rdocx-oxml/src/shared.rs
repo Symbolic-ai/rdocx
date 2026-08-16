@@ -20,7 +20,12 @@ impl ST_Jc {
             "start" | "left" => Ok(ST_Jc::Left),
             "end" | "right" => Ok(ST_Jc::Right),
             "center" => Ok(ST_Jc::Center),
-            "both" | "justify" => Ok(ST_Jc::Both),
+            // Kashida justification stretches Arabic text by elongating the
+            // connecting stroke rather than by widening spaces. Shaping that
+            // faithfully is beyond this crate, and justified is what the three
+            // values mean at the paragraph level. Rejecting them instead failed
+            // the whole document open.
+            "both" | "justify" | "lowKashida" | "mediumKashida" | "highKashida" => Ok(ST_Jc::Both),
             "distribute" => Ok(ST_Jc::Distribute),
             _ => Err(OxmlError::InvalidValue(format!("invalid ST_Jc: {s}"))),
         }
@@ -402,6 +407,61 @@ impl ST_HighlightColor {
             Self::Red => "red",
             Self::White => "white",
             Self::Yellow => "yellow",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // F-X014, kashida justification values.
+
+    #[test]
+    fn kashida_justification_maps_to_both() {
+        for value in ["lowKashida", "mediumKashida", "highKashida"] {
+            assert_eq!(
+                ST_Jc::from_str(value).unwrap(),
+                ST_Jc::Both,
+                "{value} should justify"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_justification_is_still_rejected() {
+        // The story widens the accepted set. It does not remove the check.
+        assert!(ST_Jc::from_str("sideways").is_err());
+        assert!(ST_Jc::from_str("").is_err());
+    }
+
+    #[test]
+    fn a_document_using_kashida_justification_still_opens() {
+        use crate::document::CT_Document;
+
+        for value in ["lowKashida", "mediumKashida", "highKashida"] {
+            let xml = format!(
+                r#"<?xml version="1.0"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:pPr><w:jc w:val="{value}"/><w:keepNext/></w:pPr>
+  <w:r><w:t>Arabic justified text.</w:t></w:r></w:p></w:body></w:document>"#
+            );
+
+            let document = CT_Document::from_xml(xml.as_bytes())
+                .unwrap_or_else(|e| panic!("a document using {value} must open, got {e}"));
+
+            let crate::document::BodyContent::Paragraph(paragraph) = &document.body.content[0]
+            else {
+                panic!("expected a paragraph");
+            };
+            let properties = paragraph.properties.as_ref().expect("properties survive");
+            assert_eq!(properties.jc, Some(ST_Jc::Both), "{value} justifies");
+            assert_eq!(
+                properties.keep_next,
+                Some(true),
+                "{value} must not cost the paragraph its sibling properties"
+            );
+            assert_eq!(paragraph.text(), "Arabic justified text.");
         }
     }
 }

@@ -5998,3 +5998,52 @@ any assertion about the new behaviour does. The public surface of `oxml-layout`
 changed: `footnote_id` became `note`. That crate is incubating at 0.2.0 with no
 consumer outside this workspace, and `rdocx`'s own public API is untouched,
 since `RunRef::footnote_id()` reads the oxml model rather than a layout segment.
+
+### F-X014, Kashida justification values
+
+**Sprint.** S41
+**Completed.** 2026-08-16
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** `ST_Jc` accepts `lowKashida`, `mediumKashida` and
+`highKashida`, mapping each to justified alignment. The symptom was larger than
+the backlog entry described and the entry was corrected before implementing:
+`CT_PPr::from_xml` propagates a rejected justification with `?`, and that error
+reaches `Document::open`, so a document carrying any of the three failed to open
+at all rather than losing one property.
+
+**Non-obvious choices.** The three values join the existing `both | justify`
+arm rather than gaining a variant of their own. Kashida justification stretches
+Arabic text by elongating the connecting stroke rather than by widening spaces,
+which needs shaping this crate does not do, so a distinct variant would behave
+identically to `Both` at every site that matches on `ST_Jc` while adding a case
+to each. `distribute` was rejected because it spreads the last line and kashida
+justification does not.
+
+A kashida value round trips as `both`. That is a deliberate normalisation
+recorded in the design plan, not an oversight.
+
+**Deviations from the design plan.** None. The backlog story itself was
+corrected during design, once the failure was reproduced and turned out to be a
+load failure rather than a layout inaccuracy.
+
+**Spec sections touched.** None.
+
+**Tests.** The gate is
+`a_document_using_kashida_justification_still_opens`, which loads a document for
+each of the three values and asserts the paragraph keeps both its justification
+and a sibling property. Plus `kashida_justification_maps_to_both` and
+`an_unknown_justification_is_still_rejected`, the latter pinning that the check
+was widened rather than removed. All three fail against the unwidened parser.
+
+**Hash harness.** Unchanged. All 28 entries match. No corpus document carries a
+kashida value, and no existing behaviour moved, since affected documents
+previously failed to open rather than rendering differently.
+
+**Notes for future sessions.** This is one instance of a wider problem, filed as
+F-X018. Nine value parsers in `shared.rs` and `styles.rs` reject any string they
+do not enumerate, and several are reached through `?` from property parsing, so
+a document using a spec-valid value the model has not yet listed fails to open.
+Fixing all nine means deciding a general rule, which is that an unmodelled value
+falls back to the element's default and its siblings survive. That is a story of
+its own rather than something to change in passing here.

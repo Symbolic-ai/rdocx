@@ -1381,12 +1381,32 @@ single-section document is byte-identical to before.
 
 ### F-X014, Kashida justification values (S)
 `ST_Jc` accepts `lowKashida`, `mediumKashida` and `highKashida`, mapping each to
-justified alignment instead of rejecting the value. A paragraph carrying one of
-the three Arabic justification settings lays out justified rather than losing
-the surrounding paragraph properties to a failed parse.
-**Test gate**: unit. The three values parse to the justified variant, and the
-existing invalid-value rejection still holds for an unknown string. The hash
-harness is unchanged, since no recorded baseline carries a kashida value.
+justified alignment instead of rejecting the value.
+
+The consequence is larger than the alignment. `CT_PPr::from_xml` propagates the
+rejection with `?`, and that error travels all the way out of
+`CT_Document::from_xml`, so a document carrying one of the three Arabic
+justification settings **fails to open at all**. This is a load failure, not a
+layout inaccuracy.
+**Test gate**: regression, named as a sentence describing the failure it
+prevents. A document whose paragraph carries each kashida value opens and lays
+out justified, and the existing rejection still holds for a genuinely unknown
+string. The hash harness is unchanged, since no recorded baseline carries a
+kashida value.
+
+### F-X018, Unknown enumerated values should not fail a document open (M)
+Nine value parsers in `rdocx-oxml/src/shared.rs` and `styles.rs` return an error
+for any string they do not enumerate, and several are reached through `?` from
+paragraph, table and numbering property parsing. A document using a
+spec-valid value the model does not yet list therefore fails to open rather
+than losing one property. F-X014 fixes the three kashida values because they
+were reachable from a real contribution. This story decides the general rule,
+which is that an unmodelled enumerated value falls back to the element's default
+and the surrounding properties survive.
+**Depends on**: F-X014.
+**Test gate**: regression. A document carrying an unmodelled value for each of
+the nine enumerations opens, keeps every sibling property, and renders with the
+default for the unmodelled one.
 
 ### F-X015, Anchored drawing wrap and alignment model (M)
 `CT_Anchor` carries the wrap mode, the four text-distance attributes and the
