@@ -1394,6 +1394,23 @@ out justified, and the existing rejection still holds for a genuinely unknown
 string. The hash harness is unchanged, since no recorded baseline carries a
 kashida value.
 
+### F-X020, Refresh the dependency lockfile (S)
+Every semver-compatible dependency update outstanding at the start of the sprint
+is taken, and its effect on rendered output is measured rather than assumed.
+Sixteen updates are pending and none is a security fix: `cargo audit` reports
+zero vulnerabilities across 152 dependencies and `cargo deny check advisories`
+passes. Two of the sixteen, `font-types` and `zune-core`, sit in the font and
+image decoding path, which is why the hash harness is this story's real gate
+rather than a formality.
+
+The `ttf-parser` unmaintained advisory, RUSTSEC-2026-0192, is unaffected. It is
+allowlisted in `deny.toml` with a documented reason, and clearing it needs the
+`fontdb` to `fontique` swap rather than a lockfile refresh.
+**Test gate**: the full workspace suite and the hash harness. A delta is
+expected only if a font or image dependency moved rendering, and any delta names
+the dependency that caused it and is reviewed before the baseline is re-recorded.
+A delta traced to no dependency in the rendering path blocks the story.
+
 ### F-X019, Paragraph-relative drawings in later blocks should wrap (M)
 Text flows around a wrapping drawing anchored to a later paragraph even when
 that drawing is positioned relative to its own paragraph rather than to the

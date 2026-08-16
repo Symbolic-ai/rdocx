@@ -657,6 +657,22 @@ F-X015 adds the wrap and alignment surface without changing placement, which
 keeps the harness flat and makes F-X016 the single story that owns the rendering
 delta for wrapped drawings.
 
+#### Sprint S42, Dependency refresh
+
+**Goal**: take the outstanding semver-compatible dependency updates and measure
+what they do to rendered output. Nothing here is a security fix, since the
+advisory scan is already clean, so the value is in not letting the lockfile
+drift far enough that a later update becomes a large unexplained delta.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X020 | Refresh the dependency lockfile | S |
+
+Two of the sixteen pending updates are in the font and image decoding path, so
+the hash harness decides whether this is a no-op or a declared rendering delta.
+The sprint carries one story deliberately: a lockfile refresh that also changed
+a baseline should not share a sprint with unrelated work.
+
 ## Cross-cutting
 
 F-X001 through F-X004 are scheduled in S36 as the final cross-cutting v1
