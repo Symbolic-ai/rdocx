@@ -9,6 +9,11 @@ use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::path::Path;
 
+use oxml_chart::{
+    Axis, AxisData, AxisId, AxisKind, AxisPosition, BarDirection, BarGrouping, CT_ChartSpace,
+    CT_Legend, CT_PlotArea, Grouping, NumericData, Plot, RadarStyle, ScatterStyle, Series,
+    StringRef,
+};
 use oxml_core::OxmlError;
 pub use oxml_core::core_properties::CoreProperties;
 pub use oxml_core::units::{Angle, Emu};
@@ -36,11 +41,6 @@ use oxml_opc::content_types;
 use oxml_opc::relationship::{Relationship, rel_types};
 use oxml_opc::{OpcError, OpcPackage, Relationships};
 use oxml_sml::{Column, Workbook};
-use rpptx_chart::{
-    Axis, AxisData, AxisId, AxisKind, AxisPosition, BarDirection, BarGrouping, CT_ChartSpace,
-    CT_Legend, CT_PlotArea, Grouping, NumericData, Plot, RadarStyle, ScatterStyle, Series,
-    StringRef,
-};
 #[cfg(feature = "render")]
 use rpptx_layout::{
     ChartResource, FlattenedItem, ResolveCtx, ScopedChartResources, ScopedHyperlinkTargets,
@@ -1622,9 +1622,9 @@ fn authored_chart_parts(
         .map_err(|error| invalid_chart_mutation("add chart", error.to_string()))?;
     let chart_shell = format!(
         r#"<c:chartSpace xmlns:c="{}" xmlns:a="{}" xmlns:r="{}"><c:chart><c:plotArea/></c:chart><c:externalData r:id="{}"><c:autoUpdate val="0"/></c:externalData></c:chartSpace>"#,
-        rpptx_chart::C_NS,
-        rpptx_chart::A_NS,
-        rpptx_chart::R_NS,
+        oxml_chart::C_NS,
+        oxml_chart::A_NS,
+        oxml_chart::R_NS,
         workbook_relationship_id,
     );
     let mut chart_space = CT_ChartSpace::from_xml(chart_shell.as_bytes())

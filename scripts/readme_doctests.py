@@ -20,8 +20,8 @@ EXAMPLE_FENCE = re.compile(
     r"^```(?:rust[^\n]*|toml|python|javascript|sh|text)$",
     re.MULTILINE,
 )
-WORKSPACE_PACKAGE_COUNT = 26
-PUBLISHABLE_PACKAGE_COUNT = 21
+WORKSPACE_PACKAGE_COUNT = 27
+PUBLISHABLE_PACKAGE_COUNT = 22
 LOCAL_PATCHES = (
     ("oxml-core", "crates/oxml-core"),
     ("oxml-drawing", "crates/oxml-drawing"),
@@ -31,6 +31,7 @@ LOCAL_PATCHES = (
     ("oxml-pdf", "crates/oxml-pdf"),
     ("oxml-sml", "crates/oxml-sml"),
     ("oxml-cli-support", "crates/oxml-cli-support"),
+    ("oxml-chart", "crates/oxml-chart"),
     ("rdocx", "crates/rdocx"),
     ("rdocx-cli", "crates/rdocx-cli"),
     ("rdocx-html", "crates/rdocx-html"),
@@ -135,6 +136,12 @@ README_CASES = (
         1,
     ),
     ReadmeCase(
+        "oxml-chart",
+        "oxml_chart",
+        REPO_ROOT / "crates/oxml-chart/README.md",
+        1,
+    ),
+    ReadmeCase(
         "rpptx",
         "rpptx",
         REPO_ROOT / "crates/rpptx/README.md",
@@ -214,6 +221,7 @@ README_REQUIRED_TEXT = {
         "use rpptx::Presentation;",
         "Presentation::new()?",
     ),
+    REPO_ROOT / "crates/oxml-chart/README.md": ("AxisId::new(10_000_001)?",),
     REPO_ROOT / "crates/rpptx-chart/README.md": ("AxisId::new(10_000_001)?",),
     REPO_ROOT / "crates/rpptx-cli/README.md": (
         "cargo install rpptx-cli --version '^0.3.0'",
@@ -475,8 +483,9 @@ def validate_inventory() -> bool:
                 valid = False
     if valid:
         print(
-            "readme_doctests: 26 distinct workspace READMEs and 21 "
-            "publishable package inventories validated"
+            f"readme_doctests: {WORKSPACE_PACKAGE_COUNT} distinct workspace "
+            f"READMEs and {PUBLISHABLE_PACKAGE_COUNT} publishable package "
+            "inventories validated"
         )
     return valid
 

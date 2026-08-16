@@ -1,6 +1,7 @@
 # 09, Charts spec
 
-Owners: `rpptx-chart` for ChartML, `oxml-sml` for the embedded workbook.
+Owners: `oxml-chart` for ChartML, `oxml-sml` for the embedded workbook.
+`rpptx-chart` is a deprecated exact re-export shim.
 
 Charts are the largest single subsystem in v1 and the reason the release spans
 three OOXML formats. They were scoped in deliberately, and the estimate that
@@ -441,7 +442,7 @@ rows `North, 12.5, 8.0`, `South, 19.0, 11.5`, and `West, 14.25, 9.75`.
 
 ## Rendering
 
-`rpptx-chart` emits `PathElement`, `Text` and `Group` directly into the page
+`oxml-chart` emits `PathElement`, `Text` and `Group` directly into the page
 frame, so **no backend work is needed beyond what `08-rendering-spec.md`
 already requires**. Bars, lines, pie wedges, areas and markers are all paths.
 Gridlines and axis lines are strokes. Labels are glyph runs.

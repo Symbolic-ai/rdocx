@@ -312,6 +312,7 @@ Migration guidance for the shared crate cutover is in the
 | Shared | `oxml-layout` | Layout output types, fonts, and line breaking |
 | Shared | `oxml-pdf` | PDF and PNG rendering backends |
 | Shared | `oxml-sml` | Minimal SpreadsheetML writer for chart workbooks |
+| Shared | `oxml-chart` | ChartML model and backend-neutral renderer |
 | Word | `rdocx` | High-level Document API |
 | Word | `rdocx-opc` | Deprecated compatibility shim over `oxml-opc` |
 | Word | `rdocx-oxml` | WordprocessingML types and `oxml-core` compatibility re-exports |
@@ -324,7 +325,7 @@ Migration guidance for the shared crate cutover is in the
 | PowerPoint | `rpptx-oxml` | PresentationML types |
 | PowerPoint | `rpptx-layout` | Inheritance resolver and flattener |
 | PowerPoint | `rpptx-render` | Slide renderer |
-| PowerPoint | `rpptx-chart` | ChartML model and renderer |
+| PowerPoint | `rpptx-chart` | Deprecated compatibility shim over `oxml-chart` |
 
 ## Minimum Supported Rust Version
 

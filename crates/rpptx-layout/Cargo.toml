@@ -20,7 +20,7 @@ tag-name = "rpptx-v{{version}}"
 [dependencies]
 oxml-drawing.workspace = true
 oxml-layout.workspace = true
-rpptx-chart.workspace = true
+oxml-chart.workspace = true
 rpptx-oxml.workspace = true
 
 [dev-dependencies]

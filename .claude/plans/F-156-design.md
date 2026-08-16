@@ -1,6 +1,6 @@
 # F-156, Extract oxml-chart
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S45
 **Size**: L
 **Depends on**: none
@@ -26,6 +26,7 @@ changing a single parser, serializer, geometry, or rendered byte.
   dependency rule", and "Why these seams".
 - `docs/hld/04-opc-and-packaging.md`, deterministic saves and XML preservation.
 - `docs/hld/09-charts-spec.md`, "The ChartML model" and "Rendering".
+- `docs/hld/11-migration-plan.md`, "Release tooling".
 - `docs/hld/12-testing-strategy.md`, "The hash harness", "The deck corpus",
   and "The render fidelity gate".
 - `docs/hld/14-development-backlog.md`, "F-156, Extract oxml-chart".
@@ -39,6 +40,9 @@ to a new published `crates/oxml-chart` package at the existing incubating
 version. Register `oxml-chart` as the shared workspace dependency and update
 every active consumer, release-order list, package assertion, README doctest,
 and repository path assertion to use the new crate directly.
+
+Update the exact incubating publish allowlist and dependency-order paragraph
+to publish `oxml-chart` before its deprecated `rpptx-chart` shim.
 
 Reduce `rpptx-chart` to the established deprecated compatibility shape:
 
@@ -91,6 +95,7 @@ move, and every existing chart test passes against the new path.
 - `docs/hld/03-architecture.md`
 - `docs/hld/07-inheritance-and-resolution.md`
 - `docs/hld/09-charts-spec.md`
+- `docs/hld/11-migration-plan.md`
 - `docs/hld/12-testing-strategy.md`
 - `docs/hld/14-development-backlog.md`
 - `docs/hld/15-build-and-toolchain.md`
@@ -127,12 +132,12 @@ defect in this mechanical extraction and blocks integration.
 
 ## Implementation checklist
 
-- [ ] Move the complete chart implementation and tests to `oxml-chart`.
-- [ ] Register the new shared dependency and point active consumers at it.
-- [ ] Reduce `rpptx-chart` to a deprecated exact re-export with a type-identity test.
-- [ ] Update release, package, README, doctest, and repository path assertions.
-- [ ] Run focused chart, dependency, package, and unchanged-output checks.
-- [ ] Update exactly the listed HLD files.
+- [x] Move the complete chart implementation and tests to `oxml-chart`.
+- [x] Register the new shared dependency and point active consumers at it.
+- [x] Reduce `rpptx-chart` to a deprecated exact re-export with a type-identity test.
+- [x] Update release, package, README, doctest, and repository path assertions.
+- [x] Run focused chart, dependency, package, and unchanged-output checks.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

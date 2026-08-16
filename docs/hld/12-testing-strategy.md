@@ -242,7 +242,7 @@ official Linux x86-64 Debian archive with reviewed SHA-256
 `2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e`.
 The installer bounds the download, archive member count, and expanded bytes,
 rejects unsafe members and populated prefixes, and checks the exact runtime
-identity before the `rpptx-chart` viewer gates execute. The installer supplies
+identity before the `oxml-chart` viewer gates execute. The installer supplies
 the explicit NSS, NSPR, D-Bus, Cairo, GLib, X11, CUPS, font, and Kerberos
 runtime libraries required by the official build.
 
@@ -466,7 +466,7 @@ stdout, exit-status verdicts, output validity, replacement persistence,
 document-order text, and bundled-font deterministic render bytes. Process ID
 and an atomic counter isolate temporary workspaces across concurrent runs.
 
-All 26 workspace packages explicitly declare one distinct README. The root
+All 27 workspace packages explicitly declare one distinct README. The root
 README is the high-level `rdocx` guide. Each crate-local document states the
 package purpose, direct-use guidance, adjacent package relationship,
 publication status, and a concrete Rust, CLI, Python, or JavaScript example.
@@ -479,10 +479,10 @@ deterministic feature guidance, and matching dependency and import names. It
 builds the applicable libraries with locked dependencies and Cargo JSON
 messages, locates each emitted rlib from one package build graph, and invokes
 rustdoc with the 2024 edition, warnings denied, the dependency search path, and
-every matching `--extern` binding. It compiles 26 Rust examples across the 20
-Rust-library READMEs. It also creates all 21 publishable archives and
+every matching `--extern` binding. It compiles 27 Rust examples across the 21
+Rust-library READMEs. It also creates all 22 publishable archives and
 byte-compares their single packaged README with the declared source. Archive
-creation uses the same exact 21-package local source patch set as the release
+creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.

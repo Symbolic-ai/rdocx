@@ -145,7 +145,7 @@ after v1 leans on that rather than away from it.
 | v1 position | Superseded by | Why it changed |
 |---|---|---|
 | `oxml-sml` is not a spreadsheet library and must not grow into one without a separate decision | **M19**, and F-184 is that decision | The decision was correct while the foundations were unbuilt. OPC, DrawingML, charts, layout and the PDF backend now all exist and are format-neutral, so the marginal cost of the third family is a fraction of what it was |
-| Charts are a PowerPoint capability | **M15** | `rpptx-chart` turned out to depend on no PowerPoint crate. It was format-neutral all along and only its name said otherwise |
+| Charts are a PowerPoint capability | **M15** | `oxml-chart` now owns the format-neutral engine. `rpptx-chart` remains a deprecated compatibility shim |
 
 Both entries are decisions, not corrections. The v1 positions were right when
 they were written.

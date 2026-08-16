@@ -195,10 +195,12 @@ the sole authority for both namespaces and crates.io publication.
 A stable tag publishes exactly `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`,
 `rdocx-html`, `rdocx-pdf`, `rdocx`, and `rdocx-cli`. An incubating tag publishes
 exactly `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
-`oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `rpptx-oxml`, `rpptx-chart`,
-`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. The stable registry
-family is published at 0.6.0 from the annotated `v0.6.0` tag, while the four
-non-publishable shared-version members remain local distribution only. The
+`oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`,
+`rpptx-chart`, `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. The
+shared chart owner publishes before its deprecated compatibility shim. The
+stable registry family is published at 0.6.0 from the annotated `v0.6.0` tag,
+while the four non-publishable shared-version members remain local distribution
+only. The
 incubating registry family remains at 0.1.3.
 
 Before either real allowlist, the workflow reproduces the deterministic hash

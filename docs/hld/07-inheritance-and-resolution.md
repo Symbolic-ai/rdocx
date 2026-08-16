@@ -166,7 +166,7 @@ support must be decided before the renderer boundary.
 `ResolveCtx::resolve_slide_with_chart_resources` additionally accepts
 `ScopedChartResources` and the caller's `FontManager`. The chart maps keep
 slide, layout and master relationship identifiers separate. A parsed supported
-chart freezes the `rpptx-chart` result as `ResolvedContent::Group`. The group
+chart freezes the `oxml-chart` result as `ResolvedContent::Group`. The group
 contains only backend-neutral paths and shaped labels. Missing, external,
 missing-target and invalid ChartML resources retain the producing scope and
 relationship identifier in their diagnostics.

@@ -1241,9 +1241,9 @@ intact, and the mode is reported through the public API.
 
 ## Milestone 15, Charts beyond PowerPoint (about 2 weeks)
 
-**Goal**: one chart engine, two document families. `rpptx-chart` is 15,909 lines
-and already depends only on `oxml-core`, `oxml-drawing`, `oxml-layout`,
-`oxml-opc` and `oxml-pdf`. It is format-neutral in everything but its name.
+**Goal**: one chart engine, two document families. `oxml-chart` owns the
+format-neutral model and renderer. `rpptx-chart` remains an exact deprecated
+re-export for existing consumers.
 
 `python-docx` has no chart API at all. The standard workaround is rendering a
 chart to PNG and pasting it, which loses every bit of editability. Apache POI

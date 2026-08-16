@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+use oxml_chart::{render_chart, render_chart_placeholder};
 use oxml_drawing::color::{ColorChoice, ColorMap, ColorMapSlot, RgbColor, resolve_color};
 use oxml_drawing::effect::CT_OuterShadowEffect;
 use oxml_drawing::fill::{
@@ -28,7 +29,6 @@ use oxml_layout::{
     Color, Diagnostic, Effect, FillRule, FontManager, GradientStop, LineCap, LineJoin, Paint, Path,
     PathCommand, Point, Rect, Stroke, Transform,
 };
-use rpptx_chart::{render_chart, render_chart_placeholder};
 use rpptx_oxml::graphic_frame::GraphicDataPayload;
 use rpptx_oxml::picture::CT_Picture;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType, PlaceholderKey};
@@ -3143,6 +3143,7 @@ mod tests {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
+    use oxml_chart::CT_ChartSpace;
     use oxml_drawing::color::ColorMap;
     use oxml_drawing::fill::Fill;
     use oxml_drawing::text::{
@@ -3151,7 +3152,6 @@ mod tests {
     use oxml_drawing::theme::CT_OfficeStyleSheet;
     use oxml_opc::OpcPackage;
     use oxml_opc::relationship::rel_types;
-    use rpptx_chart::CT_ChartSpace;
     use rpptx_oxml::placeholder::PhType;
     use rpptx_oxml::presentation::CT_Presentation;
     use rpptx_oxml::shape_tree::{CT_Shape, ShapeTreeChild};

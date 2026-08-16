@@ -134,19 +134,19 @@ The dependency order grows to roughly twenty crates:
 
 ```
 oxml-core -> oxml-opc -> oxml-media -> oxml-drawing -> oxml-layout -> oxml-pdf
-  -> oxml-sml -> oxml-cli-support
+  -> oxml-sml -> oxml-cli-support -> oxml-chart
   -> rdocx-oxml -> rdocx-layout -> rdocx-html -> rdocx -> rdocx-cli
-  -> rpptx-oxml -> rpptx-layout -> rpptx-render -> rpptx-chart -> rpptx -> rpptx-cli
+  -> rpptx-oxml -> rpptx-chart -> rpptx-layout -> rpptx-render -> rpptx -> rpptx-cli
 ```
 
-The fourteen crates.io names in this graph are published at 0.2.0 under the owner
-`mantissaman`: `oxml-core`, `oxml-opc`, `oxml-media`,
+The fifteen crates.io candidates in this graph are owned by `mantissaman`:
+`oxml-core`, `oxml-opc`, `oxml-media`,
 `oxml-drawing`, `oxml-layout`, `oxml-pdf`, `oxml-sml`, `oxml-cli-support`,
-`rpptx-oxml`, `rpptx-layout`, `rpptx-render`, `rpptx-chart`, `rpptx`, and
-`rpptx-cli`. All 14 implemented packages use the reviewed release path
-described below. The earlier 12-package family is published at 0.1.2.
+`oxml-chart`, `rpptx-oxml`, `rpptx-layout`, `rpptx-render`, `rpptx-chart`,
+`rpptx`, and `rpptx-cli`. All 15 implemented packages use the reviewed release
+path described below. The earlier 12-package family is published at 0.1.2.
 `oxml-cli-support` and `rpptx-cli` are publishable but remain unpublished at
-that version. The complete 14-package family is published at the immutable
+that version. The original 14-package family is published at the immutable
 0.1.3 and 0.2.0 boundaries.
 
 `oxml-py-support`, `rpptx-py`, and `rpptx-wasm` are not reserved on crates.io.
@@ -155,13 +155,15 @@ workspace crate with no crates.io publication path. Its reviewed npm surface is
 the local `@tensorbee/rpptx-wasm` bundler tarball. Registry publication remains
 unconfigured and unauthorized.
 
-The exact incubating crates.io allowlist contains 14 implemented shared and
-PowerPoint packages published at 0.2.0. They are
+The exact incubating crates.io allowlist now contains 15 implemented shared
+and PowerPoint packages. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
-`oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `rpptx-oxml`, `rpptx-chart`,
-`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. Manifest eligibility
-and allowlist membership do not authorize a later publication without a
-separately approved `/release` invocation at the exact reviewed SHA.
+`oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`,
+`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. The original
+14-package set is published through 0.3.0. `oxml-chart` joins the next approved
+incubating release after its version preparation. Manifest eligibility and
+allowlist membership do not authorize publication without a separately
+approved `/release` invocation at the exact reviewed SHA.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
@@ -190,12 +192,12 @@ their stable-family checks require.
 
 The workflow then runs
 `cargo publish --workspace --dry-run` with an exact local source patch for each
-member of the 21-package publishable union. Cargo rewrites packaged path
+member of the 22-package publishable union. Cargo rewrites packaged path
 dependencies to the registry, so the patches keep verification on the reviewed
 workspace graph before those versions exist there. They do not enter generated
 archives and the dry run uploads nothing. The stable path then publishes only
 the seven released rdocx packages in dependency order. The incubating path
-publishes only the 14 candidates above in dependency order. Every real command
+publishes only the 15 candidates above in dependency order. Every real command
 keeps archive verification enabled. Registry waits separate dependency layers,
 and authentication, network, compilation and duplicate-version failures fail
 the job.
@@ -210,7 +212,7 @@ Two tag namespaces:
 | Tag | Workflow | Publishes |
 |---|---|---|
 | `v*` | `publish.yml` | crates.io, the exact seven-package stable family |
-| `rpptx-v*` | `publish.yml` | crates.io, the exact 14-package incubating family |
+| `rpptx-v*` | `publish.yml` | crates.io, the exact 15-package incubating family |
 | `py-v*` | `wheels.yml` | PyPI via OIDC trusted publishing |
 
 Wheels are separate so a Rust patch release does not rebuild twelve wheels, and
@@ -239,13 +241,15 @@ exact seven-package stable family is published at 0.7.0 from the annotated
 `v0.7.0` tag whose target is the reviewed sprint SHA. Earlier immutable
 registry releases remain available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
-The 15 implemented `oxml-*` and `rpptx*` package manifests are prepared at
+The 16 implemented `oxml-*` and `rpptx*` package manifests are prepared at
 explicit version 0.3.0, use the named `incubating` group, and carry the
-`rpptx-v{{version}}` template. That preparation group is the exact 14-package
+`rpptx-v{{version}}` template. That preparation group is the exact 15-package
 crates.io family listed above plus unpublished `rpptx-wasm`. The crates.io
-allowlist remains exactly 14 packages. All 14 are published at 0.3.0 from the
-annotated `rpptx-v0.3.0` tag at the reviewed sprint SHA. Earlier immutable
-registry releases remain available, and `rpptx-wasm` remains unpublished.
+allowlist remains exactly 15 packages. The original 14 are published at 0.3.0
+from the annotated `rpptx-v0.3.0` tag at the reviewed sprint SHA. `oxml-chart`
+remains unpublished until the next incubating version preparation and release.
+Earlier immutable registry releases remain available, and `rpptx-wasm`
+remains unpublished.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.
@@ -256,12 +260,12 @@ External release actions remain owned by `/release`.
 either crates.io release tag or start crates.io publication. It selects exactly
 one namespace. The stable path validates the workspace version, its internal
 pins, and the exact seven-package stable set. The incubating path validates the
-common explicit version, workspace pins, and the exact 14-package incubating
+common explicit version, workspace pins, and the exact 15-package incubating
 set.
 
 Both paths require a clean sprint branch, full verification and a clean sprint
 review recorded at the exact HEAD, a workspace dry run containing exactly the
-21-package union and its exact local patch set, archives below 10 MiB with
+22-package union and its exact local patch set, archives below 10 MiB with
 required assets, an absent local and remote requested tag, and a separate final
 approval immediately before the first mutation. `/release` pushes only the
 requested tag. `/close-sprint` remains the only command allowed to merge
@@ -317,7 +321,7 @@ same Ubuntu 24.04 job runs `python3 scripts/golden_png_harness.py --check` with
 the Poppler 26.01.0 installation already on `PATH`. The step is unconditional
 and propagates a decoded-pixel mismatch as a CI failure.
 
-**Workspace package READMEs in the docs job.** Every one of the 26 workspace
+**Workspace package READMEs in the docs job.** Every one of the 27 workspace
 packages explicitly declares one distinct README. The root file is the
 high-level `rdocx` guide. The other 25 packages use focused crate-local files.
 The documents describe purpose, direct use, neighbouring package boundaries,
@@ -325,13 +329,13 @@ publication status, and an example suited to the actual consumer surface. The
 two deprecated shims direct new consumers to `oxml-opc` and `oxml-pdf`.
 
 After the workspace documentation build, `scripts/readme_doctests.py` checks
-the exact 26-package inventory, validates Rust, shell, Python, and JavaScript
-snippets, and compiles 26 Rust examples across the 20 Rust-library READMEs. It
+the exact 27-package inventory, validates Rust, shell, Python, and JavaScript
+snippets, and compiles 27 Rust examples across the 21 Rust-library READMEs. It
 discovers each primary and companion rlib from one Cargo build graph and passes
 them to rustdoc with the repository edition, dependency search path, matching
 external crate bindings, and warnings denied.
 The same runner is part of canonical non-fast verification. It creates each of
-the 21 publishable archives, requires exactly one packaged README, and
+the 22 publishable archives, requires exactly one packaged README, and
 byte-compares it with the declared source. Version, tag, publication, and
 release-family metadata remain unchanged.
 
@@ -410,7 +414,7 @@ requires exact identity
 `LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb`.
 It installs the explicit Ubuntu NSS, NSPR, D-Bus, Cairo, GLib, X11, CUPS,
 font, and Kerberos runtime-library set needed by that official build. This
-makes the unconditional `rpptx-chart` viewer tests self-contained without
+makes the unconditional `oxml-chart` viewer tests self-contained without
 changing the separate macOS Presentation fidelity setup.
 
 **A prose and generated-skill job.** It runs `scripts/prose_check.py` and
