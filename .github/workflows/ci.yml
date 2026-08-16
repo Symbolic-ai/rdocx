@@ -203,6 +203,14 @@ jobs:
           verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" "0.7.0" "rdocx_wasm"
           verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" "0.3.0" "rpptx_wasm"
 
+  release-regressions:
+    name: Release regressions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run release regressions
+        run: python3 -m unittest scripts.test_sprint_workflow
+
   prose:
     name: Prose and generated skills
     runs-on: ubuntu-latest

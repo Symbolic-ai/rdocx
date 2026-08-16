@@ -1,6 +1,6 @@
 # F-X026, CI must run the release regressions too
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S44
 **Size**: S
 **Depends on**: F-X025
@@ -87,14 +87,14 @@ and HLD prose only. Any delta is unexplained and blocks completion.
 
 ## Implementation checklist
 
-- [ ] Add failing workflow-contract test stubs in the existing Python module.
-- [ ] Add the dedicated unconditional release-regressions CI job.
-- [ ] Make positive and mutation-sensitive workflow tests pass.
-- [ ] Run the focused tests, both publication preflights, and the whole module.
-- [ ] Update only the listed HLD sections.
-- [ ] Confirm that manifests, the lockfile, READMEs, and version carriers did
+- [x] Add failing workflow-contract test stubs in the existing Python module.
+- [x] Add the dedicated unconditional release-regressions CI job.
+- [x] Make positive and mutation-sensitive workflow tests pass.
+- [x] Run the focused tests, both publication preflights, and the whole module.
+- [x] Update only the listed HLD sections.
+- [x] Confirm that manifests, the lockfile, READMEs, and version carriers did
   not change.
-- [ ] Run microscope and contribute the full gate evidence to the integrated
+- [x] Run microscope and contribute the full gate evidence to the integrated
   sprint verification.
 
 ## Open questions

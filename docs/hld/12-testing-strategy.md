@@ -492,6 +492,7 @@ returns non-empty rendered HTML after publication.
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
 | wasm | Locked `wasm32-unknown-unknown` checks, `wasm-pack test --node`, and local bundler pack and fresh-install gates for `rdocx-wasm` and `rpptx-wasm` |
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |
+| release-regressions | `python3 -m unittest scripts.test_sprint_workflow` |
 | hash-harness | `python3 scripts/hash_harness.py --check` |
 | presentation-fidelity | Fetch the pinned corpus, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
 | clippy | `cargo clippy --workspace --all-targets --all-features --exclude rdocx-py --exclude rpptx-py -- -D warnings` |
@@ -507,6 +508,11 @@ The `--exclude` pair on every all-feature command is required, not cosmetic:
 `pyo3/extension-module` tells the linker that Python symbols come from the host
 interpreter, which is false for a test binary, and on Linux this is an
 unresolved-symbol link failure that is easy to misdiagnose.
+
+The dedicated release regression job runs the complete standard-library test
+module after checkout. It is unconditional and failure-propagating, so stale
+stable or incubating version carriers fail on pull requests before a release
+tag can reach the publication workflow.
 
 Every Poppler-dependent CI job builds the reviewed 26.01.0 command-line oracle
 from the official source archive. `scripts/install_pinned_poppler.py` enforces

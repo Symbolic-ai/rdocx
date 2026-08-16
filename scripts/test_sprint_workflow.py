@@ -4032,6 +4032,72 @@ class SprintWorkflowTests(unittest.TestCase):
         """
         self.assertIn("python3 -m unittest scripts.test_sprint_workflow", verify)
 
+    def assert_ci_runs_release_regressions(self, ci: str) -> None:
+        job = self.yaml_block(ci, "  release-regressions:")
+        direct = self.yaml_direct_lines(job, 4)
+        self.assertEqual(
+            direct,
+            (
+                "name: Release regressions",
+                "runs-on: ubuntu-latest",
+                "steps:",
+            ),
+        )
+        steps = self.yaml_steps(job)
+        self.assertEqual(len(steps), 2)
+        self.assertEqual(self.yaml_step_actions(steps[0]), ("actions/checkout@v5",))
+        self.assertEqual(self.yaml_step_identity(steps[1], 2), "Run release regressions")
+        self.assertEqual(
+            self.yaml_direct_lines(steps[1], 8),
+            ("run: python3 -m unittest scripts.test_sprint_workflow",),
+        )
+        self.assertNotIn("continue-on-error", job)
+        self.assert_no_success_short_circuit(self.operative_lines(steps[1]))
+
+    def test_ci_runs_release_regressions_in_a_named_job(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assert_ci_runs_release_regressions(ci)
+
+    def test_ci_release_regression_job_rejects_wiring_mutations(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        mutations = {
+            "removed-command": ci.replace(
+                "python3 -m unittest scripts.test_sprint_workflow", "", 1
+            ),
+            "narrowed-command": ci.replace(
+                "python3 -m unittest scripts.test_sprint_workflow",
+                "python3 -m unittest "
+                "scripts.test_sprint_workflow.SprintWorkflowTests."
+                "test_stable_release_family_is_prepared_at_0_7_0",
+                1,
+            ),
+            "job-condition": ci.replace(
+                "  release-regressions:\n",
+                "  release-regressions:\n    if: false\n",
+                1,
+            ),
+            "continue-on-error": ci.replace(
+                "        run: python3 -m unittest scripts.test_sprint_workflow\n",
+                "        continue-on-error: true\n"
+                "        run: python3 -m unittest scripts.test_sprint_workflow\n",
+                1,
+            ),
+            "successful-fallback": ci.replace(
+                "python3 -m unittest scripts.test_sprint_workflow",
+                "python3 -m unittest scripts.test_sprint_workflow || true",
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, ci, name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_ci_runs_release_regressions(mutated)
+
     def test_verify_runs_the_release_regressions(self) -> None:
         # Without this, the preflights that publish.yml invokes by name run for
         # the first time on a tag, after the sprint is closed. S42 is the

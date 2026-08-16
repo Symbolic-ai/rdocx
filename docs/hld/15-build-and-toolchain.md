@@ -181,6 +181,12 @@ publication, which is what S42 demonstrated when F-X022 passed the entire local
 gate and still left the incubating preflight and the `ci.yml` WASM literal
 asserting the previous version.
 
+The pull-request CI workflow runs the same complete module in its dedicated
+`release-regressions` job. The job has no condition or failure-tolerant path,
+and checkout precedes the exact whole-module command. This keeps both release
+family preflights and future release-contract regressions in the ordinary CI
+gate.
+
 The workflow then runs
 `cargo publish --workspace --dry-run` with an exact local source patch for each
 member of the 21-package publishable union. Cargo rewrites packaged path
@@ -388,6 +394,12 @@ changing the separate macOS Presentation fidelity setup.
 **A prose and generated-skill job.** It runs `scripts/prose_check.py` and
 `scripts/sync_agent_skills.py --check` as separate steps, so voice-rule or
 adapter drift fails before integration.
+
+**A dedicated release regression job.** It runs
+`python3 -m unittest scripts.test_sprint_workflow` after checkout, without a job
+condition, successful fallback or `continue-on-error`. The complete module is
+the pull-request gate for release-family version carriers and their workflow
+contracts.
 
 **A dedicated Presentation fidelity job** fetches the pinned 50-deck corpus,
 installs LibreOffice and Poppler, and runs `scripts/pptx_ssim_harness.py
