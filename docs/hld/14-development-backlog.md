@@ -1518,6 +1518,45 @@ Poppler build and so cannot sit in the same place as the hash harness.
 **Test gate**: regression. A deliberate rendering change fails the gate wherever
 the story puts it, and a clean tree passes it.
 
+### F-X028, Repair the agent-facing documentation drift (M)
+`CLAUDE.md` opens by stating that its instructions override default behaviour,
+so an error in it propagates into every future session. Five claims in it are
+false today, and two more sit in the command surface and the spec set.
+
+`CLAUDE.md:159-170`, "Known defects being carried", lists three defects and says
+"Do not 'fix' these". All three were fixed in M1. `MediaNamer::scan` takes the
+maximum occupied suffix, `Document` holds `layout_cache` and
+`deterministic_layout_cache`, and Caladea ships `LICENSE-Caladea` and
+`NOTICE-Caladea` with `bundled_fonts.rs` correctly recording Apache 2.0. The
+entry claiming a false licence notice ships today is the most serious, because
+it tells an agent to leave a legal defect alone that does not exist.
+
+`CLAUDE.md:15` puts the `rdocx-*` family on crates.io at 0.2.0. It is 0.7.0.
+
+`CLAUDE.md:41` and `:163` place the bundled fonts at `crates/rdocx-layout/fonts/`.
+They live in `crates/oxml-layout/`.
+
+`CLAUDE.md:41`, `CLAUDE.md:60` and `docs/hld/10-bindings-spec.md:249` name a
+`bundled-fonts` feature. No manifest defines one. Bundled fonts are compiled in
+unconditionally and `system-fonts` is the optional feature, so the wheel-building
+instruction in the bindings spec names a flag that cannot be set.
+
+`.claude/commands/verify.md:55-57` runs `cargo test -p rdocx-layout
+--no-default-features` and tells the reader to rename the package when the
+extraction lands. It landed. `CLAUDE.md`, `AGENTS.md` and the CI matrix all name
+`oxml-layout`. Both invocations work and neither is a no-op, 87 tests against
+62, so this is one gate document disagreeing with every other record rather than
+a broken gate.
+
+F-X025 corrected two instances of the same class in the spec set. These are the
+third through the ninth, which is what makes this a story rather than another
+one-off patch.
+**Depends on**: none.
+**Test gate**: regression. A test asserts that every path, version and feature
+name `CLAUDE.md` and `.claude/commands/verify.md` cite resolves against the
+workspace, so the next stale claim fails the gate rather than surviving 40
+sprints.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this

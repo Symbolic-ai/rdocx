@@ -711,6 +711,35 @@ run the release regressions that `publish.yml` treats as its publication gate.
 The gate stories land last because neither blocks the three defect fixes, and
 putting them first would delay work that users can actually hit.
 
+#### Sprint S44, Gate coverage and specification repair
+
+**Goal**: finish the job S43 started. S43 closed two gaps in the gates and
+found, in passing, that the records describing those gates had drifted from
+them. This sprint puts the two remaining gates where CI can see them and repairs
+the documentation that tells every future session what is true.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X026 | CI must run the release regressions too | S |
+| F-X027 | Wire the golden-PNG gate into something | S |
+| F-X028 | Repair the agent-facing documentation drift | M |
+
+Every implementation milestone is closed, so this sprint carries no feature
+work. All three stories exist because S43 went looking at the instruments rather
+than the product.
+
+F-X026 and F-X027 are independent of each other and of F-X028, so the order is a
+preference rather than a dependency. F-X026 first, because it is the narrower
+half of a gap S43 half-closed: `/verify` runs the release preflights now and CI
+still does not, so a contributor who skips the local gate can move a version
+carrier and see a green pull request. F-X027 next, because the golden-PNG gate
+is fully specified and wired into nothing, and deciding where it belongs needs a
+judgement about the pinned Poppler build that F-X026 does not need.
+
+F-X028 lands last and is the largest, because it is the only one that touches
+`CLAUDE.md`, and a story that rewrites the file every other session reads first
+should land against a tree the other two have already settled.
+
 ## Cross-cutting
 
 F-X001 through F-X004 are scheduled in S36 as the final cross-cutting v1
