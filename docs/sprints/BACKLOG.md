@@ -29,8 +29,8 @@ regenerated, never hand-edited.
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
-| X, Cross-cutting (opportunistic)            | 27 | 21 | 0 | 6  |
-| **Total** | **181** | **175** | **0** | **6** |
+| X, Cross-cutting (opportunistic)            | 27 | 21 | 2 | 4  |
+| **Total** | **181** | **175** | **2** | **4** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -311,5 +311,5 @@ regenerated, never hand-edited.
 | F-X021 | Hash harness should cover PDF output       | -   | M | pending |
 | F-X024 | Move the theme adapter into rdocx-oxml     | S42 | M | done |
 | F-X022 | Tag rpptx-v0.3.0                           | S42 | S | in-progress |
-| F-X023 | Tag v0.7.0                                 | S42 | S | pending |
+| F-X023 | Tag v0.7.0                                 | S42 | S | in-progress |
 <!-- AUTOGEN:backlog-MX END -->

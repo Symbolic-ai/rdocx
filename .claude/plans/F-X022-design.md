@@ -1,6 +1,6 @@
 # F-X022, Tag rpptx-v0.3.0
 
-**Status**: completed
+**Status**: approved
 **Sprint**: S42
 **Size**: S
 **Depends on**: F-X024
@@ -106,6 +106,17 @@ mean something other than a version moved.
 - [x] `/verify`
 - [ ] Stop. `/release rpptx-v0.3.0` is a separate command needing separate
       approval at the reviewed SHA
+
+## Release boundary
+
+**Test gate**: deferred to `/release rpptx-v0.3.0`.
+
+Preparation is complete and reviewed. The gate this story is measured by needs
+real publication, so it stays open until `/release rpptx-v0.3.0` verifies every
+registry version and the GitHub release. Per the release-preparation exception
+in `.claude/commands/complete-feature.md`, this plan stays `approved`, the F-ID
+stays `reviewed` in the run state and `in-progress` in both delivery trackers,
+and no AS_BUILT entry is written yet.
 
 ## Open questions
 
