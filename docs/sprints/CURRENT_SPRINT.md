@@ -28,7 +28,7 @@ around them.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-X013a | Footnote line advance | S | done | claude |
-| F-X013b | Footnote reservation and splitting | L | pending | - |
+| F-X013b | Footnote reservation and splitting | L | done | claude |
 | F-X013c | Endnotes at the document end | M | pending | - |
 | F-X014 | Kashida justification values | S | pending | - |
 | F-X015 | Anchored drawing wrap and alignment model | M | pending | - |

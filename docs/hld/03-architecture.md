@@ -120,6 +120,13 @@ layout compares complete bytes, assigns deterministic alternate IDs when two
 compact keys collide, and is shared by the lower-level layout and pagination
 entry points.
 
+Footnotes and endnotes are laid out once into a `NoteRegistry` before
+pagination, and the paginator reserves, splits and draws them. Note placement is
+part of pagination rather than a pass that runs after it, because a page's body
+height depends on the note area it owes, and a note that does not fit continues
+on the following page. The registry pre-shapes each note's marker, so the
+paginator places notes without needing a mutable font manager.
+
 ## Versioning
 
 The 14 implemented shared and PowerPoint publication candidates use the

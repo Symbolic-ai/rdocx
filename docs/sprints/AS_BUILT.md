@@ -5852,3 +5852,85 @@ body text overlapping the note area, which is exactly what F-X013b addresses.
 The note path still ignores its paragraph's own indent and justification, which
 the body path honours. Two placement routines that drift apart is what produced
 this defect in the first place, and one shared routine is the durable answer.
+
+### F-X013b, Footnote reservation and splitting
+
+**Sprint.** S41
+**Completed.** 2026-08-16
+**Size.** L, estimated 3 days, actual 1 day
+
+**What was built.** Notes are laid out once, before pagination, into a new
+`NoteRegistry`, and the paginator reserves, splits and draws them from that
+single source. Pagination previously filled a page with body text knowing
+nothing about the note area, which a post-pagination pass then drew straight
+over the top of it. Body text and notes no longer collide. A note too tall for
+the room left continues on the following page without repeating its marker, and
+a page that opens with carried note content draws the full-width continuation
+rule rather than the short one. The post-pagination pass is gone, so the note
+placement that is reserved and the note placement that is drawn are now the same
+computation rather than two that could disagree.
+
+The note stream model changed to support it. `CT_Footnote` carries a
+`NoteType` read from `w:type`, separators are retained rather than dropped, and
+`w:type` is written back. Opening and saving a document previously deleted its
+separator definitions outright.
+
+**Non-obvious choices.** Note markers are shaped in the registry, before
+pagination, because the paginator holds only `&FontManager` and shaping needs
+`&mut`. Pre-shaping is what lets note placement live in the paginator at all.
+
+A note's cost is priced without being claimed. A paragraph is measured before
+anyone knows which page it lands on, so `available_height_for` prices its notes
+and `claim_notes` runs only where lines are actually placed. Claiming during
+measurement stranded notes on the page before their own reference.
+
+The note area is measured from `ink_bottom`, where the body's last mark sits,
+not from `cursor_y`, which includes trailing paragraph spacing that collapses at
+a page break.
+
+Separator identity follows `w:type`, with an untyped id of 0 or below still
+read as a separator. The ids separators conventionally use are a convention, not
+a rule, and `sample1.docx` puts its `continuationSeparator` at id 1, where the
+old id-based test read it as note number one.
+
+**Deviations from the design plan.** Two plan claims were wrong and were
+corrected in the plan. The plan said this story fixes notes being positioned
+against the final section's geometry: positioning is fixed, line breaking is
+not, and the remainder is filed as F-X017. The plan also did not anticipate
+retaining separators in `CT_Footnotes::footnotes`, which changes what that field
+contains. `Document::footnotes()` gained a filter so its public behaviour is
+unchanged.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "What stays put",
+updated to say note placement belongs to the paginator rather than to a
+post-pagination pass.
+
+**Tests.** The gate is the three named regressions:
+`a_page_whose_body_fills_the_text_area_does_not_overlap_its_notes`,
+`a_note_taller_than_its_remaining_space_continues_on_the_next_page`, and
+`a_page_referencing_one_note_twice_reserves_it_once`. Also added
+`a_continued_note_draws_the_continuation_separator`,
+`an_oversized_note_still_leaves_room_for_body_text`,
+`a_note_is_drawn_on_the_page_that_carries_its_reference`, and in `rdocx-oxml`
+`a_separator_definition_survives_open_and_save`,
+`get_by_id_does_not_return_a_separator`,
+`note_types_are_read_through_a_foreign_prefix` and
+`an_unknown_note_type_reads_as_a_normal_note`. Each was proven to fail against
+its own reverted change.
+
+**Hash harness.** Unchanged. All 28 entries match, and that result carries no
+information about this story, for the reason F-X013a recorded: no corpus
+document contains a note. A delta here would have been a genuine surprise. The
+evidence is the regression set plus an end-to-end render of `sample1.docx`,
+where page 5 stops overprinting its table of contents.
+
+**Notes for future sessions.** Two defects in this work were invisible to the
+tests as first written and only surfaced by sweeping the reference across every
+paragraph position and comparing the note's page against the reference's page.
+A note drifting one page from its reference is not something a fixed-position
+test finds. That sweep is now
+`a_note_is_drawn_on_the_page_that_carries_its_reference` and it is the single
+most valuable test in the set. The end-to-end render also caught a third
+regression that no unit test saw: keying the registry by note id alone let an
+endnote overwrite a footnote sharing its number, silently swapping the rendered
+text. Telling the two streams apart is F-X013c.

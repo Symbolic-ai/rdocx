@@ -10,12 +10,13 @@ use rdocx_oxml::text::{BreakType, CT_P, FieldType, RunContent};
 use crate::block::{self, LayoutBlock, ParagraphBlock};
 use crate::convert;
 use crate::input::{LayoutInput, MediaRegistry};
+use crate::notes::NoteRegistry;
 use crate::paginator::{self, HeaderFooterContent, PageGeometry};
 use crate::style_resolver::{self, NumberingState};
 use crate::table;
 use oxml_layout::{
-    Color, DocumentMetadata, FieldKind, FontManager, GlyphRun, InlineItem, LayoutResult, LineItem,
-    PageFrame, Point, PositionedElement, Rect, Result, TextSegment, break_into_lines,
+    Color, DocumentMetadata, FieldKind, FontManager, InlineItem, LayoutResult, PageFrame,
+    PositionedElement, Rect, Result, TextSegment, break_into_lines,
 };
 
 /// The layout engine.
@@ -156,9 +157,20 @@ impl Engine {
             title_pg: final_title_pg,
         });
 
+        // Lay the notes out once, before pagination, so the paginator can
+        // reserve exactly the height it will later draw.
+        let notes = NoteRegistry::build(
+            input,
+            styles,
+            &media,
+            &mut self.font_manager,
+            &mut num_state,
+            final_geometry.content_width(),
+        )?;
+
         // Paginate across all sections
         let (mut pages, outlines) =
-            paginator::paginate_sections(&sections, &self.font_manager, &media);
+            paginator::paginate_sections(&sections, &self.font_manager, &media, &notes);
 
         // Post-pagination pass: substitute field placeholders
         let total_pages = pages.len();
@@ -174,19 +186,6 @@ impl Engine {
 
         // Post-pagination pass: apply page background color
         apply_page_background(&mut pages, input);
-
-        // Post-pagination pass: render footnotes at page bottoms
-        if input.footnotes.is_some() || input.endnotes.is_some() {
-            render_page_footnotes(
-                &mut pages,
-                input,
-                styles,
-                &final_geometry,
-                &media,
-                &mut self.font_manager,
-                &mut num_state,
-            )?;
-        }
 
         // Collect font data
         let fonts = self.font_manager.all_font_data();
@@ -276,184 +275,6 @@ fn substitute_fields(
             }
         }
     }
-}
-
-/// Horizontal space reserved for the note marker, to the left of note text.
-///
-/// Note lines are both broken and drawn against this, so the two agree. Break
-/// at the full content width and draw one indent in, and every line overruns
-/// the right margin by exactly this much.
-const FOOTNOTE_INDENT: f64 = 12.0;
-
-/// Render footnote/endnote content at the bottom of each page.
-///
-/// For each page, collects footnote IDs from glyph runs, then
-/// renders a separator line and the footnote text in a smaller font.
-fn render_page_footnotes(
-    pages: &mut [PageFrame],
-    input: &LayoutInput,
-    styles: &CT_Styles,
-    geometry: &paginator::PageGeometry,
-    media: &MediaRegistry,
-    fm: &mut FontManager,
-    num_state: &mut NumberingState,
-) -> Result<()> {
-    let footnote_font_size = 8.0; // Standard footnote font size
-    let separator_offset = 6.0; // Space above separator
-    let separator_width_frac = 0.33; // Separator is 1/3 of content width
-
-    for page in pages.iter_mut() {
-        // Collect footnote IDs referenced on this page (in order, deduplicated)
-        let mut footnote_ids: Vec<i32> = Vec::new();
-        for element in &page.elements {
-            if let PositionedElement::Text(run) = element
-                && let Some(fn_id) = run.footnote_id
-                && !footnote_ids.contains(&fn_id)
-            {
-                footnote_ids.push(fn_id);
-            }
-        }
-
-        if footnote_ids.is_empty() {
-            continue;
-        }
-
-        // Find the footnote paragraphs to render
-        let mut footnote_blocks: Vec<(i32, Vec<block::ParagraphBlock>)> = Vec::new();
-        for &fn_id in &footnote_ids {
-            // Check footnotes first, then endnotes
-            let paragraphs = input
-                .footnotes
-                .as_ref()
-                .and_then(|fns| fns.get_by_id(fn_id))
-                .or_else(|| input.endnotes.as_ref().and_then(|ens| ens.get_by_id(fn_id)));
-
-            if let Some(footnote) = paragraphs {
-                let mut fn_blocks = Vec::new();
-                for para in &footnote.paragraphs {
-                    if let Ok(pb) = layout_paragraph(
-                        para,
-                        geometry.content_width() - FOOTNOTE_INDENT,
-                        styles,
-                        input,
-                        media,
-                        fm,
-                        num_state,
-                    ) {
-                        fn_blocks.push(pb);
-                    }
-                }
-                footnote_blocks.push((fn_id, fn_blocks));
-            }
-        }
-
-        if footnote_blocks.is_empty() {
-            continue;
-        }
-
-        // Calculate total footnote height
-        let total_fn_height: f64 = footnote_blocks
-            .iter()
-            .flat_map(|(_, blocks)| blocks.iter())
-            .map(|b| b.content_height())
-            .sum();
-
-        // Position footnotes at page bottom, above bottom margin
-        let footnote_area_top =
-            page.height - geometry.margin_bottom - total_fn_height - separator_offset;
-
-        // Draw separator line
-        let sep_y = footnote_area_top;
-        let sep_width = geometry.content_width() * separator_width_frac;
-        page.elements.push(PositionedElement::Line {
-            start: Point {
-                x: geometry.margin_left,
-                y: sep_y,
-            },
-            end: Point {
-                x: geometry.margin_left + sep_width,
-                y: sep_y,
-            },
-            width: 0.5,
-            color: Color::BLACK,
-            dash_pattern: None,
-        });
-
-        // Render each footnote
-        let mut cursor_y = sep_y + separator_offset;
-        for (fn_id, blocks) in &footnote_blocks {
-            for pb in blocks {
-                let baseline_y = cursor_y + pb.lines.first().map(|l| l.ascent).unwrap_or(0.0);
-
-                // Render the footnote number marker as superscript
-                let marker_text = fn_id.to_string();
-                let marker_size = footnote_font_size * 0.58;
-                if let Ok(font_id) = fm.resolve_font(Some("serif"), false, false)
-                    && let Ok(shaped) = fm.shape_text(font_id, &marker_text, marker_size)
-                {
-                    page.elements.push(PositionedElement::Text(GlyphRun {
-                        origin: Point {
-                            x: geometry.margin_left,
-                            y: baseline_y - footnote_font_size * 0.33,
-                        },
-                        font_id,
-                        font_size: marker_size,
-                        glyph_ids: shaped.glyph_ids,
-                        advances: shaped.advances,
-                        text: marker_text,
-                        color: Color::BLACK,
-                        bold: false,
-                        italic: false,
-                        field_kind: None,
-                        footnote_id: None,
-                    }));
-                }
-
-                // Render footnote paragraph lines
-                let indent = FOOTNOTE_INDENT;
-                for line in &pb.lines {
-                    let line_baseline = cursor_y + line.ascent;
-                    // Advance across the line the way the body path does. A
-                    // fixed origin stacks every segment of a multi-run note on
-                    // top of itself.
-                    let mut x = geometry.margin_left + indent;
-                    for item in &line.items {
-                        // A tab or an inline image inside a note is not drawn
-                        // yet, but it still occupies width. Skipping its
-                        // advance would pull everything after it left.
-                        let (seg, advance) = match item {
-                            LineItem::Text(seg) | LineItem::Marker(seg) => (Some(seg), seg.width),
-                            LineItem::Tab { width, .. } | LineItem::Image { width, .. } => {
-                                (None, *width)
-                            }
-                        };
-                        if let Some(seg) = seg {
-                            page.elements.push(PositionedElement::Text(GlyphRun {
-                                origin: Point {
-                                    x,
-                                    y: line_baseline - seg.baseline_offset,
-                                },
-                                font_id: seg.font_id,
-                                font_size: seg.font_size,
-                                glyph_ids: seg.glyph_ids.clone(),
-                                advances: seg.advances.clone(),
-                                text: seg.text.clone(),
-                                color: seg.color,
-                                bold: seg.bold,
-                                italic: seg.italic,
-                                field_kind: None,
-                                footnote_id: None,
-                            }));
-                        }
-                        x += advance;
-                    }
-                    cursor_y += line.height;
-                }
-            }
-        }
-    }
-
-    Ok(())
 }
 
 /// Detect if a paragraph has a heading style, returning the level (1-9).
@@ -1319,7 +1140,7 @@ mod tests {
         assert_ne!(inline_id, anchor_id);
 
         let line = oxml_layout::LayoutLine {
-            items: vec![LineItem::Image {
+            items: vec![oxml_layout::LineItem::Image {
                 width: 12.0,
                 height: 10.0,
                 media_id: inline_id,
@@ -1366,7 +1187,12 @@ mod tests {
             title_pg: false,
         }];
 
-        let (pages, _) = paginator::paginate_sections(&sections, &FontManager::new(), &media);
+        let (pages, _) = paginator::paginate_sections(
+            &sections,
+            &FontManager::new(),
+            &media,
+            &NoteRegistry::default(),
+        );
         let images = pages[0]
             .elements
             .iter()
@@ -1504,7 +1330,7 @@ mod tests {
     /// Build a document whose single body paragraph references footnote 1, and
     /// whose footnote 1 is one paragraph made of `note_runs` separate runs.
     fn make_input_with_footnote(note_runs: &[&str]) -> LayoutInput {
-        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes};
+        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes, NoteType};
         use rdocx_oxml::text::CT_R;
 
         let mut doc = rdocx_oxml::document::CT_Document::new();
@@ -1532,6 +1358,7 @@ mod tests {
             footnotes: Some(CT_Footnotes {
                 footnotes: vec![CT_Footnote {
                     id: 1,
+                    note_type: NoteType::Normal,
                     paragraphs: vec![note],
                 }],
             }),
@@ -1649,7 +1476,7 @@ mod tests {
 
     #[test]
     fn a_tab_inside_a_footnote_still_advances_the_text_after_it() {
-        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes};
+        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes, NoteType};
         use rdocx_oxml::text::CT_R;
 
         // Two notes differing only by a tab between their runs. The tab is not
@@ -1684,6 +1511,7 @@ mod tests {
                 footnotes: Some(CT_Footnotes {
                     footnotes: vec![CT_Footnote {
                         id: 1,
+                        note_type: NoteType::Normal,
                         paragraphs: vec![note],
                     }],
                 }),
@@ -1727,7 +1555,7 @@ mod tests {
 
         // Gaps between consecutive note segments must equal the width of the
         // segment that precedes them, which is what the body path advances by.
-        let notes: Vec<&GlyphRun> = page
+        let notes: Vec<&oxml_layout::GlyphRun> = page
             .elements
             .iter()
             .filter_map(|element| match element {
@@ -1746,5 +1574,298 @@ mod tests {
                 "gap {gap} should equal preceding segment advance {advance}"
             );
         }
+    }
+
+    // F-X013b, reservation and splitting.
+
+    /// A document of `body_paras` paragraphs. The paragraph at
+    /// `ref_positions` each carry a reference to note 1, whose content is
+    /// `note_paras` paragraphs of `note_text`.
+    fn make_noted_document(
+        body_paras: usize,
+        ref_positions: &[usize],
+        note_paras: usize,
+        note_text: &str,
+        continuation_separator: bool,
+    ) -> LayoutInput {
+        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes, NoteType};
+        use rdocx_oxml::text::CT_R;
+
+        let mut doc = rdocx_oxml::document::CT_Document::new();
+        for index in 0..body_paras {
+            let mut para = CT_P::new();
+            para.add_run("Body paragraph text that occupies a line of the page.");
+            if ref_positions.contains(&index) {
+                let mut marker = CT_R::new("");
+                marker.content = vec![RunContent::FootnoteRef { id: 1 }];
+                para.runs.push(marker);
+            }
+            doc.body.add_paragraph(para);
+        }
+
+        let mut entries = Vec::new();
+        if continuation_separator {
+            entries.push(CT_Footnote {
+                id: 0,
+                note_type: NoteType::ContinuationSeparator,
+                paragraphs: vec![CT_P::new()],
+            });
+        }
+        entries.push(CT_Footnote {
+            id: 1,
+            note_type: NoteType::Normal,
+            paragraphs: (0..note_paras)
+                .map(|_| {
+                    let mut p = CT_P::new();
+                    p.add_run(note_text);
+                    p
+                })
+                .collect(),
+        });
+
+        LayoutInput {
+            document: doc,
+            styles: CT_Styles::new_default(),
+            numbering: None,
+            headers: HashMap::new(),
+            footers: HashMap::new(),
+            images: HashMap::new(),
+            core_properties: None,
+            hyperlink_urls: HashMap::new(),
+            footnotes: Some(CT_Footnotes { footnotes: entries }),
+            endnotes: None,
+            theme: None,
+            fonts: Vec::new(),
+        }
+    }
+
+    /// Split a page into the glyphs drawn above the note separator and those
+    /// drawn below it. Notes are emitted after body content, so the separator
+    /// is the boundary.
+    fn split_at_separator(
+        page: &oxml_layout::output::PageFrame,
+    ) -> Option<(f64, Vec<f64>, Vec<String>)> {
+        let separator_index = page.elements.iter().position(|element| {
+            matches!(element, PositionedElement::Line { width, .. } if (*width - 0.5).abs() < 0.001)
+        })?;
+        let PositionedElement::Line { start, end, .. } = &page.elements[separator_index] else {
+            return None;
+        };
+        let separator_y = start.y;
+        let separator_width = end.x - start.x;
+
+        let body_ys: Vec<f64> = page.elements[..separator_index]
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run.origin.y),
+                _ => None,
+            })
+            .collect();
+        let note_text: Vec<String> = page.elements[separator_index + 1..]
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run.text.clone()),
+                _ => None,
+            })
+            .collect();
+
+        let _ = separator_y;
+        Some((separator_width, body_ys, note_text))
+    }
+
+    fn separator_y_of(page: &oxml_layout::output::PageFrame) -> Option<f64> {
+        page.elements.iter().find_map(|element| match element {
+            PositionedElement::Line { start, width, .. } if (*width - 0.5).abs() < 0.001 => {
+                Some(start.y)
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_page_whose_body_fills_the_text_area_does_not_overlap_its_notes() {
+        // Enough body to reach the bottom margin, with the reference early so
+        // the note is owed by the first page.
+        let input = make_noted_document(
+            60,
+            &[0],
+            2,
+            "A note long enough to wrap onto a second line of the note area.",
+            false,
+        );
+        let mut engine = Engine::new();
+        let output = engine.layout(&input).expect("layout succeeds");
+        let page = &output.pages[0];
+
+        let separator_y = separator_y_of(page).expect("the page draws a separator");
+        let (_, body_ys, note_text) = split_at_separator(page).unwrap();
+
+        assert!(!note_text.is_empty(), "the note must be drawn");
+        let lowest_body = body_ys.iter().cloned().fold(f64::MIN, f64::max);
+        assert!(
+            lowest_body < separator_y,
+            "body text reaches {lowest_body}, at or below the separator at {separator_y}"
+        );
+    }
+
+    #[test]
+    fn a_page_referencing_one_note_twice_reserves_it_once() {
+        let input = make_noted_document(4, &[0, 1], 1, "Referenced twice from one page.", false);
+        let mut engine = Engine::new();
+        let output = engine.layout(&input).expect("layout succeeds");
+        let page = &output.pages[0];
+
+        let separators = page
+            .elements
+            .iter()
+            .filter(|e| matches!(e, PositionedElement::Line { width, .. } if (*width - 0.5).abs() < 0.001))
+            .count();
+        assert_eq!(separators, 1, "one note area, so one separator");
+
+        let (_, _, note_text) = split_at_separator(page).unwrap();
+        let markers = note_text.iter().filter(|t| t.as_str() == "1").count();
+        assert_eq!(markers, 1, "the note is drawn once, got {note_text:?}");
+    }
+
+    #[test]
+    fn a_note_taller_than_its_remaining_space_continues_on_the_next_page() {
+        // 120 note paragraphs exceed a single page, so the note has to break.
+        let input = make_noted_document(30, &[25], 120, "Note paragraph line.", true);
+        let mut engine = Engine::new();
+        let output = engine.layout(&input).expect("layout succeeds");
+
+        let note_pages: Vec<usize> = output
+            .pages
+            .iter()
+            .enumerate()
+            .filter(|(_, page)| separator_y_of(page).is_some())
+            .map(|(index, _)| index)
+            .collect();
+
+        assert!(
+            note_pages.len() >= 2,
+            "a note taller than a page must span pages, got {note_pages:?}"
+        );
+
+        let first = split_at_separator(&output.pages[note_pages[0]]).unwrap().2;
+        let second = split_at_separator(&output.pages[note_pages[1]]).unwrap().2;
+
+        assert!(!first.is_empty(), "the first page draws part of the note");
+        assert!(!second.is_empty(), "the next page draws the rest");
+        assert_eq!(
+            first.iter().filter(|t| t.as_str() == "1").count(),
+            1,
+            "the marker is drawn on the page the note starts on"
+        );
+        assert_eq!(
+            second.iter().filter(|t| t.as_str() == "1").count(),
+            0,
+            "a continuation does not repeat the marker, got {second:?}"
+        );
+    }
+
+    #[test]
+    fn a_continued_note_draws_the_continuation_separator() {
+        let geometry = sect_pr_to_geometry(&CT_SectPr::default_letter());
+
+        let widths = |continuation: bool| {
+            let input = make_noted_document(30, &[25], 120, "Note paragraph line.", continuation);
+            let mut engine = Engine::new();
+            let output = engine.layout(&input).expect("layout succeeds");
+            let pages: Vec<usize> = output
+                .pages
+                .iter()
+                .enumerate()
+                .filter(|(_, page)| separator_y_of(page).is_some())
+                .map(|(index, _)| index)
+                .collect();
+            assert!(pages.len() >= 2, "the note must span pages");
+            (
+                split_at_separator(&output.pages[pages[0]]).unwrap().0,
+                split_at_separator(&output.pages[pages[1]]).unwrap().0,
+            )
+        };
+
+        let (first, second) = widths(true);
+        assert!(
+            (first - geometry.content_width() * 0.33).abs() < 0.5,
+            "a note starting on its page gets the short rule, got {first}"
+        );
+        assert!(
+            (second - geometry.content_width()).abs() < 0.5,
+            "a continued note gets the full-width rule, got {second}"
+        );
+
+        // A document defining no continuation separator keeps the short rule.
+        let (_, second) = widths(false);
+        assert!(
+            (second - geometry.content_width() * 0.33).abs() < 0.5,
+            "without a continuation separator the short rule is kept, got {second}"
+        );
+    }
+
+    #[test]
+    fn an_oversized_note_still_leaves_room_for_body_text() {
+        // A note several pages tall, referenced from the first paragraph.
+        let input = make_noted_document(3, &[0], 200, "A line of an enormous note.", true);
+        let mut engine = Engine::new();
+        let output = engine.layout(&input).expect("layout terminates");
+
+        let (_, body_ys, _) = split_at_separator(&output.pages[0]).unwrap();
+        assert!(
+            !body_ys.is_empty(),
+            "an oversized note must not starve the page of body text"
+        );
+        assert!(
+            output.pages.len() > 1 && output.pages.len() < 100,
+            "the note spills over a bounded number of pages, got {}",
+            output.pages.len()
+        );
+
+        // The note area has to stay on the page. Placing an oversized note
+        // whole would push its separator off the top of the sheet.
+        for (index, page) in output.pages.iter().enumerate() {
+            let Some(separator_y) = separator_y_of(page) else {
+                continue;
+            };
+            assert!(
+                separator_y >= 0.0,
+                "page {} draws its separator at {separator_y}, off the sheet",
+                index + 1
+            );
+        }
+    }
+
+    #[test]
+    fn a_note_is_drawn_on_the_page_that_carries_its_reference() {
+        // Sweeping the reference across the document is what catches the two
+        // ways a note drifts off its own page: notes claimed for a paragraph
+        // that then moves, and a note area measured from a cursor that still
+        // holds the previous paragraph's trailing space.
+        let mut mismatches = Vec::new();
+        for position in 0..60 {
+            let input = make_noted_document(60, &[position], 1, "Note text.", false);
+            let mut engine = Engine::new();
+            let output = engine.layout(&input).expect("layout succeeds");
+
+            let reference_page = output.pages.iter().position(|page| {
+                page.elements.iter().any(
+                    |element| matches!(element, PositionedElement::Text(run) if run.footnote_id == Some(1)),
+                )
+            });
+            let note_page = output
+                .pages
+                .iter()
+                .position(|page| separator_y_of(page).is_some());
+
+            if reference_page != note_page {
+                mismatches.push((position, reference_page, note_page));
+            }
+        }
+
+        assert!(
+            mismatches.is_empty(),
+            "note and reference landed on different pages for (position, ref, note): {mismatches:?}"
+        );
     }
 }

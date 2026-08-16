@@ -1368,6 +1368,17 @@ region. A footnote and an endnote sharing a number resolve to their own note
 rather than both to the footnote. The hash harness carries an expected delta for
 every baseline holding an endnote, stated and justified in the commit.
 
+### F-X017, Notes broken to their own section's width (S)
+A note is line-broken to the width of the section that references it rather
+than to the final section's width. `NoteRegistry` is built once ahead of
+pagination against one content width, which is correct for every document whose
+sections share a page size and wrong for any that does not. Note positioning is
+already per-section, so this closes the half F-X013b left open.
+**Depends on**: F-X013b.
+**Test gate**: regression. A document whose two sections differ in page width
+breaks each note to the measure of the section holding its reference, and a
+single-section document is byte-identical to before.
+
 ### F-X014, Kashida justification values (S)
 `ST_Jc` accepts `lowKashida`, `mediumKashida` and `highKashida`, mapping each to
 justified alignment instead of rejecting the value. A paragraph carrying one of
