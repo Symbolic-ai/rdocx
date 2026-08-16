@@ -1316,7 +1316,7 @@ class SprintWorkflowTests(unittest.TestCase):
             'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
             '"0.6.0" "rdocx_wasm"',
             'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
-            '"0.2.0" "rpptx_wasm"',
+            '"0.3.0" "rpptx_wasm"',
             "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
             "--ignore-scripts --no-audit --no-fund --package-lock=false "
             '"$tarball_root/$tarball"',
@@ -3676,7 +3676,7 @@ class SprintWorkflowTests(unittest.TestCase):
                     encoding="utf-8"
                 )
             )
-            self.assertEqual(manifest["package"]["version"], "0.2.0", name)
+            self.assertEqual(manifest["package"]["version"], "0.3.0", name)
             self.assertIs(
                 manifest["package"].get("publish", True),
                 name != "rpptx-wasm",
@@ -3763,7 +3763,7 @@ class SprintWorkflowTests(unittest.TestCase):
             self.assertEqual(release["shared-version"], "incubating")
             self.assertEqual(release["tag-name"], "rpptx-v{{version}}")
 
-    def test_incubating_release_family_is_prepared_at_0_2_0(self) -> None:
+    def test_incubating_release_family_is_prepared_at_0_3_0(self) -> None:
         incubating_packages = (
             "oxml-core",
             "oxml-opc",
@@ -3781,7 +3781,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "rpptx-cli",
         )
         preparation_packages = (*incubating_packages, "rpptx-wasm")
-        expected_version = "0.2.0"
+        expected_version = "0.3.0"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
         self.assertEqual(root["workspace"]["package"]["version"], "0.6.0")
         dependencies = root["workspace"]["dependencies"]
@@ -3816,20 +3816,20 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(lock_versions["rpptx-wasm"], expected_version)
 
         readme_requirements = {
-            "crates/oxml-core/README.md": ('oxml-core = "0.2.0"',),
-            "crates/oxml-drawing/README.md": ('oxml-drawing = "0.2.0"',),
-            "crates/oxml-layout/README.md": ('version = "0.2.0"',),
-            "crates/oxml-media/README.md": ('oxml-media = "0.2.0"',),
-            "crates/oxml-opc/README.md": ('oxml-opc = "0.2.0"',),
+            "crates/oxml-core/README.md": ('oxml-core = "0.3.0"',),
+            "crates/oxml-drawing/README.md": ('oxml-drawing = "0.3.0"',),
+            "crates/oxml-layout/README.md": ('version = "0.3.0"',),
+            "crates/oxml-media/README.md": ('oxml-media = "0.3.0"',),
+            "crates/oxml-opc/README.md": ('oxml-opc = "0.3.0"',),
             "crates/oxml-pdf/README.md": (
-                'oxml-pdf = "0.2.0"',
-                'oxml-layout = "0.2.0"',
+                'oxml-pdf = "0.3.0"',
+                'oxml-layout = "0.3.0"',
             ),
-            "crates/rpptx-chart/README.md": ('rpptx-chart = "0.2.0"',),
-            "crates/rpptx-cli/README.md": ("--version '^0.2.0'",),
-            "crates/rpptx-layout/README.md": ('rpptx-layout = "0.2.0"',),
-            "crates/rpptx-oxml/README.md": ('rpptx-oxml = "0.2.0"',),
-            "crates/rpptx-render/README.md": ('rpptx-render = "0.2.0"',),
+            "crates/rpptx-chart/README.md": ('rpptx-chart = "0.3.0"',),
+            "crates/rpptx-cli/README.md": ("--version '^0.3.0'",),
+            "crates/rpptx-layout/README.md": ('rpptx-layout = "0.3.0"',),
+            "crates/rpptx-oxml/README.md": ('rpptx-oxml = "0.3.0"',),
+            "crates/rpptx-render/README.md": ('rpptx-render = "0.3.0"',),
         }
         for path, requirements in readme_requirements.items():
             text = (workflow.REPO / path).read_text(encoding="utf-8")
@@ -3908,7 +3908,7 @@ class SprintWorkflowTests(unittest.TestCase):
 
         wasm_package = manifests["crates/rpptx-wasm"]["package"]
         self.assertEqual(wasm_package["name"], "rpptx-wasm")
-        self.assertEqual(wasm_package["version"], "0.2.0")
+        self.assertEqual(wasm_package["version"], "0.3.0")
         self.assertTrue(wasm_package.get("description", "").strip())
         self.assertFalse(wasm_package["publish"])
         self.assertEqual(
@@ -3927,7 +3927,7 @@ class SprintWorkflowTests(unittest.TestCase):
             for package in lock["package"]
             if package["name"] == "rpptx-wasm"
         )
-        self.assertEqual(wasm_lock_versions, ("0.2.0",))
+        self.assertEqual(wasm_lock_versions, ("0.3.0",))
 
     def test_release_preparation_metadata_cannot_mutate_external_state(self) -> None:
         self.assert_release_preparation_metadata_contract()
@@ -3962,7 +3962,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 1,
             ),
             "workspace-version": manifest.replace(
-                'version = "0.2.0"',
+                'version = "0.3.0"',
                 "version.workspace = true",
                 1,
             ),
@@ -4132,7 +4132,7 @@ class SprintWorkflowTests(unittest.TestCase):
         )
         incubating_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_incubating_release_family_is_prepared_at_0_2_0"
+            "test_incubating_release_family_is_prepared_at_0_3_0"
         )
         metadata_command = (
             "python3 -m unittest "

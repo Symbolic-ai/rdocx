@@ -7,7 +7,25 @@
 
 ## Defects
 
-None.
+None outstanding.
+
+### D1 found and fixed during the pass, the release regressions were missed
+`scripts/test_sprint_workflow.py` and `.github/workflows/ci.yml`
+
+The first pass moved every carrier under `crates/` and stopped there. It missed
+the release-family preflight in `scripts/test_sprint_workflow.py`, which
+`.github/workflows/publish.yml` runs by name as the publication gate, and the
+`verify_package` literal for `@tensorbee/rpptx-wasm` in `ci.yml`.
+
+`cargo test` does not run the Python suite and neither does `/verify`, so this
+would have passed every local gate and failed in CI at publication time. Found
+by running the release regressions directly rather than trusting the local
+gate.
+
+Fixed: `test_incubating_release_family_is_prepared_at_0_2_0` renamed to
+`..._0_3_0` with its expectations moved, `publish.yml` updated to invoke the new
+name, and the `ci.yml` WASM literal moved to 0.3.0. All 46 tests in the suite
+pass.
 
 Every carrier moved together, which is the only real risk in a version bump. The
 counts match the plan's inventory exactly: 15, 14, 11, 7. No `0.2.0` remains in
