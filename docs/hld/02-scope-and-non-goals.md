@@ -165,6 +165,24 @@ they were written.
 - **Recalculating pivot tables.** M19 preserves the cache and reports the
   source. Reproducing Excel's pivot engine is a library of its own.
 
+### The WASM packages are deliberately unpublished
+
+`@tensorbee/rdocx-wasm` and `@tensorbee/rpptx-wasm` are built, optimised,
+packed as bundler tarballs and install-tested on every pull request. **They are
+not published to npm, and npm publication is not authorised.**
+
+This is enforced rather than intended. The WASM CI job is asserted to contain
+none of `npm publish`, `wasm-pack publish`, `npm login`, `npm adduser`,
+`npm token`, `NODE_AUTH_TOKEN`, `NPM_TOKEN`, `--registry`, `id-token:`,
+`git tag` or `gh release`, so a step that could publish cannot be added without
+failing the release preflight.
+
+Both crates are `publish = false` for crates.io and inherit their Rust family's
+version. That inheritance is harmless while nothing ships, and it is the only
+thing that would need revisiting on the day npm publication is authorised.
+F-X030 was filed against that inheritance and archived once this position was
+confirmed, and its entry records what the work would be if the position changes.
+
 ### Deliberately not scheduled
 
 Named so a reader knows they were considered rather than missed.

@@ -723,14 +723,14 @@ the documentation that tells every future session what is true.
 | F-X026 | CI must run the release regressions too | S |
 | F-X027 | Wire the golden-PNG gate into something | S |
 | F-X029 | Path-filtered CI jobs | M |
-| F-X030 | Decouple the npm package versions | S |
 | F-X028 | Repair the agent-facing documentation drift | M |
 
 Every implementation milestone is closed, so this sprint carries no feature
-work. Three of the five exist because S43 went looking at the instruments rather
-than the product. F-X029 and F-X030 came out of a review of whether the
-workspace should be split into separate repositories, and are the two
-improvements that survived it.
+work. Three of the four exist because S43 went looking at the instruments rather
+than the product. F-X029 came out of a review of whether the workspace should be
+split into separate repositories. That review also produced F-X030, archived
+before the sprint started because the WASM packages are deliberately
+unpublished and its stated problem does not exist.
 
 No pair has a hard dependency, so the order is a preference. The one soft
 coupling is F-X026 and F-X029, which both edit `ci.yml`. F-X026 first, because it is the narrower

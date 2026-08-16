@@ -26,13 +26,12 @@ documentation that tells every future session what is true.
 | F-X027 | Wire the golden-PNG gate into something | S | pending | - |
 | F-X028 | Repair the agent-facing documentation drift | M | pending | - |
 | F-X029 | Path-filtered CI jobs | M | pending | - |
-| F-X030 | Decouple the npm package versions | S | pending | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-There is no hard dependency between these five, so the order is a preference
+There is no hard dependency between these four, so the order is a preference
 rather than a constraint and any of them may be claimed first. The one soft
 coupling is that F-X026 and F-X029 both edit `ci.yml`, so whichever lands second
 rebases on the first.
@@ -52,14 +51,18 @@ F-X030 is independent of everything.
 
 F-X028 lands last, and is the largest, because it is the only one that rewrites
 `CLAUDE.md`. A story that changes the file every other session reads first
-should land against a tree the other four have already settled.
+should land against a tree the other three have already settled.
 
 Every implementation milestone is closed, so this sprint carries no feature
-work. Three of the five stories exist because S43 went looking at the
-instruments rather than the product. The other two, F-X029 and F-X030, came out
-of a review of whether the workspace should be split into separate repositories.
-The conclusion was that it should not, and these are the two improvements that
-survived that review.
+work. Three of the four stories exist because S43 went looking at the
+instruments rather than the product. The fourth, F-X029, came out of a review of
+whether the workspace should be split into separate repositories. The conclusion
+was that it should not.
+
+That review also produced F-X030, which was archived before the sprint started
+once the WASM packages turned out to be deliberately unpublished, so its stated
+problem does not exist. `docs/hld/02-scope-and-non-goals.md` records the
+position.
 
 ## Definition of done for this sprint
 
@@ -77,6 +80,4 @@ survived that review.
 - A docs-only change reports every required check without running the workspace
   suite, the MSRV suite, the WASM targets or the fidelity job, and each filtered
   job has an asserted must-trigger and must-not-trigger path.
-- Each npm package carries its own version, so a JavaScript-only fix does not
-  require versioning a Rust family that did not change.
 - The hash harness stays at 49 of 49. No story here touches rendering.

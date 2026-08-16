@@ -36,8 +36,8 @@ regenerated, never hand-edited.
 | M18, Format breadth                            | 8  | 0 | 0 | 8  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
-| X, Cross-cutting (opportunistic)            | 33 | 28 | 0 | 5  |
-| **Total** | **243** | **182** | **0** | **61** |
+| X, Cross-cutting (opportunistic)            | 33 | 28 | 0 | 4  |
+| **Total** | **243** | **182** | **0** | **60** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -429,5 +429,5 @@ regenerated, never hand-edited.
 | F-X027 | Wire the golden-PNG gate into something     | S44 | S | pending |
 | F-X028 | Repair the agent-facing documentation drift | S44 | M | pending |
 | F-X029 | Path-filtered CI jobs                       | S44 | M | pending |
-| F-X030 | Decouple the npm package versions           | S44 | S | pending |
+| F-X030 | Decouple the npm package versions           | -   | S | archived |
 <!-- AUTOGEN:backlog-MX END -->

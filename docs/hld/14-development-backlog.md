@@ -2083,6 +2083,13 @@ They live in `crates/oxml-layout/`.
 unconditionally and `system-fonts` is the optional feature, so the wheel-building
 instruction in the bindings spec names a flag that cannot be set.
 
+`docs/hld/15-build-and-toolchain.md:229-236` states in the present tense that
+the shared-version group "is at 0.6.0", that the Python project and rdocx WASM
+literals "are also 0.6.0", and that the incubating manifests are "prepared at
+explicit version 0.2.0". The trains are at 0.7.0 and 0.3.0. This is the same
+paragraph family F-X025 corrected two sentences of, found while confirming the
+WASM publication position for F-X030.
+
 `.claude/commands/verify.md:55-57` runs `cargo test -p rdocx-layout
 --no-default-features` and tells the reader to rename the package when the
 extraction lands. It landed. `CLAUDE.md`, `AGENTS.md` and the CI matrix all name
@@ -2091,8 +2098,9 @@ extraction lands. It landed. `CLAUDE.md`, `AGENTS.md` and the CI matrix all name
 a broken gate.
 
 F-X025 corrected two instances of the same class in the spec set. These are the
-third through the ninth, which is what makes this a story rather than another
-one-off patch.
+third through the twelfth, which is what makes this a story rather than another
+one-off patch. Three of them were found while doing something else, which is the
+argument for the test gate below rather than another manual sweep.
 **Depends on**: none.
 **Test gate**: regression. A test asserts that every path, version and feature
 name `CLAUDE.md` and `.claude/commands/verify.md` cite resolves against the
@@ -2125,27 +2133,32 @@ reporting green because it never ran.
 that must trigger it and a changed path that must not, so narrowing a filter by
 mistake fails the suite. A docs-only change reports every required check.
 
-### F-X030, Decouple the npm package versions from the Rust family version (S)
-`crates/rdocx-wasm` and `crates/rpptx-wasm` are `publish = false` for crates.io
-and are published to npm as `@tensorbee/rdocx-wasm` and `@tensorbee/rpptx-wasm`.
-Both inherit their Rust family's version, which `.github/workflows/ci.yml:203`
-and `:204` assert as 0.7.0 and 0.3.0.
+### F-X030, Decouple the npm package versions from the Rust family version (S, archived)
 
-A JavaScript-only fix, a README correction or a packaging change to either npm
-package therefore cannot be released without versioning and publishing a Rust
-family that did not change.
+**Archived without being started. Its premise was wrong.**
 
-This is the narrow, real half of a wider idea that did not survive review. Giving
-the seven stable crates independent versions was considered and rejected: they
-are published as one dependency-ordered set at one version under a single `v*`
-tag, `test_stable_release_family_is_prepared_at_0_7_0` asserts exactly that, and
-the lockstep is a deliberate design rather than an accident. The WASM packages
-are the only members whose release cadence has a reason to differ, because their
-registry and their consumers are different.
-**Depends on**: none.
-**Test gate**: regression. Each WASM package carries its own version, the `ci.yml`
-assertions read that version rather than the workspace one, and a mutation that
-reintroduces the workspace inheritance fails the release preflight.
+The story claimed that a JavaScript-only fix to `@tensorbee/rdocx-wasm` or
+`@tensorbee/rpptx-wasm` could not ship without versioning a Rust family that had
+not changed. There is no shipping. Neither package is published anywhere.
+
+`scripts/test_sprint_workflow.py:1337-1349` asserts that the WASM CI job
+contains none of `npm publish`, `npm login`, `npm adduser`, `npm token`,
+`wasm-pack publish`, `NODE_AUTH_TOKEN`, `NPM_TOKEN`, `--registry`, `id-token:`,
+`git tag` or `gh release`. The job packs a bundler tarball and install-tests it
+locally, and that is the whole of it.
+`docs/hld/15-build-and-toolchain.md` says the same in prose: registry
+publication is "unconfigured and unauthorized", and no WASM or npm package
+gained publication authority from any release.
+
+So the version inheritance costs nothing. It would begin to cost something on
+the day npm publication is authorised, and not before. Recorded in
+`02-scope-and-non-goals.md` as a deliberate position rather than an oversight,
+so the next reader does not refile this.
+
+**Do not reopen this without first authorising npm publication.** If that
+happens, the work is the version split plus the `ci.yml` assertions at
+`scripts/test_sprint_workflow.py:1317-1319` and the lockfile package set the
+stable preflight asserts.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
