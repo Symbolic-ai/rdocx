@@ -52,9 +52,9 @@ the workspace, which is what `/close-sprint` requires.
    version. The whole module takes about four seconds.
 
 7. **The no-default-features path.**
-   `cargo test -p rdocx-layout --no-default-features`. This is the only thing
-   that exercises bundled fonts being off. Change the package name to
-   `oxml-layout` in F-013 when that rename lands.
+   `cargo test -p oxml-layout --no-default-features`. This is the only thing
+   that exercises system font discovery being off while bundled fonts remain
+   available.
 
 8. **The wasm targets.**
    `cargo check --target wasm32-unknown-unknown -p rdocx-wasm`. Add

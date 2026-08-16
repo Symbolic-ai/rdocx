@@ -58,6 +58,7 @@ defended.
 | S41 | X | 7 | 7 | 0 | 12 | 7 | Landed the surviving half of the external PR 2 rendering contribution as six stories under one umbrella. Footnote lines advance and reserve their own page space, oversized notes split across pages, endnotes moved to the document end with the two note streams keyed apart, kashida justification no longer fails a document open, and body text flows around wrapping drawings. All 28 hashes unchanged throughout, and no crate, package version or published artifact changed |
 | S42 | X | 4 | 4 | 0 | 5 | 4 | Refreshed the lockfile, broke the cross-family dependency edge that made the two publication trains mutually dependent, and released both: fourteen incubating crates at 0.3.0 and seven stable crates at 0.7.0, from one reviewed SHA. All 28 hashes unchanged throughout, and zero vulnerabilities across 152 dependencies |
 | S43 | X | 5 | 5 | 0 | 8 | 1 | Cleared the five follow-ups S41 and S42 filed. An unmodelled enumerated value now reads as an absent attribute across nine parsers, notes break to the width of the section carrying their reference, and a wrapping drawing anchored to a later paragraph pushes earlier text aside through a second pagination pass. The harness gained a three-part PDF fingerprint per sample, 28 entries to 49, and the story that added it found the PDF writer was not deterministic and fixed that too. /verify now runs the release preflights that publish.yml treats as its publication gate. One declared harness delta, 21 added and 0 changed, and no crate, package version or published artifact changed |
+| S44 | X | 4 | 4 | 0 | 6 | 4 | Closed four CI and workflow follow-ups from the S43 review. Pull-request CI now runs the full release-regression module and the golden-PNG gate under pinned Poppler, agent-facing repository claims are regression checked, and path filters preserve a stable aggregate gate. The full close gate passed, all 49 hashes remained unchanged, and no crate, package version, rendering baseline or published artifact changed |
 
 ## Completed features
 
@@ -245,6 +246,10 @@ defended.
 | F-X019 | S43 | M | 2 | 1 | 2026-08-16 | Two-pass pagination so paragraph-relative later drawings wrap |
 | F-X021 | S43 | L | 2 | 1 | 2026-08-16 | PDF fingerprint in the harness, 28 to 49 entries, and a deterministic writer |
 | F-X025 | S43 | S | 1 | 1 | 2026-08-16 | The release preflights run in the local gate, not first on a tag |
+| F-X026 | S44 | S | 1 | 1 | 2026-08-16 | Full release regressions run in a named CI job |
+| F-X027 | S44 | S | 1 | 1 | 2026-08-16 | Golden-PNG checks run in CI under pinned Poppler |
+| F-X028 | S44 | M | 2 | 1 | 2026-08-16 | Agent-facing paths, versions, fonts, and gates agree with the tree |
+| F-X029 | S44 | M | 2 | 1 | 2026-08-16 | Path-filtered CI with a stable aggregate gate |
 
 ## Velocity
 
@@ -303,6 +308,7 @@ five working days.
 | S41 | 7 | 7 | 5.00 |
 | S42 | 4 | 4 | 5.00 |
 | S43 | 5 | 1 | 25.00 |
+| S44 | 4 | 4 | 5.00 |
 
 ## Escalation record
 
@@ -349,3 +355,4 @@ was done about it. Empty is the expected state.
 | 2026-08-15 | Sprint estimate variance exceeded 30 percent | S40 | Record 1 actual day against 2 estimated. Reusing the bounded installer across hosted jobs reduced delivery time while preserving the exact pinned-tool and full-workflow evidence |
 | 2026-08-16 | Sprint estimate variance exceeded 30 percent | S41 | Record 7 actual days against 12 estimated. Splitting F-X013 into three children at design time meant each arrived with its defect already isolated, and five of the six stories shared one note or drawing subsystem, so later stories reused the first one's investigation rather than repeating it |
 | 2026-08-16 | Sprint estimate variance exceeded 30 percent | S43 | Record 1 actual day against 8 estimated. Every story arrived with its defect already isolated by the sprint that filed it, so design read a written-up cause rather than searching for one. Retain the dependency-defined boundaries. The 25.00 stories per week this produces is not a sustainable rate and is not carried into any forecast |
+| 2026-08-16 | Sprint estimate variance exceeded 30 percent | S44 | Record 4 actual days against 6 estimated. Three stories reused the existing workflow-contract module, and two reused already pinned CI environments, which reduced implementation time while preserving the dependency-defined boundaries and full close gate |

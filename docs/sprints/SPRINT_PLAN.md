@@ -711,6 +711,324 @@ run the release regressions that `publish.yml` treats as its publication gate.
 The gate stories land last because neither blocks the three defect fixes, and
 putting them first would delay work that users can actually hit.
 
+#### Sprint S44, Gate coverage and specification repair
+
+**Goal**: finish the job S43 started. S43 closed two gaps in the gates and
+found, in passing, that the records describing those gates had drifted from
+them. This sprint puts the two remaining gates where CI can see them and repairs
+the documentation that tells every future session what is true.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X026 | CI must run the release regressions too | S |
+| F-X027 | Wire the golden-PNG gate into something | S |
+| F-X029 | Path-filtered CI jobs | M |
+| F-X028 | Repair the agent-facing documentation drift | M |
+
+Every implementation milestone is closed, so this sprint carries no feature
+work. Three of the four exist because S43 went looking at the instruments rather
+than the product. F-X029 came out of a review of whether the workspace should be
+split into separate repositories. That review also produced F-X030, archived
+before the sprint started because the WASM packages are deliberately
+unpublished and its stated problem does not exist.
+
+No pair has a hard dependency, so the order is a preference. The one soft
+coupling is F-X026 and F-X029, which both edit `ci.yml`. F-X026 first, because it is the narrower
+half of a gap S43 half-closed: `/verify` runs the release preflights now and CI
+still does not, so a contributor who skips the local gate can move a version
+carrier and see a green pull request. F-X027 next, because the golden-PNG gate
+is fully specified and wired into nothing, and deciding where it belongs needs a
+judgement about the pinned Poppler build that F-X026 does not need.
+
+F-X028 lands last and is the largest, because it is the only one that touches
+`CLAUDE.md`, and a story that rewrites the file every other session reads first
+should land against a tree the other two have already settled.
+
+## Post-v1 roadmap, S45 onward
+
+v1 shipped at S43 and every implementation milestone closed. S44 repairs the
+gates and the records. From S45 the plan resumes at milestone granularity
+against `14-development-backlog.md` M14 through M20.
+
+The order is deliberate and each boundary is a stopping point. Stopping after
+S46 leaves one chart engine serving both families. Stopping after S49 leaves a
+document-automation product. Stopping after S57 leaves everything except
+spreadsheets. Nothing later is a prerequisite for anything earlier.
+
+| Sprints | Milestone | Stories | Days |
+|---|---|---|---|
+| S45 to S46 | M15, then M14 opens | 4 plus 5 | 12 plus 15 |
+| S47 to S48 | M14 completes | 4 | 13 |
+| S49 to S51 | M16, document automation | 9 | 31 |
+| S52 to S53 | M17, security and compliance | 7 | 23 |
+| S54 to S56 | M18, format breadth | 8 | 26 |
+| S57 to S60 | M19, spreadsheets | 12 | 44 |
+| S61 to S62 | M20, fidelity at scale | 7 | 27 |
+
+#### Sprint S45, One chart engine
+
+**Goal**: make the chart engine serve Word as well as PowerPoint. It is the
+cheapest milestone on the roadmap and the only one whose engine already exists
+on the format-neutral side of the crate graph.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-156 | Extract oxml-chart | L |
+| F-157 | Word chart part and embedded workbook | M |
+| F-158 | Document::add_chart | M |
+| F-159 | Chart rendering in the Word paginator | M |
+
+F-156 is a file move and nothing else. The hash harness must be byte-identical
+across it, and folding a behaviour change into it is forbidden. The other three
+are strictly ordered, since each needs the part the one before it writes.
+
+#### Sprint S46, Comments and content controls
+
+**Goal**: open the collaboration layer at both ends. Comments are the most
+requested missing API in this space and content controls are the primitive every
+document-assembly product is built on.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-147 | Comment model and part | M |
+| F-148 | Comment API | M |
+| F-152 | Content control model | L |
+| F-153 | Content control binding | M |
+| F-154 | Bookmarks and cross-references | M |
+
+Two independent pairs, so they parallelise cleanly. F-154 joins this sprint
+rather than the next because F-161 needs bookmarks to resolve `REF` and
+`PAGEREF`, and that is two sprints away.
+
+#### Sprint S47, Tracked changes
+
+**Goal**: read, write and resolve revisions. The single most demanded enterprise
+capability in this space and the one with no open-source answer in any language.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-149 | Revision model | L |
+| F-150 | Accept and reject revisions | L |
+
+Two stories, both L, and deliberately alone in a sprint. F-150 has to reproduce
+what Word produces from the same input, which is the kind of correctness that
+takes the time it takes.
+
+#### Sprint S48, Revision display and protection
+
+**Goal**: close M14. Show revisions, and read the author's intent about who may
+change what.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-151 | Revision display in the renderer | M |
+| F-155 | Document protection | M |
+
+A short sprint on purpose. It carries the M14 end-of-milestone gate, which
+covers four subsystems built across three sprints.
+
+#### Sprint S49, Fields
+
+**Goal**: evaluate the field codes real documents are full of. Everything in
+M16 rests on this.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-160 | Field instruction parser | L |
+| F-161 | Field evaluation engine | L |
+| F-162 | Field update policy | M |
+
+Strictly ordered. F-161 also depends on F-154 from S46, which is why bookmarks
+landed early.
+
+#### Sprint S50, Templating
+
+**Goal**: turn substitution into generation.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-163 | Template syntax | L |
+| F-164 | Loops and conditionals | L |
+| F-165 | Repeating table rows and lists | M |
+
+F-163 leads because the tag-split-across-runs problem is the one every naive
+implementation gets wrong, and the two after it inherit whatever it decides.
+
+#### Sprint S51, Merge, compare and watermarks
+
+**Goal**: close M16 with the three capabilities that need everything before
+them.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-166 | Mail merge | M |
+| F-167 | Document comparison | L |
+| F-168 | Watermarks | S |
+
+F-167 is the flagship of every commercial library in this category. It is scoped
+to body text, tables and list structure, with formatting-only differences
+recorded as a diagnostic, which is what keeps it one story.
+
+#### Sprint S52, Encryption
+
+**Goal**: open the files that currently cannot be opened at all.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-169 | Agile encryption, read | L |
+| F-170 | Agile encryption, write | M |
+| F-171 | Digital signature verification | L |
+
+Reading comes first and matters most. A password-protected document is a hard
+stop for a user today, where an unsigned one is only a missing assurance.
+
+#### Sprint S53, Signatures and accessible PDF
+
+**Goal**: close M17. Produce documents a public body can accept.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-172 | Digital signature creation | M |
+| F-173 | Tagged PDF structure tree | L |
+| F-174 | PDF/A conformance | M |
+| F-175 | Redaction | M |
+
+F-173 is the one a LibreOffice-based pipeline cannot do well, and the layout
+engine already knows the document semantics it needs, because
+`audit_accessibility` reads them.
+
+#### Sprint S54, RTF
+
+**Goal**: open M18 with the inbound format that blocks the most corpora.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-176 | RTF reader | L |
+| F-177 | RTF writer | M |
+| F-183 | Image export options | S |
+
+F-183 rides along because it is a day of work against an entry point every
+format in this milestone shares.
+
+#### Sprint S55, HTML and ODT in
+
+**Goal**: the two remaining inbound formats.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-178 | HTML import | L |
+| F-179 | ODT reader | L |
+
+Independent of each other. HTML import is the most requested inbound conversion
+in every comparable library's tracker, and ODT is procurement-mandated across
+European public bodies and read by nothing in Rust.
+
+#### Sprint S56, ODT, EPUB and SVG out
+
+**Goal**: close M18.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-180 | ODT writer | L |
+| F-181 | EPUB export | M |
+| F-182 | SVG page export | M |
+
+F-181 and F-182 both fall out of work that exists: EPUB from the outline API,
+SVG from the same `PageFrame` the PDF and PNG backends already consume.
+
+#### Sprint S57, The spreadsheet decision and the model
+
+**Goal**: take the decision M19 requires, then build the model it unlocks.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-184 | Supersede the spreadsheet non-goal | S |
+| F-185 | Workbook and worksheet model | L |
+| F-186 | Shared strings, styles and number formats | L |
+
+**F-184 gates everything after it in this milestone.** It is a one-day story
+that amends `02-scope-and-non-goals.md` and states the boundary between
+`oxml-sml` as chart support and `rxlsx` as a library. Nothing else in M19 may
+start before it lands.
+
+#### Sprint S58, Streaming read and write
+
+**Goal**: the one Office format that is routinely too large to hold as a tree.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-187 | Reader | L |
+| F-188 | Writer | L |
+
+Both carry an asserted memory ceiling rather than a hoped-for one. A 100 MB
+fixture is the gate, not a smoke test.
+
+#### Sprint S59, Formulas
+
+**Goal**: the capability that separates a spreadsheet library from a file
+parser. Nothing in Rust recalculates.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-189 | Formula parser | L |
+| F-190 | Calculation engine | L |
+
+F-190's gate is differential against the values Excel itself stored in a pinned
+corpus, cell for cell, with unsupported functions listed rather than silently
+wrong. That is the only honest way to measure a calculation engine.
+
+#### Sprint S60, Sheet features, rendering and distribution
+
+**Goal**: close M19.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-191 | Charts in spreadsheets | M |
+| F-192 | Conditional formatting and data validation | M |
+| F-193 | Pivot table preservation | M |
+| F-194 | Sheet rendering | L |
+| F-195 | rxlsx distribution | L |
+
+F-191 uses `oxml-chart` for the third time, which is the return on S45. F-195
+follows the shape M13 established, so it is a known quantity rather than a new
+problem.
+
+#### Sprint S61, The Word corpus
+
+**Goal**: measure the Word renderer against documents nobody here wrote. This is
+the largest untested surface in the workspace.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-196 | Word corpus | M |
+| F-197 | Word SSIM harness | L |
+| F-201 | Large document performance | L |
+
+PowerPoint has 50 fetched decks and an SSIM harness. Word has seven samples this
+project generates itself, so it can only catch a regression against its own
+output and can never catch a disagreement with Word.
+
+#### Sprint S62, Text shaping and incremental layout
+
+**Goal**: close M20, and with it the roadmap.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-198 | Hyphenation | L |
+| F-199 | Complex script shaping | L |
+| F-200 | Vertical and bidirectional text | M |
+| F-202 | Incremental layout | L |
+| F-X031 | Require the CI gate in branch protection | S |
+
+F-198 changes line breaking and therefore every line after the first hyphenated
+one, so it lands after the corpus exists to measure it. Expect a declared hash
+harness delta, and expect it to be large.
+
+F-X031 is deliberately parked at the roadmap boundary. F-X029 creates the
+stable repository-side `ci-gate` in S44. This final operational story makes it
+a required GitHub check only after the planned product work and gate names have
+settled.
+
 ## Cross-cutting
 
 F-X001 through F-X004 are scheduled in S36 as the final cross-cutting v1
@@ -719,3 +1037,5 @@ its stable-family release without rewriting the completed milestone history.
 F-X013 through F-X016 carry the surviving half of the external PR 2 rendering
 contribution, whose anchored-drawing placement was overtaken by the M7 anchor
 work before it could land.
+F-X031 carries the external branch-protection mutation deferred from F-X029 to
+the final planned sprint.

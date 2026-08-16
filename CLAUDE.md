@@ -12,7 +12,7 @@ A Rust workspace for Office Open XML. Three families of crates:
 - **`oxml-*`**, format-neutral OOXML infrastructure. The OPC container, units,
   DrawingML, image handling, layout primitives, the PDF backend.
 - **`rdocx-*`**, WordprocessingML. A shipped port of `python-docx`, on
-  crates.io at 0.2.0.
+  crates.io at 0.7.0.
 - **`rpptx-*`**, PresentationML. A port of `python-pptx`, under construction.
 
 The repository is named `rdocx` for historical reasons and keeps that name
@@ -38,7 +38,7 @@ Read `docs/hld/00-vision.md` first, then `03-architecture.md`.
 | `crates/oxml-*` | Format-neutral infrastructure. **Must not depend on `rdocx-*` or `rpptx-*`.** No exceptions: the `Theme` adapter lives in `rdocx-oxml`, so that edge runs `rdocx-oxml -> oxml-drawing` |
 | `crates/rdocx-*` | WordprocessingML. `rdocx-oxml` holds the `w:` types, `rdocx-layout` the flow engine and paginator, `rdocx` the facade |
 | `crates/rpptx-*` | PresentationML. `rpptx-oxml` the `p:` types, `rpptx-layout` the inheritance resolver, `rpptx-render` the slide renderer, `rpptx` the facade |
-| `crates/rdocx-layout/fonts/` | 20 bundled TTFs behind the `bundled-fonts` feature. Every family needs a licence file |
+| `crates/oxml-layout/fonts/` | 20 bundled TTFs compiled unconditionally. The optional `system-fonts` feature adds host discovery. Every family needs a licence file |
 | `crates/rpptx/assets/` | The bundled `default.pptx`. **Must live under the crate directory** or it is not in the published tarball |
 | `docs/hld/` | The spec set, 00 to 15. Precedence rule in `docs/hld/README.md` |
 | `docs/sprints/` | BACKLOG, SPRINT_PLAN, CURRENT_SPRINT, SPRINT_TRACKER, AS_BUILT |
@@ -57,7 +57,7 @@ cargo test -p <crate> --test <file>         # one integration binary, fastest
 cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo fmt --all --check
-cargo test -p oxml-layout --no-default-features   # the bundled-fonts-off path
+cargo test -p oxml-layout --no-default-features   # the system-font-discovery-off path
 cargo check --target wasm32-unknown-unknown -p rdocx-wasm -p rpptx-wasm
 
 python3 scripts/hash_harness.py --check     # gates every PR in M1-M6
@@ -155,15 +155,3 @@ Do not "fix" these without reading why:
   rounding shifts every twip, which shifts layout.
 - **`rdocx-oxml`'s `drawing.rs`** keeps its `wp:` code. It is Word-only and is
   not migrated.
-
-## Known defects being carried
-
-Each has a story in M1. Do not rediscover them:
-
-- `crates/rdocx-layout/fonts/` has no licence for the four Caladea TTFs, and
-  `bundled_fonts.rs:12` wrongly claims all bundled fonts are SIL OFL. Caladea is
-  Apache-2.0. **This ships today.**
-- `crates/rdocx/src/document.rs:135-138` counts media parts instead of parsing
-  the maximum suffix, so a package with `image1` and `image4` overwrites
-  `image3`.
-- `Document::render_page_to_png` re-lays out the whole document per call.

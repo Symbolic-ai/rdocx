@@ -130,6 +130,71 @@ equivalent, rather than failing five frames away.
 stock or corporate templates. Decks that lean on 3-D, heavy effects or WordArt
 will render legibly but not faithfully, and will say so.
 
+## Beyond v1
+
+v1 shipped. This section records what changed after it, and it is the only place
+a v1 non-goal may be superseded. A non-goal not named here still stands.
+
+The shape of the roadmap is in `14-development-backlog.md`, M14 through M20. The
+principle behind it: v1 proved the model and the renderer can live in one
+codebase, which is the thing no other library in Python or Rust has. Everything
+after v1 leans on that rather than away from it.
+
+### Superseded
+
+| v1 position | Superseded by | Why it changed |
+|---|---|---|
+| `oxml-sml` is not a spreadsheet library and must not grow into one without a separate decision | **M19**, and F-184 is that decision | The decision was correct while the foundations were unbuilt. OPC, DrawingML, charts, layout and the PDF backend now all exist and are format-neutral, so the marginal cost of the third family is a fraction of what it was |
+| Charts are a PowerPoint capability | **M15** | `rpptx-chart` turned out to depend on no PowerPoint crate. It was format-neutral all along and only its name said otherwise |
+
+Both entries are decisions, not corrections. The v1 positions were right when
+they were written.
+
+### Still non-goals, and still permanent
+
+- **Not a PowerPoint clone, and not a Word clone.** The renderer targets
+  business documents. Decks and documents that lean on 3-D, heavy effects or
+  WordArt render legibly and say so.
+- **Drop-in `python-docx` and `python-pptx` compatibility is not promised.**
+  Unchanged and for the unchanged reason: their real surface is inseparable from
+  lxml.
+- **EMF and WMF interpretation.** Still an outline placeholder. M18 adds
+  formats, and this is not one of them.
+- **Animations, transitions and `p:timing` as behaviour.** Preserved, never
+  executed. Nothing static renders them.
+- **Recalculating pivot tables.** M19 preserves the cache and reports the
+  source. Reproducing Excel's pivot engine is a library of its own.
+
+### The WASM packages are deliberately unpublished
+
+`@tensorbee/rdocx-wasm` and `@tensorbee/rpptx-wasm` are built, optimised,
+packed as bundler tarballs and install-tested on every pull request. **They are
+not published to npm, and npm publication is not authorised.**
+
+This is enforced rather than intended. The WASM CI job is asserted to contain
+none of `npm publish`, `wasm-pack publish`, `npm login`, `npm adduser`,
+`npm token`, `NODE_AUTH_TOKEN`, `NPM_TOKEN`, `--registry`, `id-token:`,
+`git tag` or `gh release`, so a step that could publish cannot be added without
+failing the release preflight.
+
+Both crates are `publish = false` for crates.io and inherit their Rust family's
+version. That inheritance is harmless while nothing ships, and it is the only
+thing that would need revisiting on the day npm publication is authorised.
+F-X030 was filed against that inheritance and archived once this position was
+confirmed, and its entry records what the work would be if the position changes.
+
+### Deliberately not scheduled
+
+Named so a reader knows they were considered rather than missed.
+
+- **Legacy binary `.doc`, `.xls` and `.ppt`.** Each is a compound-file format
+  with no relation to OOXML, and each is roughly a milestone on its own. The
+  demand is real and enterprise, and the cost is not justified until the OOXML
+  side is complete through M18.
+- **Presentation to video.** A commercial checkbox feature that needs an
+  encoder, a timeline and the animation engine v1 declined to build.
+- **A collaborative editing server.** Out of the shape of a library.
+
 ## The measurable bar
 
 For a business deck built from a stock Office template, with title and content

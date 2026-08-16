@@ -29,8 +29,15 @@ regenerated, never hand-edited.
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
-| X, Cross-cutting (opportunistic)            | 30 | 28 | 0 | 2  |
-| **Total** | **184** | **182** | **0** | **2** |
+| M14, Word collaboration layer                  | 9  | 0 | 0 | 9  |
+| M15, Charts beyond PowerPoint                  | 4  | 0 | 0 | 4  |
+| M16, Document automation                       | 9  | 0 | 0 | 9  |
+| M17, Security and compliance                   | 7  | 0 | 0 | 7  |
+| M18, Format breadth                            | 8  | 0 | 0 | 8  |
+| M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
+| M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
+| X, Cross-cutting (opportunistic)            | 34 | 32 | 0 | 1  |
+| **Total** | **244** | **186** | **0** | **57** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -280,6 +287,111 @@ regenerated, never hand-edited.
 | F-146 | npm publication                              | S36 | S | done |
 <!-- AUTOGEN:backlog-M13 END -->
 
+### M14, Word collaboration layer
+
+<!-- AUTOGEN:backlog-M14 START -->
+| F-ID | Title | Sprint | Size | Status |
+|------|-------|--------|------|--------|
+| F-147 | Comment model and part                       | S46  | M | pending |
+| F-148 | Comment API                                  | S46  | M | pending |
+| F-149 | Revision model                               | S47  | L | pending |
+| F-150 | Accept and reject revisions                  | S47  | L | pending |
+| F-151 | Revision display in the renderer             | S48  | M | pending |
+| F-152 | Content control model                        | S46  | L | pending |
+| F-153 | Content control binding                      | S46  | M | pending |
+| F-154 | Bookmarks and cross-references               | S46  | M | pending |
+| F-155 | Document protection                          | S48  | M | pending |
+<!-- AUTOGEN:backlog-M14 END -->
+
+### M15, Charts beyond PowerPoint
+
+<!-- AUTOGEN:backlog-M15 START -->
+| F-ID | Title | Sprint | Size | Status |
+|------|-------|--------|------|--------|
+| F-156 | Extract oxml-chart                           | S45  | L | pending |
+| F-157 | Word chart part and embedded workbook        | S45  | M | pending |
+| F-158 | Document::add_chart                          | S45  | M | pending |
+| F-159 | Chart rendering in the Word paginator        | S45  | M | pending |
+<!-- AUTOGEN:backlog-M15 END -->
+
+### M16, Document automation
+
+<!-- AUTOGEN:backlog-M16 START -->
+| F-ID | Title | Sprint | Size | Status |
+|------|-------|--------|------|--------|
+| F-160 | Field instruction parser                     | S49  | L | pending |
+| F-161 | Field evaluation engine                      | S49  | L | pending |
+| F-162 | Field update policy                          | S49  | M | pending |
+| F-163 | Template syntax                              | S50  | L | pending |
+| F-164 | Loops and conditionals                       | S50  | L | pending |
+| F-165 | Repeating table rows and lists               | S50  | M | pending |
+| F-166 | Mail merge                                   | S51  | M | pending |
+| F-167 | Document comparison                          | S51  | L | pending |
+| F-168 | Watermarks                                   | S51  | S | pending |
+<!-- AUTOGEN:backlog-M16 END -->
+
+### M17, Security and compliance
+
+<!-- AUTOGEN:backlog-M17 START -->
+| F-ID | Title | Sprint | Size | Status |
+|------|-------|--------|------|--------|
+| F-169 | Agile encryption, read                       | S52  | L | pending |
+| F-170 | Agile encryption, write                      | S52  | M | pending |
+| F-171 | Digital signature verification               | S52  | L | pending |
+| F-172 | Digital signature creation                   | S53  | M | pending |
+| F-173 | Tagged PDF structure tree                    | S53  | L | pending |
+| F-174 | PDF/A conformance                            | S53  | M | pending |
+| F-175 | Redaction                                    | S53  | M | pending |
+<!-- AUTOGEN:backlog-M17 END -->
+
+### M18, Format breadth
+
+<!-- AUTOGEN:backlog-M18 START -->
+| F-ID | Title | Sprint | Size | Status |
+|------|-------|--------|------|--------|
+| F-176 | RTF reader                                   | S54  | L | pending |
+| F-177 | RTF writer                                   | S54  | M | pending |
+| F-178 | HTML import                                  | S55  | L | pending |
+| F-179 | ODT reader                                   | S55  | L | pending |
+| F-180 | ODT writer                                   | S56  | L | pending |
+| F-181 | EPUB export                                  | S56  | M | pending |
+| F-182 | SVG page export                              | S56  | M | pending |
+| F-183 | Image export options                         | S54  | S | pending |
+<!-- AUTOGEN:backlog-M18 END -->
+
+### M19, Spreadsheets
+
+<!-- AUTOGEN:backlog-M19 START -->
+| F-ID | Title | Sprint | Size | Status |
+|------|-------|--------|------|--------|
+| F-184 | Supersede the spreadsheet non-goal           | S57  | S | pending |
+| F-185 | Workbook and worksheet model                 | S57  | L | pending |
+| F-186 | Shared strings, styles and number formats    | S57  | L | pending |
+| F-187 | Reader                                       | S58  | L | pending |
+| F-188 | Writer                                       | S58  | L | pending |
+| F-189 | Formula parser                               | S59  | L | pending |
+| F-190 | Calculation engine                           | S59  | L | pending |
+| F-191 | Charts in spreadsheets                       | S60  | M | pending |
+| F-192 | Conditional formatting and data validation   | S60  | M | pending |
+| F-193 | Pivot table preservation                     | S60  | M | pending |
+| F-194 | Sheet rendering                              | S60  | L | pending |
+| F-195 | rxlsx distribution                           | S60  | L | pending |
+<!-- AUTOGEN:backlog-M19 END -->
+
+### M20, Fidelity at scale
+
+<!-- AUTOGEN:backlog-M20 START -->
+| F-ID | Title | Sprint | Size | Status |
+|------|-------|--------|------|--------|
+| F-196 | Word corpus                                  | S61  | M | pending |
+| F-197 | Word SSIM harness                            | S61  | L | pending |
+| F-198 | Hyphenation                                  | S62  | L | pending |
+| F-199 | Complex script shaping                       | S62  | L | pending |
+| F-200 | Vertical and bidirectional text              | S62  | M | pending |
+| F-201 | Large document performance                   | S61  | L | pending |
+| F-202 | Incremental layout                           | S62  | L | pending |
+<!-- AUTOGEN:backlog-M20 END -->
+
 ### X, Cross-cutting
 
 <!-- AUTOGEN:backlog-MX START -->
@@ -313,6 +425,10 @@ regenerated, never hand-edited.
 | F-X024 | Move the theme adapter into rdocx-oxml     | S42 | M | done |
 | F-X022 | Tag rpptx-v0.3.0                           | S42 | S | done |
 | F-X023 | Tag v0.7.0                                 | S42 | S | done |
-| F-X026 | CI must run the release regressions too     | -   | S | pending |
-| F-X027 | Wire the golden-PNG gate into something     | -   | S | pending |
+| F-X026 | CI must run the release regressions too     | S44 | S | done |
+| F-X027 | Wire the golden-PNG gate into something     | S44 | S | done |
+| F-X028 | Repair the agent-facing documentation drift | S44 | M | done |
+| F-X029 | Path-filtered CI jobs                       | S44 | M | done |
+| F-X030 | Decouple the npm package versions           | -   | S | archived |
+| F-X031 | Require the CI gate in branch protection    | S62 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->

@@ -181,6 +181,13 @@ publication, which is what S42 demonstrated when F-X022 passed the entire local
 gate and still left the incubating preflight and the `ci.yml` WASM literal
 asserting the previous version.
 
+The pull-request CI workflow runs the same complete module in its dedicated
+`release-regressions` job. The job has no condition or failure-tolerant path,
+and checkout plus a locked cargo-release 1.1.3 installation precede the exact
+whole-module command. This keeps both release family preflights and future
+release-contract regressions in the ordinary CI gate with the external command
+their stable-family checks require.
+
 The workflow then runs
 `cargo publish --workspace --dry-run` with an exact local source patch for each
 member of the 21-package publishable union. Cargo rewrites packaged path
@@ -226,20 +233,19 @@ possible and never rewrite README prose by pattern.
 that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
 cargo-release's effective `workspace` shared-version group and the
-`v{{version}}` tag template. That shared-version group is at 0.6.0, and its two
-Python project versions and rdocx WASM contract literals are also 0.6.0. The
-exact seven-package stable family is published at 0.6.0 from the annotated
-`v0.6.0` tag whose target is the reviewed sprint SHA. The immutable 0.4.1 and
-0.5.0 registry releases remain available. No binding, WASM, Python, npm, or
+`v{{version}}` tag template. That shared-version group is at 0.7.0, and its two
+Python project versions and rdocx WASM contract literals are also 0.7.0. The
+exact seven-package stable family is published at 0.7.0 from the annotated
+`v0.7.0` tag whose target is the reviewed sprint SHA. Earlier immutable
+registry releases remain available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
 The 15 implemented `oxml-*` and `rpptx*` package manifests are prepared at
-explicit version 0.2.0, use the named `incubating` group, and carry the
+explicit version 0.3.0, use the named `incubating` group, and carry the
 `rpptx-v{{version}}` template. That preparation group is the exact 14-package
 crates.io family listed above plus unpublished `rpptx-wasm`. The crates.io
-allowlist remains exactly 14 packages. All 14 are published at 0.1.3, while
-all 14 are also published at 0.2.0 from the annotated `rpptx-v0.2.0` tag at
-reviewed SHA `1b13dbe4a5454f1d1629ff8915287b26daa10ed0`. The immutable 0.1.3
-release remains available, and `rpptx-wasm` remains unpublished.
+allowlist remains exactly 14 packages. All 14 are published at 0.3.0 from the
+annotated `rpptx-v0.3.0` tag at the reviewed sprint SHA. Earlier immutable
+registry releases remain available, and `rpptx-wasm` remains unpublished.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.
@@ -278,6 +284,22 @@ cannot diverge.
 Listed in `12-testing-strategy.md`. The matrix carries these
 repository-specific gates:
 
+**Path-filtered expensive jobs with one aggregate gate.** A `changes` job uses
+`dorny/paths-filter` v4.0.3 at immutable reviewed commit
+`ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d`. Its inline filters cover the full
+inputs of `test`, `msrv`, `wasm`, `python-bindings`,
+`presentation-fidelity`, `hash-harness`, `supply-chain`, and `prose`. Every
+filter also covers the CI workflow itself. The detector alone receives
+`pull-requests: read` in addition to repository content read.
+
+The `ci-gate` job always runs and depends on change detection plus every
+filtered job. It fails unless selected jobs succeeded and unselected jobs were
+skipped. This includes failure, cancellation, unexpected-skip, and
+change-detector failure paths. A documentation-only change runs prose while
+the filtered product jobs skip, yet the same stable aggregate gate reports.
+The scheduled path skips change detection and requires supply-chain success.
+Unfiltered jobs retain their ordinary triggers.
+
 **A dedicated `oxml-layout` package job.** It checks the exact bundled font and
 legal-file inventory, builds and verifies the generated archive, and enforces
 the crates.io 10 MiB limit.
@@ -289,6 +311,11 @@ unresolved-symbol link failure that is easy to misdiagnose as something else.
 
 **A dedicated no-default-features job.** It runs `cargo test -p oxml-layout
 --no-default-features`, which exercises the font-isolation path used by WASM.
+
+**The golden-PNG gate in the test job.** After the full workspace suite, the
+same Ubuntu 24.04 job runs `python3 scripts/golden_png_harness.py --check` with
+the Poppler 26.01.0 installation already on `PATH`. The step is unconditional
+and propagates a decoded-pixel mismatch as a CI failure.
 
 **Workspace package READMEs in the docs job.** Every one of the 26 workspace
 packages explicitly declares one distinct README. The root file is the
@@ -346,11 +373,12 @@ extension with `maturin develop --locked`, and runs the package's complete
 pytest directory. The Poppler installation supplies the reviewed 26.01.0 tools
 asserted by the rdocx rendering suite. Build and test failures propagate
 directly, with no failure-tolerant condition, inherited pytest override, or
-fallback. The top-level pull-request trigger is operative and the job has no
-condition. Workflow permissions are exactly repository content read, with no
-OIDC token grant. Checkout v6.0.2, setup-python v6.2.0, rust-cache v2.9.1, and
-the selected stable rust-toolchain revision use reviewed full commit SHAs and
-exact input maps.
+fallback. The top-level pull-request trigger is operative and the job condition
+uses only the change detector's `python_bindings` output. Workflow root
+permissions are repository content read, and only the detector adds pull-request
+metadata read. No job grants an OIDC token. Checkout v6.0.2, setup-python
+v6.2.0, rust-cache v2.9.1, and the selected stable rust-toolchain revision use
+reviewed full commit SHAs and exact input maps.
 
 **One checksum-pinned Poppler installer.**
 `scripts/install_pinned_poppler.py` downloads the official 26.01.0 source
@@ -388,6 +416,12 @@ changing the separate macOS Presentation fidelity setup.
 **A prose and generated-skill job.** It runs `scripts/prose_check.py` and
 `scripts/sync_agent_skills.py --check` as separate steps, so voice-rule or
 adapter drift fails before integration.
+
+**A dedicated release regression job.** It runs
+`python3 -m unittest scripts.test_sprint_workflow` after checkout, without a job
+condition, successful fallback or `continue-on-error`. The complete module is
+the pull-request gate for release-family version carriers and their workflow
+contracts.
 
 **A dedicated Presentation fidelity job** fetches the pinned 50-deck corpus,
 installs LibreOffice and Poppler, and runs `scripts/pptx_ssim_harness.py

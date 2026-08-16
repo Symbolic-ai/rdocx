@@ -246,10 +246,10 @@ Two traps specific to this workspace:
 
 - **`fontdb`'s `fontconfig` feature is useless on musl and Windows.** Gate it
   per-target.
-- **Build wheels with `bundled-fonts` on.** Otherwise `to_pdf()` produces blank
-  or mangled text on a bare manylinux container with no system fonts, which
-  would be the single most common support question. Roughly 4 MB per wheel is a
-  fair trade.
+- **Bundled fonts are always compiled into wheels.** The optional
+  `system-fonts` feature adds host discovery, but a bare manylinux container
+  still has the bundled fallback inventory needed for `to_pdf()`. Roughly 4 MB
+  per wheel is a fair trade for deterministic fallback text.
 
 Each mixed package ships a hand-written native-extension stub beside its
 extension module and a `py.typed` marker at package root. The stubs describe

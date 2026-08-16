@@ -103,6 +103,11 @@ equality for all seven buffers. The regression proof runs `--check
 directory, changes exactly one decoded pixel, and requires check mode to fail
 with the sample name.
 
+The pull-request `test` job runs the golden-PNG check after the full workspace
+suite. That job installs the pinned Poppler 26.01.0 oracle first, so the decoded
+pixel comparison is unconditional, failure-propagating, and bound to the
+reviewed rasteriser identity.
+
 ## The deck corpus
 
 Fifty real `.pptx` files are stored outside the published crates and fetched by
@@ -488,10 +493,12 @@ returns non-empty rendered HTML after publication.
 
 | Job | Command |
 |---|---|
-| test | Install exact uv 0.10.2, fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack |
+| changes | On pushes and pull requests, classify changed paths for the eight filtered jobs with `dorny/paths-filter` v4.0.3 pinned to reviewed commit `ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d` |
+| test | Install exact uv 0.10.2 and Poppler 26.01.0, fetch the pinned corpus, run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack, then run `python3 scripts/golden_png_harness.py --check` |
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
 | wasm | Locked `wasm32-unknown-unknown` checks, `wasm-pack test --node`, and local bundler pack and fresh-install gates for `rdocx-wasm` and `rpptx-wasm` |
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |
+| release-regressions | Install cargo-release 1.1.3 with its locked dependency graph, then run `python3 -m unittest scripts.test_sprint_workflow` |
 | hash-harness | `python3 scripts/hash_harness.py --check` |
 | presentation-fidelity | Fetch the pinned corpus, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
 | clippy | `cargo clippy --workspace --all-targets --all-features --exclude rdocx-py --exclude rpptx-py -- -D warnings` |
@@ -501,12 +508,34 @@ returns non-empty rendered HTML after publication.
 | msrv | Install exact uv 0.10.2, fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 with an isolated uv cache and 8 MiB Rust test-thread stack |
 | python-bindings | On pull requests, build each Python package with `maturin develop --locked` in its own Python 3.12.9 environment, then run its complete pytest directory |
 | supply-chain | `cargo-deny check` |
+| ci-gate | Always validate that every selected filtered job succeeded and every unselected filtered job was skipped |
 | python-wheels | On manual dispatch or a `py-v*` tag, build six cp39-abi3 wheels for each Python package and one source distribution per package, then install and test every compatible artifact in a fresh environment |
+
+The `changes` job routes `test`, `msrv`, `wasm`, `python-bindings`,
+`presentation-fidelity`, `hash-harness`, `supply-chain`, and `prose` through
+inline fail-safe path filters. Every filter selects `ci.yml`, so a routing edit
+cannot suppress its own gate. Product and toolchain paths include each job's
+transitive workspace inputs. A documentation-only HLD change selects `prose`
+and skips the filtered product jobs. The supply-chain job also runs on the
+weekly schedule without change detection.
+
+`ci-gate` has `if: always()` and depends on the detector plus every filtered
+job. It accepts only `success` for a selected job and only `skipped` for an
+unselected job. Failure, cancellation, an unexpected skip, or a failed change
+detector makes the aggregate gate fail. On the scheduled route, it requires
+the detector to be skipped and the supply-chain job to succeed. The stable
+aggregate check exists in the tracked workflow. Repository branch-protection
+configuration is separate external state.
 
 The `--exclude` pair on every all-feature command is required, not cosmetic:
 `pyo3/extension-module` tells the linker that Python symbols come from the host
 interpreter, which is false for a test binary, and on Linux this is an
 unresolved-symbol link failure that is easy to misdiagnose.
+
+The dedicated release regression job runs the complete standard-library test
+module after checkout. It is unconditional and failure-propagating, so stale
+stable or incubating version carriers fail on pull requests before a release
+tag can reach the publication workflow.
 
 Every Poppler-dependent CI job builds the reviewed 26.01.0 command-line oracle
 from the official source archive. `scripts/install_pinned_poppler.py` enforces
@@ -538,10 +567,12 @@ rendering suite. Each row creates a fresh environment, builds the extension,
 then runs every test in that package's binding test directory. The build and
 pytest commands are separate ordinary steps with no successful fallback or
 `continue-on-error`, so either failure makes the pull-request check fail.
-The operative top-level `pull_request` trigger schedules the job without a job
-condition. Neither the job nor its pytest step has an environment or condition
-that can suppress execution. Root permissions are exactly `contents: read`,
-with no `id-token: write` grant anywhere in the workflow. Checkout v6.0.2,
+The operative top-level `pull_request` trigger schedules change detection, and
+the binding job runs only when its complete input closure is selected. Neither
+its build nor pytest step has an environment or condition that can suppress
+execution after selection. Root permissions are exactly `contents: read`.
+Only the change detector adds `pull-requests: read`, which is required to list
+changed pull-request files. No job grants `id-token: write`. Checkout v6.0.2,
 setup-python v6.2.0, rust-cache v2.9.1, and the selected stable rust-toolchain
 revision are bound to full reviewed commit SHAs. Their operative input maps are
 exact and cannot be satisfied by comments.

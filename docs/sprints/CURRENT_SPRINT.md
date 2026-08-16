@@ -1,62 +1,83 @@
-# Current Sprint, S43
+# Current Sprint, S44
 
 **Milestone**: X Cross-cutting.
 
-**Goal**: clear the follow-ups S41 and S42 filed. Three are defects a real
-document can reach, and two close gaps in the gates that let those defects
-survive as long as they did.
+**Goal**: finish the job S43 started. S43 closed two gaps in the gates and found,
+in passing, that the records describing those gates had drifted from them. This
+sprint puts the two remaining gates where CI can see them and repairs the
+documentation that tells every future session what is true.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for the note placement and reflow the two
-  layout follow-ups extend.
-- `docs/hld/12-testing-strategy.md`, "The hash harness", which F-X021 changes
-  the shape of, and "Test taxonomy" for the categories each story picks from.
-- `docs/hld/15-build-and-toolchain.md`, for the publication gate F-X025 brings
-  under `/verify`.
-- `docs/hld/14-development-backlog.md`, for the five story definitions.
+- `docs/hld/12-testing-strategy.md`, "The golden-PNG gate", for what F-X027 has
+  to wire in, and "What CI runs" for the job table both gate stories extend.
+- `docs/hld/15-build-and-toolchain.md`, the `publish.yml` paragraph, for the
+  release preflights F-X026 brings under CI, and the pinned Poppler build
+  F-X027 has to account for.
+- `docs/hld/10-bindings-spec.md`, the wheel-building traps, which carry one of
+  the `bundled-fonts` claims F-X028 corrects.
+- `docs/hld/14-development-backlog.md`, for the four story definitions.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X018 | Unknown enumerated values must not fail a document open | M | done | - |
-| F-X017 | Notes broken to their own section's width | S | done | - |
-| F-X019 | Paragraph-relative later drawings should wrap | M | done | - |
-| F-X021 | The hash harness should cover PDF output | L | done | - |
-| F-X025 | /verify must run the release regressions | S | done | - |
+| F-X026 | CI must run the release regressions too | S | done | - |
+| F-X027 | Wire the golden-PNG gate into something | S | done | - |
+| F-X028 | Repair the agent-facing documentation drift | M | done | - |
+| F-X029 | Path-filtered CI jobs | M | done | - |
 
 ## Sequencing note
 
-Rows are listed in the order they should land, not by F-ID.
+Rows are listed in dependency order, not F-ID order.
 
-F-X018 leads because it is the only story here where a document fails to open
-rather than rendering imperfectly. F-X014 fixed three kashida values because a
-real contribution reached them, and eight more parsers have the same shape.
+There is no hard dependency between these four, so the order is a preference
+rather than a constraint and any of them may be claimed first. The one soft
+coupling is that F-X026 and F-X029 both edit `ci.yml`, so whichever lands second
+rebases on the first.
 
-F-X017 and F-X019 are the two limitations S41 recorded rather than hid. Both are
-narrow, both are reachable by a real document, and both were written up with the
-fix already described.
+F-X026 leads because it is the narrower half of a gap S43 half-closed. `/verify`
+runs the release preflights now and CI still does not, so a contributor who
+skips the local gate can move a version carrier and see a green pull request.
 
-F-X021 and F-X025 are the gates, and they land last on purpose. Neither blocks
-the three defect fixes, and putting a gate improvement ahead of work a user can
-actually hit would be optimising for the process rather than the product. They
-are in the sprint because this is the moment their absence is freshest: F-X021
-exists because a dependency refresh changed every sample PDF while the harness
-reported green, and F-X025 because a version bump passed the whole local gate
-while leaving the publication preflight stale.
+F-X027 follows because the golden-PNG gate is fully specified and wired into
+nothing, and deciding where it belongs needs a judgement about the pinned
+Poppler build that F-X026 does not need.
+
+F-X029 and F-X030 came out of a monorepo-versus-split review and are the two
+concrete improvements that survived it. F-X029 pairs naturally with F-X026,
+since both edit `ci.yml`, and whichever lands second rebases on the first.
+F-X030 is independent of everything.
+
+F-X028 lands last, and is the largest, because it is the only one that rewrites
+`CLAUDE.md`. A story that changes the file every other session reads first
+should land against a tree the other three have already settled.
+
+Every implementation milestone is closed, so this sprint carries no feature
+work. Three of the four stories exist because S43 went looking at the
+instruments rather than the product. The fourth, F-X029, came out of a review of
+whether the workspace should be split into separate repositories. The conclusion
+was that it should not.
+
+That review also produced F-X030, which was archived before the sprint started
+once the WASM packages turned out to be deliberately unpublished, so its stated
+problem does not exist. `docs/hld/02-scope-and-non-goals.md` records the
+position.
 
 ## Definition of done for this sprint
 
-- A document carrying an unmodelled value for any of the nine enumerations
-  opens, keeps every sibling property, and renders the default for the
-  unmodelled one.
-- A note is broken to the width of the section that references it.
-- A wrapping drawing anchored to a later paragraph pushes earlier text aside
-  even when it is positioned relative to its own paragraph.
-- The harness records a stable fingerprint for PDF output, and a deliberate
-  change to the PDF writer moves it while leaving the PNG entries untouched.
-- `/verify --full` fails on a stale version literal in the release regressions
-  or the workflow files.
-- Every harness delta in the sprint is stated and justified in the commit that
-  causes it, including the deliberate re-record F-X021 requires.
+- A stale version literal fails a named CI job, not only `/verify --full`, and
+  not first at publication time.
+- The golden-PNG gate runs somewhere that fails when nobody remembers it, and
+  the spec set says where.
+- Every path, version and feature name `CLAUDE.md` and
+  `.claude/commands/verify.md` cite resolves against the workspace, and a test
+  asserts it, so the next stale claim fails a gate rather than surviving 40
+  sprints.
+- `CLAUDE.md` no longer tells a reader that a false font licence notice ships
+  today, that the family is on crates.io at 0.2.0, that the bundled fonts live
+  under `rdocx-layout`, or that a `bundled-fonts` feature exists.
+- A docs-only change reports every required check without running the workspace
+  suite, the MSRV suite, the WASM targets or the fidelity job, and each filtered
+  job has an asserted must-trigger and must-not-trigger path.
+- The hash harness stays at 49 of 49. No story here touches rendering.

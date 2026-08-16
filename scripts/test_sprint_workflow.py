@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fnmatch
 import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -107,6 +109,67 @@ class SprintWorkflowTests(unittest.TestCase):
         run = self.yaml_block(step, "        run: |")
         return self.operative_lines(run)[1:]
 
+    def yaml_run_script(self, step: str) -> str:
+        run = self.yaml_block(step, "        run: |")
+        return "\n".join(
+            line[10:] if line.startswith(" " * 10) else line
+            for line in run.splitlines()[1:]
+        )
+
+    def ci_filters(self, ci: str) -> dict[str, tuple[str, ...]]:
+        changes = self.yaml_block(ci, "  changes:")
+        step = next(
+            step
+            for step in self.yaml_steps(changes)
+            if "dorny/paths-filter@" in step
+        )
+        filters = self.yaml_block(step, "          filters: |")
+        parsed: dict[str, list[str]] = {}
+        current = ""
+        for line in filters.splitlines()[1:]:
+            indentation = len(line) - len(line.lstrip())
+            stripped = line.strip()
+            if indentation == 12 and stripped.endswith(":"):
+                current = stripped[:-1]
+                parsed[current] = []
+            elif indentation == 14 and stripped.startswith("- "):
+                self.assertTrue(current)
+                parsed[current].append(stripped[2:].strip("'\""))
+        return {name: tuple(paths) for name, paths in parsed.items()}
+
+    def ci_filter_matches(self, patterns: tuple[str, ...], path: str) -> bool:
+        return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
+
+    def ci_gate_environment(
+        self,
+        *,
+        selected: dict[str, bool],
+        results: dict[str, str],
+        event_name: str = "pull_request",
+        changes_result: str = "success",
+    ) -> dict[str, str]:
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "EVENT_NAME": event_name,
+                "CHANGES_RESULT": changes_result,
+            }
+        )
+        for job in (
+            "test",
+            "msrv",
+            "wasm",
+            "python_bindings",
+            "presentation_fidelity",
+            "hash_harness",
+            "supply_chain",
+            "prose",
+        ):
+            key = job.upper()
+            environment[f"{key}_SELECTED"] = str(selected.get(job, False)).lower()
+            environment[f"{key}_RESULT"] = results.get(job, "skipped")
+        return environment
+
     def assert_no_success_short_circuit(self, lines: tuple[str, ...]) -> None:
         for line in lines:
             tokens = tuple(
@@ -122,6 +185,235 @@ class SprintWorkflowTests(unittest.TestCase):
                     token in ("exit", "return") and tokens[index + 1] == "0",
                     line,
                 )
+
+    def test_each_filtered_ci_job_has_a_must_trigger_and_must_not_trigger_path(
+        self,
+    ) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        filters = self.ci_filters(ci)
+        cases = {
+            "test": ("crates/rdocx/src/lib.rs", "docs/hld/00-vision.md"),
+            "msrv": ("crates/oxml-core/src/lib.rs", "docs/hld/00-vision.md"),
+            "wasm": ("crates/rdocx-wasm/src/lib.rs", "docs/hld/00-vision.md"),
+            "python_bindings": (
+                "crates/rdocx-py/pyproject.toml",
+                "docs/hld/00-vision.md",
+            ),
+            "presentation_fidelity": (
+                "scripts/pptx-corpus-manifest.tsv",
+                "docs/hld/00-vision.md",
+            ),
+            "hash_harness": (
+                "scripts/hash_baseline.json",
+                "docs/hld/00-vision.md",
+            ),
+            "supply_chain": ("Cargo.lock", "docs/hld/00-vision.md"),
+            "prose": ("docs/hld/00-vision.md", "crates/rdocx/src/lib.rs"),
+        }
+        self.assertEqual(set(filters), set(cases))
+        for job, (must_trigger, must_not_trigger) in cases.items():
+            with self.subTest(job=job, path=must_trigger):
+                self.assertTrue(self.ci_filter_matches(filters[job], must_trigger))
+                self.assertTrue(
+                    self.ci_filter_matches(
+                        filters[job], ".github/workflows/ci.yml"
+                    )
+                )
+            with self.subTest(job=job, path=must_not_trigger):
+                self.assertFalse(
+                    self.ci_filter_matches(filters[job], must_not_trigger)
+                )
+            narrowed = tuple(
+                pattern
+                for pattern in filters[job]
+                if not fnmatch.fnmatchcase(must_trigger, pattern)
+            )
+            with self.subTest(job=job, mutation="narrowed"):
+                self.assertFalse(self.ci_filter_matches(narrowed, must_trigger))
+
+        changes = self.yaml_block(ci, "  changes:")
+        permissions = self.yaml_block(changes, "    permissions:")
+        self.assertEqual(
+            self.yaml_direct_lines(permissions, 6),
+            ("contents: read", "pull-requests: read"),
+        )
+        self.assertEqual(self.yaml_mapping_key_count(ci, "pull-requests"), 1)
+        path_filter_step = next(
+            step
+            for step in self.yaml_steps(changes)
+            if "dorny/paths-filter@" in step
+        )
+        self.assertEqual(
+            self.yaml_step_actions(path_filter_step),
+            (
+                "dorny/paths-filter@"
+                "ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d",
+            ),
+        )
+
+    def test_docs_only_changes_skip_expensive_jobs_and_still_report_the_ci_gate(
+        self,
+    ) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        filters = self.ci_filters(ci)
+        selected = {
+            job
+            for job, patterns in filters.items()
+            if self.ci_filter_matches(patterns, "docs/hld/12-testing-strategy.md")
+        }
+        self.assertEqual(selected, {"prose"})
+
+        output_names = {
+            line.split(":", 1)[0]
+            for line in self.yaml_direct_lines(
+                self.yaml_block(
+                    self.yaml_block(ci, "  changes:"), "    outputs:"
+                ),
+                6,
+            )
+        }
+        self.assertEqual(output_names, set(filters))
+        for job_name in (
+            "test",
+            "msrv",
+            "wasm",
+            "python-bindings",
+            "presentation-fidelity",
+            "hash-harness",
+            "prose",
+        ):
+            job = self.yaml_block(ci, f"  {job_name}:")
+            output = job_name.replace("-", "_")
+            direct = self.yaml_direct_lines(job, 4)
+            self.assertIn("needs: changes", direct)
+            self.assertIn(
+                f"if: needs.changes.outputs.{output} == 'true'", direct
+            )
+        supply_chain = self.yaml_block(ci, "  supply-chain:")
+        self.assertIn("needs: changes", self.yaml_direct_lines(supply_chain, 4))
+        self.assertIn("github.event_name == 'schedule'", supply_chain)
+        self.assertIn("needs.changes.outputs.supply_chain == 'true'", supply_chain)
+
+        ci_gate = self.yaml_block(ci, "  ci-gate:")
+        self.assertIn("name: CI gate", self.yaml_direct_lines(ci_gate, 4))
+        self.assertIn("if: always()", self.yaml_direct_lines(ci_gate, 4))
+
+    def test_ci_gate_rejects_failed_selected_jobs_and_accepts_unselected_skips(
+        self,
+    ) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        gate = self.yaml_block(ci, "  ci-gate:")
+        needs = {
+            line.removeprefix("- ")
+            for line in self.operative_lines(self.yaml_block(gate, "    needs:"))[1:]
+        }
+        filtered_jobs = {
+            "test",
+            "msrv",
+            "wasm",
+            "python-bindings",
+            "presentation-fidelity",
+            "hash-harness",
+            "supply-chain",
+            "prose",
+        }
+        self.assertEqual(needs, filtered_jobs | {"changes"})
+        step = self.yaml_step(gate, "Validate filtered jobs")
+        environment = self.yaml_block(step, "        env:")
+        self.assertEqual(
+            self.yaml_direct_lines(environment, 10),
+            (
+                "EVENT_NAME: ${{ github.event_name }}",
+                "CHANGES_RESULT: ${{ needs.changes.result }}",
+                "TEST_SELECTED: ${{ needs.changes.outputs.test }}",
+                "TEST_RESULT: ${{ needs.test.result }}",
+                "MSRV_SELECTED: ${{ needs.changes.outputs.msrv }}",
+                "MSRV_RESULT: ${{ needs.msrv.result }}",
+                "WASM_SELECTED: ${{ needs.changes.outputs.wasm }}",
+                "WASM_RESULT: ${{ needs.wasm.result }}",
+                "PYTHON_BINDINGS_SELECTED: ${{ needs.changes.outputs.python_bindings }}",
+                "PYTHON_BINDINGS_RESULT: ${{ needs['python-bindings'].result }}",
+                "PRESENTATION_FIDELITY_SELECTED: ${{ needs.changes.outputs.presentation_fidelity }}",
+                "PRESENTATION_FIDELITY_RESULT: ${{ needs['presentation-fidelity'].result }}",
+                "HASH_HARNESS_SELECTED: ${{ needs.changes.outputs.hash_harness }}",
+                "HASH_HARNESS_RESULT: ${{ needs['hash-harness'].result }}",
+                "SUPPLY_CHAIN_SELECTED: ${{ needs.changes.outputs.supply_chain }}",
+                "SUPPLY_CHAIN_RESULT: ${{ needs['supply-chain'].result }}",
+                "PROSE_SELECTED: ${{ needs.changes.outputs.prose }}",
+                "PROSE_RESULT: ${{ needs.prose.result }}",
+            ),
+        )
+        script = self.yaml_run_script(step)
+
+        selected = {"test": True}
+        results = {"test": "success"}
+        completed = subprocess.run(
+            ("bash", "-eu", "-o", "pipefail", "-c", script),
+            env=self.ci_gate_environment(selected=selected, results=results),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+        for bad_result in ("failure", "cancelled", "skipped"):
+            with self.subTest(selected_result=bad_result):
+                completed = subprocess.run(
+                    ("bash", "-eu", "-o", "pipefail", "-c", script),
+                    env=self.ci_gate_environment(
+                        selected=selected,
+                        results={"test": bad_result},
+                    ),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(completed.returncode, 0)
+
+        completed = subprocess.run(
+            ("bash", "-eu", "-o", "pipefail", "-c", script),
+            env=self.ci_gate_environment(
+                selected={},
+                results={"test": "success"},
+            ),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+
+        completed = subprocess.run(
+            ("bash", "-eu", "-o", "pipefail", "-c", script),
+            env=self.ci_gate_environment(
+                selected={},
+                results={"supply_chain": "success"},
+                event_name="schedule",
+                changes_result="skipped",
+            ),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+        completed = subprocess.run(
+            ("bash", "-eu", "-o", "pipefail", "-c", script),
+            env=self.ci_gate_environment(
+                selected={},
+                results={},
+                changes_result="failure",
+            ),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
 
     def assert_pinned_poppler_installer_contract(self, installer: str) -> None:
         self.assertIn('POPLER_VERSION = "26.01.0"', installer)
@@ -290,6 +582,8 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(
             direct,
             (
+                "needs: changes",
+                "if: needs.changes.outputs.python_bindings == 'true'",
                 "name: Python bindings (${{ matrix.package.distribution }})",
                 "runs-on: macos-26",
                 "strategy:",
@@ -968,6 +1262,12 @@ class SprintWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assert_python_pr_job_contract(ci)
+        python_job = self.yaml_block(ci, "  python-bindings:")
+
+        def mutate_job(old: str, new: str) -> str:
+            self.assertIn(old, python_job)
+            return ci.replace(python_job, python_job.replace(old, new, 1), 1)
+
         mutations = {
             "missing-pull-request-trigger": ci.replace(
                 "  pull_request:\n", "", 1
@@ -1072,25 +1372,22 @@ class SprintWorkflowTests(unittest.TestCase):
                 '"$binding_python" -m pytest "crates/${{ matrix.package.crate }}/tests" || true',
                 1,
             ),
-            "wrong-checkout-sha": ci.replace(
+            "wrong-checkout-sha": mutate_job(
                 "de0fac2e4500dabe0009e67214ff5f5447ce83dd",
                 "0000000000000000000000000000000000000000",
-                1,
             ),
-            "wrong-checkout-sha-with-required-comment": ci.replace(
+            "wrong-checkout-sha-with-required-comment": mutate_job(
                 "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2",
                 "actions/checkout@0000000000000000000000000000000000000000 "
                 "# v6.0.2 de0fac2e4500dabe0009e67214ff5f5447ce83dd",
-                1,
             ),
-            "checkout-ref-input": ci.replace(
+            "checkout-ref-input": mutate_job(
                 "      - uses: actions/checkout@"
                 "de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n",
                 "      - uses: actions/checkout@"
                 "de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n"
                 "        with:\n"
                 "          ref: main\n",
-                1,
             ),
             "wrong-rust-toolchain-sha": ci.replace(
                 "4360b52568e2003a75bf9bc1d59f33a8e3fc893c",
@@ -1177,7 +1474,13 @@ class SprintWorkflowTests(unittest.TestCase):
         job = self.yaml_block(ci, "  wasm:")
         self.assertEqual(
             self.yaml_direct_lines(job, 4),
-            ("name: WASM", "runs-on: ubuntu-latest", "steps:"),
+            (
+                "needs: changes",
+                "if: needs.changes.outputs.wasm == 'true'",
+                "name: WASM",
+                "runs-on: ubuntu-latest",
+                "steps:",
+            ),
         )
         self.assertFalse(
             any("continue-on-error:" in line for line in self.operative_lines(job))
@@ -4032,6 +4335,143 @@ class SprintWorkflowTests(unittest.TestCase):
         """
         self.assertIn("python3 -m unittest scripts.test_sprint_workflow", verify)
 
+    def assert_ci_runs_golden_png_gate(self, ci: str) -> None:
+        job = self.yaml_block(ci, "  test:")
+        poppler = self.yaml_step(job, "Install pinned Poppler 26.01.0")
+        workspace = self.yaml_step(job, "Run full workspace suite")
+        golden = self.yaml_step(job, "Run golden-PNG gate")
+        command = "python3 scripts/golden_png_harness.py --check"
+        self.assertEqual(ci.count(command), 1)
+        self.assertEqual(
+            self.yaml_direct_lines(golden, 8),
+            (f"run: {command}",),
+        )
+        self.assertLess(job.index(poppler), job.index(golden))
+        self.assertLess(job.index(workspace), job.index(golden))
+        self.assert_no_success_short_circuit(self.operative_lines(golden))
+
+    def test_ci_runs_the_golden_png_gate_in_the_pinned_poppler_environment(
+        self,
+    ) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_ci_runs_golden_png_gate(ci)
+        job = self.yaml_block(ci, "  test:")
+        golden = self.yaml_step(job, "Run golden-PNG gate")
+        poppler = self.yaml_step(job, "Install pinned Poppler 26.01.0")
+        mutations = {
+            "missing-command": ci.replace(
+                "      - name: Run golden-PNG gate\n"
+                "        run: python3 scripts/golden_png_harness.py --check\n",
+                "",
+                1,
+            ),
+            "before-poppler": ci.replace(golden, "", 1).replace(
+                poppler, golden + poppler, 1
+            ),
+            "missing-check": ci.replace(
+                "python3 scripts/golden_png_harness.py --check",
+                "python3 scripts/golden_png_harness.py",
+                1,
+            ),
+            "successful-fallback": ci.replace(
+                "python3 scripts/golden_png_harness.py --check",
+                "python3 scripts/golden_png_harness.py --check || true",
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, ci, name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_ci_runs_golden_png_gate(mutated)
+
+    def assert_ci_runs_release_regressions(self, ci: str) -> None:
+        job = self.yaml_block(ci, "  release-regressions:")
+        direct = self.yaml_direct_lines(job, 4)
+        self.assertEqual(
+            direct,
+            (
+                "name: Release regressions",
+                "runs-on: ubuntu-latest",
+                "steps:",
+            ),
+        )
+        steps = self.yaml_steps(job)
+        self.assertEqual(len(steps), 3)
+        self.assertEqual(self.yaml_step_actions(steps[0]), ("actions/checkout@v5",))
+        self.assertEqual(
+            self.yaml_step_identity(steps[1], 2), "Install cargo-release 1.1.3"
+        )
+        self.assertEqual(
+            self.yaml_direct_lines(steps[1], 8),
+            ("run: cargo install cargo-release --version 1.1.3 --locked",),
+        )
+        self.assertEqual(self.yaml_step_identity(steps[2], 2), "Run release regressions")
+        self.assertEqual(
+            self.yaml_direct_lines(steps[2], 8),
+            ("run: python3 -m unittest scripts.test_sprint_workflow",),
+        )
+        self.assertNotIn("continue-on-error", job)
+        self.assert_no_success_short_circuit(self.operative_lines(steps[1]))
+        self.assert_no_success_short_circuit(self.operative_lines(steps[2]))
+
+    def test_ci_runs_release_regressions_in_a_named_job(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assert_ci_runs_release_regressions(ci)
+
+    def test_ci_release_regression_job_rejects_wiring_mutations(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        install_step = (
+            "      - name: Install cargo-release 1.1.3\n"
+            "        run: cargo install cargo-release --version 1.1.3 --locked\n"
+        )
+        run_step = (
+            "      - name: Run release regressions\n"
+            "        run: python3 -m unittest scripts.test_sprint_workflow\n"
+        )
+        mutations = {
+            "removed-cargo-release-install": ci.replace(install_step, "", 1),
+            "cargo-release-installed-after-regressions": ci.replace(
+                install_step + run_step, run_step + install_step, 1
+            ),
+            "removed-command": ci.replace(
+                "python3 -m unittest scripts.test_sprint_workflow", "", 1
+            ),
+            "narrowed-command": ci.replace(
+                "python3 -m unittest scripts.test_sprint_workflow",
+                "python3 -m unittest "
+                "scripts.test_sprint_workflow.SprintWorkflowTests."
+                "test_stable_release_family_is_prepared_at_0_7_0",
+                1,
+            ),
+            "job-condition": ci.replace(
+                "  release-regressions:\n",
+                "  release-regressions:\n    if: false\n",
+                1,
+            ),
+            "continue-on-error": ci.replace(
+                "        run: python3 -m unittest scripts.test_sprint_workflow\n",
+                "        continue-on-error: true\n"
+                "        run: python3 -m unittest scripts.test_sprint_workflow\n",
+                1,
+            ),
+            "successful-fallback": ci.replace(
+                "python3 -m unittest scripts.test_sprint_workflow",
+                "python3 -m unittest scripts.test_sprint_workflow || true",
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, ci, name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_ci_runs_release_regressions(mutated)
+
     def test_verify_runs_the_release_regressions(self) -> None:
         # Without this, the preflights that publish.yml invokes by name run for
         # the first time on a tag, after the sprint is closed. S42 is the
@@ -4438,6 +4878,212 @@ class SprintWorkflowTests(unittest.TestCase):
                 self.assertEqual(
                     workflow.cmd_close_preflight(argparse.Namespace(sprint="S01")),
                     0,
+                )
+
+    def repository_path_claims(self, source: str) -> set[str]:
+        rooted = re.findall(
+            r"(?<![A-Za-z0-9_-])"
+            r"((?:\.agents|\.claude|\.github|crates|docs|samples|scripts|target|tools)"
+            r"(?:/[A-Za-z0-9_.<>{}*?$-]*)+)",
+            source,
+        )
+        standalone = re.findall(
+            r"(?<![/A-Za-z0-9_.-])"
+            r"([A-Za-z0-9*?][A-Za-z0-9_.*?-]*\."
+            r"(?:crate|json|lock|md|pptx|py|rs|sh|toml|tsv|ttf|yaml|yml)"
+            r"(?::[0-9]+(?:-[0-9]+)?)?)(?![A-Za-z0-9_.-])",
+            source,
+        )
+        return {claim.rstrip(".,:;)") for claim in rooted + standalone}
+
+    def assert_repository_path_claims_resolve(
+        self,
+        source: str,
+        *,
+        generated_claims: set[str],
+    ) -> set[str]:
+        claims = self.repository_path_claims(source)
+        self.assertTrue(claims)
+        tracked = subprocess.run(
+            ["git", "ls-files"],
+            cwd=workflow.REPO,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        tracked_names = {Path(path).name for path in tracked}
+        found_generated: set[str] = set()
+        for claim in claims:
+            path = re.sub(r":[0-9]+(?:-[0-9]+)?$", "", claim)
+            if path in generated_claims:
+                found_generated.add(path)
+                continue
+            if path.startswith(("samples/", "target/")):
+                self.fail(f"unrecognised generated path claim: {claim}")
+            if any(marker in path for marker in ("*", "?")):
+                self.assertTrue(tuple(workflow.REPO.glob(path)), claim)
+                continue
+            if any(marker in path for marker in ("<", "{", "$")):
+                static_prefix = re.split(r"[<{$]", path, maxsplit=1)[0].rstrip("/")
+                self.assertTrue(static_prefix, claim)
+                self.assertTrue((workflow.REPO / static_prefix).exists(), claim)
+                continue
+            if "/" in path:
+                self.assertTrue((workflow.REPO / path.rstrip("/")).exists(), claim)
+                continue
+            self.assertIn(path, tracked_names, claim)
+        self.assertEqual(found_generated, generated_claims)
+        return claims
+
+    def assert_agent_facing_repository_claims(
+        self,
+        *,
+        claude: str | None = None,
+        verify: str | None = None,
+    ) -> None:
+        if claude is None:
+            claude = (workflow.REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        if verify is None:
+            verify = (workflow.REPO / ".claude/commands/verify.md").read_text(
+                encoding="utf-8"
+            )
+        root = tomllib.loads(
+            (workflow.REPO / "Cargo.toml").read_text(encoding="utf-8")
+        )
+        workspace = root["workspace"]
+        workspace_version = workspace["package"]["version"]
+        packages: dict[str, tuple[Path, dict[str, object]]] = {}
+        for member in workspace["members"]:
+            member_path = workflow.REPO / member
+            manifest = tomllib.loads(
+                (member_path / "Cargo.toml").read_text(encoding="utf-8")
+            )
+            packages[manifest["package"]["name"]] = (member_path, manifest)
+
+        claude_paths = self.assert_repository_path_claims_resolve(
+            claude,
+            generated_claims={"samples/"},
+        )
+        verify_paths = self.assert_repository_path_claims_resolve(
+            verify,
+            generated_claims={"*.crate", "target/package"},
+        )
+        self.assertIn("docs/hld/00-vision.md", claude_paths)
+        self.assertIn(".github/workflows/publish.yml", verify_paths)
+        self.assertIn("scripts/hash_harness.py", verify_paths)
+
+        stated_versions = re.findall(
+            r"on\s+crates\.io at ([0-9]+\.[0-9]+\.[0-9]+)", claude
+        )
+        self.assertEqual(stated_versions, [workspace_version])
+        for name, (_, manifest) in packages.items():
+            if not name.startswith("rdocx") or name == "rdocx-py":
+                continue
+            version = manifest["package"]["version"]
+            effective_version = (
+                workspace_version
+                if isinstance(version, dict) and version.get("workspace")
+                else version
+            )
+            self.assertEqual(effective_version, workspace_version, name)
+
+        font_claims = re.findall(r"`(crates/[^`]+/fonts/)`", claude)
+        self.assertEqual(font_claims, ["crates/oxml-layout/fonts/"])
+        font_package = Path(font_claims[0]).parts[1]
+        font_path, font_manifest = packages[font_package]
+        features = font_manifest.get("features", {})
+        self.assertIn("system-fonts", features)
+        self.assertNotIn("bundled-fonts", features)
+        claimed_font_count = re.findall(r"([0-9]+) bundled TTFs", claude)
+        self.assertEqual(claimed_font_count, ["20"])
+        fonts = font_path / "fonts"
+        self.assertEqual(len(tuple(fonts.glob("*.ttf"))), int(claimed_font_count[0]))
+        for legal_file in (
+            "LICENSE-Caladea",
+            "NOTICE-Caladea",
+            "LICENSE-Carlito",
+            "LICENSE-Liberation",
+        ):
+            self.assertTrue((fonts / legal_file).is_file(), legal_file)
+
+        feature_claims = set(re.findall(r"`([a-z0-9-]+)` feature", claude))
+        self.assertIn("system-fonts", feature_claims)
+        available_features = {
+            feature
+            for _, manifest in packages.values()
+            for feature in manifest.get("features", {})
+        }
+        self.assertLessEqual(feature_claims, available_features)
+
+        verify_packages = re.findall(
+            r"(?:-p|--package) ([a-z0-9][a-z0-9-]+)", verify
+        )
+        self.assertTrue(verify_packages)
+        for package in verify_packages:
+            self.assertIn(package, packages)
+        no_default_packages = re.findall(
+            r"cargo test -p ([a-z0-9-]+) --no-default-features", verify
+        )
+        self.assertEqual(no_default_packages, ["oxml-layout"])
+
+    def test_agent_facing_repository_claims_resolve_against_the_workspace(
+        self,
+    ) -> None:
+        self.assert_agent_facing_repository_claims()
+
+    def test_agent_facing_claim_contract_rejects_stale_mutations(self) -> None:
+        claude = (workflow.REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        verify = (workflow.REPO / ".claude/commands/verify.md").read_text(
+            encoding="utf-8"
+        )
+        mutations = {
+            "path": (
+                claude.replace(
+                    "crates/oxml-layout/fonts/",
+                    "crates/rdocx-layout/fonts/",
+                    1,
+                ),
+                verify,
+            ),
+            "non-crates-path": (
+                claude.replace(
+                    "docs/hld/00-vision.md",
+                    "docs/hld/00-missing.md",
+                    1,
+                ),
+                verify,
+            ),
+            "verify-path": (
+                claude,
+                verify.replace(
+                    ".github/workflows/publish.yml",
+                    ".github/workflows/missing.yml",
+                    1,
+                ),
+            ),
+            "version": (
+                claude.replace("crates.io at 0.7.0", "crates.io at 0.2.0", 1),
+                verify,
+            ),
+            "feature": (
+                claude.replace("`system-fonts` feature", "`bundled-fonts` feature", 1),
+                verify,
+            ),
+            "package": (
+                claude,
+                verify.replace(
+                    "cargo test -p oxml-layout --no-default-features",
+                    "cargo test -p legacy-layout --no-default-features",
+                    1,
+                ),
+            ),
+        }
+        for name, (mutated_claude, mutated_verify) in mutations.items():
+            self.assertNotEqual((mutated_claude, mutated_verify), (claude, verify), name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_agent_facing_repository_claims(
+                    claude=mutated_claude,
+                    verify=mutated_verify,
                 )
 
 
