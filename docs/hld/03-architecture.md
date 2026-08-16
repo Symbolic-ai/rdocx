@@ -160,6 +160,21 @@ position on a page. The inputs to line breaking are therefore kept alive past
 layout, but only for a document that actually holds a drawing whose wrap is not
 `none`, since those inputs hold the same shaped glyphs the laid-out lines do.
 
+Text also flows around a wrapping drawing anchored to a **later** paragraph,
+which Word documents do routinely. A drawing framed by the page or a margin has
+a position without its own paragraph being placed, so one pass is enough. A
+drawing framed by its own paragraph does not, so a section holding one
+paginates **twice**: the first pass records where each such drawing landed and
+on which page, and the second offers those rectangles to the text above them.
+The first pass is identical to a single-pass run, and a section holding no such
+drawing paginates once, which is every sample and every corpus document today.
+
+Two passes, and not a fixed point. The second pass reflows earlier text, which
+can move the drawing's own paragraph, so the rectangle it flowed around may be
+slightly stale. Iterating is not guaranteed to terminate, since growing a
+paragraph can push a drawing to the next page, which shrinks the paragraph,
+which pulls the drawing back. Two passes give one answer, always.
+
 The two note streams are placed differently and are keyed apart. A footnote
 sits at the foot of the page carrying its reference and takes height from that
 page. An endnote costs its page nothing and is emitted after the last body

@@ -127,9 +127,12 @@ updates rather than left for a reader to discover.
 | Category | Test | Asserts |
 |---|---|---|
 | regression | `a_paragraph_relative_wrapping_drawing_pushes_earlier_text_aside` | An earlier paragraph's lines are narrowed by a wrapping drawing anchored to a later paragraph with `rel_v` of `Paragraph`, and the drawing is placed once, at the same rect the earlier text flowed around |
-| regression | `a_document_with_no_paragraph_relative_wrap_paginates_in_one_pass` | The predicate is false and the page frames are identical to the single-pass result, so the common document cannot move |
+| regression | `a_page_relative_drawing_in_a_later_block_still_wraps` | F-X016's case is untouched by the second pass. This document has no paragraph-relative wrap, so the predicate is false and it paginates once |
+| regression | `a_second_pass_is_stable_for_the_document_that_earns_it` | Two layouts of the same document produce identical page elements. Two passes are not a fixed point, so the guarantee is that the answer is the same answer every time |
 | unit | `the_lookahead_offers_a_resolved_rect_only_on_its_own_page` | A resolved drawing recorded on page two is not offered to a paragraph being laid out on page one |
 | unit | `pass_one_ignores_paragraph_relative_anchors` | With an empty resolved map the look-ahead returns exactly the absolute set it returns today |
+| unit | `the_two_pass_predicate_matches_only_paragraph_relative_wraps` | The predicate deciding the pass count is true for a paragraph or line frame that wraps, and false for a page frame, a plain paragraph, and a paragraph-relative drawing whose wrap is `none` |
+| unit | `a_placed_paragraph_relative_wrap_is_recorded_for_the_next_pass` | A pass records the paragraph-relative drawing it placed, with its page, and records the page-relative one not at all |
 
 **Test gate**, from the backlog: the first regression, plus the single-pass half
 of the same gate, which is the second row.
@@ -166,15 +169,17 @@ today's single pass.
 
 ## Implementation checklist
 
-- [ ] Record the pre-change harness state
-- [ ] `ResolvedWraps` and the two `Pager` fields
-- [ ] `place_anchored` taking `block_idx` and recording resolved rects
-- [ ] `lookahead_wraps` second branch, page-scoped by the recorded page number
-- [ ] `has_paragraph_relative_wrap` and the two-pass driver in
+- [x] Record the pre-change harness state, 49 of 49
+- [x] `ResolvedWraps` and the two `Pager` fields
+- [x] `place_anchored` taking `block_idx` and recording resolved rects
+- [x] `lookahead_wraps` second branch, page-scoped by the recorded page number
+- [x] `has_paragraph_relative_wrap` and the two-pass driver in
       `paginate_with_media`
-- [ ] The four tests, added as modules to the existing entrypoint
-- [ ] Update `03-architecture.md`, including the stated two-pass limit
-- [ ] `cargo test -p rdocx-layout`, `/microscope F-X019 --working`, `/verify`
+- [x] `PassContext`, so the two passes differ in one argument rather than eight,
+      per microscope S1
+- [x] The tests, added to the existing modules rather than a new binary
+- [x] Update `03-architecture.md`, including the stated two-pass limit
+- [x] `cargo test -p rdocx-layout`, `/microscope F-X019 --working`, `/verify`
 
 ## Open questions
 

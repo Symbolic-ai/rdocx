@@ -2783,4 +2783,177 @@ mod tests {
              that section rather than to the final one it is drawn in"
         );
     }
+
+    // F-X019, paragraph-relative drawings in later blocks should wrap.
+
+    /// Two paragraphs, the second anchoring a wrapping drawing measured from
+    /// `rel_v`. The first paragraph is the earlier text that should flow around
+    /// it, which is the whole question: the drawing belongs to a block that has
+    /// not been placed when the first paragraph is being laid out.
+    fn make_lookahead_document(
+        rel_v: rdocx_oxml::drawing::ST_RelativeFromV,
+        wrap: rdocx_oxml::drawing::WrapType,
+        off_v_pt: f64,
+    ) -> LayoutInput {
+        use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, ST_RelativeFromH};
+        use rdocx_oxml::text::CT_R;
+        use rdocx_oxml::units::Emu;
+
+        let emu = |pt: f64| Emu((pt * 12700.0) as i64);
+
+        let mut doc = rdocx_oxml::document::CT_Document::new();
+
+        let mut first = CT_P::new();
+        let mut body = String::new();
+        for index in 0..30 {
+            body.push_str(&format!(
+                "Sentence {index} of running text that fills the paragraph out. "
+            ));
+        }
+        first.add_run(&body);
+        doc.body.add_paragraph(first);
+
+        let mut second = CT_P::new();
+        second.add_run("The paragraph the drawing is anchored to.");
+        let mut anchor = CT_Anchor::background("rId1", 0, 0);
+        anchor.extent_cx = emu(200.0);
+        anchor.extent_cy = emu(120.0);
+        anchor.behind_doc = false;
+        anchor.wrap = wrap;
+        anchor.pos_h_relative_from = ST_RelativeFromH::Margin;
+        anchor.pos_h_align = Some(rdocx_oxml::drawing::AnchorAlignH::Right);
+        anchor.pos_v_relative_from = rel_v;
+        // The offset is measured from `rel_v`, so the two cases need different
+        // numbers to land in the same band of the page. Above its own
+        // paragraph for the paragraph-relative case, and a fixed way down the
+        // page for the page-relative one. A drawing that lands below every line
+        // of the first paragraph pushes nothing aside and would prove nothing.
+        anchor.pos_v_offset = emu(off_v_pt);
+
+        let mut drawing_run = CT_R::new("");
+        drawing_run.content = vec![RunContent::Drawing(CT_Drawing {
+            inline: None,
+            anchor: Some(anchor),
+        })];
+        second.runs.push(drawing_run);
+        doc.body.add_paragraph(second);
+
+        let mut images = HashMap::new();
+        images.insert(
+            "rId1".to_string(),
+            ImageData {
+                data: vec![0u8; 8],
+                content_type: "image/png".to_string(),
+            },
+        );
+
+        LayoutInput {
+            document: doc,
+            styles: CT_Styles::new_default(),
+            numbering: None,
+            headers: HashMap::new(),
+            footers: HashMap::new(),
+            images,
+            core_properties: None,
+            hyperlink_urls: HashMap::new(),
+            footnotes: None,
+            endnotes: None,
+            theme: None,
+            fonts: Vec::new(),
+        }
+    }
+
+    /// How many lines of body text the document drew, across every page.
+    fn body_line_count(output: &LayoutResult) -> usize {
+        output
+            .pages
+            .iter()
+            .map(|page| text_extents(page).len())
+            .sum()
+    }
+
+    #[test]
+    fn a_paragraph_relative_wrapping_drawing_pushes_earlier_text_aside() {
+        use rdocx_oxml::drawing::{ST_RelativeFromV, WrapType};
+
+        // The same document twice, differing only in whether the drawing
+        // wraps. Narrowed lines hold less text, so the paragraph needs more of
+        // them, and that is visible without depending on where any one line
+        // broke.
+        let wrapping = Engine::new()
+            .layout(&make_lookahead_document(
+                ST_RelativeFromV::Paragraph,
+                WrapType::Square,
+                -120.0,
+            ))
+            .expect("layout succeeds");
+        let ignoring = Engine::new()
+            .layout(&make_lookahead_document(
+                ST_RelativeFromV::Paragraph,
+                WrapType::None,
+                -120.0,
+            ))
+            .expect("layout succeeds");
+
+        assert!(
+            body_line_count(&wrapping) > body_line_count(&ignoring),
+            "the earlier paragraph took {} lines against {}, so it flowed \
+             through the drawing rather than around it",
+            body_line_count(&wrapping),
+            body_line_count(&ignoring)
+        );
+    }
+
+    #[test]
+    fn a_page_relative_drawing_in_a_later_block_still_wraps() {
+        use rdocx_oxml::drawing::{ST_RelativeFromV, WrapType};
+
+        // F-X016's case, which the second pass must not disturb. This document
+        // has no paragraph-relative wrap, so it paginates in one pass.
+        let wrapping = Engine::new()
+            .layout(&make_lookahead_document(
+                ST_RelativeFromV::Page,
+                WrapType::Square,
+                150.0,
+            ))
+            .expect("layout succeeds");
+        let ignoring = Engine::new()
+            .layout(&make_lookahead_document(
+                ST_RelativeFromV::Page,
+                WrapType::None,
+                150.0,
+            ))
+            .expect("layout succeeds");
+
+        assert!(body_line_count(&wrapping) > body_line_count(&ignoring));
+    }
+
+    #[test]
+    fn a_second_pass_is_stable_for_the_document_that_earns_it() {
+        use rdocx_oxml::drawing::{ST_RelativeFromV, WrapType};
+
+        // Two passes, not a fixed point, so the guarantee is that the answer is
+        // the same answer every time rather than that it has converged.
+        let build = || {
+            Engine::new()
+                .layout(&make_lookahead_document(
+                    ST_RelativeFromV::Paragraph,
+                    WrapType::Square,
+                    -120.0,
+                ))
+                .expect("layout succeeds")
+        };
+        let first = build();
+        let second = build();
+
+        assert_eq!(first.pages.len(), second.pages.len());
+        for (index, page) in first.pages.iter().enumerate() {
+            assert_eq!(
+                page.elements,
+                second.pages[index].elements,
+                "page {} differs between two runs",
+                index + 1
+            );
+        }
+    }
 }
