@@ -24,7 +24,7 @@ version, because S41 broke both public APIs rather than merely extending them.
 |------|-------|------|--------|-------|
 | F-X020 | Refresh the dependency lockfile | S | done | - |
 | F-X024 | Move the theme adapter into rdocx-oxml | M | done | - |
-| F-X022 | Tag rpptx-v0.3.0 | S | pending | - |
+| F-X022 | Tag rpptx-v0.3.0 | S | in-progress | claude |
 | F-X023 | Tag v0.7.0 | S | pending | - |
 
 ## Sequencing note

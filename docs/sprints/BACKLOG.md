@@ -310,6 +310,6 @@ regenerated, never hand-edited.
 | F-X020 | Refresh the dependency lockfile             | S42 | S | done |
 | F-X021 | Hash harness should cover PDF output       | -   | M | pending |
 | F-X024 | Move the theme adapter into rdocx-oxml     | S42 | M | done |
-| F-X022 | Tag rpptx-v0.3.0                           | S42 | S | pending |
+| F-X022 | Tag rpptx-v0.3.0                           | S42 | S | in-progress |
 | F-X023 | Tag v0.7.0                                 | S42 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->
