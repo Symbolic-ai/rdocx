@@ -183,9 +183,10 @@ asserting the previous version.
 
 The pull-request CI workflow runs the same complete module in its dedicated
 `release-regressions` job. The job has no condition or failure-tolerant path,
-and checkout precedes the exact whole-module command. This keeps both release
-family preflights and future release-contract regressions in the ordinary CI
-gate.
+and checkout plus a locked cargo-release 1.1.3 installation precede the exact
+whole-module command. This keeps both release family preflights and future
+release-contract regressions in the ordinary CI gate with the external command
+their stable-family checks require.
 
 The workflow then runs
 `cargo publish --workspace --dry-run` with an exact local source patch for each

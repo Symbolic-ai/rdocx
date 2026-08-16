@@ -6818,15 +6818,14 @@ the standalone generated `*.crate` glob was missing from the exemption set.
 That case was fixed, and pass 3 was clean.
 
 **Spec sections touched.** `docs/hld/10-bindings-spec.md`, "Packaging", and
-`docs/hld/15-build-and-toolchain.md`, "Feature flags", "Publishing", and the
-agent-facing repository claims.
+`docs/hld/15-build-and-toolchain.md`, "Release process".
 
-**Tests.** `test_agent_facing_repository_claims_match_the_tree` and
-`test_agent_facing_repository_claims_reject_drift` cover stale crate and HLD
-paths, a missing workflow, version and feature drift, package outputs, globs,
-placeholders, and standalone filenames. The packaged `oxml-layout` inventory
-contains exactly 20 TTFs and four family legal files. The no-default-features
-suite passes.
+**Tests.** `test_agent_facing_repository_claims_resolve_against_the_workspace`
+and `test_agent_facing_claim_contract_rejects_stale_mutations` cover stale
+crate and HLD paths, a missing workflow, version and feature drift, package
+outputs, globs, placeholders, and standalone filenames. The packaged
+`oxml-layout` inventory contains exactly 20 TTFs and four family legal files.
+The no-default-features suite passes.
 
 **Hash harness.** Unchanged, 49 of 49.
 

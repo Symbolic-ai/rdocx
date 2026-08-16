@@ -16,7 +16,7 @@ documentation that tells every future session what is true.
   F-X027 has to account for.
 - `docs/hld/10-bindings-spec.md`, the wheel-building traps, which carry one of
   the `bundled-fonts` claims F-X028 corrects.
-- `docs/hld/14-development-backlog.md`, for the three story definitions.
+- `docs/hld/14-development-backlog.md`, for the four story definitions.
 
 ## The wave
 

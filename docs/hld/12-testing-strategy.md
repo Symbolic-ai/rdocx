@@ -498,7 +498,7 @@ returns non-empty rendered HTML after publication.
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
 | wasm | Locked `wasm32-unknown-unknown` checks, `wasm-pack test --node`, and local bundler pack and fresh-install gates for `rdocx-wasm` and `rpptx-wasm` |
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |
-| release-regressions | `python3 -m unittest scripts.test_sprint_workflow` |
+| release-regressions | Install cargo-release 1.1.3 with its locked dependency graph, then run `python3 -m unittest scripts.test_sprint_workflow` |
 | hash-harness | `python3 scripts/hash_harness.py --check` |
 | presentation-fidelity | Fetch the pinned corpus, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
 | clippy | `cargo clippy --workspace --all-targets --all-features --exclude rdocx-py --exclude rpptx-py -- -D warnings` |

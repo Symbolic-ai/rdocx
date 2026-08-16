@@ -4398,15 +4398,23 @@ class SprintWorkflowTests(unittest.TestCase):
             ),
         )
         steps = self.yaml_steps(job)
-        self.assertEqual(len(steps), 2)
+        self.assertEqual(len(steps), 3)
         self.assertEqual(self.yaml_step_actions(steps[0]), ("actions/checkout@v5",))
-        self.assertEqual(self.yaml_step_identity(steps[1], 2), "Run release regressions")
+        self.assertEqual(
+            self.yaml_step_identity(steps[1], 2), "Install cargo-release 1.1.3"
+        )
         self.assertEqual(
             self.yaml_direct_lines(steps[1], 8),
+            ("run: cargo install cargo-release --version 1.1.3 --locked",),
+        )
+        self.assertEqual(self.yaml_step_identity(steps[2], 2), "Run release regressions")
+        self.assertEqual(
+            self.yaml_direct_lines(steps[2], 8),
             ("run: python3 -m unittest scripts.test_sprint_workflow",),
         )
         self.assertNotIn("continue-on-error", job)
         self.assert_no_success_short_circuit(self.operative_lines(steps[1]))
+        self.assert_no_success_short_circuit(self.operative_lines(steps[2]))
 
     def test_ci_runs_release_regressions_in_a_named_job(self) -> None:
         ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
@@ -4419,7 +4427,19 @@ class SprintWorkflowTests(unittest.TestCase):
         ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
             encoding="utf-8"
         )
+        install_step = (
+            "      - name: Install cargo-release 1.1.3\n"
+            "        run: cargo install cargo-release --version 1.1.3 --locked\n"
+        )
+        run_step = (
+            "      - name: Run release regressions\n"
+            "        run: python3 -m unittest scripts.test_sprint_workflow\n"
+        )
         mutations = {
+            "removed-cargo-release-install": ci.replace(install_step, "", 1),
+            "cargo-release-installed-after-regressions": ci.replace(
+                install_step + run_step, run_step + install_step, 1
+            ),
             "removed-command": ci.replace(
                 "python3 -m unittest scripts.test_sprint_workflow", "", 1
             ),
