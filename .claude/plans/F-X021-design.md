@@ -1,6 +1,6 @@
 # F-X021, The hash harness should cover PDF output
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S43
 **Size**: L
 **Depends on**: none

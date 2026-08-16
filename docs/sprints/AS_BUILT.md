@@ -6452,3 +6452,280 @@ And an unmodelled value is now silently lost on save, since the field is `None`
 and the serialiser writes nothing. That is the accepted cost of opening the
 document at all. Preserving it would need the `raw_xml` capture machinery that
 unmodelled elements already use, extended to attributes.
+
+### F-X017, Notes broken to their own section's width
+
+**Sprint.** S43
+**Completed.** 2026-08-16
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The note registry lays each footnote and endnote out once
+per distinct section content width rather than once per document, and the
+paginator looks a note up by the width of the section drawing it. A document
+whose sections differ in page width now breaks each note to the measure of the
+section holding its reference. Before this, every note was broken to the final
+section's width and then drawn against whichever section carried the reference,
+so the two agreed only when the sections shared a page size.
+
+**Non-obvious choices.** The map is keyed on the note plus the content width in
+raw bits, through `f64::to_bits`. Both the key and every lookup come from
+`PageGeometry::content_width()` over the same `sectPr`, so this is exact
+equality on a value computed the same way twice rather than a comparison
+needing a tolerance. Repeated widths collapse, so the common single-geometry
+document still lays each note out exactly once and no fast path is needed.
+
+The once-before-pagination rule is kept. Laying notes out lazily during
+pagination would need a mutable font manager inside the paginator, which
+`notes.rs` deliberately does not have, and that is a much larger change than
+this defect earns.
+
+Endnotes are looked up at the final section's width, because they are emitted
+after the last body page and drawn against that section's geometry wherever
+their reference sits.
+
+`NumberingState` gained `Clone` so a note laid out at several widths consumes
+its list numbers once rather than once per width. Numbering does not depend on
+width, so the state left behind is the state a single layout would have left.
+
+**Deviations from the design plan.** The plan's risk routing recorded only the
+layout row. Microscope pass 1 found the **Public API of a published crate** row
+also matched, since `pub mod notes` makes both changed signatures public
+surface of `rdocx-layout`. The plan now records the semver impact.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, the `NoteRegistry`
+paragraph, which gains the per-width rule and the endnote measure.
+
+**Tests.** The gate is `a_note_is_broken_to_the_width_of_its_own_section`,
+confirmed to fail against reverted code: registering only the final width makes
+it report the same line count for both sections. Plus
+`a_single_section_document_lays_notes_out_exactly_as_before`,
+`an_endnote_is_broken_to_the_final_sections_width`, and three registry unit
+tests covering distinct widths, repeated widths and an unregistered width.
+
+**Hash harness.** Unchanged, 28 of 28 on the worker tree. No sample defines a
+section break or a note, so no sample reaches either path.
+
+**Notes for future sessions.** This is a **breaking change to a published
+crate**. `NoteRegistry::build` takes `&[f64]` where it took `f64`, and
+`NoteRegistry::get` takes the width as a second parameter. No caller outside
+`rdocx-layout` exists in this workspace, which is exactly why it compiled
+cleanly and had to be declared rather than observed. Under 0.x it is a minor
+bump for the next `/release` to state.
+
+A lookup at an unregistered width returns `None` and the note is not drawn. The
+engine registers every width it paginates, so this cannot happen by
+construction, and `an_unregistered_width_has_no_layout` pins the deliberate
+choice not to silently substitute another width.
+
+### F-X019, Paragraph-relative drawings in later blocks should wrap
+
+**Sprint.** S43
+**Completed.** 2026-08-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Text now flows around a wrapping drawing anchored to a
+later paragraph even when the drawing is positioned relative to its own
+paragraph. F-X016 did this only for drawings framed by the page or a margin,
+because a paragraph-relative drawing has no vertical position until its own
+paragraph is placed, and that cannot happen before the text above it is laid
+out. A section holding such a drawing now paginates twice: the first pass
+records where each one landed and on which page, and the second offers those
+rectangles to the text above them.
+
+**Non-obvious choices.** Two passes, and deliberately not a fixed point. The
+second pass reflows earlier text, which can move the drawing's own paragraph, so
+the rectangle it flowed around may be slightly stale. Iterating is not
+guaranteed to terminate, because growing a paragraph can push a drawing to the
+next page, which shrinks the paragraph, which pulls the drawing back. Two passes
+give one answer, always, and `a_second_pass_is_stable_for_the_document_that_
+earns_it` pins that the answer is the same answer every time.
+
+The second pass is gated on a predicate over the blocks, so a document without
+such a drawing paginates once and through code that is unchanged. That is every
+sample and every corpus document today.
+
+Drawings are keyed by block index and their index within that block, which is
+stable across passes because both walk the same slice. The look-ahead offers a
+resolved rectangle only when the recorded page matches the page being built, so
+a drawing that landed overleaf does not push this page's text aside.
+
+`PassContext` holds the six values both passes share, so the two calls differ in
+one argument rather than eight.
+
+**Deviations from the design plan.** The plan described the driver as taking
+eight arguments. Microscope pass 1 recorded that as a smell, since the
+alternative was an argument-count lint silenced with an `allow`, and the
+remediation introduced `PassContext` instead. The plan's test table also grew
+from four rows to seven during implementation.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, the paragraph on
+reflowing around floating drawings, which gains the two-pass rule and states the
+limit that the passes are not iterated to a fixed point.
+
+**Tests.** The gate is
+`a_paragraph_relative_wrapping_drawing_pushes_earlier_text_aside`, confirmed to
+fail against the unfixed look-ahead: with the second pass disabled the earlier
+paragraph takes 18 lines against 18 and the assertion fires. Plus
+`a_page_relative_drawing_in_a_later_block_still_wraps` guarding F-X016's case,
+the stability regression, and four paginator unit tests covering the predicate,
+the empty-map first pass, the page scoping and the recording.
+
+**Hash harness.** Unchanged, 49 of 49 on the worker tree. No sample anchors a
+wrapping drawing to its own paragraph, so the predicate is false for all seven.
+
+**Notes for future sessions.** The vertical offset in the test helper means
+different things per frame, which is why the paragraph case passes `-120.0` and
+the page case `150.0`. A drawing that lands below every line of the paragraph
+before it pushes nothing aside and proves nothing, which is how the first draft
+of the page-relative control failed.
+
+### F-X021, The hash harness should cover PDF output
+
+**Sprint.** S43
+**Completed.** 2026-08-16
+**Size.** L, estimated 2 days, actual 1 day. Sized M at design time and revised
+to L when the story found the PDF writer was not deterministic
+
+**What was built.** The output-stability harness records three entries per
+sample for the deterministic PDF, taking the manifest from 28 entries to 49.
+`pdf/pages` covers the page count, each page's `/MediaBox` and each page's
+inflated content stream in `/Kids` order. `pdf/resources` covers every other
+inflated stream, which is the CID font subsets, the ToUnicode CMaps and the
+image XObjects. `pdf/bytes` is the file digest. Before this the harness recorded
+three `word/*.xml` parts and a page-one PNG per sample and no PDF at all, so the
+`oxml-pdf` writer could drift with nothing watching, which is what F-X020
+demonstrated.
+
+**And the PDF writer became deterministic.** Recording the first fingerprint
+proved that `to_pdf_deterministic` was not. Two runs of the same binary on the
+same input produced different bytes for all seven samples. Three hashed maps
+were iterated to write the file: `glyph_to_unicode` for the ToUnicode CMap
+pairs, `prepared_fonts` and `font_refs` for the font objects and each page's
+`/Font` dictionary, and `image_map` for a page's image XObject names. All three
+are now ordered, and `FontId` gained `PartialOrd` and `Ord` to allow it.
+
+**Non-obvious choices.** The structural pair and the byte digest are both
+recorded, and they do different jobs. The structural pair hashes inflated bytes,
+so it says **what** moved and survives a change of Deflate implementation or
+level. The byte digest says **that** something moved and cannot be evaded,
+including by a compression-only change the structural pair is blind to by
+construction. A fingerprint of extracted text and page geometry alone was
+rejected because it would have reported green on F-X020, whose `pdftotext`
+output was identical in 7 of 7.
+
+The writer fix was absorbed here rather than split into its own F-ID, because
+two of the three entries cannot be recorded against output that disagrees with
+itself. Normalising the ordering inside the harness instead was rejected: it
+would have made the new gate blind to the defect it had just found.
+
+Ordered containers rather than a sort at each point of use, because the property
+wanted is "this map is iterated to produce output", and a type states that once
+rather than every reader having to notice it three times.
+
+The scanner reads the object syntax with the standard library alone. It takes a
+stream payload by its declared `/Length` rather than searching compressed bytes
+for `endobj`, reads `/Root` from the trailer rather than from anywhere in the
+file, and compares `/Filter` as a parsed value so a chain is refused rather than
+inflated. All three came from microscope pass 1. It raises on anything it does
+not understand, because a harness that silently skips an object reports green
+for the wrong reason.
+
+**Deviations from the design plan.** The plan's `## Risk routing` read `none`,
+correctly, for a diff that touched no Rust crate. Absorbing the writer fix made
+the **Public API of a published crate** row match, additively, and the plan
+records that. The size moved from M to L for the same reason.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`, "The hash
+harness", for the entry count and what each PDF entry covers.
+`docs/hld/08-rendering-spec.md`, "The PDF backend", which gains the rule that
+the writer's output is reproducible.
+
+**Tests.** The gates are
+`test_a_changed_content_stream_moves_the_pdf_entries_and_no_other` and
+`test_refingerprinting_identical_bytes_reproduces_every_entry`, plus
+`two_identical_documents_produce_identical_deterministic_pdfs` for the writer
+fix, which was confirmed to fail against the unfixed writer by reverting all
+three source files. Eleven tests in the harness in total, covering the resource
+mirror case, the compression-level pair, a geometry change, a hostile payload,
+a filter chain, three unparseable files and a missing PDF.
+
+**Hash harness.** **Expected delta, and it is the story.** Twenty-one added
+entries, 0 changed, 0 removed, taking the manifest from 28 to 49. Re-recorded
+with `--update --reason` in its own labelled commit, separate from the code that
+causes it. Every `word/*.xml` and `page1.png` digest holds the value it held
+before the sprint, which is what the separation of the raster path from the
+writer predicts.
+
+**Notes for future sessions.** The manual demonstration the backlog's gate asks
+for was run twice against the recorded baseline. Perturbing the TJ adjustment in
+`emit_glyphs` by one thousandth of an em moved 14 entries, `pdf/pages` and
+`pdf/bytes` for all seven samples, and left every `pdf/resources`, `page1.png`
+and `word/*.xml` entry untouched. Perturbing the `/Producer` string alone, which
+lives in the Info dictionary and in no stream, moved only the seven `pdf/bytes`
+entries. That second case is the one the byte digest exists for.
+
+F-X020's by-hand characterisation was therefore comparing against a moving
+target. Its conclusion that the dependency refresh was benign is not undermined,
+since `pdftotext` and `pdfinfo` agreed, but some of the byte movement it
+attributed to `font-types` was the writer disagreeing with itself.
+
+`scripts/golden_png_harness.py` exists and is referenced only by
+`docs/hld/12-testing-strategy.md`. It is wired into neither `/verify` nor CI.
+That is out of scope here and worth a look.
+
+### F-X025, /verify must run the release regressions
+
+**Sprint.** S43
+**Completed.** 2026-08-16
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** `/verify` step 6 runs
+`python3 -m unittest scripts.test_sprint_workflow`, the module holding the
+release family preflights that `.github/workflows/publish.yml` invokes by name
+as the publication gate, plus the pinned CI toolchain assertions. Before this
+those preflights ran for the first time on a tag, after the sprint was closed.
+
+**Non-obvious choices.** The whole module rather than the two tests
+`publish.yml` names, because naming them here would reproduce the coupling that
+caused the problem: a third preflight added later would sit unrun until someone
+updated two places. The module takes about four seconds, so nothing about the
+omission was a cost decision.
+
+It joins step 6 rather than becoming a twelfth step. Step 6 is already the
+standard-library checks that keep the process documents honest, and a step per
+script would make the gate a list rather than a shape.
+
+The wiring test asserts the step is present **and** that a copy of `verify.md`
+with the line removed fails the same assertion, so the gate defends its own
+wiring rather than trusting prose nobody checks.
+
+**Deviations from the design plan.** The plan's third test row, exercising the
+preflights against mutated version carriers, was dropped as redundant.
+`test_release_preparation_metadata_rejects_wasm_tag_and_version_mutations`
+already mutates a version literal and asserts the contract rejects it, through
+an injectable helper. Writing a second one would pin the same behaviour twice.
+
+**Spec sections touched.** `docs/hld/15-build-and-toolchain.md`, the
+`publish.yml` paragraph, which gains the statement that the same regressions run
+in the canonical local gate and has its stale figures corrected to workspace
+0.7.0 and incubating 0.3.0. `docs/hld/12-testing-strategy.md`, the
+README-inventory paragraph, whose stale stable figure becomes 0.7.0.
+
+**Tests.** The gate is `test_verify_runs_the_release_regressions`, plus
+`test_every_test_publish_yml_names_resolves_to_a_real_test`, which resolves every
+dotted path `publish.yml` invokes to a real class and method so a rename fails
+locally rather than at publication. 48 in the module.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Both halves of the backlog's gate were
+demonstrated end to end rather than only asserted, because they are statements
+about a tree that does not exist in the repository. Moving
+`crates/rpptx/Cargo.toml` to 0.3.1 fails both preflights. Putting `ci.yml`'s
+`@tensorbee/rpptx-wasm` literal back to 0.2.0, which is exactly the S42 defect,
+fails three tests including both WASM job assertions.
+
+The spec set carried the stale release figures for a whole sprint before anyone
+noticed, and it was noticed here only because this story had to read that
+paragraph. `/realign-docs` is the command that owns that class of drift, and it
+has not run recently.

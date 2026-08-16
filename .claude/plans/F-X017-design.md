@@ -1,6 +1,6 @@
 # F-X017, Notes broken to their own section's width
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S43
 **Size**: S
 **Depends on**: F-X013b

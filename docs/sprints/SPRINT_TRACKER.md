@@ -240,6 +240,10 @@ defended.
 | F-X022 | S42 | S | 1 | 1 | 2026-08-16 | Incubating train published at 0.3.0, fourteen crates |
 | F-X023 | S42 | S | 1 | 1 | 2026-08-16 | Stable train published at 0.7.0, seven crates |
 | F-X018 | S43 | M | 2 | 1 | 2026-08-16 | An unmodelled enumerated value reads as an absent attribute |
+| F-X017 | S43 | S | 1 | 1 | 2026-08-16 | Notes broken to the width of the section carrying their reference |
+| F-X019 | S43 | M | 2 | 1 | 2026-08-16 | Two-pass pagination so paragraph-relative later drawings wrap |
+| F-X021 | S43 | L | 2 | 1 | 2026-08-16 | PDF fingerprint in the harness, 28 to 49 entries, and a deterministic writer |
+| F-X025 | S43 | S | 1 | 1 | 2026-08-16 | The release preflights run in the local gate, not first on a tag |
 
 ## Velocity
 

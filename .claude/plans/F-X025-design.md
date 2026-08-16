@@ -1,6 +1,6 @@
 # F-X025, /verify must run the release regressions
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S43
 **Size**: S
 **Depends on**: none

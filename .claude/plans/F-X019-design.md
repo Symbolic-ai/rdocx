@@ -1,6 +1,6 @@
 # F-X019, Paragraph-relative drawings in later blocks should wrap
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S43
 **Size**: M
 **Depends on**: F-X016

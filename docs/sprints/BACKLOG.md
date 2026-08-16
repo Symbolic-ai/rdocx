@@ -29,8 +29,8 @@ regenerated, never hand-edited.
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
-| X, Cross-cutting (opportunistic)            | 28 | 24 | 4 | 0  |
-| **Total** | **182** | **178** | **4** | **0** |
+| X, Cross-cutting (opportunistic)            | 28 | 28 | 0 | 0  |
+| **Total** | **182** | **182** | **0** | **0** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -304,12 +304,12 @@ regenerated, never hand-edited.
 | F-X014 | Kashida justification values               | S41 | S | done |
 | F-X015 | Anchored drawing wrap and alignment model  | S41 | M | done |
 | F-X016 | Floating drawing placement and text wrapping | S41 | L | done |
-| F-X017 | Notes broken to their own section's width   | S43 | S | in-progress |
+| F-X017 | Notes broken to their own section's width   | S43 | S | done |
 | F-X018 | Unknown enumerated values must not fail open | S43 | M | done |
-| F-X019 | Paragraph-relative later drawings should wrap | S43 | M | in-progress |
+| F-X019 | Paragraph-relative later drawings should wrap | S43 | M | done |
 | F-X020 | Refresh the dependency lockfile             | S42 | S | done |
-| F-X021 | Hash harness should cover PDF output       | S43 | M | in-progress |
-| F-X025 | /verify must run the release regressions   | S43 | S | in-progress |
+| F-X021 | Hash harness should cover PDF output       | S43 | M | done |
+| F-X025 | /verify must run the release regressions   | S43 | S | done |
 | F-X024 | Move the theme adapter into rdocx-oxml     | S42 | M | done |
 | F-X022 | Tag rpptx-v0.3.0                           | S42 | S | done |
 | F-X023 | Tag v0.7.0                                 | S42 | S | done |
