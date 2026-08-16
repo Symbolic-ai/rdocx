@@ -29,8 +29,8 @@ regenerated, never hand-edited.
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
-| X, Cross-cutting (opportunistic)            | 28 | 24 | 0 | 4  |
-| **Total** | **182** | **178** | **0** | **4** |
+| X, Cross-cutting (opportunistic)            | 28 | 24 | 1 | 3  |
+| **Total** | **182** | **178** | **1** | **3** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -304,7 +304,7 @@ regenerated, never hand-edited.
 | F-X014 | Kashida justification values               | S41 | S | done |
 | F-X015 | Anchored drawing wrap and alignment model  | S41 | M | done |
 | F-X016 | Floating drawing placement and text wrapping | S41 | L | done |
-| F-X017 | Notes broken to their own section's width   | S43 | S | pending |
+| F-X017 | Notes broken to their own section's width   | S43 | S | in-progress |
 | F-X018 | Unknown enumerated values must not fail open | S43 | M | done |
 | F-X019 | Paragraph-relative later drawings should wrap | S43 | M | pending |
 | F-X020 | Refresh the dependency lockfile             | S42 | S | done |
