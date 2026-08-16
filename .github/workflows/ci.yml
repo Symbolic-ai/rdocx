@@ -16,7 +16,106 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: Detect changes
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      test: ${{ steps.filter.outputs.test }}
+      msrv: ${{ steps.filter.outputs.msrv }}
+      wasm: ${{ steps.filter.outputs.wasm }}
+      python_bindings: ${{ steps.filter.outputs.python_bindings }}
+      presentation_fidelity: ${{ steps.filter.outputs.presentation_fidelity }}
+      hash_harness: ${{ steps.filter.outputs.hash_harness }}
+      supply_chain: ${{ steps.filter.outputs.supply_chain }}
+      prose: ${{ steps.filter.outputs.prose }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            test:
+              - '.github/workflows/ci.yml'
+              - '.cargo/**'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'rust-toolchain.toml'
+              - 'crates/**'
+              - 'examples/**'
+              - 'scripts/**'
+              - 'tests/**'
+              - 'tools/**'
+            msrv:
+              - '.github/workflows/ci.yml'
+              - '.cargo/**'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'rust-toolchain.toml'
+              - 'crates/**'
+              - 'examples/**'
+              - 'scripts/**'
+              - 'tests/**'
+              - 'tools/**'
+            wasm:
+              - '.github/workflows/ci.yml'
+              - '.cargo/**'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'rust-toolchain.toml'
+              - 'crates/**'
+            python_bindings:
+              - '.github/workflows/ci.yml'
+              - '.cargo/**'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'rust-toolchain.toml'
+              - 'crates/**'
+              - 'scripts/install_pinned_poppler.py'
+            presentation_fidelity:
+              - '.github/workflows/ci.yml'
+              - '.cargo/**'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'rust-toolchain.toml'
+              - 'crates/**'
+              - 'scripts/fetch_pptx_corpus.py'
+              - 'scripts/install_pinned_poppler.py'
+              - 'scripts/pptx-corpus-manifest.tsv'
+              - 'scripts/pptx_ssim_harness.py'
+            hash_harness:
+              - '.github/workflows/ci.yml'
+              - '.cargo/**'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'rust-toolchain.toml'
+              - 'crates/**'
+              - 'scripts/**'
+            supply_chain:
+              - '.github/workflows/ci.yml'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'deny.toml'
+              - 'LICENSE'
+              - 'crates/**/Cargo.toml'
+              - 'crates/**/LICENSE*'
+              - 'crates/**/NOTICE*'
+            prose:
+              - '.github/workflows/ci.yml'
+              - '*.md'
+              - '**/*.md'
+              - '.claude/commands/**'
+              - '.claude/skills/**'
+              - '.agents/skills/**'
+              - 'scripts/prose_check.py'
+              - 'scripts/sync_agent_skills.py'
+
   test:
+    needs: changes
+    if: needs.changes.outputs.test == 'true'
     name: Test
     runs-on: ubuntu-24.04
     steps:
@@ -52,6 +151,8 @@ jobs:
         run: python3 scripts/golden_png_harness.py --check
 
   python-bindings:
+    needs: changes
+    if: needs.changes.outputs.python_bindings == 'true'
     name: Python bindings (${{ matrix.package.distribution }})
     runs-on: macos-26
     strategy:
@@ -110,6 +211,8 @@ jobs:
       - run: cargo test -p oxml-layout --no-default-features
 
   wasm:
+    needs: changes
+    if: needs.changes.outputs.wasm == 'true'
     name: WASM
     runs-on: ubuntu-latest
     steps:
@@ -214,6 +317,8 @@ jobs:
         run: python3 -m unittest scripts.test_sprint_workflow
 
   prose:
+    needs: changes
+    if: needs.changes.outputs.prose == 'true'
     name: Prose and generated skills
     runs-on: ubuntu-latest
     steps:
@@ -222,6 +327,8 @@ jobs:
       - run: python3 scripts/sync_agent_skills.py --check
 
   hash-harness:
+    needs: changes
+    if: needs.changes.outputs.hash_harness == 'true'
     name: Output stability
     runs-on: ubuntu-latest
     steps:
@@ -231,6 +338,8 @@ jobs:
       - run: python3 scripts/hash_harness.py --check
 
   presentation-fidelity:
+    needs: changes
+    if: needs.changes.outputs.presentation_fidelity == 'true'
     name: Presentation fidelity
     runs-on: macos-26
     env:
@@ -378,6 +487,8 @@ jobs:
           fi
 
   msrv:
+    needs: changes
+    if: needs.changes.outputs.msrv == 'true'
     name: MSRV (1.93)
     runs-on: ubuntu-24.04
     steps:
@@ -413,6 +524,11 @@ jobs:
           --exclude rdocx-py --exclude rpptx-py
 
   supply-chain:
+    needs: changes
+    if: >-
+      always() &&
+      (github.event_name == 'schedule' ||
+       needs.changes.outputs.supply_chain == 'true')
     name: Supply chain
     runs-on: ubuntu-latest
     steps:
@@ -426,3 +542,85 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
+
+  ci-gate:
+    name: CI gate
+    if: always()
+    needs:
+      - changes
+      - test
+      - msrv
+      - wasm
+      - python-bindings
+      - presentation-fidelity
+      - hash-harness
+      - supply-chain
+      - prose
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate filtered jobs
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          TEST_SELECTED: ${{ needs.changes.outputs.test }}
+          TEST_RESULT: ${{ needs.test.result }}
+          MSRV_SELECTED: ${{ needs.changes.outputs.msrv }}
+          MSRV_RESULT: ${{ needs.msrv.result }}
+          WASM_SELECTED: ${{ needs.changes.outputs.wasm }}
+          WASM_RESULT: ${{ needs.wasm.result }}
+          PYTHON_BINDINGS_SELECTED: ${{ needs.changes.outputs.python_bindings }}
+          PYTHON_BINDINGS_RESULT: ${{ needs['python-bindings'].result }}
+          PRESENTATION_FIDELITY_SELECTED: ${{ needs.changes.outputs.presentation_fidelity }}
+          PRESENTATION_FIDELITY_RESULT: ${{ needs['presentation-fidelity'].result }}
+          HASH_HARNESS_SELECTED: ${{ needs.changes.outputs.hash_harness }}
+          HASH_HARNESS_RESULT: ${{ needs['hash-harness'].result }}
+          SUPPLY_CHAIN_SELECTED: ${{ needs.changes.outputs.supply_chain }}
+          SUPPLY_CHAIN_RESULT: ${{ needs['supply-chain'].result }}
+          PROSE_SELECTED: ${{ needs.changes.outputs.prose }}
+          PROSE_RESULT: ${{ needs.prose.result }}
+        run: |
+          check_result() {
+            local selected="$1"
+            local result="$2"
+            local job="$3"
+            case "$selected:$result" in
+              true:success|false:skipped)
+                ;;
+              *)
+                echo "$job was selected=$selected but concluded $result" >&2
+                return 1
+                ;;
+            esac
+          }
+
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            test "$CHANGES_RESULT" = "skipped"
+            test_selected=false
+            msrv_selected=false
+            wasm_selected=false
+            python_bindings_selected=false
+            presentation_fidelity_selected=false
+            hash_harness_selected=false
+            supply_chain_selected=true
+            prose_selected=false
+          else
+            test "$CHANGES_RESULT" = "success"
+            test_selected="$TEST_SELECTED"
+            msrv_selected="$MSRV_SELECTED"
+            wasm_selected="$WASM_SELECTED"
+            python_bindings_selected="$PYTHON_BINDINGS_SELECTED"
+            presentation_fidelity_selected="$PRESENTATION_FIDELITY_SELECTED"
+            hash_harness_selected="$HASH_HARNESS_SELECTED"
+            supply_chain_selected="$SUPPLY_CHAIN_SELECTED"
+            prose_selected="$PROSE_SELECTED"
+          fi
+
+          check_result "$test_selected" "$TEST_RESULT" test
+          check_result "$msrv_selected" "$MSRV_RESULT" msrv
+          check_result "$wasm_selected" "$WASM_RESULT" wasm
+          check_result "$python_bindings_selected" "$PYTHON_BINDINGS_RESULT" python-bindings
+          check_result "$presentation_fidelity_selected" "$PRESENTATION_FIDELITY_RESULT" presentation-fidelity
+          check_result "$hash_harness_selected" "$HASH_HARNESS_RESULT" hash-harness
+          check_result "$supply_chain_selected" "$SUPPLY_CHAIN_RESULT" supply-chain
+          check_result "$prose_selected" "$PROSE_RESULT" prose

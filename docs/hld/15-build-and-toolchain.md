@@ -284,6 +284,22 @@ cannot diverge.
 Listed in `12-testing-strategy.md`. The matrix carries these
 repository-specific gates:
 
+**Path-filtered expensive jobs with one aggregate gate.** A `changes` job uses
+`dorny/paths-filter` v4.0.3 at immutable reviewed commit
+`ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d`. Its inline filters cover the full
+inputs of `test`, `msrv`, `wasm`, `python-bindings`,
+`presentation-fidelity`, `hash-harness`, `supply-chain`, and `prose`. Every
+filter also covers the CI workflow itself. The detector alone receives
+`pull-requests: read` in addition to repository content read.
+
+The `ci-gate` job always runs and depends on change detection plus every
+filtered job. It fails unless selected jobs succeeded and unselected jobs were
+skipped. This includes failure, cancellation, unexpected-skip, and
+change-detector failure paths. A documentation-only change runs prose while
+the filtered product jobs skip, yet the same stable aggregate gate reports.
+The scheduled path skips change detection and requires supply-chain success.
+Unfiltered jobs retain their ordinary triggers.
+
 **A dedicated `oxml-layout` package job.** It checks the exact bundled font and
 legal-file inventory, builds and verifies the generated archive, and enforces
 the crates.io 10 MiB limit.
@@ -357,11 +373,12 @@ extension with `maturin develop --locked`, and runs the package's complete
 pytest directory. The Poppler installation supplies the reviewed 26.01.0 tools
 asserted by the rdocx rendering suite. Build and test failures propagate
 directly, with no failure-tolerant condition, inherited pytest override, or
-fallback. The top-level pull-request trigger is operative and the job has no
-condition. Workflow permissions are exactly repository content read, with no
-OIDC token grant. Checkout v6.0.2, setup-python v6.2.0, rust-cache v2.9.1, and
-the selected stable rust-toolchain revision use reviewed full commit SHAs and
-exact input maps.
+fallback. The top-level pull-request trigger is operative and the job condition
+uses only the change detector's `python_bindings` output. Workflow root
+permissions are repository content read, and only the detector adds pull-request
+metadata read. No job grants an OIDC token. Checkout v6.0.2, setup-python
+v6.2.0, rust-cache v2.9.1, and the selected stable rust-toolchain revision use
+reviewed full commit SHAs and exact input maps.
 
 **One checksum-pinned Poppler installer.**
 `scripts/install_pinned_poppler.py` downloads the official 26.01.0 source

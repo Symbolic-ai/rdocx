@@ -1,6 +1,6 @@
 # F-X029, Path-filtered CI jobs
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S44
 **Size**: M
 **Depends on**: none
@@ -97,16 +97,16 @@ library regressions, and HLD prose only.
 
 ## Implementation checklist
 
-- [ ] Add inline fail-safe change filters and the immutable action pin.
-- [ ] Scope pull-request read permission to change detection.
-- [ ] Route each selected expensive job through its output.
-- [ ] Preserve scheduled supply-chain execution.
-- [ ] Add the always-running fan-in and strict result validation.
-- [ ] Add positive, negative, and mutation-sensitive path tests.
-- [ ] Demonstrate the docs-only route.
-- [ ] Update only the listed HLD sections.
-- [ ] Run focused regressions and contribute the full integrated gate.
-- [ ] Confirm the hash harness remains 49 of 49.
+- [x] Add inline fail-safe change filters and the immutable action pin.
+- [x] Scope pull-request read permission to change detection.
+- [x] Route each selected expensive job through its output.
+- [x] Preserve scheduled supply-chain execution.
+- [x] Add the always-running fan-in and strict result validation.
+- [x] Add positive, negative, and mutation-sensitive path tests.
+- [x] Demonstrate the docs-only route.
+- [x] Update only the listed HLD sections.
+- [x] Run focused regressions and contribute the full integrated gate.
+- [x] Confirm the hash harness remains 49 of 49.
 
 ## Open questions
 

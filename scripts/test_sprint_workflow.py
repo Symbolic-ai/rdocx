@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fnmatch
 import hashlib
 import io
 import json
@@ -107,6 +108,67 @@ class SprintWorkflowTests(unittest.TestCase):
         run = self.yaml_block(step, "        run: |")
         return self.operative_lines(run)[1:]
 
+    def yaml_run_script(self, step: str) -> str:
+        run = self.yaml_block(step, "        run: |")
+        return "\n".join(
+            line[10:] if line.startswith(" " * 10) else line
+            for line in run.splitlines()[1:]
+        )
+
+    def ci_filters(self, ci: str) -> dict[str, tuple[str, ...]]:
+        changes = self.yaml_block(ci, "  changes:")
+        step = next(
+            step
+            for step in self.yaml_steps(changes)
+            if "dorny/paths-filter@" in step
+        )
+        filters = self.yaml_block(step, "          filters: |")
+        parsed: dict[str, list[str]] = {}
+        current = ""
+        for line in filters.splitlines()[1:]:
+            indentation = len(line) - len(line.lstrip())
+            stripped = line.strip()
+            if indentation == 12 and stripped.endswith(":"):
+                current = stripped[:-1]
+                parsed[current] = []
+            elif indentation == 14 and stripped.startswith("- "):
+                self.assertTrue(current)
+                parsed[current].append(stripped[2:].strip("'\""))
+        return {name: tuple(paths) for name, paths in parsed.items()}
+
+    def ci_filter_matches(self, patterns: tuple[str, ...], path: str) -> bool:
+        return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
+
+    def ci_gate_environment(
+        self,
+        *,
+        selected: dict[str, bool],
+        results: dict[str, str],
+        event_name: str = "pull_request",
+        changes_result: str = "success",
+    ) -> dict[str, str]:
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "EVENT_NAME": event_name,
+                "CHANGES_RESULT": changes_result,
+            }
+        )
+        for job in (
+            "test",
+            "msrv",
+            "wasm",
+            "python_bindings",
+            "presentation_fidelity",
+            "hash_harness",
+            "supply_chain",
+            "prose",
+        ):
+            key = job.upper()
+            environment[f"{key}_SELECTED"] = str(selected.get(job, False)).lower()
+            environment[f"{key}_RESULT"] = results.get(job, "skipped")
+        return environment
+
     def assert_no_success_short_circuit(self, lines: tuple[str, ...]) -> None:
         for line in lines:
             tokens = tuple(
@@ -122,6 +184,235 @@ class SprintWorkflowTests(unittest.TestCase):
                     token in ("exit", "return") and tokens[index + 1] == "0",
                     line,
                 )
+
+    def test_each_filtered_ci_job_has_a_must_trigger_and_must_not_trigger_path(
+        self,
+    ) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        filters = self.ci_filters(ci)
+        cases = {
+            "test": ("crates/rdocx/src/lib.rs", "docs/hld/00-vision.md"),
+            "msrv": ("crates/oxml-core/src/lib.rs", "docs/hld/00-vision.md"),
+            "wasm": ("crates/rdocx-wasm/src/lib.rs", "docs/hld/00-vision.md"),
+            "python_bindings": (
+                "crates/rdocx-py/pyproject.toml",
+                "docs/hld/00-vision.md",
+            ),
+            "presentation_fidelity": (
+                "scripts/pptx-corpus-manifest.tsv",
+                "docs/hld/00-vision.md",
+            ),
+            "hash_harness": (
+                "scripts/hash_baseline.json",
+                "docs/hld/00-vision.md",
+            ),
+            "supply_chain": ("Cargo.lock", "docs/hld/00-vision.md"),
+            "prose": ("docs/hld/00-vision.md", "crates/rdocx/src/lib.rs"),
+        }
+        self.assertEqual(set(filters), set(cases))
+        for job, (must_trigger, must_not_trigger) in cases.items():
+            with self.subTest(job=job, path=must_trigger):
+                self.assertTrue(self.ci_filter_matches(filters[job], must_trigger))
+                self.assertTrue(
+                    self.ci_filter_matches(
+                        filters[job], ".github/workflows/ci.yml"
+                    )
+                )
+            with self.subTest(job=job, path=must_not_trigger):
+                self.assertFalse(
+                    self.ci_filter_matches(filters[job], must_not_trigger)
+                )
+            narrowed = tuple(
+                pattern
+                for pattern in filters[job]
+                if not fnmatch.fnmatchcase(must_trigger, pattern)
+            )
+            with self.subTest(job=job, mutation="narrowed"):
+                self.assertFalse(self.ci_filter_matches(narrowed, must_trigger))
+
+        changes = self.yaml_block(ci, "  changes:")
+        permissions = self.yaml_block(changes, "    permissions:")
+        self.assertEqual(
+            self.yaml_direct_lines(permissions, 6),
+            ("contents: read", "pull-requests: read"),
+        )
+        self.assertEqual(self.yaml_mapping_key_count(ci, "pull-requests"), 1)
+        path_filter_step = next(
+            step
+            for step in self.yaml_steps(changes)
+            if "dorny/paths-filter@" in step
+        )
+        self.assertEqual(
+            self.yaml_step_actions(path_filter_step),
+            (
+                "dorny/paths-filter@"
+                "ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d",
+            ),
+        )
+
+    def test_docs_only_changes_skip_expensive_jobs_and_still_report_the_ci_gate(
+        self,
+    ) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        filters = self.ci_filters(ci)
+        selected = {
+            job
+            for job, patterns in filters.items()
+            if self.ci_filter_matches(patterns, "docs/hld/12-testing-strategy.md")
+        }
+        self.assertEqual(selected, {"prose"})
+
+        output_names = {
+            line.split(":", 1)[0]
+            for line in self.yaml_direct_lines(
+                self.yaml_block(
+                    self.yaml_block(ci, "  changes:"), "    outputs:"
+                ),
+                6,
+            )
+        }
+        self.assertEqual(output_names, set(filters))
+        for job_name in (
+            "test",
+            "msrv",
+            "wasm",
+            "python-bindings",
+            "presentation-fidelity",
+            "hash-harness",
+            "prose",
+        ):
+            job = self.yaml_block(ci, f"  {job_name}:")
+            output = job_name.replace("-", "_")
+            direct = self.yaml_direct_lines(job, 4)
+            self.assertIn("needs: changes", direct)
+            self.assertIn(
+                f"if: needs.changes.outputs.{output} == 'true'", direct
+            )
+        supply_chain = self.yaml_block(ci, "  supply-chain:")
+        self.assertIn("needs: changes", self.yaml_direct_lines(supply_chain, 4))
+        self.assertIn("github.event_name == 'schedule'", supply_chain)
+        self.assertIn("needs.changes.outputs.supply_chain == 'true'", supply_chain)
+
+        ci_gate = self.yaml_block(ci, "  ci-gate:")
+        self.assertIn("name: CI gate", self.yaml_direct_lines(ci_gate, 4))
+        self.assertIn("if: always()", self.yaml_direct_lines(ci_gate, 4))
+
+    def test_ci_gate_rejects_failed_selected_jobs_and_accepts_unselected_skips(
+        self,
+    ) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        gate = self.yaml_block(ci, "  ci-gate:")
+        needs = {
+            line.removeprefix("- ")
+            for line in self.operative_lines(self.yaml_block(gate, "    needs:"))[1:]
+        }
+        filtered_jobs = {
+            "test",
+            "msrv",
+            "wasm",
+            "python-bindings",
+            "presentation-fidelity",
+            "hash-harness",
+            "supply-chain",
+            "prose",
+        }
+        self.assertEqual(needs, filtered_jobs | {"changes"})
+        step = self.yaml_step(gate, "Validate filtered jobs")
+        environment = self.yaml_block(step, "        env:")
+        self.assertEqual(
+            self.yaml_direct_lines(environment, 10),
+            (
+                "EVENT_NAME: ${{ github.event_name }}",
+                "CHANGES_RESULT: ${{ needs.changes.result }}",
+                "TEST_SELECTED: ${{ needs.changes.outputs.test }}",
+                "TEST_RESULT: ${{ needs.test.result }}",
+                "MSRV_SELECTED: ${{ needs.changes.outputs.msrv }}",
+                "MSRV_RESULT: ${{ needs.msrv.result }}",
+                "WASM_SELECTED: ${{ needs.changes.outputs.wasm }}",
+                "WASM_RESULT: ${{ needs.wasm.result }}",
+                "PYTHON_BINDINGS_SELECTED: ${{ needs.changes.outputs.python_bindings }}",
+                "PYTHON_BINDINGS_RESULT: ${{ needs['python-bindings'].result }}",
+                "PRESENTATION_FIDELITY_SELECTED: ${{ needs.changes.outputs.presentation_fidelity }}",
+                "PRESENTATION_FIDELITY_RESULT: ${{ needs['presentation-fidelity'].result }}",
+                "HASH_HARNESS_SELECTED: ${{ needs.changes.outputs.hash_harness }}",
+                "HASH_HARNESS_RESULT: ${{ needs['hash-harness'].result }}",
+                "SUPPLY_CHAIN_SELECTED: ${{ needs.changes.outputs.supply_chain }}",
+                "SUPPLY_CHAIN_RESULT: ${{ needs['supply-chain'].result }}",
+                "PROSE_SELECTED: ${{ needs.changes.outputs.prose }}",
+                "PROSE_RESULT: ${{ needs.prose.result }}",
+            ),
+        )
+        script = self.yaml_run_script(step)
+
+        selected = {"test": True}
+        results = {"test": "success"}
+        completed = subprocess.run(
+            ("bash", "-eu", "-o", "pipefail", "-c", script),
+            env=self.ci_gate_environment(selected=selected, results=results),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+        for bad_result in ("failure", "cancelled", "skipped"):
+            with self.subTest(selected_result=bad_result):
+                completed = subprocess.run(
+                    ("bash", "-eu", "-o", "pipefail", "-c", script),
+                    env=self.ci_gate_environment(
+                        selected=selected,
+                        results={"test": bad_result},
+                    ),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(completed.returncode, 0)
+
+        completed = subprocess.run(
+            ("bash", "-eu", "-o", "pipefail", "-c", script),
+            env=self.ci_gate_environment(
+                selected={},
+                results={"test": "success"},
+            ),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+
+        completed = subprocess.run(
+            ("bash", "-eu", "-o", "pipefail", "-c", script),
+            env=self.ci_gate_environment(
+                selected={},
+                results={"supply_chain": "success"},
+                event_name="schedule",
+                changes_result="skipped",
+            ),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+        completed = subprocess.run(
+            ("bash", "-eu", "-o", "pipefail", "-c", script),
+            env=self.ci_gate_environment(
+                selected={},
+                results={},
+                changes_result="failure",
+            ),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
 
     def assert_pinned_poppler_installer_contract(self, installer: str) -> None:
         self.assertIn('POPLER_VERSION = "26.01.0"', installer)
@@ -290,6 +581,8 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(
             direct,
             (
+                "needs: changes",
+                "if: needs.changes.outputs.python_bindings == 'true'",
                 "name: Python bindings (${{ matrix.package.distribution }})",
                 "runs-on: macos-26",
                 "strategy:",
@@ -968,6 +1261,12 @@ class SprintWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assert_python_pr_job_contract(ci)
+        python_job = self.yaml_block(ci, "  python-bindings:")
+
+        def mutate_job(old: str, new: str) -> str:
+            self.assertIn(old, python_job)
+            return ci.replace(python_job, python_job.replace(old, new, 1), 1)
+
         mutations = {
             "missing-pull-request-trigger": ci.replace(
                 "  pull_request:\n", "", 1
@@ -1072,25 +1371,22 @@ class SprintWorkflowTests(unittest.TestCase):
                 '"$binding_python" -m pytest "crates/${{ matrix.package.crate }}/tests" || true',
                 1,
             ),
-            "wrong-checkout-sha": ci.replace(
+            "wrong-checkout-sha": mutate_job(
                 "de0fac2e4500dabe0009e67214ff5f5447ce83dd",
                 "0000000000000000000000000000000000000000",
-                1,
             ),
-            "wrong-checkout-sha-with-required-comment": ci.replace(
+            "wrong-checkout-sha-with-required-comment": mutate_job(
                 "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2",
                 "actions/checkout@0000000000000000000000000000000000000000 "
                 "# v6.0.2 de0fac2e4500dabe0009e67214ff5f5447ce83dd",
-                1,
             ),
-            "checkout-ref-input": ci.replace(
+            "checkout-ref-input": mutate_job(
                 "      - uses: actions/checkout@"
                 "de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n",
                 "      - uses: actions/checkout@"
                 "de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n"
                 "        with:\n"
                 "          ref: main\n",
-                1,
             ),
             "wrong-rust-toolchain-sha": ci.replace(
                 "4360b52568e2003a75bf9bc1d59f33a8e3fc893c",
@@ -1177,7 +1473,13 @@ class SprintWorkflowTests(unittest.TestCase):
         job = self.yaml_block(ci, "  wasm:")
         self.assertEqual(
             self.yaml_direct_lines(job, 4),
-            ("name: WASM", "runs-on: ubuntu-latest", "steps:"),
+            (
+                "needs: changes",
+                "if: needs.changes.outputs.wasm == 'true'",
+                "name: WASM",
+                "runs-on: ubuntu-latest",
+                "steps:",
+            ),
         )
         self.assertFalse(
             any("continue-on-error:" in line for line in self.operative_lines(job))
