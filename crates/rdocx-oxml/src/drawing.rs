@@ -101,9 +101,121 @@ impl ST_RelativeFromV {
 }
 
 /// Wrapping type for anchored drawings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WrapType {
+    /// Text flows over or under the drawing without reserving space.
+    #[default]
     None,
+    /// Text keeps clear of the drawing's frame.
+    Square,
+    /// Text clears the drawing above and below, using the full width.
+    TopAndBottom,
+    /// Text follows the drawing's outline.
+    Tight,
+    /// Text follows the outline and may enter its concave regions.
+    Through,
+}
+
+impl WrapType {
+    /// The wrapping element's local name, or `None` when there is no wrap.
+    fn element_name(self) -> &'static str {
+        match self {
+            WrapType::None => "wp:wrapNone",
+            WrapType::Square => "wp:wrapSquare",
+            WrapType::TopAndBottom => "wp:wrapTopAndBottom",
+            WrapType::Tight => "wp:wrapTight",
+            WrapType::Through => "wp:wrapThrough",
+        }
+    }
+}
+
+/// The wrap mode a wrapping element names, or `None` if it is not one.
+fn wrap_type_of(name: &[u8]) -> Option<WrapType> {
+    if matches_local_name(name, b"wrapNone") {
+        Some(WrapType::None)
+    } else if matches_local_name(name, b"wrapSquare") {
+        Some(WrapType::Square)
+    } else if matches_local_name(name, b"wrapTopAndBottom") {
+        Some(WrapType::TopAndBottom)
+    } else if matches_local_name(name, b"wrapTight") {
+        Some(WrapType::Tight)
+    } else if matches_local_name(name, b"wrapThrough") {
+        Some(WrapType::Through)
+    } else {
+        None
+    }
+}
+
+/// Horizontal alignment for an anchored drawing.
+///
+/// An anchor positions itself either by an offset or by an alignment. When an
+/// alignment is given the offset is not used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorAlignH {
+    Left,
+    Center,
+    Right,
+    Inside,
+    Outside,
+}
+
+impl AnchorAlignH {
+    /// Parse an alignment. An unrecognised value reads as no alignment, which
+    /// falls back to the offset rather than inventing a position.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "left" => Some(Self::Left),
+            "center" => Some(Self::Center),
+            "right" => Some(Self::Right),
+            "inside" => Some(Self::Inside),
+            "outside" => Some(Self::Outside),
+            _ => None,
+        }
+    }
+
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Center => "center",
+            Self::Right => "right",
+            Self::Inside => "inside",
+            Self::Outside => "outside",
+        }
+    }
+}
+
+/// Vertical alignment for an anchored drawing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorAlignV {
+    Top,
+    Center,
+    Bottom,
+    Inside,
+    Outside,
+}
+
+impl AnchorAlignV {
+    /// Parse an alignment. An unrecognised value reads as no alignment.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "top" => Some(Self::Top),
+            "center" => Some(Self::Center),
+            "bottom" => Some(Self::Bottom),
+            "inside" => Some(Self::Inside),
+            "outside" => Some(Self::Outside),
+            _ => None,
+        }
+    }
+
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::Center => "center",
+            Self::Bottom => "bottom",
+            Self::Inside => "inside",
+            Self::Outside => "outside",
+        }
+    }
 }
 
 /// `CT_Anchor` — An anchored (floating) drawing element.
@@ -115,14 +227,23 @@ pub struct CT_Anchor {
     pub pos_h_offset: Emu,
     /// Horizontal relative-from.
     pub pos_h_relative_from: ST_RelativeFromH,
+    /// Horizontal alignment, used instead of the offset when present.
+    pub pos_h_align: Option<AnchorAlignH>,
     /// Vertical position offset in EMUs.
     pub pos_v_offset: Emu,
     /// Vertical relative-from.
     pub pos_v_relative_from: ST_RelativeFromV,
+    /// Vertical alignment, used instead of the offset when present.
+    pub pos_v_align: Option<AnchorAlignV>,
     /// Width in EMUs.
     pub extent_cx: Emu,
     /// Height in EMUs.
     pub extent_cy: Emu,
+    /// Space kept between the drawing and the text wrapping around it.
+    pub dist_t: Emu,
+    pub dist_b: Emu,
+    pub dist_l: Emu,
+    pub dist_r: Emu,
     /// Wrapping type.
     pub wrap: WrapType,
     /// Relationship ID referencing the image part.
@@ -286,10 +407,16 @@ impl CT_Anchor {
             behind_doc: true,
             pos_h_offset: Emu(0),
             pos_h_relative_from: ST_RelativeFromH::Page,
+            pos_h_align: None,
             pos_v_offset: Emu(0),
             pos_v_relative_from: ST_RelativeFromV::Page,
+            pos_v_align: None,
             extent_cx: Emu(page_width_emu),
             extent_cy: Emu(page_height_emu),
+            dist_t: Emu(0),
+            dist_b: Emu(0),
+            dist_l: Emu(0),
+            dist_r: Emu(0),
             wrap: WrapType::None,
             embed_id: embed_id.to_string(),
             relative_height: 0,
@@ -303,6 +430,10 @@ impl CT_Anchor {
     pub fn from_xml(reader: &mut Reader<&[u8]>, start: &BytesStart) -> Result<Self> {
         let mut behind_doc = false;
         let mut relative_height = 0u32;
+        let mut dist_t = Emu(0);
+        let mut dist_b = Emu(0);
+        let mut dist_l = Emu(0);
+        let mut dist_r = Emu(0);
 
         // Parse attributes from the <wp:anchor> start tag
         for attr in start.attributes() {
@@ -313,13 +444,24 @@ impl CT_Anchor {
                 behind_doc = val == "1" || val == "true";
             } else if key == b"relativeHeight" {
                 relative_height = val.parse().unwrap_or(0);
+            } else if key == b"distT" {
+                dist_t = Emu(val.parse().unwrap_or(0));
+            } else if key == b"distB" {
+                dist_b = Emu(val.parse().unwrap_or(0));
+            } else if key == b"distL" {
+                dist_l = Emu(val.parse().unwrap_or(0));
+            } else if key == b"distR" {
+                dist_r = Emu(val.parse().unwrap_or(0));
             }
         }
 
         let mut pos_h_offset = Emu(0);
         let mut pos_h_relative_from = ST_RelativeFromH::Page;
+        let mut pos_h_align = None;
         let mut pos_v_offset = Emu(0);
         let mut pos_v_relative_from = ST_RelativeFromV::Page;
+        let mut pos_v_align = None;
+        let mut wrap = WrapType::None;
         let mut extent_cx = Emu(0);
         let mut extent_cy = Emu(0);
         let mut embed_id = String::new();
@@ -365,8 +507,8 @@ impl CT_Anchor {
                         }
                     } else if matches_local_name(ename.as_ref(), b"simplePos") {
                         // Ignore simplePos
-                    } else if matches_local_name(ename.as_ref(), b"wrapNone") {
-                        // Already default
+                    } else if let Some(parsed) = wrap_type_of(ename.as_ref()) {
+                        wrap = parsed;
                     }
                 }
                 Ok(Event::Start(ref e)) => {
@@ -392,6 +534,15 @@ impl CT_Anchor {
                                         .unwrap_or_default();
                                     pos_h_offset = Emu(text.trim().parse().unwrap_or(0));
                                 }
+                                Ok(Event::Start(ref ie))
+                                    if matches_local_name(ie.name().as_ref(), b"align") =>
+                                {
+                                    let text = reader
+                                        .read_text(ie.name())
+                                        .map(|t| crate::xml_text::decode_escaped(&t))
+                                        .unwrap_or_default();
+                                    pos_h_align = AnchorAlignH::parse(text.trim());
+                                }
                                 Ok(Event::End(ref ie))
                                     if matches_local_name(ie.name().as_ref(), b"positionH") =>
                                 {
@@ -403,6 +554,11 @@ impl CT_Anchor {
                             }
                             inner_buf.clear();
                         }
+                    } else if let Some(parsed) = wrap_type_of(ename.as_ref()) {
+                        // Expanded spelling. wrapSquare and the outline wraps
+                        // carry children we do not model, so skip the subtree.
+                        wrap = parsed;
+                        reader.read_to_end_into(ename, &mut Vec::new())?;
                     } else if matches_local_name(ename.as_ref(), b"positionV") {
                         for attr in e.attributes() {
                             let attr = attr?;
@@ -422,6 +578,15 @@ impl CT_Anchor {
                                         .map(|t| crate::xml_text::decode_escaped(&t))
                                         .unwrap_or_default();
                                     pos_v_offset = Emu(text.trim().parse().unwrap_or(0));
+                                }
+                                Ok(Event::Start(ref ie))
+                                    if matches_local_name(ie.name().as_ref(), b"align") =>
+                                {
+                                    let text = reader
+                                        .read_text(ie.name())
+                                        .map(|t| crate::xml_text::decode_escaped(&t))
+                                        .unwrap_or_default();
+                                    pos_v_align = AnchorAlignV::parse(text.trim());
                                 }
                                 Ok(Event::End(ref ie))
                                     if matches_local_name(ie.name().as_ref(), b"positionV") =>
@@ -506,11 +671,17 @@ impl CT_Anchor {
             behind_doc,
             pos_h_offset,
             pos_h_relative_from,
+            pos_h_align,
             pos_v_offset,
             pos_v_relative_from,
+            pos_v_align,
             extent_cx,
             extent_cy,
-            wrap: WrapType::None,
+            dist_t,
+            dist_b,
+            dist_l,
+            dist_r,
+            wrap,
             embed_id,
             relative_height,
             description,
@@ -532,6 +703,25 @@ impl CT_Anchor {
         anchor.push_attribute(("behindDoc", if self.behind_doc { "1" } else { "0" }));
         anchor.push_attribute(("simplePos", "0"));
         anchor.push_attribute(("relativeHeight", buf.format(self.relative_height)));
+        // A zero distance is the default, and an absent attribute means the
+        // same thing. Emitting zeros would change the bytes of every anchor
+        // that never asked for a wrap distance, for no difference in meaning.
+        let dist_t = self.dist_t.0.to_string();
+        let dist_b = self.dist_b.0.to_string();
+        let dist_l = self.dist_l.0.to_string();
+        let dist_r = self.dist_r.0.to_string();
+        if self.dist_t.0 != 0 {
+            anchor.push_attribute(("distT", dist_t.as_str()));
+        }
+        if self.dist_b.0 != 0 {
+            anchor.push_attribute(("distB", dist_b.as_str()));
+        }
+        if self.dist_l.0 != 0 {
+            anchor.push_attribute(("distL", dist_l.as_str()));
+        }
+        if self.dist_r.0 != 0 {
+            anchor.push_attribute(("distR", dist_r.as_str()));
+        }
         anchor.push_attribute(("locked", "0"));
         anchor.push_attribute(("layoutInCell", "1"));
         anchor.push_attribute(("allowOverlap", "1"));
@@ -547,22 +737,35 @@ impl CT_Anchor {
         let mut pos_h = BytesStart::new("wp:positionH");
         pos_h.push_attribute(("relativeFrom", self.pos_h_relative_from.to_str()));
         writer.write_event(Event::Start(pos_h))?;
-        writer.write_event(Event::Start(BytesStart::new("wp:posOffset")))?;
-        writer.write_event(Event::Text(BytesText::new(
-            &self.pos_h_offset.0.to_string(),
-        )))?;
-        writer.write_event(Event::End(BytesEnd::new("wp:posOffset")))?;
+        // An anchor positions by an alignment or by an offset, never both.
+        if let Some(align) = self.pos_h_align {
+            writer.write_event(Event::Start(BytesStart::new("wp:align")))?;
+            writer.write_event(Event::Text(BytesText::new(align.to_str())))?;
+            writer.write_event(Event::End(BytesEnd::new("wp:align")))?;
+        } else {
+            writer.write_event(Event::Start(BytesStart::new("wp:posOffset")))?;
+            writer.write_event(Event::Text(BytesText::new(
+                &self.pos_h_offset.0.to_string(),
+            )))?;
+            writer.write_event(Event::End(BytesEnd::new("wp:posOffset")))?;
+        }
         writer.write_event(Event::End(BytesEnd::new("wp:positionH")))?;
 
         // wp:positionV
         let mut pos_v = BytesStart::new("wp:positionV");
         pos_v.push_attribute(("relativeFrom", self.pos_v_relative_from.to_str()));
         writer.write_event(Event::Start(pos_v))?;
-        writer.write_event(Event::Start(BytesStart::new("wp:posOffset")))?;
-        writer.write_event(Event::Text(BytesText::new(
-            &self.pos_v_offset.0.to_string(),
-        )))?;
-        writer.write_event(Event::End(BytesEnd::new("wp:posOffset")))?;
+        if let Some(align) = self.pos_v_align {
+            writer.write_event(Event::Start(BytesStart::new("wp:align")))?;
+            writer.write_event(Event::Text(BytesText::new(align.to_str())))?;
+            writer.write_event(Event::End(BytesEnd::new("wp:align")))?;
+        } else {
+            writer.write_event(Event::Start(BytesStart::new("wp:posOffset")))?;
+            writer.write_event(Event::Text(BytesText::new(
+                &self.pos_v_offset.0.to_string(),
+            )))?;
+            writer.write_event(Event::End(BytesEnd::new("wp:posOffset")))?;
+        }
         writer.write_event(Event::End(BytesEnd::new("wp:positionV")))?;
 
         // wp:extent
@@ -571,8 +774,8 @@ impl CT_Anchor {
         extent.push_attribute(("cy", buf.format(self.extent_cy.0)));
         writer.write_event(Event::Empty(extent))?;
 
-        // wp:wrapNone
-        writer.write_event(Event::Empty(BytesStart::new("wp:wrapNone")))?;
+        // The wrapping element, in the sequence position wp:wrapNone held.
+        writer.write_event(Event::Empty(BytesStart::new(self.wrap.element_name())))?;
 
         // wp:docPr
         let mut doc_pr = BytesStart::new("wp:docPr");
@@ -1035,5 +1238,137 @@ mod tests {
         let d2 = CT_Drawing::anchor(anchor);
         assert!(d2.inline.is_none());
         assert!(d2.anchor.is_some());
+    }
+
+    // F-X015, wrap and alignment model.
+
+    const W_NS_URI: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const WP_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+
+    fn parse_anchor(inner: &str) -> CT_Anchor {
+        let xml = format!(
+            r#"<w:drawing xmlns:w="{W_NS_URI}" xmlns:wp="{WP_NS}"><wp:anchor {inner}</wp:anchor></w:drawing>"#
+        );
+        let drawing = parse_drawing(&xml);
+        drawing.anchor.expect("an anchor")
+    }
+
+    const ANCHOR_TAIL: &str = r#"<wp:positionH relativeFrom="margin"><wp:align>right</wp:align></wp:positionH>
+        <wp:positionV relativeFrom="paragraph"><wp:align>bottom</wp:align></wp:positionV>
+        <wp:extent cx="914400" cy="457200"/>"#;
+
+    #[test]
+    fn every_wrap_element_parses_to_its_own_mode() {
+        let cases = [
+            ("wrapNone", WrapType::None),
+            ("wrapSquare", WrapType::Square),
+            ("wrapTopAndBottom", WrapType::TopAndBottom),
+            ("wrapTight", WrapType::Tight),
+            ("wrapThrough", WrapType::Through),
+        ];
+
+        for (element, expected) in cases {
+            // Empty spelling.
+            let anchor = parse_anchor(&format!(
+                r#"distT="0" distB="0" distL="0" distR="0">{ANCHOR_TAIL}<wp:{element}/>"#
+            ));
+            assert_eq!(anchor.wrap, expected, "{element} as an empty element");
+
+            // Expanded spelling, with a child subtree we do not model.
+            let anchor = parse_anchor(&format!(
+                r#"distT="0" distB="0" distL="0" distR="0">{ANCHOR_TAIL}<wp:{element}><wp:wrapPolygon/></wp:{element}>"#
+            ));
+            assert_eq!(anchor.wrap, expected, "{element} as an expanded element");
+        }
+    }
+
+    #[test]
+    fn anchor_alignments_and_distances_are_read() {
+        let anchor = parse_anchor(&format!(
+            r#"distT="10" distB="20" distL="30" distR="40">{ANCHOR_TAIL}<wp:wrapSquare/>"#
+        ));
+
+        assert_eq!(anchor.dist_t, Emu(10));
+        assert_eq!(anchor.dist_b, Emu(20));
+        assert_eq!(anchor.dist_l, Emu(30));
+        assert_eq!(anchor.dist_r, Emu(40));
+        assert_eq!(anchor.pos_h_align, Some(AnchorAlignH::Right));
+        assert_eq!(anchor.pos_v_align, Some(AnchorAlignV::Bottom));
+    }
+
+    #[test]
+    fn an_unknown_alignment_reads_as_no_alignment() {
+        // Falling back to the offset beats inventing a position.
+        let anchor = parse_anchor(
+            r#"distT="0" distB="0" distL="0" distR="0"><wp:positionH relativeFrom="margin"><wp:align>sideways</wp:align></wp:positionH>
+            <wp:positionV relativeFrom="paragraph"><wp:posOffset>5000</wp:posOffset></wp:positionV>
+            <wp:extent cx="914400" cy="457200"/><wp:wrapSquare/>"#,
+        );
+
+        assert_eq!(anchor.pos_h_align, None);
+        assert_eq!(anchor.pos_v_align, None);
+        assert_eq!(anchor.pos_v_offset, Emu(5000));
+    }
+
+    #[test]
+    fn an_anchor_round_trips_its_wrap_distances_and_alignments() {
+        for wrap in [
+            WrapType::None,
+            WrapType::Square,
+            WrapType::TopAndBottom,
+            WrapType::Tight,
+            WrapType::Through,
+        ] {
+            let mut built = CT_Anchor::background("rId7", 914400, 457200);
+            built.wrap = wrap;
+            built.dist_t = Emu(11);
+            built.dist_b = Emu(22);
+            built.dist_l = Emu(33);
+            built.dist_r = Emu(44);
+            built.pos_h_align = Some(AnchorAlignH::Center);
+            built.pos_v_align = Some(AnchorAlignV::Top);
+
+            let mut writer = Writer::new(Vec::new());
+            built.to_xml(&mut writer).expect("serialises");
+            let bytes = writer.into_inner();
+            let xml = format!(
+                r#"<w:drawing xmlns:w="{W_NS_URI}" xmlns:wp="{WP_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">{}</w:drawing>"#,
+                String::from_utf8(bytes).expect("utf8")
+            );
+
+            let parsed = parse_drawing(&xml).anchor.expect("an anchor");
+
+            assert_eq!(parsed.wrap, wrap, "wrap survives");
+            assert_eq!(parsed.dist_t, Emu(11));
+            assert_eq!(parsed.dist_b, Emu(22));
+            assert_eq!(parsed.dist_l, Emu(33));
+            assert_eq!(parsed.dist_r, Emu(44));
+            assert_eq!(parsed.pos_h_align, Some(AnchorAlignH::Center));
+            assert_eq!(parsed.pos_v_align, Some(AnchorAlignV::Top));
+        }
+    }
+
+    #[test]
+    fn a_parsed_anchor_re_emits_its_original_bytes() {
+        // The capture path is what keeps an unmodelled subtree intact. This
+        // story must not disturb it.
+        let xml = format!(
+            r#"<w:drawing xmlns:w="{W_NS_URI}" xmlns:wp="{WP_NS}"><wp:anchor distT="5" distB="6" distL="7" distR="8">{ANCHOR_TAIL}<wp:wrapSquare wrapText="bothSides"/><wp:unmodelled foo="bar"/></wp:anchor></w:drawing>"#
+        );
+        let drawing = parse_drawing(&xml);
+        let anchor = drawing.anchor.as_ref().expect("an anchor");
+        assert!(anchor.raw_xml.is_some(), "the anchor bytes are captured");
+
+        let mut writer = Writer::new(Vec::new());
+        anchor.to_xml(&mut writer).expect("serialises");
+        let emitted = String::from_utf8(writer.into_inner()).expect("utf8");
+        assert!(
+            emitted.contains("wp:unmodelled"),
+            "the unmodelled subtree survives, got {emitted}"
+        );
+        assert!(
+            emitted.contains(r#"wrapText="bothSides""#),
+            "attributes we do not model survive, got {emitted}"
+        );
     }
 }

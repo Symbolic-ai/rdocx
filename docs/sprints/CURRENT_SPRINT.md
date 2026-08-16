@@ -31,7 +31,7 @@ around them.
 | F-X013b | Footnote reservation and splitting | L | done | claude |
 | F-X013c | Endnotes at the document end | M | done | claude |
 | F-X014 | Kashida justification values | S | done | claude |
-| F-X015 | Anchored drawing wrap and alignment model | M | pending | - |
+| F-X015 | Anchored drawing wrap and alignment model | M | done | claude |
 | F-X016 | Floating drawing placement and text wrapping | L | pending | - |
 
 ## Sequencing note

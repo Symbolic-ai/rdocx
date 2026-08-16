@@ -3,7 +3,9 @@
 use crate::table::TableBlock;
 use oxml_layout::{Align, Color, LayoutLine, MediaId};
 use rdocx_oxml::borders::CT_PBdr;
-use rdocx_oxml::drawing::{ST_RelativeFromH, ST_RelativeFromV};
+use rdocx_oxml::drawing::{
+    AnchorAlignH, AnchorAlignV, ST_RelativeFromH, ST_RelativeFromV, WrapType,
+};
 
 /// A floating drawing anchored to a paragraph.
 ///
@@ -27,6 +29,18 @@ pub struct AnchoredDrawing {
     pub width: f64,
     /// Height in points.
     pub height: f64,
+    /// How text flows around the drawing.
+    pub wrap: WrapType,
+    /// Space kept between the drawing and the text wrapping around it, in
+    /// points.
+    pub dist_top: f64,
+    pub dist_bottom: f64,
+    pub dist_left: f64,
+    pub dist_right: f64,
+    /// Horizontal alignment, used instead of the offset when present.
+    pub align_h: Option<AnchorAlignH>,
+    /// Vertical alignment, used instead of the offset when present.
+    pub align_v: Option<AnchorAlignV>,
     /// What the drawing actually holds.
     pub content: AnchoredContent,
 }

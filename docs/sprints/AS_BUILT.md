@@ -6047,3 +6047,60 @@ a document using a spec-valid value the model has not yet listed fails to open.
 Fixing all nine means deciding a general rule, which is that an unmodelled value
 falls back to the element's default and its siblings survive. That is a story of
 its own rather than something to change in passing here.
+
+### F-X015, Anchored drawing wrap and alignment model
+
+**Sprint.** S41
+**Completed.** 2026-08-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `WrapType` gains `Square`, `TopAndBottom`, `Tight` and
+`Through` alongside `None`, and each wrapping element parses to its own mode in
+both the empty and the expanded spelling. `CT_Anchor` reads the four text
+distances and the `wp:align` child of `positionH` and `positionV`, and
+`AnchoredDrawing` carries all of it into layout in points. Nothing reads the new
+fields yet, so placement and rendering are unchanged. F-X016 consumes them.
+
+Before this, `wrap` was parsed-but-dead: set to `None` at both construction
+sites and read nowhere, while the serialiser wrote `wrapNone` unconditionally.
+An alignment-positioned drawing landed at offset zero, because only the offset
+was read.
+
+**Non-obvious choices.** `Tight` and `Through` parse to their own variants
+rather than collapsing into `Square`. They wrap to the drawing's outline rather
+than its frame, F-X016 will approximate them as `Square`, and approximating is
+the renderer's job. Collapsing at parse time would throw away information the
+model cannot recover.
+
+A zero text distance is not written. That began as a bug, see below, and the
+resolution is right on its own terms: an absent attribute and a zero attribute
+mean the same thing.
+
+**Deviations from the design plan.** One, and the harness caught it. The plan
+said the serialiser path runs only for a programmatically built anchor, which is
+true, and missed that the sample generators are exactly that. Writing all four
+distances unconditionally changed `report:word/document.xml` on the first
+harness run. Corrected by omitting zero distances, and the plan now records both
+the mistake and the fix.
+
+**Spec sections touched.** None. F-X016 carries the HLD update for wrapping,
+since that is where the behaviour appears.
+
+**Tests.** The gate is the round-trip pair,
+`an_anchor_round_trips_its_wrap_distances_and_alignments` and
+`a_parsed_anchor_re_emits_its_original_bytes`. Plus
+`every_wrap_element_parses_to_its_own_mode`,
+`anchor_alignments_and_distances_are_read` and
+`an_unknown_alignment_reads_as_no_alignment`. Proven against two separate
+reverts, one of wrap parsing and one of the distance and alignment reads.
+
+**Hash harness.** Unchanged, 28 of 28, which is this story's proof rather than a
+formality. It did not start that way, and the delta is described above.
+
+**Notes for future sessions.** The sample generators build anchors
+programmatically, so a change to `CT_Anchor::to_xml` reaches the harness even
+though a parsed anchor re-emits its captured `raw_xml` and never touches that
+code. Any future change to an anchor serialiser should expect the same. More
+generally, this is the story where declaring "expected unchanged" and being
+wrong was useful: the prediction is what turned a silent byte change into a
+question worth answering.

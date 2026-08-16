@@ -736,6 +736,13 @@ fn collect_anchored_drawings(
                 off_v: anchor.pos_v_offset.to_pt(),
                 width: anchor.extent_cx.to_pt(),
                 height: anchor.extent_cy.to_pt(),
+                wrap: anchor.wrap,
+                dist_top: anchor.dist_t.to_pt(),
+                dist_bottom: anchor.dist_b.to_pt(),
+                dist_left: anchor.dist_l.to_pt(),
+                dist_right: anchor.dist_r.to_pt(),
+                align_h: anchor.pos_h_align,
+                align_v: anchor.pos_v_align,
                 content,
             });
         }
@@ -1186,6 +1193,13 @@ mod tests {
             off_v: 20.0,
             width: 12.0,
             height: 10.0,
+            wrap: rdocx_oxml::drawing::WrapType::None,
+            dist_top: 0.0,
+            dist_bottom: 0.0,
+            dist_left: 0.0,
+            dist_right: 0.0,
+            align_h: None,
+            align_v: None,
             content: block::AnchoredContent::Image {
                 media_id: anchor_id,
             },
