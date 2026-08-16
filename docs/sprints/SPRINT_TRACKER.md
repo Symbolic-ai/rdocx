@@ -56,6 +56,7 @@ defended.
 | S39 | X | 3 | 3 | 0 | 6 | 3 | Added compile-checked README coverage for all 26 workspace crates, published the seven-package stable rdocx 0.6.0 family, and published the complete 14-package rpptx 0.2.0 family. Every crates.io README rendered, all 28 hashes remained unchanged, and no WASM, Python, npm, or PyPI package was published |
 | S40 | X | 1 | 1 | 0 | 2 | 1 | Restored a green hosted CI baseline by pinning the Poppler 26.01.0 rendering oracle, the Binaryen 125 identity, uv 0.10.2 and the LibreOffice viewer build behind one bounded installer. All 28 hashes remained unchanged, and no crate, release version, published package or rendering baseline changed |
 | S41 | X | 7 | 7 | 0 | 12 | 7 | Landed the surviving half of the external PR 2 rendering contribution as six stories under one umbrella. Footnote lines advance and reserve their own page space, oversized notes split across pages, endnotes moved to the document end with the two note streams keyed apart, kashida justification no longer fails a document open, and body text flows around wrapping drawings. All 28 hashes unchanged throughout, and no crate, package version or published artifact changed |
+| S42 | X | 4 | 4 | 0 | 5 | 4 | Refreshed the lockfile, broke the cross-family dependency edge that made the two publication trains mutually dependent, and released both: fourteen incubating crates at 0.3.0 and seven stable crates at 0.7.0, from one reviewed SHA. All 28 hashes unchanged throughout, and zero vulnerabilities across 152 dependencies |
 
 ## Completed features
 
@@ -294,6 +295,7 @@ five working days.
 | S39 | 3 | 3 | 5.00 |
 | S40 | 1 | 1 | 5.00 |
 | S41 | 7 | 7 | 5.00 |
+| S42 | 4 | 4 | 5.00 |
 
 ## Escalation record
 
