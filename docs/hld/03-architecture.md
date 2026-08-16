@@ -138,18 +138,42 @@ layout compares complete bytes, assigns deterministic alternate IDs when two
 compact keys collide, and is shared by the lower-level layout and pagination
 entry points.
 
-Footnotes and endnotes are laid out once into a `NoteRegistry` before
-pagination, and the paginator reserves, splits and draws them. Note placement is
-part of pagination rather than a pass that runs after it, because a page's body
-height depends on the note area it owes, and a note that does not fit continues
-on the following page. The registry pre-shapes each note's marker, so the
-paginator places notes without needing a mutable font manager.
+Footnotes and endnotes are laid out into a `NoteRegistry` before pagination, and
+the paginator reserves, splits and draws them. Note placement is part of
+pagination rather than a pass that runs after it, because a page's body height
+depends on the note area it owes, and a note that does not fit continues on the
+following page. The registry pre-shapes each note's marker, so the paginator
+places notes without needing a mutable font manager.
+
+Each note is laid out once per distinct section content width rather than once
+per document, and is looked up by the width of the section drawing it. A note is
+broken to the measure of the section carrying its reference, since that is the
+measure it is drawn at, and reserve and render therefore still read the same
+lines. A document whose sections share a page size registers one width and lays
+each note out once, which is the common case. Endnotes are measured against the
+final section, because they are emitted after the last body page and drawn
+against that section's geometry wherever their references sit.
 
 The paginator also reflows a paragraph around any floating drawing that wraps,
 because whether a drawing overlaps a line is only known once the paragraph has a
 position on a page. The inputs to line breaking are therefore kept alive past
 layout, but only for a document that actually holds a drawing whose wrap is not
 `none`, since those inputs hold the same shaped glyphs the laid-out lines do.
+
+Text also flows around a wrapping drawing anchored to a **later** paragraph,
+which Word documents do routinely. A drawing framed by the page or a margin has
+a position without its own paragraph being placed, so one pass is enough. A
+drawing framed by its own paragraph does not, so a section holding one
+paginates **twice**: the first pass records where each such drawing landed and
+on which page, and the second offers those rectangles to the text above them.
+The first pass is identical to a single-pass run, and a section holding no such
+drawing paginates once, which is every sample and every corpus document today.
+
+Two passes, and not a fixed point. The second pass reflows earlier text, which
+can move the drawing's own paragraph, so the rectangle it flowed around may be
+slightly stale. Iterating is not guaranteed to terminate, since growing a
+paragraph can push a drawing to the next page, which shrinks the paragraph,
+which pulls the drawing back. Two passes give one answer, always.
 
 The two note streams are placed differently and are keyed apart. A footnote
 sits at the foot of the page carrying its reference and takes height from that
@@ -202,6 +226,14 @@ them. The families fold into a lockstep train once rpptx stabilises.
   `to_xml<W: Write>(&self, writer: &mut Writer<W>)`.
 - **Prefix-tolerant on read, fixed prefix on write.** `matches_local_name`
   strips any prefix and compares the local part.
+- **An unmodelled enumerated value reads as an absent attribute.** A value
+  parser rejects a string it does not list, and the property parsers treat that
+  rejection as "not specified" rather than propagating it. An absent attribute
+  means the element's default, which is usually inheritance from the style
+  chain, so the surrounding properties survive and the document opens. The
+  parsers stay fallible, so a caller that wants strictness keeps it: the
+  tolerance belongs to the reader, not to the type. A value carried this way is
+  lost on save, which is the accepted cost of opening the document at all.
 - **Unmodelled subtrees are preserved verbatim** via `capture_element` into
   `raw_xml` fields. This matters far more for PresentationML than for
   WordprocessingML, and it is the scope control for an otherwise unbounded

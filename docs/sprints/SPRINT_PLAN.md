@@ -686,6 +686,31 @@ first.
 
 The two release stories then carry S41's work to crates.io in that order.
 
+#### Sprint S43, Robustness and gate coverage
+
+**Goal**: clear the follow-ups S41 and S42 filed. Three are defects that a real
+document can reach, and two close gaps in the gates that let the other three
+survive as long as they did.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X018 | Unknown enumerated values must not fail a document open | M |
+| F-X017 | Notes broken to their own section's width | S |
+| F-X019 | Paragraph-relative later drawings should wrap | M |
+| F-X021 | The hash harness should cover PDF output | M |
+| F-X025 | /verify must run the release regressions | S |
+
+F-X018 leads because it is the only one where a document fails to open rather
+than rendering imperfectly. F-X014 fixed the three kashida values because a real
+contribution reached them, and eight more parsers have the same shape.
+
+F-X017 and F-X019 are the two limitations S41 recorded rather than hid, both
+narrow and both reachable by a real document. F-X021 and F-X025 are the gates:
+one gives the harness PDF coverage it has never had, the other makes `/verify`
+run the release regressions that `publish.yml` treats as its publication gate.
+The gate stories land last because neither blocks the three defect fixes, and
+putting them first would delay work that users can actually hit.
+
 ## Cross-cutting
 
 F-X001 through F-X004 are scheduled in S36 as the final cross-cutting v1

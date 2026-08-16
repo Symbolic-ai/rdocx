@@ -1488,6 +1488,36 @@ would have failed in CI at publication time.
 `scripts/test_sprint_workflow.py` or a workflow file fails `/verify --full`,
 and a clean tree passes it.
 
+### F-X026, CI must run the release regressions too (S)
+`/verify` step 6 runs `python3 -m unittest scripts.test_sprint_workflow` after
+F-X025, so the release family preflights no longer run for the first time on a
+tag. `.github/workflows/ci.yml` does not. Its `prose` job runs the sprint's other
+two standard-library checks, `prose_check.py` and `sync_agent_skills.py --check`,
+and not this one, so a contributor who does not run `/verify` can move a version
+carrier and see a green pull request.
+
+Filed by the S43 sprint review, `.claude/reviews/S43-sprint-review-pass-1.md`,
+finding N1. It is narrower than the defect S42 hit, since F-X022 was authored
+through the local gate, which is why it was not fixed inside F-X025.
+**Depends on**: F-X025.
+**Test gate**: regression. The module runs in a named CI job, asserted the way
+the other job contracts are, and a stale version literal fails that job.
+
+### F-X027, Wire the golden-PNG gate into something (S)
+`scripts/golden_png_harness.py` generates deterministic PDFs, rasterises page one
+at 150 DPI with the pinned Poppler oracle, and compares decoded pixels against
+`scripts/golden_pixel_manifest.json`. `docs/hld/12-testing-strategy.md` describes
+it in full. It appears in no `/verify` step and no CI job, so it runs only when
+somebody remembers it, and a recorded manifest nothing checks is not a gate.
+
+Filed by the S43 sprint review, finding N2. Pre-existing rather than caused by
+S43. It surfaced because F-X021 went looking for what watches PDF output. The
+story decides where it belongs, given that it needs `pdftoppm` and a pinned
+Poppler build and so cannot sit in the same place as the hash harness.
+**Depends on**: none.
+**Test gate**: regression. A deliberate rendering change fails the gate wherever
+the story puts it, and a clean tree passes it.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this

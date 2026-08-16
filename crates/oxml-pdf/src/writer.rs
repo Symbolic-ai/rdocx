@@ -1,6 +1,6 @@
 //! PDF document writer: assembles pages, fonts, images, metadata, and outlines.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use oxml_layout::{
     Color, FillRule, FontId, GradientStop, LayoutResult, LineCap, LineJoin, Paint, Path,
@@ -382,8 +382,11 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
 
     // ── Font preparation ─────────────────────────────────────────────
     let mut glyph_usage = font::collect_glyph_usage(layout);
-    let mut prepared_fonts: HashMap<FontId, PreparedFont> = HashMap::new();
-    let mut font_refs: HashMap<FontId, (Ref, Ref, Ref, Ref, Ref)> = HashMap::new(); // type0, cid, descriptor, stream, cmap
+    // Ordered by font ID. Both maps are iterated to write the font objects and
+    // the page /Font dictionaries, so a hashed order wrote the same document
+    // differently on every run.
+    let mut prepared_fonts: BTreeMap<FontId, PreparedFont> = BTreeMap::new();
+    let mut font_refs: BTreeMap<FontId, (Ref, Ref, Ref, Ref, Ref)> = BTreeMap::new(); // type0, cid, descriptor, stream, cmap
 
     for fd in &layout.fonts {
         if let Some(usage) = glyph_usage.get_mut(&fd.id)
@@ -689,13 +692,21 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
         }
 
         // Image XObject resources
-        let page_image_names: Vec<(String, Ref)> = image_map
+        // Sorted by element index. `image_map` is hashed, and its iteration
+        // order reached the /XObject dictionary, so the same page named its
+        // images in a different order on every run.
+        let mut page_images: Vec<(usize, usize)> = image_map
             .iter()
             .filter(|((pi, _), _)| *pi == page_idx)
-            .map(|((_, ei), img_idx)| {
+            .map(|((_, ei), img_idx)| (*ei, *img_idx))
+            .collect();
+        page_images.sort_unstable();
+        let page_image_names: Vec<(String, Ref)> = page_images
+            .into_iter()
+            .map(|(ei, img_idx)| {
                 (
                     format!("Im{}_{}", page_idx, ei),
-                    image_entries[*img_idx].xobject_ref,
+                    image_entries[img_idx].xobject_ref,
                 )
             })
             .collect();
@@ -861,8 +872,8 @@ fn write_gradient_objects(pdf: &mut Pdf, gradients: &GradientRegistry) {
 fn build_page_content(
     page_idx: usize,
     page: &oxml_layout::PageFrame,
-    prepared_fonts: &HashMap<FontId, PreparedFont>,
-    font_refs: &HashMap<FontId, (Ref, Ref, Ref, Ref, Ref)>,
+    prepared_fonts: &BTreeMap<FontId, PreparedFont>,
+    font_refs: &BTreeMap<FontId, (Ref, Ref, Ref, Ref, Ref)>,
     image_map: &HashMap<(usize, usize), usize>,
     alpha_states: &AlphaStates,
     gradients: &GradientRegistry,
@@ -889,8 +900,8 @@ fn build_page_content(
 
 struct EmitState<'a> {
     page_idx: usize,
-    prepared_fonts: &'a HashMap<FontId, PreparedFont>,
-    font_refs: &'a HashMap<FontId, (Ref, Ref, Ref, Ref, Ref)>,
+    prepared_fonts: &'a BTreeMap<FontId, PreparedFont>,
+    font_refs: &'a BTreeMap<FontId, (Ref, Ref, Ref, Ref, Ref)>,
     image_map: &'a HashMap<(usize, usize), usize>,
     alpha_states: &'a AlphaStates,
     gradients: &'a GradientRegistry,
@@ -1453,8 +1464,8 @@ mod tests {
         String::from_utf8(build_page_content(
             0,
             &page,
-            &HashMap::new(),
-            &HashMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             &HashMap::new(),
             &alpha_states,
             &gradients,
@@ -2205,8 +2216,8 @@ mod tests {
         let content = String::from_utf8(build_page_content(
             0,
             &page,
-            &HashMap::new(),
-            &HashMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             &image_map,
             &alpha_states,
             &gradients,
@@ -2289,8 +2300,8 @@ mod tests {
             },
         ];
         let page = page_with(elements);
-        let prepared_fonts = HashMap::from([(font_id, prepared)]);
-        let font_refs = HashMap::from([(
+        let prepared_fonts = BTreeMap::from([(font_id, prepared)]);
+        let font_refs = BTreeMap::from([(
             font_id,
             (
                 Ref::new(1),

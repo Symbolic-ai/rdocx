@@ -195,6 +195,35 @@ pub fn paginate(
     )
 }
 
+/// Where a pass placed the wrapping drawings whose vertical anchor is their own
+/// paragraph, keyed by block index and the drawing's index within that block.
+///
+/// The key is stable across passes because both passes walk the same block list
+/// in the same order.
+type ResolvedWraps = HashMap<(usize, usize), (usize, PlacedWrap)>;
+
+/// Whether any block anchors a wrapping drawing to its own paragraph or line.
+///
+/// A document without one paginates in a single pass, which is every sample and
+/// every corpus document today.
+fn has_paragraph_relative_wrap(blocks: &[LayoutBlock]) -> bool {
+    blocks.iter().any(|block| {
+        let LayoutBlock::Paragraph(para) = block else {
+            return false;
+        };
+        para.anchored.iter().any(is_paragraph_relative_wrap)
+    })
+}
+
+/// The filter both the look-ahead and the two-pass predicate agree on.
+fn is_paragraph_relative_wrap(anchored: &AnchoredDrawing) -> bool {
+    anchored.wrap != WrapType::None
+        && matches!(
+            anchored.rel_v,
+            ST_RelativeFromV::Paragraph | ST_RelativeFromV::Line
+        )
+}
+
 fn paginate_with_media(
     blocks: &[LayoutBlock],
     geometry: PageGeometry,
@@ -204,7 +233,68 @@ fn paginate_with_media(
     media: &HashMap<MediaId, ImageData>,
     notes: &NoteRegistry,
 ) -> (Vec<PageFrame>, Vec<OutlineEntry>) {
-    let mut pager = Pager::new(geometry, header_footer, title_pg, media, notes, _fm);
+    let context = PassContext {
+        geometry,
+        header_footer,
+        title_pg,
+        fm: _fm,
+        media,
+        notes,
+    };
+    let first = paginate_pass(blocks, &context, &ResolvedWraps::new());
+
+    // A paragraph-relative drawing has no vertical position until its own
+    // paragraph is placed, so the first pass cannot offer one to the text above
+    // it. The second pass can, because the first recorded where each landed.
+    //
+    // Two passes, not a fixed point. The second pass reflows earlier text, which
+    // can move the drawing's own paragraph, so the rect it offered may be
+    // slightly stale. Iterating is not guaranteed to terminate: growing a
+    // paragraph can push a drawing to the next page, which shrinks the
+    // paragraph, which pulls it back.
+    if !has_paragraph_relative_wrap(blocks) {
+        return (first.pages, first.outlines);
+    }
+
+    let second = paginate_pass(blocks, &context, &first.resolved);
+    (second.pages, second.outlines)
+}
+
+/// One pagination pass, and what it learned about paragraph-relative wraps.
+struct PassResult {
+    pages: Vec<PageFrame>,
+    outlines: Vec<OutlineEntry>,
+    resolved: ResolvedWraps,
+}
+
+/// Everything a pass needs that is the same for both passes.
+///
+/// Built once and borrowed twice, so the eight-value argument list appears in
+/// one place rather than at each call.
+struct PassContext<'a> {
+    geometry: PageGeometry,
+    header_footer: Option<&'a HeaderFooterContent>,
+    title_pg: bool,
+    fm: &'a FontManager,
+    media: &'a HashMap<MediaId, ImageData>,
+    notes: &'a NoteRegistry,
+}
+
+fn paginate_pass(
+    blocks: &[LayoutBlock],
+    context: &PassContext,
+    resolved_in: &ResolvedWraps,
+) -> PassResult {
+    let geometry = context.geometry;
+    let mut pager = Pager::new(
+        geometry,
+        context.header_footer,
+        context.title_pg,
+        context.media,
+        context.notes,
+        context.fm,
+        resolved_in,
+    );
 
     for (block_idx, block) in blocks.iter().enumerate() {
         // Check for page break before
@@ -271,7 +361,13 @@ fn paginate_with_media(
         }
     }
 
-    pager.flush()
+    let resolved = std::mem::take(&mut pager.resolved_out);
+    let (pages, outlines) = pager.flush();
+    PassResult {
+        pages,
+        outlines,
+        resolved,
+    }
 }
 
 /// Helper struct to track page state during pagination.
@@ -315,6 +411,12 @@ struct Pager<'a> {
     /// would let it eat into the height that was reserved, which is enough to
     /// push a note off the page its own reference sits on.
     ink_bottom: f64,
+    /// Where the previous pass placed each paragraph-relative wrapping drawing.
+    /// Empty on the first pass, which is what makes that pass identical to a
+    /// single-pass run.
+    resolved_in: &'a ResolvedWraps,
+    /// Where this pass is placing them, for the pass that follows.
+    resolved_out: ResolvedWraps,
 }
 
 impl<'a> Pager<'a> {
@@ -325,6 +427,7 @@ impl<'a> Pager<'a> {
         media: &'a HashMap<MediaId, ImageData>,
         notes: &'a NoteRegistry,
         fm: &'a FontManager,
+        resolved_in: &'a ResolvedWraps,
     ) -> Self {
         Pager {
             pages: Vec::new(),
@@ -346,6 +449,8 @@ impl<'a> Pager<'a> {
             fm,
             page_wraps: Vec::new(),
             ink_bottom: 0.0,
+            resolved_in,
+            resolved_out: ResolvedWraps::new(),
         }
     }
 
@@ -363,11 +468,19 @@ impl<'a> Pager<'a> {
         }
         let carried_height: f64 = carried
             .iter()
-            .filter_map(|(id, first)| self.notes.get(*id).map(|note| note.height_from(*first)))
+            .filter_map(|(id, first)| {
+                self.notes
+                    .get(*id, self.geometry.content_width())
+                    .map(|note| note.height_from(*first))
+            })
             .sum();
         let fresh_height: f64 = fresh
             .iter()
-            .filter_map(|id| self.notes.get(*id).map(NoteLayout::height))
+            .filter_map(|id| {
+                self.notes
+                    .get(*id, self.geometry.content_width())
+                    .map(NoteLayout::height)
+            })
             .sum();
         NOTE_SEPARATOR_OFFSET + carried_height + fresh_height
     }
@@ -393,7 +506,7 @@ impl<'a> Pager<'a> {
         let mut fresh = self.page_note_ids.clone();
         for line in lines {
             for id in page_foot_notes_in_line(line) {
-                if self.notes.get(id).is_some()
+                if self.notes.get(id, self.geometry.content_width()).is_some()
                     && !fresh.contains(&id)
                     && !self.pending_notes.iter().any(|(pending, _)| *pending == id)
                 {
@@ -411,7 +524,7 @@ impl<'a> Pager<'a> {
     fn claim_notes(&mut self, lines: &[LayoutLine]) {
         for id in lines.iter().flat_map(page_foot_notes_in_line) {
             {
-                if self.notes.get(id).is_some()
+                if self.notes.get(id, self.geometry.content_width()).is_some()
                     && !self.page_note_ids.contains(&id)
                     && !self.pending_notes.iter().any(|(pending, _)| *pending == id)
                 {
@@ -435,7 +548,7 @@ impl<'a> Pager<'a> {
 
         for (index, line) in lines.iter().enumerate() {
             for id in page_foot_notes_in_line(line) {
-                if self.notes.get(id).is_some()
+                if self.notes.get(id, self.geometry.content_width()).is_some()
                     && !fresh.contains(&id)
                     && !self.pending_notes.iter().any(|(pending, _)| *pending == id)
                 {
@@ -502,21 +615,24 @@ impl<'a> Pager<'a> {
             .collect()
     }
 
-    /// Wrapping drawings anchored to blocks after `block_idx` whose position
-    /// does not depend on where their own paragraph lands.
+    /// Wrapping drawings anchored to blocks after `block_idx`, positioned well
+    /// enough to flow this block's text around them.
     ///
     /// A drawing anchored to a later paragraph still pushes earlier text aside,
     /// and Word documents do this routinely: the arrow beside a paragraph is
-    /// often anchored to the paragraph after it. Looking ahead is only sound
-    /// when the drawing's vertical frame is the page or a margin, because then
-    /// its position is known without paginating the block that owns it. A
-    /// paragraph-relative anchor genuinely needs its own paragraph placed
-    /// first, so those are left to the pass that places them.
+    /// often anchored to the paragraph after it. Where its position comes from
+    /// depends on the frame it is measured against.
+    ///
+    /// A drawing framed by the page or a margin is positioned here, because
+    /// that needs nothing from the block that owns it. A drawing framed by its
+    /// own paragraph has no position until that paragraph is placed, so the
+    /// first pass offers nothing for it and the second offers what the first
+    /// recorded, for the drawings the first put on the page being built now.
     fn lookahead_wraps(&self, block_idx: usize, blocks: &[LayoutBlock]) -> Vec<PlacedWrap> {
         let mut out = Vec::new();
         let mut height = self.cursor_y;
 
-        for block in blocks.iter().skip(block_idx + 1) {
+        for (offset, block) in blocks.iter().enumerate().skip(block_idx + 1) {
             if block.page_break_before() || height > self.content_height {
                 break;
             }
@@ -525,14 +641,21 @@ impl<'a> Pager<'a> {
             let LayoutBlock::Paragraph(para) = block else {
                 continue;
             };
-            let absolute = para.anchored.iter().filter(|a| {
-                a.wrap != WrapType::None
-                    && !matches!(
-                        a.rel_v,
-                        ST_RelativeFromV::Paragraph | ST_RelativeFromV::Line
-                    )
-            });
-            for a in absolute {
+            for (anchor_idx, a) in para.anchored.iter().enumerate() {
+                if a.wrap == WrapType::None {
+                    continue;
+                }
+                if is_paragraph_relative_wrap(a) {
+                    // Resolved by the previous pass, or not at all. The page
+                    // check is what stops a drawing that landed overleaf from
+                    // pushing this page's text aside.
+                    if let Some((page, placed)) = self.resolved_in.get(&(offset, anchor_idx))
+                        && *page == self.page_number
+                    {
+                        out.push(*placed);
+                    }
+                    continue;
+                }
                 out.extend(self.wrap_rects_for(std::slice::from_ref(a), 0.0, para.indent_left));
             }
         }
@@ -542,8 +665,17 @@ impl<'a> Pager<'a> {
 
     /// Place the drawings anchored to a paragraph whose top sits at `para_top`,
     /// measured from the top of the content area.
-    fn place_anchored(&mut self, anchored: &[AnchoredDrawing], para_top: f64, indent_left: f64) {
-        for a in anchored {
+    ///
+    /// `block_idx` identifies the owning block, so a paragraph-relative
+    /// wrapping drawing can be recorded for the pass that follows this one.
+    fn place_anchored(
+        &mut self,
+        anchored: &[AnchoredDrawing],
+        para_top: f64,
+        indent_left: f64,
+        block_idx: usize,
+    ) {
+        for (anchor_idx, a) in anchored.iter().enumerate() {
             let x = resolve_anchor_h(
                 a.rel_h,
                 a.off_h,
@@ -568,14 +700,19 @@ impl<'a> Pager<'a> {
             };
 
             if a.wrap != WrapType::None {
-                self.page_wraps.push(PlacedWrap {
+                let placed = PlacedWrap {
                     rect,
                     wrap: a.wrap,
                     dist_top: a.dist_top,
                     dist_bottom: a.dist_bottom,
                     dist_left: a.dist_left,
                     dist_right: a.dist_right,
-                });
+                };
+                if is_paragraph_relative_wrap(a) {
+                    self.resolved_out
+                        .insert((block_idx, anchor_idx), (self.page_number, placed));
+                }
+                self.page_wraps.push(placed);
             }
 
             let mut produced: Vec<PositionedElement> = Vec::new();
@@ -655,7 +792,7 @@ impl<'a> Pager<'a> {
         let mut carried: Vec<(NoteRef, usize)> = Vec::new();
 
         for (id, first, continued) in queue {
-            let Some(note) = self.notes.get(id) else {
+            let Some(note) = self.notes.get(id, self.geometry.content_width()) else {
                 continue;
             };
             if !carried.is_empty() {
@@ -691,7 +828,9 @@ impl<'a> Pager<'a> {
         let total: f64 = placed
             .iter()
             .filter_map(|(id, first, count, _)| {
-                self.notes.get(*id).map(|n| n.height_of(*first, *count))
+                self.notes
+                    .get(*id, self.geometry.content_width())
+                    .map(|n| n.height_of(*first, *count))
             })
             .sum();
 
@@ -724,7 +863,7 @@ impl<'a> Pager<'a> {
 
         let mut cursor_y = separator_y + NOTE_SEPARATOR_OFFSET;
         for (id, first, count, continued) in placed {
-            let Some(note) = self.notes.get(id) else {
+            let Some(note) = self.notes.get(id, self.geometry.content_width()) else {
                 continue;
             };
             cursor_y += draw_note(
@@ -918,7 +1057,7 @@ pub fn append_endnote_pages(
             if let PositionedElement::Text(run) = element
                 && let Some(note) = run.note
                 && note.stream == NoteStream::Endnote
-                && notes.get(note).is_some()
+                && notes.get(note, geometry.content_width()).is_some()
                 && !ordered.contains(&note)
             {
                 ordered.push(note);
@@ -946,7 +1085,7 @@ pub fn append_endnote_pages(
     };
 
     for note_ref in ordered {
-        let Some(note) = notes.get(note_ref) else {
+        let Some(note) = notes.get(note_ref, geometry.content_width()) else {
             continue;
         };
 
@@ -1305,12 +1444,12 @@ fn paginate_paragraph(
         if para.widow_control && lines_remaining < 2 && lines_that_fit >= 3 {
             // Would leave orphan — move one line to next page
             let split_at = lines_that_fit - 1;
-            render_para_split(para, split_at, space_before, pager);
+            render_para_split(para, split_at, space_before, pager, block_idx);
             return;
         }
 
         if lines_that_fit > 0 {
-            render_para_split(para, lines_that_fit, space_before, pager);
+            render_para_split(para, lines_that_fit, space_before, pager, block_idx);
             return;
         }
 
@@ -1327,7 +1466,7 @@ fn paginate_paragraph(
         let lines_that_fit =
             pager.count_lines_that_fit_with_notes(&para.lines, para.content_offset_top);
         if lines_that_fit > 0 && lines_that_fit < para.lines.len() {
-            render_para_split(para, lines_that_fit, 0.0, pager);
+            render_para_split(para, lines_that_fit, 0.0, pager, block_idx);
             return;
         }
     }
@@ -1384,7 +1523,7 @@ fn paginate_paragraph(
 
     // Anchored drawings resolve against the paragraph's position, so place
     // them now that the page and the cursor are settled.
-    pager.place_anchored(&para.anchored, pager.cursor_y, para.indent_left);
+    pager.place_anchored(&para.anchored, pager.cursor_y, para.indent_left, block_idx);
 
     render_paragraph_lines(
         &para.lines,
@@ -1403,11 +1542,17 @@ fn paginate_paragraph(
 
 /// Split a paragraph at the given line index, rendering first part on current page
 /// and continuing the rest on a new page (recursively if needed).
-fn render_para_split(para: &ParagraphBlock, split_at: usize, space_before: f64, pager: &mut Pager) {
+fn render_para_split(
+    para: &ParagraphBlock,
+    split_at: usize,
+    space_before: f64,
+    pager: &mut Pager,
+    block_idx: usize,
+) {
     // Render lines before split on current page
     pager.cursor_y += space_before;
     // A split paragraph anchors its drawings to where it starts.
-    pager.place_anchored(&para.anchored, pager.cursor_y, para.indent_left);
+    pager.place_anchored(&para.anchored, pager.cursor_y, para.indent_left, block_idx);
     render_paragraph_lines(
         &para.lines[..split_at],
         para,
@@ -1457,7 +1602,7 @@ fn render_para_split(para: &ParagraphBlock, split_at: usize, space_before: f64, 
                 reflow: None,
                 content_offset_top: 0.0,
             };
-            render_para_split(&temp_para, lines_that_fit, 0.0, pager);
+            render_para_split(&temp_para, lines_that_fit, 0.0, pager, block_idx);
             return;
         }
     }
@@ -3023,5 +3168,163 @@ mod tests {
             resolve_anchor_v(ST_RelativeFromV::Paragraph, 5.0, None, 50.0, &g, 300.0),
             g.margin_top + 300.0 + 5.0
         );
+    }
+
+    // F-X019, paragraph-relative drawings in later blocks should wrap.
+
+    fn wrapping_drawing(rel_v: ST_RelativeFromV) -> AnchoredDrawing {
+        AnchoredDrawing {
+            behind_doc: false,
+            rel_h: ST_RelativeFromH::Margin,
+            off_h: 0.0,
+            rel_v,
+            off_v: 0.0,
+            width: 100.0,
+            height: 50.0,
+            wrap: WrapType::Square,
+            dist_top: 0.0,
+            dist_bottom: 0.0,
+            dist_left: 0.0,
+            dist_right: 0.0,
+            align_h: None,
+            align_v: None,
+            content: AnchoredContent::Image {
+                media_id: MediaId(1),
+            },
+        }
+    }
+
+    fn para_anchoring(rel_v: ST_RelativeFromV) -> LayoutBlock {
+        let mut para = make_para(1, 14.0);
+        para.anchored = vec![wrapping_drawing(rel_v)];
+        LayoutBlock::Paragraph(para)
+    }
+
+    #[test]
+    fn the_two_pass_predicate_matches_only_paragraph_relative_wraps() {
+        assert!(!has_paragraph_relative_wrap(&[LayoutBlock::Paragraph(
+            make_para(3, 14.0)
+        )]));
+        assert!(!has_paragraph_relative_wrap(&[para_anchoring(
+            ST_RelativeFromV::Page
+        )]));
+        assert!(has_paragraph_relative_wrap(&[para_anchoring(
+            ST_RelativeFromV::Paragraph
+        )]));
+        assert!(has_paragraph_relative_wrap(&[para_anchoring(
+            ST_RelativeFromV::Line
+        )]));
+
+        // A paragraph-relative drawing that does not wrap pushes nothing
+        // aside, so it must not buy the document a second pass.
+        let mut still = wrapping_drawing(ST_RelativeFromV::Paragraph);
+        still.wrap = WrapType::None;
+        let mut para = make_para(1, 14.0);
+        para.anchored = vec![still];
+        assert!(!has_paragraph_relative_wrap(&[LayoutBlock::Paragraph(
+            para
+        )]));
+    }
+
+    #[test]
+    fn pass_one_ignores_paragraph_relative_anchors() {
+        let fm = FontManager::new();
+        let media = HashMap::new();
+        let notes = NoteRegistry::default();
+        let empty = ResolvedWraps::new();
+        let blocks = vec![
+            LayoutBlock::Paragraph(make_para(3, 14.0)),
+            para_anchoring(ST_RelativeFromV::Paragraph),
+            para_anchoring(ST_RelativeFromV::Page),
+        ];
+        let pager = Pager::new(
+            PageGeometry::default(),
+            None,
+            false,
+            &media,
+            &notes,
+            &fm,
+            &empty,
+        );
+
+        // With nothing resolved, the look-ahead offers the page-relative
+        // drawing and nothing else, which is what it did before this story.
+        assert_eq!(pager.lookahead_wraps(0, &blocks).len(), 1);
+    }
+
+    #[test]
+    fn the_lookahead_offers_a_resolved_rect_only_on_its_own_page() {
+        let fm = FontManager::new();
+        let media = HashMap::new();
+        let notes = NoteRegistry::default();
+        let blocks = vec![
+            LayoutBlock::Paragraph(make_para(3, 14.0)),
+            para_anchoring(ST_RelativeFromV::Paragraph),
+        ];
+        let placed = PlacedWrap {
+            rect: Rect {
+                x: 100.0,
+                y: 200.0,
+                width: 100.0,
+                height: 50.0,
+            },
+            wrap: WrapType::Square,
+            dist_top: 0.0,
+            dist_bottom: 0.0,
+            dist_left: 0.0,
+            dist_right: 0.0,
+        };
+
+        for (recorded_page, expected) in [(1usize, 1usize), (2, 0)] {
+            let mut resolved = ResolvedWraps::new();
+            resolved.insert((1, 0), (recorded_page, placed));
+            let pager = Pager::new(
+                PageGeometry::default(),
+                None,
+                false,
+                &media,
+                &notes,
+                &fm,
+                &resolved,
+            );
+
+            // The pager is building page one. A drawing the previous pass put
+            // on page two must not push page one's text aside.
+            assert_eq!(
+                pager.lookahead_wraps(0, &blocks).len(),
+                expected,
+                "recorded on page {recorded_page}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_placed_paragraph_relative_wrap_is_recorded_for_the_next_pass() {
+        let fm = FontManager::new();
+        let media = HashMap::new();
+        let notes = NoteRegistry::default();
+        let empty = ResolvedWraps::new();
+        let blocks = vec![
+            LayoutBlock::Paragraph(make_para(3, 14.0)),
+            para_anchoring(ST_RelativeFromV::Paragraph),
+            para_anchoring(ST_RelativeFromV::Page),
+        ];
+
+        let context = PassContext {
+            geometry: PageGeometry::default(),
+            header_footer: None,
+            title_pg: false,
+            fm: &fm,
+            media: &media,
+            notes: &notes,
+        };
+        let pass = paginate_pass(&blocks, &context, &empty);
+
+        // Only the paragraph-relative one is recorded. The page-relative one
+        // needs no second pass to be known.
+        assert_eq!(pass.resolved.len(), 1);
+        let (page, placed) = pass.resolved.get(&(1, 0)).expect("block one, anchor zero");
+        assert_eq!(*page, 1);
+        assert_eq!(placed.wrap, WrapType::Square);
     }
 }

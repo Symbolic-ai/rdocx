@@ -348,6 +348,44 @@ fn saving_is_reproducible() {
     assert_eq!(first, second);
 }
 
+/// Two documents built the same way must produce identical deterministic PDFs.
+///
+/// The PDF writer keyed its prepared fonts, its font references and its glyph
+/// to Unicode table on hashed maps, and iterated all three to write the file.
+/// Iteration order differs between map instances, so the same document written
+/// twice differed in its `/Font` dictionary order, its font object order and
+/// its ToUnicode CMap line order. Nothing about the rendered page changed and
+/// nothing failed, which is why it survived until the hash harness went looking.
+///
+/// Two separately built documents are the point. One document written twice
+/// reuses the same map instances and cannot see this.
+#[test]
+fn two_identical_documents_produce_identical_deterministic_pdfs() {
+    let build = || {
+        let mut doc = Document::new();
+        doc.add_paragraph("A heading in the document");
+        let mut styled = doc.add_paragraph("");
+        styled.add_run("bold text").bold(true);
+        styled.add_run(" and italic text").italic(true);
+        styled.add_run(" and plain text");
+        doc.add_paragraph("A closing paragraph with enough words to shape.");
+        doc
+    };
+
+    let first = build()
+        .to_pdf_deterministic()
+        .expect("deterministic PDF rendering should succeed");
+    let second = build()
+        .to_pdf_deterministic()
+        .expect("deterministic PDF rendering should succeed");
+
+    assert!(first.starts_with(b"%PDF-"));
+    assert_eq!(
+        first, second,
+        "the same document produced two different PDFs"
+    );
+}
+
 /// Batching must produce the same result as replacing one field at a time.
 #[test]
 fn batch_replacement_matches_sequential() {

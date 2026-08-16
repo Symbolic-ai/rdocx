@@ -38,6 +38,19 @@ the workspace, which is what `/close-sprint` requires.
    drift means Codex and Claude are following different rules while believing
    they agree. Regenerate with the same script and commit the result.
 
+   Then `python3 -m unittest scripts.test_sprint_workflow`. This holds the
+   release family preflights that `.github/workflows/publish.yml` invokes by
+   name as the publication gate, and the assertions over the pinned CI
+   toolchains. A failure means a version carrier moved without its assertion
+   moving with it. The fix is the carrier or the assertion, never deleting the
+   test.
+
+   Without this step the preflights run for the first time on a tag, after the
+   sprint is closed. S42 is the demonstration: F-X022 moved every version
+   carrier under `crates/`, passed the entire local gate, and left the
+   incubating preflight and the `ci.yml` WASM literal asserting the old
+   version. The whole module takes about four seconds.
+
 7. **The no-default-features path.**
    `cargo test -p rdocx-layout --no-default-features`. This is the only thing
    that exercises bundled fonts being off. Change the package name to

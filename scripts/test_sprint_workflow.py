@@ -4023,6 +4023,66 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertIn("/release", close_sprint)
         self.assertIn("deferred to /release", complete_feature)
 
+    def assert_verify_runs_the_release_regressions(self, verify: str) -> None:
+        """The local gate must run the module holding the release preflights.
+
+        Extracted so the mutation test can assert this fails when the step is
+        removed. A gate that is only wired by prose nobody checks is the defect
+        F-X025 exists to close.
+        """
+        self.assertIn("python3 -m unittest scripts.test_sprint_workflow", verify)
+
+    def test_verify_runs_the_release_regressions(self) -> None:
+        # Without this, the preflights that publish.yml invokes by name run for
+        # the first time on a tag, after the sprint is closed. S42 is the
+        # demonstration: F-X022 moved every version carrier under crates/,
+        # passed the whole local gate, and left the incubating preflight and the
+        # ci.yml WASM literal asserting the old version.
+        verify = (workflow.REPO / ".claude/commands/verify.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assert_verify_runs_the_release_regressions(verify)
+
+        removed = verify.replace(
+            "python3 -m unittest scripts.test_sprint_workflow", "", 1
+        )
+        self.assertNotEqual(removed, verify)
+        with self.assertRaises(AssertionError):
+            self.assert_verify_runs_the_release_regressions(removed)
+
+    def test_every_test_publish_yml_names_resolves_to_a_real_test(self) -> None:
+        # publish.yml invokes preflights by their full dotted path. A rename
+        # breaks publication on a tag, which is the worst moment to find out.
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        module = "scripts.test_sprint_workflow."
+        named = {
+            token.removeprefix(module)
+            for token in publish.split()
+            if token.startswith(module)
+        }
+
+        self.assertTrue(named, "publish.yml names no test in this module")
+        for path in sorted(named):
+            class_name, _, method_name = path.partition(".")
+            with self.subTest(path):
+                # A dotted path publish.yml can invoke has to resolve at this
+                # module's top level, which is the only place `python3 -m
+                # unittest scripts.test_sprint_workflow.<Class>.<method>` looks.
+                cls = globals().get(class_name)
+                self.assertIsNotNone(
+                    cls,
+                    f"publish.yml names {path}, and this module defines no "
+                    f"top-level {class_name}",
+                )
+                self.assertTrue(
+                    callable(getattr(cls, method_name, None)),
+                    f"publish.yml names {path}, and {class_name} has no "
+                    f"{method_name}",
+                )
+
     def test_completed_shared_and_powerpoint_crates_are_publication_candidates(
         self,
     ) -> None:

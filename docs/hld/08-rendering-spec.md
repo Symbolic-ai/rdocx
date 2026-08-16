@@ -193,6 +193,19 @@ contains four stroke-antialias pixel changes across `invoice` and `quote`. The
 other five samples remain exact, and normal check mode requires exact equality
 against that reviewed baseline.
 
+**The writer is reproducible.** One layout produces one byte sequence, every
+run and every process. It carries no creation date and no file identifier, and
+every container it iterates to produce output is ordered rather than hashed:
+the prepared fonts and their references by `FontId`, the glyph to Unicode table
+by glyph id, and a page's image XObject names by element index. This is stated
+rather than assumed because it was not true until S43. Three hashed maps were
+iterated to write the file, so the same document wrote a different `/Font`
+dictionary order, font object order and ToUnicode CMap line order on every run,
+with no visible difference and no failing test.
+
+Two writes of one document cannot detect that, since they reuse the same map
+instances. The regression builds two documents and compares their bytes.
+
 `Path` is `m`/`l`/`c`/`h` followed by `f`, `f*`, `S`, `B` or `B*` by supported
 fill, stroke and rule. Stroke state uses `w`, `J`, `j`, `M` and `d`. `Group` is
 `q`, `cm`, optional clip via `W n`, optional `/GS gs` for opacity, recurse,

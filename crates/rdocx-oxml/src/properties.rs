@@ -151,7 +151,7 @@ impl CT_PPr {
                         ppr.style_id = get_word_val_attr(e, &prefixes)?;
                     } else if is_word_element(name.as_ref(), b"jc", &prefixes) {
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
-                            ppr.jc = Some(ST_Jc::from_str(&val)?);
+                            ppr.jc = ST_Jc::from_str(&val).ok();
                         }
                     } else if is_word_element(name.as_ref(), b"spacing", &prefixes) {
                         for attr in e.attributes() {
@@ -601,7 +601,7 @@ impl CT_RPr {
                         rpr.italic_cs = Some(parse_toggle(e)?);
                     } else if matches_local_name(name.as_ref(), b"u") {
                         if let Some(val) = get_val_attr(e)? {
-                            rpr.underline = Some(ST_Underline::from_str(&val)?);
+                            rpr.underline = ST_Underline::from_str(&val).ok();
                         } else {
                             rpr.underline = Some(ST_Underline::Single);
                         }
@@ -630,7 +630,7 @@ impl CT_RPr {
                         }
                     } else if matches_local_name(name.as_ref(), b"highlight") {
                         if let Some(val) = get_val_attr(e)? {
-                            rpr.highlight = Some(ST_HighlightColor::from_str(&val)?);
+                            rpr.highlight = ST_HighlightColor::from_str(&val).ok();
                         }
                     } else if matches_local_name(name.as_ref(), b"caps") {
                         rpr.caps = Some(parse_toggle(e)?);

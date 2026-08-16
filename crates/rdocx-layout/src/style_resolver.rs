@@ -39,6 +39,10 @@ pub struct ResolvedNumbering {
 }
 
 /// Tracks numbering counters across paragraphs.
+///
+/// `Clone` exists so a note laid out at more than one section width consumes
+/// its list numbers once rather than once per width.
+#[derive(Clone)]
 pub struct NumberingState {
     /// (numId, ilvl) → current count
     counters: HashMap<(u32, u32), u32>,
