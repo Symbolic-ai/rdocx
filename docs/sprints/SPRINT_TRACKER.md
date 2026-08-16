@@ -54,6 +54,7 @@ defended.
 | S37 | M13, X | 1 | 1 | 0 | 1 | 1 | Published and verified the complete 14-package rpptx 0.1.3 family through the reviewed release workflow. The M13 hosted wheel gate remains satisfied, all 28 hashes remained unchanged, and no npm package was published |
 | S38 | X | 2 | 2 | 0 | 5 | 2 | Integrated PR 25 with Jon Stokes credited, added compile-checked documentation for every stable crate, and published the seven-package stable rdocx 0.5.0 family. All 28 hashes remained unchanged, and no incubating, WASM, Python, or npm package was published |
 | S39 | X | 3 | 3 | 0 | 6 | 3 | Added compile-checked README coverage for all 26 workspace crates, published the seven-package stable rdocx 0.6.0 family, and published the complete 14-package rpptx 0.2.0 family. Every crates.io README rendered, all 28 hashes remained unchanged, and no WASM, Python, npm, or PyPI package was published |
+| S40 | X | 1 | 1 | 0 | 2 | 1 | Restored a green hosted CI baseline by pinning the Poppler 26.01.0 rendering oracle, the Binaryen 125 identity, uv 0.10.2 and the LibreOffice viewer build behind one bounded installer. All 28 hashes remained unchanged, and no crate, release version, published package or rendering baseline changed |
 
 ## Completed features
 
