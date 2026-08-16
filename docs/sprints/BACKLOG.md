@@ -304,12 +304,12 @@ regenerated, never hand-edited.
 | F-X014 | Kashida justification values               | S41 | S | done |
 | F-X015 | Anchored drawing wrap and alignment model  | S41 | M | done |
 | F-X016 | Floating drawing placement and text wrapping | S41 | L | done |
-| F-X017 | Notes broken to their own section's width   | -   | S | pending |
-| F-X018 | Unknown enumerated values must not fail open | -  | M | pending |
-| F-X019 | Paragraph-relative later drawings should wrap | -  | M | pending |
+| F-X017 | Notes broken to their own section's width   | S43 | S | pending |
+| F-X018 | Unknown enumerated values must not fail open | S43 | M | pending |
+| F-X019 | Paragraph-relative later drawings should wrap | S43 | M | pending |
 | F-X020 | Refresh the dependency lockfile             | S42 | S | done |
-| F-X021 | Hash harness should cover PDF output       | -   | M | pending |
-| F-X025 | /verify must run the release regressions   | -   | S | pending |
+| F-X021 | Hash harness should cover PDF output       | S43 | M | pending |
+| F-X025 | /verify must run the release regressions   | S43 | S | pending |
 | F-X024 | Move the theme adapter into rdocx-oxml     | S42 | M | done |
 | F-X022 | Tag rpptx-v0.3.0                           | S42 | S | done |
 | F-X023 | Tag v0.7.0                                 | S42 | S | done |

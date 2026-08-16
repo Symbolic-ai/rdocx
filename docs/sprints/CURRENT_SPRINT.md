@@ -1,81 +1,62 @@
-# Current Sprint, S42
+# Current Sprint, S43
 
 **Milestone**: X Cross-cutting.
 
-**Goal**: refresh the dependency lockfile and measure what it does to rendered
-output, then carry S41's work to crates.io. Both publication trains move a minor
-version, because S41 broke both public APIs rather than merely extending them.
+**Goal**: clear the follow-ups S41 and S42 filed. Three are defects a real
+document can reach, and two close gaps in the gates that let those defects
+survive as long as they did.
 
 ## Spec references
 
-- `docs/hld/12-testing-strategy.md`, "The hash harness", for the rule that an
-  intentional delta lands as its own labelled commit with the expected change
-  stated. That rule is what this sprint turns on.
-- `docs/hld/15-build-and-toolchain.md`, for the pinned toolchain the refresh
-  must keep working against, and for the release job contracts the two
-  publication stories execute.
-- `docs/hld/10-bindings-spec.md`, for the Python and WASM packages that inherit
-  a version without gaining publication authority.
-- `docs/hld/14-development-backlog.md`, for the F-X020 scope and its gate.
+- `docs/hld/03-architecture.md`, for the note placement and reflow the two
+  layout follow-ups extend.
+- `docs/hld/12-testing-strategy.md`, "The hash harness", which F-X021 changes
+  the shape of, and "Test taxonomy" for the categories each story picks from.
+- `docs/hld/15-build-and-toolchain.md`, for the publication gate F-X025 brings
+  under `/verify`.
+- `docs/hld/14-development-backlog.md`, for the five story definitions.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X020 | Refresh the dependency lockfile | S | done | - |
-| F-X024 | Move the theme adapter into rdocx-oxml | M | done | - |
-| F-X022 | Tag rpptx-v0.3.0 | S | done | - |
-| F-X023 | Tag v0.7.0 | S | done | - |
+| F-X018 | Unknown enumerated values must not fail a document open | M | pending | - |
+| F-X017 | Notes broken to their own section's width | S | pending | - |
+| F-X019 | Paragraph-relative later drawings should wrap | M | pending | - |
+| F-X021 | The hash harness should cover PDF output | M | pending | - |
+| F-X025 | /verify must run the release regressions | S | pending | - |
 
 ## Sequencing note
 
-Rows are listed in dependency order.
+Rows are listed in the order they should land, not by F-ID.
 
-F-X020 ran first and alone, so that a refresh which moved a rendering baseline
-could not compete with a release to explain the same delta. It did not move one,
-though it did move every sample PDF, which is recorded in its AS_BUILT entry and
-filed as F-X021.
+F-X018 leads because it is the only story here where a document fails to open
+rather than rendering imperfectly. F-X014 fixed three kashida values because a
+real contribution reached them, and eight more parsers have the same shape.
 
-F-X024 comes before either release, because without it neither release is
-possible. Scoping F-X022 and F-X023 exposed a cycle between the trains:
-`rdocx-layout` depends on `oxml-layout`, and `oxml-drawing` depends on
-`rdocx-oxml` through the one documented architecture exception. Publishing a
-train requires the other train's dependency to already resolve on crates.io,
-and with both carrying breaking changes neither could go first. Stable first
-will not compile, since `rdocx-layout` needs `oxml-layout` 0.3.0. Incubating
-first would ship an adapter bound to the old `rdocx-oxml`, breaking the one
-cross-family integration point. F-X024 removes the edge instead of choosing a
-bad order.
+F-X017 and F-X019 are the two limitations S41 recorded rather than hid. Both are
+narrow, both are reachable by a real document, and both were written up with the
+fix already described.
 
-F-X022 then precedes F-X023, and after F-X024 that order is permanent rather
-than incidental: the dependency runs one way, so incubating always publishes
-first.
-
-Each release story ends at a boundary this sprint cannot cross on its own.
-`/release` is the only command permitted to create a `v*` or `rpptx-v*` tag or
-start publication, and it requires separate immediate approval at the reviewed
-SHA. Preparation lands in the sprint. Publication does not happen without that
-approval.
+F-X021 and F-X025 are the gates, and they land last on purpose. Neither blocks
+the three defect fixes, and putting a gate improvement ahead of work a user can
+actually hit would be optimising for the process rather than the product. They
+are in the sprint because this is the moment their absence is freshest: F-X021
+exists because a dependency refresh changed every sample PDF while the harness
+reported green, and F-X025 because a version bump passed the whole local gate
+while leaving the publication preflight stale.
 
 ## Definition of done for this sprint
 
-- Every semver-compatible update outstanding at the sprint's start is taken, or
-  the ones held back are named with a reason.
-- `cargo audit` reports zero vulnerabilities and `cargo deny check` passes,
-  with the `ttf-parser` unmaintained advisory still the single documented
-  exception.
-- The hash harness is either unchanged, or its delta names the dependency that
-  caused it and was reviewed before the baseline was re-recorded.
-- The pinned toolchain and MSRV still build the workspace.
-- No `oxml-*` package depends on any `rdocx-*` or `rpptx-*` package, and
-  `docs/hld/03-architecture.md` no longer documents an exception, because there
-  is none.
-- The fifteen incubating packages read 0.3.0 and the eleven workspace-version
-  packages read 0.7.0, with every root pin, lock entry, README example, Python
-  project version and WASM literal agreeing.
-- The exact publication sets hold: fourteen incubating crates and seven stable
-  crates, with `rpptx-wasm`, the Python packages and the WASM packages gaining
-  no publication authority.
-- Nothing is tagged or published without the separate approval `/release`
-  requires. A sprint that ends prepared but unpublished is a complete sprint,
-  not a carried one.
+- A document carrying an unmodelled value for any of the nine enumerations
+  opens, keeps every sibling property, and renders the default for the
+  unmodelled one.
+- A note is broken to the width of the section that references it.
+- A wrapping drawing anchored to a later paragraph pushes earlier text aside
+  even when it is positioned relative to its own paragraph.
+- The harness records a stable fingerprint for PDF output, and a deliberate
+  change to the PDF writer moves it while leaving the PNG entries untouched.
+- `/verify --full` fails on a stale version literal in the release regressions
+  or the workflow files.
+- Every harness delta in the sprint is stated and justified in the commit that
+  causes it, including the deliberate re-record F-X021 requires.
