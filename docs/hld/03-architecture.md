@@ -39,12 +39,14 @@ crates/
 ## The dependency rule
 
 The graph is acyclic and layered. **Nothing in `oxml-*` may depend on
-`rdocx-*` or `rpptx-*`,** with exactly one documented exception below.
+`rdocx-*` or `rpptx-*`.** There is no exception, and
+`no_shared_crate_depends_on_a_format_crate` in `oxml-drawing` keeps it that
+way.
 
 ```
 oxml-core ──┬─→ oxml-drawing ──→ rpptx-oxml ──→ rpptx-layout ──→ rpptx-render
             │         │                                              │
-            │         └────────────────→ rdocx-oxml ──→ rdocx-layout │
+            │         ←────────────────── rdocx-oxml ──→ rdocx-layout │
             ├─→ oxml-opc                                    │        │
             ├─→ oxml-media                                  ↓        ↓
             └─→ oxml-layout ──→ oxml-pdf ←──────────── rdocx-pdf   rpptx
@@ -52,10 +54,17 @@ oxml-core ──┬─→ oxml-drawing ──→ rpptx-oxml ──→ rpptx-layo
                                                           rdocx   rpptx-cli
 ```
 
-**The one exception.** `rdocx_oxml::theme::Theme` becomes a thin adapter over
+**The theme adapter.** `rdocx_oxml::theme::Theme` is a thin adapter over
 `oxml_drawing::CT_OfficeStyleSheet` (`impl From<&CT_OfficeStyleSheet> for
 Theme`), so that `rdocx-layout`'s existing `LayoutInput.theme` field does not
-churn. The edge runs `oxml-drawing → rdocx-oxml`, never the reverse.
+churn. The impl lives in `rdocx-oxml`, which owns `Theme`, so the edge runs
+`rdocx-oxml → oxml-drawing` like every other cross-family edge.
+
+It used to sit in `oxml-drawing` and point the other way, as the one documented
+exception. That single edge made the two publication trains mutually dependent,
+because `rdocx-layout` already depends on `oxml-layout`. Once both trains
+carried breaking changes neither could publish first, so the adapter moved to
+the side that owns its target type.
 
 ## Why these seams
 

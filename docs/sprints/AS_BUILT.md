@@ -6178,3 +6178,214 @@ with the limitation in place, because they anchor the drawing to the paragraph
 it affects, which is the case the limitation covers. Real documents do not.
 Where a story is motivated by a specific document, that document belongs in the
 loop, not just the tests derived from it.
+
+### F-X020, Refresh the dependency lockfile
+
+**Sprint.** S42
+**Completed.** 2026-08-16
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Sixteen semver-compatible dependency updates taken with
+`cargo update`. `Cargo.lock` is the only product change: no manifest moved, so
+no crate gained or lost a dependency and no API surface changed. None of the
+sixteen was a security fix. `cargo audit` reports zero vulnerabilities across
+152 dependencies before and after, and `cargo deny check` passes all four
+sections, with `ttf-parser` RUSTSEC-2026-0192 remaining the single documented
+exception rather than something this story cleared.
+
+**Non-obvious choices.** The updates were taken together rather than
+individually, because the point was to measure their combined effect once while
+the isolation tooling was to hand, not to avoid measuring them.
+
+**Deviations from the design plan.** The plan listed `zlib-rs` among the crates
+with no path to rendered output. It does have one, through `flate2`, `png` and
+`tiny-skia`. The conclusion survived, since PDF stream compression uses
+`miniz_oxide` and that did not update, but the reasoning was wrong and is
+corrected here rather than edited out of the plan.
+
+**Spec sections touched.** None.
+
+**Tests.** No new test, deliberately: there is no new behaviour to pin, and a
+test asserting a version number would pin the lockfile rather than the
+behaviour. The gate is the existing instrument, the full workspace suite at 53
+binaries and zero failures, plus the 28-entry hash harness.
+
+**Hash harness.** Unchanged, 28 of 28, **and that is not the whole answer.**
+
+The refresh changed all seven sample PDFs. Every sample PNG stayed
+byte-identical, which is why the harness stayed flat: it records `page1.png` and
+three `word/*.xml` parts per sample and no PDF at all.
+
+The delta was traced as the plan required, by reverting the lockfile and
+applying suspects alone. `font-types 0.12.2 to 0.12.3` on its own moves all
+seven PDFs, reaching the text shaper through `read-fonts 0.41.0` and `harfrust`.
+It was then characterised with the repository's own pinned Poppler oracle before
+being accepted: extracted text identical in 7 of 7 samples under `pdftotext`,
+`pdfinfo` identical apart from the file size line, sizes moving by single-digit
+bytes, and every PNG byte-identical. A serialisation-level difference in numbers
+written to the content stream, with no semantic effect.
+
+No baseline was re-recorded, because no recorded baseline moved.
+
+**Notes for future sessions.** The durable finding is not the delta but that a
+gate reported green while a first-class output changed across every sample. The
+harness has no PDF coverage, so the `oxml-pdf` writer, its glyph positions,
+embedded font subsets and compressed streams, can drift with nothing watching.
+Filed as F-X021, which also has to decide what a stable PDF fingerprint is,
+since raw PDF bytes carry a creation date and object ordering that need not be
+reproducible. Until that lands, a dependency refresh should compare sample PDFs
+by hand the way this one did.
+
+### F-X024, Move the theme adapter into rdocx-oxml
+
+**Sprint.** S42
+**Completed.** 2026-08-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `impl From<&CT_OfficeStyleSheet> for Theme` moved from
+`oxml-drawing` to `rdocx-oxml`, which owns `Theme`. The orphan rule permits it,
+and the effect is that the dependency between the families now runs one way,
+from the format crate to the shared crate, like every other cross-family edge.
+`docs/hld/03-architecture.md` no longer documents an exception, because there is
+none, and `no_shared_crate_depends_on_a_format_crate` keeps it that way.
+
+**Why it was needed.** Scoping the two release stories exposed a cycle between
+the publication trains. `rdocx-layout` depends on `oxml-layout` and
+`oxml-drawing` depended on `rdocx-oxml`, and `publish.yml` publishes one train
+per tag. That works only when the train going first depends on an
+already-published version of the other, which S39 satisfied because only one
+train moved. S41 broke both APIs, so both had to bump, and neither could go
+first. Stable first will not compile, since `rdocx-layout` needs `oxml-layout`
+0.3.0. Incubating first would have shipped an adapter bound to `rdocx-oxml`
+0.6.0 while `rdocx-layout` 0.7.0 expected 0.7.0's `Theme`, putting two
+semver-incompatible copies of the Word model in one graph and breaking the one
+cross-family integration point.
+
+**Non-obvious choices.** Moving beat deleting. The adapter has no caller in the
+workspace today, so deleting it would have been the smaller diff and cost
+nothing immediately. It is the documented bridge for when PresentationML themes
+reach Word layout, and removing it would only have to be undone later on the
+other side. The accepted cost is that `rdocx-oxml` now pulls `oxml-drawing`, so
+a Word-only consumer compiles DrawingML.
+
+`OFFICE_DEFAULT_XML` became public in `oxml-drawing` so the moved regression can
+compare a projected `Theme` against one parsed from the same source. The
+alternative, a dev-dependency from `oxml-drawing` back on `rdocx-oxml`, would
+have rebuilt the edge the story exists to remove, since a dev-dependency still
+has to resolve at publish time.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "The dependency rule"
+and the adapter paragraph, plus the diagram edge. `CLAUDE.md`, the layout table.
+
+**Tests.** The gate is the conversion regression, which moved with the impl and
+still compares the projection against `Theme::from_xml` on the same source, plus
+`no_shared_crate_depends_on_a_format_crate`. The invariant test discriminates:
+adding `rdocx-oxml.workspace = true` to `oxml-layout` fails it with the
+offending line named.
+
+**Hash harness.** Unchanged. All 28 entries match, which is the expected result
+for the same conversion code in a different crate.
+
+**Notes for future sessions.** The invariant test cannot be exercised against
+`oxml-drawing` itself. Reintroducing that exact edge now produces
+`rdocx-oxml -> oxml-drawing -> rdocx-oxml`, a cargo cycle that fails to resolve
+before any test runs. That is a stronger guarantee than the test, but a reader
+proving the test works should edit a different `oxml-*` crate or they will get a
+confusing resolver error instead of a clean assertion failure.
+
+### F-X022, Tag rpptx-v0.3.0
+
+**Sprint.** S42
+**Completed.** 2026-08-16
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The incubating train moved 0.2.0 to 0.3.0 and was published.
+S41 broke its public API rather than extending it: `oxml-layout` renamed
+`TextSegment::footnote_id` and `GlyphRun::footnote_id` to `note`, changing the
+type from `Option<i32>` to `Option<NoteRef>`, and added two `LineBreakParams`
+fields. A 0.x minor bump is the correct response.
+
+Fifteen packages were prepared and exactly fourteen published. `rpptx-wasm`
+moved to 0.3.0 and remains `publish = false`.
+
+**Release evidence.** All fourteen resolve from crates.io at 0.3.0 under owner
+`mantissaman`: `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`,
+`oxml-drawing`, `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `rpptx-oxml`,
+`rpptx-chart`, `rpptx-layout`, `rpptx-render`, `rpptx`, `rpptx-cli`. The
+annotated tag `rpptx-v0.3.0` dereferences to `ab52cd2`, the reviewed SHA.
+
+**Non-obvious choices.** The incubating train published first, and after F-X024
+that order is permanent rather than incidental. The stable crates depend on
+`oxml-layout`, so 0.3.0 had to resolve on crates.io before the stable train
+could publish. S39 released stable first because only one train moved that
+sprint.
+
+**Deviations from the design plan.** One, and it mattered. The first pass moved
+every version carrier under `crates/` and stopped there, missing the
+release-family preflight in `scripts/test_sprint_workflow.py` that
+`publish.yml` invokes by name as its gate, and the `ci.yml` WASM literal.
+Neither `cargo test` nor `/verify` runs the Python suite, so the gap passed
+every local gate and would have failed in CI at publication. Fixed before
+release and filed as F-X025.
+
+**Spec sections touched.** None.
+
+**Tests.** All 46 release regressions pass, including
+`test_incubating_release_family_is_prepared_at_0_3_0`. Full workspace suite at
+53 binaries and zero failures, README doctests, `cargo deny`, and the patched
+21-package dry run with every archive under 10 MiB.
+
+**Hash harness.** Unchanged, 28 of 28. A version string reaches no rendered
+byte.
+
+**Notes for future sessions.** The publication order is now fixed by the
+dependency graph rather than by convention: incubating, then stable. F-X024 is
+what makes that true, and reintroducing an `oxml-*` dependency on a format crate
+would break it again.
+
+### F-X023, Tag v0.7.0
+
+**Sprint.** S42
+**Completed.** 2026-08-16
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The stable train moved 0.6.0 to 0.7.0 and was published.
+S41 broke its public API: `rdocx-oxml` added `note_type` to `CT_Footnote`, six
+fields to `CT_Anchor` and four variants to `WrapType`, each of which breaks an
+exhaustive match or a struct literal, and `rdocx-layout` added fields to
+`ParagraphBlock` and `AnchoredDrawing`.
+
+The `rdocx` facade's own API is unchanged. `Document::footnotes()` still returns
+`Vec<(i32, String)>` and `RunRef::footnote_id()` is untouched, so a consumer of
+the facade alone sees no break. Eleven packages were prepared and exactly seven
+published.
+
+**Release evidence.** All seven resolve from crates.io at 0.7.0 under owner
+`mantissaman`: `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`, `rdocx-html`,
+`rdocx-pdf`, `rdocx`, `rdocx-cli`. The annotated tag `v0.7.0` dereferences to
+`ab52cd2`, the same reviewed SHA as `rpptx-v0.3.0`. The four unpublished
+packages, `oxml-py-support`, `rdocx-py`, `rdocx-wasm` and `rpptx-py`, inherited
+0.7.0 without gaining publication authority.
+
+**Non-obvious choices.** The stable train published second, because
+`rdocx-layout 0.7.0` declares a dependency on `oxml-layout 0.3.0` and could not
+have resolved before the incubating train landed.
+
+**Deviations from the design plan.** The story was implemented before its design
+plan was written, which is a workflow violation. The plan was written
+afterwards and records what was done and the inventory that was taken.
+
+**Spec sections touched.** None.
+
+**Tests.** All 46 release regressions pass, including
+`test_stable_release_family_is_prepared_at_0_7_0`. Full workspace suite, README
+doctests, `cargo deny`, and the patched 21-package dry run.
+
+**Hash harness.** Unchanged, 28 of 28.
+
+**Notes for future sessions.** Both trains now sit one minor version apart from
+where S41 left them, and the two tags share a SHA. A future release that moves
+only one train is the normal case again, and only a sprint that breaks both
+needs the ordering care this one did.

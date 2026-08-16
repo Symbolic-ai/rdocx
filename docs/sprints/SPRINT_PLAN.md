@@ -657,6 +657,35 @@ F-X015 adds the wrap and alignment surface without changing placement, which
 keeps the harness flat and makes F-X016 the single story that owns the rendering
 delta for wrapped drawings.
 
+#### Sprint S42, Dependency refresh
+
+**Goal**: take the outstanding semver-compatible dependency updates and measure
+what they do to rendered output. Nothing here is a security fix, since the
+advisory scan is already clean, so the value is in not letting the lockfile
+drift far enough that a later update becomes a large unexplained delta.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X020 | Refresh the dependency lockfile | S |
+| F-X024 | Move the theme adapter into rdocx-oxml | M |
+| F-X022 | Tag rpptx-v0.3.0 | S |
+| F-X023 | Tag v0.7.0 | S |
+
+Two of the sixteen pending updates are in the font and image decoding path, so
+the hash harness decides whether the refresh is a no-op or a declared rendering
+delta. It runs first and alone, because a refresh that moved a baseline should
+not compete with a release to explain the same delta.
+
+F-X024 then removes the reason the release order was impossible. Scoping the two
+release stories exposed a cycle between the trains: `rdocx-layout` depends on
+`oxml-layout`, and `oxml-drawing` depends on `rdocx-oxml` through the one
+documented architecture exception. With both trains carrying breaking changes,
+neither could publish first. Moving the theme adapter into `rdocx-oxml` inverts
+that edge, so the dependency runs one way and incubating always publishes
+first.
+
+The two release stories then carry S41's work to crates.io in that order.
+
 ## Cross-cutting
 
 F-X001 through F-X004 are scheduled in S36 as the final cross-cutting v1

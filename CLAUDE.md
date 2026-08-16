@@ -35,7 +35,7 @@ Read `docs/hld/00-vision.md` first, then `03-architecture.md`.
 
 | Path | What |
 |---|---|
-| `crates/oxml-*` | Format-neutral infrastructure. **Must not depend on `rdocx-*` or `rpptx-*`**, with one documented exception: `oxml-drawing -> rdocx-oxml` for the `Theme` adapter |
+| `crates/oxml-*` | Format-neutral infrastructure. **Must not depend on `rdocx-*` or `rpptx-*`.** No exceptions: the `Theme` adapter lives in `rdocx-oxml`, so that edge runs `rdocx-oxml -> oxml-drawing` |
 | `crates/rdocx-*` | WordprocessingML. `rdocx-oxml` holds the `w:` types, `rdocx-layout` the flow engine and paginator, `rdocx` the facade |
 | `crates/rpptx-*` | PresentationML. `rpptx-oxml` the `p:` types, `rpptx-layout` the inheritance resolver, `rpptx-render` the slide renderer, `rpptx` the facade |
 | `crates/rdocx-layout/fonts/` | 20 bundled TTFs behind the `bundled-fonts` feature. Every family needs a licence file |

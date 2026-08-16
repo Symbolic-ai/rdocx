@@ -56,6 +56,7 @@ defended.
 | S39 | X | 3 | 3 | 0 | 6 | 3 | Added compile-checked README coverage for all 26 workspace crates, published the seven-package stable rdocx 0.6.0 family, and published the complete 14-package rpptx 0.2.0 family. Every crates.io README rendered, all 28 hashes remained unchanged, and no WASM, Python, npm, or PyPI package was published |
 | S40 | X | 1 | 1 | 0 | 2 | 1 | Restored a green hosted CI baseline by pinning the Poppler 26.01.0 rendering oracle, the Binaryen 125 identity, uv 0.10.2 and the LibreOffice viewer build behind one bounded installer. All 28 hashes remained unchanged, and no crate, release version, published package or rendering baseline changed |
 | S41 | X | 7 | 7 | 0 | 12 | 7 | Landed the surviving half of the external PR 2 rendering contribution as six stories under one umbrella. Footnote lines advance and reserve their own page space, oversized notes split across pages, endnotes moved to the document end with the two note streams keyed apart, kashida justification no longer fails a document open, and body text flows around wrapping drawings. All 28 hashes unchanged throughout, and no crate, package version or published artifact changed |
+| S42 | X | 4 | 4 | 0 | 5 | 4 | Refreshed the lockfile, broke the cross-family dependency edge that made the two publication trains mutually dependent, and released both: fourteen incubating crates at 0.3.0 and seven stable crates at 0.7.0, from one reviewed SHA. All 28 hashes unchanged throughout, and zero vulnerabilities across 152 dependencies |
 
 ## Completed features
 
@@ -234,6 +235,10 @@ defended.
 | F-X014 | S41 | S | 1 | 1 | 2026-08-16 | Kashida justification values accepted instead of failing the open |
 | F-X015 | S41 | M | 2 | 1 | 2026-08-16 | Wrap modes, text distances and anchor alignments read into the model |
 | F-X016 | S41 | L | 3 | 1 | 2026-08-16 | Alignment placement, and body text flowing around wrapping drawings |
+| F-X020 | S42 | S | 1 | 1 | 2026-08-16 | Sixteen semver-compatible updates, PDF-only delta traced to font-types |
+| F-X024 | S42 | M | 2 | 1 | 2026-08-16 | Theme adapter moved to rdocx-oxml, the shared-to-format edge removed |
+| F-X022 | S42 | S | 1 | 1 | 2026-08-16 | Incubating train published at 0.3.0, fourteen crates |
+| F-X023 | S42 | S | 1 | 1 | 2026-08-16 | Stable train published at 0.7.0, seven crates |
 
 ## Velocity
 
@@ -290,6 +295,7 @@ five working days.
 | S39 | 3 | 3 | 5.00 |
 | S40 | 1 | 1 | 5.00 |
 | S41 | 7 | 7 | 5.00 |
+| S42 | 4 | 4 | 5.00 |
 
 ## Escalation record
 

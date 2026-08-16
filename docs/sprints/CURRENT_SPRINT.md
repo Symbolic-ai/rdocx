@@ -1,74 +1,81 @@
-# Current Sprint, S41
+# Current Sprint, S42
 
 **Milestone**: X Cross-cutting.
 
-**Goal**: land the parts of the external PR 2 rendering contribution that
-current `main` still lacks, rebuilt against the anchor architecture that
-superseded the contributor's own. Two footnote placement defects are fixed
-first, since they are contained and independent of the drawing work. Anchored
-drawings then gain a real wrap and alignment model, and body text learns to flow
-around them.
+**Goal**: refresh the dependency lockfile and measure what it does to rendered
+output, then carry S41's work to crates.io. Both publication trains move a minor
+version, because S41 broke both public APIs rather than merely extending them.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for the `rdocx-layout` flow model boundary, and
-  for the rule that the `wp:` inline and anchor code in `rdocx-oxml/drawing.rs`
-  is Word-only and stays where it is rather than migrating to `oxml-drawing`.
-- `docs/hld/05-drawingml-model.md`, "Do not touch the Word path", which is what
-  keeps F-X015 and F-X016 inside `rdocx-oxml` and out of the shared DrawingML
-  crates.
-- `docs/hld/12-testing-strategy.md`, for the test taxonomy each story picks its
-  gate from, and for the hash harness rule that an intentional delta lands as
-  its own labelled commit with the expected change stated.
-- `docs/hld/14-development-backlog.md`, for the F-X013 through F-X016 scope and
-  acceptance gates.
+- `docs/hld/12-testing-strategy.md`, "The hash harness", for the rule that an
+  intentional delta lands as its own labelled commit with the expected change
+  stated. That rule is what this sprint turns on.
+- `docs/hld/15-build-and-toolchain.md`, for the pinned toolchain the refresh
+  must keep working against, and for the release job contracts the two
+  publication stories execute.
+- `docs/hld/10-bindings-spec.md`, for the Python and WASM packages that inherit
+  a version without gaining publication authority.
+- `docs/hld/14-development-backlog.md`, for the F-X020 scope and its gate.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X013a | Footnote line advance | S | done | - |
-| F-X013b | Footnote reservation and splitting | L | done | - |
-| F-X013c | Endnotes at the document end | M | done | - |
-| F-X014 | Kashida justification values | S | done | - |
-| F-X015 | Anchored drawing wrap and alignment model | M | done | - |
-| F-X016 | Floating drawing placement and text wrapping | L | done | - |
+| F-X020 | Refresh the dependency lockfile | S | done | - |
+| F-X024 | Move the theme adapter into rdocx-oxml | M | done | - |
+| F-X022 | Tag rpptx-v0.3.0 | S | done | - |
+| F-X023 | Tag v0.7.0 | S | done | - |
 
 ## Sequencing note
 
-Rows are listed in dependency order, not F-ID order.
+Rows are listed in dependency order.
 
-The three F-X013 children run in order. F-X013a is a contained drawing-position
-fix that stands alone. F-X013b builds the shared note height map and the
-reservation that consumes it, which is what F-X013c then needs in order to route
-one of the two note streams somewhere else. Attempting F-X013c first would mean
-separating the streams with no place to put the endnote stream.
+F-X020 ran first and alone, so that a refresh which moved a rendering baseline
+could not compete with a release to explain the same delta. It did not move one,
+though it did move every sample PDF, which is recorded in its AS_BUILT entry and
+filed as F-X021.
 
-F-X014 is independent of everything else in the wave and can land at any point.
-It is grouped here because it comes from the same external contribution.
+F-X024 comes before either release, because without it neither release is
+possible. Scoping F-X022 and F-X023 exposed a cycle between the trains:
+`rdocx-layout` depends on `oxml-layout`, and `oxml-drawing` depends on
+`rdocx-oxml` through the one documented architecture exception. Publishing a
+train requires the other train's dependency to already resolve on crates.io,
+and with both carrying breaking changes neither could go first. Stable first
+will not compile, since `rdocx-layout` needs `oxml-layout` 0.3.0. Incubating
+first would ship an adapter bound to the old `rdocx-oxml`, breaking the one
+cross-family integration point. F-X024 removes the edge instead of choosing a
+bad order.
 
-F-X015 must precede F-X016. F-X015 deliberately changes no placement and no
-rendering, which is what lets its harness result stay flat and prove the story
-is model-only. F-X016 then owns the entire rendering delta for wrapped drawings
-in one reviewable commit. Splitting them the other way, or merging them, would
-mix a model addition with a layout change and leave a delta nobody can attribute
-to a cause.
+F-X022 then precedes F-X023, and after F-X024 that order is permanent rather
+than incidental: the dependency runs one way, so incubating always publishes
+first.
 
-F-X016 is sized L and touches line breaking, which every paragraph in every
-baseline flows through. If it exceeds twice its estimate it splits into F-X016a
-for alignment-based placement and F-X016b for text wrapping, per the escalation
-rule in `.claude/WORKFLOW.md`.
+Each release story ends at a boundary this sprint cannot cross on its own.
+`/release` is the only command permitted to create a `v*` or `rpptx-v*` tag or
+start publication, and it requires separate immediate approval at the reviewed
+SHA. Preparation lands in the sprint. Publication does not happen without that
+approval.
 
 ## Definition of done for this sprint
 
-- A footnote assembled from several runs renders its segments at strictly
-  increasing x, and a page whose body fills the text area leaves the reserved
-  footnote area clear.
-- The three kashida justification values parse to the justified variant, and an
-  unknown justification string is still rejected.
-- Wrap mode, the four text distances and both alignment axes round-trip through
-  `CT_Anchor` and reach `AnchoredDrawing`, with the hash harness unchanged.
-- Body text flows around a `wrapSquare` drawing and clears a `wrapTopAndBottom`
-  one, while every baseline without a wrapped drawing stays byte-identical.
-- Every harness delta in the sprint is stated and justified in the commit that
-  causes it. No delta is folded into an unrelated change.
+- Every semver-compatible update outstanding at the sprint's start is taken, or
+  the ones held back are named with a reason.
+- `cargo audit` reports zero vulnerabilities and `cargo deny check` passes,
+  with the `ttf-parser` unmaintained advisory still the single documented
+  exception.
+- The hash harness is either unchanged, or its delta names the dependency that
+  caused it and was reviewed before the baseline was re-recorded.
+- The pinned toolchain and MSRV still build the workspace.
+- No `oxml-*` package depends on any `rdocx-*` or `rpptx-*` package, and
+  `docs/hld/03-architecture.md` no longer documents an exception, because there
+  is none.
+- The fifteen incubating packages read 0.3.0 and the eleven workspace-version
+  packages read 0.7.0, with every root pin, lock entry, README example, Python
+  project version and WASM literal agreeing.
+- The exact publication sets hold: fourteen incubating crates and seven stable
+  crates, with `rpptx-wasm`, the Python packages and the WASM packages gaining
+  no publication authority.
+- Nothing is tagged or published without the separate approval `/release`
+  requires. A sprint that ends prepared but unpublished is a complete sprint,
+  not a carried one.

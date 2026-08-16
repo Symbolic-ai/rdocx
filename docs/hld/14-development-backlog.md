@@ -1394,6 +1394,138 @@ out justified, and the existing rejection still holds for a genuinely unknown
 string. The hash harness is unchanged, since no recorded baseline carries a
 kashida value.
 
+### F-X024, Move the theme adapter into rdocx-oxml (M)
+`oxml-drawing` hosts `impl From<&CT_OfficeStyleSheet> for
+rdocx_oxml::theme::Theme`, which is the single documented exception to the rule
+that nothing in `oxml-*` depends on `rdocx-*`. That one edge makes the two
+publication trains mutually dependent: `rdocx-layout` depends on `oxml-layout`
+and `oxml-drawing` depends on `rdocx-oxml`, so neither train can publish first
+once both carry breaking changes.
+
+The adapter moves to `rdocx-oxml`, which the orphan rule permits because `Theme`
+is local there and `CT_OfficeStyleSheet` is the foreign type. The edge inverts
+to stable depending on incubating, the architecture rule loses its exception and
+becomes absolute, and train-at-a-time publication works in one fixed order
+forever: incubating, then stable.
+
+`rdocx-oxml` gains a dependency on `oxml-drawing`, so a Word-only consumer now
+compiles DrawingML. That is the accepted cost, chosen over deleting an adapter
+that exists so `rdocx-layout`'s `LayoutInput.theme` does not churn when
+PresentationML themes reach Word layout.
+**Depends on**: F-X020.
+**Test gate**: regression. The conversion produces the same `Theme` from the
+same `CT_OfficeStyleSheet` as before the move, `cargo tree` shows no `oxml-*`
+package depending on any `rdocx-*` or `rpptx-*` package, and the workspace
+still builds with all 28 hashes unchanged.
+
+### F-X022, Tag rpptx-v0.3.0 (S)
+The complete incubating train moves to the next minor version, 0.3.0, because
+S41 broke its public API rather than merely extending it. `oxml-layout` renamed
+`TextSegment::footnote_id` and `GlyphRun::footnote_id` to `note`, changing the
+type from `Option<i32>` to `Option<NoteRef>`, and added two fields to
+`LineBreakParams`. Under semver a 0.x minor bump is the correct response.
+
+The fifteen packages carrying an explicit 0.2.0 move together, their root
+dependency pins, lock entries, README dependency examples and the local
+`rpptx-wasm` version with them. Exactly fourteen are published: `rpptx-wasm`
+stays unpublished. The stable train stays at 0.6.0 during this story, and its
+pins on the incubating crates move to 0.3.0 so the later stable release can
+resolve against a published 0.3.0.
+
+This story prepares and, through `/release rpptx-v0.3.0`, publishes. Publication
+happens only after full verification, a clean microscope, a clean sprint review
+and separate immediate approval at the reviewed SHA. No npm, PyPI, Python, WASM
+or stable package is authorized.
+**Depends on**: F-X020.
+**Test gate**: the incubating release regression proves the fifteen-package
+preparation group, the fourteen internal pins, the exact fourteen-package
+publication set, README requirements, lock entries and the unpublished
+`rpptx-wasm` literal. The patched workspace dry run, archive inventory under
+10 MiB, README compilation and `cargo deny` pass, and all 28 hashes stay
+unchanged.
+
+### F-X023, Tag v0.7.0 (S)
+The complete stable train moves to 0.7.0, because S41 broke its public API.
+`rdocx-oxml` added `note_type` to `CT_Footnote`, six fields to `CT_Anchor` and
+four variants to `WrapType`, each of which breaks an exhaustive match or a
+struct literal. `rdocx-layout` added fields to `ParagraphBlock` and
+`AnchoredDrawing`. The `rdocx` facade's own public API is unchanged, and it
+moves with its train regardless.
+
+The eleven workspace-version packages move together: the exact seven crates.io
+packages plus the four unpublished Python and WASM support packages. README
+dependency examples, metadata regressions, lock entries, the two Python project
+versions and the WASM contract literals move to 0.7.0. The incubating train
+remains at 0.3.0.
+
+`/release v0.7.0` publishes only the exact seven stable crates, after full
+verification, a clean microscope, a clean sprint review and separate immediate
+approval. No PyPI, npm, WASM, Python or incubating publication is authorized.
+**Depends on**: F-X022. The stable crates depend on `oxml-layout`, so the
+incubating train has to be resolvable at 0.3.0 on crates.io before the stable
+train that pins it can publish. This is the reverse of the S39 order, where only
+one train moved.
+**Test gate**: the stable release regression proves the eleven-package train,
+the nine internal pins, the exact seven-package publication set, README
+requirements, lock entries, Python project versions, WASM literals and the
+unchanged incubating train at 0.3.0. The patched workspace dry run, archive
+inventory, README compilation and `cargo deny` pass, and all 28 hashes stay
+unchanged.
+
+### F-X025, /verify must run the release regressions (S)
+`/verify --full` runs formatting, lints, the workspace suite, the hash harness,
+the prose rules, the no-default-features path, the WASM targets, docs, packaging
+and the supply-chain check. It does not run
+`python3 -m unittest scripts.test_sprint_workflow`, which holds the release
+family preflights that `.github/workflows/publish.yml` invokes by name as the
+publication gate.
+
+S42 demonstrated the gap rather than theorised it. F-X022 moved every version
+carrier under `crates/`, passed the entire local gate, and still left the
+incubating preflight and the `ci.yml` WASM literal asserting the old version. It
+would have failed in CI at publication time.
+**Test gate**: regression. A deliberately stale version literal in
+`scripts/test_sprint_workflow.py` or a workflow file fails `/verify --full`,
+and a clean tree passes it.
+
+### F-X021, The hash harness should cover PDF output (M)
+The output-stability harness records `page1.png` and three `word/*.xml` parts
+for each of the seven samples, and no PDF. PDF is a first-class output of this
+workspace, produced by a different code path from the PNG: `oxml-pdf` writes
+glyph positions, embedded font subsets and compressed streams, none of which the
+rasterised PNG exercises. That path can therefore drift with no gate noticing.
+
+F-X020 demonstrated the gap rather than theorised it. A routine
+semver-compatible dependency refresh changed all seven sample PDFs while every
+PNG stayed byte-identical and the harness reported 28 of 28. The change was
+benign, and it was found by hand rather than by the gate that exists to find it.
+
+Recording a PDF byte hash directly would be brittle, since a PDF carries a
+creation date and object ordering that need not be stable. The story therefore
+decides what a stable PDF fingerprint is, likely extracted text plus page
+geometry plus glyph positions, before recording one.
+**Depends on**: none.
+**Test gate**: regression. A deliberate change to the PDF writer moves the new
+entries and leaves the PNG entries untouched, and a re-run with no change
+reproduces every entry exactly.
+
+### F-X020, Refresh the dependency lockfile (S)
+Every semver-compatible dependency update outstanding at the start of the sprint
+is taken, and its effect on rendered output is measured rather than assumed.
+Sixteen updates are pending and none is a security fix: `cargo audit` reports
+zero vulnerabilities across 152 dependencies and `cargo deny check advisories`
+passes. Two of the sixteen, `font-types` and `zune-core`, sit in the font and
+image decoding path, which is why the hash harness is this story's real gate
+rather than a formality.
+
+The `ttf-parser` unmaintained advisory, RUSTSEC-2026-0192, is unaffected. It is
+allowlisted in `deny.toml` with a documented reason, and clearing it needs the
+`fontdb` to `fontique` swap rather than a lockfile refresh.
+**Test gate**: the full workspace suite and the hash harness. A delta is
+expected only if a font or image dependency moved rendering, and any delta names
+the dependency that caused it and is reviewed before the baseline is re-recorded.
+A delta traced to no dependency in the rendering path blocks the story.
+
 ### F-X019, Paragraph-relative drawings in later blocks should wrap (M)
 Text flows around a wrapping drawing anchored to a later paragraph even when
 that drawing is positioned relative to its own paragraph rather than to the
