@@ -48,6 +48,8 @@ jobs:
         run: >-
           cargo test --workspace --all-features
           --exclude rdocx-py --exclude rpptx-py
+      - name: Run golden-PNG gate
+        run: python3 scripts/golden_png_harness.py --check
 
   python-bindings:
     name: Python bindings (${{ matrix.package.distribution }})

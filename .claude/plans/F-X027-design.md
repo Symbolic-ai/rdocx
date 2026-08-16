@@ -1,6 +1,6 @@
 # F-X027, Wire the golden-PNG gate into something
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S44
 **Size**: S
 **Depends on**: none
@@ -84,16 +84,16 @@ manifest, or harness implementation changes. Any delta blocks completion.
 
 ## Implementation checklist
 
-- [ ] Record the pre-change clean golden check and Poppler identity.
-- [ ] Add the unconditional named step after the workspace suite.
-- [ ] Add the CI contract helper and mutation-sensitive regression in the
+- [x] Record the pre-change clean golden check and Poppler identity.
+- [x] Add the unconditional named step after the workspace suite.
+- [x] Add the CI contract helper and mutation-sensitive regression in the
   existing Python module.
-- [ ] Run the whole workflow regression module and the golden harness
+- [x] Run the whole workflow regression module and the golden harness
   self-test.
-- [ ] Run the clean and expected-failing one-pixel checks.
-- [ ] Update only the listed HLD sections.
-- [ ] Confirm both manifests and the hash baseline remain byte-identical.
-- [ ] Run microscope and contribute the oracle evidence to the integrated full
+- [x] Run the clean and expected-failing one-pixel checks.
+- [x] Update only the listed HLD sections.
+- [x] Confirm both manifests and the hash baseline remain byte-identical.
+- [x] Run microscope and contribute the oracle evidence to the integrated full
   gate.
 
 ## Open questions

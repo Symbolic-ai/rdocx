@@ -103,6 +103,11 @@ equality for all seven buffers. The regression proof runs `--check
 directory, changes exactly one decoded pixel, and requires check mode to fail
 with the sample name.
 
+The pull-request `test` job runs the golden-PNG check after the full workspace
+suite. That job installs the pinned Poppler 26.01.0 oracle first, so the decoded
+pixel comparison is unconditional, failure-propagating, and bound to the
+reviewed rasteriser identity.
+
 ## The deck corpus
 
 Fifty real `.pptx` files are stored outside the published crates and fetched by
@@ -488,7 +493,7 @@ returns non-empty rendered HTML after publication.
 
 | Job | Command |
 |---|---|
-| test | Install exact uv 0.10.2, fetch the pinned corpus, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack |
+| test | Install exact uv 0.10.2 and Poppler 26.01.0, fetch the pinned corpus, run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack, then run `python3 scripts/golden_png_harness.py --check` |
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
 | wasm | Locked `wasm32-unknown-unknown` checks, `wasm-pack test --node`, and local bundler pack and fresh-install gates for `rdocx-wasm` and `rpptx-wasm` |
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |

@@ -296,6 +296,11 @@ unresolved-symbol link failure that is easy to misdiagnose as something else.
 **A dedicated no-default-features job.** It runs `cargo test -p oxml-layout
 --no-default-features`, which exercises the font-isolation path used by WASM.
 
+**The golden-PNG gate in the test job.** After the full workspace suite, the
+same Ubuntu 24.04 job runs `python3 scripts/golden_png_harness.py --check` with
+the Poppler 26.01.0 installation already on `PATH`. The step is unconditional
+and propagates a decoded-pixel mismatch as a CI failure.
+
 **Workspace package READMEs in the docs job.** Every one of the 26 workspace
 packages explicitly declares one distinct README. The root file is the
 high-level `rdocx` guide. The other 25 packages use focused crate-local files.

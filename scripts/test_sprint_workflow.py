@@ -4032,6 +4032,57 @@ class SprintWorkflowTests(unittest.TestCase):
         """
         self.assertIn("python3 -m unittest scripts.test_sprint_workflow", verify)
 
+    def assert_ci_runs_golden_png_gate(self, ci: str) -> None:
+        job = self.yaml_block(ci, "  test:")
+        poppler = self.yaml_step(job, "Install pinned Poppler 26.01.0")
+        workspace = self.yaml_step(job, "Run full workspace suite")
+        golden = self.yaml_step(job, "Run golden-PNG gate")
+        command = "python3 scripts/golden_png_harness.py --check"
+        self.assertEqual(ci.count(command), 1)
+        self.assertEqual(
+            self.yaml_direct_lines(golden, 8),
+            (f"run: {command}",),
+        )
+        self.assertLess(job.index(poppler), job.index(golden))
+        self.assertLess(job.index(workspace), job.index(golden))
+        self.assert_no_success_short_circuit(self.operative_lines(golden))
+
+    def test_ci_runs_the_golden_png_gate_in_the_pinned_poppler_environment(
+        self,
+    ) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_ci_runs_golden_png_gate(ci)
+        job = self.yaml_block(ci, "  test:")
+        golden = self.yaml_step(job, "Run golden-PNG gate")
+        poppler = self.yaml_step(job, "Install pinned Poppler 26.01.0")
+        mutations = {
+            "missing-command": ci.replace(
+                "      - name: Run golden-PNG gate\n"
+                "        run: python3 scripts/golden_png_harness.py --check\n",
+                "",
+                1,
+            ),
+            "before-poppler": ci.replace(golden, "", 1).replace(
+                poppler, golden + poppler, 1
+            ),
+            "missing-check": ci.replace(
+                "python3 scripts/golden_png_harness.py --check",
+                "python3 scripts/golden_png_harness.py",
+                1,
+            ),
+            "successful-fallback": ci.replace(
+                "python3 scripts/golden_png_harness.py --check",
+                "python3 scripts/golden_png_harness.py --check || true",
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, ci, name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_ci_runs_golden_png_gate(mutated)
+
     def assert_ci_runs_release_regressions(self, ci: str) -> None:
         job = self.yaml_block(ci, "  release-regressions:")
         direct = self.yaml_direct_lines(job, 4)
