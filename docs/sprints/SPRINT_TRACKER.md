@@ -230,6 +230,7 @@ defended.
 | F-X013c | S41 | M | 2 | 1 | 2026-08-16 | Endnotes emitted at the document end, note streams keyed apart |
 | F-X014 | S41 | S | 1 | 1 | 2026-08-16 | Kashida justification values accepted instead of failing the open |
 | F-X015 | S41 | M | 2 | 1 | 2026-08-16 | Wrap modes, text distances and anchor alignments read into the model |
+| F-X016 | S41 | L | 3 | 1 | 2026-08-16 | Alignment placement, and body text flowing around wrapping drawings |
 
 ## Velocity
 

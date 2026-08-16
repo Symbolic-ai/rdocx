@@ -1,6 +1,6 @@
 # F-X016, Floating drawing placement and text wrapping
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S41
 **Size**: L
 **Depends on**: F-X015
@@ -112,13 +112,21 @@ the `wp:wrapPolygon` the model does not carry, and reserving the frame is a
 strictly better approximation than not wrapping at all. Stated here so the
 approximation is a decision.
 
-**Known limitation, stated rather than hidden.** Only drawings anchored to the
-current paragraph, or to paragraphs already placed on the page, affect wrapping.
-A drawing anchored to a later paragraph on the same page does not push earlier
-text aside, because knowing which later paragraphs land on this page requires
-the pagination that the reflow feeds. Word anchors a floating drawing to the
-paragraph where its wrap begins, so the common case is covered. Recorded as a
-follow-up rather than solved here.
+**Corrected during implementation.** The plan originally limited wrapping to
+drawings anchored to the current paragraph or to ones already placed, on the
+grounds that a later paragraph's position is not yet known. Rendering
+`sample1.docx` showed that assumption failing on the contribution's own headline
+page: its right-hand arrow is anchored to paragraph 282 while the text that must
+flow around it is in paragraph 280, so the right arrow kept printing over the
+text while the left one wrapped correctly.
+
+A bounded look-ahead now collects wrapping drawings from following blocks, but
+only those whose vertical frame is the page or a margin. Those have a position
+that does not depend on where their own paragraph lands, so there is no
+circularity to resolve. A drawing anchored **paragraph-relative** in a later
+block is still left to the pass that places it, because its position genuinely
+needs its own paragraph placed first. That residual case is the honest
+limitation, and it is much narrower than the original one.
 
 ## Rejected alternatives
 
@@ -171,25 +179,25 @@ the model.
 
 ## Hash harness
 
-**Expected unchanged.** No corpus document contains a floating drawing with a
-wrap mode other than `None`, and every new code path is gated on one. A delta
-would mean the gating leaks, and would block the merge until explained.
+**Unchanged, 28 of 28.** No corpus document contains a floating drawing with a
+wrap mode other than `None`, and every new code path is gated on one, so the
+flat result is what proves the gating holds.
 
 Evidence for the new behaviour is the golden set, since the harness cannot see
 it.
 
 ## Implementation checklist
 
-- [ ] `line_prefix_widths` and `line_suffix_widths` in `LineBreakParams`, with
+- [x] `line_prefix_widths` and `line_suffix_widths` in `LineBreakParams`, with
       `break_into_lines` honouring them
-- [ ] Alignment-aware `resolve_anchor_h` and `resolve_anchor_v`
-- [ ] `ParagraphReflow`, carried only when the document has a wrapping drawing
-- [ ] Wrapping drawings tracked per page in the `Pager`
-- [ ] Reflow before measuring, two passes, square and top-and-bottom
-- [ ] Tests, including the wrap-none identity regression
-- [ ] Confirm the harness is unchanged
-- [ ] `/microscope F-X016 --working`
-- [ ] `/verify`
+- [x] Alignment-aware `resolve_anchor_h` and `resolve_anchor_v`
+- [x] `ParagraphReflow`, carried only when the document has a wrapping drawing
+- [x] Wrapping drawings tracked per page in the `Pager`
+- [x] Reflow before measuring, two passes, square and top-and-bottom
+- [x] Tests, including the wrap-none identity regression
+- [x] Confirm the harness is unchanged
+- [x] `/microscope F-X016 --working`
+- [x] `/verify`
 
 ## Open questions
 

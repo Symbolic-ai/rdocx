@@ -1,6 +1,7 @@
 //! Layout engine orchestrator: ties all phases together.
 
 use rdocx_oxml::document::{BodyContent, CT_SectPr};
+use rdocx_oxml::drawing::WrapType;
 use rdocx_oxml::header_footer::HdrFtrType;
 use rdocx_oxml::properties::CT_PPr;
 use rdocx_oxml::shared::ST_HighlightColor;
@@ -55,6 +56,11 @@ impl Engine {
         let mut num_state = NumberingState::new();
         let media = MediaRegistry::new(&input.images);
 
+        // Re-breaking a paragraph around a floating drawing needs its line
+        // breaking inputs kept alive past layout. Nearly no document has a
+        // drawing that wraps, so the state is dropped again unless one does.
+        let document_wraps = document_has_wrapping_drawing(input);
+
         // Get final section properties (body-level sectPr)
         let final_sect_pr = input
             .document
@@ -90,6 +96,10 @@ impl Engine {
                         &mut self.font_manager,
                         &mut num_state,
                     )?;
+
+                    if !document_wraps {
+                        para_block.reflow = None;
+                    }
 
                     // Detect heading style for outline generation
                     if let Some(level) = detect_heading_level(para, styles) {
@@ -659,7 +669,59 @@ pub fn layout_paragraph(
         widow_control,
     );
     result.anchored = collect_anchored_drawings(para, styles, input, media, fm, num_state)?;
+    // `inline_items` is finished with here and would otherwise be dropped, so
+    // handing it to the reflow costs nothing but the memory it already holds.
+    // `Engine::layout` frees it again unless the document wraps.
+    result.reflow = Some(Box::new(block::ParagraphReflow {
+        items: inline_items,
+        params: line_params,
+    }));
     Ok(result)
+}
+
+/// Whether any drawing in the document body wraps text around itself.
+///
+/// A document without one can never reach the reflow path, so it does not pay
+/// for it.
+fn document_has_wrapping_drawing(input: &LayoutInput) -> bool {
+    fn paragraph_wraps(para: &CT_P) -> bool {
+        para.runs.iter().any(|run| {
+            run.content
+                .iter()
+                .filter_map(|rc| match rc {
+                    RunContent::Drawing(d) => Some(d),
+                    _ => None,
+                })
+                .chain(run.alt_drawings.iter())
+                .any(|drawing| {
+                    drawing
+                        .anchor
+                        .as_ref()
+                        .is_some_and(|anchor| anchor.wrap != WrapType::None)
+                })
+        })
+    }
+
+    input
+        .document
+        .body
+        .content
+        .iter()
+        .any(|content| match content {
+            BodyContent::Paragraph(para) => paragraph_wraps(para),
+            BodyContent::Table(table) => table
+                .rows
+                .iter()
+                .flat_map(|row| row.cells.iter())
+                .flat_map(|cell| cell.content.iter())
+                .any(|content| match content {
+                    rdocx_oxml::table::CellContent::Paragraph(para) => paragraph_wraps(para),
+                    // A drawing inside a nested table is rare enough that the
+                    // conservative answer is to look no deeper.
+                    rdocx_oxml::table::CellContent::Table(_) => false,
+                }),
+            _ => false,
+        })
 }
 
 /// Collect the floating drawings anchored to a paragraph.
@@ -2128,5 +2190,315 @@ mod tests {
                 index + 1
             );
         }
+    }
+
+    // F-X016, text wrapping around a floating drawing.
+
+    /// A document of one long paragraph, with a floating drawing anchored to
+    /// it. `align` places the drawing, `wrap` says how text should treat it.
+    fn make_wrapping_document(
+        wrap: rdocx_oxml::drawing::WrapType,
+        align: Option<rdocx_oxml::drawing::AnchorAlignH>,
+        width_pt: f64,
+        height_pt: f64,
+        dist_pt: f64,
+    ) -> LayoutInput {
+        use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, ST_RelativeFromH, ST_RelativeFromV};
+        use rdocx_oxml::text::CT_R;
+        use rdocx_oxml::units::Emu;
+
+        let emu = |pt: f64| Emu((pt * 12700.0) as i64);
+
+        let mut doc = rdocx_oxml::document::CT_Document::new();
+        let mut para = CT_P::new();
+        // Long enough that many lines sit below the drawing, which is what
+        // makes "returns to the margin" a meaningful assertion.
+        let mut body = String::new();
+        for index in 0..40 {
+            body.push_str(&format!(
+                "Sentence {index} of running text that fills the paragraph out. "
+            ));
+        }
+        para.add_run(&body);
+
+        let mut anchor = CT_Anchor::background("rId1", 0, 0);
+        anchor.extent_cx = emu(width_pt);
+        anchor.extent_cy = emu(height_pt);
+        anchor.behind_doc = false;
+        anchor.wrap = wrap;
+        anchor.pos_h_relative_from = ST_RelativeFromH::Margin;
+        anchor.pos_h_align = align;
+        anchor.pos_v_relative_from = ST_RelativeFromV::Paragraph;
+        anchor.pos_v_offset = Emu(0);
+        anchor.dist_t = emu(dist_pt);
+        anchor.dist_b = emu(dist_pt);
+        anchor.dist_l = emu(dist_pt);
+        anchor.dist_r = emu(dist_pt);
+
+        let mut drawing_run = CT_R::new("");
+        drawing_run.content = vec![RunContent::Drawing(CT_Drawing {
+            inline: None,
+            anchor: Some(anchor),
+        })];
+        para.runs.push(drawing_run);
+        doc.body.add_paragraph(para);
+
+        let mut images = HashMap::new();
+        images.insert(
+            "rId1".to_string(),
+            ImageData {
+                data: vec![0u8; 8],
+                content_type: "image/png".to_string(),
+            },
+        );
+
+        LayoutInput {
+            document: doc,
+            styles: CT_Styles::new_default(),
+            numbering: None,
+            headers: HashMap::new(),
+            footers: HashMap::new(),
+            images,
+            core_properties: None,
+            hyperlink_urls: HashMap::new(),
+            footnotes: None,
+            endnotes: None,
+            theme: None,
+            fonts: Vec::new(),
+        }
+    }
+
+    /// The x origin and right edge of every body text run, by line.
+    fn text_extents(page: &oxml_layout::output::PageFrame) -> Vec<(f64, f64)> {
+        let mut by_line: Vec<(f64, f64, f64)> = Vec::new();
+        for element in &page.elements {
+            let PositionedElement::Text(run) = element else {
+                continue;
+            };
+            let right = run.origin.x + run.advances.iter().sum::<f64>();
+            if let Some(entry) = by_line
+                .iter_mut()
+                .find(|(y, _, _)| (*y - run.origin.y).abs() < 0.01)
+            {
+                entry.1 = entry.1.min(run.origin.x);
+                entry.2 = entry.2.max(right);
+            } else {
+                by_line.push((run.origin.y, run.origin.x, right));
+            }
+        }
+        by_line.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        by_line.into_iter().map(|(_, l, r)| (l, r)).collect()
+    }
+
+    #[test]
+    fn text_wraps_beside_a_left_aligned_square_drawing() {
+        use rdocx_oxml::drawing::{AnchorAlignH, WrapType};
+
+        let input =
+            make_wrapping_document(WrapType::Square, Some(AnchorAlignH::Left), 100.0, 40.0, 5.0);
+        let mut engine = Engine::new();
+        let output = engine.layout(&input).expect("layout succeeds");
+        let geometry = sect_pr_to_geometry(&CT_SectPr::default_letter());
+        let extents = text_extents(&output.pages[0]);
+
+        assert!(
+            extents.len() > 2,
+            "the paragraph must wrap, got {extents:?}"
+        );
+
+        // Lines beside the drawing start to its right, past width plus distR.
+        let expected_left = geometry.margin_left + 100.0 + 5.0;
+        assert!(
+            (extents[0].0 - expected_left).abs() < 1.0,
+            "first line should start at {expected_left}, got {:?}",
+            extents[0]
+        );
+
+        // A line below the drawing returns to the margin.
+        let last = extents.last().unwrap();
+        assert!(
+            (last.0 - geometry.margin_left).abs() < 1.0,
+            "the last line should return to the margin, got {last:?}"
+        );
+    }
+
+    #[test]
+    fn text_wraps_beside_a_right_aligned_square_drawing() {
+        use rdocx_oxml::drawing::{AnchorAlignH, WrapType};
+
+        let input = make_wrapping_document(
+            WrapType::Square,
+            Some(AnchorAlignH::Right),
+            100.0,
+            40.0,
+            5.0,
+        );
+        let mut engine = Engine::new();
+        let output = engine.layout(&input).expect("layout succeeds");
+        let geometry = sect_pr_to_geometry(&CT_SectPr::default_letter());
+        let extents = text_extents(&output.pages[0]);
+
+        assert!(
+            extents.len() > 2,
+            "the paragraph must wrap, got {extents:?}"
+        );
+
+        // Lines beside the drawing still start at the margin but end early.
+        let text_right = geometry.page_width - geometry.margin_right;
+        let drawing_left = text_right - 100.0;
+        assert!(
+            (extents[0].0 - geometry.margin_left).abs() < 1.0,
+            "a right-aligned drawing does not move the line start, got {:?}",
+            extents[0]
+        );
+        assert!(
+            extents[0].1 <= drawing_left - 5.0 + 1.0,
+            "the first line should stop before the drawing at {}, got {:?}",
+            drawing_left - 5.0,
+            extents[0]
+        );
+
+        // Some line below the drawing runs past where the drawing sat, which
+        // is only possible once the reservation stops applying. The final line
+        // of a paragraph is naturally short, so the widest is the fair test.
+        let widest = extents
+            .iter()
+            .map(|(_, right)| *right)
+            .fold(f64::MIN, f64::max);
+        assert!(
+            widest > drawing_left,
+            "a line below the drawing should reach past {drawing_left}, got {extents:?}"
+        );
+    }
+
+    #[test]
+    fn a_top_and_bottom_drawing_pushes_text_below_it() {
+        use rdocx_oxml::drawing::WrapType;
+
+        let input = make_wrapping_document(WrapType::TopAndBottom, None, 100.0, 40.0, 5.0);
+        let mut engine = Engine::new();
+        let output = engine.layout(&input).expect("layout succeeds");
+        let geometry = sect_pr_to_geometry(&CT_SectPr::default_letter());
+        let extents = text_extents(&output.pages[0]);
+
+        assert!(!extents.is_empty(), "the paragraph renders");
+
+        // The drawing sits at the paragraph top, so text starts below its
+        // bottom edge plus distB.
+        let first_baseline = output.pages[0]
+            .elements
+            .iter()
+            .find_map(|element| match element {
+                PositionedElement::Text(run) => Some(run.origin.y),
+                _ => None,
+            })
+            .expect("text is rendered");
+        let drawing_bottom = geometry.margin_top + 40.0 + 5.0;
+        assert!(
+            first_baseline >= drawing_bottom,
+            "the first line at {first_baseline} should sit below {drawing_bottom}"
+        );
+    }
+
+    #[test]
+    fn a_wrap_none_drawing_leaves_text_untouched() {
+        use rdocx_oxml::drawing::WrapType;
+
+        // The identity case. A drawing that does not wrap must not move a
+        // single glyph, which is what keeps every recorded baseline still.
+        let with = make_wrapping_document(WrapType::None, None, 100.0, 40.0, 5.0);
+        let mut engine = Engine::new();
+        let output = engine.layout(&with).expect("layout succeeds");
+        let wrapped_extents = text_extents(&output.pages[0]);
+
+        let geometry = sect_pr_to_geometry(&CT_SectPr::default_letter());
+        for (left, _) in &wrapped_extents {
+            assert!(
+                (left - geometry.margin_left).abs() < 0.01,
+                "a wrapNone drawing must not indent any line, got {wrapped_extents:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_drawing_anchored_to_a_later_paragraph_still_pushes_text_aside() {
+        use rdocx_oxml::drawing::{
+            AnchorAlignH, AnchorAlignV, CT_Anchor, CT_Drawing, ST_RelativeFromH, ST_RelativeFromV,
+            WrapType,
+        };
+        use rdocx_oxml::text::CT_R;
+        use rdocx_oxml::units::Emu;
+
+        // Word routinely anchors the arrow beside a paragraph to the paragraph
+        // after it, which is what the external contribution's own sample does.
+        let emu = |pt: f64| Emu((pt * 12700.0) as i64);
+        let mut doc = rdocx_oxml::document::CT_Document::new();
+
+        let mut first = CT_P::new();
+        let mut body = String::new();
+        for index in 0..40 {
+            body.push_str(&format!("Sentence {index} of running text to fill lines. "));
+        }
+        first.add_run(&body);
+        doc.body.add_paragraph(first);
+
+        let mut second = CT_P::new();
+        second.add_run("A later paragraph that owns the drawing.");
+        let mut anchor = CT_Anchor::background("rId1", 0, 0);
+        anchor.extent_cx = emu(100.0);
+        anchor.extent_cy = emu(40.0);
+        anchor.behind_doc = false;
+        anchor.wrap = WrapType::Square;
+        anchor.pos_h_relative_from = ST_RelativeFromH::Margin;
+        anchor.pos_h_align = Some(AnchorAlignH::Left);
+        // Margin-relative, so its position does not depend on where the
+        // paragraph that owns it lands.
+        anchor.pos_v_relative_from = ST_RelativeFromV::Margin;
+        anchor.pos_v_align = Some(AnchorAlignV::Top);
+        let mut drawing_run = CT_R::new("");
+        drawing_run.content = vec![RunContent::Drawing(CT_Drawing {
+            inline: None,
+            anchor: Some(anchor),
+        })];
+        second.runs.push(drawing_run);
+        doc.body.add_paragraph(second);
+
+        let mut images = HashMap::new();
+        images.insert(
+            "rId1".to_string(),
+            ImageData {
+                data: vec![0u8; 8],
+                content_type: "image/png".to_string(),
+            },
+        );
+
+        let input = LayoutInput {
+            document: doc,
+            styles: CT_Styles::new_default(),
+            numbering: None,
+            headers: HashMap::new(),
+            footers: HashMap::new(),
+            images,
+            core_properties: None,
+            hyperlink_urls: HashMap::new(),
+            footnotes: None,
+            endnotes: None,
+            theme: None,
+            fonts: Vec::new(),
+        };
+
+        let mut engine = Engine::new();
+        let output = engine.layout(&input).expect("layout succeeds");
+        let geometry = sect_pr_to_geometry(&CT_SectPr::default_letter());
+        let extents = text_extents(&output.pages[0]);
+
+        assert!(!extents.is_empty(), "text renders");
+        let expected_left = geometry.margin_left + 100.0;
+        assert!(
+            extents[0].0 >= expected_left - 1.0,
+            "the first line of the earlier paragraph should clear the drawing at \
+             {expected_left}, got {:?}",
+            extents[0]
+        );
     }
 }

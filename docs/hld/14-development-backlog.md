@@ -1394,6 +1394,18 @@ out justified, and the existing rejection still holds for a genuinely unknown
 string. The hash harness is unchanged, since no recorded baseline carries a
 kashida value.
 
+### F-X019, Paragraph-relative drawings in later blocks should wrap (M)
+Text flows around a wrapping drawing anchored to a later paragraph even when
+that drawing is positioned relative to its own paragraph rather than to the
+page or a margin. F-X016 looks ahead only for absolutely framed drawings,
+because a paragraph-relative one has no position until its own paragraph is
+placed, and resolving that needs the paginator to run twice. No sample or corpus
+document hits the gap today.
+**Depends on**: F-X016.
+**Test gate**: regression. A paragraph-relative wrapping drawing anchored to a
+later paragraph pushes earlier text aside, and a document with no such drawing
+paginates in a single pass exactly as before.
+
 ### F-X018, Unknown enumerated values should not fail a document open (M)
 Nine value parsers in `rdocx-oxml/src/shared.rs` and `styles.rs` return an error
 for any string they do not enumerate, and several are reached through `?` from

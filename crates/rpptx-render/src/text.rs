@@ -651,6 +651,9 @@ fn line_break_params(
         (paragraph.indent, 0.0)
     };
     LineBreakParams {
+        // Slide text has nothing floating beside it to flow around.
+        line_prefix_widths: Vec::new(),
+        line_suffix_widths: Vec::new(),
         available_width,
         ind_left: paragraph.left_margin,
         ind_right: paragraph.right_margin,

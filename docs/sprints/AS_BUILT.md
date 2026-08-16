@@ -6104,3 +6104,77 @@ code. Any future change to an anchor serialiser should expect the same. More
 generally, this is the story where declaring "expected unchanged" and being
 wrong was useful: the prediction is what turned a silent byte change into a
 question worth answering.
+
+### F-X016, Floating drawing placement and text wrapping
+
+**Sprint.** S41
+**Completed.** 2026-08-16
+**Size.** L, estimated 3 days, actual 1 day
+
+**What was built.** Two behaviours the model has described since F-X015 but
+nothing performed.
+
+An anchored drawing positioned by an alignment now resolves against its
+`relativeFrom` frame instead of landing at offset zero. A right-aligned drawing
+sits at the right of its frame, a centred one at the midpoint.
+
+Body text flows around a wrapping drawing. `wrapSquare` keeps text clear of the
+frame plus its text distance on the lines the drawing spans, on the side the
+drawing sits, and `wrapTopAndBottom` pushes the paragraph's content below the
+drawing. `wrapTight` and `wrapThrough` are approximated as square, since
+wrapping to an outline needs the `wp:wrapPolygon` the model does not carry, and
+reserving the frame beats not wrapping at all.
+
+**Non-obvious choices.** The line breaker gained per-line prefix and suffix
+reservations rather than a wrapping concept of its own. An empty vector, the
+default, reproduces existing behaviour exactly, which is what let every other
+caller stay untouched and the harness stay flat.
+
+Re-breaking needs the line breaking inputs to survive past layout, and those
+hold the same shaped glyphs the laid-out lines hold. They are moved rather than
+cloned, since `inline_items` is finished with at that point and would otherwise
+be dropped, and `Engine::layout` drops them again unless the document holds a
+drawing that wraps. A document without one carries nothing.
+
+The reflow runs before the paragraph is measured, because a reflow changes its
+height and measuring first would measure the wrong thing. Two passes, not a
+loop: the second settles a drawing that only overlaps once the text has moved,
+and a fixed count cannot fail to terminate.
+
+**Deviations from the design plan.** One, and rendering the sample is what
+caught it. The plan limited wrapping to drawings anchored to the current
+paragraph or already placed, on the grounds that a later paragraph's position is
+unknown, and accepted that as a documented limitation. `sample1.docx` shows the
+limitation failing on the contribution's own headline page: its two arrows
+flank one paragraph, but the right-hand arrow is anchored to paragraph 282 while
+the text is in paragraph 280, so the left arrow wrapped and the right one kept
+printing over the text. A bounded look-ahead now collects wrapping drawings from
+following blocks whose vertical frame is the page or a margin, which have a
+position independent of where their own paragraph lands. The residual case,
+paragraph-relative anchors in later blocks, is filed as F-X019.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "What stays put",
+extended to say the paginator reflows around wrapping drawings and why the
+reflow inputs are carried conditionally.
+
+**Tests.** The gate is the three golden tests,
+`text_wraps_beside_a_left_aligned_square_drawing`,
+`text_wraps_beside_a_right_aligned_square_drawing` and
+`a_top_and_bottom_drawing_pushes_text_below_it`. Plus
+`a_drawing_anchored_to_a_later_paragraph_still_pushes_text_aside` for the
+look-ahead, `a_wrap_none_drawing_leaves_text_untouched` as the identity guard,
+and two placement unit tests. Every one except the identity guard was proven to
+fail against its own reverted change.
+
+**Hash harness.** Unchanged. All 28 entries match, and here that is a real
+result rather than the blind spot the note stories carried: the corpus does
+contain floating drawings, they simply all use `wrapNone`, and every new path is
+gated on a wrap mode other than `None`. The flat harness is what proves the
+gating holds.
+
+**Notes for future sessions.** Rendering the contributor's own document is what
+turned an accepted limitation into a fixed defect. The unit tests all passed
+with the limitation in place, because they anchor the drawing to the paragraph
+it affects, which is the case the limitation covers. Real documents do not.
+Where a story is motivated by a specific document, that document belongs in the
+loop, not just the tests derived from it.

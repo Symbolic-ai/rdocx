@@ -127,6 +127,12 @@ height depends on the note area it owes, and a note that does not fit continues
 on the following page. The registry pre-shapes each note's marker, so the
 paginator places notes without needing a mutable font manager.
 
+The paginator also reflows a paragraph around any floating drawing that wraps,
+because whether a drawing overlaps a line is only known once the paragraph has a
+position on a page. The inputs to line breaking are therefore kept alive past
+layout, but only for a document that actually holds a drawing whose wrap is not
+`none`, since those inputs hold the same shaped glyphs the laid-out lines do.
+
 The two note streams are placed differently and are keyed apart. A footnote
 sits at the foot of the page carrying its reference and takes height from that
 page. An endnote costs its page nothing and is emitted after the last body
