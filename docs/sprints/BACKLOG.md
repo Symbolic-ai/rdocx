@@ -36,8 +36,8 @@ regenerated, never hand-edited.
 | M18, Format breadth                            | 8  | 0 | 0 | 8  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
-| X, Cross-cutting (opportunistic)            | 31 | 28 | 0 | 3  |
-| **Total** | **241** | **182** | **0** | **59** |
+| X, Cross-cutting (opportunistic)            | 33 | 28 | 0 | 5  |
+| **Total** | **243** | **182** | **0** | **61** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -428,4 +428,6 @@ regenerated, never hand-edited.
 | F-X026 | CI must run the release regressions too     | S44 | S | pending |
 | F-X027 | Wire the golden-PNG gate into something     | S44 | S | pending |
 | F-X028 | Repair the agent-facing documentation drift | S44 | M | pending |
+| F-X029 | Path-filtered CI jobs                       | S44 | M | pending |
+| F-X030 | Decouple the npm package versions           | S44 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->

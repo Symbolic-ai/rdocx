@@ -25,13 +25,17 @@ documentation that tells every future session what is true.
 | F-X026 | CI must run the release regressions too | S | pending | - |
 | F-X027 | Wire the golden-PNG gate into something | S | pending | - |
 | F-X028 | Repair the agent-facing documentation drift | M | pending | - |
+| F-X029 | Path-filtered CI jobs | M | pending | - |
+| F-X030 | Decouple the npm package versions | S | pending | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-There is no dependency between these three, so the order is a preference rather
-than a constraint and any of them may be claimed first.
+There is no hard dependency between these five, so the order is a preference
+rather than a constraint and any of them may be claimed first. The one soft
+coupling is that F-X026 and F-X029 both edit `ci.yml`, so whichever lands second
+rebases on the first.
 
 F-X026 leads because it is the narrower half of a gap S43 half-closed. `/verify`
 runs the release preflights now and CI still does not, so a contributor who
@@ -41,13 +45,21 @@ F-X027 follows because the golden-PNG gate is fully specified and wired into
 nothing, and deciding where it belongs needs a judgement about the pinned
 Poppler build that F-X026 does not need.
 
+F-X029 and F-X030 came out of a monorepo-versus-split review and are the two
+concrete improvements that survived it. F-X029 pairs naturally with F-X026,
+since both edit `ci.yml`, and whichever lands second rebases on the first.
+F-X030 is independent of everything.
+
 F-X028 lands last, and is the largest, because it is the only one that rewrites
 `CLAUDE.md`. A story that changes the file every other session reads first
-should land against a tree the other two have already settled.
+should land against a tree the other four have already settled.
 
 Every implementation milestone is closed, so this sprint carries no feature
-work. All three stories exist because S43 went looking at the instruments rather
-than the product.
+work. Three of the five stories exist because S43 went looking at the
+instruments rather than the product. The other two, F-X029 and F-X030, came out
+of a review of whether the workspace should be split into separate repositories.
+The conclusion was that it should not, and these are the two improvements that
+survived that review.
 
 ## Definition of done for this sprint
 
@@ -62,4 +74,9 @@ than the product.
 - `CLAUDE.md` no longer tells a reader that a false font licence notice ships
   today, that the family is on crates.io at 0.2.0, that the bundled fonts live
   under `rdocx-layout`, or that a `bundled-fonts` feature exists.
+- A docs-only change reports every required check without running the workspace
+  suite, the MSRV suite, the WASM targets or the fidelity job, and each filtered
+  job has an asserted must-trigger and must-not-trigger path.
+- Each npm package carries its own version, so a JavaScript-only fix does not
+  require versioning a Rust family that did not change.
 - The hash harness stays at 49 of 49. No story here touches rendering.

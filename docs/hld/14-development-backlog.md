@@ -2099,6 +2099,54 @@ name `CLAUDE.md` and `.claude/commands/verify.md` cite resolves against the
 workspace, so the next stale claim fails the gate rather than surviving 40
 sprints.
 
+### F-X029, Path-filtered CI jobs (M)
+`.github/workflows/ci.yml` defines thirteen jobs and no `paths` filter, so every
+job runs on every change. A commit that touches only `docs/` currently runs the
+workspace test suite, the MSRV suite, both WASM targets, the Python bindings,
+the packaging archive build and the pinned-render fidelity job.
+
+The filters that pay: `presentation-fidelity` needs the PowerPoint and shared
+crates, `python-bindings` needs the binding crates, `supply-chain` needs the
+manifests and the lockfile, `hash-harness` needs anything that can reach the
+sample generator, and `prose` needs only tracked Markdown.
+
+**The trap is required status checks, and this story exists to get it right.**
+A job skipped by a `paths` filter never reports, so a required check waits
+forever and the pull request can never merge. The fix is a gate job that always
+runs and reports on behalf of the filtered set, rather than filtering the
+required jobs directly. A story that adds filters without handling this converts
+a slow pipeline into a stuck one.
+
+Filters must also fail safe. A filter that is too narrow silently stops running
+a gate, which is the same class of defect as F-X021 and F-X025: an instrument
+reporting green because it never ran.
+**Depends on**: none.
+**Test gate**: regression. A test asserts, for each filtered job, a changed path
+that must trigger it and a changed path that must not, so narrowing a filter by
+mistake fails the suite. A docs-only change reports every required check.
+
+### F-X030, Decouple the npm package versions from the Rust family version (S)
+`crates/rdocx-wasm` and `crates/rpptx-wasm` are `publish = false` for crates.io
+and are published to npm as `@tensorbee/rdocx-wasm` and `@tensorbee/rpptx-wasm`.
+Both inherit their Rust family's version, which `.github/workflows/ci.yml:203`
+and `:204` assert as 0.7.0 and 0.3.0.
+
+A JavaScript-only fix, a README correction or a packaging change to either npm
+package therefore cannot be released without versioning and publishing a Rust
+family that did not change.
+
+This is the narrow, real half of a wider idea that did not survive review. Giving
+the seven stable crates independent versions was considered and rejected: they
+are published as one dependency-ordered set at one version under a single `v*`
+tag, `test_stable_release_family_is_prepared_at_0_7_0` asserts exactly that, and
+the lockstep is a deliberate design rather than an accident. The WASM packages
+are the only members whose release cadence has a reason to differ, because their
+registry and their consumers are different.
+**Depends on**: none.
+**Test gate**: regression. Each WASM package carries its own version, the `ci.yml`
+assertions read that version rather than the workspace one, and a mutation that
+reintroduces the workspace inheritance fails the release preflight.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this
