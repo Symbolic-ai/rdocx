@@ -105,16 +105,32 @@ and asserts on their content, so no new mechanism is introduced.
 
 | Category | Test | Asserts |
 |---|---|---|
-| regression | `verify_runs_the_release_regressions` | `.claude/commands/verify.md` invokes `python3 -m unittest scripts.test_sprint_workflow`, so a tree where the step was dropped fails the gate |
-| regression | `every_test_publish_yml_names_resolves_to_a_real_test` | Each dotted path in `publish.yml` resolves to an existing class and method in this module, so a rename fails locally rather than on a tag |
-| unit | `a_stale_version_literal_fails_the_release_preflight` | The existing preflights are exercised through a mutated copy of the version carriers, confirming the tests `/verify` now runs are the ones that catch a stale literal |
+| regression | `test_verify_runs_the_release_regressions` | `.claude/commands/verify.md` invokes `python3 -m unittest scripts.test_sprint_workflow`, and removing that line from a copy of the document fails the same assertion. The gate defends its own wiring |
+| regression | `test_every_test_publish_yml_names_resolves_to_a_real_test` | Every `scripts.test_sprint_workflow.<Class>.<method>` path `publish.yml` invokes resolves to a real test in this module, so a rename fails locally rather than on a tag |
 
 **Test gate**, from the backlog: the first regression, which is the half that
-makes the stale literal reach `/verify --full` at all. The second row covers
-the workflow-file half of the same sentence.
+makes a stale literal reach `/verify --full` at all. The second row closes the
+rename hole in the same wiring.
 
-The clean-tree half of the gate is the suite passing on this branch, which is
-observed rather than asserted.
+A third row was planned, exercising the preflights against mutated version
+carriers, and dropped as redundant.
+`test_release_preparation_metadata_rejects_wasm_tag_and_version_mutations` at
+`scripts/test_sprint_workflow.py:3951` already mutates a version literal and
+asserts the contract rejects it, through the injectable
+`assert_release_preparation_metadata_contract` helper. Writing a second one
+would pin the same behaviour twice.
+
+The end-to-end halves of the backlog's sentence are demonstrated rather than
+asserted, because they are statements about a tree that does not exist in the
+repository:
+
+- `crates/rpptx/Cargo.toml` moved from 0.3.0 to 0.3.1: the module fails, with
+  `test_incubating_release_family_is_prepared_at_0_3_0` and
+  `test_stable_release_family_is_prepared_at_0_7_0` both reporting.
+- `ci.yml`'s `@tensorbee/rpptx-wasm` literal moved back to 0.2.0, which is
+  exactly the S42 defect: the module fails, with three tests reporting,
+  including both WASM job assertions.
+- The clean tree: 48 tests, OK.
 
 ## HLD impact
 
@@ -153,16 +169,19 @@ diff moved.
 
 ## Implementation checklist
 
-- [ ] Record the pre-change harness state
-- [ ] `verify.md` step 6 gains the release regressions and what a failure means
-- [ ] `python3 scripts/sync_agent_skills.py`, regenerated adapter committed
-- [ ] The wiring test and the name-resolution test
-- [ ] The mutated-carrier unit test over the existing preflights
-- [ ] Update the `publish.yml` paragraph in `15-build-and-toolchain.md`,
+- [x] Record the pre-change harness state, 28 of 28 at the sprint base
+- [x] `verify.md` step 6 gains the release regressions and what a failure means
+- [x] `python3 scripts/sync_agent_skills.py`, regenerated adapter committed
+- [x] The wiring test, with its own mutation half, and the name-resolution test
+- [x] The mutated-carrier test, dropped as redundant against
+      `test_release_preparation_metadata_rejects_wasm_tag_and_version_mutations`
+- [x] Demonstrate both end-to-end halves, a stale manifest version and the
+      reproduced S42 `ci.yml` literal
+- [x] Update the `publish.yml` paragraph in `15-build-and-toolchain.md`,
       including the two stale figures
-- [ ] Correct the stale stable figure in the `12-testing-strategy.md`
+- [x] Correct the stale stable figure in the `12-testing-strategy.md`
       README-inventory paragraph, and nothing else in that file
-- [ ] `python3 -m unittest scripts.test_sprint_workflow`,
+- [x] `python3 -m unittest scripts.test_sprint_workflow`,
       `python3 scripts/sync_agent_skills.py --check`,
       `/microscope F-X025 --working`, `/verify`
 

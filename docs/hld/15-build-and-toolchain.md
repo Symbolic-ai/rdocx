@@ -166,12 +166,22 @@ separately approved `/release` invocation at the exact reviewed SHA.
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires workspace 0.6.0, nine internal pins, eleven
+stable regression requires workspace 0.7.0, nine internal pins, eleven
 inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
-set. The incubating regression requires the exact 0.2.0 versions, pins,
-lockfile entries, publication flags, and non-empty package descriptions. The
-workflow then runs
+set. The incubating regression requires the exact 0.3.0 versions, pins,
+lockfile entries, publication flags, and non-empty package descriptions.
+
+**The same regressions run in the canonical local gate.** `/verify` step 6 runs
+`python3 -m unittest scripts.test_sprint_workflow`, the module holding both
+preflights and the pinned-toolchain assertions, so a version carrier that moves
+without its assertion moving with it fails before the sprint closes rather than
+on the tag. Without that step the preflights run for the first time at
+publication, which is what S42 demonstrated when F-X022 passed the entire local
+gate and still left the incubating preflight and the `ci.yml` WASM literal
+asserting the previous version.
+
+The workflow then runs
 `cargo publish --workspace --dry-run` with an exact local source patch for each
 member of the 21-package publishable union. Cargo rewrites packaged path
 dependencies to the registry, so the patches keep verification on the reviewed
