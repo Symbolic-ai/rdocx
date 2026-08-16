@@ -55,6 +55,7 @@ defended.
 | S38 | X | 2 | 2 | 0 | 5 | 2 | Integrated PR 25 with Jon Stokes credited, added compile-checked documentation for every stable crate, and published the seven-package stable rdocx 0.5.0 family. All 28 hashes remained unchanged, and no incubating, WASM, Python, or npm package was published |
 | S39 | X | 3 | 3 | 0 | 6 | 3 | Added compile-checked README coverage for all 26 workspace crates, published the seven-package stable rdocx 0.6.0 family, and published the complete 14-package rpptx 0.2.0 family. Every crates.io README rendered, all 28 hashes remained unchanged, and no WASM, Python, npm, or PyPI package was published |
 | S40 | X | 1 | 1 | 0 | 2 | 1 | Restored a green hosted CI baseline by pinning the Poppler 26.01.0 rendering oracle, the Binaryen 125 identity, uv 0.10.2 and the LibreOffice viewer build behind one bounded installer. All 28 hashes remained unchanged, and no crate, release version, published package or rendering baseline changed |
+| S41 | X | 7 | 7 | 0 | 12 | 7 | Landed the surviving half of the external PR 2 rendering contribution as six stories under one umbrella. Footnote lines advance and reserve their own page space, oversized notes split across pages, endnotes moved to the document end with the two note streams keyed apart, kashida justification no longer fails a document open, and body text flows around wrapping drawings. All 28 hashes unchanged throughout, and no crate, package version or published artifact changed |
 
 ## Completed features
 
@@ -288,6 +289,7 @@ five working days.
 | S38 | 2 | 2 | 5.00 |
 | S39 | 3 | 3 | 5.00 |
 | S40 | 1 | 1 | 5.00 |
+| S41 | 7 | 7 | 5.00 |
 
 ## Escalation record
 
@@ -332,3 +334,4 @@ was done about it. Empty is the expected state.
 | 2026-08-14 | Sprint estimate variance exceeded 30 percent | S38 | Record 2 actual days against 5 estimated. The externally contributed implementation reduced authoring work, while eighteen review passes established the required package-preserving numbering boundary before release |
 | 2026-08-14 | Sprint estimate variance exceeded 30 percent | S39 | Record 3 actual days against 6 estimated. Documentation automation and the established release workflow reduced delivery time while preserving exact package, registry, and rendered README verification |
 | 2026-08-15 | Sprint estimate variance exceeded 30 percent | S40 | Record 1 actual day against 2 estimated. Reusing the bounded installer across hosted jobs reduced delivery time while preserving the exact pinned-tool and full-workflow evidence |
+| 2026-08-16 | Sprint estimate variance exceeded 30 percent | S41 | Record 7 actual days against 12 estimated. Splitting F-X013 into three children at design time meant each arrived with its defect already isolated, and five of the six stories shared one note or drawing subsystem, so later stories reused the first one's investigation rather than repeating it |
