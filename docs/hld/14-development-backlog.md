@@ -17,28 +17,37 @@ incrementally-testable slices so something verifiable lands every few days.
 
 ## Velocity assumption
 
-This backlog is **162 stories**. Summed by size it is roughly **408 developer-days**:
-about 50 at S, 60 at M, 38 at L and 2 at XL.
+### v1, as planned and as delivered
 
-At a sustained solo pace that is **17 to 18 months**, not the nine to twelve
-first estimated when the plan was written at phase granularity. The story-level
-sizing is the more trustworthy number and this document is the source of truth
-for it.
+The v1 backlog was **162 stories**, roughly **408 developer-days**, forecast at
+17 to 18 months solo. It delivered as **182 stories** across 43 sprints, the
+extra 20 being cross-cutting `F-X###` work that no milestone predicted: an
+external contribution, four releases, two dependency events and the defect
+follow-ups each of those filed.
 
-Two ways to compress, both available without reworking anything above:
+The forecast held at the story level and failed at the sprint level. Sprints
+came in far under their estimates whenever a story arrived with its cause
+already written up by the sprint that filed it, and the escalation record
+carries the variance for each.
 
-- **A second developer.** M7 (DrawingML) and M8 (PresentationML) parallelise
-  cleanly once M6 lands, and M12 (charts) is self-contained throughout. Two
-  developers is roughly 9 to 11 months.
-- **Cut a read-plus-render release at the end of M10.** That is 104 stories,
-  roughly 270 days, or about 12 months solo, and it is the point at which the
-  library becomes genuinely useful.
+### Post-v1, M14 through M20
 
-M12 alone is 12 stories and roughly 60 days, which is the single largest
-discretionary block.
+**56 stories, roughly 190 developer-days**, or about 38 weeks solo. By
+milestone, in days: M14 28, M15 12, M16 31, M17 23, M18 26, M19 44, M20 27.
 
-Front-loaded risk sits in M4, M5 and M9. M4 and M5 change a shipped renderer.
-M9 is the correctness heart of PowerPoint and has no rdocx analogue.
+M19 is 44 of those 190 and supersedes a recorded permanent non-goal, so it is
+the one milestone that is a business decision rather than a scheduling one. The
+roadmap is ordered so that everything before it stands alone: stopping after M18
+leaves a coherent product, and so does stopping after M15.
+
+Three ways to compress, all available without reworking the order:
+
+- **M15 first.** Twelve days, and it is the only milestone whose engine already
+  exists and already sits on the format-neutral side of the crate graph.
+- **Drop M18.** Format breadth is the least coupled block. Nothing else depends
+  on it.
+- **A second developer.** M14, M17 and M19 barely touch each other. M16 depends
+  on M14 and M20 depends on nothing.
 
 ---
 
@@ -1135,6 +1144,539 @@ authority.
 **Test gate**: `npm pack` produces an installable tarball for each, and both
 installed packages retain their exact metadata, WASM, JavaScript glue,
 TypeScript declaration, and import.
+
+---
+
+## Milestone 14, Word collaboration layer (about 4 weeks)
+
+**Goal**: the parts of a document that exist because more than one person
+touched it. All four are preserved verbatim today and none is addressable.
+
+Commercial libraries treat this as the dividing line. Aspose.Words, Spire.Doc
+and GemBox all sell revision and comment APIs, and `python-docx` has offered
+neither in a decade of requests. Nothing in the Rust ecosystem has any of it.
+
+**End-of-milestone gate**: a document carrying tracked changes, comments,
+content controls and bookmarks round-trips byte-identically in the parts this
+milestone does not model, and every one of the four is readable and writable
+through the public API.
+
+### F-147, Comment model and part (M)
+`word/comments.xml`, `CT_Comment` and `CT_Comments`, plus the
+`w:commentRangeStart`, `w:commentRangeEnd` and `w:commentReference` anchors in
+the body. Today the part survives because `OpcPackage` writes every part it
+holds, which means a comment is never lost and never reachable.
+**Depends on**: none.
+**Test gate**: round-trip. A document with three comments, one spanning two
+paragraphs, reloads with every anchor in the same place and saves byte-identical.
+
+### F-148, Comment API (M)
+`Document::comments`, `add_comment` over a run range, `reply_to`, `resolve` and
+`remove`. Replies use `w:commentsExtended` and the paragraph-id linkage, which
+is what Word itself reads.
+**Depends on**: F-147.
+**Test gate**: regression. A comment added over a range, replied to and resolved
+opens in Word with the thread intact.
+
+### F-149, Revision model (L)
+`w:ins`, `w:del`, `w:delText`, `w:moveFrom`, `w:moveTo`, and the property-change
+elements `w:rPrChange`, `w:pPrChange`, `w:tblPrChange` and `w:sectPrChange`.
+These are captured as raw XML today, listed in the modelled-children exclusions
+in `numbering.rs` and `text.rs`.
+**Depends on**: none.
+**Test gate**: round-trip. Every revision element survives a load and save
+unchanged, and each is reported with its author, timestamp and kind.
+
+### F-150, Accept and reject revisions (L)
+`accept_all`, `reject_all`, and the same two scoped to an author, a date range
+or a single revision id. Rejecting an insertion removes content, rejecting a
+deletion restores it, and a property change reverts to the recorded prior value.
+**Depends on**: F-149.
+**Test gate**: regression. Accepting every revision produces the document Word
+produces from the same input, compared as normalised body XML.
+
+### F-151, Revision display in the renderer (M)
+Rendering shows insertions underlined, deletions struck through, and a change
+bar in the margin, or renders the accepted view. The choice is a render option
+and the default is the accepted view, because that is the document a reader
+means when they ask for a PDF.
+**Depends on**: F-149.
+**Test gate**: golden. Both views of one document render, and the accepted view
+is pixel-identical to the same document with revisions accepted and removed.
+
+### F-152, Content control model (L)
+`w:sdt`, its `w:sdtPr` properties and `w:sdtContent`, at block, row, cell,
+paragraph and run level. `table.rs` already unwraps these to find rows and
+cells, so the traversal exists and the model does not.
+**Depends on**: none.
+**Test gate**: round-trip. Controls at all five nesting levels survive, and each
+is reported with its tag, alias, id and type.
+
+### F-153, Content control binding (M)
+Read and write a control's value by tag or alias, and bind a control set to a
+key-value map in one call. Includes the `w:dataBinding` XPath into a custom XML
+part, which is how document-assembly products drive Word.
+**Depends on**: F-152.
+**Test gate**: regression. A control set bound to a map produces the expected
+text, and a bound custom XML part updates both the part and the display text.
+
+### F-154, Bookmarks and cross-references (M)
+`w:bookmarkStart` and `w:bookmarkEnd`, a bookmark collection, insertion over a
+range, and `REF` and `PAGEREF` targets resolved against them.
+**Depends on**: none.
+**Test gate**: regression. A bookmark inserted over a range is listed, its text
+is readable, and a cross-reference to it resolves to the right page after
+pagination.
+
+### F-155, Document protection (M)
+`w:documentProtection` in settings: read-only, comments-only, tracked-changes-
+forced and forms-only, with the hash and salt Word writes. Reading the setting
+matters more than enforcing it, because a consumer needs to know the author's
+intent.
+**Depends on**: none.
+**Test gate**: regression. Each protection mode round-trips with its hash
+intact, and the mode is reported through the public API.
+
+---
+
+## Milestone 15, Charts beyond PowerPoint (about 2 weeks)
+
+**Goal**: one chart engine, two document families. `rpptx-chart` is 15,909 lines
+and already depends only on `oxml-core`, `oxml-drawing`, `oxml-layout`,
+`oxml-opc` and `oxml-pdf`. It is format-neutral in everything but its name.
+
+`python-docx` has no chart API at all. The standard workaround is rendering a
+chart to PNG and pasting it, which loses every bit of editability. Apache POI
+and docx4j both have native Word charts, and so does every commercial library.
+
+**End-of-milestone gate**: a Word document gains a native chart that opens
+editable in Word, and renders identically to the same chart in a deck.
+
+### F-156, Extract oxml-chart (L)
+Move `rpptx-chart` to `oxml-chart` with no behaviour change. A pure rename and
+re-export, with the deprecation shim pattern F-015 and F-022 already
+established.
+**Depends on**: none.
+**Test gate**: regression. The hash harness is byte-identical across the move,
+and every existing chart test passes against the new path. This is a file move,
+so folding any behaviour change into it is forbidden.
+
+### F-157, Word chart part and embedded workbook (M)
+The chart part, its relationship from `document.xml`, and the embedded
+`.xlsx` workbook Word requires. `oxml-sml` already writes exactly the one
+worksheet a chart needs, which is the whole reason it exists.
+**Depends on**: F-156.
+**Test gate**: round-trip. A document with a chart part saves with the part, its
+relationship, its content type and its embedded workbook, and Word opens it
+without repair.
+
+### F-158, Document::add_chart (M)
+The Word-side authoring API, matching the shape of `rpptx`'s `add_chart` so a
+reader who knows one knows the other.
+**Depends on**: F-157.
+**Test gate**: regression. A bar, line and pie chart added to a document carry
+the series, categories and number formats they were given.
+
+### F-159, Chart rendering in the Word paginator (M)
+An anchored or inline chart lays out and renders through the same path as an
+image, delegating to the chart renderer for its content.
+**Depends on**: F-158.
+**Test gate**: golden. A chart in a Word document renders pixel-identical to the
+same chart on a slide at the same size.
+
+---
+
+## Milestone 16, Document automation (about 5 weeks)
+
+**Goal**: generate documents from data rather than editing them by hand. This
+is the largest commercial category. Aspose sells a LINQ reporting engine,
+docxtpl is one of the most-used Python packages in the space, and every
+document-assembly product is built on fields, content controls and merges.
+
+`rdocx` already has `replace_text`, `replace_regex`, `replace_all` and
+`replace_many_in_chart_xml`, which covers substitution and nothing structural.
+
+**End-of-milestone gate**: a template with loops, conditionals and a repeating
+table row produces a correct document from a JSON data model, and every field in
+it evaluates to the value Word computes.
+
+### F-160, Field instruction parser (L)
+`w:fldSimple` and the `w:fldChar` plus `w:instrText` run sequence, parsed into a
+field name, arguments and switches. `text.rs` already extracts `w:instr` for the
+simple form.
+**Depends on**: none.
+**Test gate**: unit. Every field form in the corpus parses, including nested
+fields and instructions split across runs, which is how Word actually writes
+them.
+
+### F-161, Field evaluation engine (L)
+`IF`, `REF`, `PAGEREF`, `SEQ`, `DOCPROPERTY`, `DOCVARIABLE`, `STYLEREF`,
+`INCLUDETEXT`, `DATE`, `TIME`, `FILENAME`, `AUTHOR` and `MERGEFIELD`, plus the
+formatting switches. `PAGE` and `NUMPAGES` already evaluate during pagination.
+**Depends on**: F-160, F-154.
+**Test gate**: regression. Each supported field evaluates to the value Word
+computes for the same document, checked against a pinned expected set.
+
+### F-162, Field update policy (M)
+Update on demand, update on save, and leave alone, with the dirty flag Word
+sets. A field whose result is cached must not be silently recomputed, because a
+document may legitimately carry a stale result on purpose.
+**Depends on**: F-161.
+**Test gate**: regression. Each policy produces the expected result cache, and
+an unsupported field keeps its cached result rather than blanking.
+
+### F-163, Template syntax (L)
+A tag syntax over the existing placeholder machinery, resolving inside runs that
+Word has split mid-tag, which is the failure every naive implementation hits.
+**Depends on**: none.
+**Test gate**: unit. A tag split across five runs with different formatting
+resolves, and the surrounding formatting is preserved.
+
+### F-164, Loops and conditionals (L)
+Block-level repetition and inclusion over a data model, at paragraph, row and
+section granularity.
+**Depends on**: F-163.
+**Test gate**: regression. A template with a nested loop and a conditional
+produces the expected document from a fixture data model.
+
+### F-165, Repeating table rows and lists (M)
+The two structures that need their own handling: a row that repeats keeps its
+formatting and its merged cells, and a repeated list item keeps its numbering
+continuous.
+**Depends on**: F-164.
+**Test gate**: regression. A three-row template over ten records produces thirty
+rows with the banding and numbering intact.
+
+### F-166, Mail merge (M)
+A record set driving `MERGEFIELD`, with one document per record or one document
+with a section per record.
+**Depends on**: F-161, F-164.
+**Test gate**: regression. A merge over a fixture record set produces the
+expected documents, and an absent field renders empty rather than failing.
+
+### F-167, Document comparison (L)
+Compare two documents and express the difference as tracked revisions, scoped to
+body text, tables and list structure. Formatting-only differences are recorded
+as a diagnostic rather than a revision, which keeps this one story instead of
+three.
+**Depends on**: F-149.
+**Test gate**: regression. Comparing a document with its edited copy produces
+revisions that, when accepted, reproduce the edited copy exactly.
+
+### F-168, Watermarks (S)
+Text and image watermarks through the header `w:pict` shape Word uses, readable
+and writable, and rendered.
+**Depends on**: none.
+**Test gate**: golden. A watermark renders behind body text on every page.
+
+---
+
+## Milestone 17, Security and compliance (about 3 weeks)
+
+**Goal**: files an enterprise or a public body can accept. Encryption and
+signatures are table stakes in commercial libraries and absent from every open
+source Office library in Python and Rust. Apache POI is the only open
+implementation of OOXML agile encryption worth reading.
+
+Tagged PDF is a legal requirement for public-sector documents in the EU and the
+United States, and a LibreOffice-based pipeline cannot produce it well. The PDF
+backend here is ours, so it can.
+
+**End-of-milestone gate**: an encrypted document opens with its password, a
+signed document verifies, and a rendered PDF passes a PDF/UA structure check.
+
+### F-169, Agile encryption, read (L)
+ECMA-376 Part 4 agile encryption: the `EncryptionInfo` stream, key derivation,
+and AES decryption of the package. This is the difference between opening a
+protected file and telling the user to go and find Word.
+**Depends on**: none.
+**Test gate**: regression. A password-protected document produced by Word opens
+with the right password and fails cleanly with the wrong one.
+
+### F-170, Agile encryption, write (M)
+Save with a password, using the same parameters Word writes, so the result opens
+in Word rather than only in this library.
+**Depends on**: F-169.
+**Test gate**: round-trip. A document encrypted here decrypts here, and the
+parameters match a Word-encrypted reference byte for byte where the spec fixes
+them.
+
+### F-171, Digital signature verification (L)
+Read `_xmlsignatures`, verify the signature over the declared part set, and
+report which parts a signature actually covers, since a signature over a subset
+is the usual attack.
+**Depends on**: none.
+**Test gate**: regression. A validly signed document verifies, and a document
+modified after signing fails with the changed part named.
+
+### F-172, Digital signature creation (M)
+Sign a package with a supplied key and certificate.
+**Depends on**: F-171.
+**Test gate**: round-trip. A document signed here verifies here and in Word.
+
+### F-173, Tagged PDF structure tree (L)
+Emit `/StructTreeRoot`, marked content, heading levels, list structure, table
+headers and alternate text from the document's own semantics, which the layout
+engine already knows because `audit_accessibility` reads them.
+**Depends on**: none.
+**Test gate**: regression. A rendered PDF carries a structure tree whose heading
+and list nesting matches the source document.
+
+### F-174, PDF/A conformance (M)
+PDF/A-2b and PDF/A-3b output: embedded fonts already, plus the output intent,
+metadata and the prohibited-feature checks.
+**Depends on**: F-173.
+**Test gate**: regression. A rendered PDF passes a conformance check for the
+declared level.
+
+### F-175, Redaction (M)
+Remove text and its traces rather than drawing a black box over it, covering the
+body, comments, revisions, metadata and the embedded workbook of any chart.
+**Depends on**: F-147, F-149.
+**Test gate**: regression. Redacted text is absent from every part of the saved
+package, checked by scanning the raw zip rather than the model.
+
+---
+
+## Milestone 18, Format breadth (about 5 weeks)
+
+**Goal**: read and write the formats users actually have, rather than the one
+format we prefer. Aspose.Words converts between roughly twenty. The gap that
+costs real users is inbound: a library that cannot read RTF or HTML cannot be
+put in front of a corpus nobody curated.
+
+Rendering is already format-neutral below the facade, so every writer here is a
+new front end onto a layout engine that exists.
+
+**End-of-milestone gate**: each format round-trips at its declared fidelity
+level, and every lossy conversion records a diagnostic naming what it dropped.
+
+### F-176, RTF reader (L)
+The control-word grammar, destinations, code pages and the subset of RTF that
+Word itself writes. Scoped to text, formatting, tables, lists and images.
+**Depends on**: none.
+**Test gate**: differential. An RTF file converted to docx here matches the same
+file opened and saved as docx by the pinned oracle, compared structurally.
+
+### F-177, RTF writer (M)
+The inverse, at the same scope.
+**Depends on**: F-176.
+**Test gate**: round-trip. A document written to RTF and read back preserves
+text, formatting, tables, lists and images.
+
+### F-178, HTML import (L)
+HTML and CSS to a Word document, scoped to the subset a browser copy-paste and a
+CMS export actually produce. This is the most requested inbound conversion in
+every library's issue tracker.
+**Depends on**: none.
+**Test gate**: regression. A fixture set of HTML documents produces the expected
+paragraph, run, table and list structure, with unsupported CSS recorded as a
+diagnostic.
+
+### F-179, ODT reader (L)
+OpenDocument Text, which European public-sector procurement frequently mandates
+and which no Rust library reads.
+**Depends on**: none.
+**Test gate**: differential. An ODT converted here matches the pinned
+LibreOffice conversion structurally.
+
+### F-180, ODT writer (L)
+The inverse.
+**Depends on**: F-179.
+**Test gate**: round-trip. Text, formatting, tables, lists and images survive.
+
+### F-181, EPUB export (M)
+Reflowable EPUB 3 from the document outline, which the heading and outline APIs
+already produce.
+**Depends on**: none.
+**Test gate**: regression. A generated EPUB passes epubcheck and its spine
+matches the document outline.
+
+### F-182, SVG page export (M)
+A rendered page as SVG, from the same `PageFrame` the PDF and PNG backends
+consume. Text stays text, so the output is searchable and scalable.
+**Depends on**: none.
+**Test gate**: golden. An SVG page rasterises to the same pixels as the PNG
+backend at the same dpi, within the recorded tolerance.
+
+### F-183, Image export options (S)
+Multi-page TIFF, JPEG quality, transparent PNG backgrounds, and a page range on
+every image entry point.
+**Depends on**: none.
+**Test gate**: regression. Each option produces the declared output and a page
+range selects exactly the requested pages.
+
+---
+
+## Milestone 19, Spreadsheets (about 10 weeks)
+
+**Goal**: `rxlsx`, the third family.
+
+**This milestone supersedes a recorded permanent non-goal.**
+`docs/hld/02-scope-and-non-goals.md` states that `oxml-sml` is not a spreadsheet
+library and must not grow into one without a separate decision. F-184 is that
+decision, and nothing else in this milestone may start before it lands.
+
+The economics changed after v1 shipped. OPC, DrawingML, the chart engine, the
+layout engine and the PDF backend all exist and are format-neutral. Of the three
+Office formats, xlsx carries the highest volume in data engineering, and Rust's
+coverage is fragmented: `calamine` reads, `rust_xlsxwriter` writes, neither
+renders, and `umya-spreadsheet` does both thinly. Nothing in any language reads,
+writes, recalculates and renders on one foundation.
+
+**End-of-milestone gate**: a workbook round-trips, its formulas recalculate to
+the values Excel computes, and a sheet renders to PDF.
+
+### F-184, Supersede the spreadsheet non-goal (S)
+The decision record. Amend `02-scope-and-non-goals.md`, state what changed and
+why, and define the boundary between `oxml-sml` as chart support and `rxlsx` as
+a library.
+**Depends on**: none.
+**Test gate**: regression. The scope document states the superseding decision,
+and a test asserts the two statements do not contradict each other.
+
+### F-185, Workbook and worksheet model (L)
+Workbook, sheets, rows, columns, cells, cell types, merged ranges and defined
+names.
+**Depends on**: F-184.
+**Test gate**: round-trip. Every element survives a load and save unchanged.
+
+### F-186, Shared strings, styles and number formats (L)
+The three tables that make xlsx compact and make naive implementations wrong:
+the shared string table, `styles.xml` with its indexed formats, and the built-in
+plus custom number format codes.
+**Depends on**: F-185.
+**Test gate**: round-trip. A workbook with every built-in format and twenty
+custom ones preserves each cell's displayed value.
+
+### F-187, Reader (L)
+Streaming read of the sheet XML, because a spreadsheet is the one Office format
+that is routinely too large to hold in memory as a tree.
+**Depends on**: F-186.
+**Test gate**: regression. A 100 MB fixture reads within a bounded memory
+ceiling, asserted rather than assumed.
+
+### F-188, Writer (L)
+Streaming write, with the same ceiling.
+**Depends on**: F-187.
+**Test gate**: round-trip. A generated workbook opens in Excel without repair.
+
+### F-189, Formula parser (L)
+The A1 and R1C1 grammars, operators, ranges, cross-sheet and cross-workbook
+references, and the shared-formula compression Excel writes.
+**Depends on**: F-185.
+**Test gate**: unit. Every formula in the corpus parses and re-serialises
+identically.
+
+### F-190, Calculation engine (L)
+Dependency graph, evaluation order, cycle detection, and the function set that
+covers the overwhelming majority of real sheets: maths, statistics, text,
+logical, date and lookup.
+**Depends on**: F-189.
+**Test gate**: differential. Recalculated values match the values Excel stored
+in a pinned corpus, cell for cell, with unsupported functions listed rather than
+silently wrong.
+
+### F-191, Charts in spreadsheets (M)
+The chart part on a worksheet, reusing `oxml-chart` for the third time.
+**Depends on**: F-156, F-185.
+**Test gate**: round-trip. A chart on a sheet saves, reopens and renders.
+
+### F-192, Conditional formatting and data validation (M)
+Both are widely used and both are commonly dropped by libraries that claim
+round-trip fidelity.
+**Depends on**: F-186.
+**Test gate**: round-trip. Every rule type survives with its ranges and
+priorities.
+
+### F-193, Pivot table preservation (M)
+Preserve the pivot cache and definition verbatim, and report the pivot's source
+range and fields. Recalculating a pivot is out of scope and stated as such.
+**Depends on**: F-185.
+**Test gate**: round-trip. A workbook with three pivots saves byte-identical in
+the pivot parts and reports each pivot's source.
+
+### F-194, Sheet rendering (L)
+Page setup, print areas, repeating rows and columns, scaling, and the grid
+itself, through the existing layout and PDF backends.
+**Depends on**: F-186, F-191.
+**Test gate**: golden. A rendered sheet matches the pinned oracle render within
+the recorded SSIM threshold.
+
+### F-195, rxlsx distribution (L)
+The facade, `rxlsx-cli`, `rxlsx-wasm` and the Python wheel, following the shape
+M13 established for the other two families.
+**Depends on**: F-188, F-194.
+**Test gate**: regression. The parity suite passes on every target platform.
+
+---
+
+## Milestone 20, Fidelity at scale (about 3 weeks)
+
+**Goal**: prove the Word renderer against documents nobody here wrote.
+
+PowerPoint fidelity is measured against 50 fetched decks with an SSIM harness.
+Word fidelity rests on seven samples this project generates itself, so it can
+catch a regression against its own output and can never catch a disagreement
+with how Word actually renders. That asymmetry is the largest untested surface
+in the workspace.
+
+**End-of-milestone gate**: the Word corpus renders at the declared SSIM
+threshold, and text shaping is correct for the scripts the corpus contains.
+
+### F-196, Word corpus (M)
+A pinned, fetched document corpus with the same provenance and licence
+discipline as the deck corpus, covering business letters, reports, forms, legal
+documents with revisions, and multi-script text.
+**Depends on**: none.
+**Test gate**: regression. The fetcher verifies every checksum and refuses a
+corpus that does not match.
+
+### F-197, Word SSIM harness (L)
+The analogue of `pptx_ssim_harness.py`, comparing rendered pages against the
+pinned oracle with the same trend-reference and hard-gate split.
+**Depends on**: F-196.
+**Test gate**: regression. The harness reports per-page SSIM, and a deliberate
+layout change moves it.
+
+### F-198, Hyphenation (L)
+Liang hyphenation with language-specific patterns, which changes line breaking
+and therefore every subsequent line. Word hyphenates and this renderer does not,
+so any hyphenated document currently differs from the first hyphenated line
+onward.
+**Depends on**: F-197.
+**Test gate**: golden. A hyphenated document matches the oracle's line breaks
+within the recorded tolerance, and the harness delta is declared.
+
+### F-199, Complex script shaping (L)
+Arabic joining and shaping, Indic reordering and clusters, Thai breaking, and
+CJK line-breaking rules. The shaper handles these and the line breaker does not
+know their rules.
+**Depends on**: F-196.
+**Test gate**: golden. Multi-script corpus pages match the oracle within the
+recorded threshold.
+
+### F-200, Vertical and bidirectional text (M)
+Right-to-left paragraph direction, mixed-direction runs, and the vertical text
+directions the deck renderer currently approximates.
+**Depends on**: F-199.
+**Test gate**: golden. A bidirectional document renders with the correct visual
+order.
+
+### F-201, Large document performance (L)
+A bounded memory ceiling and a stated throughput floor for a thousand-page
+document, with the paginator and the renderer both measured.
+**Depends on**: none.
+**Test gate**: regression. A thousand-page fixture paginates and renders within
+the asserted ceiling and floor.
+
+### F-202, Incremental layout (L)
+Re-lay out only what a mutation invalidated, rather than the whole document. The
+layout cache added in F-009 is all or nothing, which is what makes an editing
+session quadratic.
+**Depends on**: F-201.
+**Test gate**: regression. Editing one paragraph of a thousand-page document
+re-lays out a bounded number of pages, asserted by counting layout invocations.
 
 ---
 
