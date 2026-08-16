@@ -236,6 +236,8 @@ defended.
 | F-X016 | S41 | L | 3 | 1 | 2026-08-16 | Alignment placement, and body text flowing around wrapping drawings |
 | F-X020 | S42 | S | 1 | 1 | 2026-08-16 | Sixteen semver-compatible updates, PDF-only delta traced to font-types |
 | F-X024 | S42 | M | 2 | 1 | 2026-08-16 | Theme adapter moved to rdocx-oxml, the shared-to-format edge removed |
+| F-X022 | S42 | S | 1 | 1 | 2026-08-16 | Incubating train published at 0.3.0, fourteen crates |
+| F-X023 | S42 | S | 1 | 1 | 2026-08-16 | Stable train published at 0.7.0, seven crates |
 
 ## Velocity
 

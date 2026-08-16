@@ -1,6 +1,6 @@
 # F-X023, Tag v0.7.0
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S42
 **Size**: S
 **Depends on**: F-X022
@@ -118,8 +118,7 @@ and no AS_BUILT entry is written yet.
       release regressions
 - [x] `/microscope F-X023 --working`
 - [x] `/verify`
-- [ ] Stop. `/release v0.7.0` is a separate command needing separate approval at
-      the reviewed SHA
+- [x] `/release v0.7.0`, published and verified at `ab52cd2`
 
 ## Open questions
 

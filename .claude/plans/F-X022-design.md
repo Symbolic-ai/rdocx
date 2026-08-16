@@ -1,6 +1,6 @@
 # F-X022, Tag rpptx-v0.3.0
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S42
 **Size**: S
 **Depends on**: F-X024
@@ -104,8 +104,7 @@ mean something other than a version moved.
 - [x] Full suite, harness, README doctests, packaging dry run, `cargo deny`
 - [x] `/microscope F-X022 --working`
 - [x] `/verify`
-- [ ] Stop. `/release rpptx-v0.3.0` is a separate command needing separate
-      approval at the reviewed SHA
+- [x] `/release rpptx-v0.3.0`, published and verified at `ab52cd2`
 
 ## Release boundary
 
