@@ -53,8 +53,8 @@ Two kinds of call site, handled differently because the fields differ:
 **Nine `Option`-typed fields.** `Some(X::from_str(&v)?)` becomes
 `X::from_str(&v).ok()`. An unmodelled value leaves the field `None`, which is
 exactly "not specified", so the style chain supplies the value. Sites:
-`properties.rs` for `jc`, `underline` and `highlight`; `numbering.rs` for
-`lvl_jc` twice; `document.rs` for `orientation` and `section_type`;
+`properties.rs` for `jc`, `underline` and `highlight`, `numbering.rs` for
+`lvl_jc` twice, `document.rs` for `orientation` and `section_type`, and
 `table.rs` for `jc` twice.
 
 **Three non-`Option` locals.** `borders.rs` assigns into a local that already
