@@ -58,7 +58,11 @@ impl Color {
 }
 
 /// Opaque font identifier assigned by FontManager.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// Ordered, so a backend keying a map on it can iterate in a fixed order rather
+/// than a hashed one. The PDF writer does exactly that, and the order it
+/// iterates in reaches the bytes it writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FontId(pub u32);
 
 /// Stable content-addressed media key for renderer-local reuse.

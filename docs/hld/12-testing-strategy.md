@@ -30,11 +30,35 @@ The existing file is the model: `zero_column_tables_do_not_panic`,
 The single highest-value mechanism in the plan is
 `scripts/hash_harness.py --check`. It deletes the expected generated outputs,
 runs `generate_all_samples`, and records the flushed `word/document.xml`,
-`word/styles.xml`, and `word/numbering.xml` state plus the page-one PNG for each
-of the seven samples. PNGs are rendered at 150 dpi through the deterministic
-font path.
+`word/styles.xml`, and `word/numbering.xml` state, the page-one PNG, and a
+three-part fingerprint of the deterministic PDF for each of the seven samples.
+PNGs are rendered at 150 dpi through the deterministic font path.
 
-The sorted `scripts/hash_baseline.json` manifest has 28 entries. Each entry is
+PDF is fingerprinted because it is a first-class output written by a different
+code path from the PNG. Rasterising page one exercises none of the writer's
+glyph positions, CID font subsets or ToUnicode CMaps as bytes, and nothing at
+all beyond page one. Three entries per sample:
+
+| Entry | Covers |
+|---|---|
+| `<sample>:pdf/pages` | The page count, each page's `/MediaBox`, and each page's inflated content stream, in `/Kids` order |
+| `<sample>:pdf/resources` | Every other inflated stream, which is the font subsets, the ToUnicode CMaps and the image XObjects |
+| `<sample>:pdf/bytes` | SHA-256 of the file as written |
+
+The first two hash inflated bytes, so they say **what** moved and survive a
+change of Deflate implementation or level. The third says **that** something
+moved and cannot be evaded, including by a change that is purely in
+compression. A fingerprint of extracted text and page geometry alone was
+rejected, because the dependency refresh in F-X020 moved all seven sample PDFs
+while `pdftotext` output stayed identical in 7 of 7.
+
+The harness reads a PDF with a scanner over the object syntax, using the
+standard library alone, and raises rather than skipping anything it does not
+understand. A missing PDF is an error and not an absent entry, because `null`
+means "this optional XML part is absent by design" and a sample whose PDF failed
+to generate is not that.
+
+The sorted `scripts/hash_baseline.json` manifest has 49 entries. Each entry is
 either a SHA-256 digest or JSON `null` when an optional XML part is absent.
 Check mode reads the manifest without modifying it and reports added, removed,
 and changed entries. Baseline writes require `--update --reason <text>`, and an

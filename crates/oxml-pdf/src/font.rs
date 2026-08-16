@@ -1,6 +1,6 @@
 //! Font subsetting and ToUnicode CMap generation for PDF embedding.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use oxml_layout::{FontData, FontId, LayoutResult, PositionedElement, walk};
 use pdf_writer::types::{SystemInfo, UnicodeCmap};
@@ -11,7 +11,11 @@ use subsetter::GlyphRemapper;
 pub(crate) struct FontUsage {
     /// Mapping from original glyph ID to the Unicode text it represents.
     /// Multiple characters may map to one glyph, so we store the first seen.
-    pub glyph_to_unicode: HashMap<u16, char>,
+    ///
+    /// Ordered by glyph ID, because this map is iterated to emit the ToUnicode
+    /// CMap. A hashed order put the same pairs in a different order on every
+    /// run, which made the written PDF differ from itself byte for byte.
+    pub glyph_to_unicode: BTreeMap<u16, char>,
     /// The GlyphRemapper for subsetting.
     pub remapper: GlyphRemapper,
 }
@@ -33,7 +37,7 @@ pub(crate) fn collect_glyph_usage(layout: &LayoutResult) -> HashMap<FontId, Font
         walk(&page.elements, &mut |element, _| {
             if let PositionedElement::Text(run) = element {
                 let entry = usage.entry(run.font_id).or_insert_with(|| FontUsage {
-                    glyph_to_unicode: HashMap::new(),
+                    glyph_to_unicode: BTreeMap::new(),
                     remapper: GlyphRemapper::new(),
                 });
 
