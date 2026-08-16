@@ -2113,7 +2113,7 @@ mod tests {
             bold: false,
             italic: false,
             field_kind: None,
-            footnote_id: None,
+            note: None,
         });
         let layout = LayoutResult::new(
             vec![page_with(vec![group(Transform::IDENTITY, vec![text])])],
@@ -2274,7 +2274,7 @@ mod tests {
                 bold: false,
                 italic: false,
                 field_kind: None,
-                footnote_id: None,
+                note: None,
             }),
             PositionedElement::Image {
                 rect: Rect {

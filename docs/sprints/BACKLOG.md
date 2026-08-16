@@ -29,8 +29,8 @@ regenerated, never hand-edited.
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
-| X, Cross-cutting (opportunistic)            | 19 | 14 | 0 | 5  |
-| **Total** | **173** | **168** | **0** | **5** |
+| X, Cross-cutting (opportunistic)            | 19 | 15 | 0 | 4  |
+| **Total** | **173** | **169** | **0** | **4** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -299,7 +299,7 @@ regenerated, never hand-edited.
 | F-X012 | Restore pinned CI toolchains                | S40 | M | done |
 | F-X013a | Footnote line advance                     | S41 | S | done |
 | F-X013b | Footnote reservation and splitting        | S41 | L | done |
-| F-X013c | Endnotes at the document end              | S41 | M | pending |
+| F-X013c | Endnotes at the document end              | S41 | M | done |
 | F-X014 | Kashida justification values               | S41 | S | pending |
 | F-X015 | Anchored drawing wrap and alignment model  | S41 | M | pending |
 | F-X016 | Floating drawing placement and text wrapping | S41 | L | pending |

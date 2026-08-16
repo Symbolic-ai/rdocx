@@ -17,7 +17,7 @@ use rdocx_oxml::styles::CT_Styles;
 use crate::engine::layout_paragraph;
 use crate::input::{LayoutInput, MediaRegistry};
 use crate::style_resolver::NumberingState;
-use oxml_layout::{Color, FontManager, LayoutLine, Result, TextSegment};
+use oxml_layout::{Color, FontManager, LayoutLine, NoteRef, NoteStream, Result, TextSegment};
 
 /// Point size notes are set at.
 pub const NOTE_FONT_SIZE: f64 = 8.0;
@@ -67,7 +67,7 @@ impl NoteLayout {
 /// Every note the document defines, laid out once.
 #[derive(Debug, Clone, Default)]
 pub struct NoteRegistry {
-    notes: HashMap<i32, NoteLayout>,
+    notes: HashMap<NoteRef, NoteLayout>,
     continuation_separator: bool,
 }
 
@@ -88,14 +88,14 @@ impl NoteRegistry {
         let mut continuation_separator = false;
         let note_width = (content_width - NOTE_INDENT).max(1.0);
 
-        // Footnotes are walked before endnotes, and an id already taken is
-        // never overwritten. A reference carries only a number, so a document
-        // numbering a footnote and an endnote alike is ambiguous at this
-        // layer, and footnotes have always won that tie. Telling the two
-        // streams apart is F-X013c.
-        for stream in [input.footnotes.as_ref(), input.endnotes.as_ref()]
-            .into_iter()
-            .flatten()
+        // Each stream is keyed separately, so a document numbering a footnote
+        // and an endnote alike keeps both.
+        for (kind, stream) in [
+            (NoteStream::Footnote, input.footnotes.as_ref()),
+            (NoteStream::Endnote, input.endnotes.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(kind, stream)| stream.map(|stream| (kind, stream)))
         {
             if stream.has_continuation_separator() {
                 continuation_separator = true;
@@ -104,7 +104,11 @@ impl NoteRegistry {
             for note in &stream.footnotes {
                 // `get_by_id` is the authority on what counts as a real note,
                 // so separators never reach the registry.
-                if stream.get_by_id(note.id).is_none() || notes.contains_key(&note.id) {
+                let key = NoteRef {
+                    stream: kind,
+                    id: note.id,
+                };
+                if stream.get_by_id(note.id).is_none() || notes.contains_key(&key) {
                     continue;
                 }
 
@@ -121,7 +125,7 @@ impl NoteRegistry {
                 };
 
                 notes.insert(
-                    note.id,
+                    key,
                     NoteLayout {
                         marker,
                         marker_rise: NOTE_FONT_SIZE * 0.33,
@@ -137,8 +141,8 @@ impl NoteRegistry {
         })
     }
 
-    pub fn get(&self, id: i32) -> Option<&NoteLayout> {
-        self.notes.get(&id)
+    pub fn get(&self, note: NoteRef) -> Option<&NoteLayout> {
+        self.notes.get(&note)
     }
 
     /// Whether either stream defined the rule drawn above a carried note.
@@ -184,6 +188,6 @@ fn shape_marker(id: i32, fm: &mut FontManager) -> Result<Option<TextSegment>> {
         baseline_offset: 0.0,
         hyperlink_url: None,
         field_kind: None,
-        footnote_id: None,
+        note: None,
     }))
 }

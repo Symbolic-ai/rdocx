@@ -296,7 +296,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind: None,
-            footnote_id: None,
+            note: None,
         };
         let items = text_segments(segment);
         assert_eq!(items.len(), 2);

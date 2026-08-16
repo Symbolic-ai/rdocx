@@ -92,6 +92,27 @@ pub enum InlineItem {
     Marker(TextSegment),
 }
 
+/// Which stream a note reference belongs to.
+///
+/// A reference carries only a number in the markup, and the two streams
+/// number independently, so a document can hold a footnote and an endnote
+/// that share a number. Without the stream the two are indistinguishable and
+/// one silently shadows the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NoteStream {
+    /// Rendered at the foot of the page carrying the reference.
+    Footnote,
+    /// Rendered at the end of the document.
+    Endnote,
+}
+
+/// A reference to one note, unique across both streams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NoteRef {
+    pub stream: NoteStream,
+    pub id: i32,
+}
+
 /// A shaped text segment with associated formatting.
 #[derive(Debug, Clone)]
 pub struct TextSegment {
@@ -122,8 +143,8 @@ pub struct TextSegment {
     pub hyperlink_url: Option<String>,
     /// If this segment is a field placeholder, the kind of field.
     pub field_kind: Option<FieldKind>,
-    /// If this segment is a footnote/endnote reference marker, its ID.
-    pub footnote_id: Option<i32>,
+    /// If this segment is a note reference marker, which note it points at.
+    pub note: Option<NoteRef>,
 }
 
 /// A single item positioned on a line.
@@ -555,7 +576,7 @@ fn split_text_subsegment(
         baseline_offset: seg.baseline_offset,
         hyperlink_url: seg.hyperlink_url.clone(),
         field_kind: seg.field_kind,
-        footnote_id: seg.footnote_id,
+        note: seg.note,
     }))
 }
 
@@ -746,7 +767,7 @@ fn shape_leader(
         baseline_offset: 0.0,
         hyperlink_url: None,
         field_kind: None,
-        footnote_id: None,
+        note: None,
     })
 }
 
@@ -853,7 +874,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind: None,
-            footnote_id: None,
+            note: None,
         }
     }
 
@@ -891,7 +912,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind: None,
-            footnote_id: None,
+            note: None,
         }
     }
 

@@ -7,8 +7,8 @@ use crate::block::{AnchoredContent, AnchoredDrawing, LayoutBlock, ParagraphBlock
 use std::collections::HashMap;
 
 use oxml_layout::{
-    Align, Color, FontManager, GlyphRun, LayoutLine, LineItem, MediaId, OutlineEntry, PageFrame,
-    Point, PositionedElement, Rect, Underline,
+    Align, Color, FontManager, GlyphRun, LayoutLine, LineItem, MediaId, NoteRef, NoteStream,
+    OutlineEntry, PageFrame, Point, PositionedElement, Rect, Underline,
 };
 
 use rdocx_oxml::drawing::{ST_RelativeFromH, ST_RelativeFromV};
@@ -274,10 +274,10 @@ struct Pager<'a> {
     /// Notes first referenced by a line placed on the page being built, in
     /// reference order. Line counts are decided when the page is finished,
     /// since that is when the leftover height is known.
-    page_note_ids: Vec<i32>,
+    page_note_ids: Vec<NoteRef>,
     /// Note content that did not fit on the previous page, as (id, next line).
     /// Placed before this page's own notes, and drawn without a marker.
-    pending_notes: Vec<(i32, usize)>,
+    pending_notes: Vec<(NoteRef, usize)>,
     /// Where the body's last mark sits, ignoring trailing paragraph spacing.
     ///
     /// `cursor_y` includes the space after the final paragraph, and that space
@@ -324,7 +324,7 @@ impl<'a> Pager<'a> {
     ///
     /// Zero when there are none, so a page without notes keeps every point of
     /// its content height.
-    fn reserve_for(&self, carried: &[(i32, usize)], fresh: &[i32]) -> f64 {
+    fn reserve_for(&self, carried: &[(NoteRef, usize)], fresh: &[NoteRef]) -> f64 {
         if carried.is_empty() && fresh.is_empty() {
             return 0.0;
         }
@@ -359,7 +359,7 @@ impl<'a> Pager<'a> {
     fn available_height_for(&self, lines: &[LayoutLine]) -> f64 {
         let mut fresh = self.page_note_ids.clone();
         for line in lines {
-            for id in note_ids_in_line(line) {
+            for id in page_foot_notes_in_line(line) {
                 if self.notes.get(id).is_some()
                     && !fresh.contains(&id)
                     && !self.pending_notes.iter().any(|(pending, _)| *pending == id)
@@ -371,10 +371,13 @@ impl<'a> Pager<'a> {
         (self.content_height - self.reserve_for(&self.pending_notes, &fresh)).max(0.0)
     }
 
-    /// Record the notes referenced by lines about to be placed.
+    /// Record the footnotes referenced by lines about to be placed.
+    ///
+    /// Endnotes are ignored here. They are emitted at the document end, so
+    /// they cost the page carrying their reference nothing.
     fn claim_notes(&mut self, lines: &[LayoutLine]) {
-        for line in lines {
-            for id in note_ids_in_line(line) {
+        for id in lines.iter().flat_map(page_foot_notes_in_line) {
+            {
                 if self.notes.get(id).is_some()
                     && !self.page_note_ids.contains(&id)
                     && !self.pending_notes.iter().any(|(pending, _)| *pending == id)
@@ -398,7 +401,7 @@ impl<'a> Pager<'a> {
         let mut used = 0.0;
 
         for (index, line) in lines.iter().enumerate() {
-            for id in note_ids_in_line(line) {
+            for id in page_foot_notes_in_line(line) {
                 if self.notes.get(id).is_some()
                     && !fresh.contains(&id)
                     && !self.pending_notes.iter().any(|(pending, _)| *pending == id)
@@ -494,7 +497,7 @@ impl<'a> Pager<'a> {
     /// Notes sit above the bottom margin and grow upward, so the body text
     /// above them was already kept clear by `available_height`.
     fn place_page_notes(&mut self) {
-        let mut queue: Vec<(i32, usize, bool)> = self
+        let mut queue: Vec<(NoteRef, usize, bool)> = self
             .pending_notes
             .drain(..)
             .map(|(id, first)| (id, first, true))
@@ -509,9 +512,9 @@ impl<'a> Pager<'a> {
         let available = (self.content_height - self.ink_bottom - NOTE_SEPARATOR_OFFSET).max(0.0);
 
         // Decide how much of each note this page can hold.
-        let mut placed: Vec<(i32, usize, usize, bool)> = Vec::new();
+        let mut placed: Vec<(NoteRef, usize, usize, bool)> = Vec::new();
         let mut used = 0.0;
-        let mut carried: Vec<(i32, usize)> = Vec::new();
+        let mut carried: Vec<(NoteRef, usize)> = Vec::new();
 
         for (id, first, continued) in queue {
             let Some(note) = self.notes.get(id) else {
@@ -586,60 +589,15 @@ impl<'a> Pager<'a> {
             let Some(note) = self.notes.get(id) else {
                 continue;
             };
-            let baseline = cursor_y + note.lines.get(first).map_or(0.0, |line| line.ascent);
-
-            // A continuation does not repeat the marker.
-            if !continued {
-                self.elements.push(PositionedElement::Text(GlyphRun {
-                    origin: Point {
-                        x: self.geometry.margin_left,
-                        y: baseline - note.marker_rise,
-                    },
-                    font_id: note.marker.font_id,
-                    font_size: note.marker.font_size,
-                    glyph_ids: note.marker.glyph_ids.clone(),
-                    advances: note.marker.advances.clone(),
-                    text: note.marker.text.clone(),
-                    color: note.marker.color,
-                    bold: note.marker.bold,
-                    italic: note.marker.italic,
-                    field_kind: None,
-                    footnote_id: None,
-                }));
-            }
-
-            for line in note.lines.iter().skip(first).take(count) {
-                let line_baseline = cursor_y + line.ascent;
-                let mut x = self.geometry.margin_left + NOTE_INDENT;
-                for item in &line.items {
-                    let (segment, advance) = match item {
-                        LineItem::Text(seg) | LineItem::Marker(seg) => (Some(seg), seg.width),
-                        LineItem::Tab { width, .. } | LineItem::Image { width, .. } => {
-                            (None, *width)
-                        }
-                    };
-                    if let Some(seg) = segment {
-                        self.elements.push(PositionedElement::Text(GlyphRun {
-                            origin: Point {
-                                x,
-                                y: line_baseline - seg.baseline_offset,
-                            },
-                            font_id: seg.font_id,
-                            font_size: seg.font_size,
-                            glyph_ids: seg.glyph_ids.clone(),
-                            advances: seg.advances.clone(),
-                            text: seg.text.clone(),
-                            color: seg.color,
-                            bold: seg.bold,
-                            italic: seg.italic,
-                            field_kind: None,
-                            footnote_id: None,
-                        }));
-                    }
-                    x += advance;
-                }
-                cursor_y += line.height;
-            }
+            cursor_y += draw_note(
+                &mut self.elements,
+                &self.geometry,
+                note,
+                first,
+                count,
+                continued,
+                cursor_y,
+            );
         }
     }
 
@@ -733,12 +691,188 @@ impl<'a> Pager<'a> {
     }
 }
 
-/// The note ids referenced by the segments on one line.
-fn note_ids_in_line(line: &LayoutLine) -> impl Iterator<Item = i32> + '_ {
+/// Draw one note, or one slice of one, with its top edge at `top`.
+///
+/// Returns the height consumed. Shared by the page foot and the document end
+/// so the two regions cannot drift apart in how a note looks.
+fn draw_note(
+    elements: &mut Vec<PositionedElement>,
+    geometry: &PageGeometry,
+    note: &NoteLayout,
+    first: usize,
+    count: usize,
+    continued: bool,
+    top: f64,
+) -> f64 {
+    let baseline = top + note.lines.get(first).map_or(0.0, |line| line.ascent);
+
+    // A continuation does not repeat the marker.
+    if !continued {
+        elements.push(PositionedElement::Text(GlyphRun {
+            origin: Point {
+                x: geometry.margin_left,
+                y: baseline - note.marker_rise,
+            },
+            font_id: note.marker.font_id,
+            font_size: note.marker.font_size,
+            glyph_ids: note.marker.glyph_ids.clone(),
+            advances: note.marker.advances.clone(),
+            text: note.marker.text.clone(),
+            color: note.marker.color,
+            bold: note.marker.bold,
+            italic: note.marker.italic,
+            field_kind: None,
+            note: None,
+        }));
+    }
+
+    let mut cursor_y = top;
+    for line in note.lines.iter().skip(first).take(count) {
+        let line_baseline = cursor_y + line.ascent;
+        let mut x = geometry.margin_left + NOTE_INDENT;
+        for item in &line.items {
+            let (segment, advance) = match item {
+                LineItem::Text(seg) | LineItem::Marker(seg) => (Some(seg), seg.width),
+                LineItem::Tab { width, .. } | LineItem::Image { width, .. } => (None, *width),
+            };
+            if let Some(seg) = segment {
+                elements.push(PositionedElement::Text(GlyphRun {
+                    origin: Point {
+                        x,
+                        y: line_baseline - seg.baseline_offset,
+                    },
+                    font_id: seg.font_id,
+                    font_size: seg.font_size,
+                    glyph_ids: seg.glyph_ids.clone(),
+                    advances: seg.advances.clone(),
+                    text: seg.text.clone(),
+                    color: seg.color,
+                    bold: seg.bold,
+                    italic: seg.italic,
+                    field_kind: None,
+                    note: None,
+                }));
+            }
+            x += advance;
+        }
+        cursor_y += line.height;
+    }
+
+    cursor_y - top
+}
+
+/// Append the document's endnotes as pages after the last body page.
+///
+/// Endnotes are flow content read at the end, not marginalia, so they start at
+/// the top of a fresh page and carry no separator rule. There is no body text
+/// on these pages for a rule to divide them from.
+pub fn append_endnote_pages(
+    pages: &mut Vec<PageFrame>,
+    notes: &NoteRegistry,
+    geometry: PageGeometry,
+) {
+    // First-reference order across the document, which is the order a reader
+    // met them in.
+    let mut ordered: Vec<NoteRef> = Vec::new();
+    for page in pages.iter() {
+        for element in &page.elements {
+            if let PositionedElement::Text(run) = element
+                && let Some(note) = run.note
+                && note.stream == NoteStream::Endnote
+                && notes.get(note).is_some()
+                && !ordered.contains(&note)
+            {
+                ordered.push(note);
+            }
+        }
+    }
+
+    if ordered.is_empty() {
+        return;
+    }
+
+    let content_height = geometry.content_height();
+    let mut elements: Vec<PositionedElement> = Vec::new();
+    let mut cursor_y = 0.0;
+    let mut page_number = pages.len() + 1;
+
+    let mut flush = |elements: &mut Vec<PositionedElement>, page_number: &mut usize| {
+        pages.push(PageFrame::new(
+            *page_number,
+            geometry.page_width,
+            geometry.page_height,
+            std::mem::take(elements),
+        ));
+        *page_number += 1;
+    };
+
+    for note_ref in ordered {
+        let Some(note) = notes.get(note_ref) else {
+            continue;
+        };
+
+        let mut first = 0;
+        let mut continued = false;
+        while first < note.lines.len() {
+            let mut count = 0;
+            let mut used = cursor_y;
+            for line in note.lines.iter().skip(first) {
+                if used + line.height > content_height + 0.01 {
+                    break;
+                }
+                used += line.height;
+                count += 1;
+            }
+
+            if count == 0 {
+                // Nothing more fits on this page. Start a fresh one, unless
+                // the page is already empty. An empty page that still cannot
+                // take a line means the line is taller than the page, so it is
+                // placed and allowed to overflow rather than looping forever.
+                // Overflowing beats dropping the text, and body text on a page
+                // of its own behaves the same way.
+                if cursor_y == 0.0 {
+                    count = 1;
+                } else {
+                    flush(&mut elements, &mut page_number);
+                    cursor_y = 0.0;
+                    continue;
+                }
+            }
+
+            cursor_y += draw_note(
+                &mut elements,
+                &geometry,
+                note,
+                first,
+                count,
+                continued,
+                geometry.margin_top + cursor_y,
+            );
+            first += count;
+            continued = true;
+        }
+    }
+
+    if !elements.is_empty() {
+        flush(&mut elements, &mut page_number);
+    }
+}
+
+/// The notes referenced by the segments on one line.
+fn notes_in_line(line: &LayoutLine) -> impl Iterator<Item = NoteRef> + '_ {
     line.items.iter().filter_map(|item| match item {
-        LineItem::Text(seg) | LineItem::Marker(seg) => seg.footnote_id,
+        LineItem::Text(seg) | LineItem::Marker(seg) => seg.note,
         _ => None,
     })
+}
+
+/// The notes on one line that belong at the foot of its page.
+///
+/// Endnotes are excluded. They are emitted at the document end and take no
+/// height from the page their reference sits on.
+fn page_foot_notes_in_line(line: &LayoutLine) -> impl Iterator<Item = NoteRef> + '_ {
+    notes_in_line(line).filter(|note| note.stream == NoteStream::Footnote)
 }
 
 /// Paginate a single paragraph, handling splitting across pages.
@@ -1138,7 +1272,7 @@ fn render_paragraph_lines(
                         bold: seg.bold,
                         italic: seg.italic,
                         field_kind: seg.field_kind,
-                        footnote_id: seg.footnote_id,
+                        note: seg.note,
                     }));
 
                     // Render underline
@@ -1255,7 +1389,7 @@ fn render_paragraph_lines(
                             bold: leader_seg.bold,
                             italic: leader_seg.italic,
                             field_kind: None,
-                            footnote_id: None,
+                            note: None,
                         }));
                     }
                     x += width;
@@ -1823,7 +1957,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind: None,
-            footnote_id: None,
+            note: None,
         };
         LayoutLine {
             items: vec![LineItem::Text(seg)],
@@ -1944,7 +2078,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind: None,
-            footnote_id: None,
+            note: None,
         };
         let line = LayoutLine {
             items: vec![LineItem::Text(seg)],
@@ -2148,7 +2282,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind: None,
-            footnote_id: None,
+            note: None,
         };
         LayoutLine {
             items: vec![LineItem::Text(seg)],
@@ -2187,7 +2321,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: Some("https://example.com".to_string()),
             field_kind: None,
-            footnote_id: None,
+            note: None,
         };
         let line = LayoutLine {
             items: vec![LineItem::Text(seg)],

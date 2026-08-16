@@ -127,6 +127,14 @@ height depends on the note area it owes, and a note that does not fit continues
 on the following page. The registry pre-shapes each note's marker, so the
 paginator places notes without needing a mutable font manager.
 
+The two note streams are placed differently and are keyed apart. A footnote
+sits at the foot of the page carrying its reference and takes height from that
+page. An endnote costs its page nothing and is emitted after the last body
+page, where endnotes flow from the top of their own pages without a separator
+rule. A reference therefore carries a `NoteRef`, its stream and its number,
+because the streams number independently and a document may hold a footnote and
+an endnote sharing a number.
+
 ## Versioning
 
 The 14 implemented shared and PowerPoint publication candidates use the

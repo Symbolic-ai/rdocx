@@ -5934,3 +5934,67 @@ most valuable test in the set. The end-to-end render also caught a third
 regression that no unit test saw: keying the registry by note id alone let an
 endnote overwrite a footnote sharing its number, silently swapping the rendered
 text. Telling the two streams apart is F-X013c.
+
+### F-X013c, Endnotes at the document end
+
+**Sprint.** S41
+**Completed.** 2026-08-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Endnotes stop rendering at the foot of the page carrying
+their reference and are emitted after the last body page, flowing from the top
+of their own pages. Footnotes keep the page foot. An endnote reference now costs
+its page no height at all.
+
+Underneath, a note reference carries which stream it came from. `TextSegment`
+and `GlyphRun` swap `footnote_id: Option<i32>` for `note: Option<NoteRef>`,
+where a `NoteRef` is a stream and a number. `NoteRegistry` keys on that pair, so
+a document numbering a footnote and an endnote alike keeps both. It previously
+kept one and silently dropped the other, which `sample1.docx` triggers with a
+footnote 2 and an endnote 2.
+
+**Non-obvious choices.** Endnotes begin on a fresh page rather than continuing
+on the last body page, which is what Word does when there is room. An endnote
+flowing onto a page that also owes footnotes would put two note regions on one
+page competing for the same height, and that interaction is not worth its
+complexity here. Recorded in the design plan so the choice is legible rather
+than accidental.
+
+`draw_note` was extracted so the page foot and the document end share one
+drawing routine. Two placement routines that drift apart is exactly what
+produced the F-X013a defect, and this story would otherwise have created a
+second pair.
+
+Endnote markers keep the raw id. Word defaults endnotes to lower roman numerals
+through `w:endnotePr/w:numFmt`, which is a numbering-format concern rather than
+a placement one and was not taken.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "What stays put",
+extended to describe the two note streams being placed differently and keyed
+apart.
+
+**Tests.** The gate is
+`a_footnote_and_an_endnote_sharing_a_number_render_their_own_text` and
+`endnotes_render_after_the_last_body_page`. Also added
+`footnotes_and_endnotes_keep_their_own_regions` and
+`an_endnote_reference_does_not_reserve_space_at_the_page_foot`, which pins that
+an endnote changes body pagination not at all. Each was proven to fail against
+its own reverted change: three against the stream split, and the shared-number
+regression against id-only registry keying, where the endnote text vanishes
+entirely.
+
+**Hash harness.** Unchanged. All 28 entries match, for the reason F-X013a
+recorded: no corpus document contains a note. The evidence is the regression set
+plus an end-to-end render of `sample1.docx`, where all eight body pages stay
+byte identical, the footnote keeps its own text at the foot of page 5, and a
+ninth page appears carrying the endnote's own distinct text.
+
+**Notes for future sessions.** All eight body pages being byte identical is the
+useful signal here, and it is worth reaching for whenever a story carves one
+behaviour out of another. It says the change was additive far more directly than
+any assertion about the new behaviour does. The public surface of `oxml-layout`
+changed: `footnote_id` became `note`. That crate is incubating at 0.2.0 with no
+consumer outside this workspace, and `rdocx`'s own public API is untouched,
+since `RunRef::footnote_id()` reads the oxml model rather than a layout segment.

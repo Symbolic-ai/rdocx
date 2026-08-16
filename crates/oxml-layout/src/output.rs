@@ -112,7 +112,7 @@ pub struct GlyphRun {
     /// If this glyph run is a field placeholder, the kind of field.
     pub field_kind: Option<FieldKind>,
     /// If this glyph run is a footnote/endnote reference marker, its ID.
-    pub footnote_id: Option<i32>,
+    pub note: Option<crate::line::NoteRef>,
 }
 
 /// A positioned element on a page.

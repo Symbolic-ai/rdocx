@@ -209,7 +209,7 @@ fn shape_run(
         baseline_offset: style.baseline.unwrap_or(0.0) * font_size,
         hyperlink_url: style.hyperlink_url.clone(),
         field_kind: None,
-        footnote_id: None,
+        note: None,
     })
 }
 
@@ -814,7 +814,7 @@ fn emit_segment(
         bold: segment.bold,
         italic: segment.italic,
         field_kind: segment.field_kind,
-        footnote_id: segment.footnote_id,
+        note: segment.note,
     }));
 
     if segment.underline.is_some() {
@@ -1856,7 +1856,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind: None,
-            footnote_id: None,
+            note: None,
         };
         let line = oxml_layout::LayoutLine {
             items: vec![

@@ -227,6 +227,7 @@ defended.
 | F-X012 | S40 | M | 2 | 1 | 2026-08-15 | Pinned Poppler, Binaryen, uv, and LibreOffice CI toolchains |
 | F-X013a | S41 | S | 1 | 1 | 2026-08-16 | Footnote lines advance, and break width matches the marker indent |
 | F-X013b | S41 | L | 3 | 1 | 2026-08-16 | Note area reserved during pagination, notes split across pages |
+| F-X013c | S41 | M | 2 | 1 | 2026-08-16 | Endnotes emitted at the document end, note streams keyed apart |
 
 ## Velocity
 

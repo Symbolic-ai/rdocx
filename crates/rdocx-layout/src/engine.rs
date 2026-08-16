@@ -15,8 +15,8 @@ use crate::paginator::{self, HeaderFooterContent, PageGeometry};
 use crate::style_resolver::{self, NumberingState};
 use crate::table;
 use oxml_layout::{
-    Color, DocumentMetadata, FieldKind, FontManager, InlineItem, LayoutResult, PageFrame,
-    PositionedElement, Rect, Result, TextSegment, break_into_lines,
+    Color, DocumentMetadata, FieldKind, FontManager, InlineItem, LayoutResult, NoteRef, NoteStream,
+    PageFrame, PositionedElement, Rect, Result, TextSegment, break_into_lines,
 };
 
 /// The layout engine.
@@ -171,6 +171,10 @@ impl Engine {
         // Paginate across all sections
         let (mut pages, outlines) =
             paginator::paginate_sections(&sections, &self.font_manager, &media, &notes);
+
+        // Endnotes read at the end of the document, so they follow the last
+        // body page rather than sitting at the foot of their reference's page.
+        paginator::append_endnote_pages(&mut pages, &notes, final_geometry);
 
         // Post-pagination pass: substitute field placeholders
         let total_pages = pages.len();
@@ -407,7 +411,7 @@ pub fn layout_paragraph(
                     baseline_offset: 0.0,
                     hyperlink_url: None,
                     field_kind: None,
-                    footnote_id: None,
+                    note: None,
                 }));
 
                 // Add a space/tab after the marker
@@ -540,7 +544,7 @@ pub fn layout_paragraph(
                         baseline_offset,
                         hyperlink_url: current_hyperlink_url.clone(),
                         field_kind: None,
-                        footnote_id: None,
+                        note: None,
                     }));
                 }
                 RunContent::Tab => {
@@ -591,10 +595,16 @@ pub fn layout_paragraph(
                         baseline_offset,
                         hyperlink_url: None,
                         field_kind: Some(fk),
-                        footnote_id: None,
+                        note: None,
                     }));
                 }
                 RunContent::FootnoteRef { id } | RunContent::EndnoteRef { id } => {
+                    // The two streams number independently, so the marker has
+                    // to carry which one it came from.
+                    let stream = match content {
+                        RunContent::EndnoteRef { .. } => NoteStream::Endnote,
+                        _ => NoteStream::Footnote,
+                    };
                     // Render as superscript number
                     let marker = id.to_string();
                     let sup_size = font_size * 0.58;
@@ -621,7 +631,7 @@ pub fn layout_paragraph(
                         baseline_offset: sup_offset,
                         hyperlink_url: None,
                         field_kind: None,
-                        footnote_id: Some(*id),
+                        note: Some(NoteRef { stream, id: *id }),
                     }));
                 }
             }
@@ -1849,9 +1859,13 @@ mod tests {
             let output = engine.layout(&input).expect("layout succeeds");
 
             let reference_page = output.pages.iter().position(|page| {
-                page.elements.iter().any(
-                    |element| matches!(element, PositionedElement::Text(run) if run.footnote_id == Some(1)),
-                )
+                page.elements.iter().any(|element| {
+                    matches!(element, PositionedElement::Text(run)
+                    if run.note == Some(oxml_layout::NoteRef {
+                        stream: oxml_layout::NoteStream::Footnote,
+                        id: 1,
+                    }))
+                })
             });
             let note_page = output
                 .pages
@@ -1867,5 +1881,238 @@ mod tests {
             mismatches.is_empty(),
             "note and reference landed on different pages for (position, ref, note): {mismatches:?}"
         );
+    }
+
+    // F-X013c, endnotes at the document end.
+
+    /// A document whose single body paragraph references footnote `id` and
+    /// endnote `id`, with each stream giving that number different text.
+    fn make_document_with_both_streams(id: i32, body_paras: usize) -> LayoutInput {
+        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes, NoteType};
+        use rdocx_oxml::text::CT_R;
+
+        let mut doc = rdocx_oxml::document::CT_Document::new();
+        for index in 0..body_paras {
+            let mut para = CT_P::new();
+            para.add_run("Body paragraph text that occupies a line of the page.");
+            if index == 0 {
+                let mut foot = CT_R::new("");
+                foot.content = vec![RunContent::FootnoteRef { id }];
+                para.runs.push(foot);
+                let mut end = CT_R::new("");
+                end.content = vec![RunContent::EndnoteRef { id }];
+                para.runs.push(end);
+            }
+            doc.body.add_paragraph(para);
+        }
+
+        let note = |text: &str| {
+            let mut p = CT_P::new();
+            p.add_run(text);
+            CT_Footnote {
+                id,
+                note_type: NoteType::Normal,
+                paragraphs: vec![p],
+            }
+        };
+
+        LayoutInput {
+            document: doc,
+            styles: CT_Styles::new_default(),
+            numbering: None,
+            headers: HashMap::new(),
+            footers: HashMap::new(),
+            images: HashMap::new(),
+            core_properties: None,
+            hyperlink_urls: HashMap::new(),
+            footnotes: Some(CT_Footnotes {
+                footnotes: vec![note("FOOTNOTETEXT")],
+            }),
+            endnotes: Some(CT_Footnotes {
+                footnotes: vec![note("ENDNOTETEXT")],
+            }),
+            theme: None,
+            fonts: Vec::new(),
+        }
+    }
+
+    fn page_text(page: &oxml_layout::output::PageFrame) -> String {
+        page.elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn a_footnote_and_an_endnote_sharing_a_number_render_their_own_text() {
+        let input = make_document_with_both_streams(2, 3);
+        let mut engine = Engine::new();
+        let output = engine.layout(&input).expect("layout succeeds");
+
+        let all: String = output
+            .pages
+            .iter()
+            .map(page_text)
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(
+            all.contains("FOOTNOTETEXT"),
+            "the footnote must render its own text, got {all}"
+        );
+        assert!(
+            all.contains("ENDNOTETEXT"),
+            "the endnote must render its own text, got {all}"
+        );
+    }
+
+    #[test]
+    fn endnotes_render_after_the_last_body_page() {
+        let input = make_document_with_both_streams(2, 3);
+        let mut engine = Engine::new();
+        let output = engine.layout(&input).expect("layout succeeds");
+
+        let endnote_page = output
+            .pages
+            .iter()
+            .position(|page| page_text(page).contains("ENDNOTETEXT"))
+            .expect("the endnote is rendered somewhere");
+        let last_body_page = output
+            .pages
+            .iter()
+            .rposition(|page| page_text(page).contains("occupies"))
+            .expect("the body is rendered somewhere");
+
+        assert!(
+            endnote_page > last_body_page,
+            "endnotes come after every body page, endnote on {endnote_page} and body to {last_body_page}"
+        );
+        assert!(
+            !page_text(&output.pages[endnote_page]).contains("occupies"),
+            "an endnote page carries no body text"
+        );
+    }
+
+    #[test]
+    fn footnotes_and_endnotes_keep_their_own_regions() {
+        let input = make_document_with_both_streams(2, 3);
+        let mut engine = Engine::new();
+        let output = engine.layout(&input).expect("layout succeeds");
+
+        let footnote_page = output
+            .pages
+            .iter()
+            .position(|page| page_text(page).contains("FOOTNOTETEXT"))
+            .expect("the footnote is rendered");
+
+        // The footnote shares the page that carries its reference.
+        assert!(
+            page_text(&output.pages[footnote_page]).contains("occupies"),
+            "a footnote sits on the page carrying its reference"
+        );
+        assert!(
+            separator_y_of(&output.pages[footnote_page]).is_some(),
+            "the footnote page draws a separator"
+        );
+
+        // The endnote page is a different page, and draws no separator,
+        // because there is no body text there to divide it from.
+        let endnote_page = output
+            .pages
+            .iter()
+            .position(|page| page_text(page).contains("ENDNOTETEXT"))
+            .expect("the endnote is rendered");
+        assert_ne!(footnote_page, endnote_page, "the two regions are distinct");
+        assert!(
+            separator_y_of(&output.pages[endnote_page]).is_none(),
+            "an endnote page draws no separator rule"
+        );
+    }
+
+    #[test]
+    fn an_endnote_reference_does_not_reserve_space_at_the_page_foot() {
+        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes, NoteType};
+        use rdocx_oxml::text::CT_R;
+
+        // The same document twice, once with an endnote reference and once
+        // with none. An endnote costs its page nothing, so the body must
+        // paginate identically.
+        let build = |with_endnote: bool| {
+            let mut doc = rdocx_oxml::document::CT_Document::new();
+            for index in 0..60 {
+                let mut para = CT_P::new();
+                para.add_run("Body paragraph text that occupies a line of the page.");
+                if index == 0 && with_endnote {
+                    let mut end = CT_R::new("");
+                    end.content = vec![RunContent::EndnoteRef { id: 1 }];
+                    para.runs.push(end);
+                }
+                doc.body.add_paragraph(para);
+            }
+            let mut note = CT_P::new();
+            note.add_run("An endnote that would be tall in the margin.");
+            LayoutInput {
+                document: doc,
+                styles: CT_Styles::new_default(),
+                numbering: None,
+                headers: HashMap::new(),
+                footers: HashMap::new(),
+                images: HashMap::new(),
+                core_properties: None,
+                hyperlink_urls: HashMap::new(),
+                footnotes: None,
+                endnotes: Some(CT_Footnotes {
+                    footnotes: vec![CT_Footnote {
+                        id: 1,
+                        note_type: NoteType::Normal,
+                        paragraphs: vec![note],
+                    }],
+                }),
+                theme: None,
+                fonts: Vec::new(),
+            }
+        };
+
+        let mut engine = Engine::new();
+        let plain = engine.layout(&build(false)).expect("layout succeeds");
+        let noted = engine.layout(&build(true)).expect("layout succeeds");
+
+        // One extra page for the endnote itself, and no separator anywhere.
+        assert_eq!(
+            noted.pages.len(),
+            plain.pages.len() + 1,
+            "an endnote adds its own page and takes none from the body"
+        );
+        for (index, page) in noted.pages.iter().enumerate() {
+            if index < plain.pages.len() {
+                assert!(
+                    separator_y_of(page).is_none(),
+                    "page {} reserved foot space for an endnote",
+                    index + 1
+                );
+            }
+        }
+
+        // Body pagination is untouched.
+        for (index, plain_page) in plain.pages.iter().enumerate() {
+            let body_lines = |page: &oxml_layout::output::PageFrame| {
+                page.elements
+                    .iter()
+                    .filter(|element| {
+                        matches!(element, PositionedElement::Text(run)
+                            if run.text.starts_with("occupies"))
+                    })
+                    .count()
+            };
+            assert_eq!(
+                body_lines(plain_page),
+                body_lines(&noted.pages[index]),
+                "page {} holds a different amount of body text",
+                index + 1
+            );
+        }
     }
 }
