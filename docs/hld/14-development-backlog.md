@@ -1394,6 +1394,60 @@ out justified, and the existing rejection still holds for a genuinely unknown
 string. The hash harness is unchanged, since no recorded baseline carries a
 kashida value.
 
+### F-X022, Tag rpptx-v0.3.0 (S)
+The complete incubating train moves to the next minor version, 0.3.0, because
+S41 broke its public API rather than merely extending it. `oxml-layout` renamed
+`TextSegment::footnote_id` and `GlyphRun::footnote_id` to `note`, changing the
+type from `Option<i32>` to `Option<NoteRef>`, and added two fields to
+`LineBreakParams`. Under semver a 0.x minor bump is the correct response.
+
+The fifteen packages carrying an explicit 0.2.0 move together, their root
+dependency pins, lock entries, README dependency examples and the local
+`rpptx-wasm` version with them. Exactly fourteen are published: `rpptx-wasm`
+stays unpublished. The stable train stays at 0.6.0 during this story, and its
+pins on the incubating crates move to 0.3.0 so the later stable release can
+resolve against a published 0.3.0.
+
+This story prepares and, through `/release rpptx-v0.3.0`, publishes. Publication
+happens only after full verification, a clean microscope, a clean sprint review
+and separate immediate approval at the reviewed SHA. No npm, PyPI, Python, WASM
+or stable package is authorized.
+**Depends on**: F-X020.
+**Test gate**: the incubating release regression proves the fifteen-package
+preparation group, the fourteen internal pins, the exact fourteen-package
+publication set, README requirements, lock entries and the unpublished
+`rpptx-wasm` literal. The patched workspace dry run, archive inventory under
+10 MiB, README compilation and `cargo deny` pass, and all 28 hashes stay
+unchanged.
+
+### F-X023, Tag v0.7.0 (S)
+The complete stable train moves to 0.7.0, because S41 broke its public API.
+`rdocx-oxml` added `note_type` to `CT_Footnote`, six fields to `CT_Anchor` and
+four variants to `WrapType`, each of which breaks an exhaustive match or a
+struct literal. `rdocx-layout` added fields to `ParagraphBlock` and
+`AnchoredDrawing`. The `rdocx` facade's own public API is unchanged, and it
+moves with its train regardless.
+
+The eleven workspace-version packages move together: the exact seven crates.io
+packages plus the four unpublished Python and WASM support packages. README
+dependency examples, metadata regressions, lock entries, the two Python project
+versions and the WASM contract literals move to 0.7.0. The incubating train
+remains at 0.3.0.
+
+`/release v0.7.0` publishes only the exact seven stable crates, after full
+verification, a clean microscope, a clean sprint review and separate immediate
+approval. No PyPI, npm, WASM, Python or incubating publication is authorized.
+**Depends on**: F-X022. The stable crates depend on `oxml-layout`, so the
+incubating train has to be resolvable at 0.3.0 on crates.io before the stable
+train that pins it can publish. This is the reverse of the S39 order, where only
+one train moved.
+**Test gate**: the stable release regression proves the eleven-package train,
+the nine internal pins, the exact seven-package publication set, README
+requirements, lock entries, Python project versions, WASM literals and the
+unchanged incubating train at 0.3.0. The patched workspace dry run, archive
+inventory, README compilation and `cargo deny` pass, and all 28 hashes stay
+unchanged.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this
