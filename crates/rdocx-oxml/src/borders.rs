@@ -44,7 +44,7 @@ impl CT_BorderEdge {
             let key = attr.key.as_ref();
             let v = std::str::from_utf8(&attr.value)?;
             if matches_local_name(key, b"val") {
-                val = ST_Border::from_str(v)?;
+                val = ST_Border::from_str(v).unwrap_or(val);
             } else if matches_local_name(key, b"sz") {
                 sz = Some(v.parse()?);
             } else if matches_local_name(key, b"space") {
@@ -237,11 +237,11 @@ impl CT_TabStop {
             let key = attr.key.as_ref();
             let v = std::str::from_utf8(&attr.value)?;
             if is_word_attribute(key, b"val", &prefixes) {
-                val = ST_TabJc::from_str(v)?;
+                val = ST_TabJc::from_str(v).unwrap_or(val);
             } else if is_word_attribute(key, b"pos", &prefixes) {
                 pos = Twips(v.parse()?);
             } else if is_word_attribute(key, b"leader", &prefixes) {
-                leader = Some(ST_TabLeader::from_str(v)?);
+                leader = ST_TabLeader::from_str(v).ok();
             }
         }
 

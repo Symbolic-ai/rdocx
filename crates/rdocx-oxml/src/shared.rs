@@ -413,6 +413,22 @@ impl ST_HighlightColor {
 
 #[cfg(test)]
 mod tests {
+
+    // F-X018, an unmodelled enumerated value must not fail a document open.
+
+    #[test]
+    fn the_parsers_still_reject_an_unknown_value() {
+        // Tolerance lives at the call site, not in the type. A caller that
+        // wants strictness keeps it.
+        assert!(ST_Jc::from_str("nonsense").is_err());
+        assert!(ST_Underline::from_str("nonsense").is_err());
+        assert!(ST_Border::from_str("nonsense").is_err());
+        assert!(ST_TabJc::from_str("nonsense").is_err());
+        assert!(ST_TabLeader::from_str("nonsense").is_err());
+        assert!(ST_SectionType::from_str("nonsense").is_err());
+        assert!(ST_PageOrientation::from_str("nonsense").is_err());
+        assert!(ST_HighlightColor::from_str("nonsense").is_err());
+    }
     use super::*;
 
     // F-X014, kashida justification values.

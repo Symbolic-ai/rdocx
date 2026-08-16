@@ -6389,3 +6389,66 @@ doctests, `cargo deny`, and the patched 21-package dry run.
 where S41 left them, and the two tags share a SHA. A future release that moves
 only one train is the normal case again, and only a sprint that breaks both
 needs the ordering care this one did.
+
+### F-X018, Unknown enumerated values must not fail a document open
+
+**Sprint.** S43
+**Completed.** 2026-08-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Twelve call sites across six files in `rdocx-oxml` stopped
+propagating a rejected enumerated value out of document parsing. An unmodelled
+value is now read as if the attribute were absent, which in OOXML means the
+element's default, which is usually inheritance from the style chain. The
+document opens and every sibling property survives.
+
+Before this, nine value parsers returned an error for any string they did not
+list, and those errors travelled through `?` out of `CT_Document::from_xml` to
+`Document::open`. A document using a spec-valid value the model had not yet
+enumerated did not open at all.
+
+**Non-obvious choices.** The parsers stay fallible. `from_str` still returns
+`Result`, so the tolerance is an explicit decision at each call site rather than
+a property of the type, and a caller that wants strictness keeps it. That is
+the same shape as `ST_OnOff::from_str_or_default`, which already existed.
+
+`Option`-typed fields become `None` rather than a guessed variant. `None` means
+"not specified" and lets the style chain supply the value. Falling back to a
+concrete variant such as `ST_Jc::Left` would override a style that does specify
+alignment, turning a missing value into an actively wrong one. The three
+`borders.rs` locals are not `Option`, so they keep the default they were
+initialised with.
+
+No enum gained a variant. Guessing which unmodelled values matter is what
+F-X014 did for the one case that was reachable, and the shape was the defect.
+
+**Deviations from the design plan.** The plan cited
+`docs/hld/04-opc-and-packaging.md` as the home of the prefix-tolerant read rule.
+It lives in `docs/hld/03-architecture.md`. Corrected in the plan and the right
+file updated.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, the domain
+conventions list, which gains a bullet stating that an unmodelled enumerated
+value reads as an absent attribute, including the round-trip cost.
+
+**Tests.** The gate is
+`a_document_with_an_unmodelled_enumerated_value_still_opens`, which loads a
+document for each of eight enumerations reachable from `document.xml` and
+asserts a sibling property survives. Plus
+`an_unmodelled_value_leaves_the_property_unset`, pinning `None` rather than a
+guess, and `the_parsers_still_reject_an_unknown_value`, pinning that the check
+was moved rather than removed. The first two fail against a single reverted call
+site, naming the offending value.
+
+**Hash harness.** Unchanged, 28 of 28. Every corpus document already opens, so
+none carries an unmodelled value.
+
+**Notes for future sessions.** Two things are worth knowing. `StyleType` is the
+ninth enumeration and is not in the document-level regression, because it is
+reached from `styles.xml` rather than `document.xml`, so a `CT_Document`
+fixture cannot carry it. It is covered by the strictness unit test only.
+
+And an unmodelled value is now silently lost on save, since the field is `None`
+and the serialiser writes nothing. That is the accepted cost of opening the
+document at all. Preserving it would need the `raw_xml` capture machinery that
+unmodelled elements already use, extended to attributes.

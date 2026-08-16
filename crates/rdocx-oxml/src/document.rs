@@ -178,7 +178,7 @@ impl CT_SectPr {
                             } else if matches_local_name(key, b"h") {
                                 sect.page_height = Some(Twips(val_str.parse()?));
                             } else if matches_local_name(key, b"orient") {
-                                sect.orientation = Some(ST_PageOrientation::from_str(val_str)?);
+                                sect.orientation = ST_PageOrientation::from_str(val_str).ok();
                             }
                         }
                     } else if matches_local_name(name.as_ref(), b"pgMar") {
@@ -208,7 +208,7 @@ impl CT_SectPr {
                         }
                     } else if matches_local_name(name.as_ref(), b"type") {
                         if let Some(val) = get_val_attr(e)? {
-                            sect.section_type = Some(ST_SectionType::from_str(&val)?);
+                            sect.section_type = ST_SectionType::from_str(&val).ok();
                         }
                     } else if matches_local_name(name.as_ref(), b"cols") {
                         sect.columns = Some(Self::parse_cols_empty(e)?);
@@ -809,6 +809,87 @@ impl Default for CT_Document {
 
 #[cfg(test)]
 mod tests {
+
+    // F-X018, an unmodelled enumerated value must not fail a document open.
+
+    /// Every enumeration reachable from document parsing, with an unmodelled
+    /// but plausibly spec-valid value, plus a sibling property on the same
+    /// element that must survive.
+    #[test]
+    fn a_document_with_an_unmodelled_enumerated_value_still_opens() {
+        let cases: [(&str, &str); 8] = [
+            (
+                "ST_Jc",
+                r#"<w:pPr><w:jc w:val="thaiDistribute"/><w:keepNext/></w:pPr>"#,
+            ),
+            (
+                "ST_Underline",
+                r#"<w:pPr><w:keepNext/></w:pPr><w:r><w:rPr><w:u w:val="wavyHeavy"/><w:b/></w:rPr><w:t>x</w:t></w:r>"#,
+            ),
+            (
+                "ST_HighlightColor",
+                r#"<w:pPr><w:keepNext/></w:pPr><w:r><w:rPr><w:highlight w:val="chartreuse"/><w:b/></w:rPr><w:t>x</w:t></w:r>"#,
+            ),
+            (
+                "ST_Border",
+                r#"<w:pPr><w:keepNext/><w:pBdr><w:top w:val="tribal4" w:sz="8"/></w:pBdr></w:pPr>"#,
+            ),
+            (
+                "ST_TabJc",
+                r#"<w:pPr><w:keepNext/><w:tabs><w:tab w:val="numbering" w:pos="720"/></w:tabs></w:pPr>"#,
+            ),
+            (
+                "ST_TabLeader",
+                r#"<w:pPr><w:keepNext/><w:tabs><w:tab w:val="left" w:pos="720" w:leader="middleDot"/></w:tabs></w:pPr>"#,
+            ),
+            (
+                "ST_SectionType",
+                r#"<w:pPr><w:keepNext/><w:sectPr><w:type w:val="oddPage2"/></w:sectPr></w:pPr>"#,
+            ),
+            (
+                "ST_PageOrientation",
+                r#"<w:pPr><w:keepNext/><w:sectPr><w:pgSz w:w="12240" w:h="15840" w:orient="sideways"/></w:sectPr></w:pPr>"#,
+            ),
+        ];
+
+        for (name, body) in cases {
+            let xml = format!(
+                r#"<?xml version="1.0"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p>{body}</w:p></w:body></w:document>"#
+            );
+            let document = CT_Document::from_xml(xml.as_bytes()).unwrap_or_else(|e| {
+                panic!("{name}: an unmodelled value must not fail the open, got {e}")
+            });
+
+            let BodyContent::Paragraph(paragraph) = &document.body.content[0] else {
+                panic!("{name}: expected a paragraph");
+            };
+            let properties = paragraph
+                .properties
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name}: properties survive"));
+            assert_eq!(
+                properties.keep_next,
+                Some(true),
+                "{name}: an unmodelled value must not cost the element its siblings"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unmodelled_value_leaves_the_property_unset() {
+        // None means "not specified", so the style chain still supplies it.
+        // A guessed variant would override a style that does specify one.
+        let xml = br#"<?xml version="1.0"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:pPr><w:jc w:val="thaiDistribute"/></w:pPr></w:p></w:body></w:document>"#;
+        let document = CT_Document::from_xml(xml).expect("opens");
+        let BodyContent::Paragraph(paragraph) = &document.body.content[0] else {
+            panic!("expected a paragraph");
+        };
+        assert_eq!(paragraph.properties.as_ref().unwrap().jc, None);
+    }
     use super::*;
 
     #[test]

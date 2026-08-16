@@ -410,7 +410,7 @@ impl CT_TblPr {
                         pr.width = Some(CT_TblWidth::from_xml_attrs(e)?);
                     } else if matches_local_name(name.as_ref(), b"jc") {
                         if let Some(val) = get_val_attr(e)? {
-                            pr.jc = Some(ST_Jc::from_str(&val)?);
+                            pr.jc = ST_Jc::from_str(&val).ok();
                         }
                     } else if matches_local_name(name.as_ref(), b"tblLayout") {
                         if let Some(val) = get_val_attr(e)? {
@@ -611,7 +611,7 @@ impl CT_TrPr {
                         pr.header = Some(true);
                     } else if matches_local_name(name.as_ref(), b"jc") {
                         if let Some(val) = get_val_attr(e)? {
-                            pr.jc = Some(ST_Jc::from_str(&val)?);
+                            pr.jc = ST_Jc::from_str(&val).ok();
                         }
                     } else if matches_local_name(name.as_ref(), b"cnfStyle") {
                         pr.cnf_style = get_val_attr(e)?;

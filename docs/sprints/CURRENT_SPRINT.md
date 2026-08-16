@@ -20,7 +20,7 @@ survive as long as they did.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X018 | Unknown enumerated values must not fail a document open | M | pending | - |
+| F-X018 | Unknown enumerated values must not fail a document open | M | done | - |
 | F-X017 | Notes broken to their own section's width | S | pending | - |
 | F-X019 | Paragraph-relative later drawings should wrap | M | pending | - |
 | F-X021 | The hash harness should cover PDF output | M | pending | - |

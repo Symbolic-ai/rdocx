@@ -2094,7 +2094,7 @@ impl CT_Lvl {
                         boundary = 7;
                     } else if is_word_element(name.as_ref(), b"lvlJc", &prefixes) {
                         if let Some(value) = word_attribute_value(e, b"val", &prefixes)? {
-                            lvl.lvl_jc = Some(ST_Jc::from_str(&value)?);
+                            lvl.lvl_jc = ST_Jc::from_str(&value).ok();
                         }
                         reader.read_to_end_into(name, &mut Vec::new())?;
                         boundary = 10;
@@ -2139,7 +2139,7 @@ impl CT_Lvl {
                     } else if is_word_element(name.as_ref(), b"lvlJc", &prefixes)
                         && let Some(val) = word_attribute_value(e, b"val", &prefixes)?
                     {
-                        lvl.lvl_jc = Some(ST_Jc::from_str(&val)?);
+                        lvl.lvl_jc = ST_Jc::from_str(&val).ok();
                         boundary = 10;
                     } else if is_word_element(name.as_ref(), b"pPr", &prefixes) {
                         let raw = capture_empty_element(e)?;

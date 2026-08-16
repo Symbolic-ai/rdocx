@@ -202,6 +202,14 @@ them. The families fold into a lockstep train once rpptx stabilises.
   `to_xml<W: Write>(&self, writer: &mut Writer<W>)`.
 - **Prefix-tolerant on read, fixed prefix on write.** `matches_local_name`
   strips any prefix and compares the local part.
+- **An unmodelled enumerated value reads as an absent attribute.** A value
+  parser rejects a string it does not list, and the property parsers treat that
+  rejection as "not specified" rather than propagating it. An absent attribute
+  means the element's default, which is usually inheritance from the style
+  chain, so the surrounding properties survive and the document opens. The
+  parsers stay fallible, so a caller that wants strictness keeps it: the
+  tolerance belongs to the reader, not to the type. A value carried this way is
+  lost on save, which is the accepted cost of opening the document at all.
 - **Unmodelled subtrees are preserved verbatim** via `capture_element` into
   `raw_xml` fields. This matters far more for PresentationML than for
   WordprocessingML, and it is the scope control for an otherwise unbounded
