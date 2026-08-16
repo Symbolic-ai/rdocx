@@ -22,9 +22,9 @@ survive as long as they did.
 |------|-------|------|--------|-------|
 | F-X018 | Unknown enumerated values must not fail a document open | M | done | - |
 | F-X017 | Notes broken to their own section's width | S | in-progress | claude |
-| F-X019 | Paragraph-relative later drawings should wrap | M | pending | - |
+| F-X019 | Paragraph-relative later drawings should wrap | M | in-progress | claude |
 | F-X021 | The hash harness should cover PDF output | M | in-progress | claude |
-| F-X025 | /verify must run the release regressions | S | pending | - |
+| F-X025 | /verify must run the release regressions | S | in-progress | claude |
 
 ## Sequencing note
 
