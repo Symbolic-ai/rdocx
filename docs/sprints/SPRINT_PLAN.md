@@ -640,6 +640,7 @@ drawings a real wrap model and make body text flow around them.
 
 | F-ID | Title | Size |
 |------|-------|------|
+| F-X013 | Footnote and endnote placement | M |
 | F-X013a | Footnote line advance | S |
 | F-X013b | Footnote reservation and splitting | L |
 | F-X013c | Endnotes at the document end | M |

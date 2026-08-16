@@ -1316,7 +1316,7 @@ checksum, bound, runtime, ordering, or consumer-step drift. Full verification
 and a hosted pull-request CI run at the reviewed SHA pass with all 28 hashes
 unchanged.
 
-### F-X013, Footnote and endnote placement (parent)
+### F-X013, Footnote and endnote placement (M, split at design)
 Carries the footnote half of the external PR 2 contribution, whose
 anchored-drawing half was superseded by F-X007 and the M7 anchor work. Split
 into three children at design time, when fixing endnote placement and splitting
