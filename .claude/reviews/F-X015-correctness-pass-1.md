@@ -65,6 +65,6 @@ Checked and produced nothing:
   consumer: F-X016 reads every one. No new trait, generic, module or file.
 - **contract**. Matches the plan, with the serialiser correction recorded in the
   plan itself.
-- **tests**. The wrap and round-trip tests fail against reverted wrap parsing;
-  the alignment and round-trip tests fail against reverted distance and
+- **tests**. The wrap and round-trip tests fail against reverted wrap parsing.
+  The alignment and round-trip tests fail against reverted distance and
   alignment reads. Both reverts were run.
