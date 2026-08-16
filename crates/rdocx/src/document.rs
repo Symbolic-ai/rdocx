@@ -390,10 +390,15 @@ impl Document {
     }
 
     /// All footnotes as (id, plain text), in file order.
+    ///
+    /// Separator entries are excluded. They live in the same stream and are
+    /// retained by the model so a round trip preserves them, but they are not
+    /// notes and never were part of this listing.
     pub fn footnotes(&self) -> Vec<(i32, String)> {
         self.footnotes
             .footnotes
             .iter()
+            .filter(|f| f.note_type == rdocx_oxml::footnotes::NoteType::Normal)
             .map(|f| {
                 let text = f
                     .paragraphs
@@ -424,6 +429,7 @@ impl Document {
         p.add_run(text);
         self.footnotes.footnotes.push(CT_Footnote {
             id,
+            note_type: rdocx_oxml::footnotes::NoteType::Normal,
             paragraphs: vec![p],
         });
         id

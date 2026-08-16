@@ -74,6 +74,8 @@ pub(crate) fn line_spacing(properties: &CT_PPr) -> LineSpacing {
 
 pub(crate) fn line_break_params(properties: &CT_PPr, available_width: f64) -> LineBreakParams {
     LineBreakParams {
+        line_prefix_widths: Vec::new(),
+        line_suffix_widths: Vec::new(),
         available_width,
         ind_left: properties.ind_left.map_or(0.0, |value| value.to_pt()),
         ind_right: properties.ind_right.map_or(0.0, |value| value.to_pt()),
@@ -296,7 +298,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind: None,
-            footnote_id: None,
+            note: None,
         };
         let items = text_segments(segment);
         assert_eq!(items.len(), 2);

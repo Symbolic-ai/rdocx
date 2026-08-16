@@ -92,6 +92,27 @@ pub enum InlineItem {
     Marker(TextSegment),
 }
 
+/// Which stream a note reference belongs to.
+///
+/// A reference carries only a number in the markup, and the two streams
+/// number independently, so a document can hold a footnote and an endnote
+/// that share a number. Without the stream the two are indistinguishable and
+/// one silently shadows the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NoteStream {
+    /// Rendered at the foot of the page carrying the reference.
+    Footnote,
+    /// Rendered at the end of the document.
+    Endnote,
+}
+
+/// A reference to one note, unique across both streams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NoteRef {
+    pub stream: NoteStream,
+    pub id: i32,
+}
+
 /// A shaped text segment with associated formatting.
 #[derive(Debug, Clone)]
 pub struct TextSegment {
@@ -122,8 +143,8 @@ pub struct TextSegment {
     pub hyperlink_url: Option<String>,
     /// If this segment is a field placeholder, the kind of field.
     pub field_kind: Option<FieldKind>,
-    /// If this segment is a footnote/endnote reference marker, its ID.
-    pub footnote_id: Option<i32>,
+    /// If this segment is a note reference marker, which note it points at.
+    pub note: Option<NoteRef>,
 }
 
 /// A single item positioned on a line.
@@ -185,6 +206,7 @@ impl LayoutLine {
 }
 
 /// Parameters for line breaking.
+#[derive(Debug, Clone)]
 pub struct LineBreakParams {
     /// Total available width (page width minus margins).
     pub available_width: f64,
@@ -204,12 +226,22 @@ pub struct LineBreakParams {
     pub jc: Option<Align>,
     /// Whether width overflow may create automatic line breaks.
     pub wrap: bool,
+    /// Extra width kept clear at the start of individual lines, by line index.
+    ///
+    /// This is how a floating drawing pushes text aside. An empty vector, the
+    /// default, reserves nothing and reproduces unwrapped line breaking
+    /// exactly.
+    pub line_prefix_widths: Vec<f64>,
+    /// Extra width kept clear at the end of individual lines, by line index.
+    pub line_suffix_widths: Vec<f64>,
 }
 
 impl Default for LineBreakParams {
     fn default() -> Self {
         LineBreakParams {
             available_width: 468.0, // US Letter with 1" margins
+            line_prefix_widths: Vec::new(),
+            line_suffix_widths: Vec::new(),
             ind_left: 0.0,
             ind_right: 0.0,
             ind_first_line: 0.0,
@@ -237,8 +269,8 @@ pub fn break_into_lines(
             descent: 0.0,
             line_gap: 0.0,
             height: compute_line_height(0.0, 0.0, 0.0, 0.0, params),
-            indent_left: params.ind_left + params.ind_first_line,
-            available_width: params.available_width,
+            indent_left: line_indent_at(params, 0, true),
+            available_width: line_width_at(params, 0, true),
             is_last: true,
         }]);
     }
@@ -250,10 +282,12 @@ pub fn break_into_lines(
     let mut current_descent: f64 = 0.0;
     let mut current_natural_height: f64 = 0.0;
     let mut current_font_size: f64 = 0.0;
+    // The line index drives the per-line reservations a floating drawing
+    // creates, so it is tracked rather than a plain first-or-not flag.
+    let mut line_index = 0usize;
     let mut is_first_line = true;
 
-    let first_line_width = compute_first_line_width(params);
-    let subsequent_line_width = compute_subsequent_line_width(params);
+    let first_line_width = line_width_at(params, 0, true);
 
     let mut line_avail = first_line_width;
 
@@ -280,11 +314,7 @@ pub fn break_into_lines(
                     && current_width + seg_width > line_avail + 0.01
                 {
                     // Finish current line
-                    let indent = if is_first_line {
-                        first_line_indent(params)
-                    } else {
-                        subsequent_line_indent(params)
-                    };
+                    let indent = line_indent_at(params, line_index, is_first_line);
                     let line_gap =
                         effective_line_gap(current_ascent, current_descent, current_natural_height);
                     lines.push(LayoutLine {
@@ -310,7 +340,8 @@ pub fn break_into_lines(
                     current_natural_height = 0.0;
                     current_font_size = 0.0;
                     is_first_line = false;
-                    line_avail = subsequent_line_width;
+                    line_index += 1;
+                    line_avail = line_width_at(params, line_index, false);
                 }
 
                 // Add segment items to current line
@@ -339,11 +370,7 @@ pub fn break_into_lines(
                 }
             }
             BreakableSegment::ForcedBreak(break_type) => {
-                let indent = if is_first_line {
-                    first_line_indent(params)
-                } else {
-                    subsequent_line_indent(params)
-                };
+                let indent = line_indent_at(params, line_index, is_first_line);
                 let line_gap =
                     effective_line_gap(current_ascent, current_descent, current_natural_height);
                 lines.push(LayoutLine {
@@ -369,17 +396,14 @@ pub fn break_into_lines(
                 current_natural_height = 0.0;
                 current_font_size = 0.0;
                 is_first_line = false;
-                line_avail = subsequent_line_width;
+                line_index += 1;
+                line_avail = line_width_at(params, line_index, false);
             }
         }
     }
 
     // Flush remaining items as the last line
-    let indent = if is_first_line {
-        first_line_indent(params)
-    } else {
-        subsequent_line_indent(params)
-    };
+    let indent = line_indent_at(params, line_index, is_first_line);
     let line_gap = effective_line_gap(current_ascent, current_descent, current_natural_height);
     lines.push(LayoutLine {
         items: current_items,
@@ -555,7 +579,7 @@ fn split_text_subsegment(
         baseline_offset: seg.baseline_offset,
         hyperlink_url: seg.hyperlink_url.clone(),
         field_kind: seg.field_kind,
-        footnote_id: seg.footnote_id,
+        note: seg.note,
     }))
 }
 
@@ -746,7 +770,7 @@ fn shape_leader(
         baseline_offset: 0.0,
         hyperlink_url: None,
         field_kind: None,
-        footnote_id: None,
+        note: None,
     })
 }
 
@@ -790,6 +814,44 @@ fn compute_first_line_width(params: &LineBreakParams) -> f64 {
 
 fn compute_subsequent_line_width(params: &LineBreakParams) -> f64 {
     params.available_width - params.ind_left - params.ind_right
+}
+
+/// Width kept clear at the start of a given line.
+fn line_prefix_width(params: &LineBreakParams, line_index: usize) -> f64 {
+    params
+        .line_prefix_widths
+        .get(line_index)
+        .copied()
+        .unwrap_or(0.0)
+}
+
+/// Width kept clear at the end of a given line.
+fn line_suffix_width(params: &LineBreakParams, line_index: usize) -> f64 {
+    params
+        .line_suffix_widths
+        .get(line_index)
+        .copied()
+        .unwrap_or(0.0)
+}
+
+/// Usable width of a line, once anything floating beside it is taken out.
+fn line_width_at(params: &LineBreakParams, line_index: usize, is_first_line: bool) -> f64 {
+    let base = if is_first_line {
+        compute_first_line_width(params)
+    } else {
+        compute_subsequent_line_width(params)
+    };
+    (base - line_prefix_width(params, line_index) - line_suffix_width(params, line_index)).max(0.0)
+}
+
+/// Where a line starts, once anything floating to its left is taken out.
+fn line_indent_at(params: &LineBreakParams, line_index: usize, is_first_line: bool) -> f64 {
+    let base = if is_first_line {
+        first_line_indent(params)
+    } else {
+        subsequent_line_indent(params)
+    };
+    base + line_prefix_width(params, line_index)
 }
 
 fn first_line_indent(params: &LineBreakParams) -> f64 {
@@ -853,7 +915,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind: None,
-            footnote_id: None,
+            note: None,
         }
     }
 
@@ -891,7 +953,7 @@ mod tests {
             baseline_offset: 0.0,
             hyperlink_url: None,
             field_kind: None,
-            footnote_id: None,
+            note: None,
         }
     }
 

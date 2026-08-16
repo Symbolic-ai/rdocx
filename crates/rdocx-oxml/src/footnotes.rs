@@ -9,11 +9,55 @@ use crate::numbering::word_prefixes_at;
 use crate::properties::is_word_element;
 use crate::text::CT_P;
 
+/// `ST_FtnEdn` — what a note in the stream is for.
+///
+/// The stream holds the document's real notes alongside the separator marks
+/// Word draws above them. The distinction is carried by `w:type`, not by the
+/// id: the conventional ids 0 and 1 are a convention, not a guarantee, and
+/// reading a `continuationSeparator` as if it were note number 1 is how a
+/// separator ends up rendered as body content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NoteType {
+    /// A real note, the only kind a reference can resolve to.
+    #[default]
+    Normal,
+    /// The rule drawn above the notes on a page.
+    Separator,
+    /// The rule drawn above a note carried over from the previous page.
+    ContinuationSeparator,
+    /// The notice Word can place when a note continues.
+    ContinuationNotice,
+}
+
+impl NoteType {
+    fn from_str(s: &str) -> Self {
+        match s {
+            "separator" => NoteType::Separator,
+            "continuationSeparator" => NoteType::ContinuationSeparator,
+            "continuationNotice" => NoteType::ContinuationNotice,
+            _ => NoteType::Normal,
+        }
+    }
+
+    fn to_str(self) -> Option<&'static str> {
+        match self {
+            NoteType::Normal => None,
+            NoteType::Separator => Some("separator"),
+            NoteType::ContinuationSeparator => Some("continuationSeparator"),
+            NoteType::ContinuationNotice => Some("continuationNotice"),
+        }
+    }
+}
+
 /// A single footnote or endnote.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CT_Footnote {
     /// Footnote ID (matches w:footnoteReference w:id in the document body).
     pub id: i32,
+    /// What this entry is for. Separators are retained so a round trip does
+    /// not discard them, and filtered out of `get_by_id` so no reference can
+    /// resolve to one.
+    pub note_type: NoteType,
     /// Paragraphs making up the footnote content.
     pub paragraphs: Vec<CT_P>,
 }
@@ -32,9 +76,22 @@ impl CT_Footnotes {
         }
     }
 
-    /// Get a footnote by its ID.
+    /// Get a real note by its ID.
+    ///
+    /// Separator entries are never returned. A reference can only ever mean a
+    /// real note, and some documents place a `continuationSeparator` at an id
+    /// a reference could otherwise collide with.
     pub fn get_by_id(&self, id: i32) -> Option<&CT_Footnote> {
-        self.footnotes.iter().find(|f| f.id == id)
+        self.footnotes
+            .iter()
+            .find(|f| f.id == id && f.note_type == NoteType::Normal)
+    }
+
+    /// Whether the stream defines the rule drawn above a carried-over note.
+    pub fn has_continuation_separator(&self) -> bool {
+        self.footnotes
+            .iter()
+            .any(|f| f.note_type == NoteType::ContinuationSeparator)
     }
 
     /// Parse from XML bytes (the content of footnotes.xml).
@@ -55,22 +112,40 @@ impl CT_Footnotes {
                         || is_word_element(name.as_ref(), b"endnote", &prefixes)
                     {
                         let mut id: i32 = 0;
+                        let mut note_type = NoteType::Normal;
                         for attr in e.attributes().flatten() {
                             if matches_local_name(attr.key.as_ref(), b"id") {
                                 id = std::str::from_utf8(&attr.value)
                                     .unwrap_or("0")
                                     .parse()
                                     .unwrap_or(0);
+                            } else if matches_local_name(attr.key.as_ref(), b"type") {
+                                note_type = NoteType::from_str(
+                                    std::str::from_utf8(&attr.value).unwrap_or(""),
+                                );
                             }
                         }
 
-                        // Skip separator/continuation footnotes (id 0 and -1)
-                        if id <= 0 {
-                            reader.read_to_end_into(name, &mut Vec::new())?;
-                        } else {
-                            let paragraphs = parse_footnote_content(&mut reader, &prefixes)?;
-                            footnotes.push(CT_Footnote { id, paragraphs });
+                        // `w:type` decides what an entry is, because the ids
+                        // separators conventionally use are a convention
+                        // rather than a rule, and a `continuationSeparator`
+                        // sitting at id 1 must not read as note number one.
+                        //
+                        // An untyped entry at id 0 or below is still treated
+                        // as a separator. That is the older convention, and
+                        // producers that predate writing `w:type` rely on it.
+                        if note_type == NoteType::Normal && id <= 0 {
+                            note_type = NoteType::Separator;
                         }
+
+                        // Separators are kept rather than dropped, so a round
+                        // trip preserves them.
+                        let paragraphs = parse_footnote_content(&mut reader, &prefixes)?;
+                        footnotes.push(CT_Footnote {
+                            id,
+                            note_type,
+                            paragraphs,
+                        });
                     } else if is_word_element(name.as_ref(), b"footnotes", &prefixes)
                         || is_word_element(name.as_ref(), b"endnotes", &prefixes)
                     {
@@ -120,6 +195,11 @@ impl CT_Footnotes {
         let mut buf = itoa::Buffer::new();
         for footnote in &self.footnotes {
             let mut fn_start = BytesStart::new(item_tag);
+            // `w:type` precedes `w:id` in the schema's attribute listing, and
+            // is omitted entirely for a normal note, which is what Word writes.
+            if let Some(type_str) = footnote.note_type.to_str() {
+                fn_start.push_attribute(("w:type", type_str));
+            }
             fn_start.push_attribute(("w:id", buf.format(footnote.id)));
             writer.write_event(Event::Start(fn_start))?;
 
@@ -200,16 +280,16 @@ mod tests {
         </w:footnotes>"#;
 
         let footnotes = CT_Footnotes::from_xml(xml).unwrap();
-        // id=0 (separator) is skipped
-        assert_eq!(footnotes.footnotes.len(), 2);
-        assert_eq!(footnotes.footnotes[0].id, 1);
-        assert_eq!(footnotes.footnotes[0].paragraphs.len(), 1);
-        assert_eq!(
-            footnotes.footnotes[0].paragraphs[0].text(),
-            "First footnote text."
-        );
-        assert_eq!(footnotes.footnotes[1].id, 2);
-        assert_eq!(footnotes.footnotes[1].paragraphs.len(), 2);
+        // The untyped id=0 entry is retained as a separator, so a round trip
+        // preserves it, but it is not reachable as a note.
+        assert_eq!(footnotes.footnotes.len(), 3);
+        assert_eq!(footnotes.footnotes[0].note_type, NoteType::Separator);
+        assert!(footnotes.get_by_id(0).is_none());
+
+        let first = footnotes.get_by_id(1).unwrap();
+        assert_eq!(first.paragraphs.len(), 1);
+        assert_eq!(first.paragraphs[0].text(), "First footnote text.");
+        assert_eq!(footnotes.get_by_id(2).unwrap().paragraphs.len(), 2);
     }
 
     #[test]
@@ -225,8 +305,12 @@ mod tests {
         </w:endnotes>"#;
 
         let endnotes = CT_Footnotes::from_xml(xml).unwrap();
-        assert_eq!(endnotes.footnotes.len(), 1);
-        assert_eq!(endnotes.footnotes[0].id, 1);
+        assert_eq!(endnotes.footnotes.len(), 2);
+        assert_eq!(endnotes.footnotes[0].note_type, NoteType::Separator);
+        assert_eq!(
+            endnotes.get_by_id(1).unwrap().paragraphs[0].text(),
+            "An endnote."
+        );
     }
 
     #[test]
@@ -267,10 +351,12 @@ mod tests {
             footnotes: vec![
                 CT_Footnote {
                     id: 1,
+                    note_type: NoteType::Normal,
                     paragraphs: vec![],
                 },
                 CT_Footnote {
                     id: 2,
+                    note_type: NoteType::Normal,
                     paragraphs: vec![],
                 },
             ],
@@ -292,10 +378,12 @@ mod tests {
             footnotes: vec![
                 CT_Footnote {
                     id: 1,
+                    note_type: NoteType::Normal,
                     paragraphs: vec![fn1_para],
                 },
                 CT_Footnote {
                     id: 2,
+                    note_type: NoteType::Normal,
                     paragraphs: vec![fn2_para],
                 },
             ],
@@ -308,5 +396,77 @@ mod tests {
         assert_eq!(parsed.footnotes[0].paragraphs[0].text(), "First footnote.");
         assert_eq!(parsed.footnotes[1].id, 2);
         assert_eq!(parsed.footnotes[1].paragraphs[0].text(), "Second footnote.");
+    }
+
+    // F-X013b, note types and separator preservation.
+
+    const WITH_SEPARATORS: &str = r#"<?xml version="1.0"?>
+<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:footnote w:type="separator" w:id="0"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>
+  <w:footnote w:type="continuationSeparator" w:id="1"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>
+  <w:footnote w:id="2"><w:p><w:r><w:t>A real note.</w:t></w:r></w:p></w:footnote>
+</w:footnotes>"#;
+
+    #[test]
+    fn a_separator_definition_survives_open_and_save() {
+        let parsed = CT_Footnotes::from_xml(WITH_SEPARATORS.as_bytes()).unwrap();
+        assert_eq!(parsed.footnotes.len(), 3, "separators must be retained");
+
+        let round_tripped = CT_Footnotes::from_xml(&parsed.to_xml_footnotes().unwrap()).unwrap();
+        assert_eq!(round_tripped.footnotes.len(), 3);
+        assert_eq!(round_tripped.footnotes[0].note_type, NoteType::Separator);
+        assert_eq!(round_tripped.footnotes[0].id, 0);
+        assert_eq!(
+            round_tripped.footnotes[1].note_type,
+            NoteType::ContinuationSeparator
+        );
+        assert_eq!(round_tripped.footnotes[1].id, 1);
+        assert_eq!(round_tripped.footnotes[2].note_type, NoteType::Normal);
+        assert_eq!(round_tripped, parsed, "a second trip must be a fixed point");
+    }
+
+    #[test]
+    fn get_by_id_does_not_return_a_separator() {
+        let parsed = CT_Footnotes::from_xml(WITH_SEPARATORS.as_bytes()).unwrap();
+
+        // Id 1 is the continuation separator here, not note number one.
+        assert!(parsed.get_by_id(0).is_none(), "separator is not a note");
+        assert!(
+            parsed.get_by_id(1).is_none(),
+            "continuation separator is not a note"
+        );
+        assert_eq!(
+            parsed.get_by_id(2).unwrap().paragraphs[0].text(),
+            "A real note."
+        );
+        assert!(parsed.has_continuation_separator());
+    }
+
+    #[test]
+    fn note_types_are_read_through_a_foreign_prefix() {
+        let xml = r#"<?xml version="1.0"?>
+<x:footnotes xmlns:x="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <x:footnote x:type="separator" x:id="0"><x:p/></x:footnote>
+  <x:footnote x:id="7"><x:p><x:r><x:t>Prefixed.</x:t></x:r></x:p></x:footnote>
+</x:footnotes>"#;
+        let parsed = CT_Footnotes::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(parsed.footnotes.len(), 2);
+        assert_eq!(parsed.footnotes[0].note_type, NoteType::Separator);
+        assert!(parsed.get_by_id(0).is_none());
+        assert_eq!(
+            parsed.get_by_id(7).unwrap().paragraphs[0].text(),
+            "Prefixed."
+        );
+    }
+
+    #[test]
+    fn an_unknown_note_type_reads_as_a_normal_note() {
+        let xml = r#"<?xml version="1.0"?>
+<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:footnote w:type="somethingNew" w:id="3"><w:p><w:r><w:t>Note.</w:t></w:r></w:p></w:footnote>
+</w:footnotes>"#;
+        let parsed = CT_Footnotes::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(parsed.footnotes[0].note_type, NoteType::Normal);
+        assert!(parsed.get_by_id(3).is_some());
     }
 }

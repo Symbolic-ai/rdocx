@@ -631,8 +631,37 @@ string, and proves the complete pull-request workflow on a hosted runner. It
 does not change a crate, release version, published package, or rendering
 baseline.
 
+#### Sprint S41, Footnote placement and floating drawing wrapping
+
+**Goal**: land the parts of the external PR 2 contribution that current `main`
+still lacks, rebuilt on the anchor architecture that superseded the
+contributor's own. Fix the two footnote placement defects, then give anchored
+drawings a real wrap model and make body text flow around them.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X013 | Footnote and endnote placement | M |
+| F-X013a | Footnote line advance | S |
+| F-X013b | Footnote reservation and splitting | L |
+| F-X013c | Endnotes at the document end | M |
+| F-X014 | Kashida justification values | S |
+| F-X015 | Anchored drawing wrap and alignment model | M |
+| F-X016 | Floating drawing placement and text wrapping | L |
+
+The note work lands first, because it is independent of the drawing work and
+each child carries its own baseline delta. F-X013 was planned as a single M and
+split into three children during its design, when splitting oversized notes and
+correcting endnote placement were taken into scope. F-X014 is a one-line parser
+widening carried in the same wave because it comes from the same contribution.
+F-X015 adds the wrap and alignment surface without changing placement, which
+keeps the harness flat and makes F-X016 the single story that owns the rendering
+delta for wrapped drawings.
+
 ## Cross-cutting
 
 F-X001 through F-X004 are scheduled in S36 as the final cross-cutting v1
 hardening wave. F-X007 and F-X008 handle the external Word contribution and
 its stable-family release without rewriting the completed milestone history.
+F-X013 through F-X016 carry the surviving half of the external PR 2 rendering
+contribution, whose anchored-drawing placement was overtaken by the M7 anchor
+work before it could land.

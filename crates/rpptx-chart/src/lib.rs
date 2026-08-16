@@ -1117,7 +1117,7 @@ fn shape_label_with_properties(
         bold,
         italic,
         field_kind: None,
-        footnote_id: None,
+        note: None,
     })
 }
 

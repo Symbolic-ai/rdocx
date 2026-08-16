@@ -12,8 +12,8 @@ pub mod transform;
 pub use error::{LayoutError, Result};
 pub use font::{FontFile, FontManager, FontMetrics, ShapedText};
 pub use line::{
-    Align, InlineItem, LayoutLine, LineBreakParams, LineItem, LineSpacing, TabAlign, TabLeader,
-    TabStop, TextSegment, Underline, break_into_lines,
+    Align, InlineItem, LayoutLine, LineBreakParams, LineItem, LineSpacing, NoteRef, NoteStream,
+    TabAlign, TabLeader, TabStop, TextSegment, Underline, break_into_lines,
 };
 pub use output::{
     Color, Diagnostic, DocumentMetadata, Effect, FieldKind, FontData, FontId, GlyphRun,

@@ -5788,3 +5788,393 @@ checksums, archive bounds, runtime identities, and consumer-job assertions in
 one reviewed contract. A moving package-manager binary or a preinstalled tool
 is not equivalent evidence. The temporary hosted-validation pull request was
 closed without merge and its remote branch was deleted.
+
+### F-X013a, Footnote line advance
+
+**Sprint.** S41
+**Completed.** 2026-08-16
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Footnote and endnote text drawn at the bottom of a page now
+advances across the line instead of drawing every segment at the same x. A note
+built from more than one run, which is what any note carrying mixed formatting
+or a hyperlink produces, was previously an unreadable stack of overprinted
+words. It now reads as a line of text. The same change made a second defect
+visible and fixed it: notes were line-broken at the full content width but drawn
+one marker indent to the right, so every note line overran the right margin by
+exactly that indent. A single `FOOTNOTE_INDENT` constant now feeds both the
+break width and the draw position, so the two cannot disagree.
+
+**Non-obvious choices.** The advance covers all four `LineItem` variants, not
+just the two that draw. A tab or an inline image inside a note is still not
+rendered, but it occupies width, and skipping its advance would pull everything
+after it to the left. The match is exhaustive, so a new variant fails to compile
+here rather than silently reintroducing the defect.
+
+The right-margin fix was taken into this story rather than deferred. It is one
+constant and one subtraction, it shares a root cause with the defect the story
+exists to fix, and deferring it would have shipped a story whose stated outcome
+is legible notes while leaving them running off the page.
+
+**Deviations from the design plan.** Two. The plan asserted that non-text line
+items do not advance in the body path, and that was wrong. `paginator.rs`
+advances for tabs and images, and the first microscope pass caught the claim.
+The plan also predicted a hash harness delta and there is none, for a reason
+worth recording: no corpus document contains a footnote at all, so the harness
+never exercises this code path.
+
+**Spec sections touched.** None. The story fixes a defect in rendering a
+construct the spec set already describes, and adds no surface.
+
+**Tests.** The gate is the pair of named regressions,
+`a_multi_segment_footnote_does_not_stack_its_segments_at_one_x` and
+`a_single_segment_footnote_keeps_its_original_position`. Three more were added:
+`footnote_segment_advance_matches_body_segment_advance`,
+`a_tab_inside_a_footnote_still_advances_the_text_after_it` for the defect the
+first review pass found, and `a_long_footnote_does_not_overrun_the_right_margin`
+for the width fix. Each was proven to fail against its own reverted code. The
+single-segment test is an intentional guard that passes both before and after.
+
+**Hash harness.** Unchanged. All 28 entries match, and that result carries no
+information about this story. None of the seven corpus documents contains a
+footnote, so `render_page_footnotes` is entirely unexercised by the harness. The
+evidence for this story is its regression tests plus an end-to-end render of
+`sample1.docx`, the document the external contribution used for its own before
+and after screenshots. Exactly one of that document's eight pages changed, the
+one carrying the footnote.
+
+**Notes for future sessions.** The harness blind spot matters beyond this
+story. F-X013b and F-X013c will both report a flat 28 of 28 for the same reason,
+and that must not be read as those stories having no output effect. Closing the
+gap means adding a corpus document with notes, which changes the baseline set
+and is its own decision. The remaining visible defect on that sample page is
+body text overlapping the note area, which is exactly what F-X013b addresses.
+The note path still ignores its paragraph's own indent and justification, which
+the body path honours. Two placement routines that drift apart is what produced
+this defect in the first place, and one shared routine is the durable answer.
+
+### F-X013b, Footnote reservation and splitting
+
+**Sprint.** S41
+**Completed.** 2026-08-16
+**Size.** L, estimated 3 days, actual 1 day
+
+**What was built.** Notes are laid out once, before pagination, into a new
+`NoteRegistry`, and the paginator reserves, splits and draws them from that
+single source. Pagination previously filled a page with body text knowing
+nothing about the note area, which a post-pagination pass then drew straight
+over the top of it. Body text and notes no longer collide. A note too tall for
+the room left continues on the following page without repeating its marker, and
+a page that opens with carried note content draws the full-width continuation
+rule rather than the short one. The post-pagination pass is gone, so the note
+placement that is reserved and the note placement that is drawn are now the same
+computation rather than two that could disagree.
+
+The note stream model changed to support it. `CT_Footnote` carries a
+`NoteType` read from `w:type`, separators are retained rather than dropped, and
+`w:type` is written back. Opening and saving a document previously deleted its
+separator definitions outright.
+
+**Non-obvious choices.** Note markers are shaped in the registry, before
+pagination, because the paginator holds only `&FontManager` and shaping needs
+`&mut`. Pre-shaping is what lets note placement live in the paginator at all.
+
+A note's cost is priced without being claimed. A paragraph is measured before
+anyone knows which page it lands on, so `available_height_for` prices its notes
+and `claim_notes` runs only where lines are actually placed. Claiming during
+measurement stranded notes on the page before their own reference.
+
+The note area is measured from `ink_bottom`, where the body's last mark sits,
+not from `cursor_y`, which includes trailing paragraph spacing that collapses at
+a page break.
+
+Separator identity follows `w:type`, with an untyped id of 0 or below still
+read as a separator. The ids separators conventionally use are a convention, not
+a rule, and `sample1.docx` puts its `continuationSeparator` at id 1, where the
+old id-based test read it as note number one.
+
+**Deviations from the design plan.** Two plan claims were wrong and were
+corrected in the plan. The plan said this story fixes notes being positioned
+against the final section's geometry: positioning is fixed, line breaking is
+not, and the remainder is filed as F-X017. The plan also did not anticipate
+retaining separators in `CT_Footnotes::footnotes`, which changes what that field
+contains. `Document::footnotes()` gained a filter so its public behaviour is
+unchanged.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "What stays put",
+updated to say note placement belongs to the paginator rather than to a
+post-pagination pass.
+
+**Tests.** The gate is the three named regressions:
+`a_page_whose_body_fills_the_text_area_does_not_overlap_its_notes`,
+`a_note_taller_than_its_remaining_space_continues_on_the_next_page`, and
+`a_page_referencing_one_note_twice_reserves_it_once`. Also added
+`a_continued_note_draws_the_continuation_separator`,
+`an_oversized_note_still_leaves_room_for_body_text`,
+`a_note_is_drawn_on_the_page_that_carries_its_reference`, and in `rdocx-oxml`
+`a_separator_definition_survives_open_and_save`,
+`get_by_id_does_not_return_a_separator`,
+`note_types_are_read_through_a_foreign_prefix` and
+`an_unknown_note_type_reads_as_a_normal_note`. Each was proven to fail against
+its own reverted change.
+
+**Hash harness.** Unchanged. All 28 entries match, and that result carries no
+information about this story, for the reason F-X013a recorded: no corpus
+document contains a note. A delta here would have been a genuine surprise. The
+evidence is the regression set plus an end-to-end render of `sample1.docx`,
+where page 5 stops overprinting its table of contents.
+
+**Notes for future sessions.** Two defects in this work were invisible to the
+tests as first written and only surfaced by sweeping the reference across every
+paragraph position and comparing the note's page against the reference's page.
+A note drifting one page from its reference is not something a fixed-position
+test finds. That sweep is now
+`a_note_is_drawn_on_the_page_that_carries_its_reference` and it is the single
+most valuable test in the set. The end-to-end render also caught a third
+regression that no unit test saw: keying the registry by note id alone let an
+endnote overwrite a footnote sharing its number, silently swapping the rendered
+text. Telling the two streams apart is F-X013c.
+
+### F-X013c, Endnotes at the document end
+
+**Sprint.** S41
+**Completed.** 2026-08-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Endnotes stop rendering at the foot of the page carrying
+their reference and are emitted after the last body page, flowing from the top
+of their own pages. Footnotes keep the page foot. An endnote reference now costs
+its page no height at all.
+
+Underneath, a note reference carries which stream it came from. `TextSegment`
+and `GlyphRun` swap `footnote_id: Option<i32>` for `note: Option<NoteRef>`,
+where a `NoteRef` is a stream and a number. `NoteRegistry` keys on that pair, so
+a document numbering a footnote and an endnote alike keeps both. It previously
+kept one and silently dropped the other, which `sample1.docx` triggers with a
+footnote 2 and an endnote 2.
+
+**Non-obvious choices.** Endnotes begin on a fresh page rather than continuing
+on the last body page, which is what Word does when there is room. An endnote
+flowing onto a page that also owes footnotes would put two note regions on one
+page competing for the same height, and that interaction is not worth its
+complexity here. Recorded in the design plan so the choice is legible rather
+than accidental.
+
+`draw_note` was extracted so the page foot and the document end share one
+drawing routine. Two placement routines that drift apart is exactly what
+produced the F-X013a defect, and this story would otherwise have created a
+second pair.
+
+Endnote markers keep the raw id. Word defaults endnotes to lower roman numerals
+through `w:endnotePr/w:numFmt`, which is a numbering-format concern rather than
+a placement one and was not taken.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "What stays put",
+extended to describe the two note streams being placed differently and keyed
+apart.
+
+**Tests.** The gate is
+`a_footnote_and_an_endnote_sharing_a_number_render_their_own_text` and
+`endnotes_render_after_the_last_body_page`. Also added
+`footnotes_and_endnotes_keep_their_own_regions` and
+`an_endnote_reference_does_not_reserve_space_at_the_page_foot`, which pins that
+an endnote changes body pagination not at all. Each was proven to fail against
+its own reverted change: three against the stream split, and the shared-number
+regression against id-only registry keying, where the endnote text vanishes
+entirely.
+
+**Hash harness.** Unchanged. All 28 entries match, for the reason F-X013a
+recorded: no corpus document contains a note. The evidence is the regression set
+plus an end-to-end render of `sample1.docx`, where all eight body pages stay
+byte identical, the footnote keeps its own text at the foot of page 5, and a
+ninth page appears carrying the endnote's own distinct text.
+
+**Notes for future sessions.** All eight body pages being byte identical is the
+useful signal here, and it is worth reaching for whenever a story carves one
+behaviour out of another. It says the change was additive far more directly than
+any assertion about the new behaviour does. The public surface of `oxml-layout`
+changed: `footnote_id` became `note`. That crate is incubating at 0.2.0 with no
+consumer outside this workspace, and `rdocx`'s own public API is untouched,
+since `RunRef::footnote_id()` reads the oxml model rather than a layout segment.
+
+### F-X014, Kashida justification values
+
+**Sprint.** S41
+**Completed.** 2026-08-16
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** `ST_Jc` accepts `lowKashida`, `mediumKashida` and
+`highKashida`, mapping each to justified alignment. The symptom was larger than
+the backlog entry described and the entry was corrected before implementing:
+`CT_PPr::from_xml` propagates a rejected justification with `?`, and that error
+reaches `Document::open`, so a document carrying any of the three failed to open
+at all rather than losing one property.
+
+**Non-obvious choices.** The three values join the existing `both | justify`
+arm rather than gaining a variant of their own. Kashida justification stretches
+Arabic text by elongating the connecting stroke rather than by widening spaces,
+which needs shaping this crate does not do, so a distinct variant would behave
+identically to `Both` at every site that matches on `ST_Jc` while adding a case
+to each. `distribute` was rejected because it spreads the last line and kashida
+justification does not.
+
+A kashida value round trips as `both`. That is a deliberate normalisation
+recorded in the design plan, not an oversight.
+
+**Deviations from the design plan.** None. The backlog story itself was
+corrected during design, once the failure was reproduced and turned out to be a
+load failure rather than a layout inaccuracy.
+
+**Spec sections touched.** None.
+
+**Tests.** The gate is
+`a_document_using_kashida_justification_still_opens`, which loads a document for
+each of the three values and asserts the paragraph keeps both its justification
+and a sibling property. Plus `kashida_justification_maps_to_both` and
+`an_unknown_justification_is_still_rejected`, the latter pinning that the check
+was widened rather than removed. All three fail against the unwidened parser.
+
+**Hash harness.** Unchanged. All 28 entries match. No corpus document carries a
+kashida value, and no existing behaviour moved, since affected documents
+previously failed to open rather than rendering differently.
+
+**Notes for future sessions.** This is one instance of a wider problem, filed as
+F-X018. Nine value parsers in `shared.rs` and `styles.rs` reject any string they
+do not enumerate, and several are reached through `?` from property parsing, so
+a document using a spec-valid value the model has not yet listed fails to open.
+Fixing all nine means deciding a general rule, which is that an unmodelled value
+falls back to the element's default and its siblings survive. That is a story of
+its own rather than something to change in passing here.
+
+### F-X015, Anchored drawing wrap and alignment model
+
+**Sprint.** S41
+**Completed.** 2026-08-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `WrapType` gains `Square`, `TopAndBottom`, `Tight` and
+`Through` alongside `None`, and each wrapping element parses to its own mode in
+both the empty and the expanded spelling. `CT_Anchor` reads the four text
+distances and the `wp:align` child of `positionH` and `positionV`, and
+`AnchoredDrawing` carries all of it into layout in points. Nothing reads the new
+fields yet, so placement and rendering are unchanged. F-X016 consumes them.
+
+Before this, `wrap` was parsed-but-dead: set to `None` at both construction
+sites and read nowhere, while the serialiser wrote `wrapNone` unconditionally.
+An alignment-positioned drawing landed at offset zero, because only the offset
+was read.
+
+**Non-obvious choices.** `Tight` and `Through` parse to their own variants
+rather than collapsing into `Square`. They wrap to the drawing's outline rather
+than its frame, F-X016 will approximate them as `Square`, and approximating is
+the renderer's job. Collapsing at parse time would throw away information the
+model cannot recover.
+
+A zero text distance is not written. That began as a bug, see below, and the
+resolution is right on its own terms: an absent attribute and a zero attribute
+mean the same thing.
+
+**Deviations from the design plan.** One, and the harness caught it. The plan
+said the serialiser path runs only for a programmatically built anchor, which is
+true, and missed that the sample generators are exactly that. Writing all four
+distances unconditionally changed `report:word/document.xml` on the first
+harness run. Corrected by omitting zero distances, and the plan now records both
+the mistake and the fix.
+
+**Spec sections touched.** None. F-X016 carries the HLD update for wrapping,
+since that is where the behaviour appears.
+
+**Tests.** The gate is the round-trip pair,
+`an_anchor_round_trips_its_wrap_distances_and_alignments` and
+`a_parsed_anchor_re_emits_its_original_bytes`. Plus
+`every_wrap_element_parses_to_its_own_mode`,
+`anchor_alignments_and_distances_are_read` and
+`an_unknown_alignment_reads_as_no_alignment`. Proven against two separate
+reverts, one of wrap parsing and one of the distance and alignment reads.
+
+**Hash harness.** Unchanged, 28 of 28, which is this story's proof rather than a
+formality. It did not start that way, and the delta is described above.
+
+**Notes for future sessions.** The sample generators build anchors
+programmatically, so a change to `CT_Anchor::to_xml` reaches the harness even
+though a parsed anchor re-emits its captured `raw_xml` and never touches that
+code. Any future change to an anchor serialiser should expect the same. More
+generally, this is the story where declaring "expected unchanged" and being
+wrong was useful: the prediction is what turned a silent byte change into a
+question worth answering.
+
+### F-X016, Floating drawing placement and text wrapping
+
+**Sprint.** S41
+**Completed.** 2026-08-16
+**Size.** L, estimated 3 days, actual 1 day
+
+**What was built.** Two behaviours the model has described since F-X015 but
+nothing performed.
+
+An anchored drawing positioned by an alignment now resolves against its
+`relativeFrom` frame instead of landing at offset zero. A right-aligned drawing
+sits at the right of its frame, a centred one at the midpoint.
+
+Body text flows around a wrapping drawing. `wrapSquare` keeps text clear of the
+frame plus its text distance on the lines the drawing spans, on the side the
+drawing sits, and `wrapTopAndBottom` pushes the paragraph's content below the
+drawing. `wrapTight` and `wrapThrough` are approximated as square, since
+wrapping to an outline needs the `wp:wrapPolygon` the model does not carry, and
+reserving the frame beats not wrapping at all.
+
+**Non-obvious choices.** The line breaker gained per-line prefix and suffix
+reservations rather than a wrapping concept of its own. An empty vector, the
+default, reproduces existing behaviour exactly, which is what let every other
+caller stay untouched and the harness stay flat.
+
+Re-breaking needs the line breaking inputs to survive past layout, and those
+hold the same shaped glyphs the laid-out lines hold. They are moved rather than
+cloned, since `inline_items` is finished with at that point and would otherwise
+be dropped, and `Engine::layout` drops them again unless the document holds a
+drawing that wraps. A document without one carries nothing.
+
+The reflow runs before the paragraph is measured, because a reflow changes its
+height and measuring first would measure the wrong thing. Two passes, not a
+loop: the second settles a drawing that only overlaps once the text has moved,
+and a fixed count cannot fail to terminate.
+
+**Deviations from the design plan.** One, and rendering the sample is what
+caught it. The plan limited wrapping to drawings anchored to the current
+paragraph or already placed, on the grounds that a later paragraph's position is
+unknown, and accepted that as a documented limitation. `sample1.docx` shows the
+limitation failing on the contribution's own headline page: its two arrows
+flank one paragraph, but the right-hand arrow is anchored to paragraph 282 while
+the text is in paragraph 280, so the left arrow wrapped and the right one kept
+printing over the text. A bounded look-ahead now collects wrapping drawings from
+following blocks whose vertical frame is the page or a margin, which have a
+position independent of where their own paragraph lands. The residual case,
+paragraph-relative anchors in later blocks, is filed as F-X019.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "What stays put",
+extended to say the paginator reflows around wrapping drawings and why the
+reflow inputs are carried conditionally.
+
+**Tests.** The gate is the three golden tests,
+`text_wraps_beside_a_left_aligned_square_drawing`,
+`text_wraps_beside_a_right_aligned_square_drawing` and
+`a_top_and_bottom_drawing_pushes_text_below_it`. Plus
+`a_drawing_anchored_to_a_later_paragraph_still_pushes_text_aside` for the
+look-ahead, `a_wrap_none_drawing_leaves_text_untouched` as the identity guard,
+and two placement unit tests. Every one except the identity guard was proven to
+fail against its own reverted change.
+
+**Hash harness.** Unchanged. All 28 entries match, and here that is a real
+result rather than the blind spot the note stories carried: the corpus does
+contain floating drawings, they simply all use `wrapNone`, and every new path is
+gated on a wrap mode other than `None`. The flat harness is what proves the
+gating holds.
+
+**Notes for future sessions.** Rendering the contributor's own document is what
+turned an accepted limitation into a fixed defect. The unit tests all passed
+with the limitation in place, because they anchor the drawing to the paragraph
+it affects, which is the case the limitation covers. Real documents do not.
+Where a story is motivated by a specific document, that document belongs in the
+loop, not just the tests derived from it.

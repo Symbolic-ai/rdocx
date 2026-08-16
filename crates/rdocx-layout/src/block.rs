@@ -1,9 +1,11 @@
 //! Block-level layout: paragraphs and tables as positioned blocks.
 
 use crate::table::TableBlock;
-use oxml_layout::{Align, Color, LayoutLine, MediaId};
+use oxml_layout::{Align, Color, InlineItem, LayoutLine, LineBreakParams, MediaId};
 use rdocx_oxml::borders::CT_PBdr;
-use rdocx_oxml::drawing::{ST_RelativeFromH, ST_RelativeFromV};
+use rdocx_oxml::drawing::{
+    AnchorAlignH, AnchorAlignV, ST_RelativeFromH, ST_RelativeFromV, WrapType,
+};
 
 /// A floating drawing anchored to a paragraph.
 ///
@@ -27,6 +29,18 @@ pub struct AnchoredDrawing {
     pub width: f64,
     /// Height in points.
     pub height: f64,
+    /// How text flows around the drawing.
+    pub wrap: WrapType,
+    /// Space kept between the drawing and the text wrapping around it, in
+    /// points.
+    pub dist_top: f64,
+    pub dist_bottom: f64,
+    pub dist_left: f64,
+    pub dist_right: f64,
+    /// Horizontal alignment, used instead of the offset when present.
+    pub align_h: Option<AnchorAlignH>,
+    /// Vertical alignment, used instead of the offset when present.
+    pub align_v: Option<AnchorAlignV>,
     /// What the drawing actually holds.
     pub content: AnchoredContent,
 }
@@ -140,6 +154,21 @@ impl LayoutBlock {
     }
 }
 
+/// What a paragraph needs in order to be broken into lines again.
+///
+/// Whether a floating drawing overlaps a line is only known once the paragraph
+/// has a position on a page, which is after layout and during pagination. The
+/// inputs to line breaking therefore have to survive that far.
+///
+/// `InlineItem::Text` holds the same shaped glyphs `LayoutLine` already holds,
+/// so this roughly doubles a paragraph's text memory. It is carried only when
+/// the document contains a drawing that wraps, which nearly none do.
+#[derive(Debug, Clone)]
+pub struct ParagraphReflow {
+    pub items: Vec<InlineItem>,
+    pub params: LineBreakParams,
+}
+
 /// A laid-out paragraph with its lines and spacing.
 #[derive(Debug, Clone)]
 pub struct ParagraphBlock {
@@ -177,12 +206,19 @@ pub struct ParagraphBlock {
     pub heading_level: Option<u32>,
     /// Heading text for outline generation.
     pub heading_text: Option<String>,
+    /// Inputs for re-breaking this paragraph around a floating drawing.
+    ///
+    /// `None` unless the document holds a drawing that wraps.
+    pub reflow: Option<Box<ParagraphReflow>>,
+    /// Vertical space kept clear above the first line, for a drawing this
+    /// paragraph must clear rather than flow beside.
+    pub content_offset_top: f64,
 }
 
 impl ParagraphBlock {
     /// Total height of the paragraph lines (not including before/after spacing).
     pub fn content_height(&self) -> f64 {
-        self.lines.iter().map(|l| l.height).sum()
+        self.content_offset_top + self.lines.iter().map(|l| l.height).sum::<f64>()
     }
 
     /// Total height including spacing.
@@ -227,6 +263,8 @@ pub fn build_paragraph_block(
         widow_control,
         heading_level: None,
         heading_text: None,
+        reflow: None,
+        content_offset_top: 0.0,
     }
 }
 
@@ -275,6 +313,8 @@ mod tests {
             widow_control: true,
             heading_level: None,
             heading_text: None,
+            reflow: None,
+            content_offset_top: 0.0,
         };
         assert!((block.content_height() - 26.0).abs() < 0.01);
         assert!((block.total_height() - 40.0).abs() < 0.01);

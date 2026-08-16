@@ -29,8 +29,8 @@ regenerated, never hand-edited.
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
-| X, Cross-cutting (opportunistic)            | 12 | 12 | 0 | 0  |
-| **Total** | **166** | **166** | **0** | **0** |
+| X, Cross-cutting (opportunistic)            | 22 | 19 | 0 | 3  |
+| **Total** | **176** | **173** | **0** | **3** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -297,4 +297,14 @@ regenerated, never hand-edited.
 | F-X010 | Tag v0.6.0                                  | S39 | S | done |
 | F-X011 | Tag rpptx-v0.2.0                            | S39 | S | done |
 | F-X012 | Restore pinned CI toolchains                | S40 | M | done |
+| F-X013 | Footnote and endnote placement             | S41 | M | done |
+| F-X013a | Footnote line advance                     | S41 | S | done |
+| F-X013b | Footnote reservation and splitting        | S41 | L | done |
+| F-X013c | Endnotes at the document end              | S41 | M | done |
+| F-X014 | Kashida justification values               | S41 | S | done |
+| F-X015 | Anchored drawing wrap and alignment model  | S41 | M | done |
+| F-X016 | Floating drawing placement and text wrapping | S41 | L | done |
+| F-X017 | Notes broken to their own section's width   | -   | S | pending |
+| F-X018 | Unknown enumerated values must not fail open | -  | M | pending |
+| F-X019 | Paragraph-relative later drawings should wrap | -  | M | pending |
 <!-- AUTOGEN:backlog-MX END -->
