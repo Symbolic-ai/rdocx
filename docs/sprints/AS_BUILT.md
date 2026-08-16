@@ -6235,3 +6235,62 @@ Filed as F-X021, which also has to decide what a stable PDF fingerprint is,
 since raw PDF bytes carry a creation date and object ordering that need not be
 reproducible. Until that lands, a dependency refresh should compare sample PDFs
 by hand the way this one did.
+
+### F-X024, Move the theme adapter into rdocx-oxml
+
+**Sprint.** S42
+**Completed.** 2026-08-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `impl From<&CT_OfficeStyleSheet> for Theme` moved from
+`oxml-drawing` to `rdocx-oxml`, which owns `Theme`. The orphan rule permits it,
+and the effect is that the dependency between the families now runs one way,
+from the format crate to the shared crate, like every other cross-family edge.
+`docs/hld/03-architecture.md` no longer documents an exception, because there is
+none, and `no_shared_crate_depends_on_a_format_crate` keeps it that way.
+
+**Why it was needed.** Scoping the two release stories exposed a cycle between
+the publication trains. `rdocx-layout` depends on `oxml-layout` and
+`oxml-drawing` depended on `rdocx-oxml`, and `publish.yml` publishes one train
+per tag. That works only when the train going first depends on an
+already-published version of the other, which S39 satisfied because only one
+train moved. S41 broke both APIs, so both had to bump, and neither could go
+first. Stable first will not compile, since `rdocx-layout` needs `oxml-layout`
+0.3.0. Incubating first would have shipped an adapter bound to `rdocx-oxml`
+0.6.0 while `rdocx-layout` 0.7.0 expected 0.7.0's `Theme`, putting two
+semver-incompatible copies of the Word model in one graph and breaking the one
+cross-family integration point.
+
+**Non-obvious choices.** Moving beat deleting. The adapter has no caller in the
+workspace today, so deleting it would have been the smaller diff and cost
+nothing immediately. It is the documented bridge for when PresentationML themes
+reach Word layout, and removing it would only have to be undone later on the
+other side. The accepted cost is that `rdocx-oxml` now pulls `oxml-drawing`, so
+a Word-only consumer compiles DrawingML.
+
+`OFFICE_DEFAULT_XML` became public in `oxml-drawing` so the moved regression can
+compare a projected `Theme` against one parsed from the same source. The
+alternative, a dev-dependency from `oxml-drawing` back on `rdocx-oxml`, would
+have rebuilt the edge the story exists to remove, since a dev-dependency still
+has to resolve at publish time.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, "The dependency rule"
+and the adapter paragraph, plus the diagram edge. `CLAUDE.md`, the layout table.
+
+**Tests.** The gate is the conversion regression, which moved with the impl and
+still compares the projection against `Theme::from_xml` on the same source, plus
+`no_shared_crate_depends_on_a_format_crate`. The invariant test discriminates:
+adding `rdocx-oxml.workspace = true` to `oxml-layout` fails it with the
+offending line named.
+
+**Hash harness.** Unchanged. All 28 entries match, which is the expected result
+for the same conversion code in a different crate.
+
+**Notes for future sessions.** The invariant test cannot be exercised against
+`oxml-drawing` itself. Reintroducing that exact edge now produces
+`rdocx-oxml -> oxml-drawing -> rdocx-oxml`, a cargo cycle that fails to resolve
+before any test runs. That is a stronger guarantee than the test, but a reader
+proving the test works should edit a different `oxml-*` crate or they will get a
+confusing resolver error instead of a clean assertion failure.

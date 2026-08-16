@@ -1394,6 +1394,30 @@ out justified, and the existing rejection still holds for a genuinely unknown
 string. The hash harness is unchanged, since no recorded baseline carries a
 kashida value.
 
+### F-X024, Move the theme adapter into rdocx-oxml (M)
+`oxml-drawing` hosts `impl From<&CT_OfficeStyleSheet> for
+rdocx_oxml::theme::Theme`, which is the single documented exception to the rule
+that nothing in `oxml-*` depends on `rdocx-*`. That one edge makes the two
+publication trains mutually dependent: `rdocx-layout` depends on `oxml-layout`
+and `oxml-drawing` depends on `rdocx-oxml`, so neither train can publish first
+once both carry breaking changes.
+
+The adapter moves to `rdocx-oxml`, which the orphan rule permits because `Theme`
+is local there and `CT_OfficeStyleSheet` is the foreign type. The edge inverts
+to stable depending on incubating, the architecture rule loses its exception and
+becomes absolute, and train-at-a-time publication works in one fixed order
+forever: incubating, then stable.
+
+`rdocx-oxml` gains a dependency on `oxml-drawing`, so a Word-only consumer now
+compiles DrawingML. That is the accepted cost, chosen over deleting an adapter
+that exists so `rdocx-layout`'s `LayoutInput.theme` does not churn when
+PresentationML themes reach Word layout.
+**Depends on**: F-X020.
+**Test gate**: regression. The conversion produces the same `Theme` from the
+same `CT_OfficeStyleSheet` as before the move, `cargo tree` shows no `oxml-*`
+package depending on any `rdocx-*` or `rpptx-*` package, and the workspace
+still builds with all 28 hashes unchanged.
+
 ### F-X022, Tag rpptx-v0.3.0 (S)
 The complete incubating train moves to the next minor version, 0.3.0, because
 S41 broke its public API rather than merely extending it. `oxml-layout` renamed

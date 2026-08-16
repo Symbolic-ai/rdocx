@@ -667,6 +667,7 @@ drift far enough that a later update becomes a large unexplained delta.
 | F-ID | Title | Size |
 |------|-------|------|
 | F-X020 | Refresh the dependency lockfile | S |
+| F-X024 | Move the theme adapter into rdocx-oxml | M |
 | F-X022 | Tag rpptx-v0.3.0 | S |
 | F-X023 | Tag v0.7.0 | S |
 
@@ -675,11 +676,15 @@ the hash harness decides whether the refresh is a no-op or a declared rendering
 delta. It runs first and alone, because a refresh that moved a baseline should
 not compete with a release to explain the same delta.
 
-The two release stories then carry S41's work to crates.io. Both trains move a
-minor version because S41 broke both public APIs, not merely extended them.
-Incubating goes first: the stable crates pin `oxml-layout`, so 0.3.0 has to be
-resolvable on crates.io before the stable train that depends on it can publish.
-That reverses the S39 order, where only one train moved at a time.
+F-X024 then removes the reason the release order was impossible. Scoping the two
+release stories exposed a cycle between the trains: `rdocx-layout` depends on
+`oxml-layout`, and `oxml-drawing` depends on `rdocx-oxml` through the one
+documented architecture exception. With both trains carrying breaking changes,
+neither could publish first. Moving the theme adapter into `rdocx-oxml` inverts
+that edge, so the dependency runs one way and incubating always publishes
+first.
+
+The two release stories then carry S41's work to crates.io in that order.
 
 ## Cross-cutting
 

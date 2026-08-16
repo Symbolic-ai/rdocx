@@ -46,6 +46,53 @@ mod table_gate_tests {
 
 #[cfg(test)]
 mod tests {
+
+    /// F-X024. The shared crates must not depend on a format crate.
+    ///
+    /// `oxml-drawing` used to be the one exception, hosting the Word theme
+    /// adapter and therefore depending on `rdocx-oxml`. That single edge made
+    /// the two publication trains mutually dependent, so neither could publish
+    /// first once both carried breaking changes. The adapter now lives in
+    /// `rdocx-oxml` and the rule has no exception, which this test keeps true.
+    #[test]
+    fn no_shared_crate_depends_on_a_format_crate() {
+        let manifests: [(&str, &str); 9] = [
+            ("oxml-core", include_str!("../../oxml-core/Cargo.toml")),
+            ("oxml-opc", include_str!("../../oxml-opc/Cargo.toml")),
+            ("oxml-media", include_str!("../../oxml-media/Cargo.toml")),
+            ("oxml-layout", include_str!("../../oxml-layout/Cargo.toml")),
+            ("oxml-drawing", include_str!("../Cargo.toml")),
+            ("oxml-pdf", include_str!("../../oxml-pdf/Cargo.toml")),
+            ("oxml-sml", include_str!("../../oxml-sml/Cargo.toml")),
+            (
+                "oxml-cli-support",
+                include_str!("../../oxml-cli-support/Cargo.toml"),
+            ),
+            (
+                "oxml-py-support",
+                include_str!("../../oxml-py-support/Cargo.toml"),
+            ),
+        ];
+
+        for (crate_name, manifest) in manifests {
+            for line in manifest.lines() {
+                let line = line.trim();
+                if line.starts_with('#') || line.is_empty() {
+                    continue;
+                }
+                // A dependency entry names the crate at the start of the line,
+                // either as `rdocx-oxml.workspace = true` or as a table key.
+                let names_format_crate = line.starts_with("rdocx")
+                    || line.starts_with("rpptx")
+                    || line.starts_with("\"rdocx")
+                    || line.starts_with("\"rpptx");
+                assert!(
+                    !names_format_crate,
+                    "{crate_name} depends on a format crate: {line}"
+                );
+            }
+        }
+    }
     use std::collections::HashSet;
     use std::path::PathBuf;
     use std::process::Command;

@@ -23,6 +23,7 @@ version, because S41 broke both public APIs rather than merely extending them.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-X020 | Refresh the dependency lockfile | S | done | - |
+| F-X024 | Move the theme adapter into rdocx-oxml | M | done | - |
 | F-X022 | Tag rpptx-v0.3.0 | S | pending | - |
 | F-X023 | Tag v0.7.0 | S | pending | - |
 
@@ -35,11 +36,20 @@ could not compete with a release to explain the same delta. It did not move one,
 though it did move every sample PDF, which is recorded in its AS_BUILT entry and
 filed as F-X021.
 
-F-X022 precedes F-X023, and the reason is a pin rather than a preference. The
-stable crates depend on `oxml-layout`, so the incubating train has to be
-resolvable at 0.3.0 on crates.io before the stable train that pins it can
-publish. S39 released stable first because only one train moved that sprint.
-Both move here, so the order reverses.
+F-X024 comes before either release, because without it neither release is
+possible. Scoping F-X022 and F-X023 exposed a cycle between the trains:
+`rdocx-layout` depends on `oxml-layout`, and `oxml-drawing` depends on
+`rdocx-oxml` through the one documented architecture exception. Publishing a
+train requires the other train's dependency to already resolve on crates.io,
+and with both carrying breaking changes neither could go first. Stable first
+will not compile, since `rdocx-layout` needs `oxml-layout` 0.3.0. Incubating
+first would ship an adapter bound to the old `rdocx-oxml`, breaking the one
+cross-family integration point. F-X024 removes the edge instead of choosing a
+bad order.
+
+F-X022 then precedes F-X023, and after F-X024 that order is permanent rather
+than incidental: the dependency runs one way, so incubating always publishes
+first.
 
 Each release story ends at a boundary this sprint cannot cross on its own.
 `/release` is the only command permitted to create a `v*` or `rpptx-v*` tag or
@@ -57,6 +67,9 @@ approval.
 - The hash harness is either unchanged, or its delta names the dependency that
   caused it and was reviewed before the baseline was re-recorded.
 - The pinned toolchain and MSRV still build the workspace.
+- No `oxml-*` package depends on any `rdocx-*` or `rpptx-*` package, and
+  `docs/hld/03-architecture.md` no longer documents an exception, because there
+  is none.
 - The fifteen incubating packages read 0.3.0 and the eleven workspace-version
   packages read 0.7.0, with every root pin, lock entry, README example, Python
   project version and WASM literal agreeing.

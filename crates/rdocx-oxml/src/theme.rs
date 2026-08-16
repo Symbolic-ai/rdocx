@@ -253,9 +253,113 @@ pub fn apply_tint_shade(hex: &str, tint_val: Option<u8>, shade_val: Option<u8>) 
     )
 }
 
+/// Project a shared DrawingML theme onto this crate's Word theme.
+///
+/// The adapter lives here rather than in `oxml-drawing` so the dependency runs
+/// one way, from the format crate to the shared crate. Hosting it the other way
+/// round made the two publication trains mutually dependent, since
+/// `rdocx-layout` already depends on `oxml-layout`. The orphan rule allows this
+/// placement because `Theme` is local here.
+impl From<&oxml_drawing::theme::CT_OfficeStyleSheet> for Theme {
+    fn from(theme: &oxml_drawing::theme::CT_OfficeStyleSheet) -> Self {
+        let colours = &theme.theme_elements.color_scheme;
+        let fonts = &theme.theme_elements.font_scheme;
+        Self {
+            colors: ThemeColors {
+                dk1: legacy_colour(colours.color(oxml_drawing::color::ThemeColorSlot::Dark1)),
+                dk2: legacy_colour(colours.color(oxml_drawing::color::ThemeColorSlot::Dark2)),
+                lt1: legacy_colour(colours.color(oxml_drawing::color::ThemeColorSlot::Light1)),
+                lt2: legacy_colour(colours.color(oxml_drawing::color::ThemeColorSlot::Light2)),
+                accent1: legacy_colour(colours.color(oxml_drawing::color::ThemeColorSlot::Accent1)),
+                accent2: legacy_colour(colours.color(oxml_drawing::color::ThemeColorSlot::Accent2)),
+                accent3: legacy_colour(colours.color(oxml_drawing::color::ThemeColorSlot::Accent3)),
+                accent4: legacy_colour(colours.color(oxml_drawing::color::ThemeColorSlot::Accent4)),
+                accent5: legacy_colour(colours.color(oxml_drawing::color::ThemeColorSlot::Accent5)),
+                accent6: legacy_colour(colours.color(oxml_drawing::color::ThemeColorSlot::Accent6)),
+                hlink: legacy_colour(colours.color(oxml_drawing::color::ThemeColorSlot::Hyperlink)),
+                fol_hlink: legacy_colour(
+                    colours.color(oxml_drawing::color::ThemeColorSlot::FollowedHyperlink),
+                ),
+            },
+            major_font: Some(fonts.major_font.latin.typeface.clone()),
+            minor_font: Some(fonts.minor_font.latin.typeface.clone()),
+        }
+    }
+}
+
+fn legacy_colour(colour: &oxml_drawing::color::ColorChoice) -> Option<String> {
+    match colour {
+        oxml_drawing::color::ColorChoice::Srgb { value, .. } => Some(value.to_string()),
+        oxml_drawing::color::ColorChoice::System {
+            value, last_color, ..
+        } => Some(
+            last_color
+                .map(|resolved| resolved.to_string())
+                .unwrap_or_else(|| value.clone()),
+        ),
+        oxml_drawing::color::ColorChoice::Scheme { .. }
+        | oxml_drawing::color::ColorChoice::Preset { .. } => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // F-X024, the theme adapter's regressions, moved here with the impl.
+
+    #[test]
+    fn shared_theme_adapter_matches_the_legacy_theme_projection() {
+        let shared = oxml_drawing::theme::CT_OfficeStyleSheet::from_xml(
+            oxml_drawing::theme::OFFICE_DEFAULT_XML.as_bytes(),
+        )
+        .unwrap();
+        let legacy = Theme::from_xml(oxml_drawing::theme::OFFICE_DEFAULT_XML.as_bytes()).unwrap();
+        let projected = Theme::from(&shared);
+
+        for slot in [
+            "dk1", "dk2", "lt1", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5",
+            "accent6", "hlink", "folHlink",
+        ] {
+            assert_eq!(projected.colors.get(slot), legacy.colors.get(slot));
+        }
+        assert_eq!(projected.major_font, legacy.major_font);
+        assert_eq!(projected.minor_font, legacy.minor_font);
+    }
+
+    #[test]
+    fn shared_theme_adapter_does_not_project_unresolved_colour_forms() {
+        let mut shared = oxml_drawing::theme::CT_OfficeStyleSheet::office_default();
+        shared.theme_elements.color_scheme.accent1 = oxml_drawing::color::ColorChoice::Scheme {
+            value: "accent2".to_owned(),
+            transforms: Vec::new(),
+            raw_children: oxml_drawing::order::OrderedRawChildren::default(),
+        };
+        shared.theme_elements.color_scheme.accent2 = oxml_drawing::color::ColorChoice::Preset {
+            value: "red".to_owned(),
+            transforms: Vec::new(),
+            raw_children: oxml_drawing::order::OrderedRawChildren::default(),
+        };
+        shared.theme_elements.color_scheme.accent3 = oxml_drawing::color::ColorChoice::System {
+            value: "windowText".to_owned(),
+            last_color: None,
+            transforms: Vec::new(),
+            raw_children: oxml_drawing::order::OrderedRawChildren::default(),
+        };
+        shared.theme_elements.color_scheme.accent4 = oxml_drawing::color::ColorChoice::System {
+            value: "window".to_owned(),
+            last_color: Some(oxml_drawing::color::RgbColor::new(0xab, 0xcd, 0xef)),
+            transforms: Vec::new(),
+            raw_children: oxml_drawing::order::OrderedRawChildren::default(),
+        };
+
+        let projected = Theme::from(&shared);
+
+        assert_eq!(projected.colors.accent1, None);
+        assert_eq!(projected.colors.accent2, None);
+        assert_eq!(projected.colors.accent3.as_deref(), Some("windowText"));
+        assert_eq!(projected.colors.accent4.as_deref(), Some("ABCDEF"));
+    }
 
     #[test]
     fn parse_office_theme() {

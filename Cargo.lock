@@ -501,7 +501,6 @@ dependencies = [
  "oxml-core",
  "oxml-opc",
  "quick-xml",
- "rdocx-oxml",
 ]
 
 [[package]]
@@ -747,6 +746,7 @@ version = "0.6.0"
 dependencies = [
  "itoa",
  "oxml-core",
+ "oxml-drawing",
  "quick-xml",
  "regex",
  "thiserror",

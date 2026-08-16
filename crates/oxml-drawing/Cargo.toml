@@ -18,7 +18,6 @@ tag-name = "rpptx-v{{version}}"
 [dependencies]
 oxml-core.workspace = true
 quick-xml.workspace = true
-rdocx-oxml.workspace = true
 
 [dev-dependencies]
 oxml-opc.workspace = true
