@@ -29,8 +29,8 @@ regenerated, never hand-edited.
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
-| X, Cross-cutting (opportunistic)            | 28 | 28 | 0 | 0  |
-| **Total** | **182** | **182** | **0** | **0** |
+| X, Cross-cutting (opportunistic)            | 30 | 28 | 0 | 2  |
+| **Total** | **184** | **182** | **0** | **2** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -313,4 +313,6 @@ regenerated, never hand-edited.
 | F-X024 | Move the theme adapter into rdocx-oxml     | S42 | M | done |
 | F-X022 | Tag rpptx-v0.3.0                           | S42 | S | done |
 | F-X023 | Tag v0.7.0                                 | S42 | S | done |
+| F-X026 | CI must run the release regressions too     | -   | S | pending |
+| F-X027 | Wire the golden-PNG gate into something     | -   | S | pending |
 <!-- AUTOGEN:backlog-MX END -->
