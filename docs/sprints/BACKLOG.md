@@ -29,8 +29,8 @@ regenerated, never hand-edited.
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
-| X, Cross-cutting (opportunistic)            | 23 | 19 | 0 | 4  |
-| **Total** | **177** | **173** | **0** | **4** |
+| X, Cross-cutting (opportunistic)            | 24 | 20 | 0 | 4  |
+| **Total** | **178** | **174** | **0** | **4** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -307,5 +307,6 @@ regenerated, never hand-edited.
 | F-X017 | Notes broken to their own section's width   | -   | S | pending |
 | F-X018 | Unknown enumerated values must not fail open | -  | M | pending |
 | F-X019 | Paragraph-relative later drawings should wrap | -  | M | pending |
-| F-X020 | Refresh the dependency lockfile             | S42 | S | pending |
+| F-X020 | Refresh the dependency lockfile             | S42 | S | done |
+| F-X021 | Hash harness should cover PDF output       | -   | M | pending |
 <!-- AUTOGEN:backlog-MX END -->

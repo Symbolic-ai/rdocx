@@ -21,7 +21,7 @@ attribute.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X020 | Refresh the dependency lockfile | S | pending | - |
+| F-X020 | Refresh the dependency lockfile | S | done | - |
 
 ## Sequencing note
 

@@ -6178,3 +6178,60 @@ with the limitation in place, because they anchor the drawing to the paragraph
 it affects, which is the case the limitation covers. Real documents do not.
 Where a story is motivated by a specific document, that document belongs in the
 loop, not just the tests derived from it.
+
+### F-X020, Refresh the dependency lockfile
+
+**Sprint.** S42
+**Completed.** 2026-08-16
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Sixteen semver-compatible dependency updates taken with
+`cargo update`. `Cargo.lock` is the only product change: no manifest moved, so
+no crate gained or lost a dependency and no API surface changed. None of the
+sixteen was a security fix. `cargo audit` reports zero vulnerabilities across
+152 dependencies before and after, and `cargo deny check` passes all four
+sections, with `ttf-parser` RUSTSEC-2026-0192 remaining the single documented
+exception rather than something this story cleared.
+
+**Non-obvious choices.** The updates were taken together rather than
+individually, because the point was to measure their combined effect once while
+the isolation tooling was to hand, not to avoid measuring them.
+
+**Deviations from the design plan.** The plan listed `zlib-rs` among the crates
+with no path to rendered output. It does have one, through `flate2`, `png` and
+`tiny-skia`. The conclusion survived, since PDF stream compression uses
+`miniz_oxide` and that did not update, but the reasoning was wrong and is
+corrected here rather than edited out of the plan.
+
+**Spec sections touched.** None.
+
+**Tests.** No new test, deliberately: there is no new behaviour to pin, and a
+test asserting a version number would pin the lockfile rather than the
+behaviour. The gate is the existing instrument, the full workspace suite at 53
+binaries and zero failures, plus the 28-entry hash harness.
+
+**Hash harness.** Unchanged, 28 of 28, **and that is not the whole answer.**
+
+The refresh changed all seven sample PDFs. Every sample PNG stayed
+byte-identical, which is why the harness stayed flat: it records `page1.png` and
+three `word/*.xml` parts per sample and no PDF at all.
+
+The delta was traced as the plan required, by reverting the lockfile and
+applying suspects alone. `font-types 0.12.2 to 0.12.3` on its own moves all
+seven PDFs, reaching the text shaper through `read-fonts 0.41.0` and `harfrust`.
+It was then characterised with the repository's own pinned Poppler oracle before
+being accepted: extracted text identical in 7 of 7 samples under `pdftotext`,
+`pdfinfo` identical apart from the file size line, sizes moving by single-digit
+bytes, and every PNG byte-identical. A serialisation-level difference in numbers
+written to the content stream, with no semantic effect.
+
+No baseline was re-recorded, because no recorded baseline moved.
+
+**Notes for future sessions.** The durable finding is not the delta but that a
+gate reported green while a first-class output changed across every sample. The
+harness has no PDF coverage, so the `oxml-pdf` writer, its glyph positions,
+embedded font subsets and compressed streams, can drift with nothing watching.
+Filed as F-X021, which also has to decide what a stable PDF fingerprint is,
+since raw PDF bytes carry a creation date and object ordering that need not be
+reproducible. Until that lands, a dependency refresh should compare sample PDFs
+by hand the way this one did.

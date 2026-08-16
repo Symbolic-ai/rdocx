@@ -1394,6 +1394,27 @@ out justified, and the existing rejection still holds for a genuinely unknown
 string. The hash harness is unchanged, since no recorded baseline carries a
 kashida value.
 
+### F-X021, The hash harness should cover PDF output (M)
+The output-stability harness records `page1.png` and three `word/*.xml` parts
+for each of the seven samples, and no PDF. PDF is a first-class output of this
+workspace, produced by a different code path from the PNG: `oxml-pdf` writes
+glyph positions, embedded font subsets and compressed streams, none of which the
+rasterised PNG exercises. That path can therefore drift with no gate noticing.
+
+F-X020 demonstrated the gap rather than theorised it. A routine
+semver-compatible dependency refresh changed all seven sample PDFs while every
+PNG stayed byte-identical and the harness reported 28 of 28. The change was
+benign, and it was found by hand rather than by the gate that exists to find it.
+
+Recording a PDF byte hash directly would be brittle, since a PDF carries a
+creation date and object ordering that need not be stable. The story therefore
+decides what a stable PDF fingerprint is, likely extracted text plus page
+geometry plus glyph positions, before recording one.
+**Depends on**: none.
+**Test gate**: regression. A deliberate change to the PDF writer moves the new
+entries and leaves the PNG entries untouched, and a re-run with no change
+reproduces every entry exactly.
+
 ### F-X020, Refresh the dependency lockfile (S)
 Every semver-compatible dependency update outstanding at the start of the sprint
 is taken, and its effect on rendered output is measured rather than assumed.
