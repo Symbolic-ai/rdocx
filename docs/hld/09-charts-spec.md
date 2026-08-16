@@ -9,7 +9,7 @@ follows is recorded so it can be revisited rather than discovered.
 
 ## Why a chart needs three parts
 
-A chart in a `.pptx` is not one thing:
+A chart in a `.pptx` or `.docx` is not one thing:
 
 ```
 /ppt/slides/slide1.xml
@@ -25,6 +25,12 @@ A chart in a `.pptx` is not one thing:
 
 /ppt/embeddings/Workbook1.xlsx                  a complete .xlsx, nested
 ```
+
+Word uses the same ChartML and embedded SpreadsheetML pair under `/word`.
+The main document carries an inline or anchored `w:drawing`, whose ChartML
+`a:graphicData` contains `c:chart r:id`. That relationship reaches
+`/word/charts/chartN.xml`, whose package relationship reaches
+`/word/embeddings/WorkbookN.xlsx`.
 
 The workbook is what "Edit Data" opens. PowerPoint will render a chart whose
 workbook is missing, but the file is malformed and editing is broken. This is
@@ -432,6 +438,27 @@ parts use `/ppt/charts/chartN.xml` and `/ppt/embeddings/WorkbookN.xlsx`.
 Each numbered family independently takes the next positive suffix after its
 greatest occupied suffix, following the allocation rule in
 `04-opc-and-packaging.md`.
+
+The Word drawing model carries either one picture relationship or one chart
+relationship. Its reader accepts producer prefixes but recognizes `c:chart`
+only inside `a:graphicData` whose URI is the ChartML namespace. Its writer uses
+fixed `a:`, `c:`, and `r:` prefixes and emits the ChartML graphic payload in
+schema order. Opened inline and anchored elements retain their complete raw XML
+as the sole write-back source, including unmodelled producer children.
+
+The Word facade stages a typed chart, editable workbook, document-to-chart
+relationship, chart-to-workbook package relationship, both content-type
+overrides, and the drawing as one private package mutation. Chart and workbook
+names allocate independently after the greatest occupied positive suffix.
+Public chart-data construction remains outside this package seam.
+
+The reviewed Word candidate has SHA-256
+`79e9b9ff9e7557dbd09a365bb8c189806e700ed48ca768b27d7158cf2b41370b`.
+Microsoft Word 16.104, Info.plist build 16.104.25121423, opened that exact file
+without a repair warning. In the human-action gate, Edit Data opened the
+embedded workbook in Excel and the user successfully changed the chart data.
+The workbook initially carried `Category` and `Revenue` columns with `North,
+12.5`, `South, 19.0`, and `West, 14.25`.
 
 The native chart candidate has SHA-256
 `e6e9f7eef1c774d0414c5d0c3f1202da1a28635b5d089e15455b7adc3f66cb00`.

@@ -706,11 +706,14 @@ dependencies = [
 name = "rdocx"
 version = "0.7.0"
 dependencies = [
+ "oxml-chart",
  "oxml-core",
  "oxml-layout",
  "oxml-media",
  "oxml-opc",
  "oxml-pdf",
+ "oxml-sml",
+ "quick-xml",
  "rdocx-html",
  "rdocx-layout",
  "rdocx-oxml",

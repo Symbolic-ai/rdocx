@@ -1,6 +1,6 @@
 # F-157, Word chart part and embedded workbook
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S45
 **Size**: M
 **Depends on**: F-156
@@ -63,6 +63,12 @@ data-first authoring API.
 The same-sprint dependency F-156 runs first, so this implementation consumes
 `oxml-chart` and never adds an `rdocx` edge to the deprecated shim.
 
+Add `quick-xml` as a direct private `rdocx` dependency for the package guard
+that rejects a chart which already contains `c:externalData`. The scanner
+resolves aliases declared on `c:chartSpace`, ignores foreign namespace
+lookalikes, and avoids expanding the published `oxml-chart` raw or typed model
+API for one facade-only duplicate check.
+
 ## Rejected alternatives
 
 - Store charts as images. That loses the editable workbook and fails the
@@ -107,8 +113,10 @@ acceptance evidence.
   schema-order, malformed-value, structural round-trip, and byte-preservation
   tests for inline and anchored chart payloads.
 - Crate dependency graph and new cross-family uses. Read HLD 03. Confirm
-  `rdocx -> oxml-chart` and `rdocx -> oxml-sml` point inward and that no
-  `oxml-*` crate gains an `rdocx-*` dependency.
+  `rdocx -> oxml-chart`, `rdocx -> oxml-sml`, and the direct `quick-xml`
+  parser dependency resolve in affected package dry-runs. Confirm that the
+  cross-family edges point inward and that no `oxml-*` crate gains an
+  `rdocx-*` dependency.
 - Public API of a published crate. Read HLD 10 and the structural rules. The
   drawing additions are additive, and the package helper remains private. Run
   affected package dry-runs and archive size assertions.
@@ -123,12 +131,12 @@ does not author charts in this story.
 
 ## Implementation checklist
 
-- [ ] Parse and write typed inline and anchored Word chart relationship payloads.
-- [ ] Add collision-safe Word chart and embedded-workbook package assembly.
-- [ ] Preserve opened producer drawing XML as the sole round-trip source.
-- [ ] Add round-trip, ordering, preservation, collision, and atomicity tests.
-- [ ] Produce pinned SHA-bound Microsoft Word no-repair evidence.
-- [ ] Update exactly HLD 04 and HLD 09.
+- [x] Parse and write typed inline and anchored Word chart relationship payloads.
+- [x] Add collision-safe Word chart and embedded-workbook package assembly.
+- [x] Preserve opened producer drawing XML as the sole round-trip source.
+- [x] Add round-trip, ordering, preservation, collision, and atomicity tests.
+- [x] Produce pinned SHA-bound Microsoft Word no-repair evidence.
+- [x] Update exactly HLD 04 and HLD 09.
 
 ## Open questions
 
