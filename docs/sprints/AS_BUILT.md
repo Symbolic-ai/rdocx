@@ -6729,3 +6729,142 @@ The spec set carried the stale release figures for a whole sprint before anyone
 noticed, and it was noticed here only because this story had to read that
 paragraph. `/realign-docs` is the command that owns that class of drift, and it
 has not run recently.
+
+### F-X026, CI must run the release regressions too
+
+**Sprint.** S44
+**Completed.** 2026-08-16
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Pull-request CI now has a named `Release regressions` job
+that runs the complete `scripts.test_sprint_workflow` module with the Python
+standard library. It catches stale release metadata before publication and
+reports the failure independently of the prose checks.
+
+**Non-obvious choices.** The job runs the whole module rather than naming the
+two current publication preflights. That keeps later release contract tests in
+the gate automatically. It remains separate from the path-filtered prose job,
+whose inputs are Markdown only.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`, "What CI runs",
+and `docs/hld/15-build-and-toolchain.md`, "Publishing" and "CI job matrix".
+
+**Tests.** `test_ci_runs_release_regressions_in_a_named_job` and
+`test_ci_release_regression_job_rejects_wiring_mutations`, plus both existing
+release-family preflights and the stale-version mutation regression.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep the whole-module command unconditional.
+Narrowing it to named methods recreates the coupling this story removed.
+
+### F-X027, Wire the golden-PNG gate into something
+
+**Sprint.** S44
+**Completed.** 2026-08-16
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The CI `test` job runs the golden-PNG check after the full
+workspace suite. It reuses the job's checksum-pinned Poppler 26.01.0 build and
+compiled sample generators, then compares all seven decoded page-one pixel
+buffers at 150 DPI.
+
+**Non-obvious choices.** Reusing `test` avoids a second Poppler source build and
+keeps the raster oracle beside the workspace artifacts it consumes. The
+portable hash harness remains a separate job because it does not require the
+external rasterizer.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`, "The golden-PNG
+gate" and "What CI runs", plus `docs/hld/15-build-and-toolchain.md`, "CI job
+matrix".
+
+**Tests.** `test_ci_runs_the_golden_png_gate_in_the_pinned_poppler_environment`
+asserts placement, ordering, uniqueness, exact command, and ordinary failure
+propagation. The harness self-test rejects a one-pixel offset. The integrated
+oracle matched seven of seven clean buffers and rejected an injected pixel in
+`proposal` under Poppler 26.01.0.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The pixel manifest and rasterizer version are a
+single reviewed contract. A Poppler change needs a deliberate oracle review,
+not a baseline refresh hidden inside CI maintenance.
+
+### F-X028, Repair the agent-facing documentation drift
+
+**Sprint.** S44
+**Completed.** 2026-08-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `CLAUDE.md`, the canonical verify command, and the two
+affected HLD sections now name repository paths, package versions, font
+ownership, features, and known defects that match the current tree. A
+structured regression resolves repository claims from both governed documents,
+and the generated Codex adapter was refreshed from the canonical command.
+
+**Non-obvious choices.** The claim checker distinguishes concrete rooted paths,
+rooted globs, placeholders, numeric line suffixes, generated outputs, and
+tracked standalone filenames. This lets it reject stale documentation without
+requiring generated package archives to exist in a fresh checkout.
+
+**Deviations from the design plan.** Integration review found that the first
+helper covered only backticked crate paths. It was expanded to both governed
+documents and every documented path shape. Microscope pass 2 then found that
+the standalone generated `*.crate` glob was missing from the exemption set.
+That case was fixed, and pass 3 was clean.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`, "Packaging", and
+`docs/hld/15-build-and-toolchain.md`, "Feature flags", "Publishing", and the
+agent-facing repository claims.
+
+**Tests.** `test_agent_facing_repository_claims_match_the_tree` and
+`test_agent_facing_repository_claims_reject_drift` cover stale crate and HLD
+paths, a missing workflow, version and feature drift, package outputs, globs,
+placeholders, and standalone filenames. The packaged `oxml-layout` inventory
+contains exactly 20 TTFs and four family legal files. The no-default-features
+suite passes.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Edit `.claude/commands/verify.md`, then regenerate
+the adapter. Never edit `.agents/skills/verify/SKILL.md` directly.
+
+### F-X029, Path-filtered CI jobs
+
+**Sprint.** S44
+**Completed.** 2026-08-16
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** CI detects changed path families once, routes eight costly
+jobs only when their inputs can affect their result, and reports one stable
+`CI gate` status. Docs-only changes run the documentation checks without
+scheduling the workspace, MSRV, WASM, bindings, fidelity, hash, or supply-chain
+jobs. Scheduled supply-chain checks still run.
+
+**Non-obvious choices.** `dorny/paths-filter` v4.0.3 is pinned to immutable
+commit `ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d`. The detector alone receives
+`pull-requests: read`. The aggregate job treats a selected failure as failure
+and an unselected skip as success, which avoids the required-status trap of
+job-level native path filters.
+
+**Deviations from the design plan.** None. Repository-side routing landed, but
+branch protection remains deliberately external. F-X031 now owns that setting
+and is scheduled for S62 by user direction.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`, "What CI runs",
+and `docs/hld/15-build-and-toolchain.md`, "CI job matrix".
+
+**Tests.** The three CI-filter contract regressions cover every routed job's
+must-trigger and must-not-trigger paths, docs-only routing, scheduled
+supply-chain selection, least privilege, immutable action provenance, a
+fail-safe `ci.yml` route, and aggregate-gate result mutations.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** F-X031 must make only `CI gate` required after
+hosted runs prove its exact reported name. Do not require the routed jobs
+individually.

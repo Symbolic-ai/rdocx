@@ -245,6 +245,10 @@ defended.
 | F-X019 | S43 | M | 2 | 1 | 2026-08-16 | Two-pass pagination so paragraph-relative later drawings wrap |
 | F-X021 | S43 | L | 2 | 1 | 2026-08-16 | PDF fingerprint in the harness, 28 to 49 entries, and a deterministic writer |
 | F-X025 | S43 | S | 1 | 1 | 2026-08-16 | The release preflights run in the local gate, not first on a tag |
+| F-X026 | S44 | S | 1 | 1 | 2026-08-16 | Full release regressions run in a named CI job |
+| F-X027 | S44 | S | 1 | 1 | 2026-08-16 | Golden-PNG checks run in CI under pinned Poppler |
+| F-X028 | S44 | M | 2 | 1 | 2026-08-16 | Agent-facing paths, versions, fonts, and gates agree with the tree |
+| F-X029 | S44 | M | 2 | 1 | 2026-08-16 | Path-filtered CI with a stable aggregate gate |
 
 ## Velocity
 
