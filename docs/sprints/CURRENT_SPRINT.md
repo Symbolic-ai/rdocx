@@ -23,7 +23,7 @@ documentation that tells every future session what is true.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-X026 | CI must run the release regressions too | S | in-progress | codex |
-| F-X027 | Wire the golden-PNG gate into something | S | pending | - |
+| F-X027 | Wire the golden-PNG gate into something | S | in-progress | codex |
 | F-X028 | Repair the agent-facing documentation drift | M | pending | - |
 | F-X029 | Path-filtered CI jobs | M | pending | - |
 

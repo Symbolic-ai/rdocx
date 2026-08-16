@@ -36,8 +36,8 @@ regenerated, never hand-edited.
 | M18, Format breadth                            | 8  | 0 | 0 | 8  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
-| X, Cross-cutting (opportunistic)            | 34 | 28 | 1 | 4  |
-| **Total** | **244** | **182** | **1** | **60** |
+| X, Cross-cutting (opportunistic)            | 34 | 28 | 2 | 3  |
+| **Total** | **244** | **182** | **2** | **59** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -426,7 +426,7 @@ regenerated, never hand-edited.
 | F-X022 | Tag rpptx-v0.3.0                           | S42 | S | done |
 | F-X023 | Tag v0.7.0                                 | S42 | S | done |
 | F-X026 | CI must run the release regressions too     | S44 | S | in-progress |
-| F-X027 | Wire the golden-PNG gate into something     | S44 | S | pending |
+| F-X027 | Wire the golden-PNG gate into something     | S44 | S | in-progress |
 | F-X028 | Repair the agent-facing documentation drift | S44 | M | pending |
 | F-X029 | Path-filtered CI jobs                       | S44 | M | pending |
 | F-X030 | Decouple the npm package versions           | -   | S | archived |
