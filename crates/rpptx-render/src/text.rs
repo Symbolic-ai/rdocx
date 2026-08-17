@@ -774,6 +774,8 @@ fn emit_line_items(
                 x += width;
             }
             LineItem::Image { width, .. } => x += width,
+            LineItem::Group { width, .. } => x += width,
+            _ => x += item.width(),
         }
     }
     x - start_x
@@ -885,7 +887,11 @@ fn glyph_gap_count(items: &[LineItem]) -> usize {
 fn text_segment(item: &LineItem) -> Option<&TextSegment> {
     match item {
         LineItem::Text(segment) => Some(segment),
-        LineItem::Marker(_) | LineItem::Tab { .. } | LineItem::Image { .. } => None,
+        LineItem::Marker(_)
+        | LineItem::Tab { .. }
+        | LineItem::Image { .. }
+        | LineItem::Group { .. } => None,
+        _ => None,
     }
 }
 

@@ -6867,3 +6867,148 @@ fail-safe `ci.yml` route, and aggregate-gate result mutations.
 **Notes for future sessions.** F-X031 must make only `CI gate` required after
 hosted runs prove its exact reported name. Do not require the routed jobs
 individually.
+
+### F-156, Extract oxml-chart
+
+**Sprint.** S45
+**Completed.** 2026-08-17
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The complete typed ChartML model, renderer, and tests now
+live in the shared `oxml-chart` crate. Active consumers depend on that shared
+crate, while `rpptx-chart` remains as a deprecated exact re-export for source
+and type compatibility.
+
+**Non-obvious choices.** The extraction was a mechanical ownership move. The
+compatibility crate contains no forwarding implementation, and the release,
+packaging, README, doctest, and architecture assertions all name the new shared
+crate explicitly.
+
+**Deviations from the design plan.** Pre-implementation review added HLD 11 to
+the impact list because its current incubating publication allowlist named
+`rpptx-chart` without `oxml-chart`.
+
+**Spec sections touched.** `docs/hld/01-glossary.md`,
+`docs/hld/02-scope-and-non-goals.md`, `docs/hld/03-architecture.md`,
+`docs/hld/07-inheritance-and-resolution.md`, `docs/hld/09-charts-spec.md`,
+`docs/hld/11-migration-plan.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `legacy_shim_retains_shared_chart_type`, the 80 shared chart tests,
+the shared-crate dependency assertion, both chart package dry-runs, and the
+workspace verification gate.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** New chart implementation belongs in
+`oxml-chart`. Keep `rpptx-chart` as the compatibility identity until a reviewed
+migration removes it.
+
+### F-157, Word chart part and embedded workbook
+
+**Sprint.** S45
+**Completed.** 2026-08-17
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Word packages can now contain typed inline and anchored
+chart drawings, collision-safe chart parts, document relationships, content
+types, and editable embedded workbooks. Package changes are staged atomically,
+and opened producer drawing XML remains the sole round-trip source.
+
+**Non-obvious choices.** Duplicate `externalData` detection uses a
+namespace-aware reader because ChartML permits arbitrary prefix aliases and
+foreign elements may share the same local name. This avoids rewriting the raw
+chart model solely to expose one package guard.
+
+**Deviations from the design plan.** The plan was revised to permit the direct
+workspace `quick-xml` dependency in `rdocx` for the namespace-aware duplicate
+guard. No public API or shared-crate model expansion was required.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, native chart
+parts and atomic package mutation, and `docs/hld/09-charts-spec.md`, Word chart
+relationships and editable workbooks.
+
+**Tests.** `word_chart_part_and_workbook_round_trip`,
+`invalid_chart_package_assembly_is_atomic`, sparse suffix allocation, producer
+XML preservation, and the SHA-bound Microsoft Word 16.104 native gate. Word
+opened without repair and Edit Data successfully changed the embedded values.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve producer chart drawing XML verbatim.
+Package assembly may inspect namespaces, but it must not become a second
+ChartML parser.
+
+### F-158, Document::add_chart
+
+**Sprint.** S45
+**Completed.** 2026-08-17
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `ChartKind`, `ChartData`, validation, ChartML construction,
+and workbook construction now share one `oxml-chart` authoring path.
+`Document::add_chart` uses that path to append an atomic inline Word chart,
+while the existing PowerPoint public paths remain source-compatible re-exports.
+
+**Non-obvious choices.** ChartML formulas, caches, workbook headers,
+categories, and numeric cells are asserted from one validated source. Word
+placement follows flow layout through width and height rather than slide-style
+absolute coordinates.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/09-charts-spec.md`, shared authoring data,
+validation, atomic facade mutation, and Word inline placement.
+
+**Tests.** `added_bar_line_and_pie_charts_keep_source_data`,
+`word_add_chart_writes_cache_and_workbook_from_one_source`,
+`word_add_chart_rejects_invalid_data_without_mutation`, and
+`word_add_chart_uses_inline_flow_placement`, plus the existing PowerPoint chart
+authoring suite.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep cache and workbook serialization together
+in `oxml-chart`. Facades own their package relationship scopes and should not
+reimplement the data projection.
+
+### F-159, Chart rendering in the Word paginator
+
+**Sprint.** S45
+**Completed.** 2026-08-17
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Word layout resolves internal chart and theme
+relationships, carries backend-neutral groups through line breaking and
+pagination, and renders inline and anchored charts through `oxml-chart`.
+Missing, external, malformed, and unsupported targets produce stable
+diagnostics and visible placeholders.
+
+**Non-obvious choices.** A generic group item gives the line engine the same
+width, ascent, descent, wrapping, and placement behavior as an image without
+adding a chart dependency to `oxml-layout`. Theme lookup follows the document
+relationship target instead of assuming a conventional part name.
+
+**Deviations from the design plan.** The plan added a dev-only `rpptx`
+dependency to `rdocx` so one existing test could author both golden artifacts
+from the same `ChartData`. There is no production dependency edge.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, shared dependency
+direction, `docs/hld/08-rendering-spec.md`, generic group transport and Word
+pagination, `docs/hld/09-charts-spec.md`, chart and theme resolution, and
+`docs/hld/12-testing-strategy.md`, the exact cross-family golden gate.
+
+**Tests.** `word_and_powerpoint_chart_pixels_are_identical` produced 750 by
+450 pixel crops at 150 DPI with bundled fonts and `pdftoppm 26.01.0`, with zero
+differing RGBA pixels. The Word artifact SHA-256 is
+`e50845637449e2af4b8e2dbf16f5f6f53e5f598a00401fcc34c13f5d5716a1c4`, and
+the PowerPoint artifact SHA-256 is
+`7525e9a088c5fbf58fa1ed98cdfa0ec2fabf998662112ced7a6b6521f2c4edfc`.
+Inline, anchored, theme, color-map, and visible-fallback regressions also pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep chart geometry child-local until the
+paginator applies the inline or anchor transform. Deterministic comparisons
+must use bundled fonts and the pinned rasterizer.

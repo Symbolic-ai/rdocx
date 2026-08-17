@@ -27,7 +27,7 @@ geometry, fills, lines, effects, colour schemes, and its own text model. Used by
 all three formats. Lives in `oxml-drawing`. PowerPoint is roughly 90 percent
 DrawingML, which is why that crate is the largest new body of work.
 
-**ChartML**, the `c:` namespace. Charts. Lives in `rpptx-chart`.
+**ChartML**, the `c:` namespace. Charts. Lives in `oxml-chart`.
 
 ## The container
 

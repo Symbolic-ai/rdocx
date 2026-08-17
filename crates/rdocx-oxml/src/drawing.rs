@@ -1,6 +1,8 @@
 //! Drawing elements for inline and anchor images: `CT_Drawing`, `CT_Inline`, `CT_Anchor`.
 
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::name::{Namespace, ResolveResult};
+use quick_xml::reader::NsReader;
 use quick_xml::{Reader, Writer};
 
 use crate::error::Result;
@@ -13,6 +15,7 @@ pub mod drawing_ns {
     pub const WP: &str = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
     pub const A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
     pub const PIC: &str = "http://schemas.openxmlformats.org/drawingml/2006/picture";
+    pub const C: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
     pub const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 }
 
@@ -248,6 +251,8 @@ pub struct CT_Anchor {
     pub wrap: WrapType,
     /// Relationship ID referencing the image part.
     pub embed_id: String,
+    /// Relationship ID referencing a ChartML part.
+    pub chart_rel_id: Option<String>,
     /// Z-order relative height.
     pub relative_height: u32,
     /// Optional description/alt text.
@@ -419,12 +424,23 @@ impl CT_Anchor {
             dist_r: Emu(0),
             wrap: WrapType::None,
             embed_id: embed_id.to_string(),
+            chart_rel_id: None,
             relative_height: 0,
             description: Some("Background".to_string()),
             name: Some("Background".to_string()),
             raw_xml: None,
             shape: None,
         }
+    }
+
+    /// Create an anchored drawing whose payload is a native Word chart.
+    pub fn new_chart(chart_rel_id: &str, width_emu: i64, height_emu: i64) -> Self {
+        let mut anchor = Self::background("", width_emu, height_emu);
+        anchor.behind_doc = false;
+        anchor.chart_rel_id = Some(chart_rel_id.to_owned());
+        anchor.description = None;
+        anchor.name = Some("Chart".to_owned());
+        anchor
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>, start: &BytesStart) -> Result<Self> {
@@ -683,6 +699,7 @@ impl CT_Anchor {
             dist_r,
             wrap,
             embed_id,
+            chart_rel_id: None,
             relative_height,
             description,
             name,
@@ -697,6 +714,8 @@ impl CT_Anchor {
             writer.get_mut().write_all(raw)?;
             return Ok(());
         }
+
+        let payload = drawing_payload(&self.embed_id, self.chart_rel_id.as_deref())?;
 
         let mut buf = itoa::Buffer::new();
         let mut anchor = BytesStart::new("wp:anchor");
@@ -786,10 +805,9 @@ impl CT_Anchor {
         }
         writer.write_event(Event::Empty(doc_pr))?;
 
-        // a:graphic (same pic:pic structure as inline)
         write_graphic_element(
             writer,
-            &self.embed_id,
+            payload,
             self.extent_cx,
             self.extent_cy,
             self.name.as_deref(),
@@ -809,6 +827,8 @@ pub struct CT_Inline {
     pub extent_cy: Emu,
     /// Relationship ID referencing the image part
     pub embed_id: String,
+    /// Relationship ID referencing a ChartML part.
+    pub chart_rel_id: Option<String>,
     /// Optional description/alt text
     pub description: Option<String>,
     /// Optional name
@@ -824,8 +844,22 @@ impl CT_Inline {
             extent_cx: Emu(width_emu),
             extent_cy: Emu(height_emu),
             embed_id: embed_id.to_string(),
+            chart_rel_id: None,
             description: None,
             name: None,
+            raw_xml: None,
+        }
+    }
+
+    /// Create an inline drawing whose payload is a native Word chart.
+    pub fn new_chart(chart_rel_id: &str, width_emu: i64, height_emu: i64) -> Self {
+        CT_Inline {
+            extent_cx: Emu(width_emu),
+            extent_cy: Emu(height_emu),
+            embed_id: String::new(),
+            chart_rel_id: Some(chart_rel_id.to_owned()),
+            description: None,
+            name: Some("Chart".to_owned()),
             raw_xml: None,
         }
     }
@@ -917,6 +951,7 @@ impl CT_Inline {
             extent_cx: cx,
             extent_cy: cy,
             embed_id,
+            chart_rel_id: None,
             description,
             name,
             raw_xml: None, // Will be set by CT_Drawing::from_xml
@@ -929,6 +964,8 @@ impl CT_Inline {
             writer.get_mut().write_all(raw)?;
             return Ok(());
         }
+
+        let payload = drawing_payload(&self.embed_id, self.chart_rel_id.as_deref())?;
 
         // wp:inline
         let mut buf = itoa::Buffer::new();
@@ -957,7 +994,7 @@ impl CT_Inline {
         // a:graphic
         write_graphic_element(
             writer,
-            &self.embed_id,
+            payload,
             self.extent_cx,
             self.extent_cy,
             self.name.as_deref(),
@@ -969,10 +1006,115 @@ impl CT_Inline {
     }
 }
 
-/// Write the `a:graphic` > `a:graphicData` > `pic:pic` structure (shared by inline and anchor).
+#[derive(Clone, Copy)]
+enum DrawingPayload<'a> {
+    Picture(&'a str),
+    Chart(&'a str),
+}
+
+fn drawing_payload<'a>(
+    embed_id: &'a str,
+    chart_rel_id: Option<&'a str>,
+) -> Result<DrawingPayload<'a>> {
+    match (
+        !embed_id.is_empty(),
+        chart_rel_id.filter(|id| !id.is_empty()),
+    ) {
+        (true, None) => Ok(DrawingPayload::Picture(embed_id)),
+        (false, Some(id)) => Ok(DrawingPayload::Chart(id)),
+        (true, Some(_)) => Err(crate::OxmlError::InvalidValue(
+            "a Word drawing cannot contain both picture and chart relationships".to_owned(),
+        )),
+        (false, None) => Err(crate::OxmlError::InvalidValue(
+            "a Word drawing requires exactly one picture or chart relationship".to_owned(),
+        )),
+    }
+}
+
+fn chart_relationship_id(xml: &[u8]) -> Result<Option<String>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut chart_graphic_data_depth = None;
+    loop {
+        let (namespace, event) = reader.read_resolved_event_into(&mut buffer)?;
+        match event {
+            Event::Start(ref element) => {
+                if chart_graphic_data_depth.is_none()
+                    && namespace_matches(&namespace, drawing_ns::A, b"a")
+                    && matches_local_name(element.name().as_ref(), b"graphicData")
+                    && graphic_data_uri_is_chart(element)?
+                {
+                    chart_graphic_data_depth = Some(depth);
+                } else if chart_graphic_data_depth.is_some_and(|parent| depth == parent + 1)
+                    && namespace_matches(&namespace, drawing_ns::C, b"c")
+                    && matches_local_name(element.name().as_ref(), b"chart")
+                {
+                    return chart_element_relationship_id(&reader, element);
+                }
+                depth = depth.checked_add(1).ok_or_else(|| {
+                    crate::OxmlError::InvalidValue("drawing XML depth overflow".to_owned())
+                })?;
+            }
+            Event::Empty(ref element)
+                if chart_graphic_data_depth.is_some_and(|parent| depth == parent + 1)
+                    && namespace_matches(&namespace, drawing_ns::C, b"c")
+                    && matches_local_name(element.name().as_ref(), b"chart") =>
+            {
+                return chart_element_relationship_id(&reader, element);
+            }
+            Event::End(ref element) => {
+                depth = depth.saturating_sub(1);
+                if chart_graphic_data_depth == Some(depth)
+                    && namespace_matches(&namespace, drawing_ns::A, b"a")
+                    && matches_local_name(element.name().as_ref(), b"graphicData")
+                {
+                    chart_graphic_data_depth = None;
+                }
+            }
+            Event::Eof => return Ok(None),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn graphic_data_uri_is_chart(element: &BytesStart<'_>) -> Result<bool> {
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        if attribute.key.as_ref() == b"uri" {
+            return Ok(attribute.value.as_ref() == drawing_ns::C.as_bytes());
+        }
+    }
+    Ok(false)
+}
+
+fn chart_element_relationship_id(
+    reader: &NsReader<&[u8]>,
+    element: &BytesStart<'_>,
+) -> Result<Option<String>> {
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+        if namespace_matches(&namespace, drawing_ns::R, b"r") && local.as_ref() == b"id" {
+            return Ok(Some(std::str::from_utf8(&attribute.value)?.to_owned()));
+        }
+    }
+    Ok(None)
+}
+
+fn namespace_matches(namespace: &ResolveResult<'_>, expected: &str, conventional: &[u8]) -> bool {
+    match namespace {
+        ResolveResult::Bound(Namespace(uri)) => *uri == expected.as_bytes(),
+        ResolveResult::Unknown(prefix) => *prefix == conventional,
+        ResolveResult::Unbound => false,
+    }
+}
+
+/// Write the `a:graphic` payload shared by inline and anchored drawings.
 fn write_graphic_element<W: std::io::Write>(
     writer: &mut Writer<W>,
-    embed_id: &str,
+    payload: DrawingPayload<'_>,
     cx: Emu,
     cy: Emu,
     name: Option<&str>,
@@ -983,8 +1125,29 @@ fn write_graphic_element<W: std::io::Write>(
     writer.write_event(Event::Start(graphic))?;
 
     let mut gd = BytesStart::new("a:graphicData");
-    gd.push_attribute(("uri", drawing_ns::PIC));
+    gd.push_attribute((
+        "uri",
+        match payload {
+            DrawingPayload::Picture(_) => drawing_ns::PIC,
+            DrawingPayload::Chart(_) => drawing_ns::C,
+        },
+    ));
     writer.write_event(Event::Start(gd))?;
+
+    if let DrawingPayload::Chart(chart_rel_id) = payload {
+        let mut chart = BytesStart::new("c:chart");
+        chart.push_attribute(("xmlns:c", drawing_ns::C));
+        chart.push_attribute(("xmlns:r", drawing_ns::R));
+        chart.push_attribute(("r:id", chart_rel_id));
+        writer.write_event(Event::Empty(chart))?;
+        writer.write_event(Event::End(BytesEnd::new("a:graphicData")))?;
+        writer.write_event(Event::End(BytesEnd::new("a:graphic")))?;
+        return Ok(());
+    }
+
+    let DrawingPayload::Picture(embed_id) = payload else {
+        unreachable!();
+    };
 
     let mut pic = BytesStart::new("pic:pic");
     pic.push_attribute(("xmlns:pic", drawing_ns::PIC));
@@ -1079,6 +1242,7 @@ impl CT_Drawing {
                                     if matches_local_name(ie.name().as_ref(), b"inline") =>
                                 {
                                     let mut inl = CT_Inline::from_xml(&mut re_reader)?;
+                                    inl.chart_rel_id = chart_relationship_id(&raw)?;
                                     inl.raw_xml = Some(raw);
                                     inline = Some(inl);
                                     break;
@@ -1101,6 +1265,7 @@ impl CT_Drawing {
                                     if matches_local_name(ie.name().as_ref(), b"anchor") =>
                                 {
                                     let mut anc = CT_Anchor::from_xml(&mut re_reader, ie)?;
+                                    anc.chart_rel_id = chart_relationship_id(&raw)?;
                                     anc.raw_xml = Some(raw);
                                     anchor = Some(anc);
                                     break;
@@ -1170,6 +1335,7 @@ mod tests {
             extent_cx: Emu(914400), // 1 inch
             extent_cy: Emu(457200), // 0.5 inch
             embed_id: "rId5".to_string(),
+            chart_rel_id: None,
             description: Some("A test image".to_string()),
             name: Some("TestPic".to_string()),
             raw_xml: None,
@@ -1369,6 +1535,131 @@ mod tests {
         assert!(
             emitted.contains(r#"wrapText="bothSides""#),
             "attributes we do not model survive, got {emitted}"
+        );
+    }
+
+    // F-157 start-feature stubs. These assertions describe the missing chart
+    // relationship payload before the implementation adds its typed seam.
+
+    #[test]
+    fn word_chart_drawing_writes_schema_order_and_fixed_prefixes() {
+        let inline = CT_Inline::new_chart("rId9", 4_572_000, 2_743_200);
+        let mut writer = Writer::new(Vec::new());
+        inline.to_xml(&mut writer).expect("serialises");
+        let xml = String::from_utf8(writer.into_inner()).expect("utf8");
+
+        assert!(
+            xml.contains(r#"<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId9"/>"#),
+            "Word chart drawing payload is not implemented: {xml}"
+        );
+        let positions = [
+            "<wp:extent",
+            "<wp:docPr",
+            "<a:graphic",
+            "<a:graphicData",
+            "<c:chart",
+        ]
+        .map(|tag| xml.find(tag).expect("required schema child"));
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+        let anchor = CT_Anchor::new_chart("rId10", 4_572_000, 2_743_200);
+        let mut writer = Writer::new(Vec::new());
+        anchor
+            .to_xml(&mut writer)
+            .expect("anchored chart serialises");
+        let xml = String::from_utf8(writer.into_inner()).expect("utf8");
+        assert!(xml.contains(r#"<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId10"/>"#));
+
+        let mut ambiguous = CT_Inline::new("rId1", 100, 100);
+        ambiguous.chart_rel_id = Some("rId2".to_owned());
+        let mut writer = Writer::new(Vec::new());
+        assert!(ambiguous.to_xml(&mut writer).is_err());
+        assert!(writer.into_inner().is_empty());
+
+        let mut ambiguous = CT_Anchor::new_chart("rId2", 100, 100);
+        ambiguous.embed_id = "rId1".to_owned();
+        let mut writer = Writer::new(Vec::new());
+        assert!(ambiguous.to_xml(&mut writer).is_err());
+        assert!(writer.into_inner().is_empty());
+    }
+
+    #[test]
+    fn opened_chart_drawing_preserves_unmodelled_xml() {
+        let xml = format!(
+            r#"<w:drawing xmlns:w="{W_NS_URI}" xmlns:wp="{WP_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><wp:inline><wp:extent cx="4572000" cy="2743200"/><wp:docPr id="1" name="Chart 1"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rId4"/><x:producer xmlns:x="urn:producer" keep="yes"/></a:graphicData></a:graphic></wp:inline></w:drawing>"#
+        );
+        let drawing = parse_drawing(&xml);
+        let inline = drawing.inline.expect("inline chart");
+
+        assert_eq!(inline.chart_rel_id.as_deref(), Some("rId4"));
+        let mut writer = Writer::new(Vec::new());
+        inline.to_xml(&mut writer).expect("raw chart re-emits");
+        assert_eq!(writer.into_inner(), inline.raw_xml.expect("captured bytes"));
+
+        let picture_uri = xml.replace(drawing_ns::C, drawing_ns::PIC);
+        let parsed = parse_drawing(&picture_uri).inline.expect("inline drawing");
+        assert_eq!(
+            parsed.chart_rel_id, None,
+            "c:chart is typed only inside ChartML graphicData"
+        );
+
+        let aliased = format!(
+            r#"<w:drawing xmlns:w="{W_NS_URI}" xmlns:wp="{WP_NS}" xmlns:a="{}"><wp:inline><wp:extent cx="1" cy="1"/><a:graphic><a:graphicData uri="{}"><q:chart xmlns:q="{}" xmlns:rel="{}" rel:id="rId8"/></a:graphicData></a:graphic></wp:inline></w:drawing>"#,
+            drawing_ns::A,
+            drawing_ns::C,
+            drawing_ns::C,
+            drawing_ns::R,
+        );
+        assert_eq!(
+            parse_drawing(&aliased)
+                .inline
+                .expect("aliased inline chart")
+                .chart_rel_id
+                .as_deref(),
+            Some("rId8")
+        );
+
+        let foreign = aliased
+            .replace(
+                &format!(r#"xmlns:q="{}""#, drawing_ns::C),
+                r#"xmlns:q="urn:foreign""#,
+            )
+            .replace(
+                &format!(r#"xmlns:rel="{}""#, drawing_ns::R),
+                r#"xmlns:rel="urn:foreign-rel""#,
+            );
+        assert_eq!(
+            parse_drawing(&foreign)
+                .inline
+                .expect("foreign inline drawing")
+                .chart_rel_id,
+            None
+        );
+
+        let empty_container = format!(
+            r#"<w:drawing xmlns:w="{W_NS_URI}" xmlns:wp="{WP_NS}" xmlns:a="{}"><wp:inline><wp:extent cx="1" cy="1"/><a:graphic><a:graphicData uri="{}"/><q:chart xmlns:q="{}" xmlns:rel="{}" rel:id="rId8"/></a:graphic></wp:inline></w:drawing>"#,
+            drawing_ns::A,
+            drawing_ns::C,
+            drawing_ns::C,
+            drawing_ns::R,
+        );
+        assert_eq!(
+            parse_drawing(&empty_container)
+                .inline
+                .expect("empty chart container")
+                .chart_rel_id,
+            None
+        );
+
+        let nested = aliased
+            .replace("<q:chart", "<x:wrapper xmlns:x=\"urn:producer\"><q:chart")
+            .replace("/></a:graphicData>", "/></x:wrapper></a:graphicData>");
+        assert_eq!(
+            parse_drawing(&nested)
+                .inline
+                .expect("nested chart lookalike")
+                .chart_rel_id,
+            None
         );
     }
 }

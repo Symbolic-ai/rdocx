@@ -4,7 +4,7 @@
 
 use crate::error::Result;
 use crate::font::FontManager;
-use crate::output::{Color, FieldKind, FontId, MediaId};
+use crate::output::{Color, FieldKind, FontId, GroupElement, MediaId};
 
 /// A tab stop positioned in typographic points.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -71,6 +71,7 @@ pub enum LineSpacing {
 
 /// An inline item to be placed on a line.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum InlineItem {
     /// A shaped text segment.
     Text(TextSegment),
@@ -87,6 +88,12 @@ pub enum InlineItem {
         width: f64,
         height: f64,
         media_id: MediaId,
+    },
+    /// A backend-neutral group with child-local coordinates.
+    Group {
+        width: f64,
+        height: f64,
+        group: GroupElement,
     },
     /// A numbering marker (rendered before the first line).
     Marker(TextSegment),
@@ -149,6 +156,7 @@ pub struct TextSegment {
 
 /// A single item positioned on a line.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum LineItem {
     Text(TextSegment),
     Tab {
@@ -161,6 +169,11 @@ pub enum LineItem {
         height: f64,
         media_id: MediaId,
     },
+    Group {
+        width: f64,
+        height: f64,
+        group: GroupElement,
+    },
     Marker(TextSegment),
 }
 
@@ -170,6 +183,7 @@ impl LineItem {
             LineItem::Text(seg) => seg.width,
             LineItem::Tab { width, .. } => *width,
             LineItem::Image { width, .. } => *width,
+            LineItem::Group { width, .. } => *width,
             LineItem::Marker(seg) => seg.width,
         }
     }
@@ -518,7 +532,7 @@ fn build_breakable_segments(
                     segments.push(BreakableSegment::Items(std::mem::take(&mut current_group)));
                 }
             }
-            InlineItem::Marker(_) | InlineItem::Image { .. } => {
+            InlineItem::Marker(_) | InlineItem::Image { .. } | InlineItem::Group { .. } => {
                 current_group.push(item.clone());
             }
         }
@@ -637,6 +651,7 @@ fn inline_item_width(item: &InlineItem) -> f64 {
         InlineItem::Text(seg) => seg.width,
         InlineItem::Tab => 36.0, // Default tab width, will be resolved
         InlineItem::Image { width, .. } => *width,
+        InlineItem::Group { width, .. } => *width,
         InlineItem::Marker(seg) => seg.width,
         InlineItem::LineBreak | InlineItem::PageBreak | InlineItem::ColumnBreak => 0.0,
     }
@@ -661,6 +676,7 @@ fn item_metrics(item: &InlineItem) -> (f64, f64, f64, f64, f64) {
         ),
         InlineItem::Tab => (36.0, 0.0, 0.0, 0.0, 0.0),
         InlineItem::Image { width, height, .. } => (*width, *height, 0.0, *height, 0.0),
+        InlineItem::Group { width, height, .. } => (*width, *height, 0.0, *height, 0.0),
         InlineItem::LineBreak | InlineItem::PageBreak | InlineItem::ColumnBreak => {
             (0.0, 0.0, 0.0, 0.0, 0.0)
         }
@@ -693,6 +709,15 @@ fn inline_to_line_item(
             width: *width,
             height: *height,
             media_id: *media_id,
+        },
+        InlineItem::Group {
+            width,
+            height,
+            group,
+        } => LineItem::Group {
+            width: *width,
+            height: *height,
+            group: group.clone(),
         },
         InlineItem::LineBreak | InlineItem::PageBreak | InlineItem::ColumnBreak => LineItem::Tab {
             width: 0.0,
@@ -1327,5 +1352,54 @@ mod tests {
             panic!("image should remain an image");
         };
         assert_eq!(actual, media_id);
+    }
+
+    #[test]
+    fn group_inline_item_breaks_and_positions_like_an_image() {
+        use crate::{GroupElement, PositionedElement, Transform};
+
+        let group = GroupElement {
+            transform: Transform::IDENTITY,
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children: vec![PositionedElement::FilledRect {
+                rect: crate::Rect {
+                    x: 2.0,
+                    y: 3.0,
+                    width: 4.0,
+                    height: 5.0,
+                },
+                color: crate::Color::BLACK,
+            }],
+        };
+        let items = vec![InlineItem::Group {
+            width: 80.0,
+            height: 40.0,
+            group: group.clone(),
+        }];
+        let lines = break_into_lines(
+            &items,
+            &LineBreakParams {
+                available_width: 80.0,
+                ..Default::default()
+            },
+            &deterministic_font_manager(),
+        )
+        .expect("group line breaking");
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].width, 80.0);
+        assert_eq!(lines[0].height, 40.0);
+        let LineItem::Group {
+            width,
+            height,
+            group: actual,
+        } = &lines[0].items[0]
+        else {
+            panic!("inline group should remain a group line item");
+        };
+        assert_eq!((*width, *height), (80.0, 40.0));
+        assert_eq!(actual, &group);
     }
 }

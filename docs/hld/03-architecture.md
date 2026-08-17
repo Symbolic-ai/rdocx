@@ -15,6 +15,7 @@ crates/
   oxml-pdf           PDF writer and tiny-skia rasteriser
   oxml-sml           minimal SpreadsheetML writer, chart workbooks only
   oxml-cli-support   range parsing, JSON envelope, output-path defaulting
+  oxml-chart         ChartML model and renderer
   oxml-py-support    content paths, revision checks, stale-domain errors,
                      Length conversion helpers
 
@@ -31,7 +32,7 @@ crates/
   rpptx-oxml         PresentationML types
   rpptx-layout       inheritance resolver, chart routing and flattener
   rpptx-render       resolved slides to page frames
-  rpptx-chart        ChartML model and renderer
+  rpptx-chart        deprecated shim over oxml-chart
   rpptx              the python-pptx-shaped facade, plus assets/default.pptx
   rpptx-cli  rpptx-wasm  rpptx-py
 ```
@@ -110,16 +111,30 @@ inherited property is already collapsed to a concrete value. The renderer
 consumes that and nothing else. Freezing this contract is what lets the resolver
 and the renderer be built and tested independently.
 
-**`rpptx-chart` depends on `oxml-layout` for backend-neutral geometry.** Its
+**`oxml-chart` depends on `oxml-layout` for backend-neutral geometry.** Its
 typed ChartML caches lower directly to `PathElement` and `Group` values. The
-edge points from the format-specific chart crate to format-neutral layout, and
-no PDF or raster backend becomes a chart dependency.
+edge stays inside the format-neutral family, and no PDF or raster backend
+becomes a chart dependency. `rpptx-chart` is an exact deprecated re-export shim
+over this shared owner.
 
-**`rpptx-layout` depends on `rpptx-chart` for native chart projection.** Package
+**`rpptx-layout` depends on `oxml-chart` for native chart projection.** Package
 assembly parses scoped ChartML targets, then the resolver freezes a completed
-backend-neutral group or a visible fallback in `ResolvedContent`. This edge
-stays within the PresentationML family. `rpptx-render` and the format-neutral
-backends consume only the frozen group and do not parse ChartML.
+backend-neutral group or a visible fallback in `ResolvedContent`. The
+PresentationML resolver depends inward on the shared chart engine.
+`rpptx-render` and the format-neutral backends consume only the frozen group
+and do not parse ChartML.
+
+**`rdocx-layout` depends on `oxml-chart` for native chart projection.** The
+Word facade resolves document-scoped chart and theme relationships into layout
+input. The layout engine freezes each inline or anchored chart as a
+backend-neutral group before pagination. `oxml-layout` carries that group
+through line breaking and page placement without gaining a ChartML or document
+family dependency.
+
+The `rdocx` crate uses `rpptx` only as a development dependency for the exact
+cross-family chart golden. The production dependency tree has no Word to
+PowerPoint edge. The all-target tree admits this test-only edge and retains the
+rule that no `oxml-*` crate depends on either facade family.
 
 ## What stays put
 
@@ -185,10 +200,10 @@ an endnote sharing a number.
 
 ## Versioning
 
-The 14 implemented shared and PowerPoint publication candidates use the
-explicit common incubating version 0.2.0 in their manifests and workspace
-pins. The complete 14-package family is published at 0.2.0 from the annotated
-`rpptx-v0.2.0` tag at its reviewed sprint SHA. The released `rdocx-*` crates
+The 15 shared and PowerPoint publication candidates use the explicit common
+incubating version in their manifests and workspace pins. The family adds
+`oxml-chart` as the format-neutral owner while retaining `rpptx-chart` as a
+source-compatible deprecated shim. The released `rdocx-*` crates
 continue to use the separate workspace version. Version preparation and
 manifest eligibility do not authorize publication. Every release still
 requires `/release` at an exact reviewed SHA and separate final approval at
@@ -197,7 +212,7 @@ of range parsing, JSON envelope, and output-path contracts. It has no
 dependency on either document family, while CLI binaries depend inward on it.
 
 The immutable `rpptx-v0.1.2` release contains the earlier 12-package family.
-`oxml-cli-support` and `rpptx-cli` remain unpublished at 0.1.2. The complete
+`oxml-cli-support` and `rpptx-cli` remain unpublished at 0.1.2. The original
 14-package family is published at the immutable 0.1.3 and 0.2.0 boundaries. No
 existing tag or registry version was moved or overwritten.
 

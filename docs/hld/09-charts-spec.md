@@ -1,6 +1,7 @@
 # 09, Charts spec
 
-Owners: `rpptx-chart` for ChartML, `oxml-sml` for the embedded workbook.
+Owners: `oxml-chart` for ChartML, `oxml-sml` for the embedded workbook.
+`rpptx-chart` is a deprecated exact re-export shim.
 
 Charts are the largest single subsystem in v1 and the reason the release spans
 three OOXML formats. They were scoped in deliberately, and the estimate that
@@ -8,7 +9,7 @@ follows is recorded so it can be revisited rather than discovered.
 
 ## Why a chart needs three parts
 
-A chart in a `.pptx` is not one thing:
+A chart in a `.pptx` or `.docx` is not one thing:
 
 ```
 /ppt/slides/slide1.xml
@@ -24,6 +25,12 @@ A chart in a `.pptx` is not one thing:
 
 /ppt/embeddings/Workbook1.xlsx                  a complete .xlsx, nested
 ```
+
+Word uses the same ChartML and embedded SpreadsheetML pair under `/word`.
+The main document carries an inline or anchored `w:drawing`, whose ChartML
+`a:graphicData` contains `c:chart r:id`. That relationship reaches
+`/word/charts/chartN.xml`, whose package relationship reaches
+`/word/embeddings/WorkbookN.xlsx`.
 
 The workbook is what "Edit Data" opens. PowerPoint will render a chart whose
 workbook is missing, but the file is malformed and editing is broken. This is
@@ -400,6 +407,12 @@ pub struct ChartData {
     pub number_format: Option<String>,
 }
 
+pub fn authored_chart_parts(
+    kind: ChartKind,
+    data: &ChartData,
+    workbook_relationship_id: &str,
+) -> Result<(Vec<u8>, Vec<u8>)>;
+
 impl Presentation {
     pub fn add_chart(
         &mut self,
@@ -412,25 +425,62 @@ impl Presentation {
         data: &ChartData,
     ) -> Result<ShapeRef<'_>>;
 }
+
+impl Document {
+    pub fn add_chart(
+        &mut self,
+        kind: ChartKind,
+        width: Length,
+        height: Length,
+        data: &ChartData,
+    ) -> Result<Paragraph<'_>>;
+}
 ```
 
-The owning facade performs this mutation because the package parts and
-relationships are not available through `SlideMut`. `add_chart` validates the
-complete data value before mutation. Categories and series must be nonempty,
-series lengths must match the category count, numeric values must be finite,
-number formats must be valid, and both chart extents must be positive. Pie and
-doughnut charts accept one series. Scatter categories must parse as finite
-numeric values.
+`ChartKind`, `ChartData`, validation, and the concrete ChartML plus workbook
+construction live in `oxml-chart`. Both facades re-export the input types.
+The shared helper validates the complete data value before producing either
+part. Categories and series must be nonempty, series lengths must match the
+category count, numeric values must be finite, and number formats must be
+valid. Pie and doughnut charts accept one series. Scatter categories must
+parse as finite numeric values. Each owning facade validates that both chart
+extents are positive before staging package mutation.
 
-One call writes the typed chart part, one editable workbook part, the
-slide-to-chart and chart-to-workbook relationships, both content-type
-overrides, and the `p:graphicFrame` on the slide. Workbook cells and ChartML
-caches are derived from the same `ChartData`. The package and slide changes are
-staged and become visible together only after serialization succeeds. Chart
-parts use `/ppt/charts/chartN.xml` and `/ppt/embeddings/WorkbookN.xlsx`.
+The Presentation facade owns its mutation because package parts and
+relationships are not available through `SlideMut`. One call writes the typed
+chart part, one editable workbook part, the slide-to-chart and
+chart-to-workbook relationships, both content-type overrides, and the
+`p:graphicFrame` on the slide. Workbook cells and ChartML caches are derived
+from the same `ChartData`. The package and slide changes are staged and become
+visible together only after serialization succeeds. Chart parts use
+`/ppt/charts/chartN.xml` and `/ppt/embeddings/WorkbookN.xlsx`.
 Each numbered family independently takes the next positive suffix after its
 greatest occupied suffix, following the allocation rule in
 `04-opc-and-packaging.md`.
+
+The Word drawing model carries either one picture relationship or one chart
+relationship. Its reader accepts producer prefixes but recognizes `c:chart`
+only inside `a:graphicData` whose URI is the ChartML namespace. Its writer uses
+fixed `a:`, `c:`, and `r:` prefixes and emits the ChartML graphic payload in
+schema order. Opened inline and anchored elements retain their complete raw XML
+as the sole write-back source, including unmodelled producer children.
+
+`Document::add_chart` uses Word flow placement rather than slide coordinates.
+It accepts width and height, appends one paragraph containing an inline chart
+drawing, and returns that paragraph for ordinary formatting. The Word facade
+stages the shared helper output, document-to-chart relationship,
+chart-to-workbook package relationship, both content-type overrides, and the
+drawing as one atomic package mutation. Serialization or validation failure
+leaves the document unchanged. Chart and workbook names allocate independently
+after the greatest occupied positive suffix.
+
+The reviewed Word candidate has SHA-256
+`79e9b9ff9e7557dbd09a365bb8c189806e700ed48ca768b27d7158cf2b41370b`.
+Microsoft Word 16.104, Info.plist build 16.104.25121423, opened that exact file
+without a repair warning. In the human-action gate, Edit Data opened the
+embedded workbook in Excel and the user successfully changed the chart data.
+The workbook initially carried `Category` and `Revenue` columns with `North,
+12.5`, `South, 19.0`, and `West, 14.25`.
 
 The native chart candidate has SHA-256
 `e6e9f7eef1c774d0414c5d0c3f1202da1a28635b5d089e15455b7adc3f66cb00`.
@@ -441,7 +491,7 @@ rows `North, 12.5, 8.0`, `South, 19.0, 11.5`, and `West, 14.25, 9.75`.
 
 ## Rendering
 
-`rpptx-chart` emits `PathElement`, `Text` and `Group` directly into the page
+`oxml-chart` emits `PathElement`, `Text` and `Group` directly into the page
 frame, so **no backend work is needed beyond what `08-rendering-spec.md`
 already requires**. Bars, lines, pie wedges, areas and markers are all paths.
 Gridlines and axis lines are strokes. Labels are glyph runs.
@@ -454,6 +504,20 @@ typographic points. Geometry reserves 36 points on the left, 12 on the right
 and top, and 28 on the bottom, then returns one identity group whose children
 use chart-local point coordinates. Invalid or too-small bounds, opaque or
 combination plots, and empty cached data return contextual errors.
+
+The Word render facade resolves each internal document chart relationship
+against the main document part and parses that target as `CT_ChartSpace`.
+External, missing, and malformed targets remain contextual errors for the
+layout layer. The effective chart theme comes from the document theme
+relationship. A missing or malformed theme uses the Office default, and the
+effective colour map is the standard DrawingML map.
+
+Inline charts enter the shared line model as local backend-neutral groups and
+take image-equivalent line metrics. Anchored charts enter the existing drawing
+placement path, which retains position, wrapping distances, and behind-text
+order. Both paths call the shared chart renderer with the document font manager.
+A failed chart projection produces a visible placeholder and a stable
+diagnostic instead of being omitted.
 
 Clustered bars derive their width from the category slot, `c:gapWidth`, series
 count, and `c:overlap`. Stacked bars accumulate positive and negative values

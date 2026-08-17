@@ -32,7 +32,7 @@ oxml-opc.workspace = true
 oxml-pdf = { workspace = true, optional = true }
 oxml-sml.workspace = true
 miniz_oxide = { workspace = true, optional = true }
-rpptx-chart.workspace = true
+oxml-chart.workspace = true
 rpptx-layout = { workspace = true, optional = true }
 rpptx-oxml.workspace = true
 rpptx-render = { workspace = true, default-features = false, optional = true }

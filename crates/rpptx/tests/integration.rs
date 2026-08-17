@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use oxml_chart::{AxisData, CT_ChartSpace};
 use oxml_drawing::color::ColorMap;
 use oxml_drawing::theme::CT_OfficeStyleSheet;
 use oxml_layout::{PositionedElement, walk};
@@ -16,7 +17,6 @@ use rpptx::{
     ChartKind, ConnectorType, Emu, Error, Fill, Presentation, ShapeKind, ShapeRef, TextBullet,
     TextBulletCharacter, TextBulletChoice, TextFont,
 };
-use rpptx_chart::{AxisData, CT_ChartSpace};
 use rpptx_layout::{
     FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,
 };

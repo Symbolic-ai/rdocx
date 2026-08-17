@@ -1,14 +1,18 @@
 # rpptx-chart
 
-ChartML modeling, editing, workbook integration, validation, and backend-neutral chart geometry.
+`rpptx-chart` is a deprecated compatibility shim for the shared
+[`oxml-chart`](https://docs.rs/oxml-chart) model and renderer. Existing imports
+continue to work because every public item is an exact re-export.
 
 ## Use it when
 
-Use this crate when implementing editable OOXML charts or rendering chart geometry. Use `rpptx` for charts inside a complete presentation.
+Use this crate only while migrating an existing dependency. New code should
+use `oxml-chart` directly.
 
 ## Relationship
 
-It uses SpreadsheetML workbooks from `oxml-sml` and feeds chart geometry into presentation rendering.
+The shim preserves the former PowerPoint-family package name without owning
+ChartML parsing, serialization, validation, or rendering.
 
 ## Example
 
@@ -21,4 +25,10 @@ assert_ne!(category_axis, value_axis);
 # Ok::<(), rpptx_chart::ChartError>(())
 ```
 
-Add `rpptx-chart = "0.3.0"` to your dependencies. See the [chart API](https://docs.rs/rpptx-chart) for supported plot families.
+```toml
+[dependencies]
+rpptx-chart = "0.3.0"
+```
+
+For new code, replace both the dependency and the import with `oxml-chart` and
+`oxml_chart`.

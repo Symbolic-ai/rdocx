@@ -132,13 +132,21 @@ docx                      pptx
 /word/document.xml        /ppt/presentation.xml
 /word/styles.xml          /ppt/slides/slideN.xml
 /word/media/imageN.ext    /ppt/slideLayouts/slideLayoutN.xml
-                          /ppt/slideMasters/slideMasterN.xml
-                          /ppt/notesSlides/notesSlideN.xml
-                          /ppt/theme/themeN.xml
+/word/charts/chartN.xml   /ppt/slideMasters/slideMasterN.xml
+/word/embeddings/         /ppt/notesSlides/notesSlideN.xml
+  WorkbookN.xlsx          /ppt/theme/themeN.xml
                           /ppt/media/imageN.ext
                           /ppt/charts/chartN.xml
                           /ppt/embeddings/WorkbookN.xlsx
 ```
+
+Word chart assembly follows the same independent suffix rule as PowerPoint.
+The document relationship targets `/word/charts/chartN.xml`, and that chart's
+package relationship targets `/word/embeddings/WorkbookN.xlsx`. Both parts and
+their content-type overrides are staged with the drawing on cloned package and
+document state. The mutation becomes visible only after the typed ChartML,
+SpreadsheetML workbook, relationships, content types, and structured drawing
+all serialize successfully.
 
 ## Media
 

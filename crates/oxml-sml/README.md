@@ -11,7 +11,7 @@ Use a general spreadsheet library for standalone workbook applications.
 
 ## Relationship
 
-`rpptx-chart` uses this crate for chart data. It builds the workbook package on
+`oxml-chart` uses this crate for chart data. It builds the workbook package on
 the shared `oxml-opc` layer and does not depend on presentation code.
 
 ## Example

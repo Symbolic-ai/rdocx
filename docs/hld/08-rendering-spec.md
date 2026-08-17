@@ -471,6 +471,23 @@ per slide. Each row records the positive-extent source leaf count, resolved
 shape count, dropped count, diagnostics, and PNG path. A panic or missing page
 fails the driver.
 
+## Word chart pagination
+
+The Word layout input owns document-scoped parsed chart targets, the effective
+DrawingML theme, and the standard DrawingML colour map. The paragraph engine
+renders a chart into a local `Group` with the same `FontManager` used for the
+surrounding document. `InlineItem::Group` and `LineItem::Group` carry the
+result through shared line breaking with the same width, height, ascent, and
+descent rules as an image. Pagination translates the local group to the
+resolved line position without changing its children.
+
+An anchored chart uses `AnchoredContent::Group`. The existing anchored drawing
+path resolves its page rectangle, wrapping distances, and behind-text order,
+then translates the local group to that rectangle. Missing, external, or
+malformed chart targets and chart-renderer errors produce a visible placeholder
+group plus a stable layout diagnostic. They do not disappear and do not move
+chart logic into a PDF or raster backend.
+
 ## The renderer's input
 
 ```rust

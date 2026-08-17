@@ -6,12 +6,19 @@ use std::sync::{Arc, Mutex};
 #[cfg(test)]
 use std::cell::Cell;
 
+use oxml_chart::{CT_ChartSpace, ChartData, ChartKind};
 use oxml_media::MediaNamer;
 use oxml_opc::OpcPackage;
+use oxml_opc::content_types;
 use oxml_opc::relationship::rel_types;
+use oxml_sml::Workbook;
+use quick_xml::events::Event;
+use quick_xml::name::{Namespace, ResolveResult};
+use quick_xml::reader::NsReader;
 use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
 use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, CT_Inline};
 use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef, HdrFtrType};
+use rdocx_oxml::namespace::matches_local_name;
 use rdocx_oxml::numbering::{CT_Numbering, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::shared::{ST_PageOrientation, ST_SectionType};
@@ -56,6 +63,18 @@ pub struct Document {
     layout_cache: Mutex<Option<Arc<oxml_layout::LayoutResult>>>,
     /// Bundled-font-only layout used by deterministic rendering.
     deterministic_layout_cache: Mutex<Option<Arc<oxml_layout::LayoutResult>>>,
+}
+
+enum ChartPackageSource<'a> {
+    #[allow(dead_code)]
+    Typed {
+        chart: &'a CT_ChartSpace,
+        workbook: &'a Workbook,
+    },
+    Authored {
+        kind: ChartKind,
+        data: &'a ChartData,
+    },
 }
 
 /// Fallback part names used when a document does not already declare one.
@@ -367,6 +386,87 @@ impl Document {
         self.package
             .get_or_create_part_rels(&doc_part_name)
             .add(rel_type, &target);
+    }
+
+    /// Stage a chart, its editable workbook, and the Word drawing that reaches them.
+    fn add_chart_package(
+        &mut self,
+        source: ChartPackageSource<'_>,
+        width: Length,
+        height: Length,
+    ) -> Result<()> {
+        if width.to_emu() <= 0 || height.to_emu() <= 0 {
+            return Err(Error::Other(
+                "chart width and height must be positive".to_owned(),
+            ));
+        }
+
+        let mut package = self.package.clone();
+        let mut document = self.document.clone();
+        let mut chart_namer = MediaNamer::scan(
+            "/word/charts",
+            "chart",
+            package.parts.keys().map(String::as_str),
+        );
+        let mut workbook_namer = MediaNamer::scan(
+            "/word/embeddings",
+            "Workbook",
+            package.parts.keys().map(String::as_str),
+        );
+        let chart_part = chart_namer.next_part_name("xml");
+        let workbook_part = workbook_namer.next_part_name("xlsx");
+
+        let document_relationship_id = package.get_or_create_part_rels(&self.doc_part_name).add(
+            rel_types::CHART,
+            &relative_target(&self.doc_part_name, &chart_part),
+        );
+        let workbook_relationship_id = package.get_or_create_part_rels(&chart_part).add(
+            rel_types::PACKAGE,
+            &relative_target(&chart_part, &workbook_part),
+        );
+        let (chart_xml, workbook_bytes) = match source {
+            ChartPackageSource::Typed { chart, workbook } => (
+                chart_with_workbook_relationship(chart, &workbook_relationship_id)?,
+                workbook
+                    .to_xlsx_bytes()
+                    .map_err(|error| Error::Other(format!("invalid chart workbook: {error}")))?,
+            ),
+            ChartPackageSource::Authored { kind, data } => {
+                oxml_chart::authored_chart_parts(kind, data, &workbook_relationship_id)
+                    .map_err(|error| Error::Other(format!("invalid chart data: {error}")))?
+            }
+        };
+
+        let inline =
+            CT_Inline::new_chart(&document_relationship_id, width.to_emu(), height.to_emu());
+        let drawing = CT_Drawing::inline(inline);
+        let run = CT_R {
+            alt_drawings: Vec::new(),
+            properties: None,
+            content: vec![RunContent::Drawing(drawing)],
+            extra_xml: Vec::new(),
+        };
+        let mut paragraph = CT_P::new();
+        paragraph.runs.push(run);
+        document
+            .body
+            .content
+            .push(BodyContent::Paragraph(paragraph));
+        document.to_xml()?;
+
+        package.set_part(&chart_part, chart_xml);
+        package.set_part(&workbook_part, workbook_bytes);
+        package
+            .content_types
+            .add_override(&chart_part, content_types::CHART);
+        package
+            .content_types
+            .add_override(&workbook_part, content_types::EMBEDDED_WORKBOOK);
+
+        self.package = package;
+        self.document = document;
+        self.invalidate_layout();
+        Ok(())
     }
 
     // ---- Paragraph access ----
@@ -685,6 +785,24 @@ impl Document {
             BodyContent::Paragraph(p) => Paragraph { inner: p },
             _ => unreachable!(),
         }
+    }
+
+    /// Add an editable inline chart to the document.
+    ///
+    /// The ChartML cache and embedded workbook are authored from the same
+    /// validated data. Invalid dimensions or data leave the document unchanged.
+    pub fn add_chart(
+        &mut self,
+        kind: ChartKind,
+        width: Length,
+        height: Length,
+        data: &ChartData,
+    ) -> Result<Paragraph<'_>> {
+        self.add_chart_package(ChartPackageSource::Authored { kind, data }, width, height)?;
+        let Some(BodyContent::Paragraph(paragraph)) = self.document.body.content.last_mut() else {
+            unreachable!("chart package assembly appends one paragraph");
+        };
+        Ok(Paragraph { inner: paragraph })
     }
 
     /// Add an inline image at its native size using 72 DPI when none is declared.
@@ -2451,9 +2569,11 @@ impl Document {
         let mut headers: HashMap<String, CT_HdrFtr> = HashMap::new();
         let mut footers: HashMap<String, CT_HdrFtr> = HashMap::new();
         let mut images: HashMap<String, ImageData> = HashMap::new();
+        let mut charts = HashMap::new();
         let mut hyperlink_urls: HashMap<String, String> = HashMap::new();
         let mut footnotes = None;
         let mut endnotes = None;
+        let mut theme_part_name = None;
 
         // Extract embedded fonts from the DOCX package
         let fonts = self.extract_embedded_fonts();
@@ -2495,6 +2615,31 @@ impl Document {
                             );
                         }
                     }
+                    t if t == rel_types::CHART => {
+                        let chart = if rel.target_mode.as_deref() == Some("External") {
+                            Err(format!("external target {}", rel.target))
+                        } else {
+                            let part_name =
+                                OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
+                            match self.package.get_part(&part_name) {
+                                Some(xml) => {
+                                    CT_ChartSpace::from_xml(xml).map(Box::new).map_err(|error| {
+                                        format!("malformed target {part_name}: {error}")
+                                    })
+                                }
+                                None => Err(format!("missing target {part_name}")),
+                            }
+                        };
+                        charts.insert(rel.id.clone(), chart);
+                    }
+                    t if t == rel_types::THEME => {
+                        if rel.target_mode.as_deref() != Some("External") {
+                            theme_part_name = Some(OpcPackage::resolve_rel_target(
+                                &self.doc_part_name,
+                                &rel.target,
+                            ));
+                        }
+                    }
                     t if t == rel_types::HYPERLINK => {
                         if rel.target_mode.as_ref().is_some_and(|m| m == "External") {
                             hyperlink_urls.insert(rel.id.clone(), rel.target.clone());
@@ -2520,10 +2665,13 @@ impl Document {
         }
 
         // Parse theme if available
-        let theme = self
-            .package
-            .get_part("/word/theme/theme1.xml")
-            .and_then(|data| rdocx_oxml::theme::Theme::from_xml(data).ok());
+        let theme_xml = theme_part_name
+            .as_deref()
+            .and_then(|part_name| self.package.get_part(part_name));
+        let chart_theme = theme_xml
+            .and_then(|data| oxml_drawing::theme::CT_OfficeStyleSheet::from_xml(data).ok())
+            .unwrap_or_else(oxml_drawing::theme::CT_OfficeStyleSheet::office_default);
+        let theme = theme_xml.and_then(|data| rdocx_oxml::theme::Theme::from_xml(data).ok());
 
         LayoutInput {
             document: self.document.clone(),
@@ -2532,6 +2680,9 @@ impl Document {
             headers,
             footers,
             images,
+            charts,
+            chart_theme,
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
             core_properties: self.core_properties.clone(),
             hyperlink_urls,
             footnotes,
@@ -2898,6 +3049,87 @@ impl Default for Document {
     }
 }
 
+fn chart_with_workbook_relationship(
+    chart: &CT_ChartSpace,
+    relationship_id: &str,
+) -> Result<Vec<u8>> {
+    const END: &[u8] = b"</c:chartSpace>";
+    let mut xml = chart
+        .to_xml()
+        .map_err(|error| Error::Other(format!("invalid chart part: {error}")))?;
+    if chart_has_external_data(&xml)? {
+        return Err(Error::Other(
+            "chart already contains an external workbook relationship".to_owned(),
+        ));
+    }
+    if !xml.ends_with(END) {
+        return Err(Error::Other(
+            "serialized chart lacks the chartSpace closing element".to_owned(),
+        ));
+    }
+
+    xml.truncate(xml.len() - END.len());
+    xml.extend_from_slice(
+        format!(
+            r#"<c:externalData r:id="{relationship_id}"><c:autoUpdate val="0"/></c:externalData>"#
+        )
+        .as_bytes(),
+    );
+    xml.extend_from_slice(END);
+    CT_ChartSpace::from_xml(&xml)
+        .and_then(|validated| validated.to_xml())
+        .map_err(|error| Error::Other(format!("invalid chart part: {error}")))
+}
+
+fn chart_has_external_data(xml: &[u8]) -> Result<bool> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut chart_space_depth = None;
+    loop {
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid chart part XML: {error}")))?;
+        match event {
+            Event::Start(ref element) => {
+                if chart_space_depth.is_none()
+                    && chart_namespace_matches(&namespace)
+                    && matches_local_name(element.name().as_ref(), b"chartSpace")
+                {
+                    chart_space_depth = Some(depth);
+                } else if chart_space_depth.is_some_and(|root| depth == root + 1)
+                    && chart_namespace_matches(&namespace)
+                    && matches_local_name(element.name().as_ref(), b"externalData")
+                {
+                    return Ok(true);
+                }
+                depth = depth
+                    .checked_add(1)
+                    .ok_or_else(|| Error::Other("chart part XML depth overflow".to_owned()))?;
+            }
+            Event::Empty(ref element)
+                if chart_space_depth.is_some_and(|root| depth == root + 1)
+                    && chart_namespace_matches(&namespace)
+                    && matches_local_name(element.name().as_ref(), b"externalData") =>
+            {
+                return Ok(true);
+            }
+            Event::End(_) => depth = depth.saturating_sub(1),
+            Event::Eof => return Ok(false),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn chart_namespace_matches(namespace: &ResolveResult<'_>) -> bool {
+    match namespace {
+        ResolveResult::Bound(Namespace(uri)) => *uri == oxml_chart::C_NS.as_bytes(),
+        ResolveResult::Unknown(prefix) => *prefix == b"c",
+        ResolveResult::Unbound => false,
+    }
+}
+
 /// Express `target_part` relative to the directory holding `source_part`.
 ///
 /// Falls back to the absolute part name when the two live in different
@@ -3244,7 +3476,110 @@ fn has_consistent_sfnt_header(data: &[u8]) -> bool {
 mod tests {
     use super::*;
     use crate::paragraph::Alignment;
+    use oxml_chart::{
+        Axis, AxisData, AxisId, AxisKind, AxisPosition, BarDirection, BarGrouping, CT_PlotArea,
+        ChartData, ChartKind, NumericData, Plot, Series, StringRef,
+    };
+    use oxml_sml::Column;
     use rdocx_oxml::units::{HalfPoint, Twips};
+    use std::fs;
+    use std::io::Cursor;
+    use std::process::Command;
+
+    const WORD_VERSION: &str = "16.104";
+    const WORD_BUILD: &str = "16.104.25121423";
+    const WORD_CHART_CANDIDATE_SHA256: &str =
+        "79e9b9ff9e7557dbd09a365bb8c189806e700ed48ca768b27d7158cf2b41370b";
+
+    fn minimal_chart_workbook() -> Workbook {
+        Workbook::new(
+            "Sheet1",
+            vec![
+                Column::Text {
+                    header: "Category".to_owned(),
+                    values: vec!["North".to_owned(), "South".to_owned(), "West".to_owned()],
+                },
+                Column::Number {
+                    header: "Revenue".to_owned(),
+                    values: vec![12.5, 19.0, 14.25],
+                    number_format: None,
+                },
+            ],
+        )
+        .expect("valid chart workbook")
+    }
+
+    fn minimal_typed_chart() -> CT_ChartSpace {
+        let values = NumericData::new(
+            "Sheet1!$B$2:$B$4".to_owned(),
+            "General".to_owned(),
+            vec![12.5, 19.0, 14.25],
+        )
+        .expect("valid values");
+        let mut series = Series::new(0, 0, values);
+        series.name = Some(
+            StringRef::new("Sheet1!$B$1".to_owned(), vec!["Revenue".to_owned()])
+                .expect("valid series name"),
+        );
+        series.categories = Some(AxisData::String(
+            StringRef::new(
+                "Sheet1!$A$2:$A$4".to_owned(),
+                vec!["North".to_owned(), "South".to_owned(), "West".to_owned()],
+            )
+            .expect("valid categories"),
+        ));
+        let category_axis = AxisId::new(48_650_112).expect("valid category axis ID");
+        let value_axis = AxisId::new(48_672_768).expect("valid value axis ID");
+        let plot = Plot::bar(
+            BarDirection::Column,
+            BarGrouping::Clustered,
+            vec![series],
+            [category_axis, value_axis],
+        )
+        .expect("valid bar plot");
+        let axes = vec![
+            Axis::new(
+                AxisKind::Category,
+                category_axis,
+                AxisPosition::Bottom,
+                value_axis,
+            ),
+            Axis::new(
+                AxisKind::Value,
+                value_axis,
+                AxisPosition::Left,
+                category_axis,
+            ),
+        ];
+        let mut chart = CT_ChartSpace::from_xml(
+            format!(
+                r#"<c:chartSpace xmlns:c="{}" xmlns:a="{}" xmlns:r="{}"><c:chart><c:plotArea/></c:chart></c:chartSpace>"#,
+                oxml_chart::C_NS,
+                oxml_chart::A_NS,
+                oxml_chart::R_NS,
+            )
+            .as_bytes(),
+        )
+        .expect("valid chart shell");
+        chart.chart.auto_title_deleted = true;
+        chart.chart.plot_area = CT_PlotArea::new(vec![plot], axes).expect("valid plot area");
+        chart
+    }
+
+    fn document_with_minimal_chart() -> Document {
+        let mut document = Document::new();
+        document
+            .add_chart_package(
+                ChartPackageSource::Typed {
+                    chart: &minimal_typed_chart(),
+                    workbook: &minimal_chart_workbook(),
+                },
+                Length::inches(5.0),
+                Length::inches(3.0),
+            )
+            .expect("assemble chart package");
+        document
+    }
 
     fn reset_layout_invocations() {
         LAYOUT_INVOCATIONS.set(0);
@@ -3373,6 +3708,907 @@ mod tests {
     fn document_remains_send_and_sync() {
         fn assert_send_and_sync<T: Send + Sync>() {}
         assert_send_and_sync::<Document>();
+    }
+
+    #[test]
+    fn word_chart_part_and_workbook_round_trip() {
+        let workbook_bytes = minimal_chart_workbook()
+            .to_xlsx_bytes()
+            .expect("serialize expected workbook");
+        let mut document = document_with_minimal_chart();
+        let bytes = document.to_bytes().expect("save document");
+        let reopened = Document::from_bytes(&bytes).expect("reopen document");
+        let chart_part = "/word/charts/chart1.xml";
+        let workbook_part = "/word/embeddings/Workbook1.xlsx";
+        let chart_xml = reopened.package.get_part(chart_part).expect("chart part");
+        assert!(CT_ChartSpace::from_xml(chart_xml).is_ok());
+        assert_eq!(
+            reopened.package.get_part(workbook_part),
+            Some(workbook_bytes.as_slice())
+        );
+        assert_eq!(
+            reopened.package.content_types.content_type_for(chart_part),
+            Some(content_types::CHART)
+        );
+        assert_eq!(
+            reopened
+                .package
+                .content_types
+                .content_type_for(workbook_part),
+            Some(content_types::EMBEDDED_WORKBOOK)
+        );
+        let document_relationship = reopened
+            .package
+            .get_part_rels(&reopened.doc_part_name)
+            .and_then(|relationships| relationships.get_by_type(rel_types::CHART))
+            .expect("document to chart relationship");
+        assert_eq!(
+            OpcPackage::resolve_rel_target(&reopened.doc_part_name, &document_relationship.target,),
+            chart_part
+        );
+        let workbook_relationship = reopened
+            .package
+            .get_part_rels(chart_part)
+            .and_then(|relationships| relationships.get_by_type(rel_types::PACKAGE))
+            .expect("chart to workbook relationship");
+        assert_eq!(
+            OpcPackage::resolve_rel_target(chart_part, &workbook_relationship.target),
+            workbook_part
+        );
+        assert!(
+            std::str::from_utf8(chart_xml)
+                .expect("chart XML is utf8")
+                .contains(&format!(
+                    r#"<c:externalData r:id="{}">"#,
+                    workbook_relationship.id
+                ))
+        );
+        let document_xml = std::str::from_utf8(
+            reopened
+                .package
+                .get_part(&reopened.doc_part_name)
+                .expect("document part"),
+        )
+        .expect("document XML is utf8");
+        assert!(document_xml.contains(&format!(r#"r:id="{}""#, document_relationship.id)));
+    }
+
+    #[test]
+    fn word_chart_parts_allocate_after_sparse_suffixes() {
+        let mut document = Document::new();
+        document
+            .package
+            .set_part("/word/charts/chart3.xml", b"occupied".to_vec());
+        document
+            .package
+            .set_part("/word/embeddings/Workbook7.xlsx", b"occupied".to_vec());
+        document
+            .add_chart_package(
+                ChartPackageSource::Typed {
+                    chart: &minimal_typed_chart(),
+                    workbook: &minimal_chart_workbook(),
+                },
+                Length::inches(5.0),
+                Length::inches(3.0),
+            )
+            .expect("assemble after sparse suffixes");
+
+        assert!(
+            document
+                .package
+                .get_part("/word/charts/chart4.xml")
+                .is_some()
+        );
+        assert!(
+            document
+                .package
+                .get_part("/word/embeddings/Workbook8.xlsx")
+                .is_some()
+        );
+        assert_eq!(
+            document.package.get_part("/word/charts/chart3.xml"),
+            Some(b"occupied".as_slice())
+        );
+        assert_eq!(
+            document.package.get_part("/word/embeddings/Workbook7.xlsx"),
+            Some(b"occupied".as_slice())
+        );
+    }
+
+    #[test]
+    fn invalid_chart_package_assembly_is_atomic() {
+        let mut document = Document::new();
+        let before = document
+            .to_bytes()
+            .expect("serialize before failed mutation");
+        let chart = CT_ChartSpace::from_xml(
+            format!(
+                r#"<c:chartSpace xmlns:c="{}" xmlns:a="{}" xmlns:r="{}" xmlns:q="{}"><c:chart><c:plotArea/></c:chart><q:externalData r:id="rId99"/></c:chartSpace>"#,
+                oxml_chart::C_NS,
+                oxml_chart::A_NS,
+                oxml_chart::R_NS,
+                oxml_chart::C_NS,
+            )
+            .as_bytes(),
+        )
+        .expect("valid chart with an occupied workbook relationship");
+        let error = document
+            .add_chart_package(
+                ChartPackageSource::Typed {
+                    chart: &chart,
+                    workbook: &minimal_chart_workbook(),
+                },
+                Length::inches(5.0),
+                Length::inches(3.0),
+            )
+            .expect_err("a second workbook relationship is invalid");
+        assert!(error.to_string().contains("already contains"));
+        assert_eq!(
+            document
+                .to_bytes()
+                .expect("serialize after failed mutation"),
+            before
+        );
+    }
+
+    #[test]
+    fn nested_external_data_lookalike_does_not_occupy_workbook_slot() {
+        let chart = CT_ChartSpace::from_xml(
+            format!(
+                r#"<c:chartSpace xmlns:c="{}" xmlns:a="{}" xmlns:r="{}" xmlns:q="{}"><c:chart><c:plotArea/></c:chart><c:extLst><c:ext uri="urn:producer"><q:externalData r:id="rId99"/></c:ext></c:extLst></c:chartSpace>"#,
+                oxml_chart::C_NS,
+                oxml_chart::A_NS,
+                oxml_chart::R_NS,
+                oxml_chart::C_NS,
+            )
+            .as_bytes(),
+        )
+        .expect("valid chart with a nested producer lookalike");
+        let xml = chart_with_workbook_relationship(&chart, "rId1")
+            .expect("nested lookalike leaves the workbook slot available");
+        let xml = std::str::from_utf8(&xml).expect("chart XML is utf8");
+        assert!(xml.contains(r#"<q:externalData r:id="rId99"/>"#));
+        assert!(xml.contains(r#"<c:externalData r:id="rId1">"#));
+    }
+
+    fn f158_chart_data(series_count: usize) -> ChartData {
+        ChartData {
+            categories: vec!["North".to_owned(), "South".to_owned(), "West".to_owned()],
+            series: vec![
+                ("Revenue".to_owned(), vec![12.5, 19.0, 14.25]),
+                ("Cost".to_owned(), vec![8.0, 11.5, 9.75]),
+            ]
+            .into_iter()
+            .take(series_count)
+            .collect(),
+            number_format: Some("0.00".to_owned()),
+        }
+    }
+
+    fn assert_authored_chart_matches(chart: &CT_ChartSpace, data: &ChartData) {
+        let series = chart.chart.plot_area.series().expect("typed chart series");
+        assert_eq!(series.len(), data.series.len());
+        for (actual, (name, values)) in series.iter().zip(&data.series) {
+            assert_eq!(
+                actual.name.as_ref().expect("series name").values.as_slice(),
+                std::slice::from_ref(name)
+            );
+            let AxisData::String(categories) = actual.categories.as_ref().expect("categories")
+            else {
+                panic!("Word bar, line, and pie charts use string categories");
+            };
+            assert_eq!(categories.values, data.categories);
+            assert_eq!(actual.values.values, *values);
+            assert_eq!(
+                actual.values.format_code,
+                data.number_format.as_deref().unwrap_or("General")
+            );
+        }
+    }
+
+    fn deterministic_chart_layout(document: &Document) -> oxml_layout::LayoutResult {
+        rdocx_layout::layout_document_deterministic(&document.build_layout_input())
+            .expect("deterministic Word chart layout")
+    }
+
+    fn chart_leaf_counts(layout: &oxml_layout::LayoutResult) -> (usize, usize, usize) {
+        let mut paths = 0;
+        let mut text = 0;
+        let mut images = 0;
+        oxml_layout::walk(&layout.pages[0].elements, &mut |element, _| match element {
+            oxml_layout::PositionedElement::Path(_) => paths += 1,
+            oxml_layout::PositionedElement::Text(_) => text += 1,
+            oxml_layout::PositionedElement::Image { .. } => images += 1,
+            _ => {}
+        });
+        (paths, text, images)
+    }
+
+    #[test]
+    fn inline_word_chart_renders_backend_neutral_group() {
+        let mut document = Document::new();
+        document
+            .add_chart(
+                ChartKind::Bar,
+                Length::inches(5.0),
+                Length::inches(3.0),
+                &f158_chart_data(2),
+            )
+            .expect("author inline chart");
+
+        let layout = deterministic_chart_layout(&document);
+        assert!(layout.diagnostics.is_empty());
+        assert!(
+            layout.pages[0]
+                .elements
+                .iter()
+                .any(|element| matches!(element, oxml_layout::PositionedElement::Group(_)))
+        );
+        let (paths, text, images) = chart_leaf_counts(&layout);
+        assert!(paths > 0, "chart should lower to backend-neutral paths");
+        assert!(text > 0, "chart should lower labels to shaped text");
+        assert_eq!(images, 0, "chart must not be rasterized before pagination");
+    }
+
+    #[test]
+    fn anchored_word_chart_uses_existing_wrap_and_z_order() {
+        let mut document = Document::new();
+        document
+            .add_chart(
+                ChartKind::Line,
+                Length::inches(3.0),
+                Length::inches(2.0),
+                &f158_chart_data(2),
+            )
+            .expect("author chart");
+        let BodyContent::Paragraph(paragraph) = &mut document.document.body.content[0] else {
+            panic!("chart paragraph");
+        };
+        let RunContent::Drawing(drawing) = &mut paragraph.runs[0].content[0] else {
+            panic!("chart drawing");
+        };
+        let inline = drawing.inline.take().expect("authored inline chart");
+        let mut anchor = rdocx_oxml::drawing::CT_Anchor::new_chart(
+            inline.chart_rel_id.as_deref().expect("chart relationship"),
+            inline.extent_cx.0,
+            inline.extent_cy.0,
+        );
+        anchor.behind_doc = true;
+        anchor.wrap = rdocx_oxml::drawing::WrapType::Square;
+        anchor.pos_h_relative_from = rdocx_oxml::drawing::ST_RelativeFromH::Page;
+        anchor.pos_v_relative_from = rdocx_oxml::drawing::ST_RelativeFromV::Page;
+        anchor.pos_h_offset = Length::inches(1.0).as_emu();
+        anchor.pos_v_offset = Length::inches(0.5).as_emu();
+        anchor.dist_l = Length::pt(12.0).as_emu();
+        anchor.dist_r = Length::pt(12.0).as_emu();
+        drawing.anchor = Some(anchor);
+        paragraph.add_run("Foreground text");
+
+        let layout = deterministic_chart_layout(&document);
+        assert!(layout.diagnostics.is_empty());
+        let group_index = layout.pages[0]
+            .elements
+            .iter()
+            .position(|element| matches!(element, oxml_layout::PositionedElement::Group(_)))
+            .expect("anchored chart group");
+        let text_index = layout.pages[0]
+            .elements
+            .iter()
+            .position(|element| matches!(element, oxml_layout::PositionedElement::Text(_)))
+            .expect("chart label text");
+        assert!(
+            group_index <= text_index,
+            "behind-text group must be emitted first"
+        );
+        let oxml_layout::PositionedElement::Group(group) = &layout.pages[0].elements[group_index]
+        else {
+            unreachable!()
+        };
+        assert_eq!((group.transform.e, group.transform.f), (72.0, 36.0));
+        let oxml_layout::PositionedElement::Text(foreground) =
+            &layout.pages[0].elements[text_index]
+        else {
+            unreachable!()
+        };
+        assert!(
+            foreground.origin.x >= 300.0,
+            "12 point wrap distance should clear the chart's 288 point right edge"
+        );
+    }
+
+    #[test]
+    fn word_chart_uses_document_theme_and_default_color_map() {
+        let mut document = Document::new();
+        document
+            .add_chart(
+                ChartKind::Bar,
+                Length::inches(5.0),
+                Length::inches(3.0),
+                &f158_chart_data(1),
+            )
+            .expect("author themed chart");
+        let themed = oxml_drawing::theme::OFFICE_DEFAULT_XML.replace("156082", "12AB34");
+        document
+            .package
+            .set_part("/word/theme/custom-chart-theme.xml", themed.into_bytes());
+        document.package.parts.remove("/word/theme/theme1.xml");
+        document
+            .package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(rel_types::THEME, "theme/custom-chart-theme.xml");
+
+        let input = document.build_layout_input();
+        assert_eq!(
+            input.chart_color_map,
+            oxml_drawing::color::ColorMap::default()
+        );
+        let layout =
+            rdocx_layout::layout_document_deterministic(&input).expect("layout themed Word chart");
+        let expected = oxml_layout::Color::from_hex("12AB34");
+        let mut found = false;
+        oxml_layout::walk(&layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Path(path) = element
+                && path.fill == Some(oxml_layout::Paint::Solid(expected))
+            {
+                found = true;
+            }
+        });
+        assert!(found, "chart series should use the document theme accent");
+    }
+
+    #[test]
+    fn missing_or_malformed_word_chart_is_visible() {
+        for (label, mutate) in [
+            ("missing", 0_u8),
+            ("malformed", 1_u8),
+            ("external", 2_u8),
+            ("unsupported", 3_u8),
+        ] {
+            let mut document = Document::new();
+            document
+                .add_chart(
+                    ChartKind::Bar,
+                    Length::inches(5.0),
+                    Length::inches(3.0),
+                    &f158_chart_data(1),
+                )
+                .expect("author chart before corrupting target");
+            match mutate {
+                0 => {
+                    document.package.parts.remove("/word/charts/chart1.xml");
+                }
+                1 => document
+                    .package
+                    .set_part("/word/charts/chart1.xml", b"<c:chartSpace".to_vec()),
+                2 => {
+                    let relationship = document
+                        .package
+                        .get_or_create_part_rels("/word/document.xml")
+                        .items
+                        .iter_mut()
+                        .find(|relationship| relationship.rel_type == rel_types::CHART)
+                        .expect("chart relationship");
+                    relationship.target = "https://example.invalid/chart.xml".to_owned();
+                    relationship.target_mode = Some("External".to_owned());
+                }
+                3 => document.package.set_part(
+                    "/word/charts/chart1.xml",
+                    format!(
+                        r#"<c:chartSpace xmlns:c="{}"><c:chart><c:plotArea/></c:chart></c:chartSpace>"#,
+                        oxml_chart::C_NS,
+                    )
+                    .into_bytes(),
+                ),
+                _ => unreachable!(),
+            }
+
+            let layout = deterministic_chart_layout(&document);
+            assert_eq!(layout.diagnostics.len(), 1, "{label}");
+            assert!(
+                layout.diagnostics[0]
+                    .message
+                    .contains("Word chart relationship")
+            );
+            let (_, text, images) = chart_leaf_counts(&layout);
+            assert!(text > 0, "{label} chart fallback should be visible");
+            assert_eq!(images, 0, "{label} chart must not become an empty image");
+        }
+    }
+
+    #[test]
+    fn word_and_powerpoint_chart_pixels_are_identical() {
+        const DPI: &str = "150";
+        const RASTERIZER: &str = "pdftoppm version 26.01.0";
+        const CROP_X: &str = "150";
+        const CROP_Y: &str = "150";
+        const CROP_WIDTH: &str = "750";
+        const CROP_HEIGHT: &str = "450";
+        const WORD_SHA256: &str =
+            "e50845637449e2af4b8e2dbf16f5f6f53e5f598a00401fcc34c13f5d5716a1c4";
+        const POWERPOINT_SHA256: &str =
+            "7525e9a088c5fbf58fa1ed98cdfa0ec2fabf998662112ced7a6b6521f2c4edfc";
+
+        let data = f158_chart_data(2);
+        let evidence_dir = std::env::temp_dir();
+        let word_path =
+            evidence_dir.join(format!("rdocx-f159-word-chart-{}.docx", std::process::id()));
+        let powerpoint_path = evidence_dir.join(format!(
+            "rdocx-f159-powerpoint-chart-{}.pptx",
+            std::process::id()
+        ));
+
+        let mut word = Document::new();
+        word.add_chart(
+            ChartKind::Bar,
+            Length::inches(5.0),
+            Length::inches(3.0),
+            &data,
+        )
+        .expect("author Word chart from shared data");
+        let mut powerpoint = rpptx::Presentation::new().expect("open bundled PowerPoint template");
+        powerpoint
+            .set_slide_size(Length::inches(8.5).as_emu(), Length::inches(11.0).as_emu())
+            .expect("match the Word page size");
+        powerpoint.add_slide(0).expect("add chart slide");
+        powerpoint
+            .add_chart(
+                0,
+                ChartKind::Bar,
+                Length::inches(1.0).as_emu(),
+                Length::inches(1.0).as_emu(),
+                Length::inches(5.0).as_emu(),
+                Length::inches(3.0).as_emu(),
+                &data,
+            )
+            .expect("author PowerPoint chart from shared data");
+        powerpoint
+            .save(&powerpoint_path)
+            .expect("save PowerPoint chart artifact");
+        let powerpoint_package = OpcPackage::from_reader(Cursor::new(
+            powerpoint
+                .to_bytes()
+                .expect("serialize PowerPoint artifact"),
+        ))
+        .expect("open PowerPoint artifact package");
+        let effective_theme = powerpoint_package
+            .get_part("/ppt/theme/theme1.xml")
+            .expect("PowerPoint effective theme")
+            .to_vec();
+        word.package
+            .set_part("/word/theme/theme1.xml", effective_theme);
+        word.package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(rel_types::THEME, "theme/theme1.xml");
+        word.save(&word_path).expect("save Word chart artifact");
+
+        let word_sha = sha256(&word_path);
+        let powerpoint_sha = sha256(&powerpoint_path);
+        assert_eq!(word_sha, WORD_SHA256);
+        assert_eq!(powerpoint_sha, POWERPOINT_SHA256);
+
+        let version = Command::new("pdftoppm")
+            .arg("-v")
+            .output()
+            .expect("run pinned rasterizer");
+        let reported = String::from_utf8_lossy(&version.stderr);
+        assert!(
+            reported
+                .lines()
+                .next()
+                .is_some_and(|line| line == RASTERIZER)
+        );
+
+        let word_pdf =
+            std::env::temp_dir().join(format!("rdocx-f159-word-chart-{}.pdf", std::process::id()));
+        let powerpoint_pdf = std::env::temp_dir().join(format!(
+            "rdocx-f159-powerpoint-chart-{}.pdf",
+            std::process::id()
+        ));
+        fs::write(
+            &word_pdf,
+            word.to_pdf_deterministic().expect("render Word chart PDF"),
+        )
+        .expect("write Word chart PDF");
+        fs::write(
+            &powerpoint_pdf,
+            powerpoint
+                .to_pdf_deterministic()
+                .expect("render PowerPoint chart PDF"),
+        )
+        .expect("write PowerPoint chart PDF");
+
+        let word_crop =
+            std::env::temp_dir().join(format!("rdocx-f159-word-chart-crop-{}", std::process::id()));
+        let powerpoint_crop = std::env::temp_dir().join(format!(
+            "rdocx-f159-powerpoint-chart-crop-{}",
+            std::process::id()
+        ));
+        for (pdf, crop) in [(&word_pdf, &word_crop), (&powerpoint_pdf, &powerpoint_crop)] {
+            let output = Command::new("pdftoppm")
+                .args([
+                    "-f",
+                    "1",
+                    "-l",
+                    "1",
+                    "-singlefile",
+                    "-r",
+                    DPI,
+                    "-x",
+                    CROP_X,
+                    "-y",
+                    CROP_Y,
+                    "-W",
+                    CROP_WIDTH,
+                    "-H",
+                    CROP_HEIGHT,
+                    "-png",
+                ])
+                .arg(pdf)
+                .arg(crop)
+                .output()
+                .expect("rasterize chart crop");
+            assert!(
+                output.status.success(),
+                "pdftoppm chart crop failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let word_png = word_crop.with_extension("png");
+        let powerpoint_png = powerpoint_crop.with_extension("png");
+        let comparison = Command::new("python3")
+            .args([
+                "-c",
+                "import sys\nsys.path.insert(0, sys.argv[3])\nfrom scripts.golden_png_harness import decode_png\na=decode_png(__import__('pathlib').Path(sys.argv[1]))\nb=decode_png(__import__('pathlib').Path(sys.argv[2]))\nassert a[:2] == b[:2] == (750, 450), (a[:2], b[:2])\ndiff=sum(a[2][i:i+4] != b[2][i:i+4] for i in range(0, len(a[2]), 4))\nprint(f'{a[0]}x{a[1]} differing={diff}')\nassert diff == 0, diff",
+            ])
+            .arg(&word_png)
+            .arg(&powerpoint_png)
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+            .output()
+            .expect("decode and compare chart RGBA pixels");
+        assert!(
+            comparison.status.success(),
+            "chart pixel comparison failed: {}{}",
+            String::from_utf8_lossy(&comparison.stdout),
+            String::from_utf8_lossy(&comparison.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(comparison.stdout)
+                .expect("pixel comparison output is utf8")
+                .trim(),
+            "750x450 differing=0"
+        );
+
+        for path in [
+            word_path,
+            powerpoint_path,
+            word_pdf,
+            powerpoint_pdf,
+            word_png,
+            powerpoint_png,
+        ] {
+            fs::remove_file(path).expect("remove temporary golden evidence");
+        }
+    }
+
+    #[test]
+    fn added_bar_line_and_pie_charts_keep_source_data() {
+        let mut document = Document::new();
+        let expected = [
+            (ChartKind::Bar, f158_chart_data(2), "<c:barChart>"),
+            (ChartKind::Line, f158_chart_data(2), "<c:lineChart>"),
+            (ChartKind::Pie, f158_chart_data(1), "<c:pieChart>"),
+        ];
+        for (kind, data, _) in &expected {
+            document
+                .add_chart(*kind, Length::inches(5.0), Length::inches(3.0), data)
+                .expect("public Word chart authoring");
+        }
+
+        let bytes = document.to_bytes().expect("save authored Word charts");
+        let reopened = Document::from_bytes(&bytes).expect("reopen authored Word charts");
+        let mut chart_parts = reopened
+            .package
+            .content_types
+            .overrides
+            .iter()
+            .filter_map(|(part, content_type)| {
+                (content_type == content_types::CHART).then_some(part.as_str())
+            })
+            .collect::<Vec<_>>();
+        chart_parts.sort_unstable();
+        assert_eq!(chart_parts.len(), expected.len());
+        for (part, (_, data, plot_tag)) in chart_parts.into_iter().zip(expected) {
+            let xml = reopened
+                .package
+                .get_part(part)
+                .expect("authored chart part");
+            assert!(
+                std::str::from_utf8(xml)
+                    .expect("chart XML is utf8")
+                    .contains(plot_tag)
+            );
+            let chart = CT_ChartSpace::from_xml(xml).expect("typed authored chart");
+            assert_authored_chart_matches(&chart, &data);
+        }
+    }
+
+    #[test]
+    fn word_add_chart_writes_cache_and_workbook_from_one_source() {
+        let data = f158_chart_data(2);
+        let mut document = Document::new();
+        document
+            .add_chart(
+                ChartKind::Bar,
+                Length::inches(5.0),
+                Length::inches(3.0),
+                &data,
+            )
+            .expect("author Word chart");
+        let bytes = document.to_bytes().expect("save Word chart");
+        let package = Document::from_bytes(&bytes)
+            .expect("reopen Word chart")
+            .package;
+        let chart_part = "/word/charts/chart1.xml";
+        let chart = CT_ChartSpace::from_xml(package.get_part(chart_part).expect("chart part"))
+            .expect("parse chart part");
+        assert_authored_chart_matches(&chart, &data);
+        let series = chart.chart.plot_area.series().expect("typed chart series");
+        for (actual, column) in series.iter().zip(['B', 'C']) {
+            assert_eq!(
+                actual.name.as_ref().expect("series name").formula,
+                format!("Sheet1!${column}$1")
+            );
+            let AxisData::String(categories) = actual.categories.as_ref().expect("categories")
+            else {
+                panic!("authored bar chart uses string categories");
+            };
+            assert_eq!(categories.formula, "Sheet1!$A$2:$A$4");
+            assert_eq!(
+                actual.values.formula,
+                format!("Sheet1!${column}$2:${column}$4")
+            );
+        }
+        let workbook_relationship = package
+            .get_part_rels(chart_part)
+            .and_then(|relationships| relationships.get_by_type(rel_types::PACKAGE))
+            .expect("chart workbook relationship");
+        let workbook_part =
+            OpcPackage::resolve_rel_target(chart_part, &workbook_relationship.target);
+        let workbook = OpcPackage::from_reader(Cursor::new(
+            package.get_part(&workbook_part).expect("workbook part"),
+        ))
+        .expect("open embedded workbook");
+        let worksheet = std::str::from_utf8(
+            workbook
+                .get_part("/xl/worksheets/sheet1.xml")
+                .expect("worksheet"),
+        )
+        .expect("worksheet XML is utf8");
+        let shared_strings = std::str::from_utf8(
+            workbook
+                .get_part("/xl/sharedStrings.xml")
+                .expect("shared strings"),
+        )
+        .expect("shared strings XML is utf8");
+        let shared_values = shared_strings
+            .split("<si>")
+            .skip(1)
+            .map(|item| {
+                item.split_once("<t>")
+                    .expect("shared string text start")
+                    .1
+                    .split_once("</t>")
+                    .expect("shared string text end")
+                    .0
+            })
+            .collect::<Vec<_>>();
+        for (address, value) in [
+            ("A1", "Category"),
+            ("A2", "North"),
+            ("A3", "South"),
+            ("A4", "West"),
+            ("B1", "Revenue"),
+            ("C1", "Cost"),
+        ] {
+            let index = worksheet_cell_value(worksheet, address)
+                .parse::<usize>()
+                .expect("shared string index");
+            assert_eq!(shared_values[index], value);
+        }
+        for (address, value) in [
+            ("B2", "12.5"),
+            ("B3", "19"),
+            ("B4", "14.25"),
+            ("C2", "8"),
+            ("C3", "11.5"),
+            ("C4", "9.75"),
+        ] {
+            assert_eq!(worksheet_cell_value(worksheet, address), value);
+        }
+    }
+
+    fn worksheet_cell_value<'a>(worksheet: &'a str, address: &str) -> &'a str {
+        let marker = format!(r#"<c r="{address}""#);
+        worksheet
+            .split_once(&marker)
+            .unwrap_or_else(|| panic!("missing worksheet cell {address}"))
+            .1
+            .split_once("</c>")
+            .expect("worksheet cell end")
+            .0
+            .split_once("<v>")
+            .expect("worksheet value start")
+            .1
+            .split_once("</v>")
+            .expect("worksheet value end")
+            .0
+    }
+
+    #[test]
+    fn word_add_chart_rejects_invalid_data_without_mutation() {
+        let invalid = [
+            ChartData {
+                categories: Vec::new(),
+                series: vec![("Revenue".to_owned(), Vec::new())],
+                number_format: None,
+            },
+            ChartData {
+                categories: vec!["North".to_owned()],
+                series: Vec::new(),
+                number_format: None,
+            },
+            ChartData {
+                categories: vec!["North".to_owned(), "South".to_owned()],
+                series: vec![("Revenue".to_owned(), vec![12.5])],
+                number_format: None,
+            },
+            ChartData {
+                categories: vec!["North".to_owned()],
+                series: vec![("Revenue".to_owned(), vec![f64::NAN])],
+                number_format: None,
+            },
+            ChartData {
+                categories: vec!["North".to_owned()],
+                series: vec![("Revenue".to_owned(), vec![12.5])],
+                number_format: Some(String::new()),
+            },
+        ];
+        for data in invalid {
+            let mut document = Document::new();
+            let before = document.to_bytes().expect("state before invalid chart");
+            assert!(
+                document
+                    .add_chart(
+                        ChartKind::Bar,
+                        Length::inches(5.0),
+                        Length::inches(3.0),
+                        &data,
+                    )
+                    .is_err()
+            );
+            assert_eq!(
+                document.to_bytes().expect("state after invalid chart"),
+                before
+            );
+        }
+
+        let invalid_cases = [
+            (ChartKind::Pie, Length::inches(5.0), Length::inches(3.0)),
+            (ChartKind::Bar, Length::emu(0), Length::inches(3.0)),
+            (ChartKind::Bar, Length::emu(-1), Length::inches(3.0)),
+            (ChartKind::Bar, Length::inches(5.0), Length::emu(0)),
+            (ChartKind::Bar, Length::inches(5.0), Length::emu(-1)),
+        ];
+        for (kind, width, height) in invalid_cases {
+            let mut document = Document::new();
+            let before = document.to_bytes().expect("state before invalid chart");
+            assert!(
+                document
+                    .add_chart(kind, width, height, &f158_chart_data(2))
+                    .is_err()
+            );
+            assert_eq!(
+                document.to_bytes().expect("state after invalid chart"),
+                before
+            );
+        }
+    }
+
+    #[test]
+    fn word_add_chart_uses_inline_flow_placement() {
+        let mut document = Document::new();
+        let width = Length::inches(5.0);
+        let height = Length::inches(3.0);
+        let paragraph = document
+            .add_chart(ChartKind::Line, width, height, &f158_chart_data(2))
+            .expect("author inline Word chart");
+        assert_eq!(paragraph.run_count(), 1);
+        assert_eq!(document.content_count(), 1);
+        let BodyContent::Paragraph(paragraph) = &document.document.body.content[0] else {
+            panic!("Word chart must be inline flow content");
+        };
+        let RunContent::Drawing(drawing) = &paragraph.runs[0].content[0] else {
+            panic!("Word chart paragraph must carry a drawing run");
+        };
+        let inline = drawing.inline.as_ref().expect("inline chart drawing");
+        assert!(drawing.anchor.is_none());
+        assert_eq!(inline.extent_cx.0, width.to_emu());
+        assert_eq!(inline.extent_cy.0, height.to_emu());
+        assert!(inline.chart_rel_id.is_some());
+    }
+
+    #[test]
+    #[ignore = "requires pinned Microsoft Word and human Edit Data evidence"]
+    fn word_opens_native_chart_without_repair() {
+        let output = std::env::var_os("RDOCX_WORD_CHART_GATE_OUTPUT")
+            .map(std::path::PathBuf::from)
+            .expect("set RDOCX_WORD_CHART_GATE_OUTPUT to the SHA-bound .docx path");
+        let mut document = document_with_minimal_chart();
+        document.save(&output).expect("write Word chart candidate");
+        assert_eq!(sha256(&output), WORD_CHART_CANDIDATE_SHA256);
+        let plist = "/Applications/Microsoft Word.app/Contents/Info.plist";
+        assert_eq!(
+            plist_value(plist, "CFBundleShortVersionString"),
+            WORD_VERSION
+        );
+        assert_eq!(plist_value(plist, "CFBundleVersion"), WORD_BUILD);
+        let script = format!(
+            "with timeout of 120 seconds\ntell application \"Microsoft Word\"\nactivate\nopen POSIX file \"{}\"\ndelay 3\nset gateDocument to active document\ntry\nset openedPath to POSIX path of (full name of gateDocument as alias)\nif openedPath is not \"{}\" then error \"Word chart candidate path mismatch\"\nclose gateDocument saving no\non error errorMessage number errorNumber\ntry\nclose gateDocument saving no\nend try\nerror errorMessage number errorNumber\nend try\nend tell\nend timeout\n",
+            output.display(),
+            output.display(),
+        );
+        let result = Command::new("osascript")
+            .args(["-e", &script])
+            .output()
+            .expect("launch Word acceptance script");
+        assert!(
+            result.status.success(),
+            "Microsoft Word F-157 acceptance failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    #[test]
+    fn word_chart_candidate_is_bound_to_recorded_sha() {
+        let output =
+            std::env::temp_dir().join(format!("rdocx-f157-word-chart-{}.docx", std::process::id()));
+        document_with_minimal_chart()
+            .save(&output)
+            .expect("write SHA-bound candidate");
+        assert_eq!(sha256(&output), WORD_CHART_CANDIDATE_SHA256);
+        fs::remove_file(output).expect("remove temporary candidate");
+    }
+
+    fn sha256(path: &Path) -> String {
+        let output = Command::new("shasum")
+            .args(["-a", "256"])
+            .arg(path)
+            .output()
+            .unwrap_or_else(|error| panic!("{}: run shasum: {error}", path.display()));
+        assert!(
+            output.status.success(),
+            "shasum failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .expect("shasum output is utf8")
+            .split_whitespace()
+            .next()
+            .expect("shasum digest")
+            .to_owned()
+    }
+
+    fn plist_value(path: &str, key: &str) -> String {
+        let output = Command::new("defaults")
+            .args(["read", path.trim_end_matches(".plist"), key])
+            .output()
+            .expect("read application plist");
+        assert!(output.status.success());
+        String::from_utf8(output.stdout)
+            .expect("plist value is utf8")
+            .trim()
+            .to_owned()
     }
 
     #[test]

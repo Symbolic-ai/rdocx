@@ -33,6 +33,7 @@ pub use document::{
     OutlineNode,
 };
 pub use error::{Error, Result};
+pub use oxml_chart::{ChartData, ChartKind};
 pub use oxml_core::Length;
 pub use paragraph::{
     Alignment, BorderStyle, Paragraph, ParagraphRef, SectionBreak, TabAlignment, TabLeader,

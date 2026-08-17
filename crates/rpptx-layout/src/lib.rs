@@ -2,10 +2,10 @@
 
 use std::collections::HashMap;
 
+use oxml_chart::CT_ChartSpace;
 use oxml_layout::{
     Diagnostic, Effect, GroupElement, MediaId, Paint, Path, Point, Rect, Stroke, Transform,
 };
-use rpptx_chart::CT_ChartSpace;
 
 mod context;
 mod font;

@@ -2,6 +2,9 @@
 
 use std::collections::HashMap;
 
+use oxml_chart::CT_ChartSpace;
+use oxml_drawing::color::ColorMap;
+use oxml_drawing::theme::CT_OfficeStyleSheet;
 pub use oxml_layout::FontFile;
 use oxml_layout::MediaId;
 use rdocx_oxml::core_properties::CoreProperties;
@@ -107,6 +110,12 @@ pub struct LayoutInput {
     pub footers: HashMap<String, CT_HdrFtr>,
     /// Images keyed by embed ID.
     pub images: HashMap<String, ImageData>,
+    /// Parsed chart parts, or contextual relationship failures, keyed by ID.
+    pub charts: HashMap<String, std::result::Result<Box<CT_ChartSpace>, String>>,
+    /// DrawingML theme used by the shared chart renderer.
+    pub chart_theme: CT_OfficeStyleSheet,
+    /// Standard Word chart colour mapping.
+    pub chart_color_map: ColorMap,
     /// Document core properties (metadata).
     pub core_properties: Option<CoreProperties>,
     /// Hyperlink URLs keyed by relationship ID.

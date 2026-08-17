@@ -16,8 +16,9 @@ use crate::paginator::{self, HeaderFooterContent, PageGeometry};
 use crate::style_resolver::{self, NumberingState};
 use crate::table;
 use oxml_layout::{
-    Color, DocumentMetadata, FieldKind, FontManager, InlineItem, LayoutResult, NoteRef, NoteStream,
-    PageFrame, PositionedElement, Rect, Result, TextSegment, break_into_lines,
+    Color, Diagnostic, DocumentMetadata, FieldKind, FontManager, GroupElement, InlineItem,
+    LayoutResult, NoteRef, NoteStream, PageFrame, PositionedElement, Rect, Result, TextSegment,
+    break_into_lines,
 };
 
 /// The layout engine.
@@ -55,6 +56,7 @@ impl Engine {
         let styles = &input.styles;
         let mut num_state = NumberingState::new();
         let media = MediaRegistry::new(&input.images);
+        let mut diagnostics = Vec::new();
 
         // Re-breaking a paragraph around a floating drawing needs its line
         // breaking inputs kept alive past layout. Nearly no document has a
@@ -95,6 +97,7 @@ impl Engine {
                         &media,
                         &mut self.font_manager,
                         &mut num_state,
+                        &mut diagnostics,
                     )?;
 
                     if !document_wraps {
@@ -119,6 +122,7 @@ impl Engine {
                             &media,
                             &mut self.font_manager,
                             &mut num_state,
+                            &mut diagnostics,
                         )?;
                         let title_pg = sect_pr.title_pg.unwrap_or(false);
                         sections.push(paginator::Section {
@@ -142,6 +146,7 @@ impl Engine {
                         &media,
                         &mut self.font_manager,
                         &mut num_state,
+                        &mut diagnostics,
                     )?;
                     current_blocks.push(LayoutBlock::Table(table_block));
                 }
@@ -158,6 +163,7 @@ impl Engine {
             &media,
             &mut self.font_manager,
             &mut num_state,
+            &mut diagnostics,
         )?;
         let final_title_pg = final_sect_pr.title_pg.unwrap_or(false);
         sections.push(paginator::Section {
@@ -184,6 +190,7 @@ impl Engine {
             &mut self.font_manager,
             &mut num_state,
             &content_widths,
+            &mut diagnostics,
         )?;
 
         // Paginate across all sections
@@ -221,7 +228,9 @@ impl Engine {
             creator: Some("rdocx".to_string()),
         });
 
-        Ok(LayoutResult::new(pages, fonts, metadata, outlines))
+        let mut result = LayoutResult::new(pages, fonts, metadata, outlines);
+        result.diagnostics = diagnostics;
+        Ok(result)
     }
 }
 
@@ -325,6 +334,7 @@ pub fn layout_paragraph(
     media: &MediaRegistry,
     fm: &mut FontManager,
     num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<ParagraphBlock> {
     // Resolve paragraph properties
     let para_style_id = para.properties.as_ref().and_then(|p| p.style_id.as_deref());
@@ -577,11 +587,26 @@ pub fn layout_paragraph(
                     if let Some(ref inline) = drawing.inline {
                         let width = inline.extent_cx.to_pt();
                         let height = inline.extent_cy.to_pt();
-                        inline_items.push(InlineItem::Image {
-                            width,
-                            height,
-                            media_id: media.id_for_relationship(&inline.embed_id),
-                        });
+                        if let Some(relationship_id) = inline.chart_rel_id.as_deref() {
+                            inline_items.push(InlineItem::Group {
+                                width,
+                                height,
+                                group: render_word_chart(
+                                    relationship_id,
+                                    width,
+                                    height,
+                                    input,
+                                    fm,
+                                    diagnostics,
+                                )?,
+                            });
+                        } else {
+                            inline_items.push(InlineItem::Image {
+                                width,
+                                height,
+                                media_id: media.id_for_relationship(&inline.embed_id),
+                            });
+                        }
                     }
                 }
                 RunContent::Field { field_type } => {
@@ -676,7 +701,8 @@ pub fn layout_paragraph(
         page_break_before,
         widow_control,
     );
-    result.anchored = collect_anchored_drawings(para, styles, input, media, fm, num_state)?;
+    result.anchored =
+        collect_anchored_drawings(para, styles, input, media, fm, num_state, diagnostics)?;
     // `inline_items` is finished with here and would otherwise be dropped, so
     // handing it to the reflow costs nothing but the memory it already holds.
     // `Engine::layout` frees it again unless the document wraps.
@@ -732,6 +758,44 @@ fn document_has_wrapping_drawing(input: &LayoutInput) -> bool {
         })
 }
 
+fn render_word_chart(
+    relationship_id: &str,
+    width: f64,
+    height: f64,
+    input: &LayoutInput,
+    fm: &mut FontManager,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<GroupElement> {
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width,
+        height,
+    };
+    let rendered = match input.charts.get(relationship_id) {
+        Some(Ok(chart)) => oxml_chart::render_chart(
+            &chart.chart,
+            bounds,
+            &input.chart_theme,
+            &input.chart_color_map,
+            fm,
+        )
+        .map_err(|error| error.to_string()),
+        Some(Err(message)) => Err(message.clone()),
+        None => Err("relationship was not resolved from the document part".to_owned()),
+    };
+    match rendered {
+        Ok(group) => Ok(group),
+        Err(detail) => {
+            diagnostics.push(Diagnostic {
+                message: format!("Word chart relationship {relationship_id}: {detail}"),
+            });
+            oxml_chart::render_chart_placeholder(bounds, fm)
+                .map_err(|error| oxml_layout::LayoutError::Layout(error.to_string()))
+        }
+    }
+}
+
 /// Collect the floating drawings anchored to a paragraph.
 ///
 /// The offsets stay paired with the frame they are measured from. Resolving
@@ -747,6 +811,7 @@ fn collect_anchored_drawings(
     media: &MediaRegistry,
     fm: &mut FontManager,
     num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Vec<block::AnchoredDrawing>> {
     let mut out = Vec::new();
 
@@ -765,37 +830,49 @@ fn collect_anchored_drawings(
             // A picture also carries a pic:spPr, so a parsed shape alone does
             // not mean this is a shape. An embed id is what makes it a
             // picture, and that takes precedence.
-            let shape = if anchor.embed_id.is_empty() {
+            let shape = if anchor.embed_id.is_empty() && anchor.chart_rel_id.is_none() {
                 anchor.shape.as_ref()
             } else {
                 None
             };
 
-            let content = match shape {
-                Some(shape) => {
-                    // A shape's text box wraps at the shape width.
-                    let mut text = Vec::new();
-                    for p in &shape.text {
-                        text.push(layout_paragraph(
-                            p,
-                            anchor.extent_cx.to_pt(),
-                            styles,
-                            input,
-                            media,
-                            fm,
-                            num_state,
-                        )?);
+            let content = if let Some(relationship_id) = anchor.chart_rel_id.as_deref() {
+                block::AnchoredContent::Group(render_word_chart(
+                    relationship_id,
+                    anchor.extent_cx.to_pt(),
+                    anchor.extent_cy.to_pt(),
+                    input,
+                    fm,
+                    diagnostics,
+                )?)
+            } else {
+                match shape {
+                    Some(shape) => {
+                        // A shape's text box wraps at the shape width.
+                        let mut text = Vec::new();
+                        for p in &shape.text {
+                            text.push(layout_paragraph(
+                                p,
+                                anchor.extent_cx.to_pt(),
+                                styles,
+                                input,
+                                media,
+                                fm,
+                                num_state,
+                                diagnostics,
+                            )?);
+                        }
+                        block::AnchoredContent::Shape {
+                            preset: block::ShapePreset::from_prst(shape.preset.as_deref()),
+                            fill: shape.solid_fill.as_deref().map(Color::from_hex),
+                            text,
+                        }
                     }
-                    block::AnchoredContent::Shape {
-                        preset: block::ShapePreset::from_prst(shape.preset.as_deref()),
-                        fill: shape.solid_fill.as_deref().map(Color::from_hex),
-                        text,
-                    }
+                    None if anchor.embed_id.is_empty() => continue,
+                    None => block::AnchoredContent::Image {
+                        media_id: media.id_for_relationship(&anchor.embed_id),
+                    },
                 }
-                None if anchor.embed_id.is_empty() => continue,
-                None => block::AnchoredContent::Image {
-                    media_id: media.id_for_relationship(&anchor.embed_id),
-                },
             };
 
             out.push(block::AnchoredDrawing {
@@ -901,6 +978,7 @@ fn layout_header_footer(
     media: &MediaRegistry,
     fm: &mut FontManager,
     num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<HeaderFooterContent>> {
     let mut has_content = false;
     let mut header_blocks = Vec::new();
@@ -919,7 +997,16 @@ fn layout_header_footer(
         };
         if let Some(hdr) = input.headers.get(&href.rel_id) {
             for para in &hdr.paragraphs {
-                let block = layout_paragraph(para, width, styles, input, media, fm, num_state)?;
+                let block = layout_paragraph(
+                    para,
+                    width,
+                    styles,
+                    input,
+                    media,
+                    fm,
+                    num_state,
+                    diagnostics,
+                )?;
                 target_blocks.push(block);
             }
             has_content = true;
@@ -934,7 +1021,16 @@ fn layout_header_footer(
         };
         if let Some(ftr) = input.footers.get(&fref.rel_id) {
             for para in &ftr.paragraphs {
-                let block = layout_paragraph(para, width, styles, input, media, fm, num_state)?;
+                let block = layout_paragraph(
+                    para,
+                    width,
+                    styles,
+                    input,
+                    media,
+                    fm,
+                    num_state,
+                    diagnostics,
+                )?;
                 target_blocks.push(block);
             }
             has_content = true;
@@ -1130,6 +1226,9 @@ mod tests {
             headers: HashMap::new(),
             footers: HashMap::new(),
             images: HashMap::new(),
+            charts: HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
             core_properties: None,
             hyperlink_urls: HashMap::new(),
             footnotes: None,
@@ -1163,6 +1262,9 @@ mod tests {
             headers: HashMap::new(),
             footers: HashMap::new(),
             images: HashMap::new(),
+            charts: HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
             core_properties: None,
             hyperlink_urls: HashMap::new(),
             footnotes: None,
@@ -1188,6 +1290,7 @@ mod tests {
         )];
         let mut font_manager = FontManager::new();
         let mut numbering_state = NumberingState::new();
+        let mut diagnostics = Vec::new();
         let media = MediaRegistry::new(&input.images);
 
         let anchored = collect_anchored_drawings(
@@ -1197,6 +1300,7 @@ mod tests {
             &media,
             &mut font_manager,
             &mut numbering_state,
+            &mut diagnostics,
         )
         .expect("empty shapeless anchor collection should succeed");
 
@@ -1306,6 +1410,74 @@ mod tests {
     }
 
     #[test]
+    fn group_inline_item_breaks_and_positions_like_an_image() {
+        let child = PositionedElement::FilledRect {
+            rect: Rect {
+                x: 2.0,
+                y: 3.0,
+                width: 4.0,
+                height: 5.0,
+            },
+            color: Color::BLACK,
+        };
+        let group = GroupElement {
+            transform: oxml_layout::Transform::IDENTITY,
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children: vec![child.clone()],
+        };
+        let line = oxml_layout::LayoutLine {
+            items: vec![oxml_layout::LineItem::Group {
+                width: 80.0,
+                height: 40.0,
+                group,
+            }],
+            width: 80.0,
+            ascent: 40.0,
+            descent: 0.0,
+            line_gap: 0.0,
+            height: 40.0,
+            indent_left: 0.0,
+            available_width: 468.0,
+            is_last: true,
+        };
+        let paragraph = block::build_paragraph_block(
+            vec![line],
+            0.0,
+            0.0,
+            None,
+            None,
+            0.0,
+            0.0,
+            None,
+            false,
+            false,
+            false,
+            true,
+        );
+        let sections = [paginator::Section {
+            blocks: vec![LayoutBlock::Paragraph(paragraph)],
+            geometry: PageGeometry::default(),
+            header_footer: None,
+            title_pg: false,
+        }];
+        let media = MediaRegistry::new(&HashMap::new());
+        let (pages, _) = paginator::paginate_sections(
+            &sections,
+            &FontManager::new(),
+            &media,
+            &NoteRegistry::default(),
+        );
+
+        let PositionedElement::Group(actual) = &pages[0].elements[0] else {
+            panic!("group line item should become a positioned group");
+        };
+        assert_eq!((actual.transform.e, actual.transform.f), (72.0, 72.0));
+        assert_eq!(actual.children, vec![child]);
+    }
+
+    #[test]
     fn layout_with_heading_style() {
         let mut doc = rdocx_oxml::document::CT_Document::new();
         let mut p = CT_P::new();
@@ -1323,6 +1495,9 @@ mod tests {
             headers: HashMap::new(),
             footers: HashMap::new(),
             images: HashMap::new(),
+            charts: HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
             core_properties: None,
             hyperlink_urls: HashMap::new(),
             footnotes: None,
@@ -1380,6 +1555,9 @@ mod tests {
             headers: HashMap::new(),
             footers: HashMap::new(),
             images: HashMap::new(),
+            charts: HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
             core_properties: None,
             hyperlink_urls: HashMap::new(),
             footnotes: None,
@@ -1447,6 +1625,9 @@ mod tests {
             headers: HashMap::new(),
             footers: HashMap::new(),
             images: HashMap::new(),
+            charts: HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
             core_properties: None,
             hyperlink_urls: HashMap::new(),
             footnotes: Some(CT_Footnotes {
@@ -1600,6 +1781,9 @@ mod tests {
                 headers: HashMap::new(),
                 footers: HashMap::new(),
                 images: HashMap::new(),
+                charts: HashMap::new(),
+                chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+                chart_color_map: oxml_drawing::color::ColorMap::default(),
                 core_properties: None,
                 hyperlink_urls: HashMap::new(),
                 footnotes: Some(CT_Footnotes {
@@ -1724,6 +1908,9 @@ mod tests {
             headers: HashMap::new(),
             footers: HashMap::new(),
             images: HashMap::new(),
+            charts: HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
             core_properties: None,
             hyperlink_urls: HashMap::new(),
             footnotes: Some(CT_Footnotes { footnotes: entries }),
@@ -2007,6 +2194,9 @@ mod tests {
             headers: HashMap::new(),
             footers: HashMap::new(),
             images: HashMap::new(),
+            charts: HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
             core_properties: None,
             hyperlink_urls: HashMap::new(),
             footnotes: Some(CT_Footnotes {
@@ -2145,6 +2335,9 @@ mod tests {
                 headers: HashMap::new(),
                 footers: HashMap::new(),
                 images: HashMap::new(),
+                charts: HashMap::new(),
+                chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+                chart_color_map: oxml_drawing::color::ColorMap::default(),
                 core_properties: None,
                 hyperlink_urls: HashMap::new(),
                 footnotes: None,
@@ -2267,6 +2460,9 @@ mod tests {
             headers: HashMap::new(),
             footers: HashMap::new(),
             images,
+            charts: HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
             core_properties: None,
             hyperlink_urls: HashMap::new(),
             footnotes: None,
@@ -2487,6 +2683,9 @@ mod tests {
             headers: HashMap::new(),
             footers: HashMap::new(),
             images,
+            charts: HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
             core_properties: None,
             hyperlink_urls: HashMap::new(),
             footnotes: None,
@@ -2565,6 +2764,9 @@ mod tests {
             headers: HashMap::new(),
             footers: HashMap::new(),
             images,
+            charts: HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
             core_properties: None,
             hyperlink_urls: HashMap::new(),
             footnotes: None,
@@ -2663,6 +2865,9 @@ mod tests {
             headers: HashMap::new(),
             footers: HashMap::new(),
             images: HashMap::new(),
+            charts: HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
             core_properties: None,
             hyperlink_urls: HashMap::new(),
             footnotes: (!endnotes_instead).then(|| stream.clone()),
@@ -2854,6 +3059,9 @@ mod tests {
             headers: HashMap::new(),
             footers: HashMap::new(),
             images,
+            charts: HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
             core_properties: None,
             hyperlink_urls: HashMap::new(),
             footnotes: None,

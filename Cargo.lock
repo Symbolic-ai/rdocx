@@ -479,6 +479,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
+name = "oxml-chart"
+version = "0.3.0"
+dependencies = [
+ "oxml-core",
+ "oxml-drawing",
+ "oxml-layout",
+ "oxml-opc",
+ "oxml-pdf",
+ "oxml-sml",
+ "quick-xml",
+ "tiny-skia",
+]
+
+[[package]]
 name = "oxml-cli-support"
 version = "0.3.0"
 dependencies = [
@@ -693,15 +707,20 @@ dependencies = [
 name = "rdocx"
 version = "0.7.0"
 dependencies = [
+ "oxml-chart",
  "oxml-core",
+ "oxml-drawing",
  "oxml-layout",
  "oxml-media",
  "oxml-opc",
  "oxml-pdf",
+ "oxml-sml",
+ "quick-xml",
  "rdocx-html",
  "rdocx-layout",
  "rdocx-oxml",
  "regex",
+ "rpptx",
  "thiserror",
 ]
 
@@ -728,6 +747,8 @@ dependencies = [
 name = "rdocx-layout"
 version = "0.7.0"
 dependencies = [
+ "oxml-chart",
+ "oxml-drawing",
  "oxml-layout",
  "rdocx-oxml",
  "unicode-linebreak",
@@ -842,6 +863,7 @@ name = "rpptx"
 version = "0.3.0"
 dependencies = [
  "miniz_oxide 0.9.1",
+ "oxml-chart",
  "oxml-core",
  "oxml-drawing",
  "oxml-layout",
@@ -849,7 +871,6 @@ dependencies = [
  "oxml-opc",
  "oxml-pdf",
  "oxml-sml",
- "rpptx-chart",
  "rpptx-layout",
  "rpptx-oxml",
  "rpptx-render",
@@ -860,13 +881,7 @@ dependencies = [
 name = "rpptx-chart"
 version = "0.3.0"
 dependencies = [
- "oxml-core",
- "oxml-drawing",
- "oxml-layout",
- "oxml-opc",
- "oxml-pdf",
- "quick-xml",
- "tiny-skia",
+ "oxml-chart",
 ]
 
 [[package]]
@@ -885,10 +900,10 @@ dependencies = [
 name = "rpptx-layout"
 version = "0.3.0"
 dependencies = [
+ "oxml-chart",
  "oxml-drawing",
  "oxml-layout",
  "oxml-opc",
- "rpptx-chart",
  "rpptx-oxml",
 ]
 

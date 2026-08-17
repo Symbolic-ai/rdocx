@@ -1,83 +1,61 @@
-# Current Sprint, S44
+# Current Sprint, S45
 
-**Milestone**: X Cross-cutting.
+**Milestone**: M15 Charts beyond PowerPoint.
 
-**Goal**: finish the job S43 started. S43 closed two gaps in the gates and found,
-in passing, that the records describing those gates had drifted from them. This
-sprint puts the two remaining gates where CI can see them and repairs the
-documentation that tells every future session what is true.
+**Goal**: make the chart engine serve Word as well as PowerPoint. The engine is
+already format-neutral below its crate name, so this sprint moves it to the
+shared family, adds native editable Word chart authoring, and routes the same
+backend-neutral geometry through the Word paginator.
 
 ## Spec references
 
-- `docs/hld/12-testing-strategy.md`, "The golden-PNG gate", for what F-X027 has
-  to wire in, and "What CI runs" for the job table both gate stories extend.
-- `docs/hld/15-build-and-toolchain.md`, the `publish.yml` paragraph, for the
-  release preflights F-X026 brings under CI, and the pinned Poppler build
-  F-X027 has to account for.
-- `docs/hld/10-bindings-spec.md`, the wheel-building traps, which carry one of
-  the `bundled-fonts` claims F-X028 corrects.
-- `docs/hld/14-development-backlog.md`, for the four story definitions.
+- `docs/hld/03-architecture.md`, for the shared-crate dependency rule and the
+  current ChartML-to-layout seam that F-156 moves without changing behaviour.
+- `docs/hld/04-opc-and-packaging.md`, for deterministic package saves,
+  relationship handling, and collision-safe chart and workbook part naming in
+  F-157.
+- `docs/hld/09-charts-spec.md`, for the typed ChartML model, editable embedded
+  workbook, atomic authoring, and backend-neutral rendering contracts reused by
+  all four stories.
+- `docs/hld/12-testing-strategy.md`, for the byte-identical hash gate,
+  round-trip evidence, and exact pixel comparison required across the move and
+  the Word rendering path.
+- `docs/hld/14-development-backlog.md`, for the M15 boundary, the four story
+  definitions, their dependency chain, and the editable native-chart milestone
+  gate.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X026 | CI must run the release regressions too | S | done | - |
-| F-X027 | Wire the golden-PNG gate into something | S | done | - |
-| F-X028 | Repair the agent-facing documentation drift | M | done | - |
-| F-X029 | Path-filtered CI jobs | M | done | - |
+| F-156 | Extract oxml-chart | L | done | - |
+| F-157 | Word chart part and embedded workbook | M | done | - |
+| F-158 | Document::add_chart | M | done | - |
+| F-159 | Chart rendering in the Word paginator | M | done | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-There is no hard dependency between these four, so the order is a preference
-rather than a constraint and any of them may be claimed first. The one soft
-coupling is that F-X026 and F-X029 both edit `ci.yml`, so whichever lands second
-rebases on the first.
+The chain is strict. F-156 first performs only the crate move and compatibility
+shim, with no behaviour change and no hash delta. F-157 then gives Word a chart
+part, relationship, content type, and embedded workbook. F-158 can expose the
+Word authoring API only after those package pieces exist, and F-159 can route a
+chart through pagination only after the authored Word shape is available.
 
-F-X026 leads because it is the narrower half of a gap S43 half-closed. `/verify`
-runs the release preflights now and CI still does not, so a contributor who
-skips the local gate can move a version carrier and see a green pull request.
-
-F-X027 follows because the golden-PNG gate is fully specified and wired into
-nothing, and deciding where it belongs needs a judgement about the pinned
-Poppler build that F-X026 does not need.
-
-F-X029 and F-X030 came out of a monorepo-versus-split review and are the two
-concrete improvements that survived it. F-X029 pairs naturally with F-X026,
-since both edit `ci.yml`, and whichever lands second rebases on the first.
-F-X030 is independent of everything.
-
-F-X028 lands last, and is the largest, because it is the only one that rewrites
-`CLAUDE.md`. A story that changes the file every other session reads first
-should land against a tree the other three have already settled.
-
-Every implementation milestone is closed, so this sprint carries no feature
-work. Three of the four stories exist because S43 went looking at the
-instruments rather than the product. The fourth, F-X029, came out of a review of
-whether the workspace should be split into separate repositories. The conclusion
-was that it should not.
-
-That review also produced F-X030, which was archived before the sprint started
-once the WASM packages turned out to be deliberately unpublished, so its stated
-problem does not exist. `docs/hld/02-scope-and-non-goals.md` records the
-position.
+The hash baseline is exclusive during F-156 and must stay at 49 of 49. No story
+in this sprint is expected to move it. F-157 through F-159 build on the settled
+shared-crate path rather than overlapping the move.
 
 ## Definition of done for this sprint
 
-- A stale version literal fails a named CI job, not only `/verify --full`, and
-  not first at publication time.
-- The golden-PNG gate runs somewhere that fails when nobody remembers it, and
-  the spec set says where.
-- Every path, version and feature name `CLAUDE.md` and
-  `.claude/commands/verify.md` cite resolves against the workspace, and a test
-  asserts it, so the next stale claim fails a gate rather than surviving 40
-  sprints.
-- `CLAUDE.md` no longer tells a reader that a false font licence notice ships
-  today, that the family is on crates.io at 0.2.0, that the bundled fonts live
-  under `rdocx-layout`, or that a `bundled-fonts` feature exists.
-- A docs-only change reports every required check without running the workspace
-  suite, the MSRV suite, the WASM targets or the fidelity job, and each filtered
-  job has an asserted must-trigger and must-not-trigger path.
-- The hash harness stays at 49 of 49. No story here touches rendering.
+- `rpptx-chart` moves to `oxml-chart` behind the established deprecation shim,
+  every existing chart test uses the new path, and the hash harness remains
+  byte-identical at 49 of 49.
+- A Word document saves a native chart part, its document relationship, content
+  type, chart-to-workbook relationship, and editable embedded workbook, and
+  Microsoft Word opens the result without repair.
+- `Document::add_chart` authors bar, line, and pie charts with the requested
+  series, categories, and number formats.
+- An inline or anchored Word chart renders through the Word paginator and is
+  pixel-identical to the same chart on a slide at the same size.

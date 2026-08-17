@@ -1,7 +1,7 @@
 //! Block-level layout: paragraphs and tables as positioned blocks.
 
 use crate::table::TableBlock;
-use oxml_layout::{Align, Color, InlineItem, LayoutLine, LineBreakParams, MediaId};
+use oxml_layout::{Align, Color, GroupElement, InlineItem, LayoutLine, LineBreakParams, MediaId};
 use rdocx_oxml::borders::CT_PBdr;
 use rdocx_oxml::drawing::{
     AnchorAlignH, AnchorAlignV, ST_RelativeFromH, ST_RelativeFromV, WrapType,
@@ -50,6 +50,8 @@ pub struct AnchoredDrawing {
 pub enum AnchoredContent {
     /// A picture resolved to its content-addressed shared media identity.
     Image { media_id: MediaId },
+    /// A backend-neutral group rendered in child-local chart coordinates.
+    Group(GroupElement),
     /// A shape: preset geometry, an optional fill, and optional text.
     ///
     /// The text arrives already laid out, because breaking it into lines needs

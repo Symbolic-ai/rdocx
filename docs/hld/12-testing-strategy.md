@@ -108,6 +108,21 @@ suite. That job installs the pinned Poppler 26.01.0 oracle first, so the decoded
 pixel comparison is unconditional, failure-propagating, and bound to the
 reviewed rasteriser identity.
 
+The cross-family native-chart golden constructs one Word document and one
+PowerPoint presentation from the same `ChartData`, page size, chart rectangle,
+and effective theme. The `rdocx` test target takes `rpptx` as a development-only
+dependency, so production dependency trees retain no Word to PowerPoint edge.
+Both deterministic PDFs use bundled fonts. Poppler
+`pdftoppm version 26.01.0` rasterises the chart rectangle at 150 DPI into
+750 by 450 pixel crops, and the decoded RGBA comparison requires exactly zero
+differing pixels.
+
+The SHA-bound Word artifact is
+`e50845637449e2af4b8e2dbf16f5f6f53e5f598a00401fcc34c13f5d5716a1c4`.
+The SHA-bound PowerPoint artifact is
+`7525e9a088c5fbf58fa1ed98cdfa0ec2fabf998662112ced7a6b6521f2c4edfc`.
+The recorded crop result is `750x450 differing=0`.
+
 ## The deck corpus
 
 Fifty real `.pptx` files are stored outside the published crates and fetched by
@@ -242,7 +257,7 @@ official Linux x86-64 Debian archive with reviewed SHA-256
 `2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e`.
 The installer bounds the download, archive member count, and expanded bytes,
 rejects unsafe members and populated prefixes, and checks the exact runtime
-identity before the `rpptx-chart` viewer gates execute. The installer supplies
+identity before the `oxml-chart` viewer gates execute. The installer supplies
 the explicit NSS, NSPR, D-Bus, Cairo, GLib, X11, CUPS, font, and Kerberos
 runtime libraries required by the official build.
 
@@ -466,7 +481,7 @@ stdout, exit-status verdicts, output validity, replacement persistence,
 document-order text, and bundled-font deterministic render bytes. Process ID
 and an atomic counter isolate temporary workspaces across concurrent runs.
 
-All 26 workspace packages explicitly declare one distinct README. The root
+All 27 workspace packages explicitly declare one distinct README. The root
 README is the high-level `rdocx` guide. Each crate-local document states the
 package purpose, direct-use guidance, adjacent package relationship,
 publication status, and a concrete Rust, CLI, Python, or JavaScript example.
@@ -479,10 +494,10 @@ deterministic feature guidance, and matching dependency and import names. It
 builds the applicable libraries with locked dependencies and Cargo JSON
 messages, locates each emitted rlib from one package build graph, and invokes
 rustdoc with the 2024 edition, warnings denied, the dependency search path, and
-every matching `--extern` binding. It compiles 26 Rust examples across the 20
-Rust-library READMEs. It also creates all 21 publishable archives and
+every matching `--extern` binding. It compiles 27 Rust examples across the 21
+Rust-library READMEs. It also creates all 22 publishable archives and
 byte-compares their single packaged README with the declared source. Archive
-creation uses the same exact 21-package local source patch set as the release
+creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.

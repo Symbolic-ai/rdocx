@@ -3604,6 +3604,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-pdf",
             "oxml-sml",
             "oxml-cli-support",
+            "oxml-chart",
             "rdocx",
             "rdocx-cli",
             "rdocx-html",
@@ -3630,7 +3631,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 f"--config 'patch.crates-io.{package}.path=\"crates/{package}\"'"
             )
             self.assertEqual(block.count(config), 1, package)
-        self.assertEqual(block.count("--config 'patch.crates-io."), 21)
+        self.assertEqual(block.count("--config 'patch.crates-io."), 22)
         self.assertNotIn("--no-verify", block)
         self.assertNotIn("continue-on-error", block)
 
@@ -3653,6 +3654,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-pdf",
             "oxml-sml",
             "oxml-cli-support",
+            "oxml-chart",
             "rpptx-oxml",
             "rpptx-chart",
             "rpptx-layout",
@@ -3880,6 +3882,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-pdf",
             "oxml-sml",
             "oxml-cli-support",
+            "oxml-chart",
             "rpptx",
             "rpptx-cli",
             "rpptx-chart",
@@ -4048,6 +4051,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-pdf",
             "oxml-sml",
             "oxml-cli-support",
+            "oxml-chart",
             "rpptx-oxml",
             "rpptx-layout",
             "rpptx-render",
@@ -4076,6 +4080,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-pdf",
             "oxml-sml",
             "oxml-cli-support",
+            "oxml-chart",
             "rpptx-oxml",
             "rpptx-chart",
             "rpptx-layout",
@@ -4128,6 +4133,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 'oxml-pdf = "0.3.0"',
                 'oxml-layout = "0.3.0"',
             ),
+            "crates/oxml-chart/README.md": ('oxml-chart = "0.3.0"',),
             "crates/rpptx-chart/README.md": ('rpptx-chart = "0.3.0"',),
             "crates/rpptx-cli/README.md": ("--version '^0.3.0'",),
             "crates/rpptx-layout/README.md": ('rpptx-layout = "0.3.0"',),
@@ -4193,8 +4199,9 @@ class SprintWorkflowTests(unittest.TestCase):
                 "crates/oxml-opc",
                 "crates/oxml-pdf",
                 "crates/oxml-sml",
-                "crates/oxml-cli-support",
-                "crates/rpptx",
+            "crates/oxml-cli-support",
+            "crates/oxml-chart",
+            "crates/rpptx",
                 "crates/rpptx-cli",
                 "crates/rpptx-chart",
                 "crates/rpptx-layout",
@@ -4207,7 +4214,7 @@ class SprintWorkflowTests(unittest.TestCase):
         family_counts = {
             family: len(members) for family, members in family_members.items()
         }
-        self.assertEqual(family_counts, {"workspace": 11, "incubating": 15})
+        self.assertEqual(family_counts, {"workspace": 11, "incubating": 16})
 
         wasm_package = manifests["crates/rpptx-wasm"]["package"]
         self.assertEqual(wasm_package["name"], "rpptx-wasm")
@@ -4299,9 +4306,9 @@ class SprintWorkflowTests(unittest.TestCase):
             normalized_release,
         )
         self.assertIn(
-            "The exact 14-package incubating set is `oxml-core`, `oxml-opc`, "
+            "The exact 15-package incubating set is `oxml-core`, `oxml-opc`, "
             "`oxml-media`, `oxml-layout`, `oxml-drawing`, `oxml-pdf`, "
-            "`oxml-sml`, `oxml-cli-support`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`, "
+            "`oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`, "
             "`rpptx-render`, `rpptx`, and `rpptx-cli`.",
             normalized_release,
         )
@@ -4535,6 +4542,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "oxml-pdf",
             "oxml-sml",
             "oxml-cli-support",
+            "oxml-chart",
             "rpptx-oxml",
             "rpptx-chart",
             "rpptx-layout",
@@ -4549,6 +4557,41 @@ class SprintWorkflowTests(unittest.TestCase):
                 )
             )
             self.assertIs(manifest["package"].get("publish"), True, name)
+
+    def test_chart_ownership_uses_shared_crate_and_exact_legacy_shim(self) -> None:
+        root_text = (workflow.REPO / "Cargo.toml").read_text(encoding="utf-8")
+        root = tomllib.loads(root_text)["workspace"]
+        self.assertIn("crates/oxml-chart", root["members"])
+        self.assertEqual(
+            root["dependencies"]["oxml-chart"],
+            {"path": "crates/oxml-chart", "version": "0.3.0"},
+        )
+
+        shim = tomllib.loads(
+            (workflow.REPO / "crates/rpptx-chart/Cargo.toml").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(shim["package"]["description"], "deprecated: moved to oxml-chart")
+        self.assertEqual(shim["dependencies"], {"oxml-chart": {"workspace": True}})
+
+        for consumer in ("rpptx", "rpptx-layout"):
+            manifest = tomllib.loads(
+                (workflow.REPO / f"crates/{consumer}/Cargo.toml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertIn("oxml-chart", manifest["dependencies"], consumer)
+            self.assertNotIn("rpptx-chart", manifest["dependencies"], consumer)
+
+        for path in (
+            "crates/rpptx/src/lib.rs",
+            "crates/rpptx-layout/src/context.rs",
+            "crates/rpptx-layout/src/lib.rs",
+        ):
+            source = (workflow.REPO / path).read_text(encoding="utf-8")
+            self.assertIn("oxml_chart", source, path)
+            self.assertNotIn("rpptx_chart", source, path)
 
     def test_publish_workflow_routes_exact_dependency_ordered_allowlists(self) -> None:
         publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(

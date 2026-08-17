@@ -1,6 +1,6 @@
 [package]
 name = "rpptx-chart"
-description = "ChartML modeling, editing, and rendering geometry for presentations"
+description = "deprecated: moved to oxml-chart"
 readme = "README.md"
 version = "0.3.0"
 edition.workspace = true
@@ -18,12 +18,4 @@ shared-version = "incubating"
 tag-name = "rpptx-v{{version}}"
 
 [dependencies]
-oxml-core.workspace = true
-oxml-drawing.workspace = true
-oxml-layout.workspace = true
-quick-xml.workspace = true
-
-[dev-dependencies]
-oxml-opc.workspace = true
-oxml-pdf.workspace = true
-tiny-skia.workspace = true
+oxml-chart.workspace = true
