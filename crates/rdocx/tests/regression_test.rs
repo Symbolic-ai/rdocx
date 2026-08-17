@@ -402,6 +402,48 @@ fn nested_selected_revisions_resolve_inside_out_and_count_once() {
 }
 
 #[test]
+fn duplicate_property_revisions_round_trip_and_resolve_one_identity_at_a_time() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:numPr><w:ins w:id="501" w:author="Ada"/><w:ins w:id="502" w:author="Ada"/></w:numPr><w:pPrChange w:id="101" w:author="Ada"><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange><w:pPrChange w:id="102" w:author="Ada"><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange></w:pPr><w:r><w:rPr><w:rPrChange w:id="201" w:author="Ada"><w:rPr><w:b/></w:rPr></w:rPrChange><w:rPrChange w:id="202" w:author="Ada"><w:rPr><w:i/></w:rPr></w:rPrChange></w:rPr><w:t>x</w:t></w:r></w:p><w:tbl><w:tblPr><w:tblPrChange w:id="301" w:author="Ada"><w:tblPr><w:jc w:val="left"/></w:tblPr></w:tblPrChange><w:tblPrChange w:id="302" w:author="Ada"><w:tblPr><w:jc w:val="right"/></w:tblPr></w:tblPrChange></w:tblPr><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:sectPr><w:sectPrChange w:id="401" w:author="Ada"><w:sectPr><w:titlePg/></w:sectPr></w:sectPrChange><w:sectPrChange w:id="402" w:author="Ada"><w:sectPr><w:pgSz w:w="12240"/></w:sectPr></w:sectPrChange></w:sectPr>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+    let sorted_ids = |document: &Document| {
+        let mut ids = document
+            .revisions()
+            .iter()
+            .map(|revision| revision.id())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids
+    };
+    assert_eq!(sorted_ids(&document), [102, 202, 302, 402, 502]);
+
+    let initial = document_xml(&mut document);
+    for id in [101, 102, 201, 202, 301, 302, 401, 402, 501, 502] {
+        assert_eq!(initial.matches(&format!(r#"w:id="{id}""#)).count(), 1);
+    }
+
+    for id in [102, 202, 302, 402, 502] {
+        assert_eq!(document.accept_revision_id(id).unwrap(), 1);
+    }
+    assert_eq!(sorted_ids(&document), [101, 201, 301, 401, 501]);
+    let staged = document_xml(&mut document);
+    for id in [101, 201, 301, 401, 501] {
+        assert_eq!(staged.matches(&format!(r#"w:id="{id}""#)).count(), 1);
+    }
+    for id in [102, 202, 302, 402, 502] {
+        assert!(!staged.contains(&format!(r#"w:id="{id}""#)));
+    }
+
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(sorted_ids(&reopened), [101, 201, 301, 401, 501]);
+    for id in [101, 201, 301, 401, 501] {
+        assert_eq!(reopened.accept_revision_id(id).unwrap(), 1);
+    }
+    assert!(reopened.revisions().is_empty());
+}
+
+#[test]
 fn hyperlink_nested_revisions_resolve_inside_out_when_scoped() {
     let xml = wrap_word_body(
         r#"<w:p><w:hyperlink r:id="rId5"><w:r><w:t xml:space="preserve">before </w:t></w:r><w:ins w:id="11" w:author="Ada"><w:del w:id="12" w:author="Ben"><w:r><w:delText>nested</w:delText></w:r></w:del></w:ins><w:r><w:t xml:space="preserve"> after</w:t></w:r></w:hyperlink></w:p>"#,

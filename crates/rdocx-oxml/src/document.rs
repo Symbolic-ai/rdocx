@@ -277,7 +277,9 @@ impl CT_SectPr {
                     } else if is_word_element(name.as_ref(), b"sectPrChange", &prefixes) {
                         let raw = capture_empty_element(e)?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
-                            sect.change = Some(revision);
+                            if let Some(previous) = sect.change.replace(revision) {
+                                sect.extra_xml.push(previous.into_raw_xml());
+                            }
                         } else {
                             sect.extra_xml.push(raw);
                         }
@@ -294,7 +296,9 @@ impl CT_SectPr {
                     } else if is_word_element(name.as_ref(), b"sectPrChange", &prefixes) {
                         let raw = capture_element(reader, e)?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
-                            sect.change = Some(revision);
+                            if let Some(previous) = sect.change.replace(revision) {
+                                sect.extra_xml.push(previous.into_raw_xml());
+                            }
                         } else {
                             sect.extra_xml.push(raw);
                         }

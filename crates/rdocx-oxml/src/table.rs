@@ -529,7 +529,9 @@ impl CT_TblPr {
                     } else if is_word_element(name.as_ref(), b"tblPrChange", &prefixes) {
                         let raw = capture_empty_element(e)?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
-                            pr.change = Some(revision);
+                            if let Some(previous) = pr.change.replace(revision) {
+                                pr.revision_xml.push(previous.into_raw_xml());
+                            }
                         } else {
                             pr.revision_xml.push(raw);
                         }
@@ -549,7 +551,9 @@ impl CT_TblPr {
                     } else if is_word_element(name.as_ref(), b"tblPrChange", &prefixes) {
                         let raw = capture_element(reader, e)?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
-                            pr.change = Some(revision);
+                            if let Some(previous) = pr.change.replace(revision) {
+                                pr.revision_xml.push(previous.into_raw_xml());
+                            }
                         } else {
                             pr.revision_xml.push(raw);
                         }
@@ -619,11 +623,11 @@ impl CT_TblPr {
             look.to_xml(writer)?;
         }
 
-        if let Some(change) = &self.change {
-            change.write_xml(writer)?;
-        }
         for raw in &self.revision_xml {
             writer.get_mut().write_all(raw)?;
+        }
+        if let Some(change) = &self.change {
+            change.write_xml(writer)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:tblPr")))?;

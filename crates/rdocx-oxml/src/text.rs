@@ -299,7 +299,7 @@ impl CT_R {
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(name.as_ref(), b"rPr", &prefixes) {
                         let raw = capture_element(reader, e)?;
-                        properties = Some(crate::numbering::parse_scoped_rpr(&raw, &prefixes)?);
+                        properties = Some(crate::numbering::parse_scoped_rpr(&raw, word_prefixes)?);
                         modeled_children += 1;
                     } else if is_word_element(name.as_ref(), b"t", &prefixes) {
                         let preserve = e.attributes().any(|a| {
@@ -1789,6 +1789,196 @@ pub(crate) fn write_raw_with_word_override<W: std::io::Write>(
         .get_mut()
         .write_all(&raw_with_root_word_binding(raw, namespace)?)?;
     Ok(())
+}
+
+pub(crate) fn raw_with_external_bindings(
+    raw: &[u8],
+    external_bindings: &[(String, String)],
+) -> Result<Vec<u8>> {
+    if external_bindings.is_empty() {
+        return Ok(raw.to_vec());
+    }
+
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut scopes = Vec::<Vec<(String, String)>>::new();
+    let mut required = Vec::<String>::new();
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let declarations = raw_namespace_declarations(&element)?;
+                record_external_bindings_used(
+                    &element,
+                    &scopes,
+                    &declarations,
+                    external_bindings,
+                    &mut required,
+                );
+                scopes.push(declarations);
+            }
+            Event::Empty(element) => {
+                let declarations = raw_namespace_declarations(&element)?;
+                record_external_bindings_used(
+                    &element,
+                    &scopes,
+                    &declarations,
+                    external_bindings,
+                    &mut required,
+                );
+            }
+            Event::End(_) => {
+                scopes.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+
+    if required.is_empty() {
+        return Ok(raw.to_vec());
+    }
+
+    let bindings = external_bindings
+        .iter()
+        .filter(|(prefix, _)| required.contains(prefix))
+        .cloned()
+        .collect::<Vec<_>>();
+    raw_with_root_bindings(raw, &bindings)
+}
+
+fn raw_namespace_declarations(element: &BytesStart<'_>) -> Result<Vec<(String, String)>> {
+    let mut declarations = Vec::new();
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref();
+        let prefix = if name == b"xmlns" {
+            ""
+        } else if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+            std::str::from_utf8(prefix)?
+        } else {
+            continue;
+        };
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
+            .into_owned();
+        declarations.push((prefix.to_owned(), value));
+    }
+    Ok(declarations)
+}
+
+fn record_external_bindings_used(
+    element: &BytesStart<'_>,
+    scopes: &[Vec<(String, String)>],
+    declarations: &[(String, String)],
+    external_bindings: &[(String, String)],
+    required: &mut Vec<String>,
+) {
+    let element_name = element.name();
+    let element_prefix = qualified_name_prefix(element_name.as_ref()).unwrap_or("");
+    record_external_prefix_used(
+        element_prefix,
+        scopes,
+        declarations,
+        external_bindings,
+        required,
+    );
+    for attribute in element.attributes().filter_map(|attribute| attribute.ok()) {
+        let name = attribute.key.as_ref();
+        if name == b"xmlns" || name.starts_with(b"xmlns:") {
+            continue;
+        }
+        if let Some(prefix) = qualified_name_prefix(name) {
+            record_external_prefix_used(prefix, scopes, declarations, external_bindings, required);
+        }
+    }
+}
+
+fn record_external_prefix_used(
+    prefix: &str,
+    scopes: &[Vec<(String, String)>],
+    declarations: &[(String, String)],
+    external_bindings: &[(String, String)],
+    required: &mut Vec<String>,
+) {
+    let internally_bound = declarations
+        .iter()
+        .rev()
+        .any(|(candidate, _)| candidate == prefix)
+        || scopes
+            .iter()
+            .rev()
+            .any(|scope| scope.iter().rev().any(|(candidate, _)| candidate == prefix));
+    if !internally_bound
+        && external_bindings
+            .iter()
+            .any(|(candidate, _)| candidate == prefix)
+        && !required.iter().any(|candidate| candidate == prefix)
+    {
+        required.push(prefix.to_owned());
+    }
+}
+
+fn qualified_name_prefix(name: &[u8]) -> Option<&str> {
+    let separator = name.iter().position(|byte| *byte == b':')?;
+    std::str::from_utf8(&name[..separator]).ok()
+}
+
+fn raw_with_root_bindings(raw: &[u8], bindings: &[(String, String)]) -> Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let end = reader.buffer_position() as usize;
+                let mut element = element.into_owned();
+                let names = bindings
+                    .iter()
+                    .map(|(prefix, _)| {
+                        if prefix.is_empty() {
+                            "xmlns".to_owned()
+                        } else {
+                            format!("xmlns:{prefix}")
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                for ((_, namespace), name) in bindings.iter().zip(&names) {
+                    element.push_attribute((name.as_str(), namespace.as_str()));
+                }
+                let mut output = raw[..start].to_vec();
+                Writer::new(&mut output).write_event(Event::Start(element))?;
+                output.extend_from_slice(&raw[end..]);
+                return Ok(output);
+            }
+            Event::Empty(element) => {
+                let end = reader.buffer_position() as usize;
+                let mut element = element.into_owned();
+                let names = bindings
+                    .iter()
+                    .map(|(prefix, _)| {
+                        if prefix.is_empty() {
+                            "xmlns".to_owned()
+                        } else {
+                            format!("xmlns:{prefix}")
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                for ((_, namespace), name) in bindings.iter().zip(&names) {
+                    element.push_attribute((name.as_str(), namespace.as_str()));
+                }
+                let mut output = raw[..start].to_vec();
+                Writer::new(&mut output).write_event(Event::Empty(element))?;
+                output.extend_from_slice(&raw[end..]);
+                return Ok(output);
+            }
+            Event::Eof => return Ok(raw.to_vec()),
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 fn raw_uses_external_word_binding(raw: &[u8]) -> bool {

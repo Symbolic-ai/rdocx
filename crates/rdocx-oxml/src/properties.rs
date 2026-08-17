@@ -219,7 +219,7 @@ impl CT_PPr {
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(name.as_ref(), b"rPr", &prefixes) {
                         let raw = capture_element(reader, e)?;
-                        ppr.rpr = Some(parse_scoped_rpr(&raw, &prefixes)?);
+                        ppr.rpr = Some(parse_scoped_rpr(&raw, word_prefixes)?);
                     } else if is_word_element(name.as_ref(), b"numPr", &prefixes) {
                         Self::parse_num_pr(reader, &mut ppr, &prefixes)?;
                     } else if is_word_element(name.as_ref(), b"pBdr", &prefixes) {
@@ -231,7 +231,9 @@ impl CT_PPr {
                     } else if is_word_element(name.as_ref(), b"pPrChange", &prefixes) {
                         let raw = capture_element(reader, e)?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
-                            ppr.change = Some(revision);
+                            if let Some(previous) = ppr.change.replace(revision) {
+                                ppr.revision_xml.push(previous.into_raw_xml());
+                            }
                         } else {
                             ppr.revision_xml.push(raw);
                         }
@@ -307,7 +309,9 @@ impl CT_PPr {
                     } else if is_word_element(name.as_ref(), b"pPrChange", &prefixes) {
                         let raw = capture_empty_element(e)?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
-                            ppr.change = Some(revision);
+                            if let Some(previous) = ppr.change.replace(revision) {
+                                ppr.revision_xml.push(previous.into_raw_xml());
+                            }
                         } else {
                             ppr.revision_xml.push(raw);
                         }
@@ -352,7 +356,9 @@ impl CT_PPr {
                     } else if is_word_element(name.as_ref(), b"ins", &prefixes) {
                         let raw = capture_empty_element(e)?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
-                            ppr.numbering_revision = Some(revision);
+                            if let Some(previous) = ppr.numbering_revision.replace(revision) {
+                                ppr.numbering_revision_xml.push(previous.into_raw_xml());
+                            }
                         } else {
                             ppr.numbering_revision_xml.push(raw);
                         }
@@ -365,7 +371,9 @@ impl CT_PPr {
                     if is_word_element(e.name().as_ref(), b"ins", &prefixes) {
                         let raw = capture_element(reader, e)?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
-                            ppr.numbering_revision = Some(revision);
+                            if let Some(previous) = ppr.numbering_revision.replace(revision) {
+                                ppr.numbering_revision_xml.push(previous.into_raw_xml());
+                            }
                         } else {
                             ppr.numbering_revision_xml.push(raw);
                         }
@@ -433,11 +441,11 @@ impl CT_PPr {
                 e.push_attribute(("w:val", buf.format(num_id)));
                 writer.write_event(Event::Empty(e))?;
             }
-            if let Some(revision) = &self.numbering_revision {
-                revision.write_xml(writer)?;
-            }
             for raw in &self.numbering_revision_xml {
                 writer.get_mut().write_all(raw)?;
+            }
+            if let Some(revision) = &self.numbering_revision {
+                revision.write_xml(writer)?;
             }
             writer.write_event(Event::End(BytesEnd::new("w:numPr")))?;
         }
@@ -534,11 +542,11 @@ impl CT_PPr {
             sect.to_xml(writer)?;
         }
 
-        if let Some(change) = &self.change {
-            change.write_xml(writer)?;
-        }
         for raw in &self.revision_xml {
             writer.get_mut().write_all(raw)?;
+        }
+        if let Some(change) = &self.change {
+            change.write_xml(writer)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:pPr")))?;
@@ -729,6 +737,14 @@ impl CT_RPr {
     pub(crate) fn from_xml_with_prefixes(
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
+    ) -> Result<Self> {
+        Self::from_xml_with_prefixes_and_owner_bindings(reader, word_prefixes, &[])
+    }
+
+    pub(crate) fn from_xml_with_prefixes_and_owner_bindings(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
     ) -> Result<Self> {
         let mut rpr = CT_RPr::default();
         let mut pending_raw = Vec::new();
@@ -953,7 +969,10 @@ impl CT_RPr {
                     } else if is_word_element(name.as_ref(), b"ins", &prefixes)
                         || is_word_element(name.as_ref(), b"del", &prefixes)
                     {
-                        let raw = capture_empty_element(e)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             record_rpr_modeled(
                                 &mut rpr,
@@ -966,8 +985,19 @@ impl CT_RPr {
                             pending_raw.push(raw);
                         }
                     } else if is_word_element(name.as_ref(), b"rPrChange", &prefixes) {
-                        let raw = capture_empty_element(e)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            if let Some(previous) = rpr.change.take() {
+                                record_rpr_raw_at(
+                                    &mut rpr,
+                                    previous.into_raw_xml(),
+                                    RPR_CHANGE_SLOT,
+                                    0,
+                                );
+                            }
                             record_rpr_modeled(
                                 &mut rpr,
                                 &mut pending_raw,
@@ -976,10 +1006,14 @@ impl CT_RPr {
                             );
                             rpr.change = Some(revision);
                         } else {
-                            pending_raw.push(raw);
+                            flush_rpr_raw(&mut rpr, &mut pending_raw, RPR_CHANGE_SLOT, 0);
+                            record_rpr_raw_at(&mut rpr, raw, RPR_CHANGE_SLOT, 0);
                         }
                     } else {
-                        let raw = capture_empty_element(e)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?;
                         if let Some(slot) = rpr_schema_slot(name.as_ref(), &prefixes) {
                             record_rpr_raw_at(&mut rpr, raw, slot, 0);
                         } else {
@@ -992,7 +1026,10 @@ impl CT_RPr {
                     if is_word_element(e.name().as_ref(), b"ins", &prefixes)
                         || is_word_element(e.name().as_ref(), b"del", &prefixes)
                     {
-                        let raw = capture_element(reader, e)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             record_rpr_modeled(
                                 &mut rpr,
@@ -1005,8 +1042,19 @@ impl CT_RPr {
                             pending_raw.push(raw);
                         }
                     } else if is_word_element(e.name().as_ref(), b"rPrChange", &prefixes) {
-                        let raw = capture_element(reader, e)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            if let Some(previous) = rpr.change.take() {
+                                record_rpr_raw_at(
+                                    &mut rpr,
+                                    previous.into_raw_xml(),
+                                    RPR_CHANGE_SLOT,
+                                    0,
+                                );
+                            }
                             record_rpr_modeled(
                                 &mut rpr,
                                 &mut pending_raw,
@@ -1015,10 +1063,14 @@ impl CT_RPr {
                             );
                             rpr.change = Some(revision);
                         } else {
-                            pending_raw.push(raw);
+                            flush_rpr_raw(&mut rpr, &mut pending_raw, RPR_CHANGE_SLOT, 0);
+                            record_rpr_raw_at(&mut rpr, raw, RPR_CHANGE_SLOT, 0);
                         }
                     } else {
-                        let raw = capture_element(reader, e)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
                         if let Some(slot) = rpr_schema_slot(e.name().as_ref(), &prefixes) {
                             record_rpr_raw_at(&mut rpr, raw, slot, 0);
                         } else {
@@ -1347,7 +1399,7 @@ fn write_rpr_with_positioned_raw<W: std::io::Write>(
 ) -> Result<()> {
     let mut raw_order = (0..rpr.revision_xml.len()).collect::<Vec<_>>();
     raw_order.sort_by_key(|index| {
-        let (slot, occurrence) = rpr.revision_xml_positions[*index];
+        let (slot, occurrence) = effective_rpr_raw_position(rpr, *index);
         (slot, occurrence, *index)
     });
     let mut raw_index = 0usize;
@@ -1429,7 +1481,7 @@ fn write_rpr_raw_before<W: std::io::Write>(
     foreign_word_namespace: Option<&str>,
 ) -> Result<()> {
     while let Some(index) = raw_order.get(*raw_index).copied() {
-        let position = rpr.revision_xml_positions[index];
+        let position = effective_rpr_raw_position(rpr, index);
         if position.0 > slot || (position.0 == slot && position.1 > occurrence) {
             break;
         }
@@ -1441,6 +1493,15 @@ fn write_rpr_raw_before<W: std::io::Write>(
         *raw_index += 1;
     }
     Ok(())
+}
+
+fn effective_rpr_raw_position(rpr: &CT_RPr, index: usize) -> (u8, usize) {
+    let position = rpr.revision_xml_positions[index];
+    if rpr.change.is_some() && position.0 >= RPR_CHANGE_SLOT {
+        (RPR_CHANGE_SLOT, 0)
+    } else {
+        position
+    }
 }
 
 fn rpr_slot_for_name(local: &[u8]) -> u8 {

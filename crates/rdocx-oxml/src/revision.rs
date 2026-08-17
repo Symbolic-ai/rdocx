@@ -53,6 +53,10 @@ impl CT_Revision {
         Self::try_from_raw(raw_xml, word_prefixes).ok()
     }
 
+    pub(crate) fn into_raw_xml(self) -> Vec<u8> {
+        self.raw_xml
+    }
+
     fn try_from_raw(raw_xml: Vec<u8>, word_prefixes: &[String]) -> crate::Result<Self> {
         let mut reader = Reader::from_reader(raw_xml.as_slice());
         reader.config_mut().trim_text(false);
@@ -414,7 +418,8 @@ fn parse_content(
                     let raw = crate::raw_xml::capture_element(reader, &start)?;
                     return Ok((
                         RevisionContent::PriorRunProperties(Box::new(parse_scoped_rpr(
-                            &raw, &prefixes,
+                            &raw,
+                            word_prefixes,
                         )?)),
                         nested_revisions,
                     ));
@@ -699,6 +704,152 @@ mod tests {
         assert!(output.find("<w:b").unwrap() < output.find("<w:rPrChange ").unwrap());
         assert!(output.find("<w:tblW").unwrap() < output.find("<w:tblPrChange ").unwrap());
         assert!(output.find("<w:pgSz").unwrap() < output.find("<w:sectPrChange ").unwrap());
+    }
+
+    #[test]
+    fn run_property_raw_positions_cannot_follow_the_schema_final_change() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:x="urn:producer"><w:body><w:p><w:r><w:rPr><x:raw/><w:rPrChange w:id="1" w:author="Ada"><w:rPr><w:b/></w:rPr></w:rPrChange></w:rPr><w:t>x</w:t></w:r></w:p></w:body></w:document>"#
+        );
+        let mut document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
+        {
+            let BodyContent::Paragraph(paragraph) = &mut document.body.content[0] else {
+                panic!("expected paragraph");
+            };
+            paragraph.runs[0]
+                .properties
+                .as_mut()
+                .expect("run properties")
+                .revision_xml_positions[0] = (41, 9);
+        }
+
+        let output = String::from_utf8(document.to_xml().expect("document writes")).unwrap();
+        assert!(output.find("<x:raw").unwrap() < output.find("<w:rPrChange").unwrap());
+
+        {
+            let BodyContent::Paragraph(paragraph) = &mut document.body.content[0] else {
+                panic!("expected paragraph");
+            };
+            paragraph.runs[0]
+                .properties
+                .as_mut()
+                .expect("run properties")
+                .revision_xml_positions
+                .clear();
+        }
+        let output = String::from_utf8(document.to_xml().expect("fallback writes")).unwrap();
+        assert!(output.find("<x:raw").unwrap() < output.find("<w:rPrChange").unwrap());
+
+        let BodyContent::Paragraph(paragraph) = &mut document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        paragraph.runs[0]
+            .properties
+            .as_mut()
+            .expect("run properties")
+            .revision_xml_positions
+            .extend([(41, 0), (41, 1)]);
+        let output = String::from_utf8(document.to_xml().expect("mismatch writes")).unwrap();
+        assert!(output.find("<x:raw").unwrap() < output.find("<w:rPrChange").unwrap());
+    }
+
+    #[test]
+    fn retained_run_property_children_keep_owner_local_namespace_bindings() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:rPr xmlns:x="urn:producer" xmlns:wa="{W_NS}"><x:raw/><wa:outline><wa:opaque/></wa:outline><wa:rPrChange wa:id="7" wa:author="Ada"><wa:rPr><wa:b/></wa:rPr></wa:rPrChange></w:rPr><w:t>x</w:t></w:r></w:p></w:body></w:document>"#
+        );
+        let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
+        assert_eq!(document.revisions()[0].id(), 7);
+
+        let output = String::from_utf8(document.to_xml().expect("document writes")).unwrap();
+        assert_eq!(
+            output.matches(r#"<x:raw xmlns:x="urn:producer"/>"#).count(),
+            1
+        );
+        assert_eq!(
+            output
+                .matches(&format!(r#"<wa:outline xmlns:wa="{W_NS}">"#))
+                .count(),
+            1
+        );
+        assert_eq!(
+            output
+                .matches(&format!(
+                    r#"<wa:rPrChange wa:id="7" wa:author="Ada" xmlns:wa="{W_NS}">"#
+                ))
+                .count(),
+            1
+        );
+
+        let reopened = CT_Document::from_xml(output.as_bytes()).expect("output reparses");
+        assert_eq!(reopened.revisions()[0].id(), 7);
+        let rewritten = String::from_utf8(reopened.to_xml().expect("output rewrites")).unwrap();
+        assert_eq!(rewritten.matches(r#"xmlns:x="urn:producer""#).count(), 1);
+        assert_eq!(
+            rewritten.matches(&format!(r#"xmlns:wa="{W_NS}""#)).count(),
+            2
+        );
+    }
+
+    #[test]
+    fn duplicate_property_changes_are_retained_without_replacing_the_first_projection() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}"><w:body>
+<w:p><w:pPr><w:numPr><w:ins w:id="501" w:author="Ada"/><w:ins w:id="502" w:author="Ada"/></w:numPr><w:pPrChange w:id="101" w:author="Ada"><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange><w:pPrChange w:id="102" w:author="Ada"><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange></w:pPr><w:r><w:rPr><w:rPrChange w:id="201" w:author="Ada"><w:rPr><w:b/></w:rPr></w:rPrChange><w:rPrChange w:id="202" w:author="Ada"><w:rPr><w:i/></w:rPr></w:rPrChange></w:rPr><w:t>x</w:t></w:r></w:p>
+<w:tbl><w:tblPr><w:tblPrChange w:id="301" w:author="Ada"><w:tblPr><w:jc w:val="left"/></w:tblPr></w:tblPrChange><w:tblPrChange w:id="302" w:author="Ada"><w:tblPr><w:jc w:val="right"/></w:tblPr></w:tblPrChange></w:tblPr><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>
+<w:sectPr><w:sectPrChange w:id="401" w:author="Ada"><w:sectPr><w:titlePg/></w:sectPr></w:sectPrChange><w:sectPrChange w:id="402" w:author="Ada"><w:sectPr><w:pgSz w:w="12240"/></w:sectPr></w:sectPrChange></w:sectPr>
+</w:body></w:document>"#
+        );
+        let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
+        let mut ids = document
+            .revisions()
+            .iter()
+            .map(|revision| revision.id())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, [102, 202, 302, 402, 502]);
+
+        let output = String::from_utf8(document.to_xml().expect("document writes")).unwrap();
+        for id in [101, 102, 201, 202, 301, 302, 401, 402, 501, 502] {
+            assert_eq!(output.matches(&format!(r#"w:id="{id}""#)).count(), 1);
+        }
+        for owner in ["pPr", "rPr", "tblPr", "sectPr"] {
+            let first = output
+                .find(&format!(
+                    r#"w:{owner}Change w:id="{}""#,
+                    match owner {
+                        "pPr" => 101,
+                        "rPr" => 201,
+                        "tblPr" => 301,
+                        _ => 401,
+                    }
+                ))
+                .unwrap();
+            let typed = output
+                .find(&format!(
+                    r#"w:{owner}Change w:id="{}""#,
+                    match owner {
+                        "pPr" => 102,
+                        "rPr" => 202,
+                        "tblPr" => 302,
+                        _ => 402,
+                    }
+                ))
+                .unwrap();
+            assert!(
+                first < typed,
+                "duplicate must precede typed schema-final change"
+            );
+        }
+
+        let reopened = CT_Document::from_xml(output.as_bytes()).expect("output reparses");
+        let mut reopened_ids = reopened
+            .revisions()
+            .iter()
+            .map(|revision| revision.id())
+            .collect::<Vec<_>>();
+        reopened_ids.sort_unstable();
+        assert_eq!(reopened_ids, [102, 202, 302, 402, 502]);
     }
 
     #[test]

@@ -1076,8 +1076,13 @@ fn parse_raw_rpr(raw: &[u8], word_prefixes: &[String]) -> Result<CT_RPr> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref start)) => {
+                let owner_bindings = local_namespace_overrides(start, word_prefixes)?;
                 let prefixes = word_prefixes_at(start, word_prefixes)?;
-                return CT_RPr::from_xml_with_prefixes(&mut reader, &prefixes);
+                return CT_RPr::from_xml_with_prefixes_and_owner_bindings(
+                    &mut reader,
+                    &prefixes,
+                    &owner_bindings,
+                );
             }
             Ok(Event::Empty(_)) | Ok(Event::Eof) => return Ok(CT_RPr::default()),
             Err(error) => return Err(error.into()),
@@ -1085,6 +1090,37 @@ fn parse_raw_rpr(raw: &[u8], word_prefixes: &[String]) -> Result<CT_RPr> {
         }
         buf.clear();
     }
+}
+
+fn local_namespace_overrides(
+    start: &BytesStart<'_>,
+    inherited: &[String],
+) -> Result<Vec<(String, String)>> {
+    let mut bindings = Vec::new();
+    for attribute in start.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref();
+        let prefix = if name == b"xmlns" {
+            ""
+        } else if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+            std::str::from_utf8(prefix)?
+        } else {
+            continue;
+        };
+        let namespace = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())?
+            .into_owned();
+        let inherited_namespace = inherited.iter().find_map(|binding| {
+            split_namespace_binding(binding)
+                .filter(|(candidate, _)| *candidate == prefix)
+                .map(|(_, namespace)| namespace)
+                .or_else(|| (binding == prefix).then_some(W_NS))
+        });
+        if inherited_namespace != Some(namespace.as_str()) {
+            bindings.push((prefix.to_owned(), namespace));
+        }
+    }
+    Ok(bindings)
 }
 
 pub(crate) fn parse_scoped_rpr(raw: &[u8], word_prefixes: &[String]) -> Result<CT_RPr> {
