@@ -611,6 +611,30 @@ struct ParsedHyperlinkChildren {
     extra_xml: Vec<(usize, usize, Vec<u8>)>,
 }
 
+/// A hyperlink represented by a complex field sequence rather than `w:hyperlink`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComplexFieldHyperlink {
+    pub run_start: usize,
+    pub run_end: usize,
+    pub target: String,
+}
+
+#[derive(Debug)]
+enum ComplexFieldPart {
+    Begin { dirty: bool },
+    Instruction(String),
+    Separate { dirty: bool },
+    End { dirty: bool },
+}
+
+#[derive(Debug)]
+struct OpenComplexField {
+    instruction: String,
+    result_start: Option<usize>,
+    cached_text: String,
+    dirty: bool,
+}
+
 type ParsedHyperlinkAttributes = (Option<String>, Option<String>, Vec<(String, String)>);
 
 pub(crate) fn hyperlink_revision_slot(hyperlink_index: usize) -> usize {
@@ -661,6 +685,14 @@ impl CT_P {
     /// Get the combined text of all runs in this paragraph.
     pub fn text(&self) -> String {
         self.runs().iter().map(|run| run.text()).collect()
+    }
+
+    /// Return the cached-result spans of valid complex `HYPERLINK` fields.
+    ///
+    /// Complex fields stay in their original run form for round-trip writing.
+    /// This projection supplies their external targets to reader consumers.
+    pub fn complex_field_hyperlinks(&self) -> Vec<ComplexFieldHyperlink> {
+        parse_complex_fields(&self.runs).unwrap_or_default()
     }
 
     /// Return direct and content-control-wrapped runs in document order.
@@ -1278,7 +1310,7 @@ impl CT_P {
             buf.clear();
         }
 
-        Ok(CT_P {
+        let paragraph = CT_P {
             properties,
             runs,
             hyperlinks,
@@ -1287,7 +1319,9 @@ impl CT_P {
             extra_xml,
             content_controls,
             revisions,
-        })
+        };
+        parse_complex_fields(&paragraph.runs)?;
+        Ok(paragraph)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -2254,6 +2288,200 @@ fn parse_field_instruction(instr: &str) -> FieldType {
     }
 }
 
+fn parse_complex_fields(runs: &[CT_R]) -> Result<Vec<ComplexFieldHyperlink>> {
+    let mut field = None;
+    let mut hyperlinks = Vec::new();
+
+    for (run_index, run) in runs.iter().enumerate() {
+        let parts = complex_field_parts(run)?;
+        let had_result = field
+            .as_ref()
+            .is_some_and(|field: &OpenComplexField| field.result_start.is_some());
+        let mut ended = None;
+
+        for part in parts {
+            match part {
+                ComplexFieldPart::Begin { dirty } => {
+                    if field.is_some() {
+                        return Err(OxmlError::MissingElement(
+                            "nested complex field is unsupported".to_owned(),
+                        ));
+                    }
+                    field = Some(OpenComplexField {
+                        instruction: String::new(),
+                        result_start: None,
+                        cached_text: String::new(),
+                        dirty,
+                    });
+                }
+                ComplexFieldPart::Instruction(instruction) => {
+                    let Some(field) = field.as_mut() else {
+                        return Err(OxmlError::MissingElement(
+                            "w:instrText without a complex field begin".to_owned(),
+                        ));
+                    };
+                    if field.result_start.is_some() {
+                        return Err(OxmlError::MissingElement(
+                            "w:instrText after a complex field separator".to_owned(),
+                        ));
+                    }
+                    field.instruction.push_str(&instruction);
+                }
+                ComplexFieldPart::Separate { dirty } => {
+                    let Some(field) = field.as_mut() else {
+                        return Err(OxmlError::MissingElement(
+                            "complex field separator without a begin".to_owned(),
+                        ));
+                    };
+                    if field.result_start.replace(run_index + 1).is_some() {
+                        return Err(OxmlError::MissingElement(
+                            "complex field has more than one separator".to_owned(),
+                        ));
+                    }
+                    field.dirty |= dirty;
+                }
+                ComplexFieldPart::End { dirty } => {
+                    let Some(completed) = field.take() else {
+                        return Err(OxmlError::MissingElement(
+                            "complex field end without a begin".to_owned(),
+                        ));
+                    };
+                    ended = Some(OpenComplexField {
+                        dirty: completed.dirty || dirty,
+                        ..completed
+                    });
+                }
+            }
+        }
+
+        if (had_result
+            || field
+                .as_ref()
+                .is_some_and(|field| field.result_start == Some(run_index)))
+            && let Some(field) = field.as_mut()
+        {
+            field.cached_text.push_str(&run.text());
+        }
+        if let Some(mut completed) = ended {
+            if had_result {
+                completed.cached_text.push_str(&run.text());
+            }
+            let Some(result_start) = completed.result_start else {
+                return Err(OxmlError::MissingElement(
+                    "complex field has no cached result".to_owned(),
+                ));
+            };
+            if completed.instruction.trim().is_empty() {
+                return Err(OxmlError::MissingElement(
+                    "complex field has no instruction".to_owned(),
+                ));
+            }
+            if completed.dirty || completed.cached_text.is_empty() {
+                return Err(OxmlError::MissingElement(
+                    "complex field has an unsafe cached result".to_owned(),
+                ));
+            }
+            if complex_field_is_hyperlink(&completed.instruction) {
+                let target = hyperlink_target(&completed.instruction).ok_or_else(|| {
+                    OxmlError::InvalidValue("complex HYPERLINK field has no target".to_owned())
+                })?;
+                hyperlinks.push(ComplexFieldHyperlink {
+                    run_start: result_start,
+                    run_end: run_index + 1,
+                    target,
+                });
+            }
+        }
+    }
+
+    if field.is_some() {
+        return Err(OxmlError::MissingElement(
+            "unclosed complex field".to_owned(),
+        ));
+    }
+    Ok(hyperlinks)
+}
+
+fn complex_field_parts(run: &CT_R) -> Result<Vec<ComplexFieldPart>> {
+    let mut parts = Vec::new();
+    for raw in &run.extra_xml {
+        let mut reader = Reader::from_reader(raw.as_slice());
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(element)
+                    if is_standard_word_element(element.name().as_ref(), b"instrText") =>
+                {
+                    let text = reader
+                        .read_text(element.name())
+                        .map(|text| crate::xml_text::decode_escaped(&text))?;
+                    parts.push(ComplexFieldPart::Instruction(text));
+                    break;
+                }
+                Event::Start(element) | Event::Empty(element)
+                    if is_standard_word_element(element.name().as_ref(), b"fldChar") =>
+                {
+                    let mut field_type = None;
+                    let mut dirty = false;
+                    for attribute in element.attributes() {
+                        let attribute = attribute?;
+                        if matches_local_name(attribute.key.as_ref(), b"fldCharType") {
+                            field_type = Some(std::str::from_utf8(&attribute.value)?.to_owned());
+                        } else if matches_local_name(attribute.key.as_ref(), b"dirty") {
+                            dirty = matches!(
+                                std::str::from_utf8(&attribute.value)?,
+                                "true" | "1" | "on"
+                            );
+                        }
+                    }
+                    match field_type.as_deref() {
+                        Some("begin") => parts.push(ComplexFieldPart::Begin { dirty }),
+                        Some("separate") => parts.push(ComplexFieldPart::Separate { dirty }),
+                        Some("end") => parts.push(ComplexFieldPart::End { dirty }),
+                        _ => {}
+                    }
+                    break;
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+    Ok(parts)
+}
+
+fn is_standard_word_element(name: &[u8], local: &[u8]) -> bool {
+    name.strip_prefix(b"w:") == Some(local)
+}
+
+fn hyperlink_target(instruction: &str) -> Option<String> {
+    let instruction = instruction.trim();
+    let rest = instruction.get(9..)?;
+    if !instruction
+        .get(..9)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("HYPERLINK"))
+        || (!rest.is_empty() && !rest.chars().next().is_some_and(char::is_whitespace))
+    {
+        return None;
+    }
+    let rest = rest.trim_start();
+    if let Some(rest) = rest.strip_prefix('"') {
+        return rest.split_once('"').map(|(target, _)| target.to_owned());
+    }
+    rest.split_whitespace()
+        .next()
+        .filter(|target| !target.starts_with('\\'))
+        .map(str::to_owned)
+}
+
+fn complex_field_is_hyperlink(instruction: &str) -> bool {
+    instruction
+        .split_whitespace()
+        .next()
+        .is_some_and(|keyword| keyword.eq_ignore_ascii_case("HYPERLINK"))
+}
+
 impl Default for CT_P {
     fn default() -> Self {
         Self::new()
@@ -2284,6 +2512,98 @@ mod tests {
         let p = parse_paragraph(r#"<w:r><w:t>Hello World</w:t></w:r>"#);
         assert_eq!(p.text(), "Hello World");
         assert_eq!(p.runs.len(), 1);
+    }
+
+    #[test]
+    fn complex_hyperlink_field_exposes_its_target_and_cached_text() {
+        let p = parse_paragraph(concat!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText xml:space="preserve"> HYPERLINK &quot;https://example.test/path&quot; </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:t>Example link</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        ));
+
+        assert_eq!(p.text(), "Example link");
+        assert_eq!(
+            p.complex_field_hyperlinks(),
+            vec![ComplexFieldHyperlink {
+                run_start: 3,
+                run_end: 5,
+                target: "https://example.test/path".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn form_text_field_imports_its_cached_plain_text() {
+        let p = parse_paragraph(concat!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText> FORMTEXT </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:t>Entered value</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        ));
+
+        assert_eq!(p.text(), "Entered value");
+        assert!(p.complex_field_hyperlinks().is_empty());
+    }
+
+    #[test]
+    fn unsafe_complex_fields_fail_closed() {
+        let cases = [
+            concat!(
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+                r#"<w:r><w:instrText> HYPERLINK &quot;https://example.test&quot; </w:instrText></w:r>"#,
+            ),
+            concat!(
+                r#"<w:r><w:fldChar w:fldCharType="begin" w:dirty="true"/></w:r>"#,
+                r#"<w:r><w:instrText> HYPERLINK &quot;https://example.test&quot; </w:instrText></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+                r#"<w:r><w:t>Cached</w:t></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            ),
+            concat!(
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+                r#"<w:r><w:instrText> HYPERLINK </w:instrText></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+                r#"<w:r><w:t>Cached</w:t></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            ),
+            concat!(
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+                r#"<w:r><w:instrText> HYPERLINK &quot;https://example.test&quot; </w:instrText></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="separate" w:dirty="true"/></w:r>"#,
+                r#"<w:r><w:t>Cached</w:t></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            ),
+            concat!(
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+                r#"<w:r><w:instrText> HYPERLINK &quot;https://example.test&quot; </w:instrText></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            ),
+        ];
+
+        for case in cases {
+            let xml = format!("<w:p>{case}</w:p>");
+            let mut reader = Reader::from_str(&xml);
+            let mut buffer = Vec::new();
+            loop {
+                match reader.read_event_into(&mut buffer) {
+                    Ok(Event::Start(element))
+                        if matches_local_name(element.name().as_ref(), b"p") =>
+                    {
+                        assert!(CT_P::from_xml(&mut reader).is_err(), "{case}");
+                        break;
+                    }
+                    Ok(Event::Eof) => panic!("missing paragraph"),
+                    Ok(_) => {}
+                    Err(error) => panic!("invalid fixture: {error}"),
+                }
+                buffer.clear();
+            }
+        }
     }
 
     #[test]
@@ -2542,6 +2862,24 @@ mod tests {
             "the VML fallback must survive"
         );
         assert!(xml.contains(r#"<a:prstGeom prst="rect"/>"#));
+    }
+
+    #[test]
+    fn vml_only_alternate_content_is_preserved_without_a_layout_projection() {
+        let p = parse_paragraph(concat!(
+            r#"<w:r><mc:AlternateContent><mc:Choice Requires="vml">"#,
+            r#"<w:pict><v:shape id="legacy"/></w:pict>"#,
+            r#"</mc:Choice><mc:Fallback><w:pict><v:shape id="fallback"/></w:pict>"#,
+            r#"</mc:Fallback></mc:AlternateContent></w:r>"#,
+        ));
+
+        assert!(p.runs[0].alt_drawings.is_empty());
+        let mut output = Vec::new();
+        p.to_xml(&mut Writer::new(&mut output))
+            .expect("paragraph writes");
+        let xml = String::from_utf8(output).expect("XML is UTF-8");
+        assert_eq!(xml.matches("<mc:AlternateContent").count(), 1, "{xml}");
+        assert!(xml.contains(r#"<v:shape id="legacy"/>"#), "{xml}");
     }
 
     #[test]
