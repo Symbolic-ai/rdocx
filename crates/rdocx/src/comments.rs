@@ -4,9 +4,13 @@ use std::collections::{HashMap, HashSet};
 
 use rdocx_oxml::comments::{CT_Comment, CT_Comments};
 use rdocx_oxml::comments_extended::{CT_CommentEx, CT_CommentsEx};
+use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::BodyContent;
-use rdocx_oxml::table::{CT_Tbl, CellContent};
-use rdocx_oxml::text::{CT_P, CT_R, CommentRangeMarker, HyperlinkSpan, RunContent};
+use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
+use rdocx_oxml::text::{CT_P, CT_R, CommentRangeMarker, RunContent};
+
+#[cfg(test)]
+use rdocx_oxml::text::HyperlinkSpan;
 
 use crate::{Document, Error, Result};
 
@@ -804,44 +808,11 @@ fn comment_reference_run(id: i32) -> CT_R {
 }
 
 fn insert_comment_reference(paragraph: &mut CT_P, run_index: usize, id: i32) {
-    for marker in &mut paragraph.comment_ranges {
-        match marker {
-            CommentRangeMarker::Start { run_index: at, .. }
-            | CommentRangeMarker::End { run_index: at, .. }
-                if *at >= run_index =>
-            {
-                *at += 1
-            }
-            CommentRangeMarker::Start { .. } | CommentRangeMarker::End { .. } => {}
-        }
-    }
-    let mut hyperlinks = Vec::with_capacity(paragraph.hyperlinks.len() + 1);
-    for mut hyperlink in paragraph.hyperlinks.drain(..) {
-        if hyperlink.run_start >= run_index {
-            hyperlink.run_start += 1;
-            hyperlink.run_end += 1;
-            hyperlinks.push(hyperlink);
-        } else if hyperlink.run_end > run_index {
-            let suffix = HyperlinkSpan {
-                rel_id: hyperlink.rel_id.clone(),
-                anchor: hyperlink.anchor.clone(),
-                run_start: run_index + 1,
-                run_end: hyperlink.run_end + 1,
-            };
-            hyperlink.run_end = run_index;
-            hyperlinks.push(hyperlink);
-            hyperlinks.push(suffix);
-        } else {
-            hyperlinks.push(hyperlink);
-        }
-    }
-    paragraph.hyperlinks = hyperlinks;
-    for (position, _) in &mut paragraph.extra_xml {
-        if *position >= run_index {
-            *position += 1;
-        }
-    }
-    paragraph.runs.insert(run_index, comment_reference_run(id));
+    let inserted = paragraph.insert_unwrapped_run(run_index, comment_reference_run(id));
+    debug_assert!(
+        inserted,
+        "validated comment insertion index must remain valid"
+    );
 }
 
 fn thread_root_para_id(extended: &CT_CommentsEx, para_id: &str) -> String {
@@ -946,80 +917,65 @@ fn remove_anchors_from_body_content(content: &mut BodyContent, ids: &HashSet<i32
     match content {
         BodyContent::Paragraph(paragraph) => remove_anchors_from_paragraph(paragraph, ids),
         BodyContent::Table(table) => remove_anchors_from_table(table, ids),
-        BodyContent::ContentControl(_) => {}
+        BodyContent::ContentControl(control) => remove_anchors_from_control(control, ids),
         BodyContent::RawXml(_) => {}
     }
 }
 
 fn remove_anchors_from_table(table: &mut CT_Tbl, ids: &HashSet<i32>) {
+    for (_, _, control) in &mut table.content_controls {
+        remove_anchors_from_control(control, ids);
+    }
     for row in &mut table.rows {
-        for cell in &mut row.cells {
-            for content in &mut cell.content {
-                match content {
-                    CellContent::Paragraph(paragraph) => {
-                        remove_anchors_from_paragraph(paragraph, ids)
-                    }
-                    CellContent::Table(table) => remove_anchors_from_table(table, ids),
-                    CellContent::ContentControl(_) => {}
-                }
-            }
+        remove_anchors_from_row(row, ids);
+    }
+}
+
+fn remove_anchors_from_row(row: &mut CT_Row, ids: &HashSet<i32>) {
+    for (_, _, control) in &mut row.content_controls {
+        remove_anchors_from_control(control, ids);
+    }
+    for cell in &mut row.cells {
+        remove_anchors_from_cell(cell, ids);
+    }
+}
+
+fn remove_anchors_from_cell(cell: &mut CT_Tc, ids: &HashSet<i32>) {
+    for content in &mut cell.content {
+        match content {
+            CellContent::Paragraph(paragraph) => remove_anchors_from_paragraph(paragraph, ids),
+            CellContent::Table(table) => remove_anchors_from_table(table, ids),
+            CellContent::ContentControl(control) => remove_anchors_from_control(control, ids),
+        }
+    }
+}
+
+fn remove_anchors_from_control(control: &mut CT_Sdt, ids: &HashSet<i32>) {
+    for content in &mut control.content {
+        match content {
+            SdtContent::Paragraph(paragraph) => remove_anchors_from_paragraph(paragraph, ids),
+            SdtContent::Table(table) => remove_anchors_from_table(table, ids),
+            SdtContent::Row(row) => remove_anchors_from_row(row, ids),
+            SdtContent::Cell(cell) => remove_anchors_from_cell(cell, ids),
+            SdtContent::Run(run) => remove_comment_references_from_run(run, ids),
+            SdtContent::ContentControl(control) => remove_anchors_from_control(control, ids),
+            SdtContent::RawXml(_) => {}
         }
     }
 }
 
 fn remove_anchors_from_paragraph(paragraph: &mut CT_P, ids: &HashSet<i32>) {
-    paragraph.comment_ranges.retain(|marker| match marker {
-        CommentRangeMarker::Start { id, .. } | CommentRangeMarker::End { id, .. } => {
-            !ids.contains(id)
-        }
-    });
-    let mut removed = Vec::with_capacity(paragraph.runs.len());
-    for run in &mut paragraph.runs {
-        let removed_reference = run
-            .content
-            .iter()
-            .any(|content| matches!(content, RunContent::CommentReference { id, .. } if ids.contains(id)));
-        run.content.retain(|content| {
-            !matches!(content, RunContent::CommentReference { id, .. } if ids.contains(id))
-        });
-        removed.push(
-            removed_reference
-                && run.content.is_empty()
-                && run.extra_xml.is_empty()
-                && run.alt_drawings.is_empty(),
-        );
+    for (_, _, _, control) in &mut paragraph.content_controls {
+        remove_anchors_from_control(control, ids);
     }
-    if removed.iter().all(|remove| !remove) {
-        return;
-    }
-    let remap = |index: usize| {
-        index.saturating_sub(
-            removed
-                .iter()
-                .take(index.min(removed.len()))
-                .filter(|remove| **remove)
-                .count(),
-        )
-    };
-    paragraph.runs = paragraph
-        .runs
-        .drain(..)
-        .zip(&removed)
-        .filter_map(|(run, remove)| (!remove).then_some(run))
-        .collect();
-    for marker in &mut paragraph.comment_ranges {
-        match marker {
-            CommentRangeMarker::Start { run_index, .. }
-            | CommentRangeMarker::End { run_index, .. } => *run_index = remap(*run_index),
-        }
-    }
-    for hyperlink in &mut paragraph.hyperlinks {
-        hyperlink.run_start = remap(hyperlink.run_start);
-        hyperlink.run_end = remap(hyperlink.run_end);
-    }
-    for (position, _) in &mut paragraph.extra_xml {
-        *position = remap(*position);
-    }
+    let ids = ids.iter().copied().collect::<Vec<_>>();
+    paragraph.remove_comment_anchors(&ids);
+}
+
+fn remove_comment_references_from_run(run: &mut CT_R, ids: &HashSet<i32>) {
+    run.content.retain(
+        |content| !matches!(content, RunContent::CommentReference { id, .. } if ids.contains(id)),
+    );
 }
 
 fn remap_raw_positions(extra_xml: &mut [(usize, Vec<u8>)], removed: &[bool]) {

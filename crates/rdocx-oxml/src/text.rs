@@ -474,6 +474,209 @@ impl CT_P {
         self.runs.last_mut().unwrap()
     }
 
+    /// Insert a direct run while keeping every paragraph boundary projection aligned.
+    #[doc(hidden)]
+    pub fn insert_unwrapped_run(&mut self, run_index: usize, run: CT_R) -> bool {
+        if run_index > self.runs.len() {
+            return false;
+        }
+        for marker in &mut self.comment_ranges {
+            match marker {
+                CommentRangeMarker::Start { run_index: at, .. }
+                | CommentRangeMarker::End { run_index: at, .. }
+                    if *at >= run_index =>
+                {
+                    *at += 1;
+                }
+                CommentRangeMarker::Start { .. } | CommentRangeMarker::End { .. } => {}
+            }
+        }
+        for marker in &mut self.bookmark_markers {
+            if marker.run_index >= run_index {
+                marker.run_index += 1;
+            }
+        }
+        for (at, _, _, _) in &mut self.content_controls {
+            if *at >= run_index {
+                *at += 1;
+            }
+        }
+
+        let mut hyperlinks = Vec::with_capacity(self.hyperlinks.len() + 1);
+        for mut hyperlink in self.hyperlinks.drain(..) {
+            if hyperlink.run_start >= run_index {
+                hyperlink.run_start += 1;
+                hyperlink.run_end += 1;
+                hyperlinks.push(hyperlink);
+            } else if hyperlink.run_end > run_index {
+                let suffix = HyperlinkSpan {
+                    rel_id: hyperlink.rel_id.clone(),
+                    anchor: hyperlink.anchor.clone(),
+                    run_start: run_index + 1,
+                    run_end: hyperlink.run_end + 1,
+                };
+                hyperlink.run_end = run_index;
+                hyperlinks.push(hyperlink);
+                hyperlinks.push(suffix);
+            } else {
+                hyperlinks.push(hyperlink);
+            }
+        }
+        self.hyperlinks = hyperlinks;
+        for (position, _) in &mut self.extra_xml {
+            if *position >= run_index {
+                *position += 1;
+            }
+        }
+        self.runs.insert(run_index, run);
+        true
+    }
+
+    /// Remove selected comment anchors and remap every collapsed run boundary.
+    #[doc(hidden)]
+    pub fn remove_comment_anchors(&mut self, ids: &[i32]) {
+        for (run_index, raw_before, markers_before, _) in &mut self.content_controls {
+            let preceding_removed =
+                self.comment_ranges
+                    .iter()
+                    .filter(|marker| {
+                        marker.run_index() == *run_index && marker.raw_before() == *raw_before
+                    })
+                    .take(*markers_before)
+                    .filter(|marker| match marker {
+                        CommentRangeMarker::Start { id, .. }
+                        | CommentRangeMarker::End { id, .. } => ids.contains(id),
+                    })
+                    .count();
+            *markers_before = markers_before.saturating_sub(preceding_removed);
+        }
+        self.comment_ranges.retain(|marker| match marker {
+            CommentRangeMarker::Start { id, .. } | CommentRangeMarker::End { id, .. } => {
+                !ids.contains(id)
+            }
+        });
+
+        let mut removed = Vec::with_capacity(self.runs.len());
+        for run in &mut self.runs {
+            let removed_reference = run.content.iter().any(|content| {
+                matches!(content, RunContent::CommentReference { id, .. } if ids.contains(id))
+            });
+            run.content.retain(|content| {
+                !matches!(content, RunContent::CommentReference { id, .. } if ids.contains(id))
+            });
+            removed.push(
+                removed_reference
+                    && run.content.is_empty()
+                    && run.extra_xml.is_empty()
+                    && run.alt_drawings.is_empty(),
+            );
+        }
+        if removed.iter().all(|remove| !remove) {
+            return;
+        }
+
+        let old_run_count = self.runs.len();
+        let boundary_map = (0..=old_run_count)
+            .map(|boundary| {
+                boundary
+                    - removed
+                        .iter()
+                        .take(boundary)
+                        .filter(|remove| **remove)
+                        .count()
+            })
+            .collect::<Vec<_>>();
+        let mut raw_counts = vec![0usize; old_run_count + 1];
+        for (position, _) in &self.extra_xml {
+            raw_counts[(*position).min(old_run_count)] += 1;
+        }
+        let mut raw_prefixes = vec![0usize; old_run_count + 1];
+        for boundary in 1..=old_run_count {
+            if boundary_map[boundary] == boundary_map[boundary - 1] {
+                raw_prefixes[boundary] = raw_prefixes[boundary - 1] + raw_counts[boundary - 1];
+            }
+        }
+
+        self.extra_xml.sort_by_key(|(position, _)| *position);
+        self.comment_ranges
+            .sort_by_key(|marker| (marker.run_index(), marker.raw_before()));
+        self.bookmark_markers.sort_by_key(|marker| marker.run_index);
+        self.content_controls
+            .sort_by_key(|(at, raw_before, markers_before, _)| (*at, *raw_before, *markers_before));
+
+        for control_index in 0..self.content_controls.len() {
+            let (run_index, raw_before, markers_before) = {
+                let control = &self.content_controls[control_index];
+                (control.0, control.1, control.2)
+            };
+            let old_boundary = run_index.min(old_run_count);
+            let old_raw_slot = raw_before.min(raw_counts[old_boundary]);
+            let new_boundary = boundary_map[old_boundary];
+            let new_raw_slot = raw_prefixes[old_boundary] + old_raw_slot;
+            let preceding_markers = self
+                .comment_ranges
+                .iter()
+                .filter(|marker| {
+                    let marker_boundary = marker.run_index().min(old_run_count);
+                    marker_boundary < old_boundary
+                        && boundary_map[marker_boundary] == new_boundary
+                        && raw_prefixes[marker_boundary]
+                            + marker.raw_before().min(raw_counts[marker_boundary])
+                            == new_raw_slot
+                })
+                .count();
+            let local_marker_count = self
+                .comment_ranges
+                .iter()
+                .filter(|marker| {
+                    marker.run_index() == old_boundary
+                        && marker.raw_before().min(raw_counts[old_boundary]) == old_raw_slot
+                })
+                .count();
+            let control = &mut self.content_controls[control_index];
+            control.0 = new_boundary;
+            control.1 = new_raw_slot;
+            control.2 = preceding_markers + markers_before.min(local_marker_count);
+        }
+        for marker in &mut self.comment_ranges {
+            match marker {
+                CommentRangeMarker::Start {
+                    run_index,
+                    raw_before,
+                    ..
+                }
+                | CommentRangeMarker::End {
+                    run_index,
+                    raw_before,
+                    ..
+                } => {
+                    let old_boundary = (*run_index).min(old_run_count);
+                    *run_index = boundary_map[old_boundary];
+                    *raw_before =
+                        raw_prefixes[old_boundary] + (*raw_before).min(raw_counts[old_boundary]);
+                }
+            }
+        }
+        for marker in &mut self.bookmark_markers {
+            marker.run_index = boundary_map[marker.run_index.min(old_run_count)];
+        }
+        for (position, _) in &mut self.extra_xml {
+            *position = boundary_map[(*position).min(old_run_count)];
+        }
+        for hyperlink in &mut self.hyperlinks {
+            hyperlink.run_start = boundary_map[hyperlink.run_start.min(old_run_count)];
+            hyperlink.run_end = boundary_map[hyperlink.run_end.min(old_run_count)];
+        }
+        self.hyperlinks
+            .retain(|hyperlink| hyperlink.run_start < hyperlink.run_end);
+        self.runs = self
+            .runs
+            .drain(..)
+            .zip(removed)
+            .filter_map(|(run, remove)| (!remove).then_some(run))
+            .collect();
+    }
+
     /// Insert a canonical bookmark start marker at a direct-run boundary.
     pub fn insert_bookmark_start(&mut self, run_index: usize, id: i32, name: &str) -> bool {
         if run_index > self.runs.len() {

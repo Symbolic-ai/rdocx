@@ -16,6 +16,7 @@ use oxml_sml::Workbook;
 use quick_xml::events::Event;
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
+use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
 use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, CT_Inline};
 use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef, HdrFtrType};
@@ -24,7 +25,7 @@ use rdocx_oxml::numbering::{CT_Numbering, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::shared::{ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::CT_Styles;
-use rdocx_oxml::table::{CT_Tbl, CellContent};
+use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R, RunContent};
 
 use rdocx_oxml::core_properties::CoreProperties;
@@ -121,6 +122,251 @@ fn new_word_package() -> OpcPackage {
         .content_types
         .add_override(DEFAULT_STYLES_PART, STYLES_CONTENT_TYPE);
     package
+}
+
+fn take_paragraph<'a>(paragraph: &'a mut CT_P, index: &mut usize) -> Option<&'a mut CT_P> {
+    if *index == 0 {
+        Some(paragraph)
+    } else {
+        *index -= 1;
+        None
+    }
+}
+
+fn nth_paragraph_in_body<'a>(
+    content: &'a mut [BodyContent],
+    index: &mut usize,
+) -> Option<&'a mut CT_P> {
+    for child in content {
+        let paragraph = match child {
+            BodyContent::Paragraph(paragraph) => take_paragraph(paragraph, index),
+            BodyContent::ContentControl(control) => nth_paragraph_in_control(control, index),
+            BodyContent::Table(_) | BodyContent::RawXml(_) => None,
+        };
+        if paragraph.is_some() {
+            return paragraph;
+        }
+    }
+    None
+}
+
+fn nth_paragraph_in_control<'a>(
+    control: &'a mut CT_Sdt,
+    index: &mut usize,
+) -> Option<&'a mut CT_P> {
+    for child in &mut control.content {
+        let paragraph = match child {
+            SdtContent::Paragraph(paragraph) => take_paragraph(paragraph, index),
+            SdtContent::Table(table) => nth_paragraph_in_table(table, index),
+            SdtContent::Row(row) => nth_paragraph_in_row(row, index),
+            SdtContent::Cell(cell) => nth_paragraph_in_cell(cell, index),
+            SdtContent::ContentControl(control) => nth_paragraph_in_control(control, index),
+            SdtContent::Run(_) | SdtContent::RawXml(_) => None,
+        };
+        if paragraph.is_some() {
+            return paragraph;
+        }
+    }
+    None
+}
+
+fn paragraph_count_in_control(control: &CT_Sdt) -> usize {
+    control
+        .content
+        .iter()
+        .map(|child| match child {
+            SdtContent::Paragraph(_) => 1,
+            SdtContent::Table(table) => paragraph_count_in_table(table),
+            SdtContent::Row(row) => paragraph_count_in_row(row),
+            SdtContent::Cell(cell) => paragraph_count_in_cell(cell),
+            SdtContent::ContentControl(control) => paragraph_count_in_control(control),
+            SdtContent::Run(_) | SdtContent::RawXml(_) => 0,
+        })
+        .sum()
+}
+
+fn paragraph_count_in_table(table: &CT_Tbl) -> usize {
+    table
+        .content_controls
+        .iter()
+        .map(|(_, _, control)| paragraph_count_in_control(control))
+        .sum::<usize>()
+        + table.rows.iter().map(paragraph_count_in_row).sum::<usize>()
+}
+
+fn paragraph_count_in_row(row: &CT_Row) -> usize {
+    row.content_controls
+        .iter()
+        .map(|(_, _, control)| paragraph_count_in_control(control))
+        .sum::<usize>()
+        + row.cells.iter().map(paragraph_count_in_cell).sum::<usize>()
+}
+
+fn paragraph_count_in_cell(cell: &CT_Tc) -> usize {
+    cell.content
+        .iter()
+        .map(|child| match child {
+            CellContent::Paragraph(_) => 1,
+            CellContent::ContentControl(control) => paragraph_count_in_control(control),
+            CellContent::Table(_) => 0,
+        })
+        .sum()
+}
+
+fn nth_paragraph_in_table<'a>(table: &'a mut CT_Tbl, index: &mut usize) -> Option<&'a mut CT_P> {
+    let CT_Tbl {
+        rows,
+        content_controls,
+        ..
+    } = table;
+    let mut selected_control = None;
+    let mut selected_row = None;
+    for boundary in 0..=rows.len() {
+        for (control_index, (_, _, control)) in content_controls
+            .iter()
+            .enumerate()
+            .filter(|(_, (at, _, _))| *at == boundary)
+        {
+            let count = paragraph_count_in_control(control);
+            if *index < count {
+                selected_control = Some(control_index);
+                break;
+            }
+            *index -= count;
+        }
+        if selected_control.is_some() {
+            break;
+        }
+        if let Some(row) = rows.get(boundary) {
+            let count = paragraph_count_in_row(row);
+            if *index < count {
+                selected_row = Some(boundary);
+                break;
+            }
+            *index -= count;
+        }
+    }
+    if let Some(control_index) = selected_control {
+        nth_paragraph_in_control(&mut content_controls[control_index].2, index)
+    } else if let Some(row_index) = selected_row {
+        nth_paragraph_in_row(&mut rows[row_index], index)
+    } else {
+        None
+    }
+}
+
+fn nth_paragraph_in_row<'a>(row: &'a mut CT_Row, index: &mut usize) -> Option<&'a mut CT_P> {
+    let CT_Row {
+        cells,
+        content_controls,
+        ..
+    } = row;
+    let mut selected_control = None;
+    let mut selected_cell = None;
+    for boundary in 0..=cells.len() {
+        for (control_index, (_, _, control)) in content_controls
+            .iter()
+            .enumerate()
+            .filter(|(_, (at, _, _))| *at == boundary)
+        {
+            let count = paragraph_count_in_control(control);
+            if *index < count {
+                selected_control = Some(control_index);
+                break;
+            }
+            *index -= count;
+        }
+        if selected_control.is_some() {
+            break;
+        }
+        if let Some(cell) = cells.get(boundary) {
+            let count = paragraph_count_in_cell(cell);
+            if *index < count {
+                selected_cell = Some(boundary);
+                break;
+            }
+            *index -= count;
+        }
+    }
+    if let Some(control_index) = selected_control {
+        nth_paragraph_in_control(&mut content_controls[control_index].2, index)
+    } else if let Some(cell_index) = selected_cell {
+        nth_paragraph_in_cell(&mut cells[cell_index], index)
+    } else {
+        None
+    }
+}
+
+fn nth_paragraph_in_cell<'a>(cell: &'a mut CT_Tc, index: &mut usize) -> Option<&'a mut CT_P> {
+    for child in &mut cell.content {
+        let paragraph = match child {
+            CellContent::Paragraph(paragraph) => take_paragraph(paragraph, index),
+            CellContent::ContentControl(control) => nth_paragraph_in_control(control, index),
+            CellContent::Table(_) => None,
+        };
+        if paragraph.is_some() {
+            return paragraph;
+        }
+    }
+    None
+}
+
+fn take_table<'a>(table: &'a mut CT_Tbl, index: &mut usize) -> Option<&'a mut CT_Tbl> {
+    if *index == 0 {
+        Some(table)
+    } else {
+        *index -= 1;
+        None
+    }
+}
+
+fn nth_table_in_body<'a>(
+    content: &'a mut [BodyContent],
+    index: &mut usize,
+) -> Option<&'a mut CT_Tbl> {
+    for child in content {
+        let table = match child {
+            BodyContent::Table(table) => take_table(table, index),
+            BodyContent::ContentControl(control) => nth_table_in_control(control, index),
+            BodyContent::Paragraph(_) | BodyContent::RawXml(_) => None,
+        };
+        if table.is_some() {
+            return table;
+        }
+    }
+    None
+}
+
+fn nth_table_in_control<'a>(control: &'a mut CT_Sdt, index: &mut usize) -> Option<&'a mut CT_Tbl> {
+    for child in &mut control.content {
+        let table = match child {
+            SdtContent::Table(table) => take_table(table, index),
+            SdtContent::Cell(cell) => nth_table_in_cell(cell, index),
+            SdtContent::ContentControl(control) => nth_table_in_control(control, index),
+            SdtContent::Paragraph(_)
+            | SdtContent::Row(_)
+            | SdtContent::Run(_)
+            | SdtContent::RawXml(_) => None,
+        };
+        if table.is_some() {
+            return table;
+        }
+    }
+    None
+}
+
+fn nth_table_in_cell<'a>(cell: &'a mut CT_Tc, index: &mut usize) -> Option<&'a mut CT_Tbl> {
+    for child in &mut cell.content {
+        let table = match child {
+            CellContent::Table(table) => take_table(table, index),
+            CellContent::ContentControl(control) => nth_table_in_control(control, index),
+            CellContent::Paragraph(_) => None,
+        };
+        if table.is_some() {
+            return table;
+        }
+    }
+    None
 }
 
 impl Document {
@@ -655,11 +901,9 @@ impl Document {
     /// Get a mutable reference to a paragraph by index (among paragraphs only).
     pub fn paragraph_mut(&mut self, index: usize) -> Option<Paragraph<'_>> {
         self.invalidate_layout();
-        self.document
-            .body
-            .paragraphs_mut()
-            .nth(index)
-            .map(|p| Paragraph { inner: p })
+        let mut remaining = index;
+        nth_paragraph_in_body(&mut self.document.body.content, &mut remaining)
+            .map(|inner| Paragraph { inner })
     }
 
     // ---- Table access ----
@@ -685,10 +929,8 @@ impl Document {
     /// Get a mutable table by index among tables only.
     pub fn table_mut(&mut self, index: usize) -> Option<Table<'_>> {
         self.invalidate_layout();
-        self.document
-            .body
-            .tables_mut()
-            .nth(index)
+        let mut remaining = index;
+        nth_table_in_body(&mut self.document.body.content, &mut remaining)
             .map(|inner| Table { inner })
     }
 

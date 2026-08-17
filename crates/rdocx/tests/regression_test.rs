@@ -410,6 +410,163 @@ fn removing_a_comment_removes_only_its_anchors_and_thread_metadata() {
 }
 
 #[test]
+fn comment_mutations_keep_bookmarks_and_run_controls_at_their_boundaries() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:bookmarkStart w:id="4" w:name="destination"/><w:r><w:t>left</w:t></w:r><w:sdt><w:sdtPr><w:tag w:val="run-control"/></w:sdtPr><w:sdtContent><w:r><w:t>wrapped</w:t></w:r></w:sdtContent></w:sdt><w:r><w:t>right</w:t></w:r><w:bookmarkEnd w:id="4"/></w:p>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+    assert_eq!(document.bookmarks()[0].range().unwrap().end.run_index, 2);
+
+    let comment_id = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "Review",
+        )
+        .unwrap();
+    assert_eq!(document.bookmarks()[0].range().unwrap().end.run_index, 3);
+    assert_eq!(document.content_controls()[0].text(), "wrapped");
+
+    let bytes = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let document_xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let end = document_xml.find("<w:commentRangeEnd").unwrap();
+    let reference = document_xml.find("<w:commentReference").unwrap();
+    let control = document_xml.find("<w:sdt>").unwrap();
+    let right = document_xml.find("<w:t>right</w:t>").unwrap();
+    let bookmark_end = document_xml.find("<w:bookmarkEnd").unwrap();
+    assert!(end < reference && reference < control && control < right && right < bookmark_end);
+
+    let mut reopened = Document::from_bytes(
+        &document
+            .to_bytes()
+            .expect("serialize document with comment boundaries"),
+    )
+    .unwrap();
+    assert!(reopened.remove_comment(comment_id).unwrap());
+    assert_eq!(reopened.bookmarks()[0].range().unwrap().end.run_index, 2);
+    assert_eq!(reopened.content_controls()[0].text(), "wrapped");
+    let saved = reopened.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let document_xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    assert!(!document_xml.contains("commentRange"));
+    assert!(!document_xml.contains("commentReference"));
+    let left = document_xml.find("<w:t>left</w:t>").unwrap();
+    let control = document_xml.find("<w:sdt>").unwrap();
+    let right = document_xml.find("<w:t>right</w:t>").unwrap();
+    let bookmark_end = document_xml.find("<w:bookmarkEnd").unwrap();
+    assert!(left < control && control < right && right < bookmark_end);
+}
+
+#[test]
+fn removing_a_comment_recurses_through_every_typed_control_placement() {
+    let mut document = Document::new();
+    document.add_paragraph("anchor");
+    let comment_id = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "Nested",
+        )
+        .unwrap();
+    let bytes = document.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let mut document_xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+
+    let reference = document_xml.find("<w:commentReference").unwrap();
+    let reference_run_start = document_xml[..reference].rfind("<w:r").unwrap();
+    let reference_run_end =
+        reference + document_xml[reference..].find("</w:r>").unwrap() + "</w:r>".len();
+    let reference_run = document_xml[reference_run_start..reference_run_end].to_owned();
+    document_xml.replace_range(
+        reference_run_start..reference_run_end,
+        &format!("<w:sdt><w:sdtContent>{reference_run}</w:sdtContent></w:sdt>"),
+    );
+
+    let paragraph_start = document_xml.find("<w:p").unwrap();
+    let paragraph_end =
+        paragraph_start + document_xml[paragraph_start..].find("</w:p>").unwrap() + "</w:p>".len();
+    let paragraph = document_xml[paragraph_start..paragraph_end].to_owned();
+    let nested = format!(
+        "<w:sdt><w:sdtContent><w:sdt><w:sdtContent><w:tbl><w:sdt><w:sdtContent><w:tr><w:sdt><w:sdtContent><w:tc><w:sdt><w:sdtContent>{paragraph}</w:sdtContent></w:sdt></w:tc></w:sdtContent></w:sdt></w:tr></w:sdtContent></w:sdt></w:tbl></w:sdtContent></w:sdt></w:sdtContent></w:sdt>"
+    );
+    document_xml.replace_range(paragraph_start..paragraph_end, &nested);
+    package.set_part("/word/document.xml", document_xml.into_bytes());
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+
+    let mut reopened = Document::from_bytes(output.get_ref()).unwrap();
+    assert_eq!(reopened.comments().len(), 1);
+    assert!(reopened.remove_comment(comment_id).unwrap());
+    assert!(reopened.comments().is_empty());
+    assert_eq!(reopened.paragraphs()[0].text(), "anchor");
+    let saved = reopened.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let document_xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    assert!(!document_xml.contains("commentRange"));
+    assert!(!document_xml.contains("commentReference"));
+}
+
+#[test]
+fn mutable_document_indexes_match_recursive_immutable_indexes() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>one</w:t></w:r></w:p><w:sdt><w:sdtContent><w:p><w:r><w:t>wrapped</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>three</w:t></w:r></w:p><w:sdt><w:sdtContent><w:tbl><w:tr><w:tc><w:p><w:r><w:t>table cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:sdtContent></w:sdt><w:tbl><w:tr><w:tc><w:p><w:r><w:t>direct table</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+    assert_eq!(
+        document
+            .paragraphs()
+            .iter()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>(),
+        ["one", "wrapped", "three", "table cell"]
+    );
+    assert_eq!(document.tables().len(), 2);
+
+    document
+        .paragraph_mut(1)
+        .expect("wrapped paragraph uses immutable index order")
+        .add_run(" changed");
+    document
+        .paragraph_mut(3)
+        .expect("deep wrapped paragraph uses immutable index order")
+        .add_run(" deep");
+    document
+        .table_mut(0)
+        .expect("wrapped table uses immutable index order")
+        .set_style("WrappedTable");
+
+    assert_eq!(document.paragraph(1).unwrap().text(), "wrapped changed");
+    assert_eq!(document.paragraph(3).unwrap().text(), "table cell deep");
+    assert_eq!(document.table(0).unwrap().style_id(), Some("WrappedTable"));
+    assert_eq!(document.table(1).unwrap().style_id(), None);
+}
+
+#[test]
 fn mislabelled_jpeg_uses_sniffed_package_metadata() {
     let jpeg = [0xff, 0xd8, 0xff, 0xd9];
     let mut seed = Document::new();
