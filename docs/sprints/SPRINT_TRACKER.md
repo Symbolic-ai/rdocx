@@ -62,6 +62,7 @@ defended.
 | S45 | M15 | 4 | 4 | 0 | 10 | 4 | Completed one shared chart engine across Word and PowerPoint. Word authoring now saves native editable chart parts and workbooks, `Document::add_chart` authors bar, line, and pie charts, and the Word paginator renders through shared geometry. Microsoft Word 16.104 opened the SHA-bound document without repair and Edit Data changed its workbook values. The cross-family golden had zero differing RGBA pixels, all 49 hashes remained unchanged, and no package was published |
 | S46 | M14 | 5 | 5 | 0 | 12 | 5 | Added typed comments, recursive content controls, custom XML binding, bookmarks, and cross-reference resolution. The full close gate passed with all 49 hashes unchanged. The SHA-bound Word comment thread candidate remains recorded for later human UI observation, and no package was published |
 | S47 | M14 | 2 | 2 | 0 | 8 | 2 | Added typed revision discovery and atomic accept and reject operations across content, properties, contextual markers, hyperlinks, tables, and controls. Microsoft Word 16.104 normalized-body parity passed, the full close gate passed with all 49 hashes unchanged, and no package was published. M14 continues in S48 for revision display and document protection |
+| S48 | M14 | 2 | 2 | 0 | 4 | 2 | Completed M14 with accepted and tracked revision rendering, deterministic change decorations, and typed document-protection intent. The mixed collaboration gate read and wrote revisions, comments, content controls, and bookmarks in one preserved package. The full close gate passed with all 49 hashes unchanged, and no package was published |
 
 ## Completed features
 
@@ -328,6 +329,7 @@ five working days.
 | S45 | 4 | 4 | 5.00 |
 | S46 | 5 | 5 | 5.00 |
 | S47 | 2 | 2 | 5.00 |
+| S48 | 2 | 2 | 5.00 |
 
 ## Escalation record
 
@@ -378,3 +380,4 @@ was done about it. Empty is the expected state.
 | 2026-08-17 | Sprint estimate variance exceeded 30 percent | S45 | Record 4 actual days against 10 estimated. The format-neutral chart engine already existed, and the strict dependency chain reused one shared authoring path and one golden fixture across the later stories. Retain the milestone-defined boundaries |
 | 2026-08-17 | Sprint estimate variance exceeded 30 percent | S46 | Record 5 actual days against 12 estimated. Three independent roots and two dependent stories reused one typed paragraph, package, and traversal foundation across isolated workers. Retain the dependency-defined boundaries |
 | 2026-08-17 | Sprint estimate variance exceeded 30 percent | S47 | Record 2 actual days against 8 estimated. F-150 reused F-149's typed revision model, and the extended sprint review concentrated namespace and ordering investigation into one integrated path. Retain the milestone-defined S48 boundary |
+| 2026-08-17 | Sprint estimate variance exceeded 30 percent | S48 | Record 2 actual days against 4 estimated. The two stories used isolated workers, while the integrated review concentrated the milestone interaction proof into one mixed-package gate. Retain the dependency-defined S49 boundary |
