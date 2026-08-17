@@ -239,6 +239,34 @@ package-preserving facade. These methods are additive native APIs. They do not
 implicitly add Python, WASM, or CLI methods, and the existing binding surfaces
 remain unchanged.
 
+Native Word callers inspect tracked changes through `Document::revisions`.
+Each immutable `RevisionRef` exposes the revision id, author, optional
+timestamp, and `RevisionKind`. Results recursively cover the main document
+body in document order, including tables, cells, and content controls. The
+facade reads a typed projection while serialization continues to use the
+captured raw WordprocessingML subtree. This is an additive native Rust API.
+Python, WASM, and CLI surfaces do not gain revision methods, and their existing
+load and save paths preserve the revision XML.
+
+The low-level revision storage is an intentional breaking pre-1.0 Rust
+boundary. `RunContent` adds `DeletedText`. `CT_R`, `CT_P`, `HyperlinkSpan`,
+`CT_PPr`, `CT_RPr`, `CT_SectPr`, `CT_TblPr`, and `CT_TrPr` add required
+preservation or revision fields, including ordered raw-child sidecars. Existing
+exhaustive matches and full struct literals must be updated or moved to the
+provided constructors. The workspace remains at 0.7 during development. Its
+next published stable-family version must be 0.8.0, not a 0.7 patch. The
+additive `rdocx::Document` facade and unchanged Python, WASM, and CLI surfaces
+do not inherit this low-level source break.
+
+Native callers resolve tracked changes through `accept_all`, `reject_all`, the
+exact-author pair, the inclusive RFC 3339 date-range pair, and the id pair.
+Each method returns the number of modeled revision elements resolved. Shared
+ids select every matching placement, author matching is case-sensitive, and
+missing dates do not match a date range. Invalid bounds and malformed selected
+changes return an error before mutation. These eight methods are additive on
+`rdocx::Document` only. Python, WASM, and CLI surfaces remain unchanged and
+continue to preserve the resulting document when they save it.
+
 The stable Rust family moves to 0.5.0 for the numbering preservation model.
 `CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
 producer extensions survive typed mutations. Full struct literals written for

@@ -290,7 +290,7 @@ fn emit_run(
     // Emit content
     for content in &run.content {
         match content {
-            RunContent::Text(t) => {
+            RunContent::Text(t) | RunContent::DeletedText(t) => {
                 out.push_str(&escape_html(&t.text));
             }
             RunContent::Tab => {

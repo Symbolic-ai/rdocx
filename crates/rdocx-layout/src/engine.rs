@@ -564,7 +564,7 @@ pub fn layout_paragraph(
 
         for content in &run.content {
             match content {
-                RunContent::Text(ct_text) => {
+                RunContent::Text(ct_text) | RunContent::DeletedText(ct_text) => {
                     let text = if effective_rpr.caps == Some(true) {
                         ct_text.text.to_uppercase()
                     } else {

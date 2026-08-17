@@ -2,18 +2,61 @@
 
 use oxml_opc::OpcPackage;
 use oxml_opc::relationship::rel_types;
-use rdocx::Document;
 use rdocx::paragraph::Alignment;
 use rdocx::table::VerticalAlignment;
 use rdocx::{
     BorderStyle, Length, ListLevel, RunPosition, RunRange, SectionBreak, StyleBuilder,
     TabAlignment, TabLeader, UnderlineStyle,
 };
+use rdocx::{Document, RevisionKind};
 
 fn document_xml(document: &mut Document) -> Vec<u8> {
     let bytes = document.to_bytes().unwrap();
     let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
     package.get_part("/word/document.xml").unwrap().to_vec()
+}
+
+#[test]
+fn nested_revisions_are_reported_once_in_document_order() {
+    let mut source = Document::new();
+    let bytes = source.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let document_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:ins w:id="1" w:author="Ada"><w:r><w:t>top</w:t></w:r></w:ins></w:p>
+    <w:tbl>
+      <w:tblPr><w:tblPrChange w:id="2" w:author="Ben"><w:tblPr><w:jc w:val="center"/></w:tblPr></w:tblPrChange></w:tblPr>
+      <w:tblGrid/><w:tr><w:trPr><w:ins w:id="3" w:author="Cy"/></w:trPr><w:tc>
+        <w:p><w:del w:id="4" w:author="Dee"><w:r><w:delText>cell</w:delText></w:r></w:del></w:p>
+      </w:tc></w:tr>
+    </w:tbl>
+    <w:sdt><w:sdtPr><w:tag w:val="outer"/></w:sdtPr><w:sdtContent><w:p>
+      <w:moveFrom w:id="5" w:author="Eve"><w:r><w:t>control</w:t></w:r></w:moveFrom>
+      <w:sdt><w:sdtPr><w:tag w:val="inner"/></w:sdtPr><w:sdtContent><w:r><w:rPr><w:del w:id="6" w:author="Fox"/></w:rPr><w:t>nested</w:t></w:r></w:sdtContent></w:sdt>
+    </w:p></w:sdtContent></w:sdt>
+    <w:sectPr><w:sectPrChange w:id="7" w:author="Gia"><w:sectPr><w:titlePg/></w:sectPr></w:sectPrChange></w:sectPr>
+  </w:body>
+</w:document>"#;
+    package.set_part("/word/document.xml", document_xml.to_vec());
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+
+    let document = Document::from_bytes(input.get_ref()).unwrap();
+    let revisions = document.revisions();
+    assert_eq!(
+        revisions
+            .iter()
+            .map(|revision| revision.id())
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4, 5, 6, 7]
+    );
+    assert_eq!(revisions[0].author(), "Ada");
+    assert_eq!(revisions[0].timestamp(), None);
+    assert_eq!(revisions[0].kind(), RevisionKind::Insertion);
+    assert_eq!(revisions[3].kind(), RevisionKind::Deletion);
+    assert_eq!(revisions[4].kind(), RevisionKind::MoveFrom);
+    assert_eq!(revisions[6].kind(), RevisionKind::SectionPropertyChange);
 }
 
 const PNG_2_BY_3: &[u8] = &[

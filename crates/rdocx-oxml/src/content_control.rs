@@ -10,6 +10,7 @@ use crate::namespace::matches_local_name;
 use crate::numbering::word_prefixes_at;
 use crate::properties::is_word_element;
 use crate::raw_xml::{capture_element, capture_empty_element};
+use crate::revision::CT_Revision;
 use crate::table::{CT_Row, CT_Tbl, CT_Tc};
 use crate::text::{CT_P, CT_R};
 
@@ -320,6 +321,7 @@ enum RootSlot {
 pub struct CT_Sdt {
     pub properties: Option<CT_SdtPr>,
     pub content: Vec<SdtContent>,
+    pub(crate) revisions: Vec<(usize, CT_Revision)>,
     extra_attributes: Vec<(String, String)>,
     content_attributes: Vec<(String, String)>,
     slots: Vec<RootSlot>,
@@ -356,6 +358,7 @@ impl CT_Sdt {
         let mut sdt = Self {
             properties: None,
             content: Vec::new(),
+            revisions: Vec::new(),
             extra_attributes: capture_attributes(start, &prefixes, &[])?,
             content_attributes: Vec::new(),
             slots: Vec::new(),
@@ -379,7 +382,7 @@ impl CT_Sdt {
                         && !saw_content
                     {
                         sdt.content_attributes = capture_attributes(&child, &child_prefixes, &[])?;
-                        sdt.content = parse_content(reader, &child_prefixes)?;
+                        sdt.content = parse_content(reader, &child_prefixes, &mut sdt.revisions)?;
                         saw_content = true;
                         sdt.slots.push(RootSlot::Content);
                     } else {
@@ -541,7 +544,11 @@ impl CT_Sdt {
     }
 }
 
-fn parse_content(reader: &mut Reader<&[u8]>, inherited: &[String]) -> Result<Vec<SdtContent>> {
+fn parse_content(
+    reader: &mut Reader<&[u8]>,
+    inherited: &[String],
+    revisions: &mut Vec<(usize, CT_Revision)>,
+) -> Result<Vec<SdtContent>> {
     let mut content = Vec::new();
     let mut buffer = Vec::new();
     loop {
@@ -576,7 +583,11 @@ fn parse_content(reader: &mut Reader<&[u8]>, inherited: &[String]) -> Result<Vec
                         content.push(SdtContent::RawXml(raw));
                     }
                 } else {
-                    content.push(SdtContent::RawXml(capture_element(reader, &child)?));
+                    let raw = capture_element(reader, &child)?;
+                    if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                        revisions.push((content.len(), revision));
+                    }
+                    content.push(SdtContent::RawXml(raw));
                 }
             }
             Ok(Event::Empty(child)) => {
@@ -598,10 +609,15 @@ fn parse_content(reader: &mut Reader<&[u8]>, inherited: &[String]) -> Result<Vec
                         properties: None,
                         content: Vec::new(),
                         extra_xml: Vec::new(),
+                        extra_xml_positions: Vec::new(),
                         alt_drawings: Vec::new(),
                     }));
                 } else {
-                    content.push(SdtContent::RawXml(capture_empty_element(&child)?));
+                    let raw = capture_empty_element(&child)?;
+                    if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                        revisions.push((content.len(), revision));
+                    }
+                    content.push(SdtContent::RawXml(raw));
                 }
             }
             Ok(Event::End(end)) if matches_local_name(end.name().as_ref(), b"sdtContent") => break,

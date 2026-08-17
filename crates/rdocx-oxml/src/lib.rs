@@ -15,6 +15,7 @@ pub mod namespace;
 pub mod numbering;
 pub mod placeholder;
 pub mod properties;
+pub mod revision;
 pub mod shared;
 pub mod styles;
 pub mod table;
@@ -30,6 +31,7 @@ pub use content_control::{CT_DataBinding, CT_Sdt, CT_SdtPr, SdtContent, SdtType}
 pub use document::{BodyContent, CT_Body, CT_Document, CT_SectPr};
 pub use numbering::{CT_AbstractNum, CT_Lvl, CT_Num, CT_Numbering, ST_NumberFormat};
 pub use properties::{CT_PPr, CT_RPr};
+pub use revision::{CT_Revision, RevisionContent, RevisionKind};
 pub use shared::{
     ST_Border, ST_Jc, ST_OnOff, ST_PageOrientation, ST_SectionType, ST_TabJc, ST_TabLeader,
 };

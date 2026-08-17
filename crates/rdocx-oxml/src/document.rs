@@ -7,9 +7,10 @@ use crate::content_control::CT_Sdt;
 use crate::error::Result;
 use crate::header_footer::{HdrFtrRef, HdrFtrType};
 use crate::namespace::{W_NS, matches_local_name};
-use crate::numbering::word_prefixes_at;
-use crate::properties::{get_val_attr, is_word_element};
+use crate::numbering::{local_namespace_overrides, word_prefixes_at};
+use crate::properties::{get_word_val_attr, is_word_attribute, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
+use crate::revision::CT_Revision;
 use crate::shared::{ST_PageOrientation, ST_SectionType};
 use crate::table::CT_Tbl;
 use crate::text::CT_P;
@@ -97,6 +98,8 @@ pub struct CT_SectPr {
     pub footer_refs: Vec<HdrFtrRef>,
     /// Unknown child elements captured as raw XML.
     pub extra_xml: Vec<Vec<u8>>,
+    /// Prior section properties from the schema-final `w:sectPrChange`.
+    pub change: Option<CT_Revision>,
 }
 
 #[allow(non_snake_case)]
@@ -120,6 +123,7 @@ impl CT_SectPr {
             header_refs: Vec::new(),
             footer_refs: Vec::new(),
             extra_xml: Vec::new(),
+            change: None,
         }
     }
 
@@ -142,10 +146,26 @@ impl CT_SectPr {
             header_refs: Vec::new(),
             footer_refs: Vec::new(),
             extra_xml: Vec::new(),
+            change: None,
         }
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_owned()])
+    }
+
+    pub(crate) fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
+        Self::from_xml_with_prefixes_and_owner_bindings(reader, word_prefixes, &[])
+    }
+
+    pub(crate) fn from_xml_with_prefixes_and_owner_bindings(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
+    ) -> Result<Self> {
         let mut sect = CT_SectPr {
             page_width: None,
             page_height: None,
@@ -163,65 +183,74 @@ impl CT_SectPr {
             header_refs: Vec::new(),
             footer_refs: Vec::new(),
             extra_xml: Vec::new(),
+            change: None,
         };
+        let mut change_raw_index = 0usize;
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"pgSz") {
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"pgSz", &prefixes) {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
                             let val_str = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"w") {
+                            if is_word_attribute(key, b"w", &prefixes) {
                                 sect.page_width = Some(Twips(val_str.parse()?));
-                            } else if matches_local_name(key, b"h") {
+                            } else if is_word_attribute(key, b"h", &prefixes) {
                                 sect.page_height = Some(Twips(val_str.parse()?));
-                            } else if matches_local_name(key, b"orient") {
+                            } else if is_word_attribute(key, b"orient", &prefixes) {
                                 sect.orientation = ST_PageOrientation::from_str(val_str).ok();
                             }
                         }
-                    } else if matches_local_name(name.as_ref(), b"pgMar") {
+                    } else if is_word_element(name.as_ref(), b"pgMar", &prefixes) {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
-                            let val: i32 = std::str::from_utf8(&attr.value)?.parse()?;
-                            if matches_local_name(key, b"top") {
-                                sect.margin_top = Some(Twips(val));
-                            } else if matches_local_name(key, b"right")
-                                || matches_local_name(key, b"end")
+                            if is_word_attribute(key, b"top", &prefixes) {
+                                sect.margin_top =
+                                    Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
+                            } else if is_word_attribute(key, b"right", &prefixes)
+                                || is_word_attribute(key, b"end", &prefixes)
                             {
-                                sect.margin_right = Some(Twips(val));
-                            } else if matches_local_name(key, b"bottom") {
-                                sect.margin_bottom = Some(Twips(val));
-                            } else if matches_local_name(key, b"left")
-                                || matches_local_name(key, b"start")
+                                sect.margin_right =
+                                    Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
+                            } else if is_word_attribute(key, b"bottom", &prefixes) {
+                                sect.margin_bottom =
+                                    Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
+                            } else if is_word_attribute(key, b"left", &prefixes)
+                                || is_word_attribute(key, b"start", &prefixes)
                             {
-                                sect.margin_left = Some(Twips(val));
-                            } else if matches_local_name(key, b"gutter") {
-                                sect.gutter = Some(Twips(val));
-                            } else if matches_local_name(key, b"header") {
-                                sect.header_distance = Some(Twips(val));
-                            } else if matches_local_name(key, b"footer") {
-                                sect.footer_distance = Some(Twips(val));
+                                sect.margin_left =
+                                    Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
+                            } else if is_word_attribute(key, b"gutter", &prefixes) {
+                                sect.gutter =
+                                    Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
+                            } else if is_word_attribute(key, b"header", &prefixes) {
+                                sect.header_distance =
+                                    Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
+                            } else if is_word_attribute(key, b"footer", &prefixes) {
+                                sect.footer_distance =
+                                    Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
                             }
                         }
-                    } else if matches_local_name(name.as_ref(), b"type") {
-                        if let Some(val) = get_val_attr(e)? {
+                    } else if is_word_element(name.as_ref(), b"type", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             sect.section_type = ST_SectionType::from_str(&val).ok();
                         }
-                    } else if matches_local_name(name.as_ref(), b"cols") {
-                        sect.columns = Some(Self::parse_cols_empty(e)?);
-                    } else if matches_local_name(name.as_ref(), b"headerReference") {
+                    } else if is_word_element(name.as_ref(), b"cols", &prefixes) {
+                        sect.columns = Some(Self::parse_cols_empty(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"headerReference", &prefixes) {
                         let mut hdr_type = HdrFtrType::Default;
                         let mut rel_id = String::new();
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
                             let val = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"type") {
+                            if is_word_attribute(key, b"type", &prefixes) {
                                 hdr_type = HdrFtrType::from_str(val);
                             } else if matches_local_name(key, b"id") {
                                 rel_id = val.to_string();
@@ -233,14 +262,14 @@ impl CT_SectPr {
                                 rel_id,
                             });
                         }
-                    } else if matches_local_name(name.as_ref(), b"footerReference") {
+                    } else if is_word_element(name.as_ref(), b"footerReference", &prefixes) {
                         let mut ftr_type = HdrFtrType::Default;
                         let mut rel_id = String::new();
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
                             let val = std::str::from_utf8(&attr.value)?;
-                            if matches_local_name(key, b"type") {
+                            if is_word_attribute(key, b"type", &prefixes) {
                                 ftr_type = HdrFtrType::from_str(val);
                             } else if matches_local_name(key, b"id") {
                                 rel_id = val.to_string();
@@ -252,20 +281,55 @@ impl CT_SectPr {
                                 rel_id,
                             });
                         }
-                    } else if matches_local_name(name.as_ref(), b"titlePg") {
+                    } else if is_word_element(name.as_ref(), b"titlePg", &prefixes) {
                         sect.title_pg = Some(true);
+                    } else if is_word_element(name.as_ref(), b"sectPrChange", &prefixes) {
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?;
+                        if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            if let Some(previous) = sect.change.replace(revision) {
+                                sect.extra_xml
+                                    .insert(change_raw_index, previous.into_raw_xml());
+                            }
+                            change_raw_index = sect.extra_xml.len();
+                        } else {
+                            sect.extra_xml.push(raw);
+                        }
                     } else {
                         // Capture unknown empty elements
-                        sect.extra_xml.push(capture_empty_element(e)?);
+                        sect.extra_xml.push(crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?);
                     }
                 }
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"cols") {
-                        sect.columns = Some(Self::parse_cols_start(reader, e)?);
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"cols", &prefixes) {
+                        sect.columns = Some(Self::parse_cols_start(reader, e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"sectPrChange", &prefixes) {
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
+                        if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            if let Some(previous) = sect.change.replace(revision) {
+                                sect.extra_xml
+                                    .insert(change_raw_index, previous.into_raw_xml());
+                            }
+                            change_raw_index = sect.extra_xml.len();
+                        } else {
+                            sect.extra_xml.push(raw);
+                        }
                     } else {
                         // Capture unknown start elements as raw XML
-                        sect.extra_xml.push(capture_element(reader, e)?);
+                        sect.extra_xml.push(crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?);
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"sectPr") => {
@@ -281,46 +345,54 @@ impl CT_SectPr {
         Ok(sect)
     }
 
-    fn parse_cols_attrs(e: &BytesStart) -> Result<CT_Columns> {
+    fn parse_cols_attrs(e: &BytesStart, word_prefixes: &[String]) -> Result<CT_Columns> {
         let mut cols = CT_Columns::default();
         for attr in e.attributes() {
             let attr = attr?;
             let key = attr.key.as_ref();
             let val_str = std::str::from_utf8(&attr.value)?;
-            if matches_local_name(key, b"num") {
+            if is_word_attribute(key, b"num", word_prefixes) {
                 cols.num = Some(val_str.parse()?);
-            } else if matches_local_name(key, b"space") {
+            } else if is_word_attribute(key, b"space", word_prefixes) {
                 cols.space = Some(Twips(val_str.parse()?));
-            } else if matches_local_name(key, b"equalWidth") {
+            } else if is_word_attribute(key, b"equalWidth", word_prefixes) {
                 cols.equal_width = Some(val_str == "1" || val_str == "true");
-            } else if matches_local_name(key, b"sep") {
+            } else if is_word_attribute(key, b"sep", word_prefixes) {
                 cols.sep = Some(val_str == "1" || val_str == "true");
             }
         }
         Ok(cols)
     }
 
-    fn parse_cols_empty(e: &BytesStart) -> Result<CT_Columns> {
-        Self::parse_cols_attrs(e)
+    fn parse_cols_empty(e: &BytesStart, word_prefixes: &[String]) -> Result<CT_Columns> {
+        Self::parse_cols_attrs(e, word_prefixes)
     }
 
-    fn parse_cols_start(reader: &mut Reader<&[u8]>, e: &BytesStart) -> Result<CT_Columns> {
-        let mut cols = Self::parse_cols_attrs(e)?;
+    fn parse_cols_start(
+        reader: &mut Reader<&[u8]>,
+        e: &BytesStart,
+        word_prefixes: &[String],
+    ) -> Result<CT_Columns> {
+        let mut cols = Self::parse_cols_attrs(e, word_prefixes)?;
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) if matches_local_name(e.name().as_ref(), b"col") => {
+                Ok(Event::Empty(ref e)) => {
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if !is_word_element(e.name().as_ref(), b"col", &prefixes) {
+                        buf.clear();
+                        continue;
+                    }
                     let mut width = None;
                     let mut space = None;
                     for attr in e.attributes() {
                         let attr = attr?;
                         let key = attr.key.as_ref();
-                        let val: i32 = std::str::from_utf8(&attr.value)?.parse()?;
-                        if matches_local_name(key, b"w") {
-                            width = Some(Twips(val));
-                        } else if matches_local_name(key, b"space") {
-                            space = Some(Twips(val));
+                        if is_word_attribute(key, b"w", &prefixes) {
+                            width = Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
+                        } else if is_word_attribute(key, b"space", &prefixes) {
+                            space = Some(Twips(std::str::from_utf8(&attr.value)?.parse()?));
                         }
                     }
                     cols.columns.push(CT_Column { width, space });
@@ -474,6 +546,10 @@ impl CT_SectPr {
         // Write captured unknown elements
         for raw in &self.extra_xml {
             writer.get_mut().write_all(raw)?;
+        }
+
+        if let Some(change) = &self.change {
+            change.write_xml(writer)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:sectPr")))?;
@@ -653,8 +729,13 @@ impl CT_Body {
                         } else {
                             content.push(BodyContent::RawXml(raw));
                         }
-                    } else if matches_local_name(name.as_ref(), b"sectPr") {
-                        sect_pr = Some(CT_SectPr::from_xml(reader)?);
+                    } else if is_word_element(name.as_ref(), b"sectPr", &prefixes) {
+                        let owner_bindings = local_namespace_overrides(e, word_prefixes)?;
+                        sect_pr = Some(CT_SectPr::from_xml_with_prefixes_and_owner_bindings(
+                            reader,
+                            &prefixes,
+                            &owner_bindings,
+                        )?);
                     } else {
                         // Capture unknown elements as raw XML
                         content.push(BodyContent::RawXml(capture_element(reader, e)?));

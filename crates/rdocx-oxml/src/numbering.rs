@@ -115,6 +115,7 @@ const PPR_MODELLED_CHILDREN: &[&[u8]] = &[
     b"outlineLvl",
     b"rPr",
     b"sectPr",
+    b"pPrChange",
 ];
 
 const RPR_MODELLED_CHILDREN: &[&[u8]] = &[
@@ -139,6 +140,9 @@ const RPR_MODELLED_CHILDREN: &[&[u8]] = &[
     b"u",
     b"shd",
     b"vertAlign",
+    b"ins",
+    b"del",
+    b"rPrChange",
 ];
 
 const NUM_PR_CHILDREN: &[&[u8]] = &[b"ilvl", b"numId", b"numberingChange", b"ins"];
@@ -811,7 +815,7 @@ fn property_attributes(kind: PropertyKind, local: &[u8]) -> &'static [&'static [
 
 fn nested_property_children(parent: &[u8]) -> &'static [&'static [u8]] {
     match parent {
-        b"numPr" => &[b"ilvl", b"numId"],
+        b"numPr" => &[b"ilvl", b"numId", b"ins"],
         b"pBdr" => &[
             b"top", b"left", b"start", b"bottom", b"right", b"end", b"between", b"bar",
         ],
@@ -1021,9 +1025,8 @@ fn property_projection(
 }
 
 fn ppr_from_raw(raw: &[u8], word_prefixes: &[String]) -> Result<(CT_PPr, bool)> {
-    let (projected, has_producer) =
-        property_projection(raw, PropertyKind::Paragraph, word_prefixes)?;
-    let mut ppr = parse_projected_ppr(&projected)?;
+    let (_, has_producer) = property_projection(raw, PropertyKind::Paragraph, word_prefixes)?;
+    let mut ppr = parse_raw_ppr(raw, word_prefixes)?;
     for (index, tab) in ppr
         .tabs
         .iter_mut()
@@ -1035,12 +1038,24 @@ fn ppr_from_raw(raw: &[u8], word_prefixes: &[String]) -> Result<(CT_PPr, bool)> 
     Ok((ppr, has_producer))
 }
 
-fn parse_projected_ppr(projected: &[u8]) -> Result<CT_PPr> {
-    let mut reader = Reader::from_reader(projected);
+pub(crate) fn parse_scoped_ppr(raw: &[u8], word_prefixes: &[String]) -> Result<CT_PPr> {
+    parse_raw_ppr(raw, word_prefixes)
+}
+
+fn parse_raw_ppr(raw: &[u8], word_prefixes: &[String]) -> Result<CT_PPr> {
+    let mut reader = Reader::from_reader(raw);
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(_)) => return CT_PPr::from_xml(&mut reader),
+            Ok(Event::Start(ref start)) => {
+                let owner_bindings = local_namespace_overrides(start, word_prefixes)?;
+                let prefixes = word_prefixes_at(start, word_prefixes)?;
+                return CT_PPr::from_xml_with_prefixes_and_owner_bindings(
+                    &mut reader,
+                    &prefixes,
+                    &owner_bindings,
+                );
+            }
             Ok(Event::Empty(_)) | Ok(Event::Eof) => return Ok(CT_PPr::default()),
             Err(error) => return Err(error.into()),
             _ => {}
@@ -1049,26 +1064,102 @@ fn parse_projected_ppr(projected: &[u8]) -> Result<CT_PPr> {
     }
 }
 
-pub(crate) fn parse_scoped_ppr(raw: &[u8], word_prefixes: &[String]) -> Result<CT_PPr> {
-    let (projected, _) = property_projection(raw, PropertyKind::Paragraph, word_prefixes)?;
-    parse_projected_ppr(&projected)
+fn rpr_from_raw(raw: &[u8], word_prefixes: &[String]) -> Result<(CT_RPr, bool)> {
+    let (_, has_producer) = property_projection(raw, PropertyKind::Run, word_prefixes)?;
+    let mut rpr = parse_raw_rpr(raw, word_prefixes)?;
+    // Numbering's raw property overlay is the sole preservation source.
+    // Keeping the same unmodelled children in the typed projection would
+    // duplicate them when canonical properties are merged back into it.
+    rpr.revision_xml.clear();
+    rpr.revision_xml_positions.clear();
+    Ok((rpr, has_producer))
 }
 
-fn rpr_from_raw(raw: &[u8], word_prefixes: &[String]) -> Result<(CT_RPr, bool)> {
-    let (projected, has_producer) = property_projection(raw, PropertyKind::Run, word_prefixes)?;
-    let mut reader = Reader::from_reader(projected.as_slice());
+fn parse_raw_rpr(raw: &[u8], word_prefixes: &[String]) -> Result<CT_RPr> {
+    parse_raw_rpr_with_owner_bindings(raw, word_prefixes, &[])
+}
+
+fn parse_raw_rpr_with_owner_bindings(
+    raw: &[u8],
+    word_prefixes: &[String],
+    inherited_owner_bindings: &[(String, String)],
+) -> Result<CT_RPr> {
+    let mut reader = Reader::from_reader(raw);
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(_)) => return Ok((CT_RPr::from_xml(&mut reader)?, has_producer)),
-            Ok(Event::Empty(_)) | Ok(Event::Eof) => {
-                return Ok((CT_RPr::default(), has_producer));
+            Ok(Event::Start(ref start)) => {
+                let local_bindings = local_namespace_overrides(start, word_prefixes)?;
+                let owner_bindings =
+                    merged_owner_bindings(inherited_owner_bindings, &local_bindings);
+                let prefixes = word_prefixes_at(start, word_prefixes)?;
+                return CT_RPr::from_xml_with_prefixes_and_owner_bindings(
+                    &mut reader,
+                    &prefixes,
+                    &owner_bindings,
+                );
             }
+            Ok(Event::Empty(_)) | Ok(Event::Eof) => return Ok(CT_RPr::default()),
             Err(error) => return Err(error.into()),
             _ => {}
         }
         buf.clear();
     }
+}
+
+pub(crate) fn local_namespace_overrides(
+    start: &BytesStart<'_>,
+    inherited: &[String],
+) -> Result<Vec<(String, String)>> {
+    let mut bindings = Vec::new();
+    for attribute in start.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref();
+        let prefix = if name == b"xmlns" {
+            ""
+        } else if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+            std::str::from_utf8(prefix)?
+        } else {
+            continue;
+        };
+        let namespace = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())?
+            .into_owned();
+        let inherited_namespace = inherited.iter().find_map(|binding| {
+            split_namespace_binding(binding)
+                .filter(|(candidate, _)| *candidate == prefix)
+                .map(|(_, namespace)| namespace)
+                .or_else(|| (binding == prefix).then_some(W_NS))
+        });
+        if inherited_namespace != Some(namespace.as_str()) {
+            bindings.push((prefix.to_owned(), namespace));
+        }
+    }
+    Ok(bindings)
+}
+
+pub(crate) fn parse_scoped_rpr(raw: &[u8], word_prefixes: &[String]) -> Result<CT_RPr> {
+    parse_raw_rpr(raw, word_prefixes)
+}
+
+pub(crate) fn parse_scoped_rpr_with_owner_bindings(
+    raw: &[u8],
+    word_prefixes: &[String],
+    owner_bindings: &[(String, String)],
+) -> Result<CT_RPr> {
+    parse_raw_rpr_with_owner_bindings(raw, word_prefixes, owner_bindings)
+}
+
+pub(crate) fn merged_owner_bindings(
+    inherited: &[(String, String)],
+    local: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut bindings = inherited.to_vec();
+    for (prefix, namespace) in local {
+        bindings.retain(|(candidate, _)| candidate != prefix);
+        bindings.push((prefix.clone(), namespace.clone()));
+    }
+    bindings
 }
 
 fn generated_property_children(raw: &[u8], kind: PropertyKind) -> Result<Vec<(usize, Vec<u8>)>> {
@@ -3702,10 +3793,11 @@ mod tests {
     }
 
     #[test]
-    fn run_property_change_remains_schema_final_after_typed_addition() {
+    fn numbering_preservation_does_not_duplicate_typed_changes() {
         let xml = br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0">
-    <w:rPr><w:rPrChange w:id="7"><w:rPr><w:i/></w:rPr></w:rPrChange></w:rPr>
+    <w:pPr><w:pPrChange w:id="6" w:author="Ada"><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange></w:pPr>
+    <w:rPr><w:rPrChange w:id="7" w:author="Ben"><w:rPr><w:i/></w:rPr></w:rPrChange></w:rPr>
   </w:lvl></w:abstractNum>
 </w:numbering>"#;
 
@@ -3715,12 +3807,22 @@ mod tests {
             .as_mut()
             .unwrap()
             .bold = Some(true);
+        numbering.abstract_nums[0].levels[0]
+            .ppr
+            .as_mut()
+            .unwrap()
+            .jc = Some(ST_Jc::Center);
         let output = String::from_utf8(numbering.to_xml().unwrap()).unwrap();
 
         let bold = output.find("<w:b").unwrap();
         let change = output.find("<w:rPrChange").unwrap();
         assert!(bold < change, "{output}");
         assert!(output.contains(r#"<w:rPr><w:i/></w:rPr>"#), "{output}");
+        assert_eq!(output.matches("<w:rPrChange").count(), 1, "{output}");
+        assert_eq!(output.matches("<w:pPrChange").count(), 1, "{output}");
+        assert!(
+            output.find("<w:jc w:val=\"center\"").unwrap() < output.find("<w:pPrChange").unwrap()
+        );
     }
 
     #[test]

@@ -206,7 +206,7 @@ fn collect_run_text(run: &CT_R) -> String {
 
     for content in &run.content {
         match content {
-            RunContent::Text(t) => raw.push_str(&t.text),
+            RunContent::Text(t) | RunContent::DeletedText(t) => raw.push_str(&t.text),
             RunContent::Tab => raw.push('\t'),
             RunContent::Break(bt) => match bt {
                 BreakType::Line => raw.push_str("  \n"),

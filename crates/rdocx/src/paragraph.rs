@@ -160,6 +160,8 @@ impl<'a> Paragraph<'a> {
             anchor: None,
             run_start,
             run_end: run_start + 1,
+            extra_attributes: Vec::new(),
+            extra_xml: Vec::new(),
         });
         Run {
             inner: self.inner.runs.last_mut().unwrap(),

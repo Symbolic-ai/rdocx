@@ -26,6 +26,7 @@ mod content_control;
 mod document;
 mod error;
 pub mod paragraph;
+mod revision;
 pub mod run;
 pub mod style;
 pub mod table;
@@ -42,6 +43,7 @@ pub use oxml_core::Length;
 pub use paragraph::{
     Alignment, BorderStyle, Paragraph, ParagraphRef, SectionBreak, TabAlignment, TabLeader,
 };
+pub use revision::{RevisionKind, RevisionRef};
 pub use run::{Run, RunRef, UnderlineStyle};
 pub use style::{Style, StyleBuilder};
 pub use table::{Cell, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment};

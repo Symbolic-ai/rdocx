@@ -62,6 +62,38 @@ impl CT_BorderEdge {
         })
     }
 
+    pub(crate) fn from_xml_attrs_with_prefixes(
+        e: &BytesStart,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
+        let mut val = ST_Border::None;
+        let mut sz = None;
+        let mut space = None;
+        let mut color = None;
+
+        for attr in e.attributes() {
+            let attr = attr?;
+            let key = attr.key.as_ref();
+            let value = std::str::from_utf8(&attr.value)?;
+            if is_word_attribute(key, b"val", word_prefixes) {
+                val = ST_Border::from_str(value).unwrap_or(val);
+            } else if is_word_attribute(key, b"sz", word_prefixes) {
+                sz = Some(value.parse()?);
+            } else if is_word_attribute(key, b"space", word_prefixes) {
+                space = Some(value.parse()?);
+            } else if is_word_attribute(key, b"color", word_prefixes) {
+                color = Some(value.to_string());
+            }
+        }
+
+        Ok(CT_BorderEdge {
+            val,
+            sz,
+            space,
+            color,
+        })
+    }
+
     pub fn write_xml_attrs(&self, e: &mut BytesStart) {
         let mut buf = itoa::Buffer::new();
         e.push_attribute(("w:val", self.val.to_str()));
@@ -102,6 +134,13 @@ pub struct CT_PBdr {
 
 impl CT_PBdr {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_owned()])
+    }
+
+    pub(crate) fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut bdr = CT_PBdr::default();
         let mut buf = Vec::new();
 
@@ -109,23 +148,26 @@ impl CT_PBdr {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
-                    let edge = CT_BorderEdge::from_xml_attrs(e)?;
-                    if matches_local_name(name.as_ref(), b"top") {
-                        bdr.top = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"bottom") {
-                        bdr.bottom = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"left")
-                        || matches_local_name(name.as_ref(), b"start")
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"top", &prefixes) {
+                        bdr.top = Some(CT_BorderEdge::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"bottom", &prefixes) {
+                        bdr.bottom =
+                            Some(CT_BorderEdge::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"left", &prefixes)
+                        || is_word_element(name.as_ref(), b"start", &prefixes)
                     {
-                        bdr.left = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"right")
-                        || matches_local_name(name.as_ref(), b"end")
+                        bdr.left = Some(CT_BorderEdge::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"right", &prefixes)
+                        || is_word_element(name.as_ref(), b"end", &prefixes)
                     {
-                        bdr.right = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"between") {
-                        bdr.between = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"bar") {
-                        bdr.bar = Some(edge);
+                        bdr.right =
+                            Some(CT_BorderEdge::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"between", &prefixes) {
+                        bdr.between =
+                            Some(CT_BorderEdge::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"bar", &prefixes) {
+                        bdr.bar = Some(CT_BorderEdge::from_xml_attrs_with_prefixes(e, &prefixes)?);
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"pBdr") => {

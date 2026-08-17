@@ -394,6 +394,7 @@ impl<'a> Cell<'a> {
             properties: None,
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
         };
         let mut p = CT_P::new();
         p.runs.push(run);

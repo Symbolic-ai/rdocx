@@ -803,6 +803,7 @@ fn comment_reference_run(id: i32) -> CT_R {
         properties: None,
         content: vec![RunContent::CommentReference { id, raw_before: 0 }],
         extra_xml: Vec::new(),
+        extra_xml_positions: Vec::new(),
         alt_drawings: Vec::new(),
     }
 }
@@ -973,9 +974,8 @@ fn remove_anchors_from_paragraph(paragraph: &mut CT_P, ids: &HashSet<i32>) {
 }
 
 fn remove_comment_references_from_run(run: &mut CT_R, ids: &HashSet<i32>) {
-    run.content.retain(
-        |content| !matches!(content, RunContent::CommentReference { id, .. } if ids.contains(id)),
-    );
+    let ids = ids.iter().copied().collect::<Vec<_>>();
+    run.remove_comment_references(&ids);
 }
 
 fn remap_raw_positions(extra_xml: &mut [(usize, Vec<u8>)], removed: &[bool]) {
@@ -1091,6 +1091,8 @@ mod tests {
             anchor: None,
             run_start: 0,
             run_end: 2,
+            extra_attributes: Vec::new(),
+            extra_xml: Vec::new(),
         });
 
         document
@@ -1157,6 +1159,7 @@ mod tests {
             properties: None,
             content: Vec::new(),
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
             alt_drawings: Vec::new(),
         });
         let mut reference = comment_reference_run(7);

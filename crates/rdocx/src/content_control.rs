@@ -393,10 +393,31 @@ fn replace_sdt_display(control: &mut CT_Sdt, replacement: &mut DisplayReplacemen
 fn replace_run_display(run: &mut CT_R, replacement: &mut DisplayReplacement<'_>) {
     let is_first_run = !replacement.saw_run;
     replacement.saw_run = true;
+    let insert_replacement = is_first_run
+        && !replacement.wrote_value
+        && !run
+            .content
+            .iter()
+            .any(|content| matches!(content, RunContent::Text(_)));
+    let original_raw_positions = insert_replacement.then(|| run.extra_xml_positions.clone());
+    let property_boundary = usize::from(run.properties.is_some());
+    let removed = run
+        .content
+        .iter()
+        .map(|content| {
+            !matches!(
+                content,
+                RunContent::Text(_)
+                    | RunContent::DeletedText(_)
+                    | RunContent::CommentReference { .. }
+            )
+        })
+        .collect::<Vec<_>>();
+    run.remap_removed_content(&removed);
     run.content.retain(|content| {
         matches!(
             content,
-            RunContent::Text(_) | RunContent::CommentReference { .. }
+            RunContent::Text(_) | RunContent::DeletedText(_) | RunContent::CommentReference { .. }
         )
     });
     for content in &mut run.content {
@@ -411,6 +432,17 @@ fn replace_run_display(run: &mut CT_R, replacement: &mut DisplayReplacement<'_>)
         }
     }
     if is_first_run && !replacement.wrote_value {
+        if let Some(original_raw_positions) = original_raw_positions {
+            for (position, original) in run
+                .extra_xml_positions
+                .iter_mut()
+                .zip(original_raw_positions)
+            {
+                if original > property_boundary {
+                    *position += 1;
+                }
+            }
+        }
         run.content
             .insert(0, RunContent::Text(CT_Text::new(replacement.value)));
         replacement.wrote_value = true;

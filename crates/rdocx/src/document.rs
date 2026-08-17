@@ -33,6 +33,7 @@ use rdocx_oxml::core_properties::CoreProperties;
 use crate::Length;
 use crate::error::{Error, Result};
 use crate::paragraph::{Paragraph, ParagraphRef};
+use crate::revision::RevisionRef;
 use crate::style::{self, Style, StyleBuilder};
 use crate::table::{Table, TableRef};
 
@@ -760,6 +761,7 @@ impl Document {
             properties: None,
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
         };
         let mut paragraph = CT_P::new();
         paragraph.runs.push(run);
@@ -867,6 +869,15 @@ impl Document {
     /// Get the number of paragraphs.
     pub fn paragraph_count(&self) -> usize {
         self.document.body.paragraphs().count()
+    }
+
+    /// Return every valid modeled main-document revision in document order.
+    pub fn revisions(&self) -> Vec<RevisionRef<'_>> {
+        self.document
+            .revisions()
+            .into_iter()
+            .map(|inner| RevisionRef { inner })
+            .collect()
     }
 
     /// Get the plain text of body paragraphs and table cells in document order.
@@ -1088,6 +1099,7 @@ impl Document {
             properties: None,
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1180,6 +1192,7 @@ impl Document {
             properties: None,
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1215,6 +1228,7 @@ impl Document {
             properties: None,
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1666,6 +1680,7 @@ impl Document {
             properties: None,
             content: vec![RunContent::Drawing(CT_Drawing::inline(inline))],
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -2352,6 +2367,7 @@ impl Document {
                 properties: None,
                 content: vec![rdocx_oxml::text::RunContent::Tab],
                 extra_xml: Vec::new(),
+                extra_xml_positions: Vec::new(),
             });
 
             // Wrap the text run in a hyperlink to the bookmark
@@ -2360,6 +2376,8 @@ impl Document {
                 anchor: Some(heading.bookmark_name.clone()),
                 run_start: 0,
                 run_end: 1, // Just the text run, not the tab
+                extra_attributes: Vec::new(),
+                extra_xml: Vec::new(),
             });
 
             toc_paragraphs.push(p);
@@ -5877,12 +5895,16 @@ mod hyperlink_span_tests {
             anchor: Some("bookmark".to_string()),
             run_start: 1,
             run_end: 99,
+            extra_attributes: Vec::new(),
+            extra_xml: Vec::new(),
         });
         p.hyperlinks.push(HyperlinkSpan {
             rel_id: None,
             anchor: Some("inverted".to_string()),
             run_start: 5,
             run_end: 1,
+            extra_attributes: Vec::new(),
+            extra_xml: Vec::new(),
         });
 
         let links = doc.links();

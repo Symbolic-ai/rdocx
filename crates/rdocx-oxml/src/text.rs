@@ -1,15 +1,16 @@
 //! Text content elements: `CT_P` (paragraph), `CT_R` (run), `CT_Text`.
 
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::content_control::CT_Sdt;
 use crate::drawing::CT_Drawing;
 use crate::error::{OxmlError, Result};
-use crate::namespace::matches_local_name;
+use crate::namespace::{R_NS, matches_local_name};
 use crate::numbering::{parse_scoped_ppr, word_prefixes_at};
 use crate::properties::{CT_PPr, CT_RPr, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
+use crate::revision::CT_Revision;
 
 /// `CT_Text` — The text content of a run, with optional xml:space="preserve".
 #[derive(Debug, Clone, PartialEq)]
@@ -52,6 +53,8 @@ pub enum FieldType {
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunContent {
     Text(CT_Text),
+    /// Deleted text projected from `w:delText` inside a deletion wrapper.
+    DeletedText(CT_Text),
     Tab,
     Break(BreakType),
     Drawing(CT_Drawing),
@@ -160,6 +163,9 @@ pub struct CT_R {
     pub content: Vec<RunContent>,
     /// Unknown child elements captured as raw XML.
     pub extra_xml: Vec<Vec<u8>>,
+    /// Parsed raw-child positions among properties and typed run content.
+    #[doc(hidden)]
+    pub extra_xml_positions: Vec<usize>,
     /// Drawings read out of an `mc:AlternateContent` block, for layout only.
     ///
     /// Never serialised. The verbatim copy in `extra_xml` is what gets
@@ -174,6 +180,7 @@ impl CT_R {
             properties: None,
             content: vec![RunContent::Text(CT_Text::new(text))],
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
             alt_drawings: Vec::new(),
         }
     }
@@ -183,7 +190,7 @@ impl CT_R {
         let mut result = String::new();
         for item in &self.content {
             match item {
-                RunContent::Text(t) => result.push_str(&t.text),
+                RunContent::Text(t) | RunContent::DeletedText(t) => result.push_str(&t.text),
                 RunContent::Tab => result.push('\t'),
                 RunContent::Break(_) => result.push('\n'),
                 RunContent::Drawing(_) => {} // Drawings have no text content
@@ -196,8 +203,81 @@ impl CT_R {
         result
     }
 
+    /// Replace typed run content while retaining every raw child boundary.
+    #[doc(hidden)]
+    pub fn replace_content(&mut self, content: Vec<RunContent>) {
+        let property_boundary = usize::from(self.properties.is_some());
+        let replacement_end = property_boundary + content.len();
+        for position in &mut self.extra_xml_positions {
+            if *position > property_boundary {
+                *position = replacement_end;
+            }
+        }
+        self.content = content;
+    }
+
+    /// Append typed content without moving raw children after existing content.
+    #[doc(hidden)]
+    pub fn append_content(&mut self, content: RunContent) {
+        self.content.push(content);
+    }
+
+    /// Materialize run properties in their required first-child position.
+    #[doc(hidden)]
+    pub fn ensure_properties(&mut self) -> &mut CT_RPr {
+        if self.properties.is_none() {
+            for position in &mut self.extra_xml_positions {
+                *position += 1;
+            }
+            self.properties = Some(CT_RPr::default());
+        }
+        self.properties.as_mut().expect("properties were inserted")
+    }
+
+    /// Remap raw boundaries after selected typed content children are removed.
+    #[doc(hidden)]
+    pub fn remap_removed_content(&mut self, removed: &[bool]) {
+        let property_boundary = usize::from(self.properties.is_some());
+        for position in &mut self.extra_xml_positions {
+            let content_boundary = position.saturating_sub(property_boundary);
+            *position = position.saturating_sub(
+                removed
+                    .iter()
+                    .take(content_boundary.min(removed.len()))
+                    .filter(|remove| **remove)
+                    .count(),
+            );
+        }
+    }
+
+    /// Remove selected comment-reference content and retain surrounding raw XML.
+    #[doc(hidden)]
+    pub fn remove_comment_references(&mut self, ids: &[i32]) -> bool {
+        let removed = self
+            .content
+            .iter()
+            .map(|content| {
+                matches!(content, RunContent::CommentReference { id, .. } if ids.contains(id))
+            })
+            .collect::<Vec<_>>();
+        let removed_any = removed.iter().any(|remove| *remove);
+        if removed_any {
+            self.remap_removed_content(&removed);
+            self.content = self
+                .content
+                .drain(..)
+                .zip(removed)
+                .filter_map(|(content, remove)| (!remove).then_some(content))
+                .collect();
+        }
+        removed_any
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
-        Self::from_xml_with_prefixes(reader, &["w".to_owned()])
+        Self::from_xml_with_prefixes(
+            reader,
+            &["w".to_owned(), format!("\0mc\0{}", crate::namespace::MC_NS)],
+        )
     }
 
     pub(crate) fn from_xml_with_prefixes(
@@ -207,7 +287,9 @@ impl CT_R {
         let mut properties = None;
         let mut content = Vec::new();
         let mut extra_xml = Vec::new();
+        let mut extra_xml_positions = Vec::new();
         let mut alt_drawings = Vec::new();
+        let mut modeled_children = 0usize;
         let mut buf = Vec::new();
 
         loop {
@@ -215,9 +297,11 @@ impl CT_R {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if matches_local_name(name.as_ref(), b"rPr") {
-                        properties = Some(CT_RPr::from_xml(reader)?);
-                    } else if matches_local_name(name.as_ref(), b"t") {
+                    if is_word_element(name.as_ref(), b"rPr", &prefixes) {
+                        let raw = capture_element(reader, e)?;
+                        properties = Some(crate::numbering::parse_scoped_rpr(&raw, word_prefixes)?);
+                        modeled_children += 1;
+                    } else if is_word_element(name.as_ref(), b"t", &prefixes) {
                         let preserve = e.attributes().any(|a| {
                             a.ok()
                                 .map(|a| {
@@ -236,18 +320,39 @@ impl CT_R {
                             text,
                             preserve_space: preserve,
                         }));
-                    } else if matches_local_name(name.as_ref(), b"drawing") {
+                        modeled_children += 1;
+                    } else if is_word_element(name.as_ref(), b"delText", &prefixes) {
+                        let preserve = e.attributes().any(|a| {
+                            a.ok().is_some_and(|a| {
+                                a.key.as_ref() == b"xml:space" && a.value.as_ref() == b"preserve"
+                            })
+                        });
+                        let text = reader
+                            .read_text(name)
+                            .map(|t| crate::xml_text::decode_escaped(&t))
+                            .unwrap_or_default();
+                        content.push(RunContent::DeletedText(CT_Text {
+                            text,
+                            preserve_space: preserve,
+                        }));
+                        modeled_children += 1;
+                    } else if is_word_element(name.as_ref(), b"drawing", &prefixes) {
                         content.push(RunContent::Drawing(CT_Drawing::from_xml(reader)?));
-                    } else if matches_local_name(name.as_ref(), b"commentReference")
-                        && is_word_element(name.as_ref(), b"commentReference", &prefixes)
-                    {
+                        modeled_children += 1;
+                    } else if is_word_element(name.as_ref(), b"commentReference", &prefixes) {
                         let id = required_word_i32_attribute(e, b"id", &prefixes)?;
                         reader.read_to_end_into(name, &mut Vec::new())?;
                         content.push(RunContent::CommentReference {
                             id,
                             raw_before: extra_xml.len(),
                         });
-                    } else if matches_local_name(name.as_ref(), b"AlternateContent") {
+                        modeled_children += 1;
+                    } else if is_element_in_namespace(
+                        name.as_ref(),
+                        b"AlternateContent",
+                        crate::namespace::MC_NS,
+                        &prefixes,
+                    ) {
                         // Keep the block verbatim so the VML fallback survives
                         // a write, and separately read the DrawingML out of it
                         // so layout can see the shape. alt_drawings is never
@@ -257,51 +362,49 @@ impl CT_R {
                             alt_drawings.push(drawing);
                         }
                         extra_xml.push(raw);
+                        extra_xml_positions.push(modeled_children);
                     } else {
                         // Capture unknown child elements as raw XML
                         extra_xml.push(capture_element(reader, e)?);
+                        extra_xml_positions.push(modeled_children);
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if matches_local_name(name.as_ref(), b"tab") {
+                    if is_word_element(name.as_ref(), b"tab", &prefixes) {
                         content.push(RunContent::Tab);
-                    } else if matches_local_name(name.as_ref(), b"br") {
-                        let break_type = e
-                            .attributes()
-                            .filter_map(|a| a.ok())
-                            .find(|a| matches_local_name(a.key.as_ref(), b"type"))
-                            .map(|a| match a.value.as_ref() {
+                        modeled_children += 1;
+                    } else if is_word_element(name.as_ref(), b"br", &prefixes) {
+                        let break_type = optional_word_attribute(e, b"type", &prefixes)
+                            .map(|value| match value.as_bytes() {
                                 b"page" => BreakType::Page,
                                 b"column" => BreakType::Column,
                                 _ => BreakType::Line,
                             })
                             .unwrap_or(BreakType::Line);
                         content.push(RunContent::Break(break_type));
-                    } else if matches_local_name(name.as_ref(), b"footnoteReference") {
-                        let id = e
-                            .attributes()
-                            .filter_map(|a| a.ok())
-                            .find(|a| matches_local_name(a.key.as_ref(), b"id"))
-                            .and_then(|a| std::str::from_utf8(&a.value).ok()?.parse::<i32>().ok())
+                        modeled_children += 1;
+                    } else if is_word_element(name.as_ref(), b"footnoteReference", &prefixes) {
+                        let id = optional_word_attribute(e, b"id", &prefixes)
+                            .and_then(|value| value.parse::<i32>().ok())
                             .unwrap_or(0);
                         content.push(RunContent::FootnoteRef { id });
-                    } else if matches_local_name(name.as_ref(), b"endnoteReference") {
-                        let id = e
-                            .attributes()
-                            .filter_map(|a| a.ok())
-                            .find(|a| matches_local_name(a.key.as_ref(), b"id"))
-                            .and_then(|a| std::str::from_utf8(&a.value).ok()?.parse::<i32>().ok())
+                        modeled_children += 1;
+                    } else if is_word_element(name.as_ref(), b"endnoteReference", &prefixes) {
+                        let id = optional_word_attribute(e, b"id", &prefixes)
+                            .and_then(|value| value.parse::<i32>().ok())
                             .unwrap_or(0);
                         content.push(RunContent::EndnoteRef { id });
+                        modeled_children += 1;
                     } else if is_word_element(name.as_ref(), b"commentReference", &prefixes) {
                         let id = required_word_i32_attribute(e, b"id", &prefixes)?;
                         content.push(RunContent::CommentReference {
                             id,
                             raw_before: extra_xml.len(),
                         });
-                    } else if !matches_local_name(name.as_ref(), b"rPr") {
+                        modeled_children += 1;
+                    } else if !is_word_element(name.as_ref(), b"rPr", &prefixes) {
                         // Capture unknown empty child elements (e.g.
                         // w:commentReference) as raw XML, mirroring the
                         // Event::Start fallback above.
@@ -313,6 +416,7 @@ impl CT_R {
                         // produce schema-invalid output. An empty rPr carries
                         // no formatting, so dropping it loses nothing.
                         extra_xml.push(capture_empty_element(e)?);
+                        extra_xml_positions.push(modeled_children);
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"r") => {
@@ -329,15 +433,37 @@ impl CT_R {
             properties,
             content,
             extra_xml,
+            extra_xml_positions,
             alt_drawings,
         })
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        writer.write_event(Event::Start(BytesStart::new("w:r")))?;
+        self.to_xml_with_word_override(writer, None)
+    }
 
+    pub(crate) fn to_xml_with_word_override<W: std::io::Write>(
+        &self,
+        writer: &mut Writer<W>,
+        foreign_word_namespace: Option<&str>,
+    ) -> Result<()> {
+        let mut run = BytesStart::new("w:r");
+        if foreign_word_namespace.is_some() {
+            run.push_attribute(("xmlns:w", crate::namespace::W_NS));
+        }
+        writer.write_event(Event::Start(run))?;
+
+        let ordered_raw = self.extra_xml_positions.len() == self.extra_xml.len();
+        let mut typed_boundary = 0usize;
+        if ordered_raw {
+            write_run_raw_boundary(writer, self, typed_boundary, foreign_word_namespace)?;
+        }
         if let Some(ref props) = self.properties {
-            props.to_xml(writer)?;
+            props.to_xml_with_word_override(writer, foreign_word_namespace)?;
+            typed_boundary += 1;
+            if ordered_raw {
+                write_run_raw_boundary(writer, self, typed_boundary, foreign_word_namespace)?;
+            }
         }
 
         let mut raw_written = 0;
@@ -351,6 +477,15 @@ impl CT_R {
                     writer.write_event(Event::Start(e))?;
                     writer.write_event(Event::Text(BytesText::new(&t.text)))?;
                     writer.write_event(Event::End(BytesEnd::new("w:t")))?;
+                }
+                RunContent::DeletedText(t) => {
+                    let mut e = BytesStart::new("w:delText");
+                    if t.preserve_space {
+                        e.push_attribute(("xml:space", "preserve"));
+                    }
+                    writer.write_event(Event::Start(e))?;
+                    writer.write_event(Event::Text(BytesText::new(&t.text)))?;
+                    writer.write_event(Event::End(BytesEnd::new("w:delText")))?;
                 }
                 RunContent::Tab => {
                     writer.write_event(Event::Empty(BytesStart::new("w:tab")))?;
@@ -383,14 +518,16 @@ impl CT_R {
                     writer.write_event(Event::Empty(e))?;
                 }
                 RunContent::CommentReference { id, raw_before } => {
-                    for raw in self
-                        .extra_xml
-                        .iter()
-                        .take((*raw_before).min(self.extra_xml.len()))
-                        .skip(raw_written)
-                    {
-                        writer.get_mut().write_all(raw)?;
-                        raw_written += 1;
+                    if !ordered_raw {
+                        for raw in self
+                            .extra_xml
+                            .iter()
+                            .take((*raw_before).min(self.extra_xml.len()))
+                            .skip(raw_written)
+                        {
+                            write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
+                            raw_written += 1;
+                        }
                     }
                     let mut buf = itoa::Buffer::new();
                     let mut e = BytesStart::new("w:commentReference");
@@ -398,16 +535,36 @@ impl CT_R {
                     writer.write_event(Event::Empty(e))?;
                 }
             }
+            typed_boundary += 1;
+            if ordered_raw {
+                write_run_raw_boundary(writer, self, typed_boundary, foreign_word_namespace)?;
+            }
         }
 
         // Write captured unknown child elements
-        for raw in self.extra_xml.iter().skip(raw_written) {
-            writer.get_mut().write_all(raw)?;
+        if !ordered_raw {
+            for raw in self.extra_xml.iter().skip(raw_written) {
+                write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
+            }
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:r")))?;
         Ok(())
     }
+}
+
+fn write_run_raw_boundary<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    run: &CT_R,
+    boundary: usize,
+    foreign_word_namespace: Option<&str>,
+) -> Result<()> {
+    for (position, raw) in run.extra_xml_positions.iter().zip(&run.extra_xml) {
+        if *position == boundary {
+            write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
+        }
+    }
+    Ok(())
 }
 
 /// A hyperlink span that wraps a range of runs.
@@ -421,6 +578,30 @@ pub struct HyperlinkSpan {
     pub run_start: usize,
     /// Index of the last run in the hyperlink (exclusive).
     pub run_end: usize,
+    /// Unmodeled owner attributes retained when the hyperlink came from XML.
+    #[doc(hidden)]
+    pub extra_attributes: Vec<(String, String)>,
+    /// Raw children at `(relative run boundary, typed revisions before, XML)`.
+    #[doc(hidden)]
+    pub extra_xml: Vec<(usize, usize, Vec<u8>)>,
+}
+
+const HYPERLINK_REVISION_FLAG: usize = 1usize << (usize::BITS - 1);
+
+struct ParsedHyperlinkChildren {
+    runs: Vec<CT_R>,
+    revisions: Vec<(usize, CT_Revision)>,
+    extra_xml: Vec<(usize, usize, Vec<u8>)>,
+}
+
+type ParsedHyperlinkAttributes = (Option<String>, Option<String>, Vec<(String, String)>);
+
+pub(crate) fn hyperlink_revision_slot(hyperlink_index: usize) -> usize {
+    HYPERLINK_REVISION_FLAG | hyperlink_index
+}
+
+pub(crate) fn hyperlink_revision_index(slot: usize) -> Option<usize> {
+    (slot & HYPERLINK_REVISION_FLAG != 0).then_some(slot & !HYPERLINK_REVISION_FLAG)
 }
 
 /// `CT_P` — A paragraph element containing runs and properties.
@@ -440,6 +621,8 @@ pub struct CT_P {
     /// Typed run controls at
     /// `(run index, raw children before, comment markers before, control)`.
     pub content_controls: Vec<(usize, usize, usize, CT_Sdt)>,
+    /// Read projections of revision wrappers retained at paragraph or hyperlink boundaries.
+    pub revisions: Vec<(usize, usize, CT_Revision)>,
 }
 
 #[allow(non_snake_case)]
@@ -453,6 +636,7 @@ impl CT_P {
             bookmark_markers: Vec::new(),
             extra_xml: Vec::new(),
             content_controls: Vec::new(),
+            revisions: Vec::new(),
         }
     }
 
@@ -501,28 +685,63 @@ impl CT_P {
                 *at += 1;
             }
         }
+        for (at, _, _) in &mut self.revisions {
+            if *at >= run_index {
+                *at += 1;
+            }
+        }
 
         let mut hyperlinks = Vec::with_capacity(self.hyperlinks.len() + 1);
+        let mut hyperlink_map = Vec::with_capacity(self.hyperlinks.len());
         for mut hyperlink in self.hyperlinks.drain(..) {
             if hyperlink.run_start >= run_index {
                 hyperlink.run_start += 1;
                 hyperlink.run_end += 1;
+                hyperlink_map.push((hyperlinks.len(), None, false));
                 hyperlinks.push(hyperlink);
             } else if hyperlink.run_end > run_index {
+                let split_at = run_index - hyperlink.run_start;
                 let suffix = HyperlinkSpan {
                     rel_id: hyperlink.rel_id.clone(),
                     anchor: hyperlink.anchor.clone(),
                     run_start: run_index + 1,
                     run_end: hyperlink.run_end + 1,
+                    extra_attributes: hyperlink.extra_attributes.clone(),
+                    extra_xml: hyperlink
+                        .extra_xml
+                        .iter()
+                        .filter(|(boundary, _, _)| *boundary >= split_at)
+                        .map(|(boundary, before, raw)| (boundary - split_at, *before, raw.clone()))
+                        .collect(),
                 };
+                hyperlink
+                    .extra_xml
+                    .retain(|(boundary, _, _)| *boundary < split_at);
                 hyperlink.run_end = run_index;
+                let prefix_index = hyperlinks.len();
                 hyperlinks.push(hyperlink);
+                let suffix_index = hyperlinks.len();
                 hyperlinks.push(suffix);
+                hyperlink_map.push((prefix_index, Some(suffix_index), false));
             } else {
+                hyperlink_map.push((hyperlinks.len(), None, hyperlink.run_end == run_index));
                 hyperlinks.push(hyperlink);
             }
         }
         self.hyperlinks = hyperlinks;
+        for (at, slot, _) in &mut self.revisions {
+            let Some(old_index) = hyperlink_revision_index(*slot) else {
+                continue;
+            };
+            let Some((prefix, suffix, ended_at_insertion)) = hyperlink_map.get(old_index) else {
+                continue;
+            };
+            if *ended_at_insertion && *at == run_index + 1 {
+                *at = run_index;
+            }
+            let new_index = suffix.filter(|_| *at > run_index).unwrap_or(*prefix);
+            *slot = hyperlink_revision_slot(new_index);
+        }
         for (position, _) in &mut self.extra_xml {
             if *position >= run_index {
                 *position += 1;
@@ -558,12 +777,7 @@ impl CT_P {
 
         let mut removed = Vec::with_capacity(self.runs.len());
         for run in &mut self.runs {
-            let removed_reference = run.content.iter().any(|content| {
-                matches!(content, RunContent::CommentReference { id, .. } if ids.contains(id))
-            });
-            run.content.retain(|content| {
-                !matches!(content, RunContent::CommentReference { id, .. } if ids.contains(id))
-            });
+            let removed_reference = run.remove_comment_references(ids);
             removed.push(
                 removed_reference
                     && run.content.is_empty()
@@ -660,15 +874,76 @@ impl CT_P {
         for marker in &mut self.bookmark_markers {
             marker.run_index = boundary_map[marker.run_index.min(old_run_count)];
         }
+        let hyperlink_revision_counts = self
+            .hyperlinks
+            .iter()
+            .enumerate()
+            .map(|(hyperlink_index, hyperlink)| {
+                let start = hyperlink.run_start.min(old_run_count);
+                let end = hyperlink.run_end.min(old_run_count);
+                (start..=end)
+                    .map(|boundary| {
+                        self.revisions
+                            .iter()
+                            .filter(|(at, slot, _)| {
+                                *at == boundary
+                                    && hyperlink_revision_index(*slot) == Some(hyperlink_index)
+                            })
+                            .count()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        for (run_index, raw_before, _) in &mut self.revisions {
+            let old_boundary = (*run_index).min(old_run_count);
+            *run_index = boundary_map[old_boundary];
+            if hyperlink_revision_index(*raw_before).is_none() {
+                *raw_before =
+                    raw_prefixes[old_boundary] + (*raw_before).min(raw_counts[old_boundary]);
+            }
+        }
         for (position, _) in &mut self.extra_xml {
             *position = boundary_map[(*position).min(old_run_count)];
         }
-        for hyperlink in &mut self.hyperlinks {
-            hyperlink.run_start = boundary_map[hyperlink.run_start.min(old_run_count)];
-            hyperlink.run_end = boundary_map[hyperlink.run_end.min(old_run_count)];
+        let old_hyperlinks = std::mem::take(&mut self.hyperlinks);
+        let mut hyperlink_map = vec![None; old_hyperlinks.len()];
+        for (old_index, mut hyperlink) in old_hyperlinks.into_iter().enumerate() {
+            let old_start = hyperlink.run_start.min(old_run_count);
+            let old_end = hyperlink.run_end.min(old_run_count);
+            let revision_counts = &hyperlink_revision_counts[old_index];
+            let new_start = boundary_map[old_start];
+            let new_end = boundary_map[old_end];
+            for (boundary, revisions_before, _) in &mut hyperlink.extra_xml {
+                let old_relative = (*boundary).min(old_end - old_start);
+                let old_boundary = old_start + old_relative;
+                let new_boundary = boundary_map[old_boundary];
+                let collapsed_before = (0..old_relative)
+                    .filter(|relative| boundary_map[old_start + relative] == new_boundary)
+                    .map(|relative| revision_counts[relative])
+                    .sum::<usize>();
+                *boundary = new_boundary.saturating_sub(new_start);
+                *revisions_before =
+                    collapsed_before + (*revisions_before).min(revision_counts[old_relative]);
+            }
+            let owns_revision = self
+                .revisions
+                .iter()
+                .any(|(_, slot, _)| hyperlink_revision_index(*slot) == Some(old_index));
+            hyperlink.run_start = new_start;
+            hyperlink.run_end = new_end;
+            if new_start < new_end || owns_revision || !hyperlink.extra_xml.is_empty() {
+                hyperlink_map[old_index] = Some(self.hyperlinks.len());
+                self.hyperlinks.push(hyperlink);
+            }
         }
-        self.hyperlinks
-            .retain(|hyperlink| hyperlink.run_start < hyperlink.run_end);
+        for (_, slot, _) in &mut self.revisions {
+            let Some(old_index) = hyperlink_revision_index(*slot) else {
+                continue;
+            };
+            if let Some(new_index) = hyperlink_map.get(old_index).copied().flatten() {
+                *slot = hyperlink_revision_slot(new_index);
+            }
+        }
         self.runs = self
             .runs
             .drain(..)
@@ -725,13 +1000,21 @@ impl CT_P {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
-        Self::from_xml_with_prefixes(reader, &["w".to_string()])
+        Self::from_xml_with_prefixes(
+            reader,
+            &[
+                "w".to_string(),
+                format!("\0r\0{R_NS}"),
+                format!("\0mc\0{}", crate::namespace::MC_NS),
+            ],
+        )
     }
 
     pub(crate) fn from_xml_with_prefixes(
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
     ) -> Result<Self> {
+        reader.config_mut().trim_text(false);
         let mut properties = None;
         let mut runs = Vec::new();
         let mut hyperlinks = Vec::new();
@@ -739,6 +1022,7 @@ impl CT_P {
         let mut bookmark_markers = Vec::new();
         let mut extra_xml = Vec::new();
         let mut content_controls = Vec::new();
+        let mut revisions = Vec::new();
         let mut buf = Vec::new();
 
         loop {
@@ -748,8 +1032,13 @@ impl CT_P {
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(name.as_ref(), b"pPr", &prefixes) {
                         let raw = capture_element(reader, e)?;
-                        properties = Some(parse_scoped_ppr(&raw, &prefixes)?);
-                    } else if matches_local_name(name.as_ref(), b"r") {
+                        properties = Some(parse_scoped_ppr(&raw, word_prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"r", &prefixes) {
+                        runs.push(CT_R::from_xml_with_prefixes(reader, &prefixes)?);
+                    } else if matches_local_name(name.as_ref(), b"r")
+                        && !element_prefix_has_binding(name.as_ref(), &prefixes)
+                    {
+                        let prefixes = prefixes_with_assumed_word_owner(name.as_ref(), &prefixes)?;
                         runs.push(CT_R::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
                         let raw = capture_element(reader, e)?;
@@ -767,60 +1056,41 @@ impl CT_P {
                         } else {
                             extra_xml.push((runs.len(), raw));
                         }
-                    } else if matches_local_name(name.as_ref(), b"hyperlink") {
-                        // Parse hyperlink: extract r:id and/or w:anchor, then parse child runs
-                        let mut rel_id = None;
-                        let mut anchor = None;
-                        for attr in e.attributes().flatten() {
-                            let key = attr.key.as_ref();
-                            if matches_local_name(key, b"id") {
-                                rel_id = Some(
-                                    std::str::from_utf8(&attr.value).unwrap_or("").to_string(),
-                                );
-                            } else if matches_local_name(key, b"anchor") {
-                                anchor = Some(
-                                    std::str::from_utf8(&attr.value).unwrap_or("").to_string(),
-                                );
-                            }
-                        }
-
+                    } else if is_word_element(name.as_ref(), b"hyperlink", &prefixes) {
+                        let (rel_id, anchor, extra_attributes) =
+                            parse_hyperlink_attributes(e, &prefixes)?;
+                        let raw = capture_element(reader, e)?;
+                        let parsed = parse_hyperlink_children(&raw, &prefixes)?;
                         let run_start = runs.len();
-                        // Parse child runs within the hyperlink
-                        let mut inner_buf = Vec::new();
-                        loop {
-                            match reader.read_event_into(&mut inner_buf) {
-                                Ok(Event::Start(ref ie)) => {
-                                    let iname = ie.name();
-                                    if matches_local_name(iname.as_ref(), b"r") {
-                                        let run_prefixes = word_prefixes_at(ie, &prefixes)?;
-                                        runs.push(CT_R::from_xml_with_prefixes(
-                                            reader,
-                                            &run_prefixes,
-                                        )?);
-                                    } else {
-                                        reader.read_to_end_into(iname, &mut Vec::new())?;
-                                    }
-                                }
-                                Ok(Event::End(ref ie))
-                                    if matches_local_name(ie.name().as_ref(), b"hyperlink") =>
-                                {
-                                    break;
-                                }
-                                Ok(Event::Eof) => break,
-                                Err(e) => return Err(e.into()),
-                                _ => {}
-                            }
-                            inner_buf.clear();
-                        }
-
-                        let run_end = runs.len();
-                        if run_start < run_end && (rel_id.is_some() || anchor.is_some()) {
+                        if parsed.runs.is_empty() {
+                            let raw_before =
+                                extra_xml.iter().filter(|(at, _)| *at == run_start).count();
+                            revisions.extend(
+                                parsed
+                                    .revisions
+                                    .into_iter()
+                                    .map(|(_, revision)| (run_start, raw_before, revision)),
+                            );
+                            extra_xml.push((run_start, raw));
+                        } else {
+                            let hyperlink_index = hyperlinks.len();
+                            let run_end = run_start + parsed.runs.len();
+                            runs.extend(parsed.runs);
                             hyperlinks.push(HyperlinkSpan {
                                 rel_id,
                                 anchor,
                                 run_start,
                                 run_end,
+                                extra_attributes,
+                                extra_xml: parsed.extra_xml,
                             });
+                            revisions.extend(parsed.revisions.into_iter().map(|(at, revision)| {
+                                (
+                                    run_start + at,
+                                    hyperlink_revision_slot(hyperlink_index),
+                                    revision,
+                                )
+                            }));
                         }
                     } else if is_word_element(name.as_ref(), b"fldSimple", &prefixes) {
                         // Parse simple field: extract w:instr attribute
@@ -865,6 +1135,7 @@ impl CT_P {
                                 display,
                             }],
                             extra_xml: Vec::new(),
+                            extra_xml_positions: Vec::new(),
                             alt_drawings: Vec::new(),
                         });
                     } else if is_word_element(name.as_ref(), b"commentRangeStart", &prefixes)
@@ -893,6 +1164,18 @@ impl CT_P {
                             run_index: runs.len(),
                         });
                         extra_xml.push((runs.len(), capture_element(reader, e)?));
+                    } else if is_word_element(name.as_ref(), b"ins", &prefixes)
+                        || is_word_element(name.as_ref(), b"del", &prefixes)
+                        || is_word_element(name.as_ref(), b"moveFrom", &prefixes)
+                        || is_word_element(name.as_ref(), b"moveTo", &prefixes)
+                    {
+                        let raw_before =
+                            extra_xml.iter().filter(|(at, _)| *at == runs.len()).count();
+                        let raw = capture_element(reader, e)?;
+                        if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            revisions.push((runs.len(), raw_before, revision));
+                        }
+                        extra_xml.push((runs.len(), raw));
                     } else {
                         // Capture unknown elements (bookmarks, comments, etc.) as raw XML
                         extra_xml.push((runs.len(), capture_element(reader, e)?));
@@ -927,7 +1210,18 @@ impl CT_P {
                         });
                         extra_xml.push((runs.len(), capture_empty_element(e)?));
                     } else if !matches_local_name(name.as_ref(), b"p") {
-                        extra_xml.push((runs.len(), capture_empty_element(e)?));
+                        let raw_before =
+                            extra_xml.iter().filter(|(at, _)| *at == runs.len()).count();
+                        let raw = capture_empty_element(e)?;
+                        if (is_word_element(name.as_ref(), b"ins", &prefixes)
+                            || is_word_element(name.as_ref(), b"del", &prefixes)
+                            || is_word_element(name.as_ref(), b"moveFrom", &prefixes)
+                            || is_word_element(name.as_ref(), b"moveTo", &prefixes))
+                            && let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes)
+                        {
+                            revisions.push((runs.len(), raw_before, revision));
+                        }
+                        extra_xml.push((runs.len(), raw));
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"p") => {
@@ -948,6 +1242,7 @@ impl CT_P {
             bookmark_markers,
             extra_xml,
             content_controls,
+            revisions,
         })
     }
 
@@ -985,7 +1280,17 @@ impl CT_P {
 
             // Paragraph boundary content is a sibling of the hyperlink.
             if current_hyperlink.is_some() && current_hyperlink != in_hl {
-                writer.write_event(Event::End(BytesEnd::new("w:hyperlink")))?;
+                let hyperlink_index = current_hyperlink.expect("open hyperlink exists");
+                write_hyperlink_boundary(
+                    writer,
+                    &self.revisions,
+                    hyperlink_index,
+                    &self.hyperlinks[hyperlink_index],
+                    run_idx,
+                )?;
+                writer.write_event(Event::End(BytesEnd::new(hyperlink_qname(
+                    &self.hyperlinks[hyperlink_index],
+                ))))?;
                 current_hyperlink = None;
             }
 
@@ -997,20 +1302,25 @@ impl CT_P {
                 run_idx,
             )?;
 
+            write_empty_hyperlinks(writer, &self.hyperlinks, &self.revisions, run_idx)?;
+
             // Open hyperlink if entering one
             if let Some(hl_idx) = in_hl
                 && current_hyperlink != in_hl
             {
                 let hl = &self.hyperlinks[hl_idx];
-                let mut e = BytesStart::new("w:hyperlink");
-                if let Some(ref rid) = hl.rel_id {
-                    e.push_attribute(("r:id", rid.as_str()));
-                }
-                if let Some(ref anchor) = hl.anchor {
-                    e.push_attribute(("w:anchor", anchor.as_str()));
-                }
-                writer.write_event(Event::Start(e))?;
+                write_hyperlink_start(writer, hl)?;
                 current_hyperlink = in_hl;
+            }
+
+            if let Some(hyperlink_index) = current_hyperlink {
+                write_hyperlink_boundary(
+                    writer,
+                    &self.revisions,
+                    hyperlink_index,
+                    &self.hyperlinks[hyperlink_index],
+                    run_idx,
+                )?;
             }
 
             // Check if this run is a field run
@@ -1029,6 +1339,12 @@ impl CT_P {
                     FieldType::Other(s) => s.as_str(),
                 };
                 let mut fld = BytesStart::new("w:fldSimple");
+                if current_hyperlink
+                    .and_then(|index| shadowed_word_namespace(&self.hyperlinks[index]))
+                    .is_some()
+                {
+                    fld.push_attribute(("xmlns:w", crate::namespace::W_NS));
+                }
                 fld.push_attribute(("w:instr", instr));
                 writer.write_event(Event::Start(fld))?;
                 // Emit a default display run
@@ -1045,12 +1361,28 @@ impl CT_P {
                 continue;
             }
 
-            run.to_xml(writer)?;
+            if let Some(hyperlink_index) = current_hyperlink {
+                run.to_xml_with_word_override(
+                    writer,
+                    shadowed_word_namespace(&self.hyperlinks[hyperlink_index]),
+                )?;
+            } else {
+                run.to_xml(writer)?;
+            }
         }
 
         // Close any remaining open hyperlink
-        if current_hyperlink.is_some() {
-            writer.write_event(Event::End(BytesEnd::new("w:hyperlink")))?;
+        if let Some(hyperlink_index) = current_hyperlink {
+            write_hyperlink_boundary(
+                writer,
+                &self.revisions,
+                hyperlink_index,
+                &self.hyperlinks[hyperlink_index],
+                self.runs.len(),
+            )?;
+            writer.write_event(Event::End(BytesEnd::new(hyperlink_qname(
+                &self.hyperlinks[hyperlink_index],
+            ))))?;
         }
 
         write_paragraph_boundary(
@@ -1060,6 +1392,7 @@ impl CT_P {
             &self.comment_ranges,
             self.runs.len(),
         )?;
+        write_empty_hyperlinks(writer, &self.hyperlinks, &self.revisions, self.runs.len())?;
 
         writer.write_event(Event::End(BytesEnd::new("w:p")))?;
         Ok(())
@@ -1115,6 +1448,172 @@ fn push_comment_marker(
     markers.push(marker);
 }
 
+fn parse_hyperlink_children(
+    raw: &[u8],
+    word_prefixes: &[String],
+) -> Result<ParsedHyperlinkChildren> {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut runs = Vec::new();
+    let mut revisions = Vec::new();
+    let mut extra_xml = Vec::new();
+    let mut revisions_at_boundary = 0usize;
+    let mut buffer = Vec::new();
+    let mut inside = false;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) if !inside => {
+                inside = true;
+                let _ = word_prefixes_at(&element, word_prefixes)?;
+            }
+            Event::Start(element) => {
+                let prefixes = word_prefixes_at(&element, word_prefixes)?;
+                if is_word_element(element.name().as_ref(), b"r", &prefixes) {
+                    runs.push(CT_R::from_xml_with_prefixes(&mut reader, &prefixes)?);
+                    revisions_at_boundary = 0;
+                } else if is_content_revision_element(element.name().as_ref(), &prefixes) {
+                    let raw = capture_element(&mut reader, &element)?;
+                    if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                        revisions.push((runs.len(), revision));
+                        revisions_at_boundary += 1;
+                    } else {
+                        extra_xml.push((runs.len(), revisions_at_boundary, raw));
+                    }
+                } else {
+                    extra_xml.push((
+                        runs.len(),
+                        revisions_at_boundary,
+                        capture_element(&mut reader, &element)?,
+                    ));
+                }
+            }
+            Event::Empty(element) => {
+                let prefixes = word_prefixes_at(&element, word_prefixes)?;
+                let raw = capture_empty_element(&element)?;
+                if is_content_revision_element(element.name().as_ref(), &prefixes) {
+                    if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                        revisions.push((runs.len(), revision));
+                        revisions_at_boundary += 1;
+                    } else {
+                        extra_xml.push((runs.len(), revisions_at_boundary, raw));
+                    }
+                } else {
+                    extra_xml.push((runs.len(), revisions_at_boundary, raw));
+                }
+            }
+            Event::End(element)
+                if inside && matches_local_name(element.name().as_ref(), b"hyperlink") =>
+            {
+                break;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(ParsedHyperlinkChildren {
+        runs,
+        revisions,
+        extra_xml,
+    })
+}
+
+fn parse_hyperlink_attributes(
+    element: &BytesStart<'_>,
+    scope: &[String],
+) -> Result<ParsedHyperlinkAttributes> {
+    let mut rel_id = None;
+    let mut anchor = None;
+    let mut extra = Vec::new();
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref();
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
+            .into_owned();
+        if attribute_in_namespace(name, b"id", R_NS, scope) {
+            rel_id = Some(value);
+        } else if attribute_in_namespace(name, b"anchor", crate::namespace::W_NS, scope) {
+            anchor = Some(value);
+        } else {
+            extra.push((std::str::from_utf8(name)?.to_owned(), value));
+        }
+    }
+    Ok((rel_id, anchor, extra))
+}
+
+fn attribute_in_namespace(name: &[u8], local: &[u8], namespace: &str, scope: &[String]) -> bool {
+    let Some(separator) = name.iter().position(|byte| *byte == b':') else {
+        return false;
+    };
+    if name.get(separator + 1..) != Some(local) {
+        return false;
+    }
+    let prefix = &name[..separator];
+    let bound_namespace = scope.iter().find_map(|binding| {
+        binding
+            .strip_prefix('\0')
+            .and_then(|binding| binding.split_once('\0'))
+            .filter(|(candidate, _)| candidate.as_bytes() == prefix)
+            .map(|(_, value)| value)
+    });
+    match bound_namespace {
+        Some(value) => value == namespace,
+        None if namespace == crate::namespace::W_NS => {
+            scope.iter().any(|candidate| candidate.as_bytes() == prefix)
+        }
+        None => false,
+    }
+}
+
+fn is_element_in_namespace(name: &[u8], local: &[u8], namespace: &str, scope: &[String]) -> bool {
+    let (prefix, actual_local) = name
+        .iter()
+        .position(|byte| *byte == b':')
+        .map_or((&b""[..], name), |separator| {
+            (&name[..separator], &name[separator + 1..])
+        });
+    actual_local == local
+        && scope.iter().any(|binding| {
+            binding
+                .strip_prefix('\0')
+                .and_then(|binding| binding.split_once('\0'))
+                .is_some_and(|(candidate, value)| {
+                    candidate.as_bytes() == prefix && value == namespace
+                })
+        })
+}
+
+fn element_prefix_has_binding(name: &[u8], scope: &[String]) -> bool {
+    let prefix = name
+        .iter()
+        .position(|byte| *byte == b':')
+        .map_or(&b""[..], |separator| &name[..separator]);
+    scope.iter().any(|binding| {
+        binding
+            .strip_prefix('\0')
+            .and_then(|binding| binding.split_once('\0'))
+            .is_some_and(|(candidate, _)| candidate.as_bytes() == prefix)
+    })
+}
+
+fn prefixes_with_assumed_word_owner(name: &[u8], scope: &[String]) -> Result<Vec<String>> {
+    let prefix = name
+        .iter()
+        .position(|byte| *byte == b':')
+        .map_or(&b""[..], |separator| &name[..separator]);
+    let mut prefixes = scope.to_vec();
+    prefixes.push(std::str::from_utf8(prefix)?.to_owned());
+    Ok(prefixes)
+}
+
+fn is_content_revision_element(name: &[u8], word_prefixes: &[String]) -> bool {
+    is_word_element(name, b"ins", word_prefixes)
+        || is_word_element(name, b"del", word_prefixes)
+        || is_word_element(name, b"moveFrom", word_prefixes)
+        || is_word_element(name, b"moveTo", word_prefixes)
+}
+
 fn write_paragraph_boundary<W: std::io::Write>(
     writer: &mut Writer<W>,
     extra_xml: &[(usize, Vec<u8>)],
@@ -1161,6 +1660,442 @@ fn write_paragraph_boundary<W: std::io::Write>(
         if let Some(raw) = extras.get(raw_index) {
             writer.get_mut().write_all(raw)?;
         }
+    }
+    Ok(())
+}
+
+fn write_hyperlink_boundary<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    revisions: &[(usize, usize, CT_Revision)],
+    hyperlink_index: usize,
+    hyperlink: &HyperlinkSpan,
+    run_index: usize,
+) -> Result<()> {
+    let boundary_revisions = revisions
+        .iter()
+        .filter(|(at, slot, _)| {
+            *at == run_index && hyperlink_revision_index(*slot) == Some(hyperlink_index)
+        })
+        .map(|(_, _, revision)| revision)
+        .collect::<Vec<_>>();
+    let relative_boundary = run_index.saturating_sub(hyperlink.run_start);
+    for revision_index in 0..=boundary_revisions.len() {
+        for (_, _, raw) in hyperlink.extra_xml.iter().filter(|(boundary, before, _)| {
+            *boundary == relative_boundary
+                && (*before).min(boundary_revisions.len()) == revision_index
+        }) {
+            writer.get_mut().write_all(raw)?;
+        }
+        if let Some(revision) = boundary_revisions.get(revision_index) {
+            revision.write_xml(writer)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_hyperlink_start<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    hyperlink: &HyperlinkSpan,
+) -> Result<()> {
+    let (word_prefix, declare_word) =
+        safe_hyperlink_prefix(hyperlink, "w", "rdocxW", crate::namespace::W_NS);
+    let (relationship_prefix, declare_relationship) =
+        safe_hyperlink_prefix(hyperlink, "r", "rdocxR", R_NS);
+    let mut element = BytesStart::new(format!("{word_prefix}:hyperlink"));
+    let word_declaration = format!("xmlns:{word_prefix}");
+    let relationship_declaration = format!("xmlns:{relationship_prefix}");
+    let relationship_id = format!("{relationship_prefix}:id");
+    let anchor_name = format!("{word_prefix}:anchor");
+    if declare_word {
+        element.push_attribute((word_declaration.as_str(), crate::namespace::W_NS));
+    }
+    if hyperlink.rel_id.is_some() && declare_relationship {
+        element.push_attribute((relationship_declaration.as_str(), R_NS));
+    }
+    if let Some(rel_id) = &hyperlink.rel_id {
+        element.push_attribute((relationship_id.as_str(), rel_id.as_str()));
+    }
+    if let Some(anchor) = &hyperlink.anchor {
+        element.push_attribute((anchor_name.as_str(), anchor.as_str()));
+    }
+    for (name, value) in &hyperlink.extra_attributes {
+        element.push_attribute((name.as_str(), value.as_str()));
+    }
+    writer.write_event(Event::Start(element))?;
+    Ok(())
+}
+
+fn hyperlink_qname(hyperlink: &HyperlinkSpan) -> String {
+    let (prefix, _) = safe_hyperlink_prefix(hyperlink, "w", "rdocxW", crate::namespace::W_NS);
+    format!("{prefix}:hyperlink")
+}
+
+fn safe_hyperlink_prefix(
+    hyperlink: &HyperlinkSpan,
+    preferred: &str,
+    fallback: &str,
+    namespace: &str,
+) -> (String, bool) {
+    let preferred_declaration = format!("xmlns:{preferred}");
+    match hyperlink
+        .extra_attributes
+        .iter()
+        .find(|(name, _)| name == &preferred_declaration)
+    {
+        None => return (preferred.to_owned(), false),
+        Some((_, value)) if value == namespace => return (preferred.to_owned(), false),
+        Some(_) => {}
+    }
+    for suffix in 0usize.. {
+        let candidate = if suffix == 0 {
+            fallback.to_owned()
+        } else {
+            format!("{fallback}{suffix}")
+        };
+        let declaration = format!("xmlns:{candidate}");
+        if !hyperlink
+            .extra_attributes
+            .iter()
+            .any(|(name, _)| name == &declaration)
+        {
+            return (candidate, true);
+        }
+    }
+    unreachable!("the finite attribute set cannot occupy every prefix")
+}
+
+fn shadowed_word_namespace(hyperlink: &HyperlinkSpan) -> Option<&str> {
+    hyperlink
+        .extra_attributes
+        .iter()
+        .find(|(name, value)| name == "xmlns:w" && value != crate::namespace::W_NS)
+        .map(|(_, value)| value.as_str())
+}
+
+pub(crate) fn write_raw_with_word_override<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    raw: &[u8],
+    foreign_word_namespace: Option<&str>,
+) -> Result<()> {
+    let Some(namespace) = foreign_word_namespace else {
+        writer.get_mut().write_all(raw)?;
+        return Ok(());
+    };
+    if !raw_uses_external_word_binding(raw) {
+        writer.get_mut().write_all(raw)?;
+        return Ok(());
+    }
+    writer
+        .get_mut()
+        .write_all(&raw_with_root_word_binding(raw, namespace)?)?;
+    Ok(())
+}
+
+pub(crate) fn raw_with_external_bindings(
+    raw: &[u8],
+    external_bindings: &[(String, String)],
+) -> Result<Vec<u8>> {
+    if external_bindings.is_empty() {
+        return Ok(raw.to_vec());
+    }
+
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut scopes = Vec::<Vec<(String, String)>>::new();
+    let mut required = Vec::<String>::new();
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let declarations = raw_namespace_declarations(&element)?;
+                record_external_bindings_used(
+                    &element,
+                    &scopes,
+                    &declarations,
+                    external_bindings,
+                    &mut required,
+                );
+                scopes.push(declarations);
+            }
+            Event::Empty(element) => {
+                let declarations = raw_namespace_declarations(&element)?;
+                record_external_bindings_used(
+                    &element,
+                    &scopes,
+                    &declarations,
+                    external_bindings,
+                    &mut required,
+                );
+            }
+            Event::End(_) => {
+                scopes.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+
+    if required.is_empty() {
+        return Ok(raw.to_vec());
+    }
+
+    let bindings = external_bindings
+        .iter()
+        .filter(|(prefix, _)| required.contains(prefix))
+        .cloned()
+        .collect::<Vec<_>>();
+    raw_with_root_bindings(raw, &bindings)
+}
+
+fn raw_namespace_declarations(element: &BytesStart<'_>) -> Result<Vec<(String, String)>> {
+    let mut declarations = Vec::new();
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref();
+        let prefix = if name == b"xmlns" {
+            ""
+        } else if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+            std::str::from_utf8(prefix)?
+        } else {
+            continue;
+        };
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
+            .into_owned();
+        declarations.push((prefix.to_owned(), value));
+    }
+    Ok(declarations)
+}
+
+fn record_external_bindings_used(
+    element: &BytesStart<'_>,
+    scopes: &[Vec<(String, String)>],
+    declarations: &[(String, String)],
+    external_bindings: &[(String, String)],
+    required: &mut Vec<String>,
+) {
+    let element_name = element.name();
+    let element_prefix = qualified_name_prefix(element_name.as_ref()).unwrap_or("");
+    record_external_prefix_used(
+        element_prefix,
+        scopes,
+        declarations,
+        external_bindings,
+        required,
+    );
+    for attribute in element.attributes().filter_map(|attribute| attribute.ok()) {
+        let name = attribute.key.as_ref();
+        if name == b"xmlns" || name.starts_with(b"xmlns:") {
+            continue;
+        }
+        if let Some(prefix) = qualified_name_prefix(name) {
+            record_external_prefix_used(prefix, scopes, declarations, external_bindings, required);
+        }
+    }
+}
+
+fn record_external_prefix_used(
+    prefix: &str,
+    scopes: &[Vec<(String, String)>],
+    declarations: &[(String, String)],
+    external_bindings: &[(String, String)],
+    required: &mut Vec<String>,
+) {
+    let internally_bound = declarations
+        .iter()
+        .rev()
+        .any(|(candidate, _)| candidate == prefix)
+        || scopes
+            .iter()
+            .rev()
+            .any(|scope| scope.iter().rev().any(|(candidate, _)| candidate == prefix));
+    if !internally_bound
+        && external_bindings
+            .iter()
+            .any(|(candidate, _)| candidate == prefix)
+        && !required.iter().any(|candidate| candidate == prefix)
+    {
+        required.push(prefix.to_owned());
+    }
+}
+
+fn qualified_name_prefix(name: &[u8]) -> Option<&str> {
+    let separator = name.iter().position(|byte| *byte == b':')?;
+    std::str::from_utf8(&name[..separator]).ok()
+}
+
+fn raw_with_root_bindings(raw: &[u8], bindings: &[(String, String)]) -> Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let end = reader.buffer_position() as usize;
+                let mut element = element.into_owned();
+                let names = bindings
+                    .iter()
+                    .map(|(prefix, _)| {
+                        if prefix.is_empty() {
+                            "xmlns".to_owned()
+                        } else {
+                            format!("xmlns:{prefix}")
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                for ((_, namespace), name) in bindings.iter().zip(&names) {
+                    element.push_attribute((name.as_str(), namespace.as_str()));
+                }
+                let mut output = raw[..start].to_vec();
+                Writer::new(&mut output).write_event(Event::Start(element))?;
+                output.extend_from_slice(&raw[end..]);
+                return Ok(output);
+            }
+            Event::Empty(element) => {
+                let end = reader.buffer_position() as usize;
+                let mut element = element.into_owned();
+                let names = bindings
+                    .iter()
+                    .map(|(prefix, _)| {
+                        if prefix.is_empty() {
+                            "xmlns".to_owned()
+                        } else {
+                            format!("xmlns:{prefix}")
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                for ((_, namespace), name) in bindings.iter().zip(&names) {
+                    element.push_attribute((name.as_str(), namespace.as_str()));
+                }
+                let mut output = raw[..start].to_vec();
+                Writer::new(&mut output).write_event(Event::Empty(element))?;
+                output.extend_from_slice(&raw[end..]);
+                return Ok(output);
+            }
+            Event::Eof => return Ok(raw.to_vec()),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn raw_uses_external_word_binding(raw: &[u8]) -> bool {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut external_binding = vec![true];
+    let mut saw_root = false;
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                let (declares_word, uses_word) = raw_word_binding_use(&element);
+                if !saw_root {
+                    saw_root = true;
+                    if declares_word {
+                        return false;
+                    }
+                }
+                let uses_external =
+                    external_binding.last().copied().unwrap_or(true) && !declares_word;
+                if uses_external && uses_word {
+                    return true;
+                }
+                external_binding.push(uses_external);
+            }
+            Ok(Event::Empty(element)) => {
+                let (declares_word, uses_word) = raw_word_binding_use(&element);
+                if !saw_root {
+                    saw_root = true;
+                    if declares_word {
+                        return false;
+                    }
+                }
+                let uses_external =
+                    external_binding.last().copied().unwrap_or(true) && !declares_word;
+                if uses_external && uses_word {
+                    return true;
+                }
+            }
+            Ok(Event::End(_)) => {
+                if external_binding.len() > 1 {
+                    external_binding.pop();
+                }
+            }
+            Ok(Event::Eof) => return false,
+            Err(_) => return false,
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn raw_word_binding_use(element: &BytesStart<'_>) -> (bool, bool) {
+    let declares_word = element
+        .attributes()
+        .filter_map(|attribute| attribute.ok())
+        .any(|attribute| attribute.key.as_ref() == b"xmlns:w");
+    let uses_word = qualified_name_uses_prefix(element.name().as_ref(), b"w")
+        || element
+            .attributes()
+            .filter_map(|attribute| attribute.ok())
+            .any(|attribute| qualified_name_uses_prefix(attribute.key.as_ref(), b"w"));
+    (declares_word, uses_word)
+}
+
+fn qualified_name_uses_prefix(name: &[u8], prefix: &[u8]) -> bool {
+    name.iter()
+        .position(|byte| *byte == b':')
+        .is_some_and(|separator| &name[..separator] == prefix)
+}
+
+fn raw_with_root_word_binding(raw: &[u8], namespace: &str) -> Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let end = reader.buffer_position() as usize;
+                let mut element = element.into_owned();
+                element.push_attribute(("xmlns:w", namespace));
+                let mut output = raw[..start].to_vec();
+                Writer::new(&mut output).write_event(Event::Start(element))?;
+                output.extend_from_slice(&raw[end..]);
+                return Ok(output);
+            }
+            Event::Empty(element) => {
+                let end = reader.buffer_position() as usize;
+                let mut element = element.into_owned();
+                element.push_attribute(("xmlns:w", namespace));
+                let mut output = raw[..start].to_vec();
+                Writer::new(&mut output).write_event(Event::Empty(element))?;
+                output.extend_from_slice(&raw[end..]);
+                return Ok(output);
+            }
+            Event::Eof => return Ok(raw.to_vec()),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn write_empty_hyperlinks<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    hyperlinks: &[HyperlinkSpan],
+    revisions: &[(usize, usize, CT_Revision)],
+    run_index: usize,
+) -> Result<()> {
+    for (hyperlink_index, hyperlink) in hyperlinks
+        .iter()
+        .enumerate()
+        .filter(|(_, hyperlink)| hyperlink.run_start == run_index && hyperlink.run_end == run_index)
+    {
+        write_hyperlink_start(writer, hyperlink)?;
+        write_hyperlink_boundary(writer, revisions, hyperlink_index, hyperlink, run_index)?;
+        writer.write_event(Event::End(BytesEnd::new(hyperlink_qname(hyperlink))))?;
     }
     Ok(())
 }
@@ -1429,6 +2364,8 @@ mod tests {
             anchor: None,
             run_start: 1,
             run_end: 2,
+            extra_attributes: Vec::new(),
+            extra_xml: Vec::new(),
         });
 
         let mut output = Vec::new();
@@ -1717,6 +2654,7 @@ mod tests {
                 display: "1".to_owned(),
             }],
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
             alt_drawings: Vec::new(),
         });
 
@@ -1799,6 +2737,7 @@ mod tests {
             properties: None,
             content: vec![RunContent::FootnoteRef { id: 2 }],
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
             alt_drawings: Vec::new(),
         });
         p.add_run(" text after");
