@@ -31,7 +31,7 @@ backend-neutral geometry through the Word paginator.
 | F-156 | Extract oxml-chart | L | in-progress | codex |
 | F-157 | Word chart part and embedded workbook | M | in-progress | codex |
 | F-158 | Document::add_chart | M | in-progress | codex |
-| F-159 | Chart rendering in the Word paginator | M | pending | - |
+| F-159 | Chart rendering in the Word paginator | M | in-progress | codex |
 
 ## Sequencing note
 
