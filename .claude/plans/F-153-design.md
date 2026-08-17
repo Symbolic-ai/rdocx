@@ -1,6 +1,6 @@
 # F-153, Content control binding
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S46
 **Size**: M
 **Depends on**: F-152
@@ -111,13 +111,13 @@ controls or custom XML bindings.
 
 ## Implementation checklist
 
-- [ ] Add ordered content-control traversal and lookup by tag or alias.
-- [ ] Add atomic plain-text value mutation and deterministic map binding.
-- [ ] Resolve custom XML datastores by store item id and prefix mappings.
-- [ ] Evaluate the approved bounded XPath subset and preserve untouched XML.
-- [ ] Add map, bound-part, invalid-binding, and preservation regressions.
-- [ ] Run focused checks plus the declared packaging rider.
-- [ ] Update exactly HLD 03, HLD 04, and HLD 10 at completion.
+- [x] Add ordered content-control traversal and lookup by tag or alias.
+- [x] Add atomic plain-text value mutation and deterministic map binding.
+- [x] Resolve custom XML datastores by store item id and prefix mappings.
+- [x] Evaluate the approved bounded XPath subset and preserve untouched XML.
+- [x] Add map, bound-part, invalid-binding, and preservation regressions.
+- [x] Run focused checks plus the declared packaging rider.
+- [x] Update exactly HLD 03, HLD 04, and HLD 10 at completion.
 
 ## Open questions
 

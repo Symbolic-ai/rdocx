@@ -7,6 +7,228 @@ use std::collections::HashMap;
 
 use rdocx::{Document, Length, RunPosition, RunRange};
 
+const CUSTOM_XML_REL_TYPE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml";
+const CUSTOM_XML_PROPS_REL_TYPE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps";
+
+fn document_with_content_controls(document_xml: &str) -> Document {
+    document_with_bound_content_controls(document_xml, None)
+}
+
+fn document_with_bound_content_controls(document_xml: &str, custom_xml: Option<&str>) -> Document {
+    let mut seed = Document::new();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    package.set_part("/word/document.xml", document_xml.as_bytes().to_vec());
+
+    if let Some(custom_xml) = custom_xml {
+        package.set_part("/customXml/item1.xml", custom_xml.as_bytes().to_vec());
+        package.set_part(
+            "/customXml/itemProps1.xml",
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="no"?><ds:datastoreItem ds:itemID="{11111111-1111-1111-1111-111111111111}" xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml"><ds:schemaRefs/></ds:datastoreItem>"#
+                .to_vec(),
+        );
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(CUSTOM_XML_REL_TYPE, "../customXml/item1.xml");
+        package
+            .get_or_create_part_rels("/customXml/item1.xml")
+            .add(CUSTOM_XML_PROPS_REL_TYPE, "itemProps1.xml");
+        package.content_types.add_override(
+            "/customXml/itemProps1.xml",
+            "application/vnd.openxmlformats-officedocument.customXmlProperties+xml",
+        );
+    }
+
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    Document::from_bytes(output.get_ref()).unwrap()
+}
+
+fn wrap_word_body(body: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}</w:body></w:document>"#
+    )
+}
+
+#[test]
+fn tag_precedes_alias_and_each_control_updates_once() {
+    let xml = wrap_word_body(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="customer"/><w:alias w:val="shared"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>one</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:alias w:val="shared"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>two</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="missing"/><w:alias w:val="shared"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>three</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+    let values = HashMap::from([
+        ("customer".to_string(), "tag value".to_string()),
+        ("shared".to_string(), "alias value".to_string()),
+    ]);
+
+    assert_eq!(document.bind_content_controls(&values).unwrap(), 3);
+    let controls = document.content_controls();
+    assert_eq!(
+        controls
+            .iter()
+            .map(|control| control.text())
+            .collect::<Vec<_>>(),
+        ["tag value", "alias value", "alias value"]
+    );
+    assert_eq!(controls[0].tag(), Some("customer"));
+    assert_eq!(controls[0].alias(), Some("shared"));
+    assert_eq!(controls[0].id(), None);
+    assert_eq!(
+        controls[0].control_type(),
+        Some(rdocx_oxml::SdtType::PlainText)
+    );
+    assert_eq!(document.content_controls_by_tag("customer").len(), 1);
+    assert_eq!(document.content_controls_by_alias("shared").len(), 3);
+
+    let mut alias_document = document_with_content_controls(&xml);
+    assert_eq!(
+        alias_document
+            .set_content_control_value_by_alias("shared", "direct alias")
+            .unwrap(),
+        3
+    );
+    assert!(
+        alias_document
+            .content_controls()
+            .iter()
+            .all(|control| control.text() == "direct alias")
+    );
+}
+
+#[test]
+fn a_control_map_updates_every_matching_display_value() {
+    let xml = wrap_word_body(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="outer"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>old outer</w:t><w:tab/><w:br/></w:r></w:p><w:sdt><w:sdtPr><w:tag w:val="inner"/><w:text/><w:temporary w:val="1"/></w:sdtPr><w:sdtContent><w:p><w:r><w:rPr><w:i/></w:rPr><w:t>old inner</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="unrelated-control"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>nested untouched</w:t></w:r></w:p></w:sdtContent></w:sdt></w:sdtContent></w:sdt><w:p><w:r><w:t>unrelated</w:t></w:r></w:p>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+    let values = HashMap::from([
+        ("outer".to_string(), "new outer".to_string()),
+        ("inner".to_string(), "new inner".to_string()),
+    ]);
+
+    assert_eq!(document.bind_content_controls(&values).unwrap(), 2);
+    let bytes = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let saved = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(saved.contains("<w:b/>"), "{saved}");
+    assert!(saved.contains("<w:t>new outer</w:t>"), "{saved}");
+    assert!(saved.contains("<w:i/>"), "{saved}");
+    assert!(saved.contains("<w:t>new inner</w:t>"), "{saved}");
+    assert!(saved.contains("<w:temporary w:val=\"1\"/>"), "{saved}");
+    assert!(saved.contains("<w:t>nested untouched</w:t>"), "{saved}");
+    assert!(saved.contains("<w:t>unrelated</w:t>"), "{saved}");
+    assert!(!saved.contains("<w:tab"), "{saved}");
+    assert!(!saved.contains("<w:br"), "{saved}");
+    let controls = document.content_controls();
+    assert_eq!(controls[0].text(), "new outer");
+    assert_eq!(controls[1].text(), "new inner");
+    assert_eq!(controls[2].text(), "nested untouched");
+}
+
+#[test]
+fn a_bound_custom_xml_value_updates_the_part_and_display_text_atomically() {
+    let xml = wrap_word_body(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="customer"/><w:dataBinding w:storeItemID="{11111111-1111-1111-1111-111111111111}" w:xpath="/c:root/c:customer[2]/c:name" w:prefixMappings="xmlns:c='urn:customer'"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>old display</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let custom_xml = r#"<?producer keep?><c:root xmlns:c="urn:customer" keep="same"><c:customer code="A"><c:name>First</c:name></c:customer><c:customer xmlns:c="urn:other"><c:name>shadow</c:name></c:customer><!--marker--><c:customer code="B"><c:name old="1">Old &amp; text</c:name><c:other>untouched</c:other></c:customer></c:root>"#;
+    let mut document = document_with_bound_content_controls(&xml, Some(custom_xml));
+
+    assert_eq!(
+        document
+            .set_content_control_value_by_tag("customer", "Ada & Co")
+            .unwrap(),
+        1
+    );
+    let bytes = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    assert_eq!(
+        package.get_part("/customXml/item1.xml").unwrap(),
+        br#"<?producer keep?><c:root xmlns:c="urn:customer" keep="same"><c:customer code="A"><c:name>First</c:name></c:customer><c:customer xmlns:c="urn:other"><c:name>shadow</c:name></c:customer><!--marker--><c:customer code="B"><c:name old="1">Ada &amp; Co</c:name><c:other>untouched</c:other></c:customer></c:root>"#
+    );
+
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    assert_eq!(reopened.content_controls()[0].text(), "Ada & Co");
+
+    let document_xml =
+        std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let tag = document_xml.find("<w:tag").unwrap();
+    let binding = document_xml.find("<w:dataBinding").unwrap();
+    let control_type = document_xml.find("<w:text/>").unwrap();
+    assert!(tag < binding && binding < control_type);
+}
+
+#[test]
+fn an_invalid_binding_changes_neither_document_nor_custom_xml() {
+    let cases = [
+        (
+            "{22222222-2222-2222-2222-222222222222}",
+            "/c:root/c:name",
+            "xmlns:c='urn:customer'",
+        ),
+        (
+            "{11111111-1111-1111-1111-111111111111}",
+            "//c:name",
+            "xmlns:c='urn:customer'",
+        ),
+        (
+            "{11111111-1111-1111-1111-111111111111}",
+            "/c:root/c:name",
+            "xmlns:c='urn:customer'",
+        ),
+        (
+            "{11111111-1111-1111-1111-111111111111}",
+            "/c:root/c:name[1]",
+            "xmlns:c=urn:customer",
+        ),
+    ];
+    let custom_xml =
+        r#"<c:root xmlns:c="urn:customer"><c:name>one</c:name><c:name>two</c:name></c:root>"#;
+
+    for (store_item_id, xpath, prefix_mappings) in cases {
+        let xml = wrap_word_body(&format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="customer"/><w:dataBinding w:storeItemID="{{11111111-1111-1111-1111-111111111111}}" w:xpath="/c:root/c:name[1]" w:prefixMappings="xmlns:c='urn:customer'"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>valid unchanged</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="customer"/><w:dataBinding w:storeItemID="{store_item_id}" w:xpath="{xpath}" w:prefixMappings="{prefix_mappings}"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>invalid unchanged</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+        ));
+        let mut document = document_with_bound_content_controls(&xml, Some(custom_xml));
+        let before = document.to_bytes().unwrap();
+
+        assert!(
+            document
+                .set_content_control_value_by_tag("customer", "changed")
+                .is_err(),
+            "invalid binding unexpectedly succeeded for {store_item_id} {xpath}"
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+
+    let xml = wrap_word_body(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="customer"/><w:dataBinding w:storeItemID="{11111111-1111-1111-1111-111111111111}" w:xpath="/c:root/c:name[1]" w:prefixMappings="xmlns:c='urn:customer'"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>unchanged</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let invalid_properties = [
+        br#"<ds:datastoreItem bad:itemID="{11111111-1111-1111-1111-111111111111}" xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml" xmlns:bad="urn:producer"><ds:schemaRefs/></ds:datastoreItem>"#
+            .as_slice(),
+        br#"<bad:wrapper xmlns:bad="urn:producer" xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml"><ds:datastoreItem ds:itemID="{11111111-1111-1111-1111-111111111111}"/></bad:wrapper>"#
+            .as_slice(),
+    ];
+    for properties_xml in invalid_properties {
+        let mut document = document_with_bound_content_controls(&xml, Some(custom_xml));
+        let bytes = document.to_bytes().unwrap();
+        let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        package.set_part("/customXml/itemProps1.xml", properties_xml.to_vec());
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        let mut document = Document::from_bytes(output.get_ref()).unwrap();
+        let before = document.to_bytes().unwrap();
+        assert!(
+            document
+                .set_content_control_value_by_tag("customer", "changed")
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+}
+
 #[test]
 fn run_ranges_reject_reverse_missing_and_nonparagraph_positions() {
     let mut document = Document::new();

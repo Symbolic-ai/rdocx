@@ -218,6 +218,16 @@ WASM, or CLI surfaces. Those consumers continue to own the same
 package-preserving `Document`, so native comment edits remain intact when a
 binding subsequently saves it.
 
+Native Word callers can also inspect content controls through
+`Document::content_controls` and the tag or alias lookup methods.
+`ContentControlRef` exposes immutable metadata and display text. Direct setters
+update every matching tag or alias, while `bind_content_controls` applies a
+string map with tag precedence and alias fallback. Bound values update their
+custom XML datastore and displayed text atomically through the
+package-preserving facade. These methods are additive native APIs. They do not
+implicitly add Python, WASM, or CLI methods, and the existing binding surfaces
+remain unchanged.
+
 The stable Rust family moves to 0.5.0 for the numbering preservation model.
 `CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
 producer extensions survive typed mutations. Full struct literals written for

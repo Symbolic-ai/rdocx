@@ -162,6 +162,16 @@ slots. Empty or malformed controls remain opaque. Prefix-tolerant readers and
 fixed-prefix writers follow the same boundary rules as the surrounding
 WordprocessingML model.
 
+The `rdocx` facade owns content-control value mutation because one operation
+can cross the typed document and package parts. Immutable summaries expose the
+control metadata and display text. Lookup and mutation select tags before
+aliases, so map application updates each control at most once. Display changes
+preserve the control shell, direct run formatting, and nested control
+boundaries. The facade stages every selected display and custom XML change on
+cloned state, validates the resulting XML, then commits once and invalidates
+layout once. Any rejected control or binding leaves both document and package
+state unchanged.
+
 `rdocx-layout` keeps the flow model: the engine, the paginator, blocks, tables
 and the style resolver. Slides do not paginate, so none of it transfers. The
 flow engine resolves Word relationship IDs to content-addressed `MediaId`

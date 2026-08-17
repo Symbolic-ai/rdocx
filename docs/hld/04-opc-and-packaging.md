@@ -130,6 +130,23 @@ state creates both relationships and both overrides together. Existing custom
 targets remain authoritative, and removal of the final API-owned thread removes
 only the parts, relationships, and overrides created by the typed model.
 
+Content-control data binding follows the existing package graph rather than a
+conventional filename. The main document's custom XML relationship resolves an
+item part. That item's custom XML properties relationship resolves the
+properties part whose root `ds:itemID` identifies the datastore. Matching is
+case-insensitive and accepts the optional braces used by producers, while a
+same-local-name attribute or element in another namespace is not metadata.
+
+The binding evaluator accepts namespace-aware absolute child paths with
+optional one-based numeric child indices. Functions, wildcards, descendant
+axes, and general predicates are outside the contract. Prefix mappings and
+in-scope namespace shadowing resolve every path step by expanded name. The
+selected final element must be unique and contain only simple text or be empty.
+The facade replaces only that element's text span, expands an empty selected
+element when needed, and retains every unrelated custom XML byte exactly.
+Display and custom-part changes are staged together and committed only after
+all selected bindings serialize and reparse successfully.
+
 ## Part naming
 
 **Numeric suffixes are allocated after the greatest positive parsed suffix,
