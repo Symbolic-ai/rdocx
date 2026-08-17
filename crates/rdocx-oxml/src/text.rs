@@ -34,6 +34,16 @@ pub enum FieldType {
     Page,
     /// Total number of pages (NUMPAGES field).
     NumPages,
+    /// Text of the named bookmark (REF field).
+    Ref {
+        bookmark: String,
+        instruction: String,
+    },
+    /// Page containing the named bookmark (PAGEREF field).
+    PageRef {
+        bookmark: String,
+        instruction: String,
+    },
     /// Any other field instruction.
     Other(String),
 }
@@ -48,6 +58,8 @@ pub enum RunContent {
     /// A simple field (from `<w:fldSimple>`).
     Field {
         field_type: FieldType,
+        /// Stored display text used when a target cannot be resolved.
+        display: String,
     },
     /// A footnote reference (`<w:footnoteReference w:id="..."/>`).
     FootnoteRef {
@@ -80,6 +92,42 @@ pub enum CommentRangeMarker {
         /// Number of raw children at this run boundary that precede the marker.
         raw_before: usize,
     },
+}
+
+/// Read projection of a bookmark marker retained at a run boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BookmarkMarker {
+    start: bool,
+    id: Option<i32>,
+    name: Option<String>,
+    run_index: usize,
+}
+
+impl BookmarkMarker {
+    fn new(start: bool, id: i32, name: Option<String>, run_index: usize) -> Self {
+        Self {
+            start,
+            id: Some(id),
+            name,
+            run_index,
+        }
+    }
+
+    pub fn is_start(&self) -> bool {
+        self.start
+    }
+
+    pub fn id(&self) -> Option<i32> {
+        self.id
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub fn run_index(&self) -> usize {
+        self.run_index
+    }
 }
 
 impl CommentRangeMarker {
@@ -385,6 +433,8 @@ pub struct CT_P {
     pub hyperlinks: Vec<HyperlinkSpan>,
     /// Typed comment range boundaries at run insertion points.
     pub comment_ranges: Vec<CommentRangeMarker>,
+    /// Typed projections of preserved bookmark markers.
+    pub bookmark_markers: Vec<BookmarkMarker>,
     /// Unknown child elements captured as raw XML with their insertion position (run index).
     pub extra_xml: Vec<(usize, Vec<u8>)>,
     /// Typed run controls at
@@ -400,6 +450,7 @@ impl CT_P {
             runs: Vec::new(),
             hyperlinks: Vec::new(),
             comment_ranges: Vec::new(),
+            bookmark_markers: Vec::new(),
             extra_xml: Vec::new(),
             content_controls: Vec::new(),
         }
@@ -423,6 +474,53 @@ impl CT_P {
         self.runs.last_mut().unwrap()
     }
 
+    /// Insert a canonical bookmark start marker at a direct-run boundary.
+    pub fn insert_bookmark_start(&mut self, run_index: usize, id: i32, name: &str) -> bool {
+        if run_index > self.runs.len() {
+            return false;
+        }
+        let mut value = itoa::Buffer::new();
+        let mut element = BytesStart::new("w:bookmarkStart");
+        element.push_attribute(("w:id", value.format(id)));
+        element.push_attribute(("w:name", name));
+        let mut raw = Vec::new();
+        if Writer::new(&mut raw)
+            .write_event(Event::Empty(element))
+            .is_err()
+        {
+            return false;
+        }
+        self.extra_xml.push((run_index, raw));
+        self.bookmark_markers.push(BookmarkMarker::new(
+            true,
+            id,
+            Some(name.to_owned()),
+            run_index,
+        ));
+        true
+    }
+
+    /// Insert a canonical bookmark end marker at a direct-run boundary.
+    pub fn insert_bookmark_end(&mut self, run_index: usize, id: i32) -> bool {
+        if run_index > self.runs.len() {
+            return false;
+        }
+        let mut value = itoa::Buffer::new();
+        let mut element = BytesStart::new("w:bookmarkEnd");
+        element.push_attribute(("w:id", value.format(id)));
+        let mut raw = Vec::new();
+        if Writer::new(&mut raw)
+            .write_event(Event::Empty(element))
+            .is_err()
+        {
+            return false;
+        }
+        self.extra_xml.push((run_index, raw));
+        self.bookmark_markers
+            .push(BookmarkMarker::new(false, id, None, run_index));
+        true
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_prefixes(reader, &["w".to_string()])
     }
@@ -435,6 +533,7 @@ impl CT_P {
         let mut runs = Vec::new();
         let mut hyperlinks = Vec::new();
         let mut comment_ranges = Vec::new();
+        let mut bookmark_markers = Vec::new();
         let mut extra_xml = Vec::new();
         let mut content_controls = Vec::new();
         let mut buf = Vec::new();
@@ -520,24 +619,48 @@ impl CT_P {
                                 run_end,
                             });
                         }
-                    } else if matches_local_name(name.as_ref(), b"fldSimple") {
+                    } else if is_word_element(name.as_ref(), b"fldSimple", &prefixes) {
                         // Parse simple field: extract w:instr attribute
-                        let mut instr = String::new();
-                        for attr in e.attributes().flatten() {
-                            if matches_local_name(attr.key.as_ref(), b"instr") {
-                                instr = std::str::from_utf8(&attr.value).unwrap_or("").to_string();
-                            }
-                        }
+                        let instr =
+                            optional_word_attribute(e, b"instr", &prefixes).unwrap_or_default();
 
                         let field_type = parse_field_instruction(&instr);
 
-                        // Skip child runs (they contain the default display value)
-                        reader.read_to_end_into(name, &mut Vec::new())?;
+                        let mut display = String::new();
+                        let mut inner_buf = Vec::new();
+                        loop {
+                            match reader.read_event_into(&mut inner_buf) {
+                                Ok(Event::Start(ref child)) => {
+                                    let child_prefixes = word_prefixes_at(child, &prefixes)?;
+                                    if is_word_element(child.name().as_ref(), b"r", &child_prefixes)
+                                    {
+                                        display.push_str(
+                                            &CT_R::from_xml_with_prefixes(reader, &child_prefixes)?
+                                                .text(),
+                                        );
+                                    } else {
+                                        reader.read_to_end_into(child.name(), &mut Vec::new())?;
+                                    }
+                                }
+                                Ok(Event::End(ref child))
+                                    if matches_local_name(child.name().as_ref(), b"fldSimple") =>
+                                {
+                                    break;
+                                }
+                                Ok(Event::Eof) => break,
+                                Err(error) => return Err(error.into()),
+                                _ => {}
+                            }
+                            inner_buf.clear();
+                        }
 
                         // Add a synthetic run with the field content
                         runs.push(CT_R {
                             properties: None,
-                            content: vec![RunContent::Field { field_type }],
+                            content: vec![RunContent::Field {
+                                field_type,
+                                display,
+                            }],
                             extra_xml: Vec::new(),
                             alt_drawings: Vec::new(),
                         });
@@ -553,6 +676,20 @@ impl CT_P {
                             id,
                             is_word_element(name.as_ref(), b"commentRangeStart", &prefixes),
                         );
+                    } else if is_word_element(name.as_ref(), b"bookmarkStart", &prefixes)
+                        || is_word_element(name.as_ref(), b"bookmarkEnd", &prefixes)
+                    {
+                        let start = is_word_element(name.as_ref(), b"bookmarkStart", &prefixes);
+                        let id = optional_word_attribute(e, b"id", &prefixes)
+                            .and_then(|value| value.parse().ok());
+                        let bookmark_name = optional_word_attribute(e, b"name", &prefixes);
+                        bookmark_markers.push(BookmarkMarker {
+                            start,
+                            id,
+                            name: bookmark_name,
+                            run_index: runs.len(),
+                        });
+                        extra_xml.push((runs.len(), capture_element(reader, e)?));
                     } else {
                         // Capture unknown elements (bookmarks, comments, etc.) as raw XML
                         extra_xml.push((runs.len(), capture_element(reader, e)?));
@@ -572,6 +709,20 @@ impl CT_P {
                             id,
                             is_word_element(name.as_ref(), b"commentRangeStart", &prefixes),
                         );
+                    } else if is_word_element(name.as_ref(), b"bookmarkStart", &prefixes)
+                        || is_word_element(name.as_ref(), b"bookmarkEnd", &prefixes)
+                    {
+                        let start = is_word_element(name.as_ref(), b"bookmarkStart", &prefixes);
+                        let id = optional_word_attribute(e, b"id", &prefixes)
+                            .and_then(|value| value.parse().ok());
+                        let bookmark_name = optional_word_attribute(e, b"name", &prefixes);
+                        bookmark_markers.push(BookmarkMarker {
+                            start,
+                            id,
+                            name: bookmark_name,
+                            run_index: runs.len(),
+                        });
+                        extra_xml.push((runs.len(), capture_empty_element(e)?));
                     } else if !matches_local_name(name.as_ref(), b"p") {
                         extra_xml.push((runs.len(), capture_empty_element(e)?));
                     }
@@ -591,6 +742,7 @@ impl CT_P {
             runs,
             hyperlinks,
             comment_ranges,
+            bookmark_markers,
             extra_xml,
             content_controls,
         })
@@ -660,11 +812,17 @@ impl CT_P {
 
             // Check if this run is a field run
             if run.content.len() == 1
-                && let RunContent::Field { field_type } = &run.content[0]
+                && let RunContent::Field {
+                    field_type,
+                    display,
+                } = &run.content[0]
             {
                 let instr = match field_type {
                     FieldType::Page => " PAGE ",
                     FieldType::NumPages => " NUMPAGES ",
+                    FieldType::Ref { instruction, .. } | FieldType::PageRef { instruction, .. } => {
+                        instruction.as_str()
+                    }
                     FieldType::Other(s) => s.as_str(),
                 };
                 let mut fld = BytesStart::new("w:fldSimple");
@@ -673,7 +831,11 @@ impl CT_P {
                 // Emit a default display run
                 writer.write_event(Event::Start(BytesStart::new("w:r")))?;
                 writer.write_event(Event::Start(BytesStart::new("w:t")))?;
-                writer.write_event(Event::Text(BytesText::new("1")))?;
+                let display = match field_type {
+                    FieldType::Page | FieldType::NumPages if display.is_empty() => "1",
+                    _ => display.as_str(),
+                };
+                writer.write_event(Event::Text(BytesText::new(display)))?;
                 writer.write_event(Event::End(BytesEnd::new("w:t")))?;
                 writer.write_event(Event::End(BytesEnd::new("w:r")))?;
                 writer.write_event(Event::End(BytesEnd::new("w:fldSimple")))?;
@@ -825,15 +987,60 @@ fn required_word_i32_attribute(
     )))
 }
 
+fn optional_word_attribute(
+    element: &BytesStart<'_>,
+    local: &[u8],
+    word_prefixes: &[String],
+) -> Option<String> {
+    for attribute in element.attributes().flatten() {
+        let key = attribute.key.as_ref();
+        let Some(separator) = key.iter().position(|byte| *byte == b':') else {
+            continue;
+        };
+        if key.get(separator + 1..) == Some(local)
+            && word_prefixes
+                .iter()
+                .any(|prefix| prefix.as_bytes() == &key[..separator])
+        {
+            return std::str::from_utf8(&attribute.value)
+                .ok()
+                .map(str::to_owned);
+        }
+    }
+    None
+}
+
 /// Parse a field instruction string into a FieldType.
 fn parse_field_instruction(instr: &str) -> FieldType {
-    let trimmed = instr.trim().to_uppercase();
+    let instruction = instr.trim();
+    let trimmed = instruction.to_uppercase();
     // Field instruction may have switches like "PAGE \* MERGEFORMAT"
     let keyword = trimmed.split_whitespace().next().unwrap_or("");
     match keyword {
         "PAGE" => FieldType::Page,
         "NUMPAGES" => FieldType::NumPages,
-        _ => FieldType::Other(instr.trim().to_string()),
+        "REF" | "PAGEREF" => {
+            let bookmark = instruction
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or("")
+                .trim_matches('"')
+                .to_owned();
+            if bookmark.is_empty() {
+                FieldType::Other(instruction.to_owned())
+            } else if keyword == "REF" {
+                FieldType::Ref {
+                    bookmark,
+                    instruction: instruction.to_owned(),
+                }
+            } else {
+                FieldType::PageRef {
+                    bookmark,
+                    instruction: instruction.to_owned(),
+                }
+            }
+        }
+        _ => FieldType::Other(instruction.to_owned()),
     }
 }
 
@@ -1156,7 +1363,8 @@ mod tests {
         assert!(matches!(
             p.runs[0].content[0],
             RunContent::Field {
-                field_type: FieldType::Page
+                field_type: FieldType::Page,
+                ..
             }
         ));
     }
@@ -1170,9 +1378,106 @@ mod tests {
         assert!(matches!(
             p.runs[0].content[0],
             RunContent::Field {
-                field_type: FieldType::NumPages
+                field_type: FieldType::NumPages,
+                ..
             }
         ));
+    }
+
+    #[test]
+    fn ref_and_pageref_instructions_keep_targets_and_switches() {
+        let ref_field = parse_paragraph(
+            r#"<w:fldSimple w:instr=" REF destination \h \* MERGEFORMAT "><w:r><w:t>cached text</w:t></w:r></w:fldSimple>"#,
+        );
+        let page_ref = parse_paragraph(
+            r#"<w:fldSimple w:instr=" PAGEREF destination \p "><w:r><w:t>7</w:t></w:r></w:fldSimple>"#,
+        );
+
+        assert!(matches!(
+            &ref_field.runs[0].content[0],
+            RunContent::Field {
+                field_type: FieldType::Ref { bookmark, instruction },
+                display,
+            } if bookmark == "destination"
+                && instruction == r"REF destination \h \* MERGEFORMAT"
+                && display == "cached text"
+        ));
+        assert!(matches!(
+            &page_ref.runs[0].content[0],
+            RunContent::Field {
+                field_type: FieldType::PageRef { bookmark, instruction },
+                display,
+            } if bookmark == "destination"
+                && instruction == r"PAGEREF destination \p"
+                && display == "7"
+        ));
+
+        let mut output = Vec::new();
+        ref_field.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(r#"w:instr="REF destination \h \* MERGEFORMAT""#));
+        assert!(output.contains("<w:t>cached text</w:t>"));
+    }
+
+    #[test]
+    fn empty_cross_reference_displays_remain_empty() {
+        let paragraph = parse_paragraph(
+            r#"<w:fldSimple w:instr=" REF destination "><w:r><w:t></w:t></w:r></w:fldSimple><w:fldSimple w:instr=" PAGEREF destination "><w:r><w:t></w:t></w:r></w:fldSimple>"#,
+        );
+
+        let mut output = Vec::new();
+        paragraph.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert_eq!(output.matches("<w:t></w:t>").count(), 2, "{output}");
+        assert!(!output.contains("<w:t>1</w:t>"), "{output}");
+    }
+
+    #[test]
+    fn field_parser_uses_expanded_names_and_accepts_word_aliases() {
+        let word_namespace = crate::namespace::W_NS;
+        let paragraph = parse_paragraph(&format!(
+            r#"<x:fldSimple xmlns:x="urn:producer" x:instr="REF foreign"><x:r><x:t>foreign</x:t></x:r></x:fldSimple><q:fldSimple xmlns:q="{word_namespace}" q:instr="REF destination"><q:r><q:t>cached</q:t></q:r></q:fldSimple>"#,
+        ));
+
+        assert_eq!(paragraph.runs.len(), 1);
+        assert!(matches!(
+            &paragraph.runs[0].content[0],
+            RunContent::Field {
+                field_type: FieldType::Ref { bookmark, .. },
+                display,
+            } if bookmark == "destination" && display == "cached"
+        ));
+        let mut output = Vec::new();
+        paragraph.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("<x:fldSimple"), "{output}");
+        assert!(output.contains("x:instr=\"REF foreign\""), "{output}");
+        assert!(output.contains("<w:fldSimple"), "{output}");
+    }
+
+    #[test]
+    fn bookmark_markers_keep_range_order_and_unmodelled_neighbours() {
+        let p = parse_paragraph(
+            r#"<w:customBefore/><w:bookmarkStart w:id="4" w:name="destination"/><w:r><w:t>inside</w:t></w:r><w:bookmarkEnd w:id="4"/><w:customAfter/>"#,
+        );
+
+        assert_eq!(p.bookmark_markers.len(), 2);
+        assert!(p.bookmark_markers[0].is_start());
+        assert_eq!(p.bookmark_markers[0].id(), Some(4));
+        assert_eq!(p.bookmark_markers[0].name(), Some("destination"));
+        assert_eq!(p.bookmark_markers[0].run_index(), 0);
+        assert!(!p.bookmark_markers[1].is_start());
+        assert_eq!(p.bookmark_markers[1].run_index(), 1);
+
+        let mut output = Vec::new();
+        p.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        let before = output.find("<w:customBefore/>").unwrap();
+        let start = output.find("<w:bookmarkStart").unwrap();
+        let run = output.find("<w:r>").unwrap();
+        let end = output.find("<w:bookmarkEnd").unwrap();
+        let after = output.find("<w:customAfter/>").unwrap();
+        assert!(before < start && start < run && run < end && end < after);
     }
 
     #[test]
@@ -1185,13 +1490,15 @@ mod tests {
         assert!(matches!(
             p.runs[1].content[0],
             RunContent::Field {
-                field_type: FieldType::Page
+                field_type: FieldType::Page,
+                ..
             }
         ));
         assert!(matches!(
             p.runs[3].content[0],
             RunContent::Field {
-                field_type: FieldType::NumPages
+                field_type: FieldType::NumPages,
+                ..
             }
         ));
     }
@@ -1204,6 +1511,7 @@ mod tests {
             properties: None,
             content: vec![RunContent::Field {
                 field_type: FieldType::Page,
+                display: "1".to_owned(),
             }],
             extra_xml: Vec::new(),
             alt_drawings: Vec::new(),
@@ -1224,7 +1532,8 @@ mod tests {
         assert!(matches!(
             parsed.runs[1].content[0],
             RunContent::Field {
-                field_type: FieldType::Page
+                field_type: FieldType::Page,
+                ..
             }
         ));
     }

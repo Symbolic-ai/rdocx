@@ -154,6 +154,14 @@ with unmodelled attributes and root children retained at their original
 boundaries. The `rdocx` facade owns the relationship-resolved pair of comment
 parts and coordinates them with the anchors in the main document.
 
+The Word text model also projects bookmark starts and ends at direct-run
+boundaries while retaining every marker as ordered raw XML. Structured simple
+fields distinguish `REF` and `PAGEREF`, keep the complete instruction including
+switches, and retain the stored display. The `rdocx` facade correlates bookmark
+ids and owns mutation across top-level body paragraphs. `rdocx-layout` resolves
+bookmark text and maps page targets, while the shared `oxml-layout` boundary
+exposes only format-neutral `Target` and `TargetPage` field kinds.
+
 The content-control model owns one recursive `CT_Sdt` grammar at block, row,
 cell, paragraph, and run placement boundaries. It reports tag, alias, numeric
 id, bounded control type, and custom XML binding metadata from `CT_SdtPr`.
@@ -328,6 +336,14 @@ read-only view over the typed comment and its comments-extended thread entry.
 Replies follow paragraph-id parent linkage, resolution applies to the thread
 root, and removal deletes the selected comment plus descendant replies without
 deleting unrelated runs or producer XML.
+
+Word bookmark mutation reuses the same top-level `RunPosition` and half-open
+`RunRange` boundary. `Document::bookmarks` returns immutable correlated
+summaries in document order and reports malformed, unmatched, reversed, or
+duplicate markers without hiding their preserved XML. `Document::add_bookmark`
+validates both endpoints and the Word name, rejects producer-reserved and
+duplicate names, allocates the first free nonnegative id, stages both marker
+insertions, commits once, and invalidates layout once.
 
 The `rpptx` facade provides the same total lookup boundary for slides, nested
 shape trees, placeholders, text frames, paragraphs, regular runs, tables and

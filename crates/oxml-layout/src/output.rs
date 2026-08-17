@@ -84,12 +84,25 @@ impl MediaId {
 }
 
 /// Kind of field for post-pagination substitution.
+///
+/// Target carriers stay format-neutral at this shared layout boundary.
+///
+/// ```
+/// use oxml_layout::FieldKind;
+///
+/// assert_eq!(FieldKind::TargetPage(3), FieldKind::TargetPage(3));
+/// assert_eq!(FieldKind::Target(3), FieldKind::Target(3));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldKind {
     /// Current page number.
     Page,
     /// Total number of pages.
     NumPages,
+    /// Page containing a target.
+    TargetPage(usize),
+    /// Zero-width target position retained until page locations are collected.
+    Target(usize),
 }
 
 /// A positioned run of shaped glyphs.

@@ -856,3 +856,155 @@ fn hostile_run_properties_cannot_inject_html() {
     assert!(!html.contains("display:none"), "css injection: {html}");
     assert!(html.contains("text"));
 }
+
+#[test]
+fn a_bookmark_inserted_over_a_range_is_listed_with_its_text() {
+    let mut document = Document::new();
+    document.add_paragraph("before ").add_run("inside");
+    document.add_paragraph(" across ").add_run("after");
+
+    let id = document
+        .add_bookmark(
+            "destination",
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+                end: RunPosition {
+                    body_index: 1,
+                    run_index: 1,
+                },
+            },
+        )
+        .expect("valid bookmark range");
+
+    let bookmarks = document.bookmarks();
+    assert_eq!(bookmarks.len(), 1);
+    assert_eq!(bookmarks[0].id(), Some(id));
+    assert_eq!(bookmarks[0].name(), Some("destination"));
+    assert_eq!(bookmarks[0].text(), "inside\n across ");
+    assert_eq!(bookmarks[0].issue(), None);
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.bookmarks()[0].text(), "inside\n across ");
+}
+
+#[test]
+fn ref_and_pageref_resolve_to_the_bookmark_text_and_final_page() {
+    let mut document = Document::new();
+    document.add_paragraph("field-placeholder");
+    document
+        .add_paragraph("bookmarked text")
+        .page_break_before(true);
+    document
+        .add_bookmark(
+            "destination",
+            RunRange {
+                start: RunPosition {
+                    body_index: 1,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 1,
+                    run_index: 1,
+                },
+            },
+        )
+        .unwrap();
+
+    let bytes = document.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let original_xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let xml = original_xml.replace(
+            "<w:r>\n        <w:t>field-placeholder</w:t>\n      </w:r>",
+            r#"<w:fldSimple w:instr=" REF destination "><w:r><w:t>cached</w:t></w:r></w:fldSimple><w:r><w:t> page </w:t></w:r><w:fldSimple w:instr=" PAGEREF destination "><w:r><w:t>cached-page</w:t></w:r></w:fldSimple>"#,
+        );
+    assert_ne!(xml, original_xml, "{original_xml}");
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let mut rewritten = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut rewritten).unwrap();
+
+    let reopened = Document::from_bytes(rewritten.get_ref()).unwrap();
+    let page = reopened.layout_page(0).unwrap().unwrap();
+    let text = page
+        .elements
+        .iter()
+        .filter_map(|element| match element {
+            oxml_layout::PositionedElement::Text(run) => Some(run.text.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    assert!(text.contains("bookmarked text"), "{text}");
+    assert!(text.contains("page 2"), "{text}");
+}
+
+#[test]
+fn missing_and_duplicate_bookmark_targets_fail_without_mutation() {
+    let mut document = Document::new();
+    document.add_paragraph("one");
+    let range = RunRange {
+        start: RunPosition {
+            body_index: 0,
+            run_index: 0,
+        },
+        end: RunPosition {
+            body_index: 0,
+            run_index: 1,
+        },
+    };
+    document.add_bookmark("destination", range).unwrap();
+    let before = document.to_bytes().unwrap();
+
+    assert!(document.add_bookmark("destination", range).is_err());
+    assert!(document.add_bookmark("_TocReserved", range).is_err());
+    assert!(
+        document
+            .add_bookmark(
+                "invalid",
+                RunRange {
+                    start: RunPosition {
+                        body_index: 0,
+                        run_index: 2,
+                    },
+                    end: range.end,
+                },
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn malformed_and_unmatched_bookmark_markers_are_reported_without_loss() {
+    let mut document = Document::new();
+    document.add_paragraph("content");
+    let bytes = document.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let original_xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let xml = original_xml
+        .replace(
+            "<w:r>\n        <w:t>content</w:t>\n      </w:r>",
+            r#"<w:bookmarkStart w:name="missing-id"/><w:r><w:t>content</w:t></w:r><w:bookmarkEnd w:id="9"/>"#,
+        );
+    assert_ne!(xml, original_xml);
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let mut rewritten = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut rewritten).unwrap();
+
+    let mut reopened = Document::from_bytes(rewritten.get_ref()).unwrap();
+    let bookmarks = reopened.bookmarks();
+    assert_eq!(bookmarks.len(), 2);
+    assert!(bookmarks.iter().all(|bookmark| bookmark.issue().is_some()));
+    assert!(bookmarks.iter().any(|bookmark| bookmark.id().is_none()));
+    assert!(bookmarks.iter().any(|bookmark| bookmark.id() == Some(9)));
+
+    let round_trip = reopened.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(round_trip)).unwrap();
+    let round_trip_xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    assert!(round_trip_xml.contains(r#"<w:bookmarkStart w:name="missing-id"/>"#));
+    assert!(round_trip_xml.contains(r#"<w:bookmarkEnd w:id="9"/>"#));
+}

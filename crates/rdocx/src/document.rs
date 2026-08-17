@@ -1,5 +1,6 @@
 //! The main Document type — entry point for the rdocx API.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -1987,14 +1988,28 @@ impl Document {
             level: u32,
             text: String,
             bookmark_name: String,
+            bookmark_id: i32,
         }
 
         // Calling insert_toc twice must not mint bookmarks that collide with
         // the ones the first call left behind — duplicate `w:name` values make
         // the internal links ambiguous. Continue numbering past whatever is
         // already there.
-        let mut toc_counter = self.highest_toc_bookmark();
-        let mut bookmark_id = 100 + toc_counter;
+        let mut occupied_suffixes = self.toc_bookmark_suffixes();
+        let mut toc_counter = occupied_suffixes.iter().copied().max().unwrap_or(0);
+        let mut occupied_ids = self
+            .document
+            .body
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                BodyContent::Paragraph(paragraph) => Some(&paragraph.bookmark_markers),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|marker| marker.id())
+            .filter(|id| *id >= 0)
+            .collect::<HashSet<_>>();
 
         let mut headings = Vec::new();
 
@@ -2005,33 +2020,43 @@ impl Document {
             {
                 let text = p.text();
                 if !text.trim().is_empty() {
-                    toc_counter += 1;
+                    let Some(suffix) = next_toc_bookmark_suffix(&occupied_suffixes, toc_counter)
+                    else {
+                        return;
+                    };
+                    toc_counter = suffix;
+                    occupied_suffixes.insert(suffix);
+                    let preferred_id = suffix
+                        .checked_add(99)
+                        .and_then(|candidate| i32::try_from(candidate).ok())
+                        .filter(|candidate| !occupied_ids.contains(candidate));
+                    let Some(bookmark_id) = preferred_id.or_else(|| {
+                        (0..=i32::MAX).find(|candidate| !occupied_ids.contains(candidate))
+                    }) else {
+                        return;
+                    };
+                    occupied_ids.insert(bookmark_id);
                     headings.push(HeadingInfo {
                         content_index: idx,
                         level,
                         text,
-                        bookmark_name: format!("_Toc{toc_counter}"),
+                        bookmark_name: format!("_Toc{suffix}"),
+                        bookmark_id,
                     });
                 }
             }
         }
 
-        // Step 2: Insert bookmark markers at each heading paragraph (as raw XML in extra_xml)
-        // We insert bookmarkStart/bookmarkEnd as extra_xml at position 0 in the paragraph.
+        // Step 2: Insert typed bookmark markers at each heading paragraph.
         for heading in &headings {
             if let Some(BodyContent::Paragraph(p)) =
                 self.document.body.content.get_mut(heading.content_index)
             {
-                let bm_start = format!(
-                    "<w:bookmarkStart w:id=\"{bookmark_id}\" w:name=\"{}\"/>",
-                    heading.bookmark_name
-                );
-                let bm_end = format!("<w:bookmarkEnd w:id=\"{bookmark_id}\"/>");
-                // Insert at position 0 (before runs)
-                p.extra_xml.push((0, bm_start.into_bytes()));
-                // Insert at end (after runs)
-                p.extra_xml.push((p.runs.len(), bm_end.into_bytes()));
-                bookmark_id += 1;
+                let run_count = p.runs.len();
+                let inserted_start =
+                    p.insert_bookmark_start(0, heading.bookmark_id, &heading.bookmark_name);
+                let inserted_end = p.insert_bookmark_end(run_count, heading.bookmark_id);
+                debug_assert!(inserted_start && inserted_end);
             }
         }
 
@@ -2108,32 +2133,26 @@ impl Document {
         }
     }
 
-    /// The highest `_TocN` bookmark number already present in the body.
-    ///
-    /// Returns 0 when there are none, so the next bookmark is `_Toc1`.
-    fn highest_toc_bookmark(&self) -> u32 {
-        let mut highest = 0;
+    /// Numeric `_TocN` bookmark suffixes already present in the body.
+    fn toc_bookmark_suffixes(&self) -> HashSet<u64> {
+        let mut suffixes = HashSet::new();
         for content in &self.document.body.content {
             let BodyContent::Paragraph(p) = content else {
                 continue;
             };
-            for (_, raw) in &p.extra_xml {
-                let Ok(text) = std::str::from_utf8(raw) else {
+            for marker in &p.bookmark_markers {
+                let Some(name) = marker.name() else {
                     continue;
                 };
-                for (_, after) in text.match_indices("_Toc") {
-                    let digits: String = after
-                        .trim_start_matches("_Toc")
-                        .chars()
-                        .take_while(char::is_ascii_digit)
-                        .collect();
-                    if let Ok(n) = digits.parse::<u32>() {
-                        highest = highest.max(n);
-                    }
+                let Some(after) = name.strip_prefix("_Toc") else {
+                    continue;
+                };
+                if let Ok(suffix) = after.parse::<u64>() {
+                    suffixes.insert(suffix);
                 }
             }
         }
-        highest
+        suffixes
     }
 
     /// Width of the text column in twips: page width less both side margins.
@@ -3124,6 +3143,13 @@ impl Default for Document {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn next_toc_bookmark_suffix(occupied: &HashSet<u64>, after: u64) -> Option<u64> {
+    after
+        .checked_add(1)
+        .filter(|candidate| !occupied.contains(candidate))
+        .or_else(|| (1..=u64::MAX).find(|candidate| !occupied.contains(candidate)))
 }
 
 fn chart_with_workbook_relationship(
@@ -5145,6 +5171,13 @@ mod tests {
         assert_eq!(paras[1].text(), "Chapter 1\t");
         assert_eq!(paras[2].text(), "Section 1.1\t");
         assert_eq!(paras[3].text(), "Chapter 2\t");
+        assert_eq!(
+            doc.bookmarks()
+                .iter()
+                .filter_map(|bookmark| bookmark.name())
+                .collect::<Vec<_>>(),
+            vec!["_Toc1", "_Toc2", "_Toc3"]
+        );
 
         // Verify round-trip: save and re-open
         let bytes = doc.to_bytes().expect("should serialize");
@@ -5152,6 +5185,51 @@ mod tests {
         assert_eq!(doc2.content_count(), 11);
         let paras2 = doc2.paragraphs();
         assert_eq!(paras2[0].text(), "Table of Contents");
+    }
+
+    #[test]
+    fn insert_toc_avoids_an_existing_bookmark_id() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Chapter").style("Heading1");
+        let BodyContent::Paragraph(paragraph) = &mut doc.document.body.content[0] else {
+            panic!("heading paragraph");
+        };
+        assert!(paragraph.insert_bookmark_start(0, 100, "existing"));
+        assert!(paragraph.insert_bookmark_end(1, 100));
+
+        doc.insert_toc(0, 1);
+
+        let bookmarks = doc.bookmarks();
+        let existing = bookmarks
+            .iter()
+            .find(|bookmark| bookmark.name() == Some("existing"))
+            .expect("existing bookmark");
+        let toc = bookmarks
+            .iter()
+            .find(|bookmark| bookmark.name() == Some("_Toc1"))
+            .expect("TOC bookmark");
+        assert_eq!(existing.id(), Some(100));
+        assert_ne!(toc.id(), existing.id());
+        assert_eq!(toc.id(), Some(0));
+    }
+
+    #[test]
+    fn insert_toc_handles_a_maximum_numeric_suffix_without_panicking() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Chapter").style("Heading1");
+        let BodyContent::Paragraph(paragraph) = &mut doc.document.body.content[0] else {
+            panic!("heading paragraph");
+        };
+        assert!(paragraph.insert_bookmark_start(0, 9, "_Toc18446744073709551615"));
+        assert!(paragraph.insert_bookmark_end(1, 9));
+
+        doc.insert_toc(0, 1);
+
+        assert!(
+            doc.bookmarks()
+                .iter()
+                .any(|bookmark| bookmark.name() == Some("_Toc1"))
+        );
     }
 
     #[test]

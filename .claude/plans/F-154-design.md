@@ -1,6 +1,6 @@
 # F-154, Bookmarks and cross-references
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S46
 **Size**: M
 **Depends on**: none
@@ -102,14 +102,14 @@ serialized and rendered result through their new typed path.
 
 ## Implementation checklist
 
-- [ ] Type bookmark markers and correlate valid ranges without losing malformed XML.
-- [ ] Add bookmark collection, readable text, and atomic range insertion.
-- [ ] Route TOC bookmark creation through the typed path.
-- [ ] Parse and write structured `REF` and `PAGEREF` fields.
-- [ ] Carry bookmark targets into the existing post-pagination substitution pass.
-- [ ] Add range, round-trip, field, pagination, and failure regressions.
-- [ ] Run focused checks plus parser, packaging, and deterministic layout riders.
-- [ ] Update exactly HLD 03, HLD 08, and HLD 10 at completion.
+- [x] Type bookmark markers and correlate valid ranges without losing malformed XML.
+- [x] Add bookmark collection, readable text, and atomic range insertion.
+- [x] Route TOC bookmark creation through the typed path.
+- [x] Parse and write structured `REF` and `PAGEREF` fields.
+- [x] Carry bookmark targets into the existing post-pagination substitution pass.
+- [x] Add range, round-trip, field, pagination, and failure regressions.
+- [x] Run focused checks plus parser, packaging, and deterministic layout riders.
+- [x] Update exactly HLD 03, HLD 08, and HLD 10 at completion.
 
 ## Open questions
 

@@ -471,6 +471,23 @@ per slide. Each row records the positive-extent source leaf count, resolved
 shape count, dropped count, diagnostics, and PNG path. A panic or missing page
 fails the driver.
 
+## Word bookmark field pagination
+
+Word `REF` fields resolve the text of one uniquely correlated top-level
+bookmark before shaping. A missing or ambiguous target keeps the stored field
+display and emits a stable diagnostic. `PAGEREF` follows the same validation,
+then shapes the fixed page placeholder and carries a format-neutral target id
+through line breaking.
+
+Only bookmarks named by a valid `PAGEREF` add a zero-width target marker to
+page output. After the document paginates once, the existing field substitution
+pass records the page containing each target, reshapes PAGE, NUMPAGES, and
+target-page values, and removes the target markers. It does not run pagination
+again. A field inside a laid-out table paragraph follows the same target
+discovery and substitution path. Normal and deterministic layouts use this
+identical algorithm, with the deterministic entry point restricted to bundled
+and document-supplied fonts.
+
 ## Word chart pagination
 
 The Word layout input owns document-scoped parsed chart targets, the effective

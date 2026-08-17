@@ -35,6 +35,38 @@ pub struct RunRange {
     pub end: RunPosition,
 }
 
+/// Immutable summary of one correlated bookmark or one reported marker issue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BookmarkRef {
+    id: Option<i32>,
+    name: Option<String>,
+    range: Option<RunRange>,
+    text: String,
+    issue: Option<String>,
+}
+
+impl BookmarkRef {
+    pub fn id(&self) -> Option<i32> {
+        self.id
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub fn range(&self) -> Option<RunRange> {
+        self.range
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn issue(&self) -> Option<&str> {
+        self.issue.as_deref()
+    }
+}
+
 /// Read-only view of a comment and its thread metadata.
 #[derive(Debug, Clone, Copy)]
 pub struct CommentRef<'a> {
@@ -79,6 +111,202 @@ impl CommentRef<'_> {
 }
 
 impl Document {
+    /// Return bookmarks and malformed marker reports in document order.
+    pub fn bookmarks(&self) -> Vec<BookmarkRef> {
+        #[derive(Clone)]
+        struct Marker {
+            position: RunPosition,
+            start: bool,
+            id: Option<i32>,
+            name: Option<String>,
+        }
+
+        let mut markers = Vec::new();
+        for (body_index, content) in self.document.body.content.iter().enumerate() {
+            let BodyContent::Paragraph(paragraph) = content else {
+                continue;
+            };
+            for marker in &paragraph.bookmark_markers {
+                markers.push(Marker {
+                    position: RunPosition {
+                        body_index,
+                        run_index: marker.run_index(),
+                    },
+                    start: marker.is_start(),
+                    id: marker.id(),
+                    name: marker.name().map(str::to_owned),
+                });
+            }
+        }
+
+        let mut by_id: HashMap<i32, Vec<usize>> = HashMap::new();
+        let mut results = Vec::new();
+        for (index, marker) in markers.iter().enumerate() {
+            if let Some(id) = marker.id {
+                by_id.entry(id).or_default().push(index);
+            } else {
+                results.push((
+                    index,
+                    BookmarkRef {
+                        id: None,
+                        name: marker.name.clone(),
+                        range: None,
+                        text: String::new(),
+                        issue: Some("bookmark marker has a malformed or missing id".to_owned()),
+                    },
+                ));
+            }
+        }
+
+        for (id, indices) in by_id {
+            let starts = indices
+                .iter()
+                .copied()
+                .filter(|index| markers[*index].start)
+                .collect::<Vec<_>>();
+            let ends = indices
+                .iter()
+                .copied()
+                .filter(|index| !markers[*index].start)
+                .collect::<Vec<_>>();
+            let first = indices.iter().copied().min().unwrap_or(0);
+            let name = starts
+                .first()
+                .and_then(|index| markers[*index].name.clone());
+            let (range, issue) = if starts.len() != 1 || ends.len() != 1 {
+                (
+                    None,
+                    Some(format!(
+                        "bookmark id {id} has {} start markers and {} end markers",
+                        starts.len(),
+                        ends.len()
+                    )),
+                )
+            } else if name.is_none() {
+                (None, Some(format!("bookmark id {id} has a missing name")))
+            } else {
+                let candidate = RunRange {
+                    start: markers[starts[0]].position,
+                    end: markers[ends[0]].position,
+                };
+                if candidate.start > candidate.end {
+                    (
+                        None,
+                        Some(format!("bookmark id {id} ends before it starts")),
+                    )
+                } else {
+                    (Some(candidate), None)
+                }
+            };
+            let text = range
+                .map(|range| bookmark_range_text(&self.document.body.content, range))
+                .unwrap_or_default();
+            results.push((
+                first,
+                BookmarkRef {
+                    id: Some(id),
+                    name,
+                    range,
+                    text,
+                    issue,
+                },
+            ));
+        }
+
+        let mut name_counts = HashMap::new();
+        for (_, bookmark) in &results {
+            if bookmark.range.is_some()
+                && let Some(name) = bookmark.name.as_deref()
+            {
+                *name_counts.entry(name.to_owned()).or_insert(0usize) += 1;
+            }
+        }
+        for (_, bookmark) in &mut results {
+            if bookmark
+                .name
+                .as_ref()
+                .is_some_and(|name| name_counts.get(name).copied().unwrap_or(0) > 1)
+            {
+                bookmark.issue = Some(format!(
+                    "bookmark name {} is duplicated",
+                    bookmark.name.as_deref().unwrap_or("")
+                ));
+                bookmark.range = None;
+                bookmark.text.clear();
+            }
+        }
+        results.sort_by_key(|(index, _)| *index);
+        results.into_iter().map(|(_, bookmark)| bookmark).collect()
+    }
+
+    /// Insert a bookmark over a half-open range of body paragraph runs.
+    pub fn add_bookmark(&mut self, name: &str, range: RunRange) -> Result<i32> {
+        self.insert_bookmark(name, range)
+    }
+
+    fn insert_bookmark(&mut self, name: &str, range: RunRange) -> Result<i32> {
+        validate_bookmark_name(name)?;
+        validate_bookmark_range(&self.document.body.content, range)?;
+        if self
+            .bookmarks()
+            .iter()
+            .any(|bookmark| bookmark.name() == Some(name))
+        {
+            return Err(Error::Other(format!("bookmark name {name} already exists")));
+        }
+        let occupied = self
+            .document
+            .body
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                BodyContent::Paragraph(paragraph) => Some(&paragraph.bookmark_markers),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|marker| marker.id())
+            .filter(|id| *id >= 0)
+            .collect::<HashSet<_>>();
+        let id = (0..=i32::MAX)
+            .find(|candidate| !occupied.contains(candidate))
+            .ok_or_else(|| Error::Other("no nonnegative bookmark id is available".to_owned()))?;
+
+        if range.start.body_index == range.end.body_index {
+            let mut paragraph = body_paragraph(&self.document.body.content, range.start.body_index)
+                .expect("bookmark range was validated")
+                .clone();
+            if !paragraph.insert_bookmark_start(range.start.run_index, id, name)
+                || !paragraph.insert_bookmark_end(range.end.run_index, id)
+            {
+                return Err(Error::Other(
+                    "bookmark insertion failed validation".to_owned(),
+                ));
+            }
+            *body_paragraph_mut(&mut self.document.body.content, range.start.body_index)
+                .expect("bookmark range was validated") = paragraph;
+        } else {
+            let mut start = body_paragraph(&self.document.body.content, range.start.body_index)
+                .expect("bookmark range was validated")
+                .clone();
+            let mut end = body_paragraph(&self.document.body.content, range.end.body_index)
+                .expect("bookmark range was validated")
+                .clone();
+            if !start.insert_bookmark_start(range.start.run_index, id, name)
+                || !end.insert_bookmark_end(range.end.run_index, id)
+            {
+                return Err(Error::Other(
+                    "bookmark insertion failed validation".to_owned(),
+                ));
+            }
+            *body_paragraph_mut(&mut self.document.body.content, range.start.body_index)
+                .expect("bookmark range was validated") = start;
+            *body_paragraph_mut(&mut self.document.body.content, range.end.body_index)
+                .expect("bookmark range was validated") = end;
+        }
+        self.invalidate_layout();
+        Ok(id)
+    }
+
     /// Return comments in their package part order.
     pub fn comments(&self) -> Vec<CommentRef<'_>> {
         let Some(comments) = self.comments.as_ref() else {
@@ -467,6 +695,81 @@ impl Document {
 
 fn first_para_id(comment: &CT_Comment) -> Option<&str> {
     comment.paragraph_ids.first()?.as_deref()
+}
+
+fn validate_bookmark_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(Error::Other("bookmark name must not be empty".to_owned()));
+    }
+    if name.starts_with('_') {
+        return Err(Error::Other(format!(
+            "bookmark name {name} is reserved for producer use"
+        )));
+    }
+    if name.len() > 40
+        || !name
+            .chars()
+            .next()
+            .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
+        || name
+            .chars()
+            .any(|character| !(character == '_' || character.is_ascii_alphanumeric()))
+    {
+        return Err(Error::Other(format!(
+            "bookmark name {name} is not a valid Word bookmark name"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_bookmark_range(content: &[BodyContent], range: RunRange) -> Result<()> {
+    if range.start > range.end {
+        return Err(Error::Other(
+            "bookmark range start must not follow its end".to_owned(),
+        ));
+    }
+    for (label, position) in [("start", range.start), ("end", range.end)] {
+        let paragraph = body_paragraph(content, position.body_index).ok_or_else(|| {
+            Error::Other(format!(
+                "bookmark range {label} body index {} is not a paragraph",
+                position.body_index
+            ))
+        })?;
+        if position.run_index > paragraph.runs.len() {
+            return Err(Error::Other(format!(
+                "bookmark range {label} run index {} exceeds paragraph run count {}",
+                position.run_index,
+                paragraph.runs.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn bookmark_range_text(content: &[BodyContent], range: RunRange) -> String {
+    let mut paragraphs = Vec::new();
+    for body_index in range.start.body_index..=range.end.body_index {
+        let Some(paragraph) = body_paragraph(content, body_index) else {
+            continue;
+        };
+        let start = if body_index == range.start.body_index {
+            range.start.run_index
+        } else {
+            0
+        };
+        let end = if body_index == range.end.body_index {
+            range.end.run_index
+        } else {
+            paragraph.runs.len()
+        };
+        paragraphs.push(
+            paragraph.runs[start..end]
+                .iter()
+                .map(CT_R::text)
+                .collect::<String>(),
+        );
+    }
+    paragraphs.join("\n")
 }
 
 fn body_paragraph(content: &[BodyContent], index: usize) -> Option<&CT_P> {

@@ -218,6 +218,17 @@ WASM, or CLI surfaces. Those consumers continue to own the same
 package-preserving `Document`, so native comment edits remain intact when a
 binding subsequently saves it.
 
+Native Word callers use `Document::bookmarks` for immutable `BookmarkRef`
+summaries and `Document::add_bookmark` for atomic insertion over the existing
+top-level half-open `RunRange`. A summary exposes an optional id, name, range,
+current text, and marker issue. Insertion validates the Word name and both
+boundaries, rejects duplicate or producer-reserved names, and returns the
+allocated nonnegative id. Structured `FieldType::Ref` and
+`FieldType::PageRef` variants retain their target and complete instruction.
+These additions are native Rust APIs only. Python, WASM, and CLI consumers keep
+their existing surface and preserve the typed content when they save the owned
+document.
+
 Native Word callers can also inspect content controls through
 `Document::content_controls` and the tag or alias lookup methods.
 `ContentControlRef` exposes immutable metadata and display text. Direct setters

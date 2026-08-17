@@ -30,7 +30,7 @@ pub mod run;
 pub mod style;
 pub mod table;
 
-pub use comments::{CommentRef, RunPosition, RunRange};
+pub use comments::{BookmarkRef, CommentRef, RunPosition, RunRange};
 pub use content_control::ContentControlRef;
 pub use document::{
     AccessibilityIssue, Document, ImageInfo, IssueSeverity, LinkInfo, ListLevel, ListNumberFormat,
