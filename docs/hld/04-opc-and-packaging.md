@@ -123,6 +123,16 @@ neighbouring paragraph and run XML. A document without a comments relationship
 does not gain a comments part, relationship, or override during an ordinary
 save.
 
+The Word facade resolves an existing settings part through the main document's
+`SETTINGS` relationship and retains the normalized target instead of assuming
+`/word/settings.xml`. `rdocx-oxml` projects valid document protection metadata
+while retaining the complete settings bytes as the serialization source.
+Saving writes those bytes only to the resolved existing target. Unsupported
+protection modes, unsupported algorithm enum values, and malformed numeric
+metadata remain opaque and byte-identical. A document without a settings
+relationship does not gain a settings part, relationship, or content-type
+override during an ordinary save.
+
 Threaded comments add a document relationship using the Microsoft
 `commentsExtended` relationship type. The facade retains its resolved target
 and writes the comments-extended content type at that exact part. New comment

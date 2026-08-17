@@ -1093,6 +1093,7 @@ mod tests {
             run_end: 2,
             extra_attributes: Vec::new(),
             extra_xml: Vec::new(),
+            preserved_raw_before: None,
         });
 
         document

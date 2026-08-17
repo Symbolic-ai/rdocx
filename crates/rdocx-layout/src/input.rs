@@ -15,6 +15,16 @@ use rdocx_oxml::numbering::CT_Numbering;
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::theme::Theme;
 
+/// The tracked-revision projection used for Word layout.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RevisionView {
+    /// Render the document as though all modeled revisions were accepted.
+    #[default]
+    Accepted,
+    /// Render both sides of modeled revisions with tracked decorations.
+    Tracked,
+}
+
 /// Image data keyed by relationship/embed ID.
 #[derive(Debug, Clone)]
 pub struct ImageData {
@@ -100,6 +110,8 @@ impl MediaRegistry {
 pub struct LayoutInput {
     /// The parsed document content.
     pub document: CT_Document,
+    /// The tracked-revision projection to lay out.
+    pub revision_view: RevisionView,
     /// Style definitions.
     pub styles: CT_Styles,
     /// Numbering definitions (optional).

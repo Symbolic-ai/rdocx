@@ -42,6 +42,8 @@ pub struct NoteLayout {
     pub marker_rise: f64,
     /// The note's lines, flattened across its paragraphs.
     pub lines: Vec<LayoutLine>,
+    /// Line ranges belonging to paragraphs with a visible tracked revision.
+    pub revision_ranges: Vec<std::ops::Range<usize>>,
 }
 
 impl NoteLayout {
@@ -146,6 +148,7 @@ impl NoteRegistry {
                     let note_width = (content_width - NOTE_INDENT).max(1.0);
 
                     let mut lines = Vec::new();
+                    let mut revision_ranges = Vec::new();
                     for paragraph in &note.paragraphs {
                         let block = layout_paragraph(
                             paragraph,
@@ -157,6 +160,10 @@ impl NoteRegistry {
                             num_state,
                             diagnostics,
                         )?;
+                        let first = lines.len();
+                        if block.has_visible_revision && !block.lines.is_empty() {
+                            revision_ranges.push(first..first + block.lines.len());
+                        }
                         lines.extend(block.lines);
                     }
 
@@ -170,6 +177,7 @@ impl NoteRegistry {
                             marker,
                             marker_rise: NOTE_FONT_SIZE * 0.33,
                             lines,
+                            revision_ranges,
                         },
                     );
                 }
@@ -246,6 +254,7 @@ mod tests {
         );
 
         LayoutInput {
+            revision_view: crate::input::RevisionView::Accepted,
             document: rdocx_oxml::document::CT_Document::new(),
             styles: CT_Styles::new_default(),
             numbering: None,

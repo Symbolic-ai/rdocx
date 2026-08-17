@@ -23,6 +23,7 @@ use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef, HdrFtrType};
 use rdocx_oxml::namespace::matches_local_name;
 use rdocx_oxml::numbering::{CT_Numbering, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
+use rdocx_oxml::settings::{CT_Settings, DocumentProtection};
 use rdocx_oxml::shared::{ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
@@ -36,6 +37,13 @@ use crate::paragraph::{Paragraph, ParagraphRef};
 use crate::revision::RevisionRef;
 use crate::style::{self, Style, StyleBuilder};
 use crate::table::{Table, TableRef};
+
+/// Options that select a native document render projection.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RenderOptions {
+    /// The tracked-revision view to render.
+    pub revision_view: rdocx_layout::RevisionView,
+}
 
 /// A Word document (.docx file).
 ///
@@ -58,6 +66,10 @@ pub struct Document {
     styles_part_name: String,
     /// Part name for numbering definitions, resolved the same way.
     numbering_part_name: String,
+    /// Typed document settings loaded through the main document relationship.
+    settings: Option<CT_Settings>,
+    /// Existing settings relationship target. No conventional target is assumed.
+    settings_part_name: Option<String>,
     /// Collision-free allocator for image media parts.
     image_namer: MediaNamer,
     /// Footnotes: loaded from word/footnotes.xml on open, written back on save.
@@ -392,6 +404,8 @@ impl Document {
             doc_part_name: "/word/document.xml".to_string(),
             styles_part_name: DEFAULT_STYLES_PART.to_string(),
             numbering_part_name: DEFAULT_NUMBERING_PART.to_string(),
+            settings: None,
+            settings_part_name: None,
             image_namer: MediaNamer::scan("/word/media", "image", std::iter::empty()),
             footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
             comments: None,
@@ -453,6 +467,15 @@ impl Document {
             None => None,
         };
 
+        let settings_part_name = resolve_part(rel_types::SETTINGS);
+        let settings = match settings_part_name
+            .as_deref()
+            .and_then(|part| package.get_part(part))
+        {
+            Some(xml) => Some(CT_Settings::from_xml(xml)?),
+            None => None,
+        };
+
         // Core properties are a package-level relationship, not a document part.
         let core_properties_part_name = package
             .package_rels
@@ -506,6 +529,8 @@ impl Document {
             styles_part_name: styles_part_name.unwrap_or_else(|| DEFAULT_STYLES_PART.to_string()),
             numbering_part_name: numbering_part_name
                 .unwrap_or_else(|| DEFAULT_NUMBERING_PART.to_string()),
+            settings,
+            settings_part_name,
             image_namer,
             footnotes,
             comments,
@@ -567,6 +592,31 @@ impl Document {
         Ok(layout)
     }
 
+    fn layout_with_options(
+        &self,
+        options: RenderOptions,
+        deterministic: bool,
+    ) -> Result<Arc<oxml_layout::LayoutResult>> {
+        if options.revision_view == rdocx_layout::RevisionView::Accepted {
+            return if deterministic {
+                self.cached_deterministic_layout()
+            } else {
+                self.cached_layout()
+            };
+        }
+
+        let mut input = self.build_layout_input();
+        input.revision_view = options.revision_view;
+        #[cfg(test)]
+        record_layout_invocation();
+        let layout = if deterministic {
+            rdocx_layout::layout_document_deterministic(&input)?
+        } else {
+            rdocx_layout::layout_document(&input)?
+        };
+        Ok(Arc::new(layout))
+    }
+
     /// Save the document to a file path.
     pub fn save<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
         self.flush_to_package()?;
@@ -606,6 +656,13 @@ impl Document {
                 rel_types::NUMBERING,
                 NUMBERING_CONTENT_TYPE,
             );
+        }
+
+        // F-155 exposes settings as a read-only projection. Parsed settings
+        // retain their complete producer bytes and are written back only to
+        // the relationship-resolved part they came from.
+        if let (Some(settings), Some(part_name)) = (&self.settings, &self.settings_part_name) {
+            self.package.set_part(part_name, settings.to_xml()?);
         }
 
         // Serialize footnotes.xml when any footnotes exist
@@ -878,6 +935,14 @@ impl Document {
             .into_iter()
             .map(|inner| RevisionRef { inner })
             .collect()
+    }
+
+    /// Return valid document-protection metadata recorded in the settings part.
+    ///
+    /// This reports author intent and password-verification metadata. It does
+    /// not enforce an access-control boundary or verify a password.
+    pub fn document_protection(&self) -> Option<&DocumentProtection> {
+        self.settings.as_ref()?.document_protection()
     }
 
     /// Get the plain text of body paragraphs and table cells in document order.
@@ -2378,6 +2443,7 @@ impl Document {
                 run_end: 1, // Just the text run, not the tab
                 extra_attributes: Vec::new(),
                 extra_xml: Vec::new(),
+                preserved_raw_before: None,
             });
 
             toc_paragraphs.push(p);
@@ -2762,7 +2828,12 @@ impl Document {
     /// 2. System fonts when the default `system-fonts` feature is enabled
     /// 3. Always-available bundled metric-compatible fonts
     pub fn to_pdf(&self) -> Result<Vec<u8>> {
-        let layout = self.cached_layout()?;
+        self.to_pdf_with_options(RenderOptions::default())
+    }
+
+    /// Render the document to PDF bytes with the selected revision view.
+    pub fn to_pdf_with_options(&self, options: RenderOptions) -> Result<Vec<u8>> {
+        let layout = self.layout_with_options(options, false)?;
         Ok(oxml_pdf::render_to_pdf(&layout))
     }
 
@@ -2772,7 +2843,12 @@ impl Document {
     /// The deterministic layout is cached independently from the normal-font
     /// layout and is suitable for reproducible render baselines.
     pub fn to_pdf_deterministic(&self) -> Result<Vec<u8>> {
-        let layout = self.cached_deterministic_layout()?;
+        self.to_pdf_deterministic_with_options(RenderOptions::default())
+    }
+
+    /// Render the selected revision view to deterministic PDF bytes.
+    pub fn to_pdf_deterministic_with_options(&self, options: RenderOptions) -> Result<Vec<u8>> {
+        let layout = self.layout_with_options(options, true)?;
         Ok(oxml_pdf::render_to_pdf(&layout))
     }
 
@@ -2789,7 +2865,17 @@ impl Document {
     /// 3. System fonts when the default `system-fonts` feature is enabled
     /// 4. Always-available bundled metric-compatible fonts
     pub fn to_pdf_with_fonts(&self, font_files: &[(&str, &[u8])]) -> Result<Vec<u8>> {
+        self.to_pdf_with_fonts_and_options(font_files, RenderOptions::default())
+    }
+
+    /// Render the selected revision view to PDF with user-provided fonts.
+    pub fn to_pdf_with_fonts_and_options(
+        &self,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> Result<Vec<u8>> {
         let mut input = self.build_layout_input();
+        input.revision_view = options.revision_view;
         for (family, data) in font_files {
             input.fonts.push(rdocx_layout::FontFile {
                 family: family.to_string(),
@@ -2804,7 +2890,16 @@ impl Document {
 
     /// Save the document as a PDF file.
     pub fn save_pdf<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let pdf_bytes = self.to_pdf()?;
+        self.save_pdf_with_options(path, RenderOptions::default())
+    }
+
+    /// Save the selected revision view as a PDF file.
+    pub fn save_pdf_with_options<P: AsRef<Path>>(
+        &self,
+        path: P,
+        options: RenderOptions,
+    ) -> Result<()> {
+        let pdf_bytes = self.to_pdf_with_options(options)?;
         std::fs::write(path, pdf_bytes)?;
         Ok(())
     }
@@ -2879,7 +2974,17 @@ impl Document {
     /// * `page_index` - 0-based page index
     /// * `dpi` - Resolution (72 = 1:1, 150 = standard, 300 = high quality)
     pub fn render_page_to_png(&self, page_index: usize, dpi: f64) -> Result<Option<Vec<u8>>> {
-        let layout = self.cached_layout()?;
+        self.render_page_to_png_with_options(page_index, dpi, RenderOptions::default())
+    }
+
+    /// Render one page to PNG with the selected revision view.
+    pub fn render_page_to_png_with_options(
+        &self,
+        page_index: usize,
+        dpi: f64,
+        options: RenderOptions,
+    ) -> Result<Option<Vec<u8>>> {
+        let layout = self.layout_with_options(options, false)?;
         Ok(oxml_pdf::render_page_to_png(&layout, page_index, dpi))
     }
 
@@ -2894,13 +2999,36 @@ impl Document {
         page_index: usize,
         dpi: f64,
     ) -> Result<Option<Vec<u8>>> {
-        let layout = self.cached_deterministic_layout()?;
+        self.render_page_to_png_deterministic_with_options(
+            page_index,
+            dpi,
+            RenderOptions::default(),
+        )
+    }
+
+    /// Render one page to deterministic PNG with the selected revision view.
+    pub fn render_page_to_png_deterministic_with_options(
+        &self,
+        page_index: usize,
+        dpi: f64,
+        options: RenderOptions,
+    ) -> Result<Option<Vec<u8>>> {
+        let layout = self.layout_with_options(options, true)?;
         Ok(oxml_pdf::render_page_to_png(&layout, page_index, dpi))
     }
 
     /// Render all pages of the document to PNG bytes.
     pub fn render_all_pages(&self, dpi: f64) -> Result<Vec<Vec<u8>>> {
-        let layout = self.cached_layout()?;
+        self.render_all_pages_with_options(dpi, RenderOptions::default())
+    }
+
+    /// Render every page to PNG with the selected revision view.
+    pub fn render_all_pages_with_options(
+        &self,
+        dpi: f64,
+        options: RenderOptions,
+    ) -> Result<Vec<Vec<u8>>> {
+        let layout = self.layout_with_options(options, false)?;
         Ok(oxml_pdf::render_all_pages(&layout, dpi))
     }
 
@@ -2908,7 +3036,16 @@ impl Document {
     ///
     /// `page_index` is zero-based. An index beyond the document returns `None`.
     pub fn layout_page(&self, page_index: usize) -> Result<Option<oxml_layout::PageFrame>> {
-        let layout = self.cached_layout()?;
+        self.layout_page_with_options(page_index, RenderOptions::default())
+    }
+
+    /// Return one positioned page from the selected revision view.
+    pub fn layout_page_with_options(
+        &self,
+        page_index: usize,
+        options: RenderOptions,
+    ) -> Result<Option<oxml_layout::PageFrame>> {
+        let layout = self.layout_with_options(options, false)?;
         Ok(layout.pages.get(page_index).cloned())
     }
 
@@ -3026,6 +3163,7 @@ impl Document {
         let theme = theme_xml.and_then(|data| rdocx_oxml::theme::Theme::from_xml(data).ok());
 
         LayoutInput {
+            revision_view: rdocx_layout::RevisionView::Accepted,
             document: self.document.clone(),
             styles: self.styles.clone(),
             numbering: self.numbering.clone(),
@@ -3972,6 +4110,22 @@ mod tests {
         }
 
         assert_eq!(layout_invocations(), 1);
+    }
+
+    #[test]
+    fn tracked_option_layouts_are_not_cached() {
+        let mut doc = Document::new();
+        doc.add_paragraph("tracked view");
+        let options = RenderOptions {
+            revision_view: rdocx_layout::RevisionView::Tracked,
+        };
+
+        reset_layout_invocations();
+        doc.render_page_to_png_deterministic_with_options(0, 1.0, options)
+            .unwrap();
+        doc.render_page_to_png_deterministic_with_options(0, 1.0, options)
+            .unwrap();
+        assert_eq!(layout_invocations(), 2);
     }
 
     #[test]
@@ -5897,6 +6051,7 @@ mod hyperlink_span_tests {
             run_end: 99,
             extra_attributes: Vec::new(),
             extra_xml: Vec::new(),
+            preserved_raw_before: None,
         });
         p.hyperlinks.push(HyperlinkSpan {
             rel_id: None,
@@ -5905,6 +6060,7 @@ mod hyperlink_span_tests {
             run_end: 1,
             extra_attributes: Vec::new(),
             extra_xml: Vec::new(),
+            preserved_raw_before: None,
         });
 
         let links = doc.links();

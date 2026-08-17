@@ -29,7 +29,7 @@ regenerated, never hand-edited.
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
-| M14, Word collaboration layer                  | 9  | 7 | 0 | 2  |
+| M14, Word collaboration layer                  | 9  | 9 | 0 | 0  |
 | M15, Charts beyond PowerPoint                  | 4  | 4 | 0 | 0  |
 | M16, Document automation                       | 9  | 0 | 0 | 9  |
 | M17, Security and compliance                   | 7  | 0 | 0 | 7  |
@@ -37,7 +37,7 @@ regenerated, never hand-edited.
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
 | X, Cross-cutting (opportunistic)            | 34 | 32 | 0 | 1  |
-| **Total** | **244** | **197** | **0** | **46** |
+| **Total** | **244** | **199** | **0** | **44** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -296,11 +296,11 @@ regenerated, never hand-edited.
 | F-148 | Comment API                                  | S46  | M | done |
 | F-149 | Revision model                               | S47  | L | done |
 | F-150 | Accept and reject revisions                  | S47  | L | done |
-| F-151 | Revision display in the renderer             | S48  | M | pending |
+| F-151 | Revision display in the renderer             | S48  | M | done |
 | F-152 | Content control model                        | S46  | L | done |
 | F-153 | Content control binding                      | S46  | M | done |
 | F-154 | Bookmarks and cross-references               | S46  | M | done |
-| F-155 | Document protection                          | S48  | M | pending |
+| F-155 | Document protection                          | S48  | M | done |
 <!-- AUTOGEN:backlog-M14 END -->
 
 ### M15, Charts beyond PowerPoint

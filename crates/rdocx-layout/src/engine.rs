@@ -7,14 +7,15 @@ use rdocx_oxml::document::{BodyContent, CT_SectPr};
 use rdocx_oxml::drawing::WrapType;
 use rdocx_oxml::header_footer::HdrFtrType;
 use rdocx_oxml::properties::CT_PPr;
+use rdocx_oxml::revision::{CT_Revision, RevisionContent, RevisionKind};
 use rdocx_oxml::shared::ST_HighlightColor;
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
-use rdocx_oxml::text::{BreakType, CT_P, FieldType, RunContent};
+use rdocx_oxml::text::{BreakType, CT_P, CT_R, FieldType, RunContent, hyperlink_revision_index};
 
 use crate::block::{self, LayoutBlock, ParagraphBlock};
 use crate::convert;
-use crate::input::{LayoutInput, MediaRegistry};
+use crate::input::{LayoutInput, MediaRegistry, RevisionView};
 use crate::notes::NoteRegistry;
 use crate::paginator::{self, HeaderFooterContent, PageGeometry};
 use crate::style_resolver::{self, NumberingState};
@@ -22,8 +23,216 @@ use crate::table;
 use oxml_layout::{
     Color, Diagnostic, DocumentMetadata, FieldKind, FontManager, GroupElement, InlineItem,
     LayoutResult, NoteRef, NoteStream, PageFrame, PositionedElement, Rect, Result, TextSegment,
-    break_into_lines,
+    Underline, break_into_lines,
 };
+
+#[derive(Clone, Copy)]
+struct ProjectedRun<'a> {
+    run: &'a CT_R,
+    boundary: usize,
+    raw_order: RawOrder,
+    ordinary_run_index: Option<usize>,
+    hyperlink_index: Option<usize>,
+    force_underline: bool,
+    force_strike: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum RawOrder {
+    BeforeRaw,
+    Raw(usize),
+    AfterRaw,
+}
+
+fn project_paragraph_runs(para: &CT_P, view: RevisionView) -> Vec<ProjectedRun<'_>> {
+    let mut projected = Vec::new();
+    for boundary in 0..=para.runs.len() {
+        for (_, slot, revision) in para.revisions.iter().filter(|(at, _, _)| *at == boundary) {
+            let hyperlink_index = hyperlink_revision_index(*slot);
+            let raw_order = match hyperlink_index {
+                Some(index) => {
+                    if let Some(raw_before) = para
+                        .hyperlinks
+                        .get(index)
+                        .and_then(|hyperlink| hyperlink.preserved_raw_before)
+                    {
+                        RawOrder::Raw(raw_before)
+                    } else if para
+                        .hyperlinks
+                        .get(index)
+                        .is_some_and(|hyperlink| boundary == hyperlink.run_end)
+                    {
+                        RawOrder::BeforeRaw
+                    } else {
+                        RawOrder::AfterRaw
+                    }
+                }
+                None => RawOrder::Raw(*slot),
+            };
+            project_revision_runs(
+                revision,
+                view,
+                boundary,
+                raw_order,
+                hyperlink_index,
+                false,
+                false,
+                &mut projected,
+            );
+        }
+        if let Some(run) = para.runs.get(boundary) {
+            projected.push(ProjectedRun {
+                run,
+                boundary,
+                raw_order: RawOrder::AfterRaw,
+                ordinary_run_index: Some(boundary),
+                hyperlink_index: None,
+                force_underline: false,
+                force_strike: false,
+            });
+        }
+    }
+    projected
+}
+
+fn project_revision_runs<'a>(
+    revision: &'a CT_Revision,
+    view: RevisionView,
+    boundary: usize,
+    raw_order: RawOrder,
+    hyperlink_index: Option<usize>,
+    inherited_underline: bool,
+    inherited_strike: bool,
+    projected: &mut Vec<ProjectedRun<'a>>,
+) {
+    let included = match view {
+        RevisionView::Tracked => true,
+        RevisionView::Accepted => matches!(
+            revision.kind(),
+            RevisionKind::Insertion | RevisionKind::MoveTo
+        ),
+    };
+    if !included {
+        return;
+    }
+
+    let force_underline = inherited_underline
+        || (view == RevisionView::Tracked
+            && matches!(
+                revision.kind(),
+                RevisionKind::Insertion | RevisionKind::MoveTo
+            ));
+    let force_strike = inherited_strike
+        || (view == RevisionView::Tracked
+            && matches!(
+                revision.kind(),
+                RevisionKind::Deletion | RevisionKind::MoveFrom
+            ));
+    let runs = match revision.content() {
+        RevisionContent::Runs(runs) => runs.as_slice(),
+        RevisionContent::Marker => &[],
+        RevisionContent::PriorRunProperties(_)
+        | RevisionContent::PriorParagraphProperties(_)
+        | RevisionContent::PriorTableProperties(_)
+        | RevisionContent::PriorSectionProperties(_) => return,
+    };
+
+    for run_boundary in 0..=runs.len() {
+        for (_, nested) in revision
+            .nested_revisions()
+            .iter()
+            .filter(|(at, _)| *at == run_boundary)
+        {
+            project_revision_runs(
+                nested,
+                view,
+                boundary,
+                raw_order,
+                hyperlink_index,
+                force_underline,
+                force_strike,
+                projected,
+            );
+        }
+        if let Some(run) = runs.get(run_boundary) {
+            projected.push(ProjectedRun {
+                run,
+                boundary,
+                raw_order,
+                ordinary_run_index: None,
+                hyperlink_index,
+                force_underline,
+                force_strike,
+            });
+        }
+    }
+}
+
+fn projected_paragraph_text(para: &CT_P, view: RevisionView) -> String {
+    project_paragraph_runs(para, view)
+        .iter()
+        .map(|projected| projected.run.text())
+        .collect()
+}
+
+fn paragraph_has_visible_revision(para: &CT_P) -> bool {
+    let property_revision = para.properties.as_ref().is_some_and(|properties| {
+        properties.numbering_revision.is_some()
+            || properties.change.is_some()
+            || properties
+                .sect_pr
+                .as_ref()
+                .is_some_and(|section| section.change.is_some())
+            || properties
+                .rpr
+                .as_ref()
+                .is_some_and(run_properties_have_revision)
+    });
+    property_revision
+        || para
+            .runs
+            .iter()
+            .filter_map(|run| run.properties.as_ref())
+            .any(run_properties_have_revision)
+        || para
+            .revisions
+            .iter()
+            .any(|(_, _, revision)| revision_is_visible(revision))
+}
+
+fn run_properties_have_revision(properties: &rdocx_oxml::properties::CT_RPr) -> bool {
+    properties.change.is_some() || !properties.revision_markers.is_empty()
+}
+
+fn revision_is_visible(revision: &CT_Revision) -> bool {
+    match revision.content() {
+        RevisionContent::Runs(runs) => {
+            runs.iter().any(|run| {
+                run.content.iter().any(|content| match content {
+                    RunContent::Text(text) | RunContent::DeletedText(text) => !text.text.is_empty(),
+                    RunContent::CommentReference { .. } => false,
+                    RunContent::Tab
+                    | RunContent::Break(_)
+                    | RunContent::Drawing(_)
+                    | RunContent::Field { .. }
+                    | RunContent::FootnoteRef { .. }
+                    | RunContent::EndnoteRef { .. } => true,
+                })
+            }) || revision
+                .nested_revisions()
+                .iter()
+                .any(|(_, nested)| revision_is_visible(nested))
+        }
+        RevisionContent::Marker => revision
+            .nested_revisions()
+            .iter()
+            .any(|(_, nested)| revision_is_visible(nested)),
+        RevisionContent::PriorRunProperties(_)
+        | RevisionContent::PriorParagraphProperties(_)
+        | RevisionContent::PriorTableProperties(_)
+        | RevisionContent::PriorSectionProperties(_) => true,
+    }
+}
 
 /// The layout engine.
 pub struct Engine {
@@ -111,7 +320,8 @@ impl Engine {
                     // Detect heading style for outline generation
                     if let Some(level) = detect_heading_level(para, styles) {
                         para_block.heading_level = Some(level);
-                        para_block.heading_text = Some(para.text());
+                        para_block.heading_text =
+                            Some(projected_paragraph_text(para, input.revision_view));
                     }
 
                     current_blocks.push(LayoutBlock::Paragraph(para_block));
@@ -493,9 +703,35 @@ pub fn layout_paragraph(
         }
     }
 
-    // Process runs
-    for (run_idx, run) in para.runs.iter().enumerate() {
-        let current_hyperlink_url = run_hyperlink_url.get(&run_idx).cloned();
+    // Process ordinary and revision-wrapped runs in their preserved order.
+    let mut marker_boundary = None;
+    let mut marker_raw_before = None;
+    for projected in project_paragraph_runs(para, input.revision_view) {
+        let run = projected.run;
+        if marker_boundary != Some(projected.boundary) {
+            marker_boundary = Some(projected.boundary);
+            marker_raw_before = None;
+        }
+        push_targeted_bookmark_markers(
+            &mut inline_items,
+            para,
+            projected.boundary,
+            marker_raw_before,
+            projected.raw_order,
+            input,
+            fm,
+        )?;
+        marker_raw_before = Some(projected.raw_order);
+        let current_hyperlink_url = projected
+            .ordinary_run_index
+            .and_then(|run_index| run_hyperlink_url.get(&run_index).cloned())
+            .or_else(|| {
+                projected
+                    .hyperlink_index
+                    .and_then(|index| para.hyperlinks.get(index))
+                    .and_then(|hyperlink| hyperlink.rel_id.as_deref())
+                    .and_then(|rel_id| input.hyperlink_urls.get(rel_id).cloned())
+            });
 
         let run_style_id = run.properties.as_ref().and_then(|p| p.style_id.as_deref());
 
@@ -507,8 +743,6 @@ pub fn layout_paragraph(
         if let Some(ref direct_rpr) = run.properties {
             effective_rpr.merge_from(direct_rpr);
         }
-
-        push_targeted_bookmark_markers(&mut inline_items, para, run_idx, input, fm)?;
 
         // Skip hidden text
         if effective_rpr.vanish == Some(true) {
@@ -526,8 +760,12 @@ pub fn layout_paragraph(
         let color = resolve_run_color(&effective_rpr, input.theme.as_ref());
 
         // Decoration properties
-        let underline = convert::underline(effective_rpr.underline);
-        let strike = effective_rpr.strike.unwrap_or(false);
+        let underline = if projected.force_underline {
+            Some(Underline::Single)
+        } else {
+            convert::underline(effective_rpr.underline)
+        };
+        let strike = projected.force_strike || effective_rpr.strike.unwrap_or(false);
         let dstrike = effective_rpr.dstrike.unwrap_or(false);
         let highlight = effective_rpr.highlight.and_then(highlight_to_color);
 
@@ -715,6 +953,8 @@ pub fn layout_paragraph(
                     let sup_offset = font_size * 0.33; // raise baseline
                     let shaped = fm.shape_text(font_id, &marker, sup_size)?;
                     let sup_metrics = fm.metrics(font_id, sup_size)?;
+                    let revision_marker = input.revision_view == RevisionView::Tracked
+                        && projected.ordinary_run_index.is_none();
                     inline_items.push(InlineItem::Text(TextSegment {
                         text: marker,
                         font_id,
@@ -728,10 +968,10 @@ pub fn layout_paragraph(
                         color,
                         bold,
                         italic,
-                        underline: None,
-                        strike: false,
-                        dstrike: false,
-                        highlight: None,
+                        underline: revision_marker.then_some(underline).flatten(),
+                        strike: revision_marker && strike,
+                        dstrike: revision_marker && dstrike,
+                        highlight: revision_marker.then_some(highlight).flatten(),
                         baseline_offset: sup_offset,
                         hyperlink_url: None,
                         field_kind: None,
@@ -743,7 +983,18 @@ pub fn layout_paragraph(
         }
     }
 
-    push_targeted_bookmark_markers(&mut inline_items, para, para.runs.len(), input, fm)?;
+    let final_marker_lower = (marker_boundary == Some(para.runs.len()))
+        .then_some(marker_raw_before)
+        .flatten();
+    push_targeted_bookmark_markers(
+        &mut inline_items,
+        para,
+        para.runs.len(),
+        final_marker_lower,
+        RawOrder::AfterRaw,
+        input,
+        fm,
+    )?;
 
     // Line breaking
     let line_params = convert::line_break_params(&effective_ppr, available_width);
@@ -765,6 +1016,8 @@ pub fn layout_paragraph(
         page_break_before,
         widow_control,
     );
+    result.has_visible_revision =
+        input.revision_view == RevisionView::Tracked && paragraph_has_visible_revision(para);
     result.anchored =
         collect_anchored_drawings(para, styles, input, media, fm, num_state, diagnostics)?;
     // `inline_items` is finished with here and would otherwise be dropped, so
@@ -781,6 +1034,8 @@ fn push_targeted_bookmark_markers(
     items: &mut Vec<InlineItem>,
     paragraph: &CT_P,
     run_index: usize,
+    after_raw: Option<RawOrder>,
+    through_raw: RawOrder,
     input: &LayoutInput,
     fm: &mut FontManager,
 ) -> Result<()> {
@@ -788,6 +1043,8 @@ fn push_targeted_bookmark_markers(
     for marker in paragraph.bookmark_markers.iter().filter(|marker| {
         marker.is_start()
             && marker.run_index() == run_index
+            && after_raw.is_none_or(|after| RawOrder::Raw(marker.raw_before()) > after)
+            && RawOrder::Raw(marker.raw_before()) <= through_raw
             && marker.name().is_some_and(|name| {
                 document_has_page_ref(input, name) && bookmark_text(input, name).is_some()
             })
@@ -835,7 +1092,8 @@ fn push_bookmark_marker(items: &mut Vec<InlineItem>, target: usize, font_id: oxm
 fn page_ref_id(input: &LayoutInput, name: &str) -> Option<usize> {
     let mut names = Vec::<&str>::new();
     visit_document_paragraphs(input, &mut |paragraph| {
-        for run in paragraph.runs() {
+        for projected in project_paragraph_runs(paragraph, input.revision_view) {
+            let run = projected.run;
             for content in &run.content {
                 let RunContent::Field {
                     field_type: FieldType::PageRef { bookmark, .. },
@@ -910,7 +1168,7 @@ fn visit_control_paragraphs<'a>(control: &'a CT_Sdt, visit: &mut impl FnMut(&'a 
 }
 
 fn bookmark_text(input: &LayoutInput, name: &str) -> Option<String> {
-    type BodyRunPosition = (usize, usize);
+    type BodyRunPosition = (usize, usize, RawOrder);
     type BookmarkStart<'a> = (Option<&'a str>, BodyRunPosition);
 
     let mut starts: HashMap<i32, Vec<BookmarkStart<'_>>> = HashMap::new();
@@ -923,7 +1181,14 @@ fn bookmark_text(input: &LayoutInput, name: &str) -> Option<String> {
             let Some(id) = marker.id() else {
                 continue;
             };
-            let position = (body_index, marker.run_index());
+            if marker.run_index() > paragraph.runs.len() {
+                return None;
+            }
+            let position = (
+                body_index,
+                marker.run_index(),
+                RawOrder::Raw(marker.raw_before()),
+            );
             if marker.is_start() {
                 starts
                     .entry(id)
@@ -954,19 +1219,14 @@ fn bookmark_text(input: &LayoutInput, name: &str) -> Option<String> {
         let BodyContent::Paragraph(paragraph) = &input.document.body.content[body_index] else {
             continue;
         };
-        let first = if body_index == start.0 { start.1 } else { 0 };
-        let last = if body_index == end.0 {
-            end.1
-        } else {
-            paragraph.runs.len()
-        };
-        if first > last || last > paragraph.runs.len() {
-            return None;
-        }
         parts.push(
-            paragraph.runs[first..last]
+            project_paragraph_runs(paragraph, input.revision_view)
                 .iter()
-                .map(|run| run.text())
+                .filter(|projected| {
+                    let position = (body_index, projected.boundary, projected.raw_order);
+                    position >= start && position < end
+                })
+                .map(|projected| projected.run.text())
                 .collect::<String>(),
         );
     }
@@ -978,8 +1238,9 @@ fn bookmark_text(input: &LayoutInput, name: &str) -> Option<String> {
 /// A document without one can never reach the reflow path, so it does not pay
 /// for it.
 fn document_has_wrapping_drawing(input: &LayoutInput) -> bool {
-    fn paragraph_wraps(para: &CT_P) -> bool {
-        para.runs.iter().any(|run| {
+    fn paragraph_wraps(para: &CT_P, view: RevisionView) -> bool {
+        project_paragraph_runs(para, view).iter().any(|projected| {
+            let run = projected.run;
             run.content
                 .iter()
                 .filter_map(|rc| match rc {
@@ -1002,14 +1263,16 @@ fn document_has_wrapping_drawing(input: &LayoutInput) -> bool {
         .content
         .iter()
         .any(|content| match content {
-            BodyContent::Paragraph(para) => paragraph_wraps(para),
+            BodyContent::Paragraph(para) => paragraph_wraps(para, input.revision_view),
             BodyContent::Table(table) => table
                 .rows
                 .iter()
                 .flat_map(|row| row.cells.iter())
                 .flat_map(|cell| cell.content.iter())
                 .any(|content| match content {
-                    rdocx_oxml::table::CellContent::Paragraph(para) => paragraph_wraps(para),
+                    rdocx_oxml::table::CellContent::Paragraph(para) => {
+                        paragraph_wraps(para, input.revision_view)
+                    }
                     // A drawing inside a nested table is rare enough that the
                     // conservative answer is to look no deeper.
                     rdocx_oxml::table::CellContent::Table(_) => false,
@@ -1078,7 +1341,8 @@ fn collect_anchored_drawings(
 
     // Drawings written plainly, and drawings recovered from an
     // mc:AlternateContent block, are both anchored the same way.
-    for run in &para.runs {
+    for projected in project_paragraph_runs(para, input.revision_view) {
+        let run = projected.run;
         let plain = run.content.iter().filter_map(|rc| match rc {
             RunContent::Drawing(d) => Some(d),
             _ => None,
@@ -1474,6 +1738,518 @@ mod tests {
     use oxml_layout::MediaId;
     use std::collections::HashMap;
 
+    #[test]
+    fn revision_views_project_wrapped_runs_in_document_order() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>
+            <w:r><w:t>A</w:t></w:r>
+            <w:ins w:id="1" w:author="Ada"><w:r><w:t>I1</w:t></w:r><w:del w:id="2" w:author="Ben"><w:r><w:delText>D</w:delText></w:r></w:del><w:r><w:t>I2</w:t></w:r></w:ins>
+            <w:del w:id="3" w:author="Cy"><w:r><w:delText>X</w:delText></w:r></w:del>
+            <w:moveFrom w:id="4" w:author="Dee"><w:r><w:t>F</w:t></w:r></w:moveFrom>
+            <w:moveTo w:id="5" w:author="Eve"><w:r><w:t>T</w:t></w:r></w:moveTo>
+            <w:r><w:t>Z</w:t></w:r>
+        </w:p></w:body></w:document>"#;
+        let document = rdocx_oxml::CT_Document::from_xml(xml).expect("revision document parses");
+        let BodyContent::Paragraph(paragraph) = &document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+
+        let accepted = project_paragraph_runs(paragraph, RevisionView::Accepted)
+            .iter()
+            .map(|projected| projected.run.text())
+            .collect::<Vec<_>>();
+        assert_eq!(accepted, ["A", "I1", "I2", "T", "Z"]);
+
+        let tracked = project_paragraph_runs(paragraph, RevisionView::Tracked)
+            .iter()
+            .map(|projected| projected.run.text())
+            .collect::<Vec<_>>();
+        assert_eq!(tracked, ["A", "I1", "D", "I2", "X", "F", "T", "Z"]);
+    }
+
+    #[test]
+    fn nested_only_revision_wrappers_project_their_visible_runs() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>
+            <w:ins w:id="1" w:author="Ada"><w:moveTo w:id="2" w:author="Ben"><w:r><w:t>nested</w:t></w:r></w:moveTo></w:ins>
+        </w:p></w:body></w:document>"#;
+        let document = rdocx_oxml::CT_Document::from_xml(xml).expect("revision document parses");
+        let BodyContent::Paragraph(paragraph) = &document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        for view in [RevisionView::Accepted, RevisionView::Tracked] {
+            assert_eq!(projected_paragraph_text(paragraph, view), "nested");
+        }
+        assert!(paragraph_has_visible_revision(paragraph));
+    }
+
+    #[test]
+    fn pageref_target_follows_an_earlier_revision_at_the_same_boundary() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>
+            <w:ins w:id="1" w:author="Ada"><w:r><w:t>before</w:t></w:r></w:ins>
+            <w:bookmarkStart w:id="7" w:name="target"/>
+            <w:fldSimple w:instr=" PAGEREF target "><w:r><w:t>1</w:t></w:r></w:fldSimple>
+            <w:bookmarkEnd w:id="7"/>
+        </w:p></w:body></w:document>"#;
+        let document = rdocx_oxml::CT_Document::from_xml(xml).expect("revision document parses");
+        let mut input = make_input_with_text("");
+        input.document = document;
+        let BodyContent::Paragraph(paragraph) = &input.document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        let media = MediaRegistry::new(&input.images);
+        let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
+        let mut numbering = NumberingState::new();
+        let mut diagnostics = Vec::new();
+        let block = layout_paragraph(
+            paragraph,
+            468.0,
+            &input.styles,
+            &input,
+            &media,
+            &mut fonts,
+            &mut numbering,
+            &mut diagnostics,
+        )
+        .expect("paragraph lays out");
+        let items = &block.reflow.expect("reflow items retained").items;
+        let revision_index = items
+            .iter()
+            .position(|item| matches!(item, InlineItem::Text(text) if text.text == "before"))
+            .expect("revision text");
+        let target_index = items
+            .iter()
+            .position(|item| {
+                matches!(item, InlineItem::Text(text) if matches!(text.field_kind, Some(FieldKind::Target(_))))
+            })
+            .expect("PAGEREF target");
+        assert!(revision_index < target_index);
+    }
+
+    #[test]
+    fn derived_revision_text_uses_the_selected_projection() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>
+            <w:bookmarkStart w:id="7" w:name="target"/>
+            <w:ins w:id="1" w:author="Ada"><w:r><w:t>new</w:t></w:r></w:ins>
+            <w:del w:id="2" w:author="Ben"><w:r><w:delText>old</w:delText></w:r></w:del>
+            <w:bookmarkEnd w:id="7"/>
+        </w:p></w:body></w:document>"#;
+        let document = rdocx_oxml::CT_Document::from_xml(xml).expect("revision document parses");
+        let mut input = make_input_with_text("");
+        input.document = document;
+
+        assert_eq!(bookmark_text(&input, "target").as_deref(), Some("new"));
+        input.revision_view = RevisionView::Tracked;
+        assert_eq!(bookmark_text(&input, "target").as_deref(), Some("newold"));
+    }
+
+    #[test]
+    fn bookmark_after_a_terminal_hyperlink_revision_excludes_that_revision() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p>
+            <w:hyperlink r:id="rId1"><w:r><w:t>link</w:t></w:r><w:ins w:id="1" w:author="Ada"><w:r><w:t>before bookmark</w:t></w:r></w:ins></w:hyperlink>
+            <w:bookmarkStart w:id="7" w:name="target"/><w:r><w:t>inside</w:t></w:r><w:bookmarkEnd w:id="7"/>
+        </w:p></w:body></w:document>"#;
+        let document = rdocx_oxml::CT_Document::from_xml(xml).expect("revision document parses");
+        let mut input = make_input_with_text("");
+        input.document = document;
+
+        assert_eq!(bookmark_text(&input, "target").as_deref(), Some("inside"));
+    }
+
+    #[test]
+    fn revision_only_hyperlink_keeps_its_link_annotation() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p>
+            <w:hyperlink r:id="rId1"><w:ins w:id="1" w:author="Ada"><w:r><w:t>linked revision</w:t></w:r></w:ins></w:hyperlink>
+        </w:p></w:body></w:document>"#;
+        let mut document =
+            rdocx_oxml::CT_Document::from_xml(xml).expect("revision document parses");
+        let BodyContent::Paragraph(paragraph) = &mut document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        paragraph.hyperlinks[0].rel_id = Some("rId2".to_owned());
+        let serialized = String::from_utf8(document.to_xml().expect("document serializes"))
+            .expect("document XML is UTF-8");
+        assert!(serialized.contains("r:id=\"rId2\""), "{serialized}");
+        assert!(!serialized.contains("r:id=\"rId1\""), "{serialized}");
+        let mut input = make_input_with_text("");
+        input.document = document;
+        input
+            .hyperlink_urls
+            .insert("rId2".to_owned(), "https://example.com".to_owned());
+
+        let output = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("revision hyperlink lays out");
+        assert!(output.pages[0].elements.iter().any(|element| {
+            matches!(element, PositionedElement::LinkAnnotation { url, .. }
+                if url == "https://example.com")
+        }));
+    }
+
+    #[test]
+    fn derived_revision_text_keeps_order_after_comment_run_removal() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>
+            <w:bookmarkStart w:id="7" w:name="target"/>
+            <w:commentRangeStart w:id="5"/><w:r><w:commentReference w:id="5"/></w:r>
+            <w:ins w:id="1" w:author="Ada"><w:r><w:t>inside</w:t></w:r></w:ins>
+            <w:bookmarkEnd w:id="7"/>
+        </w:p></w:body></w:document>"#;
+        let mut document =
+            rdocx_oxml::CT_Document::from_xml(xml).expect("revision document parses");
+        let BodyContent::Paragraph(paragraph) = &mut document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        paragraph.remove_comment_anchors(&[5]);
+        let mut input = make_input_with_text("");
+        input.document = document;
+
+        assert_eq!(bookmark_text(&input, "target").as_deref(), Some("inside"));
+    }
+
+    #[test]
+    fn heading_text_uses_the_selected_revision_projection() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>
+            <w:ins w:id="1" w:author="Ada"><w:r><w:t>new</w:t></w:r></w:ins>
+            <w:del w:id="2" w:author="Ben"><w:r><w:delText>old</w:delText></w:r></w:del>
+        </w:p></w:body></w:document>"#;
+        let document = rdocx_oxml::CT_Document::from_xml(xml).expect("revision document parses");
+        let BodyContent::Paragraph(paragraph) = &document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        assert_eq!(
+            projected_paragraph_text(paragraph, RevisionView::Accepted),
+            "new"
+        );
+        assert_eq!(
+            projected_paragraph_text(paragraph, RevisionView::Tracked),
+            "newold"
+        );
+    }
+
+    #[test]
+    fn revised_floating_anchors_follow_the_selected_projection() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+            xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+            xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><w:body><w:p>
+            <w:ins w:id="1" w:author="Ada"><w:r><w:drawing><wp:anchor behindDoc="0">
+              <wp:positionH relativeFrom="margin"><wp:align>right</wp:align></wp:positionH>
+              <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
+              <wp:extent cx="914400" cy="457200"/><wp:wrapSquare wrapText="bothSides"/>
+              <a:graphic><a:graphicData><wps:wsp><wps:spPr><a:prstGeom prst="rect"/></wps:spPr></wps:wsp></a:graphicData></a:graphic>
+            </wp:anchor></w:drawing></w:r></w:ins>
+        </w:p></w:body></w:document>"#;
+        let document = rdocx_oxml::CT_Document::from_xml(xml).expect("revision document parses");
+        let mut input = make_input_with_text("");
+        input.document = document;
+        assert!(document_has_wrapping_drawing(&input));
+
+        input.revision_view = RevisionView::Tracked;
+        let BodyContent::Paragraph(paragraph) = &input.document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        let media = MediaRegistry::new(&input.images);
+        let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
+        let mut numbering = NumberingState::new();
+        let mut diagnostics = Vec::new();
+        let anchored = collect_anchored_drawings(
+            paragraph,
+            &input.styles,
+            &input,
+            &media,
+            &mut fonts,
+            &mut numbering,
+            &mut diagnostics,
+        )
+        .expect("tracked anchor collection succeeds");
+        assert_eq!(anchored.len(), 1);
+    }
+
+    #[test]
+    fn tracked_revision_decorations_override_only_underline_and_strike() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>
+            <w:ins w:id="1" w:author="Ada"><w:r><w:rPr><w:rFonts w:ascii="Liberation Sans"/><w:b/><w:i/><w:u w:val="double"/><w:dstrike/><w:color w:val="AA0000"/><w:highlight w:val="yellow"/></w:rPr><w:t>inserted</w:t></w:r></w:ins>
+            <w:del w:id="2" w:author="Ben"><w:r><w:rPr><w:u w:val="double"/><w:color w:val="0000AA"/></w:rPr><w:delText>deleted</w:delText></w:r></w:del>
+            <w:ins w:id="3" w:author="Ada"><w:r><w:rPr><w:highlight w:val="yellow"/></w:rPr><w:footnoteReference w:id="11"/></w:r></w:ins>
+            <w:del w:id="4" w:author="Ben"><w:r><w:endnoteReference w:id="12"/></w:r></w:del>
+        </w:p></w:body></w:document>"#;
+        let document = rdocx_oxml::CT_Document::from_xml(xml).expect("revision document parses");
+        let mut input = make_input_with_text("");
+        input.document = document;
+        input.revision_view = RevisionView::Tracked;
+        let BodyContent::Paragraph(paragraph) = &input.document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        let media = MediaRegistry::new(&input.images);
+        let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
+        let mut numbering = NumberingState::new();
+        let mut diagnostics = Vec::new();
+        let block = layout_paragraph(
+            paragraph,
+            468.0,
+            &input.styles,
+            &input,
+            &media,
+            &mut fonts,
+            &mut numbering,
+            &mut diagnostics,
+        )
+        .expect("tracked paragraph lays out");
+        let segments = block
+            .lines
+            .iter()
+            .flat_map(|line| &line.items)
+            .filter_map(|item| match item {
+                oxml_layout::LineItem::Text(segment) => Some(segment),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let inserted = segments
+            .iter()
+            .find(|segment| segment.text == "inserted")
+            .expect("inserted segment");
+        assert_eq!(inserted.underline, Some(Underline::Single));
+        assert!(!inserted.strike);
+        assert!(inserted.dstrike);
+        assert!(inserted.bold && inserted.italic);
+        assert_eq!(inserted.color, Color::from_hex("AA0000"));
+        assert_eq!(inserted.highlight, Some(Color::from_hex("FFFF00")));
+
+        let deleted = segments
+            .iter()
+            .find(|segment| segment.text == "deleted")
+            .expect("deleted segment");
+        assert_eq!(deleted.underline, Some(Underline::Double));
+        assert!(deleted.strike);
+        assert_eq!(deleted.color, Color::from_hex("0000AA"));
+
+        let inserted_note = segments
+            .iter()
+            .find(|segment| segment.text == "11")
+            .expect("inserted note marker");
+        assert_eq!(inserted_note.underline, Some(Underline::Single));
+        assert_eq!(inserted_note.highlight, Some(Color::from_hex("FFFF00")));
+        let deleted_note = segments
+            .iter()
+            .find(|segment| segment.text == "12")
+            .expect("deleted note marker");
+        assert!(deleted_note.strike);
+
+        let mut accepted_input = input.clone();
+        accepted_input.revision_view = RevisionView::Accepted;
+        let BodyContent::Paragraph(accepted_paragraph) = &accepted_input.document.body.content[0]
+        else {
+            panic!("expected paragraph");
+        };
+        let accepted_media = MediaRegistry::new(&accepted_input.images);
+        let accepted_block = layout_paragraph(
+            accepted_paragraph,
+            468.0,
+            &accepted_input.styles,
+            &accepted_input,
+            &accepted_media,
+            &mut fonts,
+            &mut numbering,
+            &mut diagnostics,
+        )
+        .expect("accepted paragraph lays out");
+        let accepted_note = accepted_block
+            .lines
+            .iter()
+            .flat_map(|line| &line.items)
+            .filter_map(|item| match item {
+                oxml_layout::LineItem::Text(segment) if segment.text == "11" => Some(segment),
+                _ => None,
+            })
+            .next()
+            .expect("accepted note marker");
+        assert_eq!(accepted_note.underline, None);
+        assert!(!accepted_note.strike && !accepted_note.dstrike);
+        assert_eq!(accepted_note.highlight, None);
+    }
+
+    #[test]
+    fn a_split_changed_paragraph_draws_one_margin_bar_on_each_page() {
+        let changed = "changed ".repeat(3_000);
+        let xml = format!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:ins w:id="1" w:author="Ada"><w:r><w:t xml:space="preserve">{changed}</w:t></w:r></w:ins></w:p></w:body></w:document>"#
+        );
+        let document =
+            rdocx_oxml::CT_Document::from_xml(xml.as_bytes()).expect("revision document parses");
+        let mut input = make_input_with_text("");
+        input.document = document;
+        let accepted = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("accepted document lays out");
+        input.revision_view = RevisionView::Tracked;
+        let output = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("tracked document lays out");
+        let geometry = PageGeometry::default();
+        assert!(output.pages.len() > 1);
+        assert_eq!(accepted.pages.len(), output.pages.len());
+        for (accepted_page, page) in accepted.pages.iter().zip(&output.pages) {
+            let accepted_text = accepted_page
+                .elements
+                .iter()
+                .filter_map(|element| match element {
+                    PositionedElement::Text(text) => Some(text),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let tracked_text = page
+                .elements
+                .iter()
+                .filter_map(|element| match element {
+                    PositionedElement::Text(text) => Some(text),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(accepted_text, tracked_text);
+            let bars = page
+                .elements
+                .iter()
+                .filter_map(|element| match element {
+                    PositionedElement::Line {
+                        start,
+                        end,
+                        width,
+                        dash_pattern,
+                        ..
+                    } if (*width - 1.5).abs() < f64::EPSILON
+                        && dash_pattern.is_none()
+                        && start.x == end.x
+                        && (start.x < geometry.margin_left
+                            || start.x > geometry.page_width - geometry.margin_right) =>
+                    {
+                        Some((*start, *end))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(bars.len(), 1, "page {}", page.page_number);
+            let (start, end) = bars[0];
+            assert!(start.x.is_finite() && start.y.is_finite() && end.y.is_finite());
+            assert!(end.y > start.y);
+            if page.page_number.is_multiple_of(2) {
+                assert!(start.x < geometry.margin_left);
+            } else {
+                assert!(start.x > geometry.page_width - geometry.margin_right);
+            }
+        }
+    }
+
+    fn page_change_bar_count(page: &PageFrame) -> usize {
+        let geometry = PageGeometry::default();
+        page.elements
+            .iter()
+            .filter(|element| {
+                matches!(element, PositionedElement::Line { start, end, width, .. }
+                    if (*width - 1.5).abs() < f64::EPSILON
+                        && start.x == end.x
+                        && (start.x < geometry.margin_left
+                            || start.x > geometry.page_width - geometry.margin_right))
+            })
+            .count()
+    }
+
+    #[test]
+    fn tracked_header_paragraph_draws_a_change_bar() {
+        use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef, HdrFtrType};
+
+        let mut input = make_input_with_text("body");
+        input.revision_view = RevisionView::Tracked;
+        input.document.body.sect_pr = Some(CT_SectPr::default_letter());
+        input
+            .document
+            .body
+            .sect_pr
+            .as_mut()
+            .expect("section properties")
+            .header_refs
+            .push(HdrFtrRef {
+                hdr_ftr_type: HdrFtrType::Default,
+                rel_id: "rIdHeader".to_owned(),
+            });
+        let header = CT_HdrFtr::from_xml(
+            br#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:ins w:id="1" w:author="Ada"><w:r><w:t>changed header</w:t></w:r></w:ins></w:p></w:hdr>"#,
+        )
+        .expect("header parses");
+        input.headers.insert("rIdHeader".to_owned(), header);
+
+        let output = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("tracked header lays out");
+        assert_eq!(page_change_bar_count(&output.pages[0]), 1);
+    }
+
+    #[test]
+    fn tracked_note_paragraph_draws_a_change_bar() {
+        let mut input = make_input_with_footnote(&["plain"]);
+        input.revision_view = RevisionView::Tracked;
+        let changed_note = rdocx_oxml::CT_Document::from_xml(
+            br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:ins w:id="1" w:author="Ada"><w:r><w:t>added note</w:t></w:r></w:ins><w:del w:id="2" w:author="Ben"><w:r><w:delText>removed note</w:delText></w:r></w:del></w:p></w:body></w:document>"#,
+        )
+        .expect("note paragraph parses");
+        let BodyContent::Paragraph(paragraph) = &changed_note.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        input.footnotes.as_mut().expect("footnote stream").footnotes[0].paragraphs =
+            vec![paragraph.clone()];
+
+        let output = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("tracked note lays out");
+        assert_eq!(page_change_bar_count(&output.pages[0]), 1);
+        let decoration_widths = output.pages[0]
+            .elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Line {
+                    start, end, width, ..
+                } if start.y == end.y && (*width - 0.5).abs() > f64::EPSILON => Some(*width),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            decoration_widths
+                .iter()
+                .any(|width| (*width - 11.0 / 18.0).abs() < 0.001),
+            "tracked insertion underline missing: {decoration_widths:?}"
+        );
+        assert!(
+            decoration_widths
+                .iter()
+                .any(|width| (*width - 11.0 / 24.0).abs() < 0.001),
+            "tracked deletion strike missing: {decoration_widths:?}"
+        );
+    }
+
+    #[test]
+    fn property_only_revisions_mark_the_tracked_paragraph() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:pPrChange w:id="1" w:author="Ada"><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange></w:pPr><w:r><w:t>current</w:t></w:r></w:p></w:body></w:document>"#;
+        let document = rdocx_oxml::CT_Document::from_xml(xml).expect("revision document parses");
+        let BodyContent::Paragraph(paragraph) = &document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        assert!(paragraph_has_visible_revision(paragraph));
+    }
+
+    #[test]
+    fn empty_revision_wrappers_do_not_mark_the_tracked_paragraph() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:ins w:id="1" w:author="Ada"/></w:p><w:p><w:ins w:id="2" w:author="Ben"><w:r><w:t/></w:r></w:ins></w:p></w:body></w:document>"#;
+        let document = rdocx_oxml::CT_Document::from_xml(xml).expect("revision document parses");
+        for content in &document.body.content {
+            let BodyContent::Paragraph(paragraph) = content else {
+                panic!("expected paragraph");
+            };
+            assert!(!paragraph_has_visible_revision(paragraph));
+        }
+    }
+
     fn make_input_with_text(text: &str) -> LayoutInput {
         let mut doc = rdocx_oxml::document::CT_Document::new();
         let mut p = CT_P::new();
@@ -1481,6 +2257,7 @@ mod tests {
         doc.body.add_paragraph(p);
 
         LayoutInput {
+            revision_view: crate::input::RevisionView::Accepted,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -1517,6 +2294,7 @@ mod tests {
         doc.body.add_paragraph(CT_P::new());
 
         let input = LayoutInput {
+            revision_view: crate::input::RevisionView::Accepted,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -1750,6 +2528,7 @@ mod tests {
         doc.body.add_paragraph(p);
 
         let input = LayoutInput {
+            revision_view: crate::input::RevisionView::Accepted,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -1810,6 +2589,7 @@ mod tests {
         doc.body.add_paragraph(h1b);
 
         let input = LayoutInput {
+            revision_view: crate::input::RevisionView::Accepted,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -1880,6 +2660,7 @@ mod tests {
         }
 
         LayoutInput {
+            revision_view: crate::input::RevisionView::Accepted,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -2036,6 +2817,7 @@ mod tests {
             note.add_run("Beta");
 
             LayoutInput {
+                revision_view: crate::input::RevisionView::Accepted,
                 document: doc,
                 styles: CT_Styles::new_default(),
                 numbering: None,
@@ -2163,6 +2945,7 @@ mod tests {
         });
 
         LayoutInput {
+            revision_view: crate::input::RevisionView::Accepted,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -2449,6 +3232,7 @@ mod tests {
         };
 
         LayoutInput {
+            revision_view: crate::input::RevisionView::Accepted,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -2590,6 +3374,7 @@ mod tests {
             let mut note = CT_P::new();
             note.add_run("An endnote that would be tall in the margin.");
             LayoutInput {
+                revision_view: crate::input::RevisionView::Accepted,
                 document: doc,
                 styles: CT_Styles::new_default(),
                 numbering: None,
@@ -2715,6 +3500,7 @@ mod tests {
         );
 
         LayoutInput {
+            revision_view: crate::input::RevisionView::Accepted,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -2938,6 +3724,7 @@ mod tests {
         );
 
         let input = LayoutInput {
+            revision_view: crate::input::RevisionView::Accepted,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -3019,6 +3806,7 @@ mod tests {
         );
 
         let input = LayoutInput {
+            revision_view: crate::input::RevisionView::Accepted,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -3120,6 +3908,7 @@ mod tests {
             footnotes: vec![note_of(1), note_of(2)],
         };
         LayoutInput {
+            revision_view: crate::input::RevisionView::Accepted,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -3314,6 +4103,7 @@ mod tests {
         );
 
         LayoutInput {
+            revision_view: crate::input::RevisionView::Accepted,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,

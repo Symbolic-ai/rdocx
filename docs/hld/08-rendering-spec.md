@@ -442,6 +442,25 @@ separate `Mutex<Option<Arc<_>>>` caches. `render_page_to_png`,
 deterministic page renderer uses its own result, while caller-supplied font
 layouts remain uncached because those fonts are not part of a stable cache key.
 
+### Word revision views
+
+`LayoutInput::revision_view` selects the accepted or tracked projection before
+Word text shaping. One ordered projection combines ordinary runs and typed
+revision wrappers at their preserved boundaries, including nested wrappers and
+revisions inside hyperlinks. The same projection applies to body, table,
+header, footer, footnote, and endnote paragraphs. Accepted layout includes
+insertions and move destinations and omits deletions and move sources. Tracked
+layout includes both sides. It forces single underline on insertion and move
+destination text and single strike on deletion and move source text while
+retaining the remaining resolved formatting.
+
+A tracked paragraph with visible revised content or a property-only revision
+carries a changed marker into pagination. Every page fragment of that paragraph
+draws one solid line outside the text margin, on the right for odd pages and on
+the left for even pages. The marker does not affect text placement. Existing
+render methods select accepted layout and retain the normal and deterministic
+caches. Option-taking tracked renders are uncached.
+
 Every public document mutation and mutable-accessor entry point clears both
 caches before changing or exposing content. Rendering every page through the
 single-page entry point therefore performs one layout per font mode instead of

@@ -108,6 +108,15 @@ suite. That job installs the pinned Poppler 26.01.0 oracle first, so the decoded
 pixel comparison is unconditional, failure-propagating, and bound to the
 reviewed rasteriser identity.
 
+Revision-view rendering has a separate deterministic two-view golden gate. An
+in-code Word fixture renders accepted and tracked views with bundled fonts at a
+fixed DPI. Accepted pixels must equal the same document after `accept_all`
+removes the wrappers, while the tracked pixels must differ. Regression coverage
+also parses a revision whose paragraph splits across pages, requires one
+outside-margin change bar on every fragment, and compares text positions with
+an unchanged control. The general hash baseline remains unchanged at 49
+entries.
+
 The cross-family native-chart golden constructs one Word document and one
 PowerPoint presentation from the same `ChartData`, page size, chart rectangle,
 and effective theme. The `rdocx` test target takes `rpptx` as a development-only

@@ -139,6 +139,12 @@ impl CT_Revision {
         &self.content
     }
 
+    /// Return nested revision wrappers at their direct-run boundaries.
+    #[doc(hidden)]
+    pub fn nested_revisions(&self) -> &[(usize, CT_Revision)] {
+        &self.nested_revisions
+    }
+
     pub(crate) fn write_xml<W: std::io::Write>(
         &self,
         writer: &mut quick_xml::Writer<W>,
@@ -219,12 +225,33 @@ fn collect_paragraph<'a>(paragraph: &'a CT_P, revisions: &mut Vec<&'a CT_Revisio
             }) {
                 collect_revision(revision, revisions);
             }
+            for (hyperlink_index, _hyperlink) in
+                paragraph
+                    .hyperlinks
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, hyperlink)| {
+                        hyperlink.run_start == boundary
+                            && hyperlink.run_end == boundary
+                            && hyperlink.preserved_raw_before == Some(raw_index)
+                    })
+            {
+                for (_, _, revision) in paragraph.revisions.iter().filter(|(at, slot, _)| {
+                    *at == boundary && hyperlink_revision_index(*slot) == Some(hyperlink_index)
+                }) {
+                    collect_revision(revision, revisions);
+                }
+            }
         }
-        for (_, _, revision) in paragraph
-            .revisions
-            .iter()
-            .filter(|(at, slot, _)| *at == boundary && hyperlink_revision_index(*slot).is_some())
-        {
+        for (_, _, revision) in paragraph.revisions.iter().filter(|(at, slot, _)| {
+            *at == boundary
+                && hyperlink_revision_index(*slot).is_some_and(|index| {
+                    paragraph
+                        .hyperlinks
+                        .get(index)
+                        .is_none_or(|hyperlink| hyperlink.preserved_raw_before.is_none())
+                })
+        }) {
             collect_revision(revision, revisions);
         }
         if let Some(run) = paragraph.runs.get(boundary) {

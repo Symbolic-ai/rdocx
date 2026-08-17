@@ -10,6 +10,42 @@ use rdocx::{
 };
 use rdocx::{Document, RevisionKind};
 
+#[test]
+fn settings_relationship_target_is_resolved_instead_of_assumed() {
+    let settings = br#"<?xml version="1.0"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:documentProtection w:edit="comments" w:enforcement="true" w:hash="custom-hash" w:salt="custom-salt"/></w:settings>"#;
+    let mut seed = Document::new();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    package.set_part("/word/config/protection.xml", settings.to_vec());
+    package.content_types.add_override(
+        "/word/config/protection.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add(rel_types::SETTINGS, "config/protection.xml");
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+
+    let mut document = Document::from_bytes(input.get_ref()).unwrap();
+    let protection = document.document_protection().unwrap();
+    assert_eq!(protection.mode, rdocx::ProtectionMode::Comments);
+    assert_eq!(protection.hash.as_deref(), Some("custom-hash"));
+
+    let saved = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    assert_eq!(
+        package.get_part("/word/config/protection.xml").unwrap(),
+        settings
+    );
+    assert!(package.get_part("/word/settings.xml").is_none());
+    let relationship = package
+        .get_part_rels("/word/document.xml")
+        .and_then(|relationships| relationships.get_by_type(rel_types::SETTINGS))
+        .unwrap();
+    assert_eq!(relationship.target, "config/protection.xml");
+}
+
 fn document_xml(document: &mut Document) -> Vec<u8> {
     let bytes = document.to_bytes().unwrap();
     let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
@@ -57,6 +93,144 @@ fn nested_revisions_are_reported_once_in_document_order() {
     assert_eq!(revisions[3].kind(), RevisionKind::Deletion);
     assert_eq!(revisions[4].kind(), RevisionKind::MoveFrom);
     assert_eq!(revisions[6].kind(), RevisionKind::SectionPropertyChange);
+}
+
+#[test]
+fn m14_collaboration_models_coexist_and_preserve_unmodelled_xml() {
+    const PRESERVED_PART: &[u8] = b"producer-private-bytes\x00\xff";
+    const OPAQUE_CONTROL: &[u8] =
+        br#"<p:opaque-control p:flag="keep"><p:child/></p:opaque-control>"#;
+    const OPAQUE_COMMENT: &[u8] = br#"<p:opaque-comment p:flag="keep"/>"#;
+
+    let mut source = Document::new();
+    let bytes = source.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let document_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:p="urn:producer">
+  <w:body>
+    <w:p><w:r><w:t>plain </w:t></w:r><w:ins w:id="10" w:author="Ada"><w:r><w:t>inserted</w:t></w:r></w:ins><w:del w:id="11" w:author="Ben"><w:r><w:delText>deleted</w:delText></w:r></w:del></w:p>
+    <w:sdt><w:sdtPr><w:tag w:val="customer"/><p:opaque-control p:flag="keep"><p:child/></p:opaque-control></w:sdtPr><w:sdtContent><w:p><w:r><w:t>old value</w:t></w:r></w:p></w:sdtContent></w:sdt>
+    <w:p><w:bookmarkStart w:id="30" w:name="existing"/><w:commentRangeStart w:id="20"/><w:r><w:t>anchor</w:t></w:r><w:bookmarkEnd w:id="30"/><w:commentRangeEnd w:id="20"/><w:r><w:commentReference w:id="20"/></w:r><w:r><w:t> tail</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+  </w:body>
+</w:document>"#;
+    let comments_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:p="urn:producer"><w:comment w:id="20" w:author="Ada"><w:p w14:paraId="A1B2C3D4"><w:r><w:t>existing comment</w:t></w:r><p:opaque-comment p:flag="keep"/></w:p></w:comment></w:comments>"#;
+    package.set_part("/word/document.xml", document_xml.to_vec());
+    package.set_part("/word/comments.xml", comments_xml.to_vec());
+    package.content_types.add_override(
+        "/word/comments.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add(rel_types::COMMENTS, "comments.xml");
+    package.set_part("/custom/producer.bin", PRESERVED_PART.to_vec());
+    package
+        .content_types
+        .add_override("/custom/producer.bin", "application/octet-stream");
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+
+    let mut document = Document::from_bytes(input.get_ref()).unwrap();
+    assert_eq!(
+        document
+            .revisions()
+            .iter()
+            .map(|revision| revision.id())
+            .collect::<Vec<_>>(),
+        vec![10, 11]
+    );
+    assert_eq!(document.comments()[0].text(), "existing comment");
+    assert_eq!(document.content_controls()[0].tag(), Some("customer"));
+    assert_eq!(document.content_controls()[0].text(), "old value");
+    assert_eq!(document.bookmarks()[0].name(), Some("existing"));
+
+    assert_eq!(document.accept_revision_id(10).unwrap(), 1);
+    let added_comment = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Cy",
+            Some("CY"),
+            "added comment",
+        )
+        .unwrap();
+    assert_eq!(
+        document
+            .set_content_control_value_by_tag("customer", "new value")
+            .unwrap(),
+        1
+    );
+    document
+        .add_bookmark(
+            "added_bookmark",
+            RunRange {
+                start: RunPosition {
+                    body_index: 2,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 2,
+                    run_index: 1,
+                },
+            },
+        )
+        .unwrap();
+
+    let saved = document.to_bytes().unwrap();
+    let saved_package = OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    assert_eq!(
+        saved_package.get_part("/custom/producer.bin"),
+        Some(PRESERVED_PART)
+    );
+    assert!(
+        saved_package
+            .get_part("/word/document.xml")
+            .unwrap()
+            .windows(OPAQUE_CONTROL.len())
+            .any(|window| window == OPAQUE_CONTROL)
+    );
+    assert!(
+        saved_package
+            .get_part("/word/comments.xml")
+            .unwrap()
+            .windows(OPAQUE_COMMENT.len())
+            .any(|window| window == OPAQUE_COMMENT)
+    );
+
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(
+        reopened
+            .revisions()
+            .iter()
+            .map(|revision| revision.id())
+            .collect::<Vec<_>>(),
+        vec![11]
+    );
+    assert_eq!(
+        reopened
+            .comments()
+            .iter()
+            .find(|comment| comment.id() == added_comment)
+            .unwrap()
+            .text(),
+        "added comment"
+    );
+    assert_eq!(reopened.content_controls()[0].text(), "new value");
+    assert!(
+        reopened
+            .bookmarks()
+            .iter()
+            .any(|bookmark| bookmark.name() == Some("added_bookmark"))
+    );
 }
 
 const PNG_2_BY_3: &[u8] = &[
@@ -2115,12 +2289,28 @@ fn save_pdf_to_file() {
     let mut doc = Document::new();
     doc.add_paragraph("PDF file test");
 
-    let path = "/tmp/rdocx_test_output.pdf";
-    let result = doc.save_pdf(path);
+    let path = std::env::temp_dir().join(format!("rdocx_test_output_{}.pdf", std::process::id()));
+    let result = doc.save_pdf(&path);
     if result.is_ok() {
-        let bytes = std::fs::read(path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
         assert!(bytes.starts_with(b"%PDF"));
-        std::fs::remove_file(path).ok();
+        std::fs::remove_file(&path).ok();
+    }
+
+    let tracked_path = std::env::temp_dir().join(format!(
+        "rdocx_test_tracked_output_{}.pdf",
+        std::process::id()
+    ));
+    let result = doc.save_pdf_with_options(
+        &tracked_path,
+        rdocx::RenderOptions {
+            revision_view: rdocx::RevisionView::Tracked,
+        },
+    );
+    if result.is_ok() {
+        let bytes = std::fs::read(&tracked_path).unwrap();
+        assert!(bytes.starts_with(b"%PDF"));
+        std::fs::remove_file(&tracked_path).ok();
     }
 }
 

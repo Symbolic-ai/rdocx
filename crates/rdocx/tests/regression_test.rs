@@ -5,15 +5,171 @@
 
 use std::collections::HashMap;
 
-use rdocx::{Document, Length, RunPosition, RunRange};
+use rdocx::{Document, Length, RenderOptions, RevisionView, RunPosition, RunRange};
 use rdocx_oxml::CT_Document;
 use rdocx_oxml::document::CT_Body;
+
+fn document_with_settings(settings_xml: &[u8], target: &str) -> Document {
+    let mut seed = Document::new();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let part_name = oxml_opc::OpcPackage::resolve_rel_target("/word/document.xml", target);
+    package.set_part(&part_name, settings_xml.to_vec());
+    package.content_types.add_override(
+        &part_name,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add(oxml_opc::relationship::rel_types::SETTINGS, target);
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    Document::from_bytes(output.get_ref()).unwrap()
+}
+
+#[test]
+fn each_document_protection_mode_is_reported_with_its_recorded_hash() {
+    for (mode, expected) in [
+        ("readOnly", rdocx::ProtectionMode::ReadOnly),
+        ("comments", rdocx::ProtectionMode::Comments),
+        ("trackedChanges", rdocx::ProtectionMode::TrackedChanges),
+        ("forms", rdocx::ProtectionMode::Forms),
+    ] {
+        let settings = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><q:settings xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:documentProtection q:edit="{mode}" q:enforcement="1" q:cryptProviderType="rsaAES" q:cryptAlgorithmClass="hash" q:cryptAlgorithmType="typeAny" q:cryptAlgorithmSid="14" q:cryptSpinCount="100000" q:hash="HASH-{mode}" q:salt="SALT-{mode}"/></q:settings>"#
+        );
+        let mut document = document_with_settings(settings.as_bytes(), "settings.xml");
+        let protection = document.document_protection().unwrap();
+        assert_eq!(protection.mode, expected);
+        assert_eq!(protection.enforcement, Some(true));
+        assert_eq!(protection.algorithm_sid, Some(14));
+        assert_eq!(protection.spin_count, Some(100_000));
+        assert_eq!(
+            protection.hash.as_deref(),
+            Some(format!("HASH-{mode}").as_str())
+        );
+        assert_eq!(
+            protection.salt.as_deref(),
+            Some(format!("SALT-{mode}").as_str())
+        );
+
+        let saved = document.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+        assert_eq!(
+            package.get_part("/word/settings.xml").unwrap(),
+            settings.as_bytes()
+        );
+    }
+}
+
+#[test]
+fn malformed_document_protection_remains_opaque_and_unreported() {
+    for attributes in [
+        r#"q:edit="unsupported" q:cryptSpinCount="100000""#,
+        r#"q:edit="forms" q:cryptSpinCount="many""#,
+        r#"q:edit="forms" q:cryptAlgorithmSid="SHA-512""#,
+        r#"q:edit="forms" q:cryptAlgorithmClass="future""#,
+    ] {
+        let settings = format!(
+            r#"<?xml version="1.0"?><q:settings xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:p="urn:producer"><p:before/><q:documentProtection {attributes}/><p:after/></q:settings>"#
+        );
+        let mut document = document_with_settings(settings.as_bytes(), "settings.xml");
+        assert!(document.document_protection().is_none());
+
+        let saved = document.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+        assert_eq!(
+            package.get_part("/word/settings.xml").unwrap(),
+            settings.as_bytes()
+        );
+    }
+}
 
 const CUSTOM_XML_REL_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml";
 const CUSTOM_XML_PROPS_REL_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps";
 const WORD_REVISION_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
+
+#[test]
+fn both_revision_views_render_and_accepted_matches_resolved_document() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>ordinary </w:t></w:r><w:ins w:id="1" w:author="Ada"><w:r><w:t>inserted </w:t></w:r></w:ins><w:del w:id="2" w:author="Ben"><w:r><w:delText>deleted </w:delText></w:r></w:del><w:moveFrom w:id="3" w:author="Cy"><w:r><w:t>old </w:t></w:r></w:moveFrom><w:moveTo w:id="4" w:author="Dee"><w:r><w:t>moved</w:t></w:r></w:moveTo></w:p>"#,
+    );
+    let document = document_with_content_controls(&xml);
+    let accepted = document
+        .render_page_to_png_deterministic_with_options(
+            0,
+            150.0,
+            RenderOptions {
+                revision_view: RevisionView::Accepted,
+            },
+        )
+        .unwrap()
+        .expect("accepted page");
+    let tracked = document
+        .render_page_to_png_deterministic_with_options(
+            0,
+            150.0,
+            RenderOptions {
+                revision_view: RevisionView::Tracked,
+            },
+        )
+        .unwrap()
+        .expect("tracked page");
+    assert_ne!(accepted, tracked);
+
+    let mut resolved = document_with_content_controls(&xml);
+    assert_eq!(resolved.accept_all().unwrap(), 4);
+    let resolved = resolved
+        .render_page_to_png_deterministic(0, 150.0)
+        .unwrap()
+        .expect("resolved page");
+    assert_eq!(accepted, resolved);
+}
+
+#[test]
+fn default_render_methods_keep_the_accepted_view() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>ordinary </w:t></w:r><w:ins w:id="1" w:author="Ada"><w:r><w:t>accepted</w:t></w:r></w:ins><w:del w:id="2" w:author="Ben"><w:r><w:delText>omitted</w:delText></w:r></w:del></w:p>"#,
+    );
+    let document = document_with_content_controls(&xml);
+    let options = RenderOptions::default();
+
+    assert_eq!(
+        document.to_pdf().unwrap(),
+        document.to_pdf_with_options(options).unwrap()
+    );
+    assert_eq!(
+        document.to_pdf_deterministic().unwrap(),
+        document.to_pdf_deterministic_with_options(options).unwrap()
+    );
+    assert_eq!(
+        document.render_page_to_png(0, 96.0).unwrap(),
+        document
+            .render_page_to_png_with_options(0, 96.0, options)
+            .unwrap()
+    );
+    assert_eq!(
+        document.render_page_to_png_deterministic(0, 96.0).unwrap(),
+        document
+            .render_page_to_png_deterministic_with_options(0, 96.0, options)
+            .unwrap()
+    );
+    assert_eq!(
+        document.render_all_pages(96.0).unwrap(),
+        document
+            .render_all_pages_with_options(96.0, options)
+            .unwrap()
+    );
+    assert_eq!(
+        format!("{:?}", document.layout_page(0).unwrap()),
+        format!(
+            "{:?}",
+            document.layout_page_with_options(0, options).unwrap()
+        )
+    );
+}
 
 fn document_with_content_controls(document_xml: &str) -> Document {
     document_with_bound_content_controls(document_xml, None)
