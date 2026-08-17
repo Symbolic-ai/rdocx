@@ -142,6 +142,14 @@ impl CT_Revision {
         writer.get_mut().write_all(&self.raw_xml)?;
         Ok(())
     }
+
+    pub(crate) fn write_xml_with_word_override<W: std::io::Write>(
+        &self,
+        writer: &mut quick_xml::Writer<W>,
+        foreign_word_namespace: Option<&str>,
+    ) -> crate::Result<()> {
+        crate::text::write_raw_with_word_override(writer, &self.raw_xml, foreign_word_namespace)
+    }
 }
 
 impl CT_Document {
@@ -864,5 +872,43 @@ mod tests {
         let reopened = CT_Document::from_xml(output.as_bytes()).expect("output reparses");
         assert_eq!(reopened.revisions().len(), 1);
         assert_eq!(reopened.revisions()[0].id(), 31);
+    }
+
+    #[test]
+    fn aliased_hyperlink_runs_survive_a_locally_shadowed_word_prefix() {
+        let raw_in_run = r#"<w:inside/>"#;
+        let raw_at_boundary = r#"<w:boundary/>"#;
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:wx="{W_NS}"><w:body><w:p><wx:hyperlink xmlns:w="urn:foreign"><wx:r><wx:t>before</wx:t>{raw_in_run}</wx:r><wx:ins wx:id="61" wx:author="Ada"><wx:r><wx:t>reported</wx:t></wx:r></wx:ins>{raw_at_boundary}<wx:r><wx:rPr><wx:b/></wx:rPr><wx:t>after</wx:t></wx:r></wx:hyperlink></w:p></w:body></w:document>"#
+        );
+        let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
+
+        assert_eq!(
+            document.body.paragraphs().next().unwrap().text(),
+            "beforeafter"
+        );
+        assert_eq!(document.revisions().len(), 1);
+        assert_eq!(document.revisions()[0].id(), 61);
+        let output =
+            String::from_utf8(document.to_xml().expect("document writes")).expect("UTF-8 output");
+        assert!(output.contains(r#"xmlns:w="urn:foreign""#));
+        assert!(output.contains(r#"<w:inside xmlns:w="urn:foreign"/>"#));
+        assert!(output.contains(raw_at_boundary));
+        assert!(output.contains(&format!(r#"<w:r xmlns:w="{W_NS}">"#)));
+        let positions = [
+            output.find("<w:t>before</w:t>").unwrap(),
+            output.find(r#"wx:id="61""#).unwrap(),
+            output.find(raw_at_boundary).unwrap(),
+            output.find("<w:t>after</w:t>").unwrap(),
+        ];
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+        let reopened = CT_Document::from_xml(output.as_bytes()).expect("output reparses");
+        assert_eq!(
+            reopened.body.paragraphs().next().unwrap().text(),
+            "beforeafter"
+        );
+        assert_eq!(reopened.revisions().len(), 1);
+        assert_eq!(reopened.revisions()[0].id(), 61);
     }
 }

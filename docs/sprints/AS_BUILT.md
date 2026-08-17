@@ -7213,7 +7213,8 @@ native revision metadata API.
 collision, schema-order, raw-preservation, duplicate-emission, and
 `hyperlink_and_nested_content_revisions_round_trip_and_report_in_order` and
 `modeled_hyperlinks_preserve_unreported_raw_children_and_foreign_owners`
-regressions.
+regressions. The extended review also covers aliased hyperlink runs under a
+locally shadowed canonical Word prefix.
 
 **Hash harness.** Unchanged, 49 of 49.
 

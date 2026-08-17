@@ -352,10 +352,22 @@ impl CT_R {
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        writer.write_event(Event::Start(BytesStart::new("w:r")))?;
+        self.to_xml_with_word_override(writer, None)
+    }
+
+    pub(crate) fn to_xml_with_word_override<W: std::io::Write>(
+        &self,
+        writer: &mut Writer<W>,
+        foreign_word_namespace: Option<&str>,
+    ) -> Result<()> {
+        let mut run = BytesStart::new("w:r");
+        if foreign_word_namespace.is_some() {
+            run.push_attribute(("xmlns:w", crate::namespace::W_NS));
+        }
+        writer.write_event(Event::Start(run))?;
 
         if let Some(ref props) = self.properties {
-            props.to_xml(writer)?;
+            props.to_xml_with_word_override(writer, foreign_word_namespace)?;
         }
 
         let mut raw_written = 0;
@@ -416,7 +428,7 @@ impl CT_R {
                         .take((*raw_before).min(self.extra_xml.len()))
                         .skip(raw_written)
                     {
-                        writer.get_mut().write_all(raw)?;
+                        write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
                         raw_written += 1;
                     }
                     let mut buf = itoa::Buffer::new();
@@ -429,7 +441,7 @@ impl CT_R {
 
         // Write captured unknown child elements
         for raw in self.extra_xml.iter().skip(raw_written) {
-            writer.get_mut().write_all(raw)?;
+            write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:r")))?;
@@ -1201,6 +1213,12 @@ impl CT_P {
                     FieldType::Other(s) => s.as_str(),
                 };
                 let mut fld = BytesStart::new("w:fldSimple");
+                if current_hyperlink
+                    .and_then(|index| shadowed_word_namespace(&self.hyperlinks[index]))
+                    .is_some()
+                {
+                    fld.push_attribute(("xmlns:w", crate::namespace::W_NS));
+                }
                 fld.push_attribute(("w:instr", instr));
                 writer.write_event(Event::Start(fld))?;
                 // Emit a default display run
@@ -1217,7 +1235,14 @@ impl CT_P {
                 continue;
             }
 
-            run.to_xml(writer)?;
+            if let Some(hyperlink_index) = current_hyperlink {
+                run.to_xml_with_word_override(
+                    writer,
+                    shadowed_word_namespace(&self.hyperlinks[hyperlink_index]),
+                )?;
+            } else {
+                run.to_xml(writer)?;
+            }
         }
 
         // Close any remaining open hyperlink
@@ -1570,6 +1595,54 @@ fn safe_hyperlink_prefix(
         }
     }
     unreachable!("the finite attribute set cannot occupy every prefix")
+}
+
+fn shadowed_word_namespace(hyperlink: &HyperlinkSpan) -> Option<&str> {
+    hyperlink
+        .extra_attributes
+        .iter()
+        .find(|(name, value)| name == "xmlns:w" && value != crate::namespace::W_NS)
+        .map(|(_, value)| value.as_str())
+}
+
+pub(crate) fn write_raw_with_word_override<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    raw: &[u8],
+    foreign_word_namespace: Option<&str>,
+) -> Result<()> {
+    let Some(namespace) = foreign_word_namespace else {
+        writer.get_mut().write_all(raw)?;
+        return Ok(());
+    };
+    if !raw.windows(b"w:".len()).any(|window| window == b"w:") {
+        writer.get_mut().write_all(raw)?;
+        return Ok(());
+    }
+    let Some(end) = raw.iter().position(|byte| *byte == b'>') else {
+        writer.get_mut().write_all(raw)?;
+        return Ok(());
+    };
+    let opening = &raw[..end];
+    if opening
+        .windows(b"xmlns:w".len())
+        .any(|window| window == b"xmlns:w")
+    {
+        writer.get_mut().write_all(raw)?;
+        return Ok(());
+    }
+    let insertion = if opening.last() == Some(&b'/') {
+        end - 1
+    } else {
+        end
+    };
+    writer.get_mut().write_all(&raw[..insertion])?;
+    writer.get_mut().write_all(b" xmlns:w=\"")?;
+    writer
+        .get_mut()
+        .write_all(quick_xml::escape::escape(namespace).as_bytes())?;
+    writer.get_mut().write_all(b"\"")?;
+    writer.get_mut().write_all(&raw[insertion..])?;
+    Ok(())
 }
 
 fn write_empty_hyperlinks<W: std::io::Write>(

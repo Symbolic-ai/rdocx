@@ -831,6 +831,14 @@ impl CT_RPr {
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        self.to_xml_with_word_override(writer, None)
+    }
+
+    pub(crate) fn to_xml_with_word_override<W: std::io::Write>(
+        &self,
+        writer: &mut Writer<W>,
+        foreign_word_namespace: Option<&str>,
+    ) -> Result<()> {
         if self.is_empty() {
             return Ok(());
         }
@@ -961,13 +969,13 @@ impl CT_RPr {
         }
 
         for revision in &self.revision_markers {
-            revision.write_xml(writer)?;
+            revision.write_xml_with_word_override(writer, foreign_word_namespace)?;
         }
         if let Some(change) = &self.change {
-            change.write_xml(writer)?;
+            change.write_xml_with_word_override(writer, foreign_word_namespace)?;
         }
         for raw in &self.revision_xml {
-            writer.get_mut().write_all(raw)?;
+            crate::text::write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:rPr")))?;
