@@ -4,7 +4,7 @@ use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::drawing::CT_Drawing;
-use crate::error::Result;
+use crate::error::{OxmlError, Result};
 use crate::namespace::matches_local_name;
 use crate::numbering::{parse_scoped_ppr, word_prefixes_at};
 use crate::properties::{CT_PPr, CT_RPr, is_word_element};
@@ -56,6 +56,43 @@ pub enum RunContent {
     EndnoteRef {
         id: i32,
     },
+    /// A comment reference (`<w:commentReference w:id="..."/>`).
+    CommentReference {
+        id: i32,
+        /// Number of raw run children that precede this reference.
+        raw_before: usize,
+    },
+}
+
+/// A typed comment range boundary at a run insertion point.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommentRangeMarker {
+    Start {
+        id: i32,
+        run_index: usize,
+        /// Number of raw children at this run boundary that precede the marker.
+        raw_before: usize,
+    },
+    End {
+        id: i32,
+        run_index: usize,
+        /// Number of raw children at this run boundary that precede the marker.
+        raw_before: usize,
+    },
+}
+
+impl CommentRangeMarker {
+    fn run_index(&self) -> usize {
+        match self {
+            Self::Start { run_index, .. } | Self::End { run_index, .. } => *run_index,
+        }
+    }
+
+    fn raw_before(&self) -> usize {
+        match self {
+            Self::Start { raw_before, .. } | Self::End { raw_before, .. } => *raw_before,
+        }
+    }
 }
 
 /// Types of breaks.
@@ -102,13 +139,22 @@ impl CT_R {
                 RunContent::Break(_) => result.push('\n'),
                 RunContent::Drawing(_) => {} // Drawings have no text content
                 RunContent::Field { .. } => {} // Fields have no static text
-                RunContent::FootnoteRef { .. } | RunContent::EndnoteRef { .. } => {}
+                RunContent::FootnoteRef { .. }
+                | RunContent::EndnoteRef { .. }
+                | RunContent::CommentReference { .. } => {}
             }
         }
         result
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_owned()])
+    }
+
+    pub(crate) fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut properties = None;
         let mut content = Vec::new();
         let mut extra_xml = Vec::new();
@@ -119,6 +165,7 @@ impl CT_R {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if matches_local_name(name.as_ref(), b"rPr") {
                         properties = Some(CT_RPr::from_xml(reader)?);
                     } else if matches_local_name(name.as_ref(), b"t") {
@@ -142,6 +189,15 @@ impl CT_R {
                         }));
                     } else if matches_local_name(name.as_ref(), b"drawing") {
                         content.push(RunContent::Drawing(CT_Drawing::from_xml(reader)?));
+                    } else if matches_local_name(name.as_ref(), b"commentReference")
+                        && is_word_element(name.as_ref(), b"commentReference", &prefixes)
+                    {
+                        let id = required_word_i32_attribute(e, b"id", &prefixes)?;
+                        reader.read_to_end_into(name, &mut Vec::new())?;
+                        content.push(RunContent::CommentReference {
+                            id,
+                            raw_before: extra_xml.len(),
+                        });
                     } else if matches_local_name(name.as_ref(), b"AlternateContent") {
                         // Keep the block verbatim so the VML fallback survives
                         // a write, and separately read the DrawingML out of it
@@ -159,6 +215,7 @@ impl CT_R {
                 }
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if matches_local_name(name.as_ref(), b"tab") {
                         content.push(RunContent::Tab);
                     } else if matches_local_name(name.as_ref(), b"br") {
@@ -189,6 +246,12 @@ impl CT_R {
                             .and_then(|a| std::str::from_utf8(&a.value).ok()?.parse::<i32>().ok())
                             .unwrap_or(0);
                         content.push(RunContent::EndnoteRef { id });
+                    } else if is_word_element(name.as_ref(), b"commentReference", &prefixes) {
+                        let id = required_word_i32_attribute(e, b"id", &prefixes)?;
+                        content.push(RunContent::CommentReference {
+                            id,
+                            raw_before: extra_xml.len(),
+                        });
                     } else if !matches_local_name(name.as_ref(), b"rPr") {
                         // Capture unknown empty child elements (e.g.
                         // w:commentReference) as raw XML, mirroring the
@@ -228,6 +291,7 @@ impl CT_R {
             props.to_xml(writer)?;
         }
 
+        let mut raw_written = 0;
         for item in &self.content {
             match item {
                 RunContent::Text(t) => {
@@ -269,11 +333,26 @@ impl CT_R {
                     e.push_attribute(("w:id", buf.format(*id)));
                     writer.write_event(Event::Empty(e))?;
                 }
+                RunContent::CommentReference { id, raw_before } => {
+                    for raw in self
+                        .extra_xml
+                        .iter()
+                        .take((*raw_before).min(self.extra_xml.len()))
+                        .skip(raw_written)
+                    {
+                        writer.get_mut().write_all(raw)?;
+                        raw_written += 1;
+                    }
+                    let mut buf = itoa::Buffer::new();
+                    let mut e = BytesStart::new("w:commentReference");
+                    e.push_attribute(("w:id", buf.format(*id)));
+                    writer.write_event(Event::Empty(e))?;
+                }
             }
         }
 
         // Write captured unknown child elements
-        for raw in &self.extra_xml {
+        for raw in self.extra_xml.iter().skip(raw_written) {
             writer.get_mut().write_all(raw)?;
         }
 
@@ -303,6 +382,8 @@ pub struct CT_P {
     pub runs: Vec<CT_R>,
     /// Hyperlink spans referencing ranges of runs.
     pub hyperlinks: Vec<HyperlinkSpan>,
+    /// Typed comment range boundaries at run insertion points.
+    pub comment_ranges: Vec<CommentRangeMarker>,
     /// Unknown child elements captured as raw XML with their insertion position (run index).
     pub extra_xml: Vec<(usize, Vec<u8>)>,
 }
@@ -314,6 +395,7 @@ impl CT_P {
             properties: None,
             runs: Vec::new(),
             hyperlinks: Vec::new(),
+            comment_ranges: Vec::new(),
             extra_xml: Vec::new(),
         }
     }
@@ -340,6 +422,7 @@ impl CT_P {
         let mut properties = None;
         let mut runs = Vec::new();
         let mut hyperlinks = Vec::new();
+        let mut comment_ranges = Vec::new();
         let mut extra_xml = Vec::new();
         let mut buf = Vec::new();
 
@@ -352,7 +435,7 @@ impl CT_P {
                         let raw = capture_element(reader, e)?;
                         properties = Some(parse_scoped_ppr(&raw, &prefixes)?);
                     } else if matches_local_name(name.as_ref(), b"r") {
-                        runs.push(CT_R::from_xml(reader)?);
+                        runs.push(CT_R::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if matches_local_name(name.as_ref(), b"hyperlink") {
                         // Parse hyperlink: extract r:id and/or w:anchor, then parse child runs
                         let mut rel_id = None;
@@ -378,7 +461,11 @@ impl CT_P {
                                 Ok(Event::Start(ref ie)) => {
                                     let iname = ie.name();
                                     if matches_local_name(iname.as_ref(), b"r") {
-                                        runs.push(CT_R::from_xml(reader)?);
+                                        let run_prefixes = word_prefixes_at(ie, &prefixes)?;
+                                        runs.push(CT_R::from_xml_with_prefixes(
+                                            reader,
+                                            &run_prefixes,
+                                        )?);
                                     } else {
                                         reader.read_to_end_into(iname, &mut Vec::new())?;
                                     }
@@ -425,6 +512,18 @@ impl CT_P {
                             extra_xml: Vec::new(),
                             alt_drawings: Vec::new(),
                         });
+                    } else if is_word_element(name.as_ref(), b"commentRangeStart", &prefixes)
+                        || is_word_element(name.as_ref(), b"commentRangeEnd", &prefixes)
+                    {
+                        let id = required_word_i32_attribute(e, b"id", &prefixes)?;
+                        reader.read_to_end_into(name, &mut Vec::new())?;
+                        push_comment_marker(
+                            &mut comment_ranges,
+                            &extra_xml,
+                            runs.len(),
+                            id,
+                            is_word_element(name.as_ref(), b"commentRangeStart", &prefixes),
+                        );
                     } else {
                         // Capture unknown elements (bookmarks, comments, etc.) as raw XML
                         extra_xml.push((runs.len(), capture_element(reader, e)?));
@@ -432,7 +531,19 @@ impl CT_P {
                 }
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
-                    if !matches_local_name(name.as_ref(), b"p") {
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"commentRangeStart", &prefixes)
+                        || is_word_element(name.as_ref(), b"commentRangeEnd", &prefixes)
+                    {
+                        let id = required_word_i32_attribute(e, b"id", &prefixes)?;
+                        push_comment_marker(
+                            &mut comment_ranges,
+                            &extra_xml,
+                            runs.len(),
+                            id,
+                            is_word_element(name.as_ref(), b"commentRangeStart", &prefixes),
+                        );
+                    } else if !matches_local_name(name.as_ref(), b"p") {
                         extra_xml.push((runs.len(), capture_empty_element(e)?));
                     }
                 }
@@ -450,6 +561,7 @@ impl CT_P {
             properties,
             runs,
             hyperlinks,
+            comment_ranges,
             extra_xml,
         })
     }
@@ -470,21 +582,9 @@ impl CT_P {
             }
         }
 
-        // Build index of extra_xml elements by position for interleaving
-        let mut extras_by_pos: std::collections::HashMap<usize, Vec<&Vec<u8>>> =
-            std::collections::HashMap::new();
-        for (pos, raw) in &self.extra_xml {
-            extras_by_pos.entry(*pos).or_default().push(raw);
-        }
-
         let mut current_hyperlink: Option<usize> = None;
         for (run_idx, run) in self.runs.iter().enumerate() {
-            // Write any extras that should appear before this run
-            if let Some(extras) = extras_by_pos.get(&run_idx) {
-                for raw in extras {
-                    writer.get_mut().write_all(raw)?;
-                }
-            }
+            write_paragraph_boundary(writer, &self.extra_xml, &self.comment_ranges, run_idx)?;
             let in_hl = hyperlink_runs.get(&run_idx).copied();
 
             // Close hyperlink if we left it
@@ -539,16 +639,99 @@ impl CT_P {
             writer.write_event(Event::End(BytesEnd::new("w:hyperlink")))?;
         }
 
-        // Write any extras that come after the last run
-        if let Some(extras) = extras_by_pos.get(&self.runs.len()) {
-            for raw in extras {
-                writer.get_mut().write_all(raw)?;
-            }
-        }
+        write_paragraph_boundary(
+            writer,
+            &self.extra_xml,
+            &self.comment_ranges,
+            self.runs.len(),
+        )?;
 
         writer.write_event(Event::End(BytesEnd::new("w:p")))?;
         Ok(())
     }
+}
+
+fn push_comment_marker(
+    markers: &mut Vec<CommentRangeMarker>,
+    extra_xml: &[(usize, Vec<u8>)],
+    run_index: usize,
+    id: i32,
+    start: bool,
+) {
+    let raw_before = extra_xml
+        .iter()
+        .filter(|(position, _)| *position == run_index)
+        .count();
+    let marker = if start {
+        CommentRangeMarker::Start {
+            id,
+            run_index,
+            raw_before,
+        }
+    } else {
+        CommentRangeMarker::End {
+            id,
+            run_index,
+            raw_before,
+        }
+    };
+    markers.push(marker);
+}
+
+fn write_paragraph_boundary<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    extra_xml: &[(usize, Vec<u8>)],
+    markers: &[CommentRangeMarker],
+    run_index: usize,
+) -> Result<()> {
+    let extras = extra_xml
+        .iter()
+        .filter(|(position, _)| *position == run_index)
+        .map(|(_, raw)| raw)
+        .collect::<Vec<_>>();
+    for raw_index in 0..=extras.len() {
+        for marker in markers.iter().filter(|marker| {
+            marker.run_index() == run_index && marker.raw_before().min(extras.len()) == raw_index
+        }) {
+            let (tag, id) = match marker {
+                CommentRangeMarker::Start { id, .. } => ("w:commentRangeStart", *id),
+                CommentRangeMarker::End { id, .. } => ("w:commentRangeEnd", *id),
+            };
+            let mut value = itoa::Buffer::new();
+            let mut element = BytesStart::new(tag);
+            element.push_attribute(("w:id", value.format(id)));
+            writer.write_event(Event::Empty(element))?;
+        }
+        if let Some(raw) = extras.get(raw_index) {
+            writer.get_mut().write_all(raw)?;
+        }
+    }
+    Ok(())
+}
+
+fn required_word_i32_attribute(
+    element: &BytesStart<'_>,
+    local: &[u8],
+    word_prefixes: &[String],
+) -> Result<i32> {
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let key = attribute.key.as_ref();
+        let Some(separator) = key.iter().position(|byte| *byte == b':') else {
+            continue;
+        };
+        if key.get(separator + 1..) == Some(local)
+            && word_prefixes
+                .iter()
+                .any(|prefix| prefix.as_bytes() == &key[..separator])
+        {
+            return Ok(std::str::from_utf8(&attribute.value)?.parse()?);
+        }
+    }
+    Err(OxmlError::MissingElement(format!(
+        "{} attribute",
+        String::from_utf8_lossy(local)
+    )))
 }
 
 /// Parse a field instruction string into a FieldType.
@@ -766,14 +949,15 @@ mod tests {
     }
 
     #[test]
-    fn unknown_empty_run_children_roundtrip() {
-        // Unknown empty elements inside a run (e.g. w:commentReference)
-        // must be captured and re-emitted, not silently dropped.
+    fn comment_reference_is_typed_and_round_trips() {
         let p = parse_paragraph(
             r#"<w:r><w:t>flagged</w:t></w:r><w:r><w:commentReference w:id="1"/></w:r>"#,
         );
         assert_eq!(p.runs.len(), 2);
-        assert_eq!(p.runs[1].extra_xml.len(), 1);
+        assert!(matches!(
+            p.runs[1].content.as_slice(),
+            [RunContent::CommentReference { id: 1, .. }]
+        ));
 
         let mut output = Vec::new();
         let mut writer = Writer::new(&mut output);
@@ -1032,5 +1216,67 @@ mod tests {
             parsed.runs[1].content[0],
             RunContent::FootnoteRef { id: 2 }
         ));
+    }
+
+    #[test]
+    fn comment_anchors_are_typed_without_moving_neighbouring_xml() {
+        let word_namespace = crate::namespace::W_NS;
+        let p = parse_paragraph(&format!(
+            r#"<w:r><w:t>before</w:t></w:r><ext:marker xmlns:ext="urn:producer"/><q:commentRangeStart xmlns:q="{word_namespace}" q:id="7"/><w:r><w:t>inside</w:t></w:r><q:commentRangeEnd xmlns:q="{word_namespace}" q:id="7"/><w:r><ext:runBefore xmlns:ext="urn:producer"/><q:commentReference xmlns:q="{word_namespace}" q:id="7"/><ext:runAfter xmlns:ext="urn:producer"/></w:r><ext:tail xmlns:ext="urn:producer"/>"#
+        ));
+
+        assert_eq!(p.comment_ranges.len(), 2);
+        assert!(matches!(
+            p.comment_ranges[0],
+            CommentRangeMarker::Start {
+                id: 7,
+                run_index: 1,
+                ..
+            }
+        ));
+        assert!(matches!(
+            p.comment_ranges[1],
+            CommentRangeMarker::End {
+                id: 7,
+                run_index: 2,
+                ..
+            }
+        ));
+        assert!(matches!(
+            p.runs[2].content[0],
+            RunContent::CommentReference { id: 7, .. }
+        ));
+
+        let mut output = Vec::new();
+        p.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(
+            r#"<ext:marker xmlns:ext="urn:producer"/><w:commentRangeStart w:id="7"/><w:r><w:t>inside</w:t></w:r><w:commentRangeEnd w:id="7"/><w:r><ext:runBefore xmlns:ext="urn:producer"/><w:commentReference w:id="7"/><ext:runAfter xmlns:ext="urn:producer"/></w:r><ext:tail xmlns:ext="urn:producer"/>"#
+        ));
+    }
+
+    #[test]
+    fn malformed_comment_anchor_id_is_rejected() {
+        let full = format!(
+            r#"<w:p xmlns:w="{}"><w:commentRangeStart w:id="not-a-number"/></w:p>"#,
+            crate::namespace::W_NS
+        );
+        let mut reader = Reader::from_str(&full);
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref element))
+                    if matches_local_name(element.name().as_ref(), b"p") =>
+                {
+                    break;
+                }
+                Ok(Event::Eof) => panic!("missing paragraph"),
+                event => {
+                    event.unwrap();
+                }
+            }
+            buf.clear();
+        }
+        assert!(CT_P::from_xml(&mut reader).is_err());
     }
 }

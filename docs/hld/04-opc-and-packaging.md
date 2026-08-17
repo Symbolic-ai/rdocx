@@ -75,6 +75,7 @@ CORE_PROPERTIES, THUMBNAIL
 // Shared officeDocument
 EXTENDED_PROPERTIES   // docProps/app.xml
 CUSTOM_PROPERTIES     // docProps/custom.xml
+COMMENTS              // Word comments part
 
 // PresentationML
 SLIDE, SLIDE_LAYOUT, SLIDE_MASTER, NOTES_SLIDE, NOTES_MASTER,
@@ -112,6 +113,15 @@ a definition therefore preserves producer extensions, identifiers, templates,
 and level overrides verbatim. Identifier allocation uses the next value after
 the maximum when available and the first unoccupied value when the maximum is
 `u32::MAX`.
+
+The Word facade resolves an existing comments part through the main document's
+`COMMENTS` relationship and retains the normalized target. Saving serializes
+the typed comments model back to that target with its content-type override.
+The model preserves unmodelled attributes and children at their insertion
+boundaries, while comment range and reference anchors remain ordered among
+neighbouring paragraph and run XML. A document without a comments relationship
+does not gain a comments part, relationship, or override during an ordinary
+save.
 
 ## Part naming
 

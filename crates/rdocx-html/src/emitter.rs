@@ -318,7 +318,8 @@ fn emit_run(
             }
             RunContent::Field { .. }
             | RunContent::FootnoteRef { .. }
-            | RunContent::EndnoteRef { .. } => {}
+            | RunContent::EndnoteRef { .. }
+            | RunContent::CommentReference { .. } => {}
         }
     }
 

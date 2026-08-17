@@ -677,6 +677,7 @@ pub fn layout_paragraph(
                         note: Some(NoteRef { stream, id: *id }),
                     }));
                 }
+                RunContent::CommentReference { .. } => {}
             }
         }
     }

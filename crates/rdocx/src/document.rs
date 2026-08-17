@@ -59,6 +59,10 @@ pub struct Document {
     image_namer: MediaNamer,
     /// Footnotes: loaded from word/footnotes.xml on open, written back on save.
     footnotes: rdocx_oxml::footnotes::CT_Footnotes,
+    /// Typed comments loaded through the main document relationship.
+    comments: Option<rdocx_oxml::comments::CT_Comments>,
+    /// Existing comments relationship target. No target is invented on read.
+    comments_part_name: Option<String>,
     /// Normal layout, including system font discovery, computed on first use.
     layout_cache: Mutex<Option<Arc<oxml_layout::LayoutResult>>>,
     /// Bundled-font-only layout used by deterministic rendering.
@@ -134,6 +138,8 @@ impl Document {
             numbering_part_name: DEFAULT_NUMBERING_PART.to_string(),
             image_namer: MediaNamer::scan("/word/media", "image", std::iter::empty()),
             footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
+            comments: None,
+            comments_part_name: None,
             layout_cache: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
         }
@@ -211,6 +217,15 @@ impl Document {
             .and_then(|xml| rdocx_oxml::footnotes::CT_Footnotes::from_xml(xml).ok())
             .unwrap_or_default();
 
+        let comments_part_name = resolve_part(rel_types::COMMENTS);
+        let comments = match comments_part_name
+            .as_deref()
+            .and_then(|part| package.get_part(part))
+        {
+            Some(xml) => Some(rdocx_oxml::comments::CT_Comments::from_xml(xml)?),
+            None => None,
+        };
+
         Ok(Document {
             package,
             document,
@@ -225,6 +240,8 @@ impl Document {
                 .unwrap_or_else(|| DEFAULT_NUMBERING_PART.to_string()),
             image_namer,
             footnotes,
+            comments,
+            comments_part_name,
             layout_cache: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
         })
@@ -333,6 +350,20 @@ impl Document {
             if rels.get_by_type(rel_types::FOOTNOTES).is_none() {
                 rels.add(rel_types::FOOTNOTES, "footnotes.xml");
             }
+        }
+
+        // An existing comments part is modelled and flushed to its resolved
+        // relationship target. An absent part remains absent until the later
+        // comment API creates one deliberately.
+        if let (Some(comments), Some(part_name)) = (&self.comments, self.comments_part_name.clone())
+        {
+            let xml = comments.to_xml()?;
+            self.package.set_part(&part_name, xml);
+            self.ensure_part_relationship(
+                &part_name,
+                rel_types::COMMENTS,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+            );
         }
 
         // Serialize core properties to the package relationship's target.

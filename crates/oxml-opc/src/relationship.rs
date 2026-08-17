@@ -42,6 +42,8 @@ pub mod rel_types {
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes";
     pub const ENDNOTES: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes";
+    pub const COMMENTS: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
     pub const CHART: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
     pub const PACKAGE: &str =

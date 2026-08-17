@@ -140,9 +140,15 @@ rule that no `oxml-*` crate depends on either facade family.
 
 `rdocx-oxml` remains a real crate holding roughly 8,700 lines of
 WordprocessingML: text, properties, tables, styles, numbering, borders, headers
-and footers, footnotes, placeholder replacement, and `drawing.rs`. The
+and footers, footnotes, comments, placeholder replacement, and `drawing.rs`. The
 `wp:` inline and anchor code in the latter is Word-only and has no pptx value,
 so it is not migrated.
+
+The comments model owns typed comment entries and the three body anchor forms.
+Comment bodies retain ordered paragraphs, producer attributes, and unmodelled
+children. Paragraph and run models retain each anchor at its insertion boundary
+without moving neighbouring raw XML. Parsing accepts in-scope aliases for the
+WordprocessingML namespace, while serialization uses the fixed `w:` prefix.
 
 `rdocx-layout` keeps the flow model: the engine, the paginator, blocks, tables
 and the style resolver. Slides do not paginate, so none of it transfers. The

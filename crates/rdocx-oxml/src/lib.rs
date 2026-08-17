@@ -4,6 +4,7 @@
 #![allow(clippy::should_implement_trait)]
 
 pub mod borders;
+pub mod comments;
 pub mod document;
 pub mod drawing;
 pub mod footnotes;

@@ -215,7 +215,8 @@ fn collect_run_text(run: &CT_R) -> String {
             RunContent::Drawing(_)
             | RunContent::Field { .. }
             | RunContent::FootnoteRef { .. }
-            | RunContent::EndnoteRef { .. } => {}
+            | RunContent::EndnoteRef { .. }
+            | RunContent::CommentReference { .. } => {}
         }
     }
 

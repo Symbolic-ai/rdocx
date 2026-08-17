@@ -1,6 +1,6 @@
 # F-147, Comment model and part
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S46
 **Size**: M
 **Depends on**: none
@@ -97,12 +97,12 @@ no comments, so any delta is unrelated and blocks the sprint.
 
 ## Implementation checklist
 
-- [ ] Add the typed comment part parser and writer with ordered raw retention.
-- [ ] Type the three comment anchor forms without moving neighbouring XML.
-- [ ] Resolve, load, and flush the existing comments relationship target.
-- [ ] Add the round-trip, relationship-target, and absence tests.
-- [ ] Run focused checks plus the declared packaging rider.
-- [ ] Update exactly HLD 03 and HLD 04 at completion.
+- [x] Add the typed comment part parser and writer with ordered raw retention.
+- [x] Type the three comment anchor forms without moving neighbouring XML.
+- [x] Resolve, load, and flush the existing comments relationship target.
+- [x] Add the round-trip, relationship-target, and absence tests.
+- [x] Run focused checks plus the declared packaging rider.
+- [x] Update exactly HLD 03 and HLD 04 at completion.
 
 ## Open questions
 
