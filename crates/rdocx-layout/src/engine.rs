@@ -1,11 +1,15 @@
 //! Layout engine orchestrator: ties all phases together.
 
+use std::collections::HashMap;
+
+use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_SectPr};
 use rdocx_oxml::drawing::WrapType;
 use rdocx_oxml::header_footer::HdrFtrType;
 use rdocx_oxml::properties::CT_PPr;
 use rdocx_oxml::shared::ST_HighlightColor;
 use rdocx_oxml::styles::CT_Styles;
+use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{BreakType, CT_P, FieldType, RunContent};
 
 use crate::block::{self, LayoutBlock, ParagraphBlock};
@@ -201,14 +205,29 @@ impl Engine {
         // body page rather than sitting at the foot of their reference's page.
         paginator::append_endnote_pages(&mut pages, &notes, final_geometry);
 
-        // Post-pagination pass: substitute field placeholders
+        // Post-pagination pass: record bookmark targets and substitute fields.
         let total_pages = pages.len();
+        let bookmark_pages = pages
+            .iter()
+            .flat_map(|page| {
+                page.elements.iter().filter_map(move |element| {
+                    let PositionedElement::Text(run) = element else {
+                        return None;
+                    };
+                    let Some(FieldKind::Target(target)) = run.field_kind else {
+                        return None;
+                    };
+                    Some((target, page.page_number))
+                })
+            })
+            .collect::<HashMap<_, _>>();
         for page in &mut pages {
             let page_num = page.page_number;
             substitute_fields(
                 &mut page.elements,
                 page_num,
                 total_pages,
+                &bookmark_pages,
                 &mut self.font_manager,
             );
         }
@@ -285,9 +304,10 @@ fn extract_background_color(xml: &str) -> Option<Color> {
 
 /// Replace field placeholder GlyphRuns with actual values.
 fn substitute_fields(
-    elements: &mut [PositionedElement],
+    elements: &mut Vec<PositionedElement>,
     page_number: usize,
     total_pages: usize,
+    bookmark_pages: &HashMap<usize, usize>,
     fm: &mut FontManager,
 ) {
     for element in elements.iter_mut() {
@@ -297,6 +317,11 @@ fn substitute_fields(
             let value = match fk {
                 FieldKind::Page => page_number.to_string(),
                 FieldKind::NumPages => total_pages.to_string(),
+                FieldKind::TargetPage(target) => bookmark_pages
+                    .get(&target)
+                    .map(usize::to_string)
+                    .unwrap_or_else(|| run.text.clone()),
+                FieldKind::Target(_) => continue,
             };
             // Re-shape the text with the actual value
             if let Ok(shaped) = fm.shape_text(run.font_id, &value, run.font_size) {
@@ -306,6 +331,13 @@ fn substitute_fields(
             }
         }
     }
+    elements.retain(|element| {
+        !matches!(
+            element,
+            PositionedElement::Text(run)
+                if matches!(run.field_kind, Some(FieldKind::Target(_)))
+        )
+    });
 }
 
 /// Detect if a paragraph has a heading style, returning the level (1-9).
@@ -476,6 +508,8 @@ pub fn layout_paragraph(
             effective_rpr.merge_from(direct_rpr);
         }
 
+        push_targeted_bookmark_markers(&mut inline_items, para, run_idx, input, fm)?;
+
         // Skip hidden text
         if effective_rpr.vanish == Some(true) {
             continue;
@@ -609,17 +643,44 @@ pub fn layout_paragraph(
                         }
                     }
                 }
-                RunContent::Field { field_type } => {
-                    // Shape a placeholder ("99") for estimated width
-                    let placeholder = "99";
-                    let fk = match field_type {
-                        FieldType::Page => FieldKind::Page,
-                        FieldType::NumPages => FieldKind::NumPages,
-                        FieldType::Other(_) => continue, // skip unsupported fields
+                RunContent::Field {
+                    field_type,
+                    display,
+                } => {
+                    let (value, field_kind) = match field_type {
+                        FieldType::Page => ("99".to_owned(), Some(FieldKind::Page)),
+                        FieldType::NumPages => ("99".to_owned(), Some(FieldKind::NumPages)),
+                        FieldType::Ref { bookmark, .. } => {
+                            if let Some(text) = bookmark_text(input, bookmark) {
+                                (text, None)
+                            } else {
+                                diagnostics.push(Diagnostic {
+                                    message: format!(
+                                        "REF target {bookmark} was not found, stored display retained"
+                                    ),
+                                });
+                                (display.clone(), None)
+                            }
+                        }
+                        FieldType::PageRef { bookmark, .. } => {
+                            if bookmark_text(input, bookmark).is_none() {
+                                diagnostics.push(Diagnostic {
+                                    message: format!(
+                                        "PAGEREF target {bookmark} was not found, stored display retained"
+                                    ),
+                                });
+                                (display.clone(), None)
+                            } else if let Some(target) = page_ref_id(input, bookmark) {
+                                ("99".to_owned(), Some(FieldKind::TargetPage(target)))
+                            } else {
+                                (display.clone(), None)
+                            }
+                        }
+                        FieldType::Other(_) => continue,
                     };
-                    let shaped = fm.shape_text(font_id, placeholder, font_size)?;
+                    let shaped = fm.shape_text(font_id, &value, font_size)?;
                     inline_items.push(InlineItem::Text(TextSegment {
-                        text: placeholder.to_string(),
+                        text: value,
                         font_id,
                         font_size,
                         glyph_ids: shaped.glyph_ids,
@@ -637,7 +698,7 @@ pub fn layout_paragraph(
                         highlight: None,
                         baseline_offset,
                         hyperlink_url: None,
-                        field_kind: Some(fk),
+                        field_kind,
                         note: None,
                     }));
                 }
@@ -677,9 +738,12 @@ pub fn layout_paragraph(
                         note: Some(NoteRef { stream, id: *id }),
                     }));
                 }
+                RunContent::CommentReference { .. } => {}
             }
         }
     }
+
+    push_targeted_bookmark_markers(&mut inline_items, para, para.runs.len(), input, fm)?;
 
     // Line breaking
     let line_params = convert::line_break_params(&effective_ppr, available_width);
@@ -711,6 +775,202 @@ pub fn layout_paragraph(
         params: line_params,
     }));
     Ok(result)
+}
+
+fn push_targeted_bookmark_markers(
+    items: &mut Vec<InlineItem>,
+    paragraph: &CT_P,
+    run_index: usize,
+    input: &LayoutInput,
+    fm: &mut FontManager,
+) -> Result<()> {
+    let mut font_id = None;
+    for marker in paragraph.bookmark_markers.iter().filter(|marker| {
+        marker.is_start()
+            && marker.run_index() == run_index
+            && marker.name().is_some_and(|name| {
+                document_has_page_ref(input, name) && bookmark_text(input, name).is_some()
+            })
+    }) {
+        if let Some(target) = marker.name().and_then(|name| page_ref_id(input, name)) {
+            let resolved_font = match font_id {
+                Some(font_id) => font_id,
+                None => {
+                    let resolved = fm.resolve_font_for_text(None, false, false, " ")?;
+                    font_id = Some(resolved);
+                    resolved
+                }
+            };
+            push_bookmark_marker(items, target, resolved_font);
+        }
+    }
+    Ok(())
+}
+
+fn push_bookmark_marker(items: &mut Vec<InlineItem>, target: usize, font_id: oxml_layout::FontId) {
+    items.push(InlineItem::Text(TextSegment {
+        text: "\u{2060}".to_owned(),
+        font_id,
+        font_size: 1.0,
+        glyph_ids: vec![0],
+        advances: vec![0.0],
+        width: 0.0,
+        ascent: 0.0,
+        descent: 0.0,
+        line_gap: 0.0,
+        color: Color::BLACK,
+        bold: false,
+        italic: false,
+        underline: None,
+        strike: false,
+        dstrike: false,
+        highlight: None,
+        baseline_offset: 0.0,
+        hyperlink_url: None,
+        field_kind: Some(FieldKind::Target(target)),
+        note: None,
+    }));
+}
+
+fn page_ref_id(input: &LayoutInput, name: &str) -> Option<usize> {
+    let mut names = Vec::<&str>::new();
+    visit_document_paragraphs(input, &mut |paragraph| {
+        for run in paragraph.runs() {
+            for content in &run.content {
+                let RunContent::Field {
+                    field_type: FieldType::PageRef { bookmark, .. },
+                    ..
+                } = content
+                else {
+                    continue;
+                };
+                if !names.contains(&bookmark.as_str()) {
+                    names.push(bookmark);
+                }
+            }
+        }
+    });
+    names.iter().position(|candidate| *candidate == name)
+}
+
+fn document_has_page_ref(input: &LayoutInput, name: &str) -> bool {
+    page_ref_id(input, name).is_some()
+}
+
+fn visit_document_paragraphs<'a>(input: &'a LayoutInput, visit: &mut impl FnMut(&'a CT_P)) {
+    for content in &input.document.body.content {
+        match content {
+            BodyContent::Paragraph(paragraph) => visit(paragraph),
+            BodyContent::Table(table) => visit_table_paragraphs(table, visit),
+            BodyContent::ContentControl(control) => visit_control_paragraphs(control, visit),
+            BodyContent::RawXml(_) => {}
+        }
+    }
+}
+
+fn visit_table_paragraphs<'a>(table: &'a CT_Tbl, visit: &mut impl FnMut(&'a CT_P)) {
+    for (_, _, control) in &table.content_controls {
+        visit_control_paragraphs(control, visit);
+    }
+    for row in &table.rows {
+        visit_row_paragraphs(row, visit);
+    }
+}
+
+fn visit_row_paragraphs<'a>(row: &'a CT_Row, visit: &mut impl FnMut(&'a CT_P)) {
+    for (_, _, control) in &row.content_controls {
+        visit_control_paragraphs(control, visit);
+    }
+    for cell in &row.cells {
+        visit_cell_paragraphs(cell, visit);
+    }
+}
+
+fn visit_cell_paragraphs<'a>(cell: &'a CT_Tc, visit: &mut impl FnMut(&'a CT_P)) {
+    for content in &cell.content {
+        match content {
+            CellContent::Paragraph(paragraph) => visit(paragraph),
+            CellContent::Table(table) => visit_table_paragraphs(table, visit),
+            CellContent::ContentControl(control) => visit_control_paragraphs(control, visit),
+        }
+    }
+}
+
+fn visit_control_paragraphs<'a>(control: &'a CT_Sdt, visit: &mut impl FnMut(&'a CT_P)) {
+    for content in &control.content {
+        match content {
+            SdtContent::Paragraph(paragraph) => visit(paragraph),
+            SdtContent::Table(table) => visit_table_paragraphs(table, visit),
+            SdtContent::Row(row) => visit_row_paragraphs(row, visit),
+            SdtContent::Cell(cell) => visit_cell_paragraphs(cell, visit),
+            SdtContent::ContentControl(control) => visit_control_paragraphs(control, visit),
+            SdtContent::Run(_) | SdtContent::RawXml(_) => {}
+        }
+    }
+}
+
+fn bookmark_text(input: &LayoutInput, name: &str) -> Option<String> {
+    type BodyRunPosition = (usize, usize);
+    type BookmarkStart<'a> = (Option<&'a str>, BodyRunPosition);
+
+    let mut starts: HashMap<i32, Vec<BookmarkStart<'_>>> = HashMap::new();
+    let mut ends: HashMap<i32, Vec<BodyRunPosition>> = HashMap::new();
+    for (body_index, content) in input.document.body.content.iter().enumerate() {
+        let BodyContent::Paragraph(paragraph) = content else {
+            continue;
+        };
+        for marker in &paragraph.bookmark_markers {
+            let Some(id) = marker.id() else {
+                continue;
+            };
+            let position = (body_index, marker.run_index());
+            if marker.is_start() {
+                starts
+                    .entry(id)
+                    .or_default()
+                    .push((marker.name(), position));
+            } else {
+                ends.entry(id).or_default().push(position);
+            }
+        }
+    }
+    let candidates = starts
+        .iter()
+        .filter_map(|(id, starts)| {
+            let ends = ends.get(id)?;
+            (starts.len() == 1 && starts[0].0 == Some(name) && ends.len() == 1)
+                .then_some((starts[0].1, ends[0]))
+        })
+        .collect::<Vec<_>>();
+    if candidates.len() != 1 {
+        return None;
+    }
+    let (start, end) = candidates[0];
+    if start > end {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for body_index in start.0..=end.0 {
+        let BodyContent::Paragraph(paragraph) = &input.document.body.content[body_index] else {
+            continue;
+        };
+        let first = if body_index == start.0 { start.1 } else { 0 };
+        let last = if body_index == end.0 {
+            end.1
+        } else {
+            paragraph.runs.len()
+        };
+        if first > last || last > paragraph.runs.len() {
+            return None;
+        }
+        parts.push(
+            paragraph.runs[first..last]
+                .iter()
+                .map(|run| run.text())
+                .collect::<String>(),
+        );
+    }
+    Some(parts.join("\n"))
 }
 
 /// Whether any drawing in the document body wraps text around itself.
@@ -753,6 +1013,7 @@ fn document_has_wrapping_drawing(input: &LayoutInput) -> bool {
                     // A drawing inside a nested table is rare enough that the
                     // conservative answer is to look no deeper.
                     rdocx_oxml::table::CellContent::Table(_) => false,
+                    rdocx_oxml::table::CellContent::ContentControl(_) => false,
                 }),
             _ => false,
         })
@@ -3163,5 +3424,168 @@ mod tests {
                 index + 1
             );
         }
+    }
+
+    fn cross_reference_run(field_type: FieldType, display: &str) -> rdocx_oxml::text::CT_R {
+        let mut run = rdocx_oxml::text::CT_R::new("");
+        run.content = vec![RunContent::Field {
+            field_type,
+            display: display.to_owned(),
+        }];
+        run
+    }
+
+    fn target_paragraph(targets: &[(i32, &str, usize, usize)], text: &str, hidden: bool) -> CT_P {
+        let mut paragraph = CT_P::new();
+        paragraph.properties = Some(CT_PPr {
+            page_break_before: Some(true),
+            ..Default::default()
+        });
+        let mut run = rdocx_oxml::text::CT_R::new(text);
+        if hidden {
+            run.properties = Some(rdocx_oxml::properties::CT_RPr {
+                vanish: Some(true),
+                ..Default::default()
+            });
+        }
+        paragraph.runs.push(run);
+        for (id, name, start, end) in targets {
+            assert!(paragraph.insert_bookmark_start(*start, *id, name));
+            assert!(paragraph.insert_bookmark_end(*end, *id));
+        }
+        paragraph
+    }
+
+    fn output_text(output: &LayoutResult) -> Vec<String> {
+        let mut text = Vec::new();
+        for page in &output.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let PositionedElement::Text(run) = element {
+                    text.push(run.text.clone());
+                }
+            });
+        }
+        text
+    }
+
+    fn deterministic_layout(input: &LayoutInput) -> LayoutResult {
+        Engine::new_deterministic()
+            .expect("bundled fonts")
+            .layout(input)
+            .expect("layout succeeds")
+    }
+
+    #[test]
+    fn a_pageref_inside_a_table_uses_the_final_target_page() {
+        use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
+
+        let mut input = make_input_with_text("");
+        input.document.body.content.clear();
+        let mut field = CT_P::new();
+        field.runs.push(cross_reference_run(
+            FieldType::PageRef {
+                bookmark: "destination".to_owned(),
+                instruction: "PAGEREF destination".to_owned(),
+            },
+            "cached",
+        ));
+        let mut cell = CT_Tc::new();
+        cell.content = vec![CellContent::Paragraph(field)];
+        let mut row = CT_Row::new();
+        row.cells.push(cell);
+        let mut table = CT_Tbl::new();
+        table.rows.push(row);
+        input.document.body.content.push(BodyContent::Table(table));
+        input.document.body.add_paragraph(target_paragraph(
+            &[(4, "destination", 0, 1)],
+            "target",
+            false,
+        ));
+
+        let output = deterministic_layout(&input);
+        let text = output_text(&output);
+        assert!(text.iter().any(|value| value == "2"), "{text:?}");
+        assert!(!text.iter().any(|value| value == "cached"), "{text:?}");
+    }
+
+    #[test]
+    fn a_resolved_pageref_uses_a_fixed_pagination_placeholder() {
+        let build = |display: &str| {
+            let mut input = make_input_with_text("");
+            input.document.body.content.clear();
+            let mut field = CT_P::new();
+            field.runs.push(cross_reference_run(
+                FieldType::PageRef {
+                    bookmark: "destination".to_owned(),
+                    instruction: "PAGEREF destination".to_owned(),
+                },
+                display,
+            ));
+            input.document.body.add_paragraph(field);
+            input.document.body.add_paragraph(target_paragraph(
+                &[(4, "destination", 0, 1)],
+                "target",
+                false,
+            ));
+            deterministic_layout(&input)
+        };
+        let short = build("7");
+        let long = build(&"stale display ".repeat(1000));
+
+        assert_eq!(short.pages.len(), long.pages.len());
+        assert_eq!(output_text(&short), output_text(&long));
+    }
+
+    #[test]
+    fn every_target_at_a_paragraph_end_is_retained() {
+        let mut input = make_input_with_text("");
+        input.document.body.content.clear();
+        let mut fields = CT_P::new();
+        for name in ["first", "second"] {
+            fields.runs.push(cross_reference_run(
+                FieldType::PageRef {
+                    bookmark: name.to_owned(),
+                    instruction: format!("PAGEREF {name}"),
+                },
+                "cached",
+            ));
+        }
+        input.document.body.add_paragraph(fields);
+        input.document.body.add_paragraph(target_paragraph(
+            &[(4, "first", 1, 1), (5, "second", 1, 1)],
+            "target",
+            false,
+        ));
+
+        let text = output_text(&deterministic_layout(&input));
+        assert_eq!(
+            text.iter().filter(|value| value.as_str() == "2").count(),
+            2,
+            "{text:?}"
+        );
+    }
+
+    #[test]
+    fn a_target_before_hidden_text_is_retained() {
+        let mut input = make_input_with_text("");
+        input.document.body.content.clear();
+        let mut field = CT_P::new();
+        field.runs.push(cross_reference_run(
+            FieldType::PageRef {
+                bookmark: "destination".to_owned(),
+                instruction: "PAGEREF destination".to_owned(),
+            },
+            "cached",
+        ));
+        input.document.body.add_paragraph(field);
+        input.document.body.add_paragraph(target_paragraph(
+            &[(4, "destination", 0, 1)],
+            "hidden target",
+            true,
+        ));
+
+        let text = output_text(&deterministic_layout(&input));
+        assert!(text.iter().any(|value| value == "2"), "{text:?}");
+        assert!(!text.iter().any(|value| value == "cached"), "{text:?}");
     }
 }

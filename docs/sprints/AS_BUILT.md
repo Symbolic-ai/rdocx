@@ -7012,3 +7012,170 @@ Inline, anchored, theme, color-map, and visible-fallback regressions also pass.
 **Notes for future sessions.** Keep chart geometry child-local until the
 paginator applies the inline or anchor transform. Deterministic comparisons
 must use bundled fonts and the pinned rasterizer.
+
+### F-147, Comment model and part
+
+**Sprint.** S46
+**Completed.** 2026-08-17
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Word comment parts now parse and serialize through typed
+`CT_Comments` and comment values. Paragraphs retain typed comment range starts,
+range ends, and reference runs in their insertion-aware content sequence.
+Relationship discovery follows the package target, including noncanonical
+targets, and documents without a comments part remain unchanged.
+
+**Non-obvious choices.** Comment anchors keep their exact positions among raw
+producer XML and runs. The model rejects malformed identifiers while preserving
+unmodelled children and namespace aliases around the typed content.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, comment ownership and
+typed anchors, and `docs/hld/04-opc-and-packaging.md`, comment relationships and
+part preservation.
+
+**Tests.** `three_comments_and_cross_paragraph_anchors_round_trip_byte_identically`,
+the comments parser and writer unit tests, noncanonical relationship target,
+malformed identifier, and absent-part regressions.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep body anchors insertion-aware. Do not infer
+the comments part from a conventional filename when a relationship exists.
+
+### F-148, Comment API
+
+**Sprint.** S46
+**Completed.** 2026-08-17
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The native facade now exposes stable half-open `RunRange`
+coordinates, comment views, ranged comment creation, replies, resolved state,
+and thread removal. Mutations stage body, comments, comments-extended metadata,
+relationships, and content types together before committing.
+
+**Non-obvious choices.** Reply and resolved state use paragraph identifiers in
+the comments-extended part. Range insertion can split hyperlinks without moving
+the half-open boundary, while removal preserves unrelated empty runs and
+producer metadata.
+
+**Deviations from the design plan.** None. The plan permitted SHA-bound Word
+acceptance to be classified as a human action when it could not be observed
+scriptably.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, facade ownership and
+the range contract, `docs/hld/04-opc-and-packaging.md`, the comments-extended
+graph, and `docs/hld/10-bindings-spec.md`, the additive native API.
+
+**Tests.** `a_ranged_comment_reply_and_resolution_keep_one_intact_thread`,
+`removing_a_comment_removes_only_its_anchors_and_thread_metadata`, invalid range
+regressions, and the comments relationship and content-type integration gate.
+The candidate SHA-256 is
+`a5ad0e8eb2d1a676daa07431deb2a0f11ee32e8bb92d099d14d5d16d43708adb`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Microsoft Word 16.104 build 16.104.25121423 is
+installed, but no-repair opening, reply visibility, and resolved-thread UI
+acceptance were not observed. That remains an explicit human action.
+
+### F-152, Content control model
+
+**Sprint.** S46
+**Completed.** 2026-08-17
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Word content controls now have a recursive typed model for
+properties, binding metadata, bounded type markers, and ordered content at
+block, row, cell, paragraph, and run placement. Ordinary body, table, cell,
+paragraph, and run traversal sees wrapped content exactly once.
+
+**Non-obvious choices.** Each placement owns one ordered content enum instead
+of hiding controls behind raw XML. Empty paragraphs, hyperlinks, comment
+anchors, and controls sharing the same run boundary retain producer order.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, the recursive
+content-control model and traversal boundary.
+
+**Tests.** `controls_at_all_five_levels_round_trip_without_losing_content`,
+`table_traversal_sees_rows_cells_and_paragraphs_inside_controls_once`,
+`run_control_keeps_comment_anchor_and_hyperlink_boundaries`, and opaque
+property and child preservation regressions.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Recursive traversal must expose ordinary wrapped
+content once while preserving the control itself as a mutation boundary.
+
+### F-153, Content control binding
+
+**Sprint.** S46
+**Completed.** 2026-08-17
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The facade can list and mutate content controls in document
+order by tag or alias, bind matching controls from a map, and update a related
+custom XML part and every display value atomically. Store resolution follows
+custom XML properties rather than filenames.
+
+**Non-obvious choices.** Data bindings accept only namespace-aware absolute
+child paths with optional one-based indices. Prefix mappings are parsed
+strictly, ambiguous or overlapping mutations are rejected, and custom XML is
+updated by byte splices so untouched producer bytes remain identical.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, facade lookup and
+mutation, `docs/hld/04-opc-and-packaging.md`, custom XML store resolution and
+atomic package changes, and `docs/hld/10-bindings-spec.md`, the bounded binding
+contract.
+
+**Tests.** `a_control_map_updates_every_matching_display_value`,
+`a_bound_custom_xml_value_updates_the_part_and_display_text_atomically`,
+namespace-shadowed indexed binding, byte-preservation, nested-control, invalid
+binding, and wrong-namespace item identifier regressions.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep XPath support bounded to the documented
+absolute child form. Unsupported expressions must fail before any staged edit
+is committed.
+
+### F-154, Bookmarks and cross-references
+
+**Sprint.** S46
+**Completed.** 2026-08-17
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Paragraphs now retain typed bookmark starts and ends, and
+the facade correlates, lists, reads, and atomically inserts bookmarks over
+half-open run ranges. Structured `REF` and `PAGEREF` fields retain instructions
+and cached display values. `REF` resolves bookmark text before shaping, while
+`PAGEREF` resolves the target page through the existing pagination result.
+
+**Non-obvious choices.** The format-neutral layout layer carries generic target
+markers and target-bearing fields. Word recursively indexes bookmark starts in
+ordinary content, tables, and content controls, then substitutes pages without
+a second pagination path. TOC bookmark allocation is collision-safe and handles
+numeric overflow without panicking.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, bookmark ownership and
+range insertion, `docs/hld/08-rendering-spec.md`, target indexing and single-pass
+page substitution, and `docs/hld/10-bindings-spec.md`, the additive bookmark
+and cross-reference API.
+
+**Tests.** `a_bookmark_inserted_over_a_range_is_listed_with_its_text`,
+`ref_and_pageref_resolve_to_the_bookmark_text_and_final_page`, marker order and
+raw-neighbour round-trip, malformed marker reporting, atomic failure, nested
+table target, hidden boundary, empty fallback, namespace, and TOC allocation
+regressions.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep page targets in the existing layout result.
+Do not add a Word-specific type to `oxml-layout` or a second pagination pass.

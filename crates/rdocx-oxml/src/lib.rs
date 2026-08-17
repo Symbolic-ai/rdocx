@@ -4,6 +4,9 @@
 #![allow(clippy::should_implement_trait)]
 
 pub mod borders;
+pub mod comments;
+pub mod comments_extended;
+pub mod content_control;
 pub mod document;
 pub mod drawing;
 pub mod footnotes;
@@ -23,6 +26,7 @@ pub(crate) use oxml_core::xml_text;
 pub use oxml_core::{core_properties, error, raw_xml, units};
 
 pub use borders::{CT_BorderEdge, CT_PBdr, CT_TabStop, CT_Tabs};
+pub use content_control::{CT_DataBinding, CT_Sdt, CT_SdtPr, SdtContent, SdtType};
 pub use document::{BodyContent, CT_Body, CT_Document, CT_SectPr};
 pub use numbering::{CT_AbstractNum, CT_Lvl, CT_Num, CT_Numbering, ST_NumberFormat};
 pub use properties::{CT_PPr, CT_RPr};

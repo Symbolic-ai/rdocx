@@ -140,9 +140,45 @@ rule that no `oxml-*` crate depends on either facade family.
 
 `rdocx-oxml` remains a real crate holding roughly 8,700 lines of
 WordprocessingML: text, properties, tables, styles, numbering, borders, headers
-and footers, footnotes, placeholder replacement, and `drawing.rs`. The
+and footers, footnotes, comments, placeholder replacement, and `drawing.rs`. The
 `wp:` inline and anchor code in the latter is Word-only and has no pptx value,
 so it is not migrated.
+
+The comments model owns typed comment entries and the three body anchor forms.
+Comment bodies retain ordered paragraphs, producer attributes, and unmodelled
+children. Paragraph and run models retain each anchor at its insertion boundary
+without moving neighbouring raw XML. Parsing accepts in-scope aliases for the
+WordprocessingML namespace, while serialization uses the fixed `w:` prefix.
+The comments-extended model owns paragraph-id parent linkage and resolved state,
+with unmodelled attributes and root children retained at their original
+boundaries. The `rdocx` facade owns the relationship-resolved pair of comment
+parts and coordinates them with the anchors in the main document.
+
+The Word text model also projects bookmark starts and ends at direct-run
+boundaries while retaining every marker as ordered raw XML. Structured simple
+fields distinguish `REF` and `PAGEREF`, keep the complete instruction including
+switches, and retain the stored display. The `rdocx` facade correlates bookmark
+ids and owns mutation across top-level body paragraphs. `rdocx-layout` resolves
+bookmark text and maps page targets, while the shared `oxml-layout` boundary
+exposes only format-neutral `Target` and `TargetPage` field kinds.
+
+The content-control model owns one recursive `CT_Sdt` grammar at block, row,
+cell, paragraph, and run placement boundaries. It reports tag, alias, numeric
+id, bounded control type, and custom XML binding metadata from `CT_SdtPr`.
+Unmodelled attributes, properties, and content children remain in ordered raw
+slots. Empty or malformed controls remain opaque. Prefix-tolerant readers and
+fixed-prefix writers follow the same boundary rules as the surrounding
+WordprocessingML model.
+
+The `rdocx` facade owns content-control value mutation because one operation
+can cross the typed document and package parts. Immutable summaries expose the
+control metadata and display text. Lookup and mutation select tags before
+aliases, so map application updates each control at most once. Display changes
+preserve the control shell, direct run formatting, and nested control
+boundaries. The facade stages every selected display and custom XML change on
+cloned state, validates the resulting XML, then commits once and invalidates
+layout once. Any rejected control or binding leaves both document and package
+state unchanged.
 
 `rdocx-layout` keeps the flow model: the engine, the paginator, blocks, tables
 and the style resolver. Slides do not paginate, so none of it transfers. The
@@ -284,6 +320,30 @@ setters, preserving the distinction between inherited, explicitly false, and
 explicitly true formatting without bypassing the facade.
 The binding-only underline variants travel through a bounded integer-code
 accessor so the published exhaustive Rust `UnderlineStyle` enum stays stable.
+
+Low-level content-control traversal is recursive and ordered. Body, table,
+row, cell, and paragraph accessors expose each wrapped ordinary paragraph,
+table, row, cell, and run once while retaining the surrounding `CT_Sdt` for
+metadata lookup. The facade consumes this single WordprocessingML ownership
+tree and does not maintain a second content-control representation.
+
+Word comment mutation uses `RunPosition` and half-open `RunRange` values whose
+body indexes select top-level paragraphs and whose run indexes select insertion
+boundaries. `Document` validates both endpoints before mutation, allocates
+collision-free comment and paragraph ids, updates the comment parts and all
+three anchors together, then invalidates layout once. `CommentRef` is a
+read-only view over the typed comment and its comments-extended thread entry.
+Replies follow paragraph-id parent linkage, resolution applies to the thread
+root, and removal deletes the selected comment plus descendant replies without
+deleting unrelated runs or producer XML.
+
+Word bookmark mutation reuses the same top-level `RunPosition` and half-open
+`RunRange` boundary. `Document::bookmarks` returns immutable correlated
+summaries in document order and reports malformed, unmatched, reversed, or
+duplicate markers without hiding their preserved XML. `Document::add_bookmark`
+validates both endpoints and the Word name, rejects producer-reserved and
+duplicate names, allocates the first free nonnegative id, stages both marker
+insertions, commits once, and invalidates layout once.
 
 The `rpptx` facade provides the same total lookup boundary for slides, nested
 shape trees, placeholders, text frames, paragraphs, regular runs, tables and

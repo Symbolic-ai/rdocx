@@ -1,5 +1,6 @@
 //! The main Document type — entry point for the rdocx API.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -15,6 +16,7 @@ use oxml_sml::Workbook;
 use quick_xml::events::Event;
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
+use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
 use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, CT_Inline};
 use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef, HdrFtrType};
@@ -23,7 +25,7 @@ use rdocx_oxml::numbering::{CT_Numbering, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::shared::{ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::CT_Styles;
-use rdocx_oxml::table::{CT_Tbl, CellContent};
+use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R, RunContent};
 
 use rdocx_oxml::core_properties::CoreProperties;
@@ -39,15 +41,15 @@ use crate::table::{Table, TableRef};
 /// This is the main entry point for reading, creating, and modifying
 /// DOCX documents.
 pub struct Document {
-    package: OpcPackage,
-    document: CT_Document,
+    pub(crate) package: OpcPackage,
+    pub(crate) document: CT_Document,
     styles: CT_Styles,
     numbering: Option<CT_Numbering>,
     core_properties: Option<CoreProperties>,
     /// Package part containing the core properties, resolved from `_rels/.rels`.
     core_properties_part_name: String,
     /// Part name for the main document
-    doc_part_name: String,
+    pub(crate) doc_part_name: String,
     /// Part name the styles were loaded from, and where they are written back.
     /// Resolved through the relationship rather than assumed, so a document
     /// that keeps its styles somewhere other than `/word/styles.xml` is
@@ -59,6 +61,18 @@ pub struct Document {
     image_namer: MediaNamer,
     /// Footnotes: loaded from word/footnotes.xml on open, written back on save.
     footnotes: rdocx_oxml::footnotes::CT_Footnotes,
+    /// Typed comments loaded through the main document relationship.
+    pub(crate) comments: Option<rdocx_oxml::comments::CT_Comments>,
+    /// Existing comments relationship target. No target is invented on read.
+    pub(crate) comments_part_name: Option<String>,
+    /// Typed reply linkage and resolved state for comments.
+    pub(crate) comments_extended: Option<rdocx_oxml::comments_extended::CT_CommentsEx>,
+    /// Existing comments-extended relationship target.
+    pub(crate) comments_extended_part_name: Option<String>,
+    /// Whether this facade created the comments part and may remove it when empty.
+    pub(crate) comments_owned: bool,
+    /// Whether this facade created the comments-extended part and may remove it when empty.
+    pub(crate) comments_extended_owned: bool,
     /// Normal layout, including system font discovery, computed on first use.
     layout_cache: Mutex<Option<Arc<oxml_layout::LayoutResult>>>,
     /// Bundled-font-only layout used by deterministic rendering.
@@ -110,6 +124,251 @@ fn new_word_package() -> OpcPackage {
     package
 }
 
+fn take_paragraph<'a>(paragraph: &'a mut CT_P, index: &mut usize) -> Option<&'a mut CT_P> {
+    if *index == 0 {
+        Some(paragraph)
+    } else {
+        *index -= 1;
+        None
+    }
+}
+
+fn nth_paragraph_in_body<'a>(
+    content: &'a mut [BodyContent],
+    index: &mut usize,
+) -> Option<&'a mut CT_P> {
+    for child in content {
+        let paragraph = match child {
+            BodyContent::Paragraph(paragraph) => take_paragraph(paragraph, index),
+            BodyContent::ContentControl(control) => nth_paragraph_in_control(control, index),
+            BodyContent::Table(_) | BodyContent::RawXml(_) => None,
+        };
+        if paragraph.is_some() {
+            return paragraph;
+        }
+    }
+    None
+}
+
+fn nth_paragraph_in_control<'a>(
+    control: &'a mut CT_Sdt,
+    index: &mut usize,
+) -> Option<&'a mut CT_P> {
+    for child in &mut control.content {
+        let paragraph = match child {
+            SdtContent::Paragraph(paragraph) => take_paragraph(paragraph, index),
+            SdtContent::Table(table) => nth_paragraph_in_table(table, index),
+            SdtContent::Row(row) => nth_paragraph_in_row(row, index),
+            SdtContent::Cell(cell) => nth_paragraph_in_cell(cell, index),
+            SdtContent::ContentControl(control) => nth_paragraph_in_control(control, index),
+            SdtContent::Run(_) | SdtContent::RawXml(_) => None,
+        };
+        if paragraph.is_some() {
+            return paragraph;
+        }
+    }
+    None
+}
+
+fn paragraph_count_in_control(control: &CT_Sdt) -> usize {
+    control
+        .content
+        .iter()
+        .map(|child| match child {
+            SdtContent::Paragraph(_) => 1,
+            SdtContent::Table(table) => paragraph_count_in_table(table),
+            SdtContent::Row(row) => paragraph_count_in_row(row),
+            SdtContent::Cell(cell) => paragraph_count_in_cell(cell),
+            SdtContent::ContentControl(control) => paragraph_count_in_control(control),
+            SdtContent::Run(_) | SdtContent::RawXml(_) => 0,
+        })
+        .sum()
+}
+
+fn paragraph_count_in_table(table: &CT_Tbl) -> usize {
+    table
+        .content_controls
+        .iter()
+        .map(|(_, _, control)| paragraph_count_in_control(control))
+        .sum::<usize>()
+        + table.rows.iter().map(paragraph_count_in_row).sum::<usize>()
+}
+
+fn paragraph_count_in_row(row: &CT_Row) -> usize {
+    row.content_controls
+        .iter()
+        .map(|(_, _, control)| paragraph_count_in_control(control))
+        .sum::<usize>()
+        + row.cells.iter().map(paragraph_count_in_cell).sum::<usize>()
+}
+
+fn paragraph_count_in_cell(cell: &CT_Tc) -> usize {
+    cell.content
+        .iter()
+        .map(|child| match child {
+            CellContent::Paragraph(_) => 1,
+            CellContent::ContentControl(control) => paragraph_count_in_control(control),
+            CellContent::Table(_) => 0,
+        })
+        .sum()
+}
+
+fn nth_paragraph_in_table<'a>(table: &'a mut CT_Tbl, index: &mut usize) -> Option<&'a mut CT_P> {
+    let CT_Tbl {
+        rows,
+        content_controls,
+        ..
+    } = table;
+    let mut selected_control = None;
+    let mut selected_row = None;
+    for boundary in 0..=rows.len() {
+        for (control_index, (_, _, control)) in content_controls
+            .iter()
+            .enumerate()
+            .filter(|(_, (at, _, _))| *at == boundary)
+        {
+            let count = paragraph_count_in_control(control);
+            if *index < count {
+                selected_control = Some(control_index);
+                break;
+            }
+            *index -= count;
+        }
+        if selected_control.is_some() {
+            break;
+        }
+        if let Some(row) = rows.get(boundary) {
+            let count = paragraph_count_in_row(row);
+            if *index < count {
+                selected_row = Some(boundary);
+                break;
+            }
+            *index -= count;
+        }
+    }
+    if let Some(control_index) = selected_control {
+        nth_paragraph_in_control(&mut content_controls[control_index].2, index)
+    } else if let Some(row_index) = selected_row {
+        nth_paragraph_in_row(&mut rows[row_index], index)
+    } else {
+        None
+    }
+}
+
+fn nth_paragraph_in_row<'a>(row: &'a mut CT_Row, index: &mut usize) -> Option<&'a mut CT_P> {
+    let CT_Row {
+        cells,
+        content_controls,
+        ..
+    } = row;
+    let mut selected_control = None;
+    let mut selected_cell = None;
+    for boundary in 0..=cells.len() {
+        for (control_index, (_, _, control)) in content_controls
+            .iter()
+            .enumerate()
+            .filter(|(_, (at, _, _))| *at == boundary)
+        {
+            let count = paragraph_count_in_control(control);
+            if *index < count {
+                selected_control = Some(control_index);
+                break;
+            }
+            *index -= count;
+        }
+        if selected_control.is_some() {
+            break;
+        }
+        if let Some(cell) = cells.get(boundary) {
+            let count = paragraph_count_in_cell(cell);
+            if *index < count {
+                selected_cell = Some(boundary);
+                break;
+            }
+            *index -= count;
+        }
+    }
+    if let Some(control_index) = selected_control {
+        nth_paragraph_in_control(&mut content_controls[control_index].2, index)
+    } else if let Some(cell_index) = selected_cell {
+        nth_paragraph_in_cell(&mut cells[cell_index], index)
+    } else {
+        None
+    }
+}
+
+fn nth_paragraph_in_cell<'a>(cell: &'a mut CT_Tc, index: &mut usize) -> Option<&'a mut CT_P> {
+    for child in &mut cell.content {
+        let paragraph = match child {
+            CellContent::Paragraph(paragraph) => take_paragraph(paragraph, index),
+            CellContent::ContentControl(control) => nth_paragraph_in_control(control, index),
+            CellContent::Table(_) => None,
+        };
+        if paragraph.is_some() {
+            return paragraph;
+        }
+    }
+    None
+}
+
+fn take_table<'a>(table: &'a mut CT_Tbl, index: &mut usize) -> Option<&'a mut CT_Tbl> {
+    if *index == 0 {
+        Some(table)
+    } else {
+        *index -= 1;
+        None
+    }
+}
+
+fn nth_table_in_body<'a>(
+    content: &'a mut [BodyContent],
+    index: &mut usize,
+) -> Option<&'a mut CT_Tbl> {
+    for child in content {
+        let table = match child {
+            BodyContent::Table(table) => take_table(table, index),
+            BodyContent::ContentControl(control) => nth_table_in_control(control, index),
+            BodyContent::Paragraph(_) | BodyContent::RawXml(_) => None,
+        };
+        if table.is_some() {
+            return table;
+        }
+    }
+    None
+}
+
+fn nth_table_in_control<'a>(control: &'a mut CT_Sdt, index: &mut usize) -> Option<&'a mut CT_Tbl> {
+    for child in &mut control.content {
+        let table = match child {
+            SdtContent::Table(table) => take_table(table, index),
+            SdtContent::Cell(cell) => nth_table_in_cell(cell, index),
+            SdtContent::ContentControl(control) => nth_table_in_control(control, index),
+            SdtContent::Paragraph(_)
+            | SdtContent::Row(_)
+            | SdtContent::Run(_)
+            | SdtContent::RawXml(_) => None,
+        };
+        if table.is_some() {
+            return table;
+        }
+    }
+    None
+}
+
+fn nth_table_in_cell<'a>(cell: &'a mut CT_Tc, index: &mut usize) -> Option<&'a mut CT_Tbl> {
+    for child in &mut cell.content {
+        let table = match child {
+            CellContent::Table(table) => take_table(table, index),
+            CellContent::ContentControl(control) => nth_table_in_control(control, index),
+            CellContent::Paragraph(_) => None,
+        };
+        if table.is_some() {
+            return table;
+        }
+    }
+    None
+}
+
 impl Document {
     /// Create a new, empty document with default page setup and styles.
     pub fn new() -> Self {
@@ -134,6 +393,12 @@ impl Document {
             numbering_part_name: DEFAULT_NUMBERING_PART.to_string(),
             image_namer: MediaNamer::scan("/word/media", "image", std::iter::empty()),
             footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
+            comments: None,
+            comments_part_name: None,
+            comments_extended: None,
+            comments_extended_part_name: None,
+            comments_owned: false,
+            comments_extended_owned: false,
             layout_cache: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
         }
@@ -211,6 +476,23 @@ impl Document {
             .and_then(|xml| rdocx_oxml::footnotes::CT_Footnotes::from_xml(xml).ok())
             .unwrap_or_default();
 
+        let comments_part_name = resolve_part(rel_types::COMMENTS);
+        let comments = match comments_part_name
+            .as_deref()
+            .and_then(|part| package.get_part(part))
+        {
+            Some(xml) => Some(rdocx_oxml::comments::CT_Comments::from_xml(xml)?),
+            None => None,
+        };
+        let comments_extended_part_name = resolve_part(crate::comments::COMMENTS_EXTENDED_REL_TYPE);
+        let comments_extended = match comments_extended_part_name
+            .as_deref()
+            .and_then(|part| package.get_part(part))
+        {
+            Some(xml) => Some(rdocx_oxml::comments_extended::CT_CommentsEx::from_xml(xml)?),
+            None => None,
+        };
+
         Ok(Document {
             package,
             document,
@@ -225,13 +507,19 @@ impl Document {
                 .unwrap_or_else(|| DEFAULT_NUMBERING_PART.to_string()),
             image_namer,
             footnotes,
+            comments,
+            comments_part_name,
+            comments_extended,
+            comments_extended_part_name,
+            comments_owned: false,
+            comments_extended_owned: false,
             layout_cache: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
         })
     }
 
     /// Clear layouts derived from the current document state.
-    fn invalidate_layout(&mut self) {
+    pub(crate) fn invalidate_layout(&mut self) {
         self.layout_cache
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -333,6 +621,33 @@ impl Document {
             if rels.get_by_type(rel_types::FOOTNOTES).is_none() {
                 rels.add(rel_types::FOOTNOTES, "footnotes.xml");
             }
+        }
+
+        // An existing comments part is modelled and flushed to its resolved
+        // relationship target. An absent part remains absent until the later
+        // comment API creates one deliberately.
+        if let (Some(comments), Some(part_name)) = (&self.comments, self.comments_part_name.clone())
+        {
+            let xml = comments.to_xml()?;
+            self.package.set_part(&part_name, xml);
+            self.ensure_part_relationship(
+                &part_name,
+                rel_types::COMMENTS,
+                crate::comments::COMMENTS_CONTENT_TYPE,
+            );
+        }
+
+        if let (Some(comments), Some(part_name)) = (
+            &self.comments_extended,
+            self.comments_extended_part_name.clone(),
+        ) {
+            let xml = comments.to_xml()?;
+            self.package.set_part(&part_name, xml);
+            self.ensure_part_relationship(
+                &part_name,
+                crate::comments::COMMENTS_EXTENDED_REL_TYPE,
+                crate::comments::COMMENTS_EXTENDED_CONTENT_TYPE,
+            );
         }
 
         // Serialize core properties to the package relationship's target.
@@ -576,6 +891,7 @@ impl Document {
                         result.push('\n');
                     }
                 }
+                BodyContent::ContentControl(_) => {}
                 BodyContent::RawXml(_) => {}
             }
         }
@@ -585,11 +901,9 @@ impl Document {
     /// Get a mutable reference to a paragraph by index (among paragraphs only).
     pub fn paragraph_mut(&mut self, index: usize) -> Option<Paragraph<'_>> {
         self.invalidate_layout();
-        self.document
-            .body
-            .paragraphs_mut()
-            .nth(index)
-            .map(|p| Paragraph { inner: p })
+        let mut remaining = index;
+        nth_paragraph_in_body(&mut self.document.body.content, &mut remaining)
+            .map(|inner| Paragraph { inner })
     }
 
     // ---- Table access ----
@@ -615,10 +929,8 @@ impl Document {
     /// Get a mutable table by index among tables only.
     pub fn table_mut(&mut self, index: usize) -> Option<Table<'_>> {
         self.invalidate_layout();
-        self.document
-            .body
-            .tables_mut()
-            .nth(index)
+        let mut remaining = index;
+        nth_table_in_body(&mut self.document.body.content, &mut remaining)
             .map(|inner| Table { inner })
     }
 
@@ -1860,6 +2172,7 @@ impl Document {
             BodyContent::Table(tbl) => {
                 Self::remap_table_num_ids(tbl, offset);
             }
+            BodyContent::ContentControl(_) => {}
             BodyContent::RawXml(_) => {}
         }
     }
@@ -1884,6 +2197,7 @@ impl Document {
                         rdocx_oxml::table::CellContent::Table(nested) => {
                             Self::remap_table_num_ids(nested, offset);
                         }
+                        rdocx_oxml::table::CellContent::ContentControl(_) => {}
                     }
                 }
             }
@@ -1916,14 +2230,28 @@ impl Document {
             level: u32,
             text: String,
             bookmark_name: String,
+            bookmark_id: i32,
         }
 
         // Calling insert_toc twice must not mint bookmarks that collide with
         // the ones the first call left behind — duplicate `w:name` values make
         // the internal links ambiguous. Continue numbering past whatever is
         // already there.
-        let mut toc_counter = self.highest_toc_bookmark();
-        let mut bookmark_id = 100 + toc_counter;
+        let mut occupied_suffixes = self.toc_bookmark_suffixes();
+        let mut toc_counter = occupied_suffixes.iter().copied().max().unwrap_or(0);
+        let mut occupied_ids = self
+            .document
+            .body
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                BodyContent::Paragraph(paragraph) => Some(&paragraph.bookmark_markers),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|marker| marker.id())
+            .filter(|id| *id >= 0)
+            .collect::<HashSet<_>>();
 
         let mut headings = Vec::new();
 
@@ -1934,33 +2262,43 @@ impl Document {
             {
                 let text = p.text();
                 if !text.trim().is_empty() {
-                    toc_counter += 1;
+                    let Some(suffix) = next_toc_bookmark_suffix(&occupied_suffixes, toc_counter)
+                    else {
+                        return;
+                    };
+                    toc_counter = suffix;
+                    occupied_suffixes.insert(suffix);
+                    let preferred_id = suffix
+                        .checked_add(99)
+                        .and_then(|candidate| i32::try_from(candidate).ok())
+                        .filter(|candidate| !occupied_ids.contains(candidate));
+                    let Some(bookmark_id) = preferred_id.or_else(|| {
+                        (0..=i32::MAX).find(|candidate| !occupied_ids.contains(candidate))
+                    }) else {
+                        return;
+                    };
+                    occupied_ids.insert(bookmark_id);
                     headings.push(HeadingInfo {
                         content_index: idx,
                         level,
                         text,
-                        bookmark_name: format!("_Toc{toc_counter}"),
+                        bookmark_name: format!("_Toc{suffix}"),
+                        bookmark_id,
                     });
                 }
             }
         }
 
-        // Step 2: Insert bookmark markers at each heading paragraph (as raw XML in extra_xml)
-        // We insert bookmarkStart/bookmarkEnd as extra_xml at position 0 in the paragraph.
+        // Step 2: Insert typed bookmark markers at each heading paragraph.
         for heading in &headings {
             if let Some(BodyContent::Paragraph(p)) =
                 self.document.body.content.get_mut(heading.content_index)
             {
-                let bm_start = format!(
-                    "<w:bookmarkStart w:id=\"{bookmark_id}\" w:name=\"{}\"/>",
-                    heading.bookmark_name
-                );
-                let bm_end = format!("<w:bookmarkEnd w:id=\"{bookmark_id}\"/>");
-                // Insert at position 0 (before runs)
-                p.extra_xml.push((0, bm_start.into_bytes()));
-                // Insert at end (after runs)
-                p.extra_xml.push((p.runs.len(), bm_end.into_bytes()));
-                bookmark_id += 1;
+                let run_count = p.runs.len();
+                let inserted_start =
+                    p.insert_bookmark_start(0, heading.bookmark_id, &heading.bookmark_name);
+                let inserted_end = p.insert_bookmark_end(run_count, heading.bookmark_id);
+                debug_assert!(inserted_start && inserted_end);
             }
         }
 
@@ -2037,32 +2375,26 @@ impl Document {
         }
     }
 
-    /// The highest `_TocN` bookmark number already present in the body.
-    ///
-    /// Returns 0 when there are none, so the next bookmark is `_Toc1`.
-    fn highest_toc_bookmark(&self) -> u32 {
-        let mut highest = 0;
+    /// Numeric `_TocN` bookmark suffixes already present in the body.
+    fn toc_bookmark_suffixes(&self) -> HashSet<u64> {
+        let mut suffixes = HashSet::new();
         for content in &self.document.body.content {
             let BodyContent::Paragraph(p) = content else {
                 continue;
             };
-            for (_, raw) in &p.extra_xml {
-                let Ok(text) = std::str::from_utf8(raw) else {
+            for marker in &p.bookmark_markers {
+                let Some(name) = marker.name() else {
                     continue;
                 };
-                for (_, after) in text.match_indices("_Toc") {
-                    let digits: String = after
-                        .trim_start_matches("_Toc")
-                        .chars()
-                        .take_while(char::is_ascii_digit)
-                        .collect();
-                    if let Ok(n) = digits.parse::<u32>() {
-                        highest = highest.max(n);
-                    }
+                let Some(after) = name.strip_prefix("_Toc") else {
+                    continue;
+                };
+                if let Ok(suffix) = after.parse::<u64>() {
+                    suffixes.insert(suffix);
                 }
             }
         }
-        highest
+        suffixes
     }
 
     /// Width of the text column in twips: page width less both side margins.
@@ -2153,6 +2485,7 @@ impl Document {
                 BodyContent::Table(t) => {
                     count += placeholder::replace_in_table(t, placeholder, replacement);
                 }
+                BodyContent::ContentControl(_) => {}
                 BodyContent::RawXml(_) => {}
             }
         }
@@ -2239,6 +2572,7 @@ impl Document {
                 BodyContent::Table(t) => {
                     count += placeholder::replace_regex_in_table(t, re, replacement);
                 }
+                BodyContent::ContentControl(_) => {}
                 BodyContent::RawXml(_) => {}
             }
         }
@@ -2822,6 +3156,7 @@ impl Document {
         match content {
             BodyContent::Paragraph(p) => Self::collect_images_from_paragraph(p, result),
             BodyContent::Table(tbl) => Self::collect_images_from_table(tbl, result),
+            BodyContent::ContentControl(_) => {}
             BodyContent::RawXml(_) => {}
         }
     }
@@ -2867,6 +3202,7 @@ impl Document {
                         CellContent::Table(nested) => {
                             Self::collect_images_from_table(nested, result)
                         }
+                        CellContent::ContentControl(_) => {}
                     }
                 }
             }
@@ -2931,6 +3267,7 @@ impl Document {
         match content {
             BodyContent::Paragraph(p) => p.text().split_whitespace().count(),
             BodyContent::Table(tbl) => Self::word_count_in_table(tbl),
+            BodyContent::ContentControl(_) => 0,
             BodyContent::RawXml(_) => 0,
         }
     }
@@ -2949,6 +3286,7 @@ impl Document {
                         CellContent::Table(nested) => {
                             count += Self::word_count_in_table(nested);
                         }
+                        CellContent::ContentControl(_) => {}
                     }
                 }
             }
@@ -3047,6 +3385,13 @@ impl Default for Document {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn next_toc_bookmark_suffix(occupied: &HashSet<u64>, after: u64) -> Option<u64> {
+    after
+        .checked_add(1)
+        .filter(|candidate| !occupied.contains(candidate))
+        .or_else(|| (1..=u64::MAX).find(|candidate| !occupied.contains(candidate)))
 }
 
 fn chart_with_workbook_relationship(
@@ -5068,6 +5413,13 @@ mod tests {
         assert_eq!(paras[1].text(), "Chapter 1\t");
         assert_eq!(paras[2].text(), "Section 1.1\t");
         assert_eq!(paras[3].text(), "Chapter 2\t");
+        assert_eq!(
+            doc.bookmarks()
+                .iter()
+                .filter_map(|bookmark| bookmark.name())
+                .collect::<Vec<_>>(),
+            vec!["_Toc1", "_Toc2", "_Toc3"]
+        );
 
         // Verify round-trip: save and re-open
         let bytes = doc.to_bytes().expect("should serialize");
@@ -5075,6 +5427,51 @@ mod tests {
         assert_eq!(doc2.content_count(), 11);
         let paras2 = doc2.paragraphs();
         assert_eq!(paras2[0].text(), "Table of Contents");
+    }
+
+    #[test]
+    fn insert_toc_avoids_an_existing_bookmark_id() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Chapter").style("Heading1");
+        let BodyContent::Paragraph(paragraph) = &mut doc.document.body.content[0] else {
+            panic!("heading paragraph");
+        };
+        assert!(paragraph.insert_bookmark_start(0, 100, "existing"));
+        assert!(paragraph.insert_bookmark_end(1, 100));
+
+        doc.insert_toc(0, 1);
+
+        let bookmarks = doc.bookmarks();
+        let existing = bookmarks
+            .iter()
+            .find(|bookmark| bookmark.name() == Some("existing"))
+            .expect("existing bookmark");
+        let toc = bookmarks
+            .iter()
+            .find(|bookmark| bookmark.name() == Some("_Toc1"))
+            .expect("TOC bookmark");
+        assert_eq!(existing.id(), Some(100));
+        assert_ne!(toc.id(), existing.id());
+        assert_eq!(toc.id(), Some(0));
+    }
+
+    #[test]
+    fn insert_toc_handles_a_maximum_numeric_suffix_without_panicking() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Chapter").style("Heading1");
+        let BodyContent::Paragraph(paragraph) = &mut doc.document.body.content[0] else {
+            panic!("heading paragraph");
+        };
+        assert!(paragraph.insert_bookmark_start(0, 9, "_Toc18446744073709551615"));
+        assert!(paragraph.insert_bookmark_end(1, 9));
+
+        doc.insert_toc(0, 1);
+
+        assert!(
+            doc.bookmarks()
+                .iter()
+                .any(|bookmark| bookmark.name() == Some("_Toc1"))
+        );
     }
 
     #[test]

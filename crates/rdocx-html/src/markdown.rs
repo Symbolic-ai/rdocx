@@ -26,6 +26,7 @@ pub(crate) fn emit_markdown(
             BodyContent::Table(tbl) => {
                 emit_table(&mut out, tbl, hyperlink_urls);
             }
+            BodyContent::ContentControl(_) => {}
             BodyContent::RawXml(_) => {}
         }
     }
@@ -215,7 +216,8 @@ fn collect_run_text(run: &CT_R) -> String {
             RunContent::Drawing(_)
             | RunContent::Field { .. }
             | RunContent::FootnoteRef { .. }
-            | RunContent::EndnoteRef { .. } => {}
+            | RunContent::EndnoteRef { .. }
+            | RunContent::CommentReference { .. } => {}
         }
     }
 
@@ -320,6 +322,7 @@ fn collect_cell_text(
             CellContent::Table(_) => {
                 parts.push("(nested table)".to_string());
             }
+            CellContent::ContentControl(_) => {}
         }
     }
 

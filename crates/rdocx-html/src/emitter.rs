@@ -74,6 +74,7 @@ pub(crate) fn emit_body(
                 }
                 emit_table(&mut out, tbl, styles, images, hyperlink_urls, options);
             }
+            BodyContent::ContentControl(_) => {}
             BodyContent::RawXml(_) => {}
         }
     }
@@ -318,7 +319,8 @@ fn emit_run(
             }
             RunContent::Field { .. }
             | RunContent::FootnoteRef { .. }
-            | RunContent::EndnoteRef { .. } => {}
+            | RunContent::EndnoteRef { .. }
+            | RunContent::CommentReference { .. } => {}
         }
     }
 
@@ -477,6 +479,7 @@ fn emit_table(
                     CellContent::Table(nested) => {
                         emit_table(out, nested, styles, images, hyperlink_urls, options);
                     }
+                    CellContent::ContentControl(_) => {}
                 }
             }
 

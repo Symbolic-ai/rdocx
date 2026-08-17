@@ -6,8 +6,8 @@ use rdocx::Document;
 use rdocx::paragraph::Alignment;
 use rdocx::table::VerticalAlignment;
 use rdocx::{
-    BorderStyle, Length, ListLevel, SectionBreak, StyleBuilder, TabAlignment, TabLeader,
-    UnderlineStyle,
+    BorderStyle, Length, ListLevel, RunPosition, RunRange, SectionBreak, StyleBuilder,
+    TabAlignment, TabLeader, UnderlineStyle,
 };
 
 fn document_xml(document: &mut Document) -> Vec<u8> {
@@ -1214,6 +1214,227 @@ fn core_properties_at_relationship_target_round_trip_in_place() {
     let reopened = Document::from_bytes(&saved).unwrap();
     assert_eq!(reopened.title(), Some("Updated title"));
     assert_eq!(reopened.author(), Some("Original author"));
+}
+
+#[test]
+fn three_comments_and_cross_paragraph_anchors_round_trip_byte_identically() {
+    let mut source = Document::new();
+    source.add_paragraph("first");
+    source.add_paragraph("second");
+    let bytes = source.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+
+    let document_xml = package.get_part("/word/document.xml").unwrap();
+    let document_xml = String::from_utf8(document_xml.to_vec())
+        .unwrap()
+        .replace(
+            "<w:p><w:r><w:t>first</w:t></w:r></w:p><w:p><w:r><w:t>second</w:t></w:r></w:p>",
+            "<w:p><w:commentRangeStart w:id=\"1\"/><w:r><w:t>first</w:t></w:r><w:commentRangeStart w:id=\"2\"/><w:commentRangeEnd w:id=\"2\"/><w:r><w:commentReference w:id=\"2\"/></w:r></w:p><w:p><w:r><w:t>second</w:t></w:r><w:commentRangeEnd w:id=\"1\"/><w:r><w:commentReference w:id=\"1\"/></w:r><w:commentRangeStart w:id=\"3\"/><w:commentRangeEnd w:id=\"3\"/><w:r><w:commentReference w:id=\"3\"/></w:r></w:p>",
+        );
+    package.set_part("/word/document.xml", document_xml.as_bytes().to_vec());
+
+    let comments_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:comment w:author="Ada" w:id="1"><w:p><w:r><w:t>one</w:t></w:r></w:p></w:comment><w:comment w:author="Ben" w:id="2"><w:p><w:r><w:t>two</w:t></w:r></w:p></w:comment><w:comment w:author="Cy" w:id="3"><w:p><w:r><w:t>three</w:t></w:r></w:p></w:comment></w:comments>"#;
+    package.set_part("/word/comments.xml", comments_xml.to_vec());
+    package.content_types.add_override(
+        "/word/comments.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add(rel_types::COMMENTS, "comments.xml");
+
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let mut document = Document::from_bytes(input.get_ref()).unwrap();
+    let saved = document.to_bytes().unwrap();
+    let saved_package = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+
+    assert_eq!(
+        saved_package.get_part("/word/comments.xml"),
+        Some(comments_xml.as_slice())
+    );
+    assert_eq!(
+        saved_package.get_part("/word/document.xml"),
+        Some(document_xml.as_bytes())
+    );
+}
+
+#[test]
+fn comments_part_uses_its_existing_relationship_target() {
+    let mut source = Document::new();
+    source.add_paragraph("body");
+    let bytes = source.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let comments_xml = br#"<x:comments xmlns:x="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><x:comment x:id="9"><x:p><x:r><x:t>custom target</x:t></x:r></x:p></x:comment></x:comments>"#;
+    package.set_part("/custom/comments-data.xml", comments_xml.to_vec());
+    package.content_types.add_override(
+        "/custom/comments-data.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add(rel_types::COMMENTS, "../custom/comments-data.xml");
+
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let mut document = Document::from_bytes(input.get_ref()).unwrap();
+    let saved = document.to_bytes().unwrap();
+    let saved_package = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+
+    assert!(saved_package.get_part("/word/comments.xml").is_none());
+    let output = String::from_utf8(
+        saved_package
+            .get_part("/custom/comments-data.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(output.contains("<w:comments"));
+    assert!(output.contains("custom target"));
+}
+
+#[test]
+fn saving_without_comments_does_not_manufacture_a_comments_part() {
+    let mut document = Document::new();
+    document.add_paragraph("No review thread");
+    let saved = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+
+    assert!(package.get_part("/word/comments.xml").is_none());
+    assert!(
+        !package
+            .content_types
+            .overrides
+            .contains_key("/word/comments.xml")
+    );
+    assert!(
+        package
+            .get_part_rels("/word/document.xml")
+            .and_then(|rels| rels.get_by_type(rel_types::COMMENTS))
+            .is_none()
+    );
+}
+
+#[test]
+fn comment_parts_relationships_and_content_types_are_word_compatible() {
+    let mut document = Document::new();
+    document.add_paragraph("review this");
+    let id = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            Some("AL"),
+            "Please review",
+        )
+        .unwrap();
+    document.reply_to(id, "Ben", "Done").unwrap();
+    document.resolve_comment(id, true).unwrap();
+
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let relationships = package.get_part_rels("/word/document.xml").unwrap();
+    let comments = relationships.get_by_type(rel_types::COMMENTS).unwrap();
+    let extended = relationships
+        .get_by_type("http://schemas.microsoft.com/office/2011/relationships/commentsExtended")
+        .unwrap();
+    let comments_part = OpcPackage::resolve_rel_target("/word/document.xml", &comments.target);
+    let extended_part = OpcPackage::resolve_rel_target("/word/document.xml", &extended.target);
+
+    assert_eq!(
+        package.content_types.content_type_for(&comments_part),
+        Some("application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml")
+    );
+    assert_eq!(
+        package.content_types.content_type_for(&extended_part),
+        Some("application/vnd.ms-word.commentsExtended+xml")
+    );
+    let comments_xml =
+        String::from_utf8(package.get_part(&comments_part).unwrap().to_vec()).unwrap();
+    let extended_xml =
+        String::from_utf8(package.get_part(&extended_part).unwrap().to_vec()).unwrap();
+    assert!(
+        comments_xml.contains("xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\"")
+    );
+    assert!(comments_xml.contains("w14:paraId="));
+    assert!(
+        extended_xml.contains("xmlns:w15=\"http://schemas.microsoft.com/office/word/2012/wordml\"")
+    );
+    assert!(extended_xml.contains("w15:paraIdParent="));
+    assert!(extended_xml.contains("w15:done=\"1\""));
+}
+
+#[test]
+fn comments_extended_part_uses_its_existing_relationship_target() {
+    const COMMENTS_EXTENDED_REL_TYPE: &str =
+        "http://schemas.microsoft.com/office/2011/relationships/commentsExtended";
+    const COMMENTS_EXTENDED_CONTENT_TYPE: &str = "application/vnd.ms-word.commentsExtended+xml";
+
+    let mut document = Document::new();
+    document.add_paragraph("review this");
+    let id = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "Review",
+        )
+        .unwrap();
+    let bytes = document.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let extension = package.parts.remove("/word/commentsExtended.xml").unwrap();
+    package.set_part("/custom/thread-data.xml", extension);
+    package
+        .content_types
+        .overrides
+        .remove("/word/commentsExtended.xml");
+    package
+        .content_types
+        .add_override("/custom/thread-data.xml", COMMENTS_EXTENDED_CONTENT_TYPE);
+    package
+        .part_rels
+        .get_mut("/word/document.xml")
+        .unwrap()
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.rel_type == COMMENTS_EXTENDED_REL_TYPE)
+        .unwrap()
+        .target = "../custom/thread-data.xml".to_owned();
+    let mut seeded = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut seeded).unwrap();
+
+    let mut reopened = Document::from_bytes(seeded.get_ref()).unwrap();
+    assert!(reopened.resolve_comment(id, true).unwrap());
+    let saved = reopened.to_bytes().unwrap();
+    let saved_package = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    assert!(
+        saved_package
+            .get_part("/word/commentsExtended.xml")
+            .is_none()
+    );
+    assert!(saved_package.get_part("/custom/thread-data.xml").is_some());
+    let relationship = saved_package
+        .get_part_rels("/word/document.xml")
+        .and_then(|relationships| relationships.get_by_type(COMMENTS_EXTENDED_REL_TYPE))
+        .unwrap();
+    assert_eq!(relationship.target, "../custom/thread-data.xml");
 }
 
 #[test]

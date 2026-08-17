@@ -60,6 +60,7 @@ defended.
 | S43 | X | 5 | 5 | 0 | 8 | 1 | Cleared the five follow-ups S41 and S42 filed. An unmodelled enumerated value now reads as an absent attribute across nine parsers, notes break to the width of the section carrying their reference, and a wrapping drawing anchored to a later paragraph pushes earlier text aside through a second pagination pass. The harness gained a three-part PDF fingerprint per sample, 28 entries to 49, and the story that added it found the PDF writer was not deterministic and fixed that too. /verify now runs the release preflights that publish.yml treats as its publication gate. One declared harness delta, 21 added and 0 changed, and no crate, package version or published artifact changed |
 | S44 | X | 4 | 4 | 0 | 6 | 4 | Closed four CI and workflow follow-ups from the S43 review. Pull-request CI now runs the full release-regression module and the golden-PNG gate under pinned Poppler, agent-facing repository claims are regression checked, and path filters preserve a stable aggregate gate. The full close gate passed, all 49 hashes remained unchanged, and no crate, package version, rendering baseline or published artifact changed |
 | S45 | M15 | 4 | 4 | 0 | 10 | 4 | Completed one shared chart engine across Word and PowerPoint. Word authoring now saves native editable chart parts and workbooks, `Document::add_chart` authors bar, line, and pie charts, and the Word paginator renders through shared geometry. Microsoft Word 16.104 opened the SHA-bound document without repair and Edit Data changed its workbook values. The cross-family golden had zero differing RGBA pixels, all 49 hashes remained unchanged, and no package was published |
+| S46 | M14 | 5 | 5 | 0 | 12 | 5 | Added typed comments, recursive content controls, custom XML binding, bookmarks, and cross-reference resolution. The full close gate passed with all 49 hashes unchanged. The SHA-bound Word comment thread candidate remains recorded for later human UI observation, and no package was published |
 
 ## Completed features
 
@@ -255,6 +256,11 @@ defended.
 | F-157 | S45 | M | 2 | 1 | 2026-08-17 | Native Word chart parts with editable embedded workbooks |
 | F-158 | S45 | M | 2 | 1 | 2026-08-17 | Atomic inline Document::add_chart authoring |
 | F-159 | S45 | M | 2 | 1 | 2026-08-17 | Word paginator chart rendering with exact cross-family pixels |
+| F-147 | S46 | M | 2 | 1 | 2026-08-17 | Typed comment part, body anchors, and relationship discovery |
+| F-148 | S46 | M | 2 | 1 | 2026-08-17 | Atomic ranged comments, replies, resolution, and removal API |
+| F-152 | S46 | L | 4 | 1 | 2026-08-17 | Recursive content controls at all five Word placements |
+| F-153 | S46 | M | 2 | 1 | 2026-08-17 | Bounded custom XML data binding with atomic display updates |
+| F-154 | S46 | M | 2 | 1 | 2026-08-17 | Typed bookmarks and single-pass REF and PAGEREF resolution |
 
 ## Velocity
 
@@ -315,6 +321,7 @@ five working days.
 | S43 | 5 | 1 | 25.00 |
 | S44 | 4 | 4 | 5.00 |
 | S45 | 4 | 4 | 5.00 |
+| S46 | 5 | 5 | 5.00 |
 
 ## Escalation record
 
@@ -363,3 +370,4 @@ was done about it. Empty is the expected state.
 | 2026-08-16 | Sprint estimate variance exceeded 30 percent | S43 | Record 1 actual day against 8 estimated. Every story arrived with its defect already isolated by the sprint that filed it, so design read a written-up cause rather than searching for one. Retain the dependency-defined boundaries. The 25.00 stories per week this produces is not a sustainable rate and is not carried into any forecast |
 | 2026-08-16 | Sprint estimate variance exceeded 30 percent | S44 | Record 4 actual days against 6 estimated. Three stories reused the existing workflow-contract module, and two reused already pinned CI environments, which reduced implementation time while preserving the dependency-defined boundaries and full close gate |
 | 2026-08-17 | Sprint estimate variance exceeded 30 percent | S45 | Record 4 actual days against 10 estimated. The format-neutral chart engine already existed, and the strict dependency chain reused one shared authoring path and one golden fixture across the later stories. Retain the milestone-defined boundaries |
+| 2026-08-17 | Sprint estimate variance exceeded 30 percent | S46 | Record 5 actual days against 12 estimated. Three independent roots and two dependent stories reused one typed paragraph, package, and traversal foundation across isolated workers. Retain the dependency-defined boundaries |

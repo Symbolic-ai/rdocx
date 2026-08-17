@@ -75,6 +75,7 @@ CORE_PROPERTIES, THUMBNAIL
 // Shared officeDocument
 EXTENDED_PROPERTIES   // docProps/app.xml
 CUSTOM_PROPERTIES     // docProps/custom.xml
+COMMENTS              // Word comments part
 
 // PresentationML
 SLIDE, SLIDE_LAYOUT, SLIDE_MASTER, NOTES_SLIDE, NOTES_MASTER,
@@ -113,6 +114,39 @@ and level overrides verbatim. Identifier allocation uses the next value after
 the maximum when available and the first unoccupied value when the maximum is
 `u32::MAX`.
 
+The Word facade resolves an existing comments part through the main document's
+`COMMENTS` relationship and retains the normalized target. Saving serializes
+the typed comments model back to that target with its content-type override.
+The model preserves unmodelled attributes and children at their insertion
+boundaries, while comment range and reference anchors remain ordered among
+neighbouring paragraph and run XML. A document without a comments relationship
+does not gain a comments part, relationship, or override during an ordinary
+save.
+
+Threaded comments add a document relationship using the Microsoft
+`commentsExtended` relationship type. The facade retains its resolved target
+and writes the comments-extended content type at that exact part. New comment
+state creates both relationships and both overrides together. Existing custom
+targets remain authoritative, and removal of the final API-owned thread removes
+only the parts, relationships, and overrides created by the typed model.
+
+Content-control data binding follows the existing package graph rather than a
+conventional filename. The main document's custom XML relationship resolves an
+item part. That item's custom XML properties relationship resolves the
+properties part whose root `ds:itemID` identifies the datastore. Matching is
+case-insensitive and accepts the optional braces used by producers, while a
+same-local-name attribute or element in another namespace is not metadata.
+
+The binding evaluator accepts namespace-aware absolute child paths with
+optional one-based numeric child indices. Functions, wildcards, descendant
+axes, and general predicates are outside the contract. Prefix mappings and
+in-scope namespace shadowing resolve every path step by expanded name. The
+selected final element must be unique and contain only simple text or be empty.
+The facade replaces only that element's text span, expands an empty selected
+element when needed, and retains every unrelated custom XML byte exactly.
+Display and custom-part changes are staged together and committed only after
+all selected bindings serialize and reparse successfully.
+
 ## Part naming
 
 **Numeric suffixes are allocated after the greatest positive parsed suffix,
@@ -135,10 +169,14 @@ docx                      pptx
 /word/charts/chartN.xml   /ppt/slideMasters/slideMasterN.xml
 /word/embeddings/         /ppt/notesSlides/notesSlideN.xml
   WorkbookN.xlsx          /ppt/theme/themeN.xml
-                          /ppt/media/imageN.ext
-                          /ppt/charts/chartN.xml
+/word/comments.xml        /ppt/media/imageN.ext
+/word/commentsExtended.xml /ppt/charts/chartN.xml
                           /ppt/embeddings/WorkbookN.xlsx
 ```
+
+Comment part creation uses the conventional names when free and scans numbered
+alternatives when either path is occupied. It never overwrites an unrelated
+part merely because the conventional comment path exists.
 
 Word chart assembly follows the same independent suffix rule as PowerPoint.
 The document relationship targets `/word/charts/chartN.xml`, and that chart's
@@ -249,3 +287,9 @@ automatically under `debug_assertions` before `save`. It checks dangling
 relationship ids, missing content-type overrides, relationship targets that
 resolve to no part, and orphan media. `rpptx` adds its own presentation-specific
 checks, listed in `06-presentationml-model.md`.
+
+Comment mutations validate coordinates and allocate every required id before
+changing package or document state. Saving keeps the comments and
+comments-extended relationship graph reachable from the main document, with
+matching overrides and namespace declarations. A failed validation or
+allocation leaves anchors, typed parts, relationships, and overrides unchanged.

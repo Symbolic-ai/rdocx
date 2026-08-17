@@ -208,6 +208,37 @@ stable APIs. Existing binding surfaces do not gain new methods implicitly, but
 their owned `rdocx::Document` remains package-preserving when native code uses
 the new operations.
 
+Native Word callers can inspect comments through `Document::comments` and
+author threads through `add_comment`, `reply_to`, `resolve_comment`, and
+`remove_comment`. `RunPosition` and `RunRange` define top-level paragraph run
+boundaries with an inclusive start and exclusive end. `CommentRef` exposes
+comment metadata, text, parent identity, and resolved state without permitting
+part-local mutation. These additions do not implicitly expand the Python,
+WASM, or CLI surfaces. Those consumers continue to own the same
+package-preserving `Document`, so native comment edits remain intact when a
+binding subsequently saves it.
+
+Native Word callers use `Document::bookmarks` for immutable `BookmarkRef`
+summaries and `Document::add_bookmark` for atomic insertion over the existing
+top-level half-open `RunRange`. A summary exposes an optional id, name, range,
+current text, and marker issue. Insertion validates the Word name and both
+boundaries, rejects duplicate or producer-reserved names, and returns the
+allocated nonnegative id. Structured `FieldType::Ref` and
+`FieldType::PageRef` variants retain their target and complete instruction.
+These additions are native Rust APIs only. Python, WASM, and CLI consumers keep
+their existing surface and preserve the typed content when they save the owned
+document.
+
+Native Word callers can also inspect content controls through
+`Document::content_controls` and the tag or alias lookup methods.
+`ContentControlRef` exposes immutable metadata and display text. Direct setters
+update every matching tag or alias, while `bind_content_controls` applies a
+string map with tag precedence and alias fallback. Bound values update their
+custom XML datastore and displayed text atomically through the
+package-preserving facade. These methods are additive native APIs. They do not
+implicitly add Python, WASM, or CLI methods, and the existing binding surfaces
+remain unchanged.
+
 The stable Rust family moves to 0.5.0 for the numbering preservation model.
 `CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
 producer extensions survive typed mutations. Full struct literals written for

@@ -1,61 +1,57 @@
-# Current Sprint, S45
+# Current Sprint, S46
 
-**Milestone**: M15 Charts beyond PowerPoint.
+**Milestone**: M14 Word collaboration layer.
 
-**Goal**: make the chart engine serve Word as well as PowerPoint. The engine is
-already format-neutral below its crate name, so this sprint moves it to the
-shared family, adds native editable Word chart authoring, and routes the same
-backend-neutral geometry through the Word paginator.
+**Goal**: open the collaboration layer at both ends. Comments are the most
+requested missing API in this space, content controls are the foundation of
+document assembly, and bookmarks provide the targets that later field
+evaluation needs.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for the shared-crate dependency rule and the
-  current ChartML-to-layout seam that F-156 moves without changing behaviour.
-- `docs/hld/04-opc-and-packaging.md`, for deterministic package saves,
-  relationship handling, and collision-safe chart and workbook part naming in
-  F-157.
-- `docs/hld/09-charts-spec.md`, for the typed ChartML model, editable embedded
-  workbook, atomic authoring, and backend-neutral rendering contracts reused by
-  all four stories.
-- `docs/hld/12-testing-strategy.md`, for the byte-identical hash gate,
-  round-trip evidence, and exact pixel comparison required across the move and
-  the Word rendering path.
-- `docs/hld/14-development-backlog.md`, for the M15 boundary, the four story
-  definitions, their dependency chain, and the editable native-chart milestone
-  gate.
+- `docs/hld/02-scope-and-non-goals.md`, for the post-v1 preservation baseline
+  and the roadmap boundary that moves collaboration features into scope.
+- `docs/hld/03-architecture.md`, for the `rdocx-oxml` model boundary, the
+  `rdocx` facade ownership rule, and the Word-specific pagination layer.
+- `docs/hld/04-opc-and-packaging.md`, for relationship handling, deterministic
+  part naming, package integrity, and verbatim preservation of unmodelled
+  parts.
+- `docs/hld/08-rendering-spec.md`, for the Word pagination contract that
+  `PAGEREF` must query without creating a second layout path.
+- `docs/hld/12-testing-strategy.md`, for round-trip and regression test
+  categories, deterministic fixtures, and the byte-preservation rules.
+- `docs/hld/14-development-backlog.md`, for the M14 boundary, the five story
+  definitions, their dependency pairs, and their exact test gates.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-156 | Extract oxml-chart | L | done | - |
-| F-157 | Word chart part and embedded workbook | M | done | - |
-| F-158 | Document::add_chart | M | done | - |
-| F-159 | Chart rendering in the Word paginator | M | done | - |
+| F-147 | Comment model and part | M | done | - |
+| F-152 | Content control model | L | done | - |
+| F-154 | Bookmarks and cross-references | M | done | - |
+| F-148 | Comment API | M | done | - |
+| F-153 | Content control binding | M | done | - |
 
 ## Sequencing note
 
-Rows are listed in dependency order, not F-ID order.
+Rows are listed in dependency order, not by F-ID.
 
-The chain is strict. F-156 first performs only the crate move and compatibility
-shim, with no behaviour change and no hash delta. F-157 then gives Word a chart
-part, relationship, content type, and embedded workbook. F-158 can expose the
-Word authoring API only after those package pieces exist, and F-159 can route a
-chart through pagination only after the authored Word shape is available.
-
-The hash baseline is exclusive during F-156 and must stay at 49 of 49. No story
-in this sprint is expected to move it. F-157 through F-159 build on the settled
-shared-crate path rather than overlapping the move.
+F-147, F-152, and F-154 are independent roots and can proceed in parallel.
+F-148 follows F-147 because the public comment and reply API needs the comment
+part and body anchors. F-153 follows F-152 because value and custom XML binding
+must operate on the typed five-level content-control model. F-154 is in this
+sprint so F-161 can resolve `REF` and `PAGEREF` two sprints later.
 
 ## Definition of done for this sprint
 
-- `rpptx-chart` moves to `oxml-chart` behind the established deprecation shim,
-  every existing chart test uses the new path, and the hash harness remains
-  byte-identical at 49 of 49.
-- A Word document saves a native chart part, its document relationship, content
-  type, chart-to-workbook relationship, and editable embedded workbook, and
-  Microsoft Word opens the result without repair.
-- `Document::add_chart` authors bar, line, and pie charts with the requested
-  series, categories, and number formats.
-- An inline or anchored Word chart renders through the Word paginator and is
-  pixel-identical to the same chart on a slide at the same size.
+- Three comments, including one spanning two paragraphs, round-trip with their
+  anchors in place and byte-identical producer content where unmodelled.
+- The public comment API can add a ranged comment, reply to it, resolve it, and
+  remove it, and Word opens the resulting thread intact.
+- Content controls at block, row, cell, paragraph, and run level survive
+  round-trip and report their tag, alias, id, and type.
+- Content controls can be read and written by tag or alias, map binding updates
+  display text, and a bound custom XML part updates with the same value.
+- A bookmark inserted over a range is listed with readable text, and `REF` and
+  `PAGEREF` resolve to the correct content and page after pagination.
