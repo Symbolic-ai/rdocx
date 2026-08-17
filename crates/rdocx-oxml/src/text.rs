@@ -450,6 +450,16 @@ pub struct HyperlinkSpan {
     pub run_end: usize,
 }
 
+const HYPERLINK_REVISION_FLAG: usize = 1usize << (usize::BITS - 1);
+
+pub(crate) fn hyperlink_revision_slot(hyperlink_index: usize) -> usize {
+    HYPERLINK_REVISION_FLAG | hyperlink_index
+}
+
+pub(crate) fn hyperlink_revision_index(slot: usize) -> Option<usize> {
+    (slot & HYPERLINK_REVISION_FLAG != 0).then_some(slot & !HYPERLINK_REVISION_FLAG)
+}
+
 /// `CT_P` — A paragraph element containing runs and properties.
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_snake_case)]
@@ -467,7 +477,7 @@ pub struct CT_P {
     /// Typed run controls at
     /// `(run index, raw children before, comment markers before, control)`.
     pub content_controls: Vec<(usize, usize, usize, CT_Sdt)>,
-    /// Read projections of revision wrappers retained in `extra_xml`.
+    /// Read projections of revision wrappers retained at paragraph or hyperlink boundaries.
     pub revisions: Vec<(usize, usize, CT_Revision)>,
 }
 
@@ -698,7 +708,10 @@ impl CT_P {
         for (run_index, raw_before, _) in &mut self.revisions {
             let old_boundary = (*run_index).min(old_run_count);
             *run_index = boundary_map[old_boundary];
-            *raw_before = raw_prefixes[old_boundary] + (*raw_before).min(raw_counts[old_boundary]);
+            if hyperlink_revision_index(*raw_before).is_none() {
+                *raw_before =
+                    raw_prefixes[old_boundary] + (*raw_before).min(raw_counts[old_boundary]);
+            }
         }
         for (position, _) in &mut self.extra_xml {
             *position = boundary_map[(*position).min(old_run_count)];
@@ -826,6 +839,8 @@ impl CT_P {
                         }
 
                         let run_start = runs.len();
+                        let hyperlink_index = hyperlinks.len();
+                        let mut hyperlink_revisions = Vec::new();
                         // Parse child runs within the hyperlink
                         let mut inner_buf = Vec::new();
                         loop {
@@ -839,7 +854,69 @@ impl CT_P {
                                             &run_prefixes,
                                         )?);
                                     } else {
-                                        reader.read_to_end_into(iname, &mut Vec::new())?;
+                                        let child_prefixes = word_prefixes_at(ie, &prefixes)?;
+                                        if is_word_element(iname.as_ref(), b"ins", &child_prefixes)
+                                            || is_word_element(
+                                                iname.as_ref(),
+                                                b"del",
+                                                &child_prefixes,
+                                            )
+                                            || is_word_element(
+                                                iname.as_ref(),
+                                                b"moveFrom",
+                                                &child_prefixes,
+                                            )
+                                            || is_word_element(
+                                                iname.as_ref(),
+                                                b"moveTo",
+                                                &child_prefixes,
+                                            )
+                                        {
+                                            let raw = capture_element(reader, ie)?;
+                                            if let Some(revision) =
+                                                CT_Revision::from_raw(raw, &child_prefixes)
+                                            {
+                                                hyperlink_revisions.push((
+                                                    runs.len(),
+                                                    hyperlink_revision_slot(hyperlink_index),
+                                                    revision,
+                                                ));
+                                            }
+                                        } else {
+                                            reader.read_to_end_into(iname, &mut Vec::new())?;
+                                        }
+                                    }
+                                }
+                                Ok(Event::Empty(ref ie)) => {
+                                    let child_prefixes = word_prefixes_at(ie, &prefixes)?;
+                                    let revision_element = is_word_element(
+                                        ie.name().as_ref(),
+                                        b"ins",
+                                        &child_prefixes,
+                                    ) || is_word_element(
+                                        ie.name().as_ref(),
+                                        b"del",
+                                        &child_prefixes,
+                                    ) || is_word_element(
+                                        ie.name().as_ref(),
+                                        b"moveFrom",
+                                        &child_prefixes,
+                                    ) || is_word_element(
+                                        ie.name().as_ref(),
+                                        b"moveTo",
+                                        &child_prefixes,
+                                    );
+                                    if revision_element
+                                        && let Some(revision) = CT_Revision::from_raw(
+                                            capture_empty_element(ie)?,
+                                            &child_prefixes,
+                                        )
+                                    {
+                                        hyperlink_revisions.push((
+                                            runs.len(),
+                                            hyperlink_revision_slot(hyperlink_index),
+                                            revision,
+                                        ));
                                     }
                                 }
                                 Ok(Event::End(ref ie))
@@ -855,13 +932,16 @@ impl CT_P {
                         }
 
                         let run_end = runs.len();
-                        if run_start < run_end && (rel_id.is_some() || anchor.is_some()) {
+                        if (run_start < run_end || !hyperlink_revisions.is_empty())
+                            && (rel_id.is_some() || anchor.is_some())
+                        {
                             hyperlinks.push(HyperlinkSpan {
                                 rel_id,
                                 anchor,
                                 run_start,
                                 run_end,
                             });
+                            revisions.extend(hyperlink_revisions);
                         }
                     } else if is_word_element(name.as_ref(), b"fldSimple", &prefixes) {
                         // Parse simple field: extract w:instr attribute
@@ -1050,6 +1130,12 @@ impl CT_P {
 
             // Paragraph boundary content is a sibling of the hyperlink.
             if current_hyperlink.is_some() && current_hyperlink != in_hl {
+                write_hyperlink_revisions(
+                    writer,
+                    &self.revisions,
+                    current_hyperlink.expect("open hyperlink exists"),
+                    run_idx,
+                )?;
                 writer.write_event(Event::End(BytesEnd::new("w:hyperlink")))?;
                 current_hyperlink = None;
             }
@@ -1061,6 +1147,8 @@ impl CT_P {
                 &self.comment_ranges,
                 run_idx,
             )?;
+
+            write_empty_hyperlinks(writer, &self.hyperlinks, &self.revisions, run_idx)?;
 
             // Open hyperlink if entering one
             if let Some(hl_idx) = in_hl
@@ -1076,6 +1164,10 @@ impl CT_P {
                 }
                 writer.write_event(Event::Start(e))?;
                 current_hyperlink = in_hl;
+            }
+
+            if let Some(hyperlink_index) = current_hyperlink {
+                write_hyperlink_revisions(writer, &self.revisions, hyperlink_index, run_idx)?;
             }
 
             // Check if this run is a field run
@@ -1114,7 +1206,8 @@ impl CT_P {
         }
 
         // Close any remaining open hyperlink
-        if current_hyperlink.is_some() {
+        if let Some(hyperlink_index) = current_hyperlink {
+            write_hyperlink_revisions(writer, &self.revisions, hyperlink_index, self.runs.len())?;
             writer.write_event(Event::End(BytesEnd::new("w:hyperlink")))?;
         }
 
@@ -1125,6 +1218,7 @@ impl CT_P {
             &self.comment_ranges,
             self.runs.len(),
         )?;
+        write_empty_hyperlinks(writer, &self.hyperlinks, &self.revisions, self.runs.len())?;
 
         writer.write_event(Event::End(BytesEnd::new("w:p")))?;
         Ok(())
@@ -1226,6 +1320,45 @@ fn write_paragraph_boundary<W: std::io::Write>(
         if let Some(raw) = extras.get(raw_index) {
             writer.get_mut().write_all(raw)?;
         }
+    }
+    Ok(())
+}
+
+fn write_hyperlink_revisions<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    revisions: &[(usize, usize, CT_Revision)],
+    hyperlink_index: usize,
+    run_index: usize,
+) -> Result<()> {
+    for (_, _, revision) in revisions.iter().filter(|(at, slot, _)| {
+        *at == run_index && hyperlink_revision_index(*slot) == Some(hyperlink_index)
+    }) {
+        revision.write_xml(writer)?;
+    }
+    Ok(())
+}
+
+fn write_empty_hyperlinks<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    hyperlinks: &[HyperlinkSpan],
+    revisions: &[(usize, usize, CT_Revision)],
+    run_index: usize,
+) -> Result<()> {
+    for (hyperlink_index, hyperlink) in hyperlinks
+        .iter()
+        .enumerate()
+        .filter(|(_, hyperlink)| hyperlink.run_start == run_index && hyperlink.run_end == run_index)
+    {
+        let mut element = BytesStart::new("w:hyperlink");
+        if let Some(rel_id) = &hyperlink.rel_id {
+            element.push_attribute(("r:id", rel_id.as_str()));
+        }
+        if let Some(anchor) = &hyperlink.anchor {
+            element.push_attribute(("w:anchor", anchor.as_str()));
+        }
+        writer.write_event(Event::Start(element))?;
+        write_hyperlink_revisions(writer, revisions, hyperlink_index, run_index)?;
+        writer.write_event(Event::End(BytesEnd::new("w:hyperlink")))?;
     }
     Ok(())
 }

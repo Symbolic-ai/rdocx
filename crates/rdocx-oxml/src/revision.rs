@@ -7,8 +7,9 @@ use crate::content_control::{CT_Sdt, SdtContent};
 use crate::document::{BodyContent, CT_Document, CT_SectPr};
 use crate::numbering::{parse_scoped_ppr, parse_scoped_rpr, word_prefixes_at};
 use crate::properties::{CT_PPr, CT_RPr, is_word_element};
+use crate::raw_xml::capture_empty_element;
 use crate::table::{CT_Row, CT_Tbl, CT_TblPr, CT_Tc, CellContent};
-use crate::text::{CT_P, CT_R};
+use crate::text::{CT_P, CT_R, hyperlink_revision_index};
 
 /// The modeled tracked-change element kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +45,7 @@ pub struct CT_Revision {
     timestamp: Option<String>,
     raw_xml: Vec<u8>,
     content: RevisionContent,
+    nested_revisions: Vec<(usize, CT_Revision)>,
 }
 
 impl CT_Revision {
@@ -88,6 +90,7 @@ impl CT_Revision {
                         timestamp,
                         raw_xml,
                         content: RevisionContent::Marker,
+                        nested_revisions: Vec::new(),
                     });
                 }
                 Event::Eof => {
@@ -100,7 +103,7 @@ impl CT_Revision {
             buffer.clear();
         };
         let (kind, id, author, timestamp) = kind;
-        let content = parse_content(&mut reader, kind, &prefixes)?;
+        let (content, nested_revisions) = parse_content(&mut reader, kind, &prefixes)?;
         Ok(Self {
             kind,
             id,
@@ -108,6 +111,7 @@ impl CT_Revision {
             timestamp,
             raw_xml,
             content,
+            nested_revisions,
         })
     }
 
@@ -197,10 +201,19 @@ fn collect_paragraph<'a>(paragraph: &'a CT_P, revisions: &mut Vec<&'a CT_Revisio
                 collect_control(control, revisions);
             }
             for (_, _, revision) in paragraph.revisions.iter().filter(|(at, raw_before, _)| {
-                *at == boundary && (*raw_before).min(raw_count) == raw_index
+                *at == boundary
+                    && hyperlink_revision_index(*raw_before).is_none()
+                    && (*raw_before).min(raw_count) == raw_index
             }) {
                 collect_revision(revision, revisions);
             }
+        }
+        for (_, _, revision) in paragraph
+            .revisions
+            .iter()
+            .filter(|(at, slot, _)| *at == boundary && hyperlink_revision_index(*slot).is_some())
+        {
+            collect_revision(revision, revisions);
         }
         if let Some(run) = paragraph.runs.get(boundary) {
             collect_run(run, revisions);
@@ -319,8 +332,21 @@ fn collect_control<'a>(control: &'a CT_Sdt, revisions: &mut Vec<&'a CT_Revision>
 fn collect_revision<'a>(revision: &'a CT_Revision, revisions: &mut Vec<&'a CT_Revision>) {
     revisions.push(revision);
     if let RevisionContent::Runs(runs) = revision.content() {
-        for run in runs {
-            collect_run(run, revisions);
+        for boundary in 0..=runs.len() {
+            for (_, nested) in revision
+                .nested_revisions
+                .iter()
+                .filter(|(at, _)| *at == boundary)
+            {
+                collect_revision(nested, revisions);
+            }
+            if let Some(run) = runs.get(boundary) {
+                collect_run(run, revisions);
+            }
+        }
+    } else {
+        for (_, nested) in &revision.nested_revisions {
+            collect_revision(nested, revisions);
         }
     }
 }
@@ -350,8 +376,9 @@ fn parse_content(
     reader: &mut Reader<&[u8]>,
     kind: RevisionKind,
     word_prefixes: &[String],
-) -> crate::Result<RevisionContent> {
+) -> crate::Result<(RevisionContent, Vec<(usize, CT_Revision)>)> {
     let mut runs = Vec::new();
+    let mut nested_revisions = Vec::new();
     let mut buffer = Vec::new();
     loop {
         match reader.read_event_into(&mut buffer)? {
@@ -360,34 +387,68 @@ fn parse_content(
                 let name = start.name();
                 if is_word_element(name.as_ref(), b"r", &prefixes) {
                     runs.push(CT_R::from_xml_with_prefixes(reader, &prefixes)?);
+                } else if revision_kind(name.as_ref(), &prefixes).is_some() {
+                    let raw = crate::raw_xml::capture_element(reader, &start)?;
+                    if let Some(revision) = CT_Revision::from_raw(raw, &prefixes) {
+                        nested_revisions.push((runs.len(), revision));
+                    }
+                } else if is_word_element(name.as_ref(), b"hyperlink", &prefixes) {
+                    parse_run_content_container(
+                        reader,
+                        b"hyperlink",
+                        &prefixes,
+                        &mut runs,
+                        &mut nested_revisions,
+                    )?;
                 } else if is_word_element(name.as_ref(), b"rPr", &prefixes)
                     && kind == RevisionKind::RunPropertyChange
                 {
                     let raw = crate::raw_xml::capture_element(reader, &start)?;
-                    return Ok(RevisionContent::PriorRunProperties(Box::new(
-                        parse_scoped_rpr(&raw, &prefixes)?,
-                    )));
+                    return Ok((
+                        RevisionContent::PriorRunProperties(Box::new(parse_scoped_rpr(
+                            &raw, &prefixes,
+                        )?)),
+                        nested_revisions,
+                    ));
                 } else if is_word_element(name.as_ref(), b"pPr", &prefixes)
                     && kind == RevisionKind::ParagraphPropertyChange
                 {
                     let raw = crate::raw_xml::capture_element(reader, &start)?;
-                    return Ok(RevisionContent::PriorParagraphProperties(Box::new(
-                        parse_scoped_ppr(&raw, &prefixes)?,
-                    )));
+                    return Ok((
+                        RevisionContent::PriorParagraphProperties(Box::new(parse_scoped_ppr(
+                            &raw, &prefixes,
+                        )?)),
+                        nested_revisions,
+                    ));
                 } else if is_word_element(name.as_ref(), b"tblPr", &prefixes)
                     && kind == RevisionKind::TablePropertyChange
                 {
-                    return Ok(RevisionContent::PriorTableProperties(Box::new(
-                        CT_TblPr::from_xml_with_prefixes(reader, &prefixes)?,
-                    )));
+                    return Ok((
+                        RevisionContent::PriorTableProperties(Box::new(
+                            CT_TblPr::from_xml_with_prefixes(reader, &prefixes)?,
+                        )),
+                        nested_revisions,
+                    ));
                 } else if is_word_element(name.as_ref(), b"sectPr", &prefixes)
                     && kind == RevisionKind::SectionPropertyChange
                 {
-                    return Ok(RevisionContent::PriorSectionProperties(Box::new(
-                        CT_SectPr::from_xml_with_prefixes(reader, &prefixes)?,
-                    )));
+                    return Ok((
+                        RevisionContent::PriorSectionProperties(Box::new(
+                            CT_SectPr::from_xml_with_prefixes(reader, &prefixes)?,
+                        )),
+                        nested_revisions,
+                    ));
                 } else {
                     reader.read_to_end_into(name, &mut Vec::new())?;
+                }
+            }
+            Event::Empty(start) => {
+                let prefixes = word_prefixes_at(&start, word_prefixes)?;
+                if revision_kind(start.name().as_ref(), &prefixes).is_some() {
+                    let raw = capture_empty_element(&start)?;
+                    if let Some(revision) = CT_Revision::from_raw(raw, &prefixes) {
+                        nested_revisions.push((runs.len(), revision));
+                    }
                 }
             }
             Event::End(_) | Event::Eof => break,
@@ -396,10 +457,64 @@ fn parse_content(
         buffer.clear();
     }
     if runs.is_empty() {
-        Ok(RevisionContent::Marker)
+        Ok((RevisionContent::Marker, nested_revisions))
     } else {
-        Ok(RevisionContent::Runs(runs))
+        Ok((RevisionContent::Runs(runs), nested_revisions))
     }
+}
+
+fn parse_run_content_container(
+    reader: &mut Reader<&[u8]>,
+    closing_local: &[u8],
+    word_prefixes: &[String],
+    runs: &mut Vec<CT_R>,
+    nested_revisions: &mut Vec<(usize, CT_Revision)>,
+) -> crate::Result<()> {
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) => {
+                let prefixes = word_prefixes_at(&start, word_prefixes)?;
+                let name = start.name();
+                if is_word_element(name.as_ref(), b"r", &prefixes) {
+                    runs.push(CT_R::from_xml_with_prefixes(reader, &prefixes)?);
+                } else if revision_kind(name.as_ref(), &prefixes).is_some() {
+                    let raw = crate::raw_xml::capture_element(reader, &start)?;
+                    if let Some(revision) = CT_Revision::from_raw(raw, &prefixes) {
+                        nested_revisions.push((runs.len(), revision));
+                    }
+                } else if is_word_element(name.as_ref(), b"hyperlink", &prefixes) {
+                    parse_run_content_container(
+                        reader,
+                        b"hyperlink",
+                        &prefixes,
+                        runs,
+                        nested_revisions,
+                    )?;
+                } else {
+                    reader.read_to_end_into(name, &mut Vec::new())?;
+                }
+            }
+            Event::Empty(start) => {
+                let prefixes = word_prefixes_at(&start, word_prefixes)?;
+                if revision_kind(start.name().as_ref(), &prefixes).is_some() {
+                    let raw = capture_empty_element(&start)?;
+                    if let Some(revision) = CT_Revision::from_raw(raw, &prefixes) {
+                        nested_revisions.push((runs.len(), revision));
+                    }
+                }
+            }
+            Event::End(end)
+                if is_word_element(end.name().as_ref(), closing_local, word_prefixes) =>
+            {
+                break;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(())
 }
 
 fn required_word_attribute(
@@ -649,5 +764,36 @@ mod tests {
         assert!(output.contains(r#"<x:ins xmlns:x="urn:not-word" x:id="99" x:author="No"/>"#));
         let reopened = CT_Document::from_xml(output.as_bytes()).expect("output reparses");
         assert_eq!(reopened.revisions().len(), 10);
+    }
+
+    #[test]
+    fn hyperlink_and_nested_content_revisions_round_trip_and_report_in_order() {
+        let nested = r#"<w:ins w:id="11" w:author="Ada"><w:del w:id="12" w:author="Ben"><w:r><w:delText>nested</w:delText></w:r></w:del></w:ins>"#;
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:hyperlink r:id="rId5"><w:r><w:t xml:space="preserve">before </w:t></w:r>{nested}<w:r><w:t xml:space="preserve"> after</w:t></w:r></w:hyperlink></w:p></w:body></w:document>"#
+        );
+        let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
+
+        assert_eq!(
+            document
+                .revisions()
+                .iter()
+                .map(|revision| revision.id())
+                .collect::<Vec<_>>(),
+            [11, 12]
+        );
+        let output =
+            String::from_utf8(document.to_xml().expect("document writes")).expect("UTF-8 output");
+        assert!(output.contains(nested), "missing exact subtree in {output}");
+
+        let reopened = CT_Document::from_xml(output.as_bytes()).expect("output reparses");
+        assert_eq!(
+            reopened
+                .revisions()
+                .iter()
+                .map(|revision| revision.id())
+                .collect::<Vec<_>>(),
+            [11, 12]
+        );
     }
 }

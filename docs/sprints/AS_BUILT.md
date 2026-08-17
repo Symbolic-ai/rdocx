@@ -7210,7 +7210,9 @@ native revision metadata API.
 `revision_attributes_are_prefix_tolerant_and_namespace_checked`,
 `property_changes_write_in_their_schema_final_slots`, and
 `nested_revisions_are_reported_once_in_document_order`, plus namespace
-collision, schema-order, raw-preservation, and duplicate-emission regressions.
+collision, schema-order, raw-preservation, duplicate-emission, and
+`hyperlink_and_nested_content_revisions_round_trip_and_report_in_order`
+regressions.
 
 **Hash harness.** Unchanged, 49 of 49.
 
@@ -7251,8 +7253,9 @@ accept and reject methods.
 `scoped_revision_actions_change_only_matching_revisions`,
 `contextual_paragraph_markers_merge_the_adjacent_paragraphs`,
 `rejected_property_changes_keep_owner_namespace_bindings`, and
-`malformed_selected_property_changes_fail_atomically`. The normalized oracle
-is pinned to Microsoft Word 16.104 build 16.104.25121423.
+`malformed_selected_property_changes_fail_atomically`, plus
+`hyperlink_nested_revisions_resolve_inside_out_when_scoped`. The normalized
+oracle is pinned to Microsoft Word 16.104 build 16.104.25121423.
 
 **Hash harness.** Unchanged, 49 of 49.
 

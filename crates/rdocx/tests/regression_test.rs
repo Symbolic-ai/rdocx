@@ -369,6 +369,35 @@ fn nested_selected_revisions_resolve_inside_out_and_count_once() {
 }
 
 #[test]
+fn hyperlink_nested_revisions_resolve_inside_out_when_scoped() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:hyperlink r:id="rId5"><w:r><w:t xml:space="preserve">before </w:t></w:r><w:ins w:id="11" w:author="Ada"><w:del w:id="12" w:author="Ben"><w:r><w:delText>nested</w:delText></w:r></w:del></w:ins><w:r><w:t xml:space="preserve"> after</w:t></w:r></w:hyperlink></w:p>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+
+    assert_eq!(document.reject_revision_id(12).unwrap(), 1);
+    assert_eq!(
+        document
+            .revisions()
+            .iter()
+            .map(|revision| revision.id())
+            .collect::<Vec<_>>(),
+        [11]
+    );
+    let staged = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(staged)).unwrap();
+    let document_xml =
+        std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(document_xml.contains(r#"<w:ins w:id="11" w:author="Ada">"#));
+    assert!(document_xml.contains("<w:t>nested</w:t>"));
+    assert!(!document_xml.contains(r#"w:id="12""#));
+
+    assert_eq!(document.accept_revision_id(11).unwrap(), 1);
+    assert!(document.revisions().is_empty());
+    assert_eq!(document.text(), "before nested after\n");
+}
+
+#[test]
 fn tag_precedes_alias_and_each_control_updates_once() {
     let xml = wrap_word_body(
         r#"<w:sdt><w:sdtPr><w:tag w:val="customer"/><w:alias w:val="shared"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>one</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:alias w:val="shared"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>two</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="missing"/><w:alias w:val="shared"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>three</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,

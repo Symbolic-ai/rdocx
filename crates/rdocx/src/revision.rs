@@ -761,7 +761,7 @@ fn modeled_child(parent: &XmlElement, word: bool, local: &str) -> bool {
             local,
             "pPr" | "r" | "hyperlink" | "sdt" | "ins" | "del" | "moveFrom" | "moveTo"
         ),
-        "hyperlink" => local == "r",
+        "hyperlink" => matches!(local, "r" | "ins" | "del" | "moveFrom" | "moveTo"),
         "pPr" => matches!(local, "rPr" | "numPr" | "sectPr" | "pPrChange"),
         "r" => local == "rPr",
         "rPr" => matches!(local, "ins" | "del" | "rPrChange"),
@@ -789,7 +789,10 @@ fn modeled_child(parent: &XmlElement, word: bool, local: &str) -> bool {
         ),
         "sectPr" => local == "sectPrChange",
         "numPr" => local == "ins",
-        "ins" | "del" | "moveFrom" | "moveTo" => local == "r",
+        "ins" | "del" | "moveFrom" | "moveTo" => matches!(
+            local,
+            "r" | "hyperlink" | "ins" | "del" | "moveFrom" | "moveTo"
+        ),
         "rPrChange" | "pPrChange" | "tblPrChange" | "sectPrChange" => false,
         _ => false,
     }
