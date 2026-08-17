@@ -323,10 +323,11 @@ and propagates a decoded-pixel mismatch as a CI failure.
 
 **Workspace package READMEs in the docs job.** Every one of the 27 workspace
 packages explicitly declares one distinct README. The root file is the
-high-level `rdocx` guide. The other 25 packages use focused crate-local files.
+high-level `rdocx` guide. The other 26 packages use focused crate-local files.
 The documents describe purpose, direct use, neighbouring package boundaries,
 publication status, and an example suited to the actual consumer surface. The
-two deprecated shims direct new consumers to `oxml-opc` and `oxml-pdf`.
+three deprecated shims direct new consumers to `oxml-opc`, `oxml-pdf`, and
+`oxml-chart`.
 
 After the workspace documentation build, `scripts/readme_doctests.py` checks
 the exact 27-package inventory, validates Rust, shell, Python, and JavaScript

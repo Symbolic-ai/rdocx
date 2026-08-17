@@ -6888,9 +6888,9 @@ crate explicitly.
 the impact list because its current incubating publication allowlist named
 `rpptx-chart` without `oxml-chart`.
 
-**Spec sections touched.** `docs/hld/01-product-scope.md`,
-`docs/hld/02-system-context.md`, `docs/hld/03-architecture.md`,
-`docs/hld/07-api-design.md`, `docs/hld/09-charts-spec.md`,
+**Spec sections touched.** `docs/hld/01-glossary.md`,
+`docs/hld/02-scope-and-non-goals.md`, `docs/hld/03-architecture.md`,
+`docs/hld/07-inheritance-and-resolution.md`, `docs/hld/09-charts-spec.md`,
 `docs/hld/11-migration-plan.md`, `docs/hld/12-testing-strategy.md`,
 `docs/hld/14-development-backlog.md`, and
 `docs/hld/15-build-and-toolchain.md`.
