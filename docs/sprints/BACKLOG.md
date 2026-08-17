@@ -29,7 +29,7 @@ regenerated, never hand-edited.
 | M11, Write API                              | 12 | 12 | 0 | 0  |
 | M12, Charts                                 | 12 | 12 | 0 | 0  |
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
-| M14, Word collaboration layer                  | 9  | 0 | 0 | 9  |
+| M14, Word collaboration layer                  | 9  | 0 | 1 | 8  |
 | M15, Charts beyond PowerPoint                  | 4  | 4 | 0 | 0  |
 | M16, Document automation                       | 9  | 0 | 0 | 9  |
 | M17, Security and compliance                   | 7  | 0 | 0 | 7  |
@@ -37,7 +37,7 @@ regenerated, never hand-edited.
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
 | X, Cross-cutting (opportunistic)            | 34 | 32 | 0 | 1  |
-| **Total** | **244** | **190** | **0** | **53** |
+| **Total** | **244** | **190** | **1** | **52** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -292,7 +292,7 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-M14 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-147 | Comment model and part                       | S46  | M | pending |
+| F-147 | Comment model and part                       | S46  | M | in-progress |
 | F-148 | Comment API                                  | S46  | M | pending |
 | F-149 | Revision model                               | S47  | L | pending |
 | F-150 | Accept and reject revisions                  | S47  | L | pending |

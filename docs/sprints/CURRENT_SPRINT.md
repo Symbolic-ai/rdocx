@@ -27,7 +27,7 @@ evaluation needs.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-147 | Comment model and part | M | pending | - |
+| F-147 | Comment model and part | M | in-progress | codex |
 | F-152 | Content control model | L | pending | - |
 | F-154 | Bookmarks and cross-references | M | pending | - |
 | F-148 | Comment API | M | pending | - |
