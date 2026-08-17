@@ -255,6 +255,11 @@ defended.
 | F-157 | S45 | M | 2 | 1 | 2026-08-17 | Native Word chart parts with editable embedded workbooks |
 | F-158 | S45 | M | 2 | 1 | 2026-08-17 | Atomic inline Document::add_chart authoring |
 | F-159 | S45 | M | 2 | 1 | 2026-08-17 | Word paginator chart rendering with exact cross-family pixels |
+| F-147 | S46 | M | 2 | 1 | 2026-08-17 | Typed comment part, body anchors, and relationship discovery |
+| F-148 | S46 | M | 2 | 1 | 2026-08-17 | Atomic ranged comments, replies, resolution, and removal API |
+| F-152 | S46 | L | 4 | 1 | 2026-08-17 | Recursive content controls at all five Word placements |
+| F-153 | S46 | M | 2 | 1 | 2026-08-17 | Bounded custom XML data binding with atomic display updates |
+| F-154 | S46 | M | 2 | 1 | 2026-08-17 | Typed bookmarks and single-pass REF and PAGEREF resolution |
 
 ## Velocity
 

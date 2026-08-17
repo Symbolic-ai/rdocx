@@ -27,11 +27,11 @@ evaluation needs.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-147 | Comment model and part | M | in-progress | codex |
-| F-152 | Content control model | L | in-progress | codex |
-| F-154 | Bookmarks and cross-references | M | in-progress | codex |
-| F-148 | Comment API | M | in-progress | codex |
-| F-153 | Content control binding | M | in-progress | codex |
+| F-147 | Comment model and part | M | done | - |
+| F-152 | Content control model | L | done | - |
+| F-154 | Bookmarks and cross-references | M | done | - |
+| F-148 | Comment API | M | done | - |
+| F-153 | Content control binding | M | done | - |
 
 ## Sequencing note
 
