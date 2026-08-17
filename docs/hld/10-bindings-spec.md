@@ -248,6 +248,16 @@ captured raw WordprocessingML subtree. This is an additive native Rust API.
 Python, WASM, and CLI surfaces do not gain revision methods, and their existing
 load and save paths preserve the revision XML.
 
+The low-level revision storage is an intentional breaking pre-1.0 Rust
+boundary. `RunContent` adds `DeletedText`. `CT_R`, `CT_P`, `HyperlinkSpan`,
+`CT_PPr`, `CT_RPr`, `CT_SectPr`, `CT_TblPr`, and `CT_TrPr` add required
+preservation or revision fields, including ordered raw-child sidecars. Existing
+exhaustive matches and full struct literals must be updated or moved to the
+provided constructors. The workspace remains at 0.7 during development. Its
+next published stable-family version must be 0.8.0, not a 0.7 patch. The
+additive `rdocx::Document` facade and unchanged Python, WASM, and CLI surfaces
+do not inherit this low-level source break.
+
 Native callers resolve tracked changes through `accept_all`, `reject_all`, the
 exact-author pair, the inclusive RFC 3339 date-range pair, and the id pair.
 Each method returns the number of modeled revision elements resolved. Shared

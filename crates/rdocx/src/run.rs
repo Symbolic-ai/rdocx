@@ -81,14 +81,14 @@ impl<'a> Run<'a> {
 
     /// Set the text content, replacing all existing content.
     pub fn set_text(&mut self, text: &str) {
-        self.inner.content = vec![RunContent::Text(CT_Text::new(text))];
+        self.inner
+            .replace_content(vec![RunContent::Text(CT_Text::new(text))]);
     }
 
     /// Add text to this run.
     pub fn add_text(&mut self, text: &str) {
         self.inner
-            .content
-            .push(RunContent::Text(CT_Text::new(text)));
+            .append_content(RunContent::Text(CT_Text::new(text)));
     }
 
     /// Set bold formatting.
@@ -393,7 +393,7 @@ impl<'a> Run<'a> {
     }
 
     fn ensure_rpr(&mut self) -> &mut CT_RPr {
-        self.inner.properties.get_or_insert_with(CT_RPr::default)
+        self.inner.ensure_properties()
     }
 }
 

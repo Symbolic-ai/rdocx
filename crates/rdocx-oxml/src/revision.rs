@@ -880,9 +880,12 @@ mod tests {
         let foreign_text = r#"<w:t>foreign</w:t>"#;
         let foreign_drawing = r#"<w:drawing><w:opaque/></w:drawing>"#;
         let foreign_after = r#"<w:after/>"#;
+        let lexical_literal = r#"<f:literal xmlns:f="urn:foreign" f:value="w: >">w:</f:literal>"#;
+        let nested_word =
+            r#"<f:box xmlns:f="urn:foreign" xmlns:w2="urn:two" f:value=">"><w:nested/></f:box>"#;
         let raw_at_boundary = r#"<w:boundary/>"#;
         let xml = format!(
-            r#"<w:document xmlns:w="{W_NS}" xmlns:wx="{W_NS}"><w:body><w:p><wx:hyperlink xmlns:w="urn:foreign"><wx:r>{foreign_run_properties}<wx:rPr><wx:b/><w:b/></wx:rPr>{foreign_text}<wx:t>before</wx:t>{foreign_drawing}<wx:t>middle</wx:t>{foreign_after}</wx:r><wx:ins wx:id="61" wx:author="Ada"><wx:r><wx:t>reported</wx:t></wx:r></wx:ins>{raw_at_boundary}<wx:r><wx:t>after</wx:t></wx:r></wx:hyperlink></w:p></w:body></w:document>"#
+            r#"<w:document xmlns:w="{W_NS}" xmlns:wx="{W_NS}"><w:body><w:p><wx:hyperlink xmlns:w="urn:foreign"><wx:r>{foreign_run_properties}<wx:rPr><w:pre/><wx:b/><w:b/><w:between/><wx:i/><w:beforeChange/><wx:rPrChange wx:id="62" wx:author="Ada"><wx:rPr><wx:b/></wx:rPr></wx:rPrChange><w:afterChange/></wx:rPr>{foreign_text}<wx:t>before</wx:t>{foreign_drawing}<wx:t>middle</wx:t>{foreign_after}{lexical_literal}{nested_word}</wx:r><wx:ins wx:id="61" wx:author="Ada"><wx:r><wx:t>reported</wx:t></wx:r></wx:ins>{raw_at_boundary}<wx:r><wx:t>after</wx:t></wx:r></wx:hyperlink></w:p></w:body></w:document>"#
         );
         let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
 
@@ -890,32 +893,55 @@ mod tests {
             document.body.paragraphs().next().unwrap().text(),
             "beforemiddleafter"
         );
-        assert_eq!(document.revisions().len(), 1);
-        assert_eq!(document.revisions()[0].id(), 61);
+        assert_eq!(
+            document
+                .revisions()
+                .iter()
+                .map(|revision| revision.id())
+                .collect::<Vec<_>>(),
+            vec![62, 61]
+        );
         let output =
             String::from_utf8(document.to_xml().expect("document writes")).expect("UTF-8 output");
         assert!(output.contains(r#"xmlns:w="urn:foreign""#));
         let foreign_run_properties = r#"<w:rPr xmlns:w="urn:foreign"/>"#;
         let foreign_property = r#"<w:b xmlns:w="urn:foreign"/>"#;
+        let foreign_before_property = r#"<w:pre xmlns:w="urn:foreign"/>"#;
+        let foreign_between_property = r#"<w:between xmlns:w="urn:foreign"/>"#;
+        let foreign_before_change = r#"<w:beforeChange xmlns:w="urn:foreign"/>"#;
+        let foreign_after_change = r#"<w:afterChange xmlns:w="urn:foreign"/>"#;
         let foreign_text = r#"<w:t xmlns:w="urn:foreign">foreign</w:t>"#;
         let foreign_drawing = r#"<w:drawing xmlns:w="urn:foreign"><w:opaque/></w:drawing>"#;
         let foreign_after = r#"<w:after xmlns:w="urn:foreign"/>"#;
         for raw in [
             foreign_run_properties,
+            foreign_before_property,
             foreign_property,
+            foreign_between_property,
+            foreign_before_change,
+            foreign_after_change,
             foreign_text,
             foreign_drawing,
             foreign_after,
         ] {
             assert_eq!(output.matches(raw).count(), 1, "raw child {raw}");
         }
+        assert_eq!(output.matches(lexical_literal).count(), 1);
+        assert!(!output.contains(r#"<f:literal xmlns:w="urn:foreign""#));
+        let nested_word = r#"<f:box xmlns:f="urn:foreign" xmlns:w2="urn:two" f:value=">" xmlns:w="urn:foreign"><w:nested/></f:box>"#;
+        assert_eq!(output.matches(nested_word).count(), 1);
         assert!(output.contains(raw_at_boundary));
         assert!(output.contains(&format!(r#"<w:r xmlns:w="{W_NS}">"#)));
         let positions = [
             output.find(foreign_run_properties).unwrap(),
-            output
-                .find("<w:rPr>\n")
-                .unwrap_or_else(|| panic!("{output}")),
+            output.find(foreign_before_property).unwrap(),
+            output.find("<w:b/>").unwrap(),
+            output.find(foreign_property).unwrap(),
+            output.find(foreign_between_property).unwrap(),
+            output.find("<w:i/>").unwrap(),
+            output.find(foreign_before_change).unwrap(),
+            output.find(r#"wx:id="62""#).unwrap(),
+            output.find(foreign_after_change).unwrap(),
             output.find(foreign_text).unwrap(),
             output.find("<w:t>before</w:t>").unwrap(),
             output.find(foreign_drawing).unwrap(),
@@ -932,7 +958,13 @@ mod tests {
             reopened.body.paragraphs().next().unwrap().text(),
             "beforemiddleafter"
         );
-        assert_eq!(reopened.revisions().len(), 1);
-        assert_eq!(reopened.revisions()[0].id(), 61);
+        assert_eq!(
+            reopened
+                .revisions()
+                .iter()
+                .map(|revision| revision.id())
+                .collect::<Vec<_>>(),
+            vec![62, 61]
+        );
     }
 }

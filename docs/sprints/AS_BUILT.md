@@ -7198,13 +7198,19 @@ keeps untouched producer prefixes, whitespace, namespace bindings, and unknown
 descendants byte-identical. Malformed revisions remain raw and unreported so a
 previously readable document still opens.
 
-**Deviations from the design plan.** None. The approved scope included every
+**Deviations from the design plan.** The approved scope included every
 reachable main-document placement of the listed insertion and deletion
-elements, including contextual paragraph, row, and numbering markers.
+elements, including contextual paragraph, row, and numbering markers. Sprint
+review corrected the original additive semver classification. The new
+`RunContent` variant and required preservation fields on public low-level
+WordprocessingML structs are an intentional breaking pre-1.0 boundary. The
+workspace stays at 0.7 during development, and its next published family must
+use 0.8.0. The native `Document::revisions` facade remains additive.
 
 **Spec sections touched.** `docs/hld/03-architecture.md`, revision ownership,
-preservation, and traversal, and `docs/hld/10-bindings-spec.md`, the additive
-native revision metadata API.
+preservation, traversal, and the 0.8.0 low-level boundary, and
+`docs/hld/10-bindings-spec.md`, the additive native revision metadata API and
+the exact breaking low-level Rust surface.
 
 **Tests.** `revision_elements_round_trip_unchanged_and_report_metadata`,
 `revision_attributes_are_prefix_tolerant_and_namespace_checked`,
@@ -7214,7 +7220,9 @@ collision, schema-order, raw-preservation, duplicate-emission, and
 `hyperlink_and_nested_content_revisions_round_trip_and_report_in_order` and
 `modeled_hyperlinks_preserve_unreported_raw_children_and_foreign_owners`
 regressions. The extended review also covers aliased hyperlink runs under a
-locally shadowed canonical Word prefix.
+locally shadowed canonical Word prefix, schema-positioned raw run properties,
+parsed namespace repair, live raw boundaries after run mutations, and comment
+removal from direct and content-control runs.
 
 **Hash harness.** Unchanged, 49 of 49.
 

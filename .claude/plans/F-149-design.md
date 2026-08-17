@@ -162,7 +162,10 @@ binding surfaces.
   prefix-tolerant, namespace-collision, malformed-metadata, recursive
   round-trip, and exact raw-subtree preservation checks.
 - Public API of published crates. Read HLD 10 and the structural rules. The
-  low-level types and native facade accessor are additive. Run
+  native facade accessor is additive. `RunContent::DeletedText` and the
+  preservation fields added to public low-level structs form an intentional
+  breaking pre-1.0 boundary, so the next published family must be 0.8.0 rather
+  than a 0.7 patch. Run
   `cargo publish --workspace --dry-run` and assert every produced `.crate`
   remains below 10 MiB.
 - New modules or files. The two focused revision modules require explicit

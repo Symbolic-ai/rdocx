@@ -974,9 +974,8 @@ fn remove_anchors_from_paragraph(paragraph: &mut CT_P, ids: &HashSet<i32>) {
 }
 
 fn remove_comment_references_from_run(run: &mut CT_R, ids: &HashSet<i32>) {
-    run.content.retain(
-        |content| !matches!(content, RunContent::CommentReference { id, .. } if ids.contains(id)),
-    );
+    let ids = ids.iter().copied().collect::<Vec<_>>();
+    run.remove_comment_references(&ids);
 }
 
 fn remap_raw_positions(extra_xml: &mut [(usize, Vec<u8>)], removed: &[bool]) {

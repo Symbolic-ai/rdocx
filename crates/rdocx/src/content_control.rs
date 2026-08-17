@@ -393,6 +393,19 @@ fn replace_sdt_display(control: &mut CT_Sdt, replacement: &mut DisplayReplacemen
 fn replace_run_display(run: &mut CT_R, replacement: &mut DisplayReplacement<'_>) {
     let is_first_run = !replacement.saw_run;
     replacement.saw_run = true;
+    let removed = run
+        .content
+        .iter()
+        .map(|content| {
+            !matches!(
+                content,
+                RunContent::Text(_)
+                    | RunContent::DeletedText(_)
+                    | RunContent::CommentReference { .. }
+            )
+        })
+        .collect::<Vec<_>>();
+    run.remap_removed_content(&removed);
     run.content.retain(|content| {
         matches!(
             content,

@@ -203,6 +203,76 @@ impl CT_R {
         result
     }
 
+    /// Replace typed run content while retaining every raw child boundary.
+    #[doc(hidden)]
+    pub fn replace_content(&mut self, content: Vec<RunContent>) {
+        let property_boundary = usize::from(self.properties.is_some());
+        let replacement_end = property_boundary + content.len();
+        for position in &mut self.extra_xml_positions {
+            if *position > property_boundary {
+                *position = replacement_end;
+            }
+        }
+        self.content = content;
+    }
+
+    /// Append typed content without moving raw children after existing content.
+    #[doc(hidden)]
+    pub fn append_content(&mut self, content: RunContent) {
+        self.content.push(content);
+    }
+
+    /// Materialize run properties in their required first-child position.
+    #[doc(hidden)]
+    pub fn ensure_properties(&mut self) -> &mut CT_RPr {
+        if self.properties.is_none() {
+            for position in &mut self.extra_xml_positions {
+                *position += 1;
+            }
+            self.properties = Some(CT_RPr::default());
+        }
+        self.properties.as_mut().expect("properties were inserted")
+    }
+
+    /// Remap raw boundaries after selected typed content children are removed.
+    #[doc(hidden)]
+    pub fn remap_removed_content(&mut self, removed: &[bool]) {
+        let property_boundary = usize::from(self.properties.is_some());
+        for position in &mut self.extra_xml_positions {
+            let content_boundary = position.saturating_sub(property_boundary);
+            *position = position.saturating_sub(
+                removed
+                    .iter()
+                    .take(content_boundary.min(removed.len()))
+                    .filter(|remove| **remove)
+                    .count(),
+            );
+        }
+    }
+
+    /// Remove selected comment-reference content and retain surrounding raw XML.
+    #[doc(hidden)]
+    pub fn remove_comment_references(&mut self, ids: &[i32]) -> bool {
+        let removed = self
+            .content
+            .iter()
+            .map(|content| {
+                matches!(content, RunContent::CommentReference { id, .. } if ids.contains(id))
+            })
+            .collect::<Vec<_>>();
+        let removed_any = removed.iter().any(|remove| *remove);
+        if removed_any {
+            self.remap_removed_content(&removed);
+            self.content = self
+                .content
+                .drain(..)
+                .zip(removed)
+                .filter_map(|(content, remove)| (!remove).then_some(content))
+                .collect();
+        }
+        removed_any
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_prefixes(
             reader,
@@ -707,12 +777,7 @@ impl CT_P {
 
         let mut removed = Vec::with_capacity(self.runs.len());
         for run in &mut self.runs {
-            let removed_reference = run.content.iter().any(|content| {
-                matches!(content, RunContent::CommentReference { id, .. } if ids.contains(id))
-            });
-            run.content.retain(|content| {
-                !matches!(content, RunContent::CommentReference { id, .. } if ids.contains(id))
-            });
+            let removed_reference = run.remove_comment_references(ids);
             removed.push(
                 removed_reference
                     && run.content.is_empty()
@@ -1716,35 +1781,115 @@ pub(crate) fn write_raw_with_word_override<W: std::io::Write>(
         writer.get_mut().write_all(raw)?;
         return Ok(());
     };
-    if !raw.windows(b"w:".len()).any(|window| window == b"w:") {
+    if !raw_uses_external_word_binding(raw) {
         writer.get_mut().write_all(raw)?;
         return Ok(());
     }
-    let Some(end) = raw.iter().position(|byte| *byte == b'>') else {
-        writer.get_mut().write_all(raw)?;
-        return Ok(());
-    };
-    let opening = &raw[..end];
-    if opening
-        .windows(b"xmlns:w".len())
-        .any(|window| window == b"xmlns:w")
-    {
-        writer.get_mut().write_all(raw)?;
-        return Ok(());
-    }
-    let insertion = if opening.last() == Some(&b'/') {
-        end - 1
-    } else {
-        end
-    };
-    writer.get_mut().write_all(&raw[..insertion])?;
-    writer.get_mut().write_all(b" xmlns:w=\"")?;
     writer
         .get_mut()
-        .write_all(quick_xml::escape::escape(namespace).as_bytes())?;
-    writer.get_mut().write_all(b"\"")?;
-    writer.get_mut().write_all(&raw[insertion..])?;
+        .write_all(&raw_with_root_word_binding(raw, namespace)?)?;
     Ok(())
+}
+
+fn raw_uses_external_word_binding(raw: &[u8]) -> bool {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut external_binding = vec![true];
+    let mut saw_root = false;
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                let (declares_word, uses_word) = raw_word_binding_use(&element);
+                if !saw_root {
+                    saw_root = true;
+                    if declares_word {
+                        return false;
+                    }
+                }
+                let uses_external =
+                    external_binding.last().copied().unwrap_or(true) && !declares_word;
+                if uses_external && uses_word {
+                    return true;
+                }
+                external_binding.push(uses_external);
+            }
+            Ok(Event::Empty(element)) => {
+                let (declares_word, uses_word) = raw_word_binding_use(&element);
+                if !saw_root {
+                    saw_root = true;
+                    if declares_word {
+                        return false;
+                    }
+                }
+                let uses_external =
+                    external_binding.last().copied().unwrap_or(true) && !declares_word;
+                if uses_external && uses_word {
+                    return true;
+                }
+            }
+            Ok(Event::End(_)) => {
+                if external_binding.len() > 1 {
+                    external_binding.pop();
+                }
+            }
+            Ok(Event::Eof) => return false,
+            Err(_) => return false,
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn raw_word_binding_use(element: &BytesStart<'_>) -> (bool, bool) {
+    let declares_word = element
+        .attributes()
+        .filter_map(|attribute| attribute.ok())
+        .any(|attribute| attribute.key.as_ref() == b"xmlns:w");
+    let uses_word = qualified_name_uses_prefix(element.name().as_ref(), b"w")
+        || element
+            .attributes()
+            .filter_map(|attribute| attribute.ok())
+            .any(|attribute| qualified_name_uses_prefix(attribute.key.as_ref(), b"w"));
+    (declares_word, uses_word)
+}
+
+fn qualified_name_uses_prefix(name: &[u8], prefix: &[u8]) -> bool {
+    name.iter()
+        .position(|byte| *byte == b':')
+        .is_some_and(|separator| &name[..separator] == prefix)
+}
+
+fn raw_with_root_word_binding(raw: &[u8], namespace: &str) -> Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let end = reader.buffer_position() as usize;
+                let mut element = element.into_owned();
+                element.push_attribute(("xmlns:w", namespace));
+                let mut output = raw[..start].to_vec();
+                Writer::new(&mut output).write_event(Event::Start(element))?;
+                output.extend_from_slice(&raw[end..]);
+                return Ok(output);
+            }
+            Event::Empty(element) => {
+                let end = reader.buffer_position() as usize;
+                let mut element = element.into_owned();
+                element.push_attribute(("xmlns:w", namespace));
+                let mut output = raw[..start].to_vec();
+                Writer::new(&mut output).write_event(Event::Empty(element))?;
+                output.extend_from_slice(&raw[end..]);
+                return Ok(output);
+            }
+            Event::Eof => return Ok(raw.to_vec()),
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 fn write_empty_hyperlinks<W: std::io::Write>(

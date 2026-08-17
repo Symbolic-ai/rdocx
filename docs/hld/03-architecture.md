@@ -187,6 +187,10 @@ is the sole serialization source until an explicit accept or reject operation
 replaces it. Invalid revision metadata remains preserved but is not reported.
 Prior run, paragraph, table, and section properties are projected with the
 namespace context of the revision element, including nested properties.
+The ordered preservation sidecars added to the public low-level Word model and
+the `RunContent::DeletedText` variant form the breaking pre-1.0 0.8.0 boundary
+for the next published stable family. The higher-level `rdocx::Document`
+revision API remains additive.
 
 The `rdocx` facade owns revision resolution because one operation can replace
 content wrappers, property owners, paragraph boundaries, and table rows.

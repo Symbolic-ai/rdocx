@@ -1066,6 +1066,7 @@ fn rpr_from_raw(raw: &[u8], word_prefixes: &[String]) -> Result<(CT_RPr, bool)> 
     // Keeping the same unmodelled children in the typed projection would
     // duplicate them when canonical properties are merged back into it.
     rpr.revision_xml.clear();
+    rpr.revision_xml_positions.clear();
     Ok((rpr, has_producer))
 }
 

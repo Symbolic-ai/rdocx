@@ -598,6 +598,112 @@ fn comment_removal_remaps_and_retains_hyperlink_owned_revision_content() {
 }
 
 #[test]
+fn run_mutations_keep_raw_children_at_live_boundaries() {
+    let body = r#"<w:p><w:r><w:before/><w:t>A</w:t><w:between/><w:t>B</w:t><w:after/></w:r></w:p>"#;
+
+    let mut replaced = document_with_content_controls(&wrap_word_body(body));
+    replaced
+        .paragraph_mut(0)
+        .unwrap()
+        .run_mut(0)
+        .unwrap()
+        .set_text("replacement");
+    let replaced_xml = document_xml(&mut replaced);
+    let replaced_positions = [
+        replaced_xml.find("<w:before/>").unwrap(),
+        replaced_xml.find("<w:t>replacement</w:t>").unwrap(),
+        replaced_xml.find("<w:between/>").unwrap(),
+        replaced_xml.find("<w:after/>").unwrap(),
+    ];
+    assert!(replaced_positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+    let mut appended = document_with_content_controls(&wrap_word_body(body));
+    appended
+        .paragraph_mut(0)
+        .unwrap()
+        .run_mut(0)
+        .unwrap()
+        .add_text("C");
+    let appended_xml = document_xml(&mut appended);
+    let appended_positions = [
+        appended_xml.find("<w:before/>").unwrap(),
+        appended_xml.find("<w:t>A</w:t>").unwrap(),
+        appended_xml.find("<w:between/>").unwrap(),
+        appended_xml.find("<w:t>B</w:t>").unwrap(),
+        appended_xml.find("<w:after/>").unwrap(),
+        appended_xml.find("<w:t>C</w:t>").unwrap(),
+    ];
+    assert!(appended_positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+    let mut formatted = document_with_content_controls(&wrap_word_body(body));
+    formatted
+        .paragraph_mut(0)
+        .unwrap()
+        .run_mut(0)
+        .unwrap()
+        .set_bold(true);
+    let formatted_xml = document_xml(&mut formatted);
+    let formatted_positions = [
+        formatted_xml.find("<w:rPr>").unwrap(),
+        formatted_xml.find("<w:before/>").unwrap(),
+        formatted_xml.find("<w:t>A</w:t>").unwrap(),
+        formatted_xml.find("<w:between/>").unwrap(),
+        formatted_xml.find("<w:t>B</w:t>").unwrap(),
+        formatted_xml.find("<w:after/>").unwrap(),
+    ];
+    assert!(formatted_positions.windows(2).all(|pair| pair[0] < pair[1]));
+}
+
+#[test]
+fn comment_removal_remaps_direct_and_control_run_raw_boundaries() {
+    let paragraphs = r#"<w:p><w:r><w:directBefore/><w:t>A</w:t><w:directMiddle/><w:commentReference w:id="0"/><w:directAfter/><w:t>B</w:t><w:directLast/></w:r></w:p><w:p><w:sdt><w:sdtPr/><w:sdtContent><w:r><w:controlBefore/><w:t>C</w:t><w:controlMiddle/><w:commentReference w:id="0"/><w:controlAfter/><w:t>D</w:t><w:controlLast/></w:r></w:sdtContent></w:sdt></w:p>"#;
+    let (mut document, comment_id) = document_with_comment_paragraphs(paragraphs);
+
+    assert!(document.remove_comment(comment_id).unwrap());
+    let output = document_xml(&mut document);
+    assert!(!output.contains("commentReference"));
+    for ordered in [
+        [
+            "<w:directBefore/>",
+            "<w:t>A</w:t>",
+            "<w:directMiddle/>",
+            "<w:directAfter/>",
+            "<w:t>B</w:t>",
+            "<w:directLast/>",
+        ],
+        [
+            "<w:controlBefore/>",
+            "<w:t>C</w:t>",
+            "<w:controlMiddle/>",
+            "<w:controlAfter/>",
+            "<w:t>D</w:t>",
+            "<w:controlLast/>",
+        ],
+    ] {
+        let positions = ordered
+            .iter()
+            .map(|needle| output.find(needle).unwrap())
+            .collect::<Vec<_>>();
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let reopened_xml = document_xml(&mut reopened);
+    for raw in [
+        "<w:directBefore/>",
+        "<w:directMiddle/>",
+        "<w:directAfter/>",
+        "<w:directLast/>",
+        "<w:controlBefore/>",
+        "<w:controlMiddle/>",
+        "<w:controlAfter/>",
+        "<w:controlLast/>",
+    ] {
+        assert_eq!(reopened_xml.matches(raw).count(), 1, "raw child {raw}");
+    }
+}
+
+#[test]
 fn comment_insertion_keeps_content_at_the_hyperlink_end_boundary() {
     let raw = r#"<x:end xmlns:x="urn:opaque"/>"#;
     let xml = wrap_word_body(&format!(

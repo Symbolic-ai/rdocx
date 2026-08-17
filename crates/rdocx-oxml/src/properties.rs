@@ -147,6 +147,49 @@ pub struct CT_PPr {
     pub revision_xml: Vec<Vec<u8>>,
 }
 
+const RPR_STYLE_SLOT: u8 = 0;
+const RPR_FONTS_SLOT: u8 = 1;
+const RPR_BOLD_SLOT: u8 = 2;
+const RPR_BOLD_CS_SLOT: u8 = 3;
+const RPR_ITALIC_SLOT: u8 = 4;
+const RPR_ITALIC_CS_SLOT: u8 = 5;
+const RPR_CAPS_SLOT: u8 = 6;
+const RPR_SMALL_CAPS_SLOT: u8 = 7;
+const RPR_STRIKE_SLOT: u8 = 8;
+const RPR_DSTRIKE_SLOT: u8 = 9;
+const RPR_VANISH_SLOT: u8 = 10;
+const RPR_COLOR_SLOT: u8 = 11;
+const RPR_SPACING_SLOT: u8 = 12;
+const RPR_WIDTH_SLOT: u8 = 13;
+const RPR_POSITION_SLOT: u8 = 14;
+const RPR_SIZE_SLOT: u8 = 15;
+const RPR_SIZE_CS_SLOT: u8 = 16;
+const RPR_HIGHLIGHT_SLOT: u8 = 17;
+const RPR_UNDERLINE_SLOT: u8 = 18;
+const RPR_SHADING_SLOT: u8 = 19;
+const RPR_VERT_ALIGN_SLOT: u8 = 20;
+const RPR_MARKER_SLOT: u8 = 21;
+const RPR_CHANGE_SLOT: u8 = 22;
+const RPR_END_SLOT: u8 = 23;
+
+fn record_rpr_modeled(
+    rpr: &mut CT_RPr,
+    pending_raw: &mut Vec<Vec<u8>>,
+    occurrences: &mut [usize],
+    slot: u8,
+) {
+    let occurrence = occurrences[slot as usize];
+    flush_rpr_raw(rpr, pending_raw, slot, occurrence);
+    occurrences[slot as usize] += 1;
+}
+
+fn flush_rpr_raw(rpr: &mut CT_RPr, pending_raw: &mut Vec<Vec<u8>>, slot: u8, occurrence: usize) {
+    for raw in pending_raw.drain(..) {
+        rpr.revision_xml.push(raw);
+        rpr.revision_xml_positions.push((slot, occurrence));
+    }
+}
+
 #[allow(non_snake_case)]
 impl CT_PPr {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
@@ -661,8 +704,11 @@ pub struct CT_RPr {
     pub revision_markers: Vec<CT_Revision>,
     /// Prior run properties from the schema-final `w:rPrChange`.
     pub change: Option<CT_Revision>,
-    /// Malformed tracked-change elements retained without a typed projection.
+    /// Foreign and unmodelled children retained without a typed projection.
     pub revision_xml: Vec<Vec<u8>>,
+    /// Schema slots and occurrences for retained raw children.
+    #[doc(hidden)]
+    pub revision_xml_positions: Vec<(u8, usize)>,
 }
 
 #[allow(non_snake_case)]
@@ -676,6 +722,8 @@ impl CT_RPr {
         word_prefixes: &[String],
     ) -> Result<Self> {
         let mut rpr = CT_RPr::default();
+        let mut pending_raw = Vec::new();
+        let mut occurrences = [0usize; RPR_END_SLOT as usize + 1];
         let mut buf = Vec::new();
 
         loop {
@@ -684,8 +732,20 @@ impl CT_RPr {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(name.as_ref(), b"rStyle", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_STYLE_SLOT,
+                        );
                         rpr.style_id = get_word_val_attr(e, &prefixes)?;
                     } else if is_word_element(name.as_ref(), b"rFonts", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_FONTS_SLOT,
+                        );
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
@@ -705,32 +765,92 @@ impl CT_RPr {
                             }
                         }
                     } else if is_word_element(name.as_ref(), b"b", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_BOLD_SLOT,
+                        );
                         rpr.bold = Some(parse_word_toggle(e, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"bCs", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_BOLD_CS_SLOT,
+                        );
                         rpr.bold_cs = Some(parse_word_toggle(e, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"i", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_ITALIC_SLOT,
+                        );
                         rpr.italic = Some(parse_word_toggle(e, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"iCs", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_ITALIC_CS_SLOT,
+                        );
                         rpr.italic_cs = Some(parse_word_toggle(e, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"u", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_UNDERLINE_SLOT,
+                        );
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.underline = ST_Underline::from_str(&val).ok();
                         } else {
                             rpr.underline = Some(ST_Underline::Single);
                         }
                     } else if is_word_element(name.as_ref(), b"strike", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_STRIKE_SLOT,
+                        );
                         rpr.strike = Some(parse_word_toggle(e, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"dstrike", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_DSTRIKE_SLOT,
+                        );
                         rpr.dstrike = Some(parse_word_toggle(e, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"sz", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_SIZE_SLOT,
+                        );
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.sz = Some(HalfPoint(val.parse()?));
                         }
                     } else if is_word_element(name.as_ref(), b"szCs", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_SIZE_CS_SLOT,
+                        );
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.sz_cs = Some(HalfPoint(val.parse()?));
                         }
                     } else if is_word_element(name.as_ref(), b"color", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_COLOR_SLOT,
+                        );
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
@@ -742,49 +862,115 @@ impl CT_RPr {
                             }
                         }
                     } else if is_word_element(name.as_ref(), b"highlight", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_HIGHLIGHT_SLOT,
+                        );
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.highlight = ST_HighlightColor::from_str(&val).ok();
                         }
                     } else if is_word_element(name.as_ref(), b"caps", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_CAPS_SLOT,
+                        );
                         rpr.caps = Some(parse_word_toggle(e, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"smallCaps", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_SMALL_CAPS_SLOT,
+                        );
                         rpr.small_caps = Some(parse_word_toggle(e, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"vertAlign", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_VERT_ALIGN_SLOT,
+                        );
                         rpr.vert_align = get_word_val_attr(e, &prefixes)?;
                     } else if is_word_element(name.as_ref(), b"spacing", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_SPACING_SLOT,
+                        );
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.spacing = Some(Twips(val.parse()?));
                         }
                     } else if is_word_element(name.as_ref(), b"w", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_WIDTH_SLOT,
+                        );
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.width_scale = Some(val.parse()?);
                         }
                     } else if is_word_element(name.as_ref(), b"position", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_POSITION_SLOT,
+                        );
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.position = Some(val.parse()?);
                         }
                     } else if is_word_element(name.as_ref(), b"shd", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_SHADING_SLOT,
+                        );
                         rpr.shading = Some(CT_Shd::from_xml_attrs(e)?);
                     } else if is_word_element(name.as_ref(), b"vanish", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_VANISH_SLOT,
+                        );
                         rpr.vanish = Some(parse_word_toggle(e, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"ins", &prefixes)
                         || is_word_element(name.as_ref(), b"del", &prefixes)
                     {
                         let raw = capture_empty_element(e)?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            record_rpr_modeled(
+                                &mut rpr,
+                                &mut pending_raw,
+                                &mut occurrences,
+                                RPR_MARKER_SLOT,
+                            );
                             rpr.revision_markers.push(revision);
                         } else {
-                            rpr.revision_xml.push(raw);
+                            pending_raw.push(raw);
                         }
                     } else if is_word_element(name.as_ref(), b"rPrChange", &prefixes) {
                         let raw = capture_empty_element(e)?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            record_rpr_modeled(
+                                &mut rpr,
+                                &mut pending_raw,
+                                &mut occurrences,
+                                RPR_CHANGE_SLOT,
+                            );
                             rpr.change = Some(revision);
                         } else {
-                            rpr.revision_xml.push(raw);
+                            pending_raw.push(raw);
                         }
                     } else {
-                        rpr.revision_xml.push(capture_empty_element(e)?);
+                        pending_raw.push(capture_empty_element(e)?);
                     }
                 }
                 Ok(Event::Start(ref e)) => {
@@ -794,19 +980,31 @@ impl CT_RPr {
                     {
                         let raw = capture_element(reader, e)?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            record_rpr_modeled(
+                                &mut rpr,
+                                &mut pending_raw,
+                                &mut occurrences,
+                                RPR_MARKER_SLOT,
+                            );
                             rpr.revision_markers.push(revision);
                         } else {
-                            rpr.revision_xml.push(raw);
+                            pending_raw.push(raw);
                         }
                     } else if is_word_element(e.name().as_ref(), b"rPrChange", &prefixes) {
                         let raw = capture_element(reader, e)?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            record_rpr_modeled(
+                                &mut rpr,
+                                &mut pending_raw,
+                                &mut occurrences,
+                                RPR_CHANGE_SLOT,
+                            );
                             rpr.change = Some(revision);
                         } else {
-                            rpr.revision_xml.push(raw);
+                            pending_raw.push(raw);
                         }
                     } else {
-                        rpr.revision_xml.push(capture_element(reader, e)?);
+                        pending_raw.push(capture_element(reader, e)?);
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"rPr") => {
@@ -818,6 +1016,13 @@ impl CT_RPr {
             }
             buf.clear();
         }
+
+        flush_rpr_raw(
+            &mut rpr,
+            &mut pending_raw,
+            RPR_END_SLOT,
+            occurrences[RPR_END_SLOT as usize],
+        );
 
         Ok(rpr)
     }
@@ -833,6 +1038,27 @@ impl CT_RPr {
     ) -> Result<()> {
         if self.is_empty() {
             return Ok(());
+        }
+
+        if !self.revision_xml.is_empty()
+            && self.revision_xml_positions.len() == self.revision_xml.len()
+        {
+            let mut modeled = self.clone();
+            modeled.revision_xml.clear();
+            modeled.revision_xml_positions.clear();
+            let mut generated = Writer::new(Vec::new());
+            if modeled.is_empty() {
+                generated.write_event(Event::Start(BytesStart::new("w:rPr")))?;
+                generated.write_event(Event::End(BytesEnd::new("w:rPr")))?;
+            } else {
+                modeled.to_xml_with_word_override(&mut generated, foreign_word_namespace)?;
+            }
+            return write_rpr_with_positioned_raw(
+                writer,
+                &generated.into_inner(),
+                self,
+                foreign_word_namespace,
+            );
         }
 
         let mut buf = itoa::Buffer::new();
@@ -1091,6 +1317,139 @@ impl CT_RPr {
         if other.vanish.is_some() {
             self.vanish = other.vanish;
         }
+    }
+}
+
+fn write_rpr_with_positioned_raw<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    generated: &[u8],
+    rpr: &CT_RPr,
+    foreign_word_namespace: Option<&str>,
+) -> Result<()> {
+    let mut raw_order = (0..rpr.revision_xml.len()).collect::<Vec<_>>();
+    raw_order.sort_by_key(|index| {
+        let (slot, occurrence) = rpr.revision_xml_positions[*index];
+        (slot, occurrence, *index)
+    });
+    let mut raw_index = 0usize;
+    let mut occurrences = [0usize; RPR_END_SLOT as usize + 1];
+    let mut reader = Reader::from_reader(generated);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut inside = false;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) if !inside => {
+                inside = true;
+                writer.write_event(Event::Start(element.into_owned()))?;
+            }
+            Event::Start(element) => {
+                let slot = rpr_slot_for_name(element.local_name().as_ref());
+                write_rpr_raw_before(
+                    writer,
+                    rpr,
+                    &raw_order,
+                    &mut raw_index,
+                    slot,
+                    occurrences[slot as usize],
+                    foreign_word_namespace,
+                )?;
+                let raw = capture_element(&mut reader, &element)?;
+                writer.get_mut().write_all(&raw)?;
+                occurrences[slot as usize] += 1;
+            }
+            Event::Empty(element) => {
+                let slot = rpr_slot_for_name(element.local_name().as_ref());
+                write_rpr_raw_before(
+                    writer,
+                    rpr,
+                    &raw_order,
+                    &mut raw_index,
+                    slot,
+                    occurrences[slot as usize],
+                    foreign_word_namespace,
+                )?;
+                writer.write_event(Event::Empty(element.into_owned()))?;
+                occurrences[slot as usize] += 1;
+            }
+            Event::End(element) if inside => {
+                write_rpr_raw_before(
+                    writer,
+                    rpr,
+                    &raw_order,
+                    &mut raw_index,
+                    RPR_END_SLOT,
+                    0,
+                    foreign_word_namespace,
+                )?;
+                while let Some(index) = raw_order.get(raw_index).copied() {
+                    crate::text::write_raw_with_word_override(
+                        writer,
+                        &rpr.revision_xml[index],
+                        foreign_word_namespace,
+                    )?;
+                    raw_index += 1;
+                }
+                writer.write_event(Event::End(element.into_owned()))?;
+                return Ok(());
+            }
+            Event::Eof => return Ok(()),
+            event => writer.write_event(event.into_owned())?,
+        }
+        buffer.clear();
+    }
+}
+
+fn write_rpr_raw_before<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    rpr: &CT_RPr,
+    raw_order: &[usize],
+    raw_index: &mut usize,
+    slot: u8,
+    occurrence: usize,
+    foreign_word_namespace: Option<&str>,
+) -> Result<()> {
+    while let Some(index) = raw_order.get(*raw_index).copied() {
+        let position = rpr.revision_xml_positions[index];
+        if position.0 > slot || (position.0 == slot && position.1 > occurrence) {
+            break;
+        }
+        crate::text::write_raw_with_word_override(
+            writer,
+            &rpr.revision_xml[index],
+            foreign_word_namespace,
+        )?;
+        *raw_index += 1;
+    }
+    Ok(())
+}
+
+fn rpr_slot_for_name(local: &[u8]) -> u8 {
+    match local {
+        b"rStyle" => RPR_STYLE_SLOT,
+        b"rFonts" => RPR_FONTS_SLOT,
+        b"b" => RPR_BOLD_SLOT,
+        b"bCs" => RPR_BOLD_CS_SLOT,
+        b"i" => RPR_ITALIC_SLOT,
+        b"iCs" => RPR_ITALIC_CS_SLOT,
+        b"caps" => RPR_CAPS_SLOT,
+        b"smallCaps" => RPR_SMALL_CAPS_SLOT,
+        b"strike" => RPR_STRIKE_SLOT,
+        b"dstrike" => RPR_DSTRIKE_SLOT,
+        b"vanish" => RPR_VANISH_SLOT,
+        b"color" => RPR_COLOR_SLOT,
+        b"spacing" => RPR_SPACING_SLOT,
+        b"w" => RPR_WIDTH_SLOT,
+        b"position" => RPR_POSITION_SLOT,
+        b"sz" => RPR_SIZE_SLOT,
+        b"szCs" => RPR_SIZE_CS_SLOT,
+        b"highlight" => RPR_HIGHLIGHT_SLOT,
+        b"u" => RPR_UNDERLINE_SLOT,
+        b"shd" => RPR_SHADING_SLOT,
+        b"vertAlign" => RPR_VERT_ALIGN_SLOT,
+        b"ins" | b"del" => RPR_MARKER_SLOT,
+        b"rPrChange" => RPR_CHANGE_SLOT,
+        _ => RPR_END_SLOT,
     }
 }
 
