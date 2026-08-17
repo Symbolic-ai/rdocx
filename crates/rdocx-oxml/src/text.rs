@@ -104,15 +104,23 @@ pub struct BookmarkMarker {
     id: Option<i32>,
     name: Option<String>,
     run_index: usize,
+    raw_before: usize,
 }
 
 impl BookmarkMarker {
-    fn new(start: bool, id: i32, name: Option<String>, run_index: usize) -> Self {
+    fn new(
+        start: bool,
+        id: i32,
+        name: Option<String>,
+        run_index: usize,
+        raw_before: usize,
+    ) -> Self {
         Self {
             start,
             id: Some(id),
             name,
             run_index,
+            raw_before,
         }
     }
 
@@ -130,6 +138,12 @@ impl BookmarkMarker {
 
     pub fn run_index(&self) -> usize {
         self.run_index
+    }
+
+    /// Number of preserved raw children before this marker at its run boundary.
+    #[doc(hidden)]
+    pub fn raw_before(&self) -> usize {
+        self.raw_before
     }
 }
 
@@ -584,6 +598,9 @@ pub struct HyperlinkSpan {
     /// Raw children at `(relative run boundary, typed revisions before, XML)`.
     #[doc(hidden)]
     pub extra_xml: Vec<(usize, usize, Vec<u8>)>,
+    /// Parent raw slot for a revision-only hyperlink preserved as one subtree.
+    #[doc(hidden)]
+    pub preserved_raw_before: Option<usize>,
 }
 
 const HYPERLINK_REVISION_FLAG: usize = 1usize << (usize::BITS - 1);
@@ -600,7 +617,8 @@ pub(crate) fn hyperlink_revision_slot(hyperlink_index: usize) -> usize {
     HYPERLINK_REVISION_FLAG | hyperlink_index
 }
 
-pub(crate) fn hyperlink_revision_index(slot: usize) -> Option<usize> {
+#[doc(hidden)]
+pub fn hyperlink_revision_index(slot: usize) -> Option<usize> {
     (slot & HYPERLINK_REVISION_FLAG != 0).then_some(slot & !HYPERLINK_REVISION_FLAG)
 }
 
@@ -713,6 +731,7 @@ impl CT_P {
                         .filter(|(boundary, _, _)| *boundary >= split_at)
                         .map(|(boundary, before, raw)| (boundary - split_at, *before, raw.clone()))
                         .collect(),
+                    preserved_raw_before: None,
                 };
                 hyperlink
                     .extra_xml
@@ -872,7 +891,10 @@ impl CT_P {
             }
         }
         for marker in &mut self.bookmark_markers {
-            marker.run_index = boundary_map[marker.run_index.min(old_run_count)];
+            let old_boundary = marker.run_index.min(old_run_count);
+            marker.run_index = boundary_map[old_boundary];
+            marker.raw_before =
+                raw_prefixes[old_boundary] + marker.raw_before.min(raw_counts[old_boundary]);
         }
         let hyperlink_revision_counts = self
             .hyperlinks
@@ -910,6 +932,10 @@ impl CT_P {
         for (old_index, mut hyperlink) in old_hyperlinks.into_iter().enumerate() {
             let old_start = hyperlink.run_start.min(old_run_count);
             let old_end = hyperlink.run_end.min(old_run_count);
+            if let Some(raw_before) = hyperlink.preserved_raw_before {
+                hyperlink.preserved_raw_before =
+                    Some(raw_prefixes[old_start] + raw_before.min(raw_counts[old_start]));
+            }
             let revision_counts = &hyperlink_revision_counts[old_index];
             let new_start = boundary_map[old_start];
             let new_end = boundary_map[old_end];
@@ -968,12 +994,18 @@ impl CT_P {
         {
             return false;
         }
+        let raw_before = self
+            .extra_xml
+            .iter()
+            .filter(|(at, _)| *at == run_index)
+            .count();
         self.extra_xml.push((run_index, raw));
         self.bookmark_markers.push(BookmarkMarker::new(
             true,
             id,
             Some(name.to_owned()),
             run_index,
+            raw_before,
         ));
         true
     }
@@ -993,9 +1025,14 @@ impl CT_P {
         {
             return false;
         }
+        let raw_before = self
+            .extra_xml
+            .iter()
+            .filter(|(at, _)| *at == run_index)
+            .count();
         self.extra_xml.push((run_index, raw));
         self.bookmark_markers
-            .push(BookmarkMarker::new(false, id, None, run_index));
+            .push(BookmarkMarker::new(false, id, None, run_index, raw_before));
         true
     }
 
@@ -1062,19 +1099,14 @@ impl CT_P {
                         let raw = capture_element(reader, e)?;
                         let parsed = parse_hyperlink_children(&raw, &prefixes)?;
                         let run_start = runs.len();
-                        if parsed.runs.is_empty() {
-                            let raw_before =
-                                extra_xml.iter().filter(|(at, _)| *at == run_start).count();
-                            revisions.extend(
-                                parsed
-                                    .revisions
-                                    .into_iter()
-                                    .map(|(_, revision)| (run_start, raw_before, revision)),
-                            );
+                        if parsed.runs.is_empty() && parsed.revisions.is_empty() {
                             extra_xml.push((run_start, raw));
                         } else {
                             let hyperlink_index = hyperlinks.len();
                             let run_end = run_start + parsed.runs.len();
+                            let preserved_raw_before = parsed.runs.is_empty().then(|| {
+                                extra_xml.iter().filter(|(at, _)| *at == run_start).count()
+                            });
                             runs.extend(parsed.runs);
                             hyperlinks.push(HyperlinkSpan {
                                 rel_id,
@@ -1083,6 +1115,7 @@ impl CT_P {
                                 run_end,
                                 extra_attributes,
                                 extra_xml: parsed.extra_xml,
+                                preserved_raw_before,
                             });
                             revisions.extend(parsed.revisions.into_iter().map(|(at, revision)| {
                                 (
@@ -1091,6 +1124,9 @@ impl CT_P {
                                     revision,
                                 )
                             }));
+                            if preserved_raw_before.is_some() {
+                                extra_xml.push((run_start, raw));
+                            }
                         }
                     } else if is_word_element(name.as_ref(), b"fldSimple", &prefixes) {
                         // Parse simple field: extract w:instr attribute
@@ -1162,6 +1198,10 @@ impl CT_P {
                             id,
                             name: bookmark_name,
                             run_index: runs.len(),
+                            raw_before: extra_xml
+                                .iter()
+                                .filter(|(at, _)| *at == runs.len())
+                                .count(),
                         });
                         extra_xml.push((runs.len(), capture_element(reader, e)?));
                     } else if is_word_element(name.as_ref(), b"ins", &prefixes)
@@ -1207,6 +1247,10 @@ impl CT_P {
                             id,
                             name: bookmark_name,
                             run_index: runs.len(),
+                            raw_before: extra_xml
+                                .iter()
+                                .filter(|(at, _)| *at == runs.len())
+                                .count(),
                         });
                         extra_xml.push((runs.len(), capture_empty_element(e)?));
                     } else if !matches_local_name(name.as_ref(), b"p") {
@@ -1299,6 +1343,8 @@ impl CT_P {
                 &self.extra_xml,
                 &self.content_controls,
                 &self.comment_ranges,
+                &self.hyperlinks,
+                &self.revisions,
                 run_idx,
             )?;
 
@@ -1390,6 +1436,8 @@ impl CT_P {
             &self.extra_xml,
             &self.content_controls,
             &self.comment_ranges,
+            &self.hyperlinks,
+            &self.revisions,
             self.runs.len(),
         )?;
         write_empty_hyperlinks(writer, &self.hyperlinks, &self.revisions, self.runs.len())?;
@@ -1619,6 +1667,8 @@ fn write_paragraph_boundary<W: std::io::Write>(
     extra_xml: &[(usize, Vec<u8>)],
     content_controls: &[(usize, usize, usize, CT_Sdt)],
     markers: &[CommentRangeMarker],
+    hyperlinks: &[HyperlinkSpan],
+    revisions: &[(usize, usize, CT_Revision)],
     run_index: usize,
 ) -> Result<()> {
     let extras = extra_xml
@@ -1658,7 +1708,29 @@ fn write_paragraph_boundary<W: std::io::Write>(
             }
         }
         if let Some(raw) = extras.get(raw_index) {
-            writer.get_mut().write_all(raw)?;
+            if let Some((hyperlink_index, hyperlink)) =
+                hyperlinks.iter().enumerate().find(|(_, hyperlink)| {
+                    hyperlink.run_start == run_index
+                        && hyperlink.run_end == run_index
+                        && hyperlink.preserved_raw_before == Some(raw_index)
+                })
+            {
+                let mut replacement = Vec::new();
+                let mut replacement_writer = Writer::new(&mut replacement);
+                write_hyperlink_start(&mut replacement_writer, hyperlink)?;
+                write_hyperlink_boundary(
+                    &mut replacement_writer,
+                    revisions,
+                    hyperlink_index,
+                    hyperlink,
+                    run_index,
+                )?;
+                replacement_writer
+                    .write_event(Event::End(BytesEnd::new(hyperlink_qname(hyperlink))))?;
+                writer.get_mut().write_all(&replacement)?;
+            } else {
+                writer.get_mut().write_all(raw)?;
+            }
         }
     }
     Ok(())
@@ -2088,11 +2160,11 @@ fn write_empty_hyperlinks<W: std::io::Write>(
     revisions: &[(usize, usize, CT_Revision)],
     run_index: usize,
 ) -> Result<()> {
-    for (hyperlink_index, hyperlink) in hyperlinks
-        .iter()
-        .enumerate()
-        .filter(|(_, hyperlink)| hyperlink.run_start == run_index && hyperlink.run_end == run_index)
-    {
+    for (hyperlink_index, hyperlink) in hyperlinks.iter().enumerate().filter(|(_, hyperlink)| {
+        hyperlink.run_start == run_index
+            && hyperlink.run_end == run_index
+            && hyperlink.preserved_raw_before.is_none()
+    }) {
         write_hyperlink_start(writer, hyperlink)?;
         write_hyperlink_boundary(writer, revisions, hyperlink_index, hyperlink, run_index)?;
         writer.write_event(Event::End(BytesEnd::new(hyperlink_qname(hyperlink))))?;
@@ -2366,6 +2438,7 @@ mod tests {
             run_end: 2,
             extra_attributes: Vec::new(),
             extra_xml: Vec::new(),
+            preserved_raw_before: None,
         });
 
         let mut output = Vec::new();

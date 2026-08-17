@@ -202,6 +202,16 @@ property, or row. Resolution stages the complete main-document XML, resolves
 selected descendants before their enclosing subtree, reparses the result, and
 commits once only after validation succeeds.
 
+`rdocx-layout` owns the renderer-only revision projection. The
+`LayoutInput::revision_view` selector chooses an accepted or tracked view. The
+engine merges ordinary runs and typed revision runs at their preserved
+boundaries without mutating the package. Accepted layout keeps insertions and
+move destinations and omits deletions and move sources. Tracked layout keeps
+both sides, applies neutral decorations, and carries changed-paragraph state
+through pagination. The `rdocx` facade owns the concrete `RenderOptions` value
+that passes this selection into layout. Default accepted renders reuse the
+normal and deterministic caches, while tracked renders remain uncached.
+
 `rdocx-layout` keeps the flow model: the engine, the paginator, blocks, tables
 and the style resolver. Slides do not paginate, so none of it transfers. The
 flow engine resolves Word relationship IDs to content-addressed `MediaId`

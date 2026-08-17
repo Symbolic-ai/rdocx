@@ -2115,12 +2115,28 @@ fn save_pdf_to_file() {
     let mut doc = Document::new();
     doc.add_paragraph("PDF file test");
 
-    let path = "/tmp/rdocx_test_output.pdf";
-    let result = doc.save_pdf(path);
+    let path = std::env::temp_dir().join(format!("rdocx_test_output_{}.pdf", std::process::id()));
+    let result = doc.save_pdf(&path);
     if result.is_ok() {
-        let bytes = std::fs::read(path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
         assert!(bytes.starts_with(b"%PDF"));
-        std::fs::remove_file(path).ok();
+        std::fs::remove_file(&path).ok();
+    }
+
+    let tracked_path = std::env::temp_dir().join(format!(
+        "rdocx_test_tracked_output_{}.pdf",
+        std::process::id()
+    ));
+    let result = doc.save_pdf_with_options(
+        &tracked_path,
+        rdocx::RenderOptions {
+            revision_view: rdocx::RevisionView::Tracked,
+        },
+    );
+    if result.is_ok() {
+        let bytes = std::fs::read(&tracked_path).unwrap();
+        assert!(bytes.starts_with(b"%PDF"));
+        std::fs::remove_file(&tracked_path).ok();
     }
 }
 

@@ -35,7 +35,7 @@ pub use comments::{BookmarkRef, CommentRef, RunPosition, RunRange};
 pub use content_control::ContentControlRef;
 pub use document::{
     AccessibilityIssue, Document, ImageInfo, IssueSeverity, LinkInfo, ListLevel, ListNumberFormat,
-    OutlineNode,
+    OutlineNode, RenderOptions,
 };
 pub use error::{Error, Result};
 pub use oxml_chart::{ChartData, ChartKind};
@@ -43,6 +43,7 @@ pub use oxml_core::Length;
 pub use paragraph::{
     Alignment, BorderStyle, Paragraph, ParagraphRef, SectionBreak, TabAlignment, TabLeader,
 };
+pub use rdocx_layout::RevisionView;
 pub use revision::{RevisionKind, RevisionRef};
 pub use run::{Run, RunRef, UnderlineStyle};
 pub use style::{Style, StyleBuilder};

@@ -267,6 +267,14 @@ changes return an error before mutation. These eight methods are additive on
 `rdocx::Document` only. Python, WASM, and CLI surfaces remain unchanged and
 continue to preserve the resulting document when they save it.
 
+Native Word rendering exposes `rdocx::RevisionView` and the concrete
+`rdocx::RenderOptions`, whose default selects the accepted view. Additive
+option-taking counterparts cover PDF bytes and files, single-page and all-page
+raster output, page layout, deterministic rendering, and caller-supplied font
+paths. The existing methods keep their accepted default. Python, WASM, and CLI
+surfaces do not implicitly expose the selector and retain their existing
+rendering behavior.
+
 The stable Rust family moves to 0.5.0 for the numbering preservation model.
 `CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
 producer extensions survive typed mutations. Full struct literals written for

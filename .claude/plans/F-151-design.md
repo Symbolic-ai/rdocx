@@ -1,6 +1,6 @@
 # F-151, Revision display in the renderer
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S48
 **Size**: M
 **Depends on**: F-149
@@ -121,14 +121,14 @@ accepted default, and no current sample contains modeled tracked revisions.
 
 ## Implementation checklist
 
-- [ ] Add concrete revision-view options and additive PDF and raster entry points.
-- [ ] Carry the selected view through `LayoutInput` without changing the default caches.
-- [ ] Project ordinary and revision-wrapped runs in preserved paragraph order.
-- [ ] Apply tracked insertion and deletion decorations without losing other formatting.
-- [ ] Carry a changed-paragraph marker through pagination and draw split-aware margin bars.
-- [ ] Add projection, decoration, pagination, default-compatibility, and deterministic golden tests.
-- [ ] Run focused checks plus deterministic rendering and published-package riders.
-- [ ] Update exactly HLD 03, HLD 08, HLD 10, and HLD 12 at completion.
+- [x] Add concrete revision-view options and additive PDF and raster entry points.
+- [x] Carry the selected view through `LayoutInput` without changing the default caches.
+- [x] Project ordinary and revision-wrapped runs in preserved paragraph order.
+- [x] Apply tracked insertion and deletion decorations without losing other formatting.
+- [x] Carry a changed-paragraph marker through pagination and draw split-aware margin bars.
+- [x] Add projection, decoration, pagination, default-compatibility, and deterministic golden tests.
+- [x] Run focused checks plus deterministic rendering and published-package riders.
+- [x] Update exactly HLD 03, HLD 08, HLD 10, and HLD 12 at completion.
 
 ## Open questions
 

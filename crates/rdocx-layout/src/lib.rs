@@ -11,7 +11,7 @@ pub mod paginator;
 pub mod style_resolver;
 pub mod table;
 
-pub use input::{ImageData, LayoutInput, MediaRegistry};
+pub use input::{ImageData, LayoutInput, MediaRegistry, RevisionView};
 pub use oxml_layout::{
     Color, DocumentMetadata, FontData, FontFile, FontId, GlyphRun, LayoutError, LayoutResult,
     PageFrame, Point, PositionedElement, Rect, Result,

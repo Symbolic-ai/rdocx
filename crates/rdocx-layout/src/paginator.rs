@@ -334,6 +334,7 @@ fn paginate_pass(
                                     table_x,
                                     pager.geometry.margin_top + pager.cursor_y,
                                     &pager.geometry,
+                                    pager.page_number,
                                     tbl_borders,
                                     &mut pager.elements,
                                     pager.media,
@@ -350,6 +351,7 @@ fn paginate_pass(
                         table_x,
                         pager.geometry.margin_top + pager.cursor_y,
                         &pager.geometry,
+                        pager.page_number,
                         tbl_borders,
                         &mut pager.elements,
                         pager.media,
@@ -883,6 +885,7 @@ impl<'a> Pager<'a> {
                 count,
                 continued,
                 cursor_y,
+                self.page_number,
             );
         }
     }
@@ -907,6 +910,7 @@ impl<'a> Pager<'a> {
                     header_blocks,
                     &self.geometry,
                     header_y,
+                    self.page_number,
                     &mut all_elements,
                     self.media,
                 );
@@ -930,6 +934,7 @@ impl<'a> Pager<'a> {
                     footer_blocks,
                     &self.geometry,
                     footer_y,
+                    self.page_number,
                     &mut all_elements,
                     self.media,
                 );
@@ -990,6 +995,7 @@ fn draw_note(
     count: usize,
     continued: bool,
     top: f64,
+    page_number: usize,
 ) -> f64 {
     let baseline = top + note.lines.get(first).map_or(0.0, |line| line.ascent);
 
@@ -1026,10 +1032,22 @@ fn draw_note(
                 _ => (None, item.width()),
             };
             if let Some(seg) = segment {
+                let adjusted_baseline = line_baseline - seg.baseline_offset;
+                if let Some(color) = seg.highlight {
+                    elements.push(PositionedElement::FilledRect {
+                        rect: Rect {
+                            x,
+                            y: cursor_y,
+                            width: seg.width,
+                            height: line.height,
+                        },
+                        color,
+                    });
+                }
                 elements.push(PositionedElement::Text(GlyphRun {
                     origin: Point {
                         x,
-                        y: line_baseline - seg.baseline_offset,
+                        y: adjusted_baseline,
                     },
                     font_id: seg.font_id,
                     font_size: seg.font_size,
@@ -1042,10 +1060,95 @@ fn draw_note(
                     field_kind: None,
                     note: None,
                 }));
+                if let Some(underline) = seg.underline {
+                    let underline_y = adjusted_baseline + seg.descent * 0.3;
+                    let thickness = match underline {
+                        Underline::Thick => seg.font_size / 12.0,
+                        Underline::Double => seg.font_size / 24.0,
+                        _ => seg.font_size / 18.0,
+                    };
+                    elements.push(PositionedElement::Line {
+                        start: Point { x, y: underline_y },
+                        end: Point {
+                            x: x + seg.width,
+                            y: underline_y,
+                        },
+                        width: thickness,
+                        color: seg.color,
+                        dash_pattern: None,
+                    });
+                    if underline == Underline::Double {
+                        let second_y = underline_y + thickness * 2.5;
+                        elements.push(PositionedElement::Line {
+                            start: Point { x, y: second_y },
+                            end: Point {
+                                x: x + seg.width,
+                                y: second_y,
+                            },
+                            width: thickness,
+                            color: seg.color,
+                            dash_pattern: None,
+                        });
+                    }
+                }
+                if seg.strike {
+                    let strike_y = adjusted_baseline - seg.ascent * 0.3;
+                    let thickness = seg.font_size / 24.0;
+                    elements.push(PositionedElement::Line {
+                        start: Point { x, y: strike_y },
+                        end: Point {
+                            x: x + seg.width,
+                            y: strike_y,
+                        },
+                        width: thickness,
+                        color: seg.color,
+                        dash_pattern: None,
+                    });
+                }
+                if seg.dstrike {
+                    let strike_y = adjusted_baseline - seg.ascent * 0.3;
+                    let thickness = seg.font_size / 24.0;
+                    let gap = thickness * 2.0;
+                    for y in [strike_y - gap / 2.0, strike_y + gap / 2.0] {
+                        elements.push(PositionedElement::Line {
+                            start: Point { x, y },
+                            end: Point {
+                                x: x + seg.width,
+                                y,
+                            },
+                            width: thickness,
+                            color: seg.color,
+                            dash_pattern: None,
+                        });
+                    }
+                }
             }
             x += advance;
         }
         cursor_y += line.height;
+    }
+
+    for range in &note.revision_ranges {
+        let visible_start = range.start.max(first);
+        let visible_end = range.end.min(first + count);
+        if visible_start >= visible_end {
+            continue;
+        }
+        let offset = note
+            .lines
+            .iter()
+            .skip(first)
+            .take(visible_start - first)
+            .map(|line| line.height)
+            .sum::<f64>();
+        let height = note
+            .lines
+            .iter()
+            .skip(visible_start)
+            .take(visible_end - visible_start)
+            .map(|line| line.height)
+            .sum::<f64>();
+        render_change_bar_at(top + offset, height, geometry, page_number, elements);
     }
 
     cursor_y - top
@@ -1138,6 +1241,7 @@ pub fn append_endnote_pages(
                 count,
                 continued,
                 geometry.margin_top + cursor_y,
+                page_number,
             );
             first += count;
             continued = true;
@@ -1545,6 +1649,14 @@ fn paginate_paragraph(
         &mut pager.elements,
         pager.media,
     );
+    render_change_bar(
+        para,
+        pager.cursor_y,
+        para.content_height(),
+        &pager.geometry,
+        pager.page_number,
+        &mut pager.elements,
+    );
     pager.claim_notes(&para.lines);
     pager.cursor_y += para.content_height();
     pager.ink_bottom = pager.cursor_y;
@@ -1573,6 +1685,19 @@ fn render_para_split(
         &mut pager.elements,
         pager.media,
     );
+    let first_height = para.content_offset_top
+        + para.lines[..split_at]
+            .iter()
+            .map(|line| line.height)
+            .sum::<f64>();
+    render_change_bar(
+        para,
+        pager.cursor_y,
+        first_height,
+        &pager.geometry,
+        pager.page_number,
+        &mut pager.elements,
+    );
     // Only the lines placed on this page count toward its notes. The rest of
     // the paragraph, and any note it references, belong to the next page.
     pager.claim_notes(&para.lines[..split_at]);
@@ -1595,6 +1720,7 @@ fn render_para_split(
                 // The anchors were placed with the first part of the
                 // paragraph, so the continuation must not place them again.
                 anchored: Vec::new(),
+                has_visible_revision: para.has_visible_revision,
                 lines: remaining_lines.to_vec(),
                 space_before: 0.0,
                 space_after: para.space_after,
@@ -1627,6 +1753,14 @@ fn render_para_split(
         0.0,
         &mut pager.elements,
         pager.media,
+    );
+    render_change_bar(
+        para,
+        0.0,
+        remaining_height,
+        &pager.geometry,
+        pager.page_number,
+        &mut pager.elements,
     );
     pager.claim_notes(remaining_lines);
     pager.ink_bottom = remaining_height;
@@ -1890,17 +2024,76 @@ fn render_paragraph_lines(
     }
 }
 
+fn render_change_bar(
+    para: &ParagraphBlock,
+    start_y: f64,
+    height: f64,
+    geometry: &PageGeometry,
+    page_number: usize,
+    elements: &mut Vec<PositionedElement>,
+) {
+    if !para.has_visible_revision || !height.is_finite() || height <= 0.0 {
+        return;
+    }
+    render_change_bar_at(
+        geometry.margin_top + start_y,
+        height,
+        geometry,
+        page_number,
+        elements,
+    );
+}
+
+fn render_change_bar_at(
+    start_y: f64,
+    height: f64,
+    geometry: &PageGeometry,
+    page_number: usize,
+    elements: &mut Vec<PositionedElement>,
+) {
+    if !height.is_finite() || height <= 0.0 {
+        return;
+    }
+    let x = if page_number.is_multiple_of(2) {
+        geometry.margin_left / 2.0
+    } else {
+        geometry.page_width - geometry.margin_right / 2.0
+    };
+    if !x.is_finite() || !start_y.is_finite() || !(start_y + height).is_finite() {
+        return;
+    }
+    elements.push(PositionedElement::Line {
+        start: Point { x, y: start_y },
+        end: Point {
+            x,
+            y: start_y + height,
+        },
+        width: 1.5,
+        color: Color::BLACK,
+        dash_pattern: None,
+    });
+}
+
 /// Render header/footer blocks.
 fn render_hf_blocks(
     blocks: &[ParagraphBlock],
     geometry: &PageGeometry,
     start_y: f64,
+    page_number: usize,
     elements: &mut Vec<PositionedElement>,
     media: &HashMap<MediaId, ImageData>,
 ) {
     let mut y = start_y - geometry.margin_top; // Convert to relative
     for para in blocks {
         render_paragraph_lines(&para.lines, para, geometry, y, elements, media);
+        render_change_bar(
+            para,
+            y,
+            para.content_height(),
+            geometry,
+            page_number,
+            elements,
+        );
         y += para.content_height();
     }
 }
@@ -1912,6 +2105,7 @@ fn render_table_row(
     table_x: f64,
     row_y: f64,
     geometry: &PageGeometry,
+    page_number: usize,
     table_borders: Option<&rdocx_oxml::table::CT_TblBorders>,
     elements: &mut Vec<PositionedElement>,
     media: &HashMap<MediaId, ImageData>,
@@ -1977,6 +2171,14 @@ fn render_table_row(
                     para_y,
                     elements,
                     media,
+                );
+                render_change_bar(
+                    para,
+                    para_y,
+                    para.content_height(),
+                    geometry,
+                    page_number,
+                    elements,
                 );
                 para_y += para.total_height();
             }
@@ -2310,6 +2512,7 @@ mod tests {
         }
         ParagraphBlock {
             anchored: Vec::new(),
+            has_visible_revision: false,
             lines,
             space_before: 0.0,
             space_after: 0.0,
@@ -2447,6 +2650,7 @@ mod tests {
         let fm = FontManager::new();
         let para = ParagraphBlock {
             anchored: Vec::new(),
+            has_visible_revision: false,
             lines: vec![make_text_line(14.0, Some(Underline::Single), false)],
             space_before: 0.0,
             space_after: 0.0,
@@ -2488,6 +2692,7 @@ mod tests {
         let fm = FontManager::new();
         let para = ParagraphBlock {
             anchored: Vec::new(),
+            has_visible_revision: false,
             lines: vec![make_text_line(14.0, None, true)],
             space_before: 0.0,
             space_after: 0.0,
@@ -2567,6 +2772,7 @@ mod tests {
         };
         let para = ParagraphBlock {
             anchored: Vec::new(),
+            has_visible_revision: false,
             lines: vec![line],
             space_before: 0.0,
             space_after: 0.0,
@@ -2608,6 +2814,7 @@ mod tests {
         let fm = FontManager::new();
         let para = ParagraphBlock {
             anchored: Vec::new(),
+            has_visible_revision: false,
             lines: vec![make_line(14.0)],
             space_before: 0.0,
             space_after: 0.0,
@@ -2662,6 +2869,7 @@ mod tests {
         let fm = FontManager::new();
         let para = ParagraphBlock {
             anchored: Vec::new(),
+            has_visible_revision: false,
             lines: vec![make_line(14.0)],
             space_before: 0.0,
             space_after: 0.0,
@@ -2707,6 +2915,7 @@ mod tests {
         let fm = FontManager::new();
         let para = ParagraphBlock {
             anchored: Vec::new(),
+            has_visible_revision: false,
             lines: vec![make_text_line(14.0, Some(Underline::Double), false)],
             space_before: 0.0,
             space_after: 0.0,
@@ -2818,6 +3027,7 @@ mod tests {
         };
         let para = ParagraphBlock {
             anchored: Vec::new(),
+            has_visible_revision: false,
             lines: vec![line],
             space_before: 0.0,
             space_after: 0.0,
@@ -2862,6 +3072,7 @@ mod tests {
         // Line with "Hello World" (1 space = 1 gap), width 200 out of 468 available
         let para = ParagraphBlock {
             anchored: Vec::new(),
+            has_visible_revision: false,
             lines: vec![
                 make_justified_line("Hello World", 200.0, false),
                 make_justified_line("End.", 40.0, true),
@@ -2917,6 +3128,7 @@ mod tests {
         let fm = FontManager::new();
         let para = ParagraphBlock {
             anchored: Vec::new(),
+            has_visible_revision: false,
             lines: vec![
                 make_justified_line("Hello World Test", 200.0, false),
                 make_justified_line("End.", 40.0, true),
@@ -2977,6 +3189,7 @@ mod tests {
         // A line with a single word (no spaces) should not be stretched
         let para = ParagraphBlock {
             anchored: Vec::new(),
+            has_visible_revision: false,
             lines: vec![
                 make_justified_line("Superlongword", 100.0, false),
                 make_justified_line("End.", 40.0, true),

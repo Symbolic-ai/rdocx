@@ -482,6 +482,7 @@ mod tests {
         // Layout with default styles
         let styles = rdocx_oxml::styles::CT_Styles::default();
         let input = crate::input::LayoutInput {
+            revision_view: crate::input::RevisionView::Accepted,
             document: rdocx_oxml::document::CT_Document {
                 body: rdocx_oxml::document::CT_Body {
                     content: Vec::new(),
