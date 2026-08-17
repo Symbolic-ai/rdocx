@@ -7257,8 +7257,10 @@ accept and reject methods.
 `malformed_selected_property_changes_fail_atomically`, plus
 `hyperlink_nested_revisions_resolve_inside_out_when_scoped` and
 `targetless_revision_only_hyperlinks_keep_sibling_order_when_resolved`, and
-`resolving_a_modeled_hyperlink_keeps_unreported_raw_children`. The normalized
-oracle is pinned to Microsoft Word 16.104 build 16.104.25121423.
+`resolving_a_modeled_hyperlink_keeps_unreported_raw_children`. Extended sprint
+review also added opaque malformed-wrapper, comment-boundary remapping, and
+relationship-namespace collision regressions. The normalized oracle is pinned
+to Microsoft Word 16.104 build 16.104.25121423.
 
 **Hash harness.** Unchanged, 49 of 49.
 

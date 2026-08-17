@@ -698,13 +698,16 @@ fn push_element(
         .to_owned();
     let word = element_namespace(&name, scope) == Some(WORD_NS);
     let parent = stack.last().copied();
-    let modeled = parent.map_or(word && local == "document", |parent| {
+    let mut modeled = parent.map_or(word && local == "document", |parent| {
         modeled_child(&elements[parent], word, &local)
     });
     let revision = modeled
         .then(|| revision_metadata(start, &local, scope))
         .transpose()?
         .flatten();
+    if modeled && is_revision_local(&local) && revision.is_none() {
+        modeled = false;
+    }
     let index = elements.len();
     elements.push(XmlElement {
         start: offset,
@@ -919,6 +922,20 @@ fn revision_metadata(
         author,
         timestamp,
     }))
+}
+
+fn is_revision_local(local: &str) -> bool {
+    matches!(
+        local,
+        "ins"
+            | "del"
+            | "moveFrom"
+            | "moveTo"
+            | "rPrChange"
+            | "pPrChange"
+            | "tblPrChange"
+            | "sectPrChange"
+    )
 }
 
 fn is_property_change(kind: RevisionKind) -> bool {

@@ -71,6 +71,39 @@ fn document_xml(document: &mut Document) -> String {
     String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap()
 }
 
+fn document_with_comment_paragraphs(paragraphs: &str) -> (Document, i32) {
+    let mut document = Document::new();
+    document.add_paragraph("seed");
+    let comment_id = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "remove",
+        )
+        .unwrap();
+    let bytes = document.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let mut xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let start = xml.find("<w:p>").unwrap();
+    let end = start + xml[start..].find("</w:p>").unwrap() + "</w:p>".len();
+    xml.replace_range(start..end, paragraphs);
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    (Document::from_bytes(output.get_ref()).unwrap(), comment_id)
+}
+
 fn body_from_xml(body: &str) -> CT_Body {
     CT_Document::from_xml(wrap_word_body(body).as_bytes())
         .unwrap()
@@ -475,6 +508,163 @@ fn resolving_a_modeled_hyperlink_keeps_unreported_raw_children() {
         document_xml.find("<w:t>after</w:t>").unwrap(),
     ];
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+}
+
+#[test]
+fn malformed_revision_wrappers_are_opaque_to_every_resolution_scope() {
+    let malformed = r#"<w:ins w:id="bad"><w:del w:id="51" w:author="Ada" w:date="2026-08-17T10:00:00Z"><w:r><w:delText>hidden</w:delText></w:r></w:del></w:ins>"#;
+    let xml = wrap_word_body(&format!(
+        r#"<w:p><w:hyperlink>{malformed}</w:hyperlink></w:p>"#
+    ));
+    let assert_opaque =
+        |mut document: Document, action: fn(&mut Document) -> rdocx::Result<usize>| {
+            assert!(document.revisions().is_empty());
+            let before = document_xml(&mut document);
+            assert_eq!(action(&mut document).unwrap(), 0);
+            assert_eq!(document_xml(&mut document), before);
+            assert!(before.contains(malformed));
+        };
+
+    assert_opaque(document_with_content_controls(&xml), Document::accept_all);
+    assert_opaque(document_with_content_controls(&xml), Document::reject_all);
+    assert_opaque(document_with_content_controls(&xml), |document| {
+        document.accept_revision_id(51)
+    });
+    assert_opaque(document_with_content_controls(&xml), |document| {
+        document.reject_revision_id(51)
+    });
+    assert_opaque(document_with_content_controls(&xml), |document| {
+        document.accept_revisions_by_author("Ada")
+    });
+    assert_opaque(document_with_content_controls(&xml), |document| {
+        document.reject_revisions_by_author("Ada")
+    });
+    assert_opaque(document_with_content_controls(&xml), |document| {
+        document.accept_revisions_in_date_range("2026-08-17T09:00:00Z", "2026-08-17T11:00:00Z")
+    });
+    assert_opaque(document_with_content_controls(&xml), |document| {
+        document.reject_revisions_in_date_range("2026-08-17T09:00:00Z", "2026-08-17T11:00:00Z")
+    });
+}
+
+#[test]
+fn comment_removal_remaps_and_retains_hyperlink_owned_revision_content() {
+    let raw_solo = r#"<x:solo xmlns:x="urn:opaque"/>"#;
+    let raw_middle = r#"<x:middle xmlns:x="urn:opaque"/>"#;
+    let paragraphs = format!(
+        r#"<w:p><w:commentRangeStart w:id="0"/><w:commentRangeEnd w:id="0"/><w:hyperlink><w:r><w:commentReference w:id="0"/></w:r><w:ins w:id="41" w:author="Ada"><w:r><w:t>solo</w:t></w:r></w:ins>{raw_solo}</w:hyperlink></w:p><w:p><w:hyperlink><w:r><w:commentReference w:id="0"/></w:r><w:r><w:t>before</w:t></w:r><w:ins w:id="42" w:author="Ada"><w:r><w:t>middle</w:t></w:r></w:ins>{raw_middle}<w:r><w:t>after</w:t></w:r></w:hyperlink></w:p>"#
+    );
+    let (mut document, comment_id) = document_with_comment_paragraphs(&paragraphs);
+
+    assert_eq!(
+        document
+            .revisions()
+            .iter()
+            .map(|revision| revision.id())
+            .collect::<Vec<_>>(),
+        [41, 42]
+    );
+    assert!(document.remove_comment(comment_id).unwrap());
+    let removed = document_xml(&mut document);
+    assert!(!removed.contains("commentReference"));
+    for raw in [raw_solo, raw_middle] {
+        assert!(removed.contains(raw), "missing {raw} in {removed}");
+    }
+    let positions = [
+        removed.find("<w:t>before</w:t>").unwrap(),
+        removed.find(r#"w:id="42""#).unwrap(),
+        removed.find(raw_middle).unwrap(),
+        removed.find("<w:t>after</w:t>").unwrap(),
+    ];
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened
+            .revisions()
+            .iter()
+            .map(|revision| revision.id())
+            .collect::<Vec<_>>(),
+        [41, 42]
+    );
+    let mut reopened = reopened;
+    assert_eq!(reopened.accept_revision_id(41).unwrap(), 1);
+    assert_eq!(reopened.accept_revision_id(42).unwrap(), 1);
+    assert!(reopened.revisions().is_empty());
+    let resolved = document_xml(&mut reopened);
+    assert!(resolved.contains(raw_solo));
+    assert!(resolved.contains(raw_middle));
+    assert_eq!(reopened.text(), "solo\nbeforemiddleafter\n");
+}
+
+#[test]
+fn comment_insertion_keeps_content_at_the_hyperlink_end_boundary() {
+    let raw = r#"<x:end xmlns:x="urn:opaque"/>"#;
+    let xml = wrap_word_body(&format!(
+        r#"<w:p><w:hyperlink><w:r><w:t>one</w:t></w:r><w:r><w:t>two</w:t></w:r><w:ins w:id="43" w:author="Ada"><w:r><w:t>end</w:t></w:r></w:ins>{raw}</w:hyperlink></w:p>"#
+    ));
+    let mut document = document_with_content_controls(&xml);
+    let comment_id = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 2,
+                },
+            },
+            "Ada",
+            None,
+            "review",
+        )
+        .unwrap();
+
+    let inserted = document_xml(&mut document);
+    let revision = inserted.find(r#"w:id="43""#).unwrap();
+    let raw_position = inserted.find(raw).unwrap();
+    let hyperlink_end = inserted.find("</w:hyperlink>").unwrap();
+    let reference = inserted.find("<w:commentReference").unwrap();
+    assert!(revision < raw_position && raw_position < hyperlink_end && hyperlink_end < reference);
+
+    assert!(document.remove_comment(comment_id).unwrap());
+    let removed = document_xml(&mut document);
+    assert!(removed.contains(r#"w:id="43""#));
+    assert!(removed.contains(raw));
+    assert_eq!(document.accept_revision_id(43).unwrap(), 1);
+    assert_eq!(document.text(), "onetwoend\n");
+}
+
+#[test]
+fn hyperlink_relationship_ids_use_expanded_names_and_safe_output_prefixes() {
+    let relationship_namespace =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let xml = wrap_word_body(&format!(
+        r#"<w:p><w:hyperlink xmlns:r="urn:foreign" xmlns:rel="{relationship_namespace}" xmlns:x="urn:other" r:id="wrong" rel:id="right" x:id="other"><w:r><w:t>one</w:t></w:r></w:hyperlink><w:hyperlink xmlns:r="urn:foreign" r:id="still-wrong"><w:r><w:t>two</w:t></w:r></w:hyperlink></w:p>"#
+    ));
+    let mut document = document_with_content_controls(&xml);
+
+    let paragraph = document.paragraph(0).unwrap();
+    let spans = paragraph.hyperlink_spans();
+    assert_eq!(spans[0].2, Some("right"));
+    assert_eq!(spans[1].2, None);
+    let output = document_xml(&mut document);
+    assert!(output.contains(r#"xmlns:r="urn:foreign""#));
+    assert!(output.contains(r#"r:id="wrong""#));
+    assert!(output.contains(r#"r:id="still-wrong""#));
+    assert!(output.contains(r#"x:id="other""#));
+    assert!(output.contains(
+        r#"xmlns:rdocxR="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#
+    ));
+    assert!(output.contains(r#"rdocxR:id="right""#));
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let spans = paragraph.hyperlink_spans();
+    assert_eq!(spans[0].2, Some("right"));
+    assert_eq!(spans[1].2, None);
 }
 
 #[test]

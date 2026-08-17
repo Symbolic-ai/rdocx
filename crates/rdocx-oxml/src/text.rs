@@ -562,12 +562,15 @@ impl CT_P {
         }
 
         let mut hyperlinks = Vec::with_capacity(self.hyperlinks.len() + 1);
+        let mut hyperlink_map = Vec::with_capacity(self.hyperlinks.len());
         for mut hyperlink in self.hyperlinks.drain(..) {
             if hyperlink.run_start >= run_index {
                 hyperlink.run_start += 1;
                 hyperlink.run_end += 1;
+                hyperlink_map.push((hyperlinks.len(), None, false));
                 hyperlinks.push(hyperlink);
             } else if hyperlink.run_end > run_index {
+                let split_at = run_index - hyperlink.run_start;
                 let suffix = HyperlinkSpan {
                     rel_id: hyperlink.rel_id.clone(),
                     anchor: hyperlink.anchor.clone(),
@@ -577,27 +580,38 @@ impl CT_P {
                     extra_xml: hyperlink
                         .extra_xml
                         .iter()
-                        .filter(|(boundary, _, _)| *boundary > run_index - hyperlink.run_start)
-                        .map(|(boundary, before, raw)| {
-                            (
-                                boundary - (run_index - hyperlink.run_start),
-                                *before,
-                                raw.clone(),
-                            )
-                        })
+                        .filter(|(boundary, _, _)| *boundary >= split_at)
+                        .map(|(boundary, before, raw)| (boundary - split_at, *before, raw.clone()))
                         .collect(),
                 };
                 hyperlink
                     .extra_xml
-                    .retain(|(boundary, _, _)| *boundary <= run_index - hyperlink.run_start);
+                    .retain(|(boundary, _, _)| *boundary < split_at);
                 hyperlink.run_end = run_index;
+                let prefix_index = hyperlinks.len();
                 hyperlinks.push(hyperlink);
+                let suffix_index = hyperlinks.len();
                 hyperlinks.push(suffix);
+                hyperlink_map.push((prefix_index, Some(suffix_index), false));
             } else {
+                hyperlink_map.push((hyperlinks.len(), None, hyperlink.run_end == run_index));
                 hyperlinks.push(hyperlink);
             }
         }
         self.hyperlinks = hyperlinks;
+        for (at, slot, _) in &mut self.revisions {
+            let Some(old_index) = hyperlink_revision_index(*slot) else {
+                continue;
+            };
+            let Some((prefix, suffix, ended_at_insertion)) = hyperlink_map.get(old_index) else {
+                continue;
+            };
+            if *ended_at_insertion && *at == run_index + 1 {
+                *at = run_index;
+            }
+            let new_index = suffix.filter(|_| *at > run_index).unwrap_or(*prefix);
+            *slot = hyperlink_revision_slot(new_index);
+        }
         for (position, _) in &mut self.extra_xml {
             if *position >= run_index {
                 *position += 1;
@@ -735,6 +749,26 @@ impl CT_P {
         for marker in &mut self.bookmark_markers {
             marker.run_index = boundary_map[marker.run_index.min(old_run_count)];
         }
+        let hyperlink_revision_counts = self
+            .hyperlinks
+            .iter()
+            .enumerate()
+            .map(|(hyperlink_index, hyperlink)| {
+                let start = hyperlink.run_start.min(old_run_count);
+                let end = hyperlink.run_end.min(old_run_count);
+                (start..=end)
+                    .map(|boundary| {
+                        self.revisions
+                            .iter()
+                            .filter(|(at, slot, _)| {
+                                *at == boundary
+                                    && hyperlink_revision_index(*slot) == Some(hyperlink_index)
+                            })
+                            .count()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
         for (run_index, raw_before, _) in &mut self.revisions {
             let old_boundary = (*run_index).min(old_run_count);
             *run_index = boundary_map[old_boundary];
@@ -746,12 +780,45 @@ impl CT_P {
         for (position, _) in &mut self.extra_xml {
             *position = boundary_map[(*position).min(old_run_count)];
         }
-        for hyperlink in &mut self.hyperlinks {
-            hyperlink.run_start = boundary_map[hyperlink.run_start.min(old_run_count)];
-            hyperlink.run_end = boundary_map[hyperlink.run_end.min(old_run_count)];
+        let old_hyperlinks = std::mem::take(&mut self.hyperlinks);
+        let mut hyperlink_map = vec![None; old_hyperlinks.len()];
+        for (old_index, mut hyperlink) in old_hyperlinks.into_iter().enumerate() {
+            let old_start = hyperlink.run_start.min(old_run_count);
+            let old_end = hyperlink.run_end.min(old_run_count);
+            let revision_counts = &hyperlink_revision_counts[old_index];
+            let new_start = boundary_map[old_start];
+            let new_end = boundary_map[old_end];
+            for (boundary, revisions_before, _) in &mut hyperlink.extra_xml {
+                let old_relative = (*boundary).min(old_end - old_start);
+                let old_boundary = old_start + old_relative;
+                let new_boundary = boundary_map[old_boundary];
+                let collapsed_before = (0..old_relative)
+                    .filter(|relative| boundary_map[old_start + relative] == new_boundary)
+                    .map(|relative| revision_counts[relative])
+                    .sum::<usize>();
+                *boundary = new_boundary.saturating_sub(new_start);
+                *revisions_before =
+                    collapsed_before + (*revisions_before).min(revision_counts[old_relative]);
+            }
+            let owns_revision = self
+                .revisions
+                .iter()
+                .any(|(_, slot, _)| hyperlink_revision_index(*slot) == Some(old_index));
+            hyperlink.run_start = new_start;
+            hyperlink.run_end = new_end;
+            if new_start < new_end || owns_revision || !hyperlink.extra_xml.is_empty() {
+                hyperlink_map[old_index] = Some(self.hyperlinks.len());
+                self.hyperlinks.push(hyperlink);
+            }
         }
-        self.hyperlinks
-            .retain(|hyperlink| hyperlink.run_start < hyperlink.run_end);
+        for (_, slot, _) in &mut self.revisions {
+            let Some(old_index) = hyperlink_revision_index(*slot) else {
+                continue;
+            };
+            if let Some(new_index) = hyperlink_map.get(old_index).copied().flatten() {
+                *slot = hyperlink_revision_slot(new_index);
+            }
+        }
         self.runs = self
             .runs
             .drain(..)
@@ -808,7 +875,7 @@ impl CT_P {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
-        Self::from_xml_with_prefixes(reader, &["w".to_string()])
+        Self::from_xml_with_prefixes(reader, &["w".to_string(), format!("\0r\0{R_NS}")])
     }
 
     pub(crate) fn from_xml_with_prefixes(
@@ -1075,14 +1142,17 @@ impl CT_P {
 
             // Paragraph boundary content is a sibling of the hyperlink.
             if current_hyperlink.is_some() && current_hyperlink != in_hl {
+                let hyperlink_index = current_hyperlink.expect("open hyperlink exists");
                 write_hyperlink_boundary(
                     writer,
                     &self.revisions,
-                    current_hyperlink.expect("open hyperlink exists"),
-                    &self.hyperlinks[current_hyperlink.expect("open hyperlink exists")],
+                    hyperlink_index,
+                    &self.hyperlinks[hyperlink_index],
                     run_idx,
                 )?;
-                writer.write_event(Event::End(BytesEnd::new("w:hyperlink")))?;
+                writer.write_event(Event::End(BytesEnd::new(hyperlink_qname(
+                    &self.hyperlinks[hyperlink_index],
+                ))))?;
                 current_hyperlink = None;
             }
 
@@ -1101,17 +1171,7 @@ impl CT_P {
                 && current_hyperlink != in_hl
             {
                 let hl = &self.hyperlinks[hl_idx];
-                let mut e = BytesStart::new("w:hyperlink");
-                if let Some(ref rid) = hl.rel_id {
-                    e.push_attribute(("r:id", rid.as_str()));
-                }
-                if let Some(ref anchor) = hl.anchor {
-                    e.push_attribute(("w:anchor", anchor.as_str()));
-                }
-                for (name, value) in &hl.extra_attributes {
-                    e.push_attribute((name.as_str(), value.as_str()));
-                }
-                writer.write_event(Event::Start(e))?;
+                write_hyperlink_start(writer, hl)?;
                 current_hyperlink = in_hl;
             }
 
@@ -1169,7 +1229,9 @@ impl CT_P {
                 &self.hyperlinks[hyperlink_index],
                 self.runs.len(),
             )?;
-            writer.write_event(Event::End(BytesEnd::new("w:hyperlink")))?;
+            writer.write_event(Event::End(BytesEnd::new(hyperlink_qname(
+                &self.hyperlinks[hyperlink_index],
+            ))))?;
         }
 
         write_paragraph_boundary(
@@ -1349,7 +1411,6 @@ fn attribute_in_namespace(name: &[u8], local: &[u8], namespace: &str, scope: &[S
         None if namespace == crate::namespace::W_NS => {
             scope.iter().any(|candidate| candidate.as_bytes() == prefix)
         }
-        None if namespace == R_NS => prefix == b"r",
         None => false,
     }
 }
@@ -1440,6 +1501,77 @@ fn write_hyperlink_boundary<W: std::io::Write>(
     Ok(())
 }
 
+fn write_hyperlink_start<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    hyperlink: &HyperlinkSpan,
+) -> Result<()> {
+    let (word_prefix, declare_word) =
+        safe_hyperlink_prefix(hyperlink, "w", "rdocxW", crate::namespace::W_NS);
+    let (relationship_prefix, declare_relationship) =
+        safe_hyperlink_prefix(hyperlink, "r", "rdocxR", R_NS);
+    let mut element = BytesStart::new(format!("{word_prefix}:hyperlink"));
+    let word_declaration = format!("xmlns:{word_prefix}");
+    let relationship_declaration = format!("xmlns:{relationship_prefix}");
+    let relationship_id = format!("{relationship_prefix}:id");
+    let anchor_name = format!("{word_prefix}:anchor");
+    if declare_word {
+        element.push_attribute((word_declaration.as_str(), crate::namespace::W_NS));
+    }
+    if hyperlink.rel_id.is_some() && declare_relationship {
+        element.push_attribute((relationship_declaration.as_str(), R_NS));
+    }
+    if let Some(rel_id) = &hyperlink.rel_id {
+        element.push_attribute((relationship_id.as_str(), rel_id.as_str()));
+    }
+    if let Some(anchor) = &hyperlink.anchor {
+        element.push_attribute((anchor_name.as_str(), anchor.as_str()));
+    }
+    for (name, value) in &hyperlink.extra_attributes {
+        element.push_attribute((name.as_str(), value.as_str()));
+    }
+    writer.write_event(Event::Start(element))?;
+    Ok(())
+}
+
+fn hyperlink_qname(hyperlink: &HyperlinkSpan) -> String {
+    let (prefix, _) = safe_hyperlink_prefix(hyperlink, "w", "rdocxW", crate::namespace::W_NS);
+    format!("{prefix}:hyperlink")
+}
+
+fn safe_hyperlink_prefix(
+    hyperlink: &HyperlinkSpan,
+    preferred: &str,
+    fallback: &str,
+    namespace: &str,
+) -> (String, bool) {
+    let preferred_declaration = format!("xmlns:{preferred}");
+    match hyperlink
+        .extra_attributes
+        .iter()
+        .find(|(name, _)| name == &preferred_declaration)
+    {
+        None => return (preferred.to_owned(), false),
+        Some((_, value)) if value == namespace => return (preferred.to_owned(), false),
+        Some(_) => {}
+    }
+    for suffix in 0usize.. {
+        let candidate = if suffix == 0 {
+            fallback.to_owned()
+        } else {
+            format!("{fallback}{suffix}")
+        };
+        let declaration = format!("xmlns:{candidate}");
+        if !hyperlink
+            .extra_attributes
+            .iter()
+            .any(|(name, _)| name == &declaration)
+        {
+            return (candidate, true);
+        }
+    }
+    unreachable!("the finite attribute set cannot occupy every prefix")
+}
+
 fn write_empty_hyperlinks<W: std::io::Write>(
     writer: &mut Writer<W>,
     hyperlinks: &[HyperlinkSpan],
@@ -1451,19 +1583,9 @@ fn write_empty_hyperlinks<W: std::io::Write>(
         .enumerate()
         .filter(|(_, hyperlink)| hyperlink.run_start == run_index && hyperlink.run_end == run_index)
     {
-        let mut element = BytesStart::new("w:hyperlink");
-        if let Some(rel_id) = &hyperlink.rel_id {
-            element.push_attribute(("r:id", rel_id.as_str()));
-        }
-        if let Some(anchor) = &hyperlink.anchor {
-            element.push_attribute(("w:anchor", anchor.as_str()));
-        }
-        for (name, value) in &hyperlink.extra_attributes {
-            element.push_attribute((name.as_str(), value.as_str()));
-        }
-        writer.write_event(Event::Start(element))?;
+        write_hyperlink_start(writer, hyperlink)?;
         write_hyperlink_boundary(writer, revisions, hyperlink_index, hyperlink, run_index)?;
-        writer.write_event(Event::End(BytesEnd::new("w:hyperlink")))?;
+        writer.write_event(Event::End(BytesEnd::new(hyperlink_qname(hyperlink))))?;
     }
     Ok(())
 }
