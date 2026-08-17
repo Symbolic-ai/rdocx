@@ -783,10 +783,7 @@ impl CT_RPr {
                         } else {
                             rpr.revision_xml.push(raw);
                         }
-                    } else if matches_local_name(name.as_ref(), b"ins")
-                        || matches_local_name(name.as_ref(), b"del")
-                        || matches_local_name(name.as_ref(), b"rPrChange")
-                    {
+                    } else {
                         rpr.revision_xml.push(capture_empty_element(e)?);
                     }
                 }
@@ -808,13 +805,8 @@ impl CT_RPr {
                         } else {
                             rpr.revision_xml.push(raw);
                         }
-                    } else if matches_local_name(e.name().as_ref(), b"ins")
-                        || matches_local_name(e.name().as_ref(), b"del")
-                        || matches_local_name(e.name().as_ref(), b"rPrChange")
-                    {
-                        rpr.revision_xml.push(capture_element(reader, e)?);
                     } else {
-                        reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                        rpr.revision_xml.push(capture_element(reader, e)?);
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"rPr") => {

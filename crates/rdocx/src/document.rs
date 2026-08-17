@@ -761,6 +761,7 @@ impl Document {
             properties: None,
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
         };
         let mut paragraph = CT_P::new();
         paragraph.runs.push(run);
@@ -1098,6 +1099,7 @@ impl Document {
             properties: None,
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1190,6 +1192,7 @@ impl Document {
             properties: None,
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1225,6 +1228,7 @@ impl Document {
             properties: None,
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1676,6 +1680,7 @@ impl Document {
             properties: None,
             content: vec![RunContent::Drawing(CT_Drawing::inline(inline))],
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -2362,6 +2367,7 @@ impl Document {
                 properties: None,
                 content: vec![rdocx_oxml::text::RunContent::Tab],
                 extra_xml: Vec::new(),
+                extra_xml_positions: Vec::new(),
             });
 
             // Wrap the text run in a hyperlink to the bookmark

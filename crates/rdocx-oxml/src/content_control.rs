@@ -609,6 +609,7 @@ fn parse_content(
                         properties: None,
                         content: Vec::new(),
                         extra_xml: Vec::new(),
+                        extra_xml_positions: Vec::new(),
                         alt_drawings: Vec::new(),
                     }));
                 } else {

@@ -1061,7 +1061,12 @@ fn parse_raw_ppr(raw: &[u8], word_prefixes: &[String]) -> Result<CT_PPr> {
 
 fn rpr_from_raw(raw: &[u8], word_prefixes: &[String]) -> Result<(CT_RPr, bool)> {
     let (_, has_producer) = property_projection(raw, PropertyKind::Run, word_prefixes)?;
-    Ok((parse_raw_rpr(raw, word_prefixes)?, has_producer))
+    let mut rpr = parse_raw_rpr(raw, word_prefixes)?;
+    // Numbering's raw property overlay is the sole preservation source.
+    // Keeping the same unmodelled children in the typed projection would
+    // duplicate them when canonical properties are merged back into it.
+    rpr.revision_xml.clear();
+    Ok((rpr, has_producer))
 }
 
 fn parse_raw_rpr(raw: &[u8], word_prefixes: &[String]) -> Result<CT_RPr> {

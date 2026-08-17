@@ -876,27 +876,51 @@ mod tests {
 
     #[test]
     fn aliased_hyperlink_runs_survive_a_locally_shadowed_word_prefix() {
-        let raw_in_run = r#"<w:inside/>"#;
+        let foreign_run_properties = r#"<w:rPr/>"#;
+        let foreign_text = r#"<w:t>foreign</w:t>"#;
+        let foreign_drawing = r#"<w:drawing><w:opaque/></w:drawing>"#;
+        let foreign_after = r#"<w:after/>"#;
         let raw_at_boundary = r#"<w:boundary/>"#;
         let xml = format!(
-            r#"<w:document xmlns:w="{W_NS}" xmlns:wx="{W_NS}"><w:body><w:p><wx:hyperlink xmlns:w="urn:foreign"><wx:r><wx:t>before</wx:t>{raw_in_run}</wx:r><wx:ins wx:id="61" wx:author="Ada"><wx:r><wx:t>reported</wx:t></wx:r></wx:ins>{raw_at_boundary}<wx:r><wx:rPr><wx:b/></wx:rPr><wx:t>after</wx:t></wx:r></wx:hyperlink></w:p></w:body></w:document>"#
+            r#"<w:document xmlns:w="{W_NS}" xmlns:wx="{W_NS}"><w:body><w:p><wx:hyperlink xmlns:w="urn:foreign"><wx:r>{foreign_run_properties}<wx:rPr><wx:b/><w:b/></wx:rPr>{foreign_text}<wx:t>before</wx:t>{foreign_drawing}<wx:t>middle</wx:t>{foreign_after}</wx:r><wx:ins wx:id="61" wx:author="Ada"><wx:r><wx:t>reported</wx:t></wx:r></wx:ins>{raw_at_boundary}<wx:r><wx:t>after</wx:t></wx:r></wx:hyperlink></w:p></w:body></w:document>"#
         );
         let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
 
         assert_eq!(
             document.body.paragraphs().next().unwrap().text(),
-            "beforeafter"
+            "beforemiddleafter"
         );
         assert_eq!(document.revisions().len(), 1);
         assert_eq!(document.revisions()[0].id(), 61);
         let output =
             String::from_utf8(document.to_xml().expect("document writes")).expect("UTF-8 output");
         assert!(output.contains(r#"xmlns:w="urn:foreign""#));
-        assert!(output.contains(r#"<w:inside xmlns:w="urn:foreign"/>"#));
+        let foreign_run_properties = r#"<w:rPr xmlns:w="urn:foreign"/>"#;
+        let foreign_property = r#"<w:b xmlns:w="urn:foreign"/>"#;
+        let foreign_text = r#"<w:t xmlns:w="urn:foreign">foreign</w:t>"#;
+        let foreign_drawing = r#"<w:drawing xmlns:w="urn:foreign"><w:opaque/></w:drawing>"#;
+        let foreign_after = r#"<w:after xmlns:w="urn:foreign"/>"#;
+        for raw in [
+            foreign_run_properties,
+            foreign_property,
+            foreign_text,
+            foreign_drawing,
+            foreign_after,
+        ] {
+            assert_eq!(output.matches(raw).count(), 1, "raw child {raw}");
+        }
         assert!(output.contains(raw_at_boundary));
         assert!(output.contains(&format!(r#"<w:r xmlns:w="{W_NS}">"#)));
         let positions = [
+            output.find(foreign_run_properties).unwrap(),
+            output
+                .find("<w:rPr>\n")
+                .unwrap_or_else(|| panic!("{output}")),
+            output.find(foreign_text).unwrap(),
             output.find("<w:t>before</w:t>").unwrap(),
+            output.find(foreign_drawing).unwrap(),
+            output.find("<w:t>middle</w:t>").unwrap(),
+            output.find(foreign_after).unwrap(),
             output.find(r#"wx:id="61""#).unwrap(),
             output.find(raw_at_boundary).unwrap(),
             output.find("<w:t>after</w:t>").unwrap(),
@@ -906,7 +930,7 @@ mod tests {
         let reopened = CT_Document::from_xml(output.as_bytes()).expect("output reparses");
         assert_eq!(
             reopened.body.paragraphs().next().unwrap().text(),
-            "beforeafter"
+            "beforemiddleafter"
         );
         assert_eq!(reopened.revisions().len(), 1);
         assert_eq!(reopened.revisions()[0].id(), 61);
