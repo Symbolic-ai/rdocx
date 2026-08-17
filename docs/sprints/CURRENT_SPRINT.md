@@ -1,60 +1,50 @@
-# Current Sprint, S48
+# Current Sprint, S49
 
-**Milestone**: M14 Word collaboration layer.
+**Milestone**: M16 Document automation.
 
-**Goal**: close M14 by making tracked revisions visible during rendering and
-making the author's document-protection intent readable through the public API.
-The sprint combines the revision model completed in S47 with settings-level
-protection metadata, then proves the full collaboration-layer milestone gate.
+**Goal**: evaluate the field codes that real Word documents use throughout
+their content. This sprint establishes the instruction grammar, evaluation
+engine, and explicit cache-update policy that every later M16 template feature
+depends on.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for the `rdocx-oxml` ownership boundary, the
-  typed revision model, and facade coordination across document and settings
-  state.
-- `docs/hld/04-opc-and-packaging.md`, for package integrity, preservation of
-  settings metadata, and atomic document changes.
-- `docs/hld/08-rendering-spec.md`, for the shared renderer input, Word
-  pagination, and deterministic PDF and raster lowering used by the revision
-  display gate.
-- `docs/hld/10-bindings-spec.md`, for native Word facade stability and the
-  requirement that new inspection options leave existing Python, WASM, and CLI
-  surfaces compatible.
-- `docs/hld/12-testing-strategy.md`, for deterministic golden tests, in-code
-  fixtures, and the mixed-document milestone regression.
-- `docs/hld/14-development-backlog.md`, for the M14 end gate, the revision
-  display and document-protection stories, their dependencies, and their exact
-  acceptance gates.
+- `docs/hld/03-architecture.md`, for WordprocessingML field ownership in
+  `rdocx-oxml`, facade coordination, and the format-neutral layout boundary.
+- `docs/hld/08-rendering-spec.md`, for existing PAGE, NUMPAGES, REF, and
+  PAGEREF evaluation during Word pagination and stored-display fallback.
+- `docs/hld/10-bindings-spec.md`, for the native structured field and bookmark
+  surface and unchanged Python, WASM, and CLI compatibility.
+- `docs/hld/12-testing-strategy.md`, for unit, regression, round-trip, and
+  differential evidence using readable in-code fixtures and pinned oracles.
+- `docs/hld/14-development-backlog.md`, for the M16 end gate, the three field
+  stories, their strict dependencies, and their exact acceptance gates.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-151 | Revision display in the renderer | M | done | |
-| F-155 | Document protection | M | done | |
+| F-160 | Field instruction parser | L | pending | - |
+| F-161 | Field evaluation engine | L | pending | - |
+| F-162 | Field update policy | M | pending | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-F-151 depends on the typed revision model completed by F-149 in S47. F-155 is
-independent and works through the document settings part, so the two stories
-may be implemented in parallel. Both must land before the combined M14 gate can
-run because it covers revisions, comments, content controls, and bookmarks in
-one document.
+F-160 defines the grammar consumed by every later field operation. F-161 then
+evaluates that grammar and also depends on the bookmark model from F-154.
+F-162 is last because its update-on-demand, update-on-save, and leave-alone
+policies control when the F-161 evaluator may replace a stored result.
 
 ## Definition of done for this sprint
 
-- A render option selects the accepted view or the tracked-change view, with
-  the accepted view as the default.
-- The tracked-change view underlines insertions, strikes through deletions, and
-  draws a change bar in the margin.
-- The accepted view is pixel-identical to rendering the same document after all
-  revisions have been accepted and removed.
-- Read-only, comments-only, tracked-changes-forced, and forms-only protection
-  modes round-trip with the recorded hash and salt intact.
-- The public native Word API reports the document-protection mode and its
-  recorded metadata without changing existing binding surfaces.
-- One document carrying tracked changes, comments, content controls, and
-  bookmarks round-trips byte-identically in every unmodelled part, and all four
-  subsystems are readable and writable through the public API.
+- Simple and complex fields parse into a field name, arguments, and switches,
+  including nested fields and instructions split across runs.
+- IF, REF, PAGEREF, SEQ, DOCPROPERTY, DOCVARIABLE, STYLEREF, INCLUDETEXT, DATE,
+  TIME, FILENAME, AUTHOR, and MERGEFIELD evaluate to the pinned Word results.
+- Formatting switches apply without regressing existing PAGE and NUMPAGES
+  pagination or stored-display fallback.
+- Update on demand, update on save, and leave alone produce their documented
+  result caches and Word dirty flags.
+- Unsupported fields retain their cached result instead of becoming blank.
