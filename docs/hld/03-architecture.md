@@ -188,6 +188,16 @@ replaces it. Invalid revision metadata remains preserved but is not reported.
 Prior run, paragraph, table, and section properties are projected with the
 namespace context of the revision element, including nested properties.
 
+The `rdocx` facade owns revision resolution because one operation can replace
+content wrappers, property owners, paragraph boundaries, and table rows.
+Accepting keeps insertions and move destinations, while rejecting keeps
+deletions and move sources and converts deleted text to ordinary text.
+Property rejection restores exactly one namespace-correct prior property
+value. Contextual markers act on their owning run, paragraph mark, numbering
+property, or row. Resolution stages the complete main-document XML, resolves
+selected descendants before their enclosing subtree, reparses the result, and
+commits once only after validation succeeds.
+
 `rdocx-layout` keeps the flow model: the engine, the paginator, blocks, tables
 and the style resolver. Slides do not paginate, so none of it transfers. The
 flow engine resolves Word relationship IDs to content-addressed `MediaId`
@@ -340,6 +350,12 @@ cells, and content controls. `Document::revisions` reports every valid modeled
 revision once in document order as a borrowed `RevisionRef`. The facade does
 not copy or reparse the raw subtree, and revisions outside the main document
 part remain outside this traversal.
+
+Revision mutation uses explicit all, exact-author, inclusive RFC 3339 instant,
+and id selectors. One id operation resolves every modeled element carrying the
+id, while undated revisions do not match date ranges. Invalid bounds or a
+malformed selected revision leave the typed document, package bytes, and both
+layout caches unchanged. A successful operation invalidates layout once.
 
 Word comment mutation uses `RunPosition` and half-open `RunRange` values whose
 body indexes select top-level paragraphs and whose run indexes select insertion

@@ -293,3 +293,12 @@ changing package or document state. Saving keeps the comments and
 comments-extended relationship graph reachable from the main document, with
 matching overrides and namespace declarations. A failed validation or
 allocation leaves anchors, typed parts, relationships, and overrides unchanged.
+
+Tracked-revision resolution is also staged above the package boundary. The
+facade serializes a candidate main-document tree, resolves selected revision
+placements, and reparses the complete candidate before replacing live typed
+state. Namespace declarations carried only by a removed revision or property
+owner are promoted to retained raw descendants. Any selector, revision-shape,
+namespace, parse, or serialization failure leaves the package part bytes and
+live document unchanged. The ordinary deterministic save path writes the
+validated result later and preserves every unrelated part and relationship.

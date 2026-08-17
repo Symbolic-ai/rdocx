@@ -1,7 +1,18 @@
-//! Read-only native facade for tracked revision metadata.
+//! Native tracked-revision inspection and atomic resolution.
 
-use rdocx_oxml::CT_Revision;
+use std::collections::{HashMap, HashSet};
+
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::{Reader, XmlVersion};
 pub use rdocx_oxml::RevisionKind;
+use rdocx_oxml::{CT_Document, CT_Revision};
+
+use crate::{Document, Error, Result};
+
+const WORD_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+type NamespaceScope = HashMap<String, String>;
+type NamespaceDeclarations = Vec<(String, String)>;
 
 /// An immutable view of one tracked revision in the main document.
 #[derive(Debug, Clone, Copy)]
@@ -25,4 +36,1092 @@ impl RevisionRef<'_> {
     pub fn kind(&self) -> RevisionKind {
         self.inner.kind()
     }
+}
+
+#[derive(Clone, Copy)]
+enum Resolution {
+    Accept,
+    Reject,
+}
+
+#[derive(Clone)]
+enum RevisionScope<'a> {
+    All,
+    Author(&'a str),
+    Id(i32),
+    DateRange { start: Instant, end: Instant },
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct RevisionMetadata {
+    kind: RevisionKind,
+    id: i32,
+    author: String,
+    timestamp: Option<String>,
+}
+
+struct XmlElement {
+    start: usize,
+    open_end: usize,
+    close_start: usize,
+    end: usize,
+    name: String,
+    local: String,
+    word: bool,
+    modeled: bool,
+    empty: bool,
+    parent: Option<usize>,
+    children: Vec<usize>,
+    revision: Option<RevisionMetadata>,
+    namespace_declarations: NamespaceDeclarations,
+}
+
+struct XmlTree<'a> {
+    source: &'a [u8],
+    elements: Vec<XmlElement>,
+    root: usize,
+}
+
+struct RenderState<'a> {
+    resolution: Resolution,
+    scope: RevisionScope<'a>,
+    resolved: HashSet<usize>,
+}
+
+impl Document {
+    /// Accept every modeled revision in the main document.
+    pub fn accept_all(&mut self) -> Result<usize> {
+        self.resolve_revisions(Resolution::Accept, RevisionScope::All)
+    }
+
+    /// Reject every modeled revision in the main document.
+    pub fn reject_all(&mut self) -> Result<usize> {
+        self.resolve_revisions(Resolution::Reject, RevisionScope::All)
+    }
+
+    /// Accept every modeled revision written by `author`.
+    pub fn accept_revisions_by_author(&mut self, author: &str) -> Result<usize> {
+        self.resolve_revisions(Resolution::Accept, RevisionScope::Author(author))
+    }
+
+    /// Reject every modeled revision written by `author`.
+    pub fn reject_revisions_by_author(&mut self, author: &str) -> Result<usize> {
+        self.resolve_revisions(Resolution::Reject, RevisionScope::Author(author))
+    }
+
+    /// Accept every modeled revision in the inclusive RFC 3339 instant range.
+    pub fn accept_revisions_in_date_range(&mut self, start: &str, end: &str) -> Result<usize> {
+        let scope = date_scope(start, end)?;
+        self.resolve_revisions(Resolution::Accept, scope)
+    }
+
+    /// Reject every modeled revision in the inclusive RFC 3339 instant range.
+    pub fn reject_revisions_in_date_range(&mut self, start: &str, end: &str) -> Result<usize> {
+        let scope = date_scope(start, end)?;
+        self.resolve_revisions(Resolution::Reject, scope)
+    }
+
+    /// Accept every modeled revision element carrying `id`.
+    pub fn accept_revision_id(&mut self, id: i32) -> Result<usize> {
+        self.resolve_revisions(Resolution::Accept, RevisionScope::Id(id))
+    }
+
+    /// Reject every modeled revision element carrying `id`.
+    pub fn reject_revision_id(&mut self, id: i32) -> Result<usize> {
+        self.resolve_revisions(Resolution::Reject, RevisionScope::Id(id))
+    }
+
+    fn resolve_revisions(
+        &mut self,
+        resolution: Resolution,
+        scope: RevisionScope<'_>,
+    ) -> Result<usize> {
+        let source = self.document.to_xml()?;
+        let mut tree = XmlTree::parse(&source)?;
+        if let Some(packaged_xml) = self.package.get_part(&self.doc_part_name) {
+            let packaged_tree = XmlTree::parse(packaged_xml)?;
+            tree.recover_property_owner_namespaces(&packaged_tree);
+        }
+        let mut state = RenderState {
+            resolution,
+            scope,
+            resolved: HashSet::new(),
+        };
+        let mut output = Vec::with_capacity(source.len());
+        output.extend_from_slice(&source[..tree.elements[tree.root].start]);
+        output.extend_from_slice(&tree.render(tree.root, &mut state, false)?);
+        output.extend_from_slice(&source[tree.elements[tree.root].end..]);
+
+        if state.resolved.is_empty() {
+            return Ok(0);
+        }
+        let staged = CT_Document::from_xml(&output)?;
+        staged.to_xml()?;
+        self.document = staged;
+        self.invalidate_layout();
+        Ok(state.resolved.len())
+    }
+}
+
+fn date_scope(start: &str, end: &str) -> Result<RevisionScope<'static>> {
+    let start = Instant::parse(start)?;
+    let end = Instant::parse(end)?;
+    if start > end {
+        return Err(Error::Other(
+            "revision date range starts after it ends".to_owned(),
+        ));
+    }
+    Ok(RevisionScope::DateRange { start, end })
+}
+
+impl RevisionScope<'_> {
+    fn matches(&self, metadata: &RevisionMetadata) -> bool {
+        match self {
+            Self::All => true,
+            Self::Author(author) => metadata.author == *author,
+            Self::Id(id) => metadata.id == *id,
+            Self::DateRange { start, end } => metadata
+                .timestamp
+                .as_deref()
+                .and_then(|value| Instant::parse(value).ok())
+                .is_some_and(|instant| *start <= instant && instant <= *end),
+        }
+    }
+}
+
+impl<'a> XmlTree<'a> {
+    fn parse(source: &'a [u8]) -> Result<Self> {
+        let mut reader = Reader::from_reader(source);
+        reader.config_mut().trim_text(false);
+        let mut elements: Vec<XmlElement> = Vec::new();
+        let mut stack = Vec::new();
+        let mut scopes = vec![NamespaceScope::new()];
+        let mut root = None;
+        let mut buffer = Vec::new();
+
+        loop {
+            let before = reader.buffer_position() as usize;
+            let event = reader.read_event_into(&mut buffer).map_err(xml_error)?;
+            let after = reader.buffer_position() as usize;
+            match event {
+                Event::Start(start) => {
+                    let (scope, declarations) =
+                        element_scope(&start, scopes.last().expect("scope exists"))?;
+                    let index = push_element(
+                        &mut elements,
+                        &stack,
+                        &start,
+                        &scope,
+                        declarations,
+                        before,
+                        after,
+                        false,
+                    )?;
+                    root.get_or_insert(index);
+                    stack.push(index);
+                    scopes.push(scope);
+                }
+                Event::Empty(start) => {
+                    let (scope, declarations) =
+                        element_scope(&start, scopes.last().expect("scope exists"))?;
+                    let index = push_element(
+                        &mut elements,
+                        &stack,
+                        &start,
+                        &scope,
+                        declarations,
+                        before,
+                        after,
+                        true,
+                    )?;
+                    root.get_or_insert(index);
+                }
+                Event::End(_) => {
+                    let index = stack.pop().ok_or_else(|| {
+                        Error::Other("XML end element has no matching start".to_owned())
+                    })?;
+                    scopes.pop();
+                    elements[index].close_start = before;
+                    elements[index].end = after;
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+            buffer.clear();
+        }
+
+        if !stack.is_empty() {
+            return Err(Error::Other("XML has unclosed elements".to_owned()));
+        }
+        Ok(Self {
+            source,
+            elements,
+            root: root.ok_or_else(|| Error::Other("XML has no root element".to_owned()))?,
+        })
+    }
+
+    fn render(
+        &self,
+        index: usize,
+        state: &mut RenderState<'_>,
+        convert_deleted_text: bool,
+    ) -> Result<Vec<u8>> {
+        self.render_with_namespaces(index, state, convert_deleted_text, &[])
+    }
+
+    fn recover_property_owner_namespaces(&mut self, packaged: &XmlTree<'_>) {
+        let packaged_revisions = packaged
+            .elements
+            .iter()
+            .filter_map(|element| {
+                let metadata = element.revision.as_ref()?;
+                let parent = element.parent?;
+                is_property_change(metadata.kind).then(|| {
+                    (
+                        metadata.clone(),
+                        packaged.elements[parent].namespace_declarations.clone(),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut used = vec![false; packaged_revisions.len()];
+
+        for index in 0..self.elements.len() {
+            let Some(metadata) = self.elements[index].revision.as_ref() else {
+                continue;
+            };
+            if !is_property_change(metadata.kind) {
+                continue;
+            }
+            let Some(parent) = self.elements[index].parent else {
+                continue;
+            };
+            let Some((matched, (_, declarations))) = packaged_revisions.iter().enumerate().find(
+                |(candidate, (packaged_metadata, _))| {
+                    !used[*candidate] && packaged_metadata == metadata
+                },
+            ) else {
+                continue;
+            };
+            used[matched] = true;
+            self.elements[parent].namespace_declarations =
+                merged_namespaces(&self.elements[parent].namespace_declarations, declarations);
+        }
+    }
+
+    fn render_with_namespaces(
+        &self,
+        index: usize,
+        state: &mut RenderState<'_>,
+        convert_deleted_text: bool,
+        promoted_namespaces: &[(String, String)],
+    ) -> Result<Vec<u8>> {
+        let element = &self.elements[index];
+        if let Some(metadata) = &element.revision
+            && state.scope.matches(metadata)
+        {
+            state.resolved.insert(index);
+            return self.render_selected_revision(index, metadata.kind, state, promoted_namespaces);
+        }
+
+        if let Some((change, prior)) = self.selected_property_change(index, state)? {
+            state.resolved.insert(change);
+            if matches!(state.resolution, Resolution::Reject) {
+                self.validate_selected_descendants(index, state)?;
+                let namespaces = merged_namespaces(
+                    &merged_namespaces(promoted_namespaces, &element.namespace_declarations),
+                    &self.elements[change].namespace_declarations,
+                );
+                return self.render_with_namespaces(prior, state, false, &namespaces);
+            }
+        }
+
+        let markers = self.selected_owner_markers(index, state);
+        if markers.iter().any(|marker| {
+            let kind = self.elements[*marker]
+                .revision
+                .as_ref()
+                .expect("selected marker is a revision")
+                .kind;
+            removes_content(state.resolution, kind)
+        }) {
+            self.validate_selected_descendants(index, state)?;
+            return Ok(Vec::new());
+        }
+
+        self.render_ordinary(index, state, convert_deleted_text, promoted_namespaces)
+    }
+
+    fn render_selected_revision(
+        &self,
+        index: usize,
+        kind: RevisionKind,
+        state: &mut RenderState<'_>,
+        promoted_namespaces: &[(String, String)],
+    ) -> Result<Vec<u8>> {
+        if is_property_change(kind) {
+            let prior = self.prior_property(index, kind)?;
+            if matches!(state.resolution, Resolution::Accept) {
+                return Ok(Vec::new());
+            }
+            let namespaces = merged_namespaces(
+                promoted_namespaces,
+                &self.elements[index].namespace_declarations,
+            );
+            return self.render_with_namespaces(prior, state, false, &namespaces);
+        }
+
+        if self.is_contextual_marker(index) {
+            return Ok(Vec::new());
+        }
+
+        if keeps_content(state.resolution, kind) {
+            let namespaces = merged_namespaces(
+                promoted_namespaces,
+                &self.elements[index].namespace_declarations,
+            );
+            self.render_inner_with_namespaces(
+                index,
+                state,
+                matches!(state.resolution, Resolution::Reject)
+                    && matches!(kind, RevisionKind::Deletion | RevisionKind::MoveFrom),
+                &namespaces,
+            )
+        } else {
+            self.validate_selected_descendants(index, state)?;
+            Ok(Vec::new())
+        }
+    }
+
+    fn render_ordinary(
+        &self,
+        index: usize,
+        state: &mut RenderState<'_>,
+        convert_deleted_text: bool,
+        promoted_namespaces: &[(String, String)],
+    ) -> Result<Vec<u8>> {
+        let element = &self.elements[index];
+        if element.empty {
+            let raw = &self.source[element.start..element.end];
+            let raw = inject_namespace_declarations(
+                raw,
+                &element.namespace_declarations,
+                promoted_namespaces,
+            );
+            return Ok(
+                if convert_deleted_text && element.word && element.local == "delText" {
+                    rename_element(&raw, &element.name, "t")
+                } else {
+                    raw
+                },
+            );
+        }
+
+        let mut output = Vec::with_capacity(element.end - element.start);
+        let open = inject_namespace_declarations(
+            &self.source[element.start..element.open_end],
+            &element.namespace_declarations,
+            promoted_namespaces,
+        );
+        if convert_deleted_text && element.word && element.local == "delText" {
+            output.extend_from_slice(&rename_element(&open, &element.name, "t"));
+        } else {
+            output.extend_from_slice(&open);
+        }
+        output.extend_from_slice(&self.render_inner_with_namespaces(
+            index,
+            state,
+            convert_deleted_text,
+            promoted_namespaces,
+        )?);
+        let close = &self.source[element.close_start..element.end];
+        if convert_deleted_text && element.word && element.local == "delText" {
+            output.extend_from_slice(&rename_element(close, &element.name, "t"));
+        } else {
+            output.extend_from_slice(close);
+        }
+        Ok(output)
+    }
+
+    fn render_inner_with_namespaces(
+        &self,
+        index: usize,
+        state: &mut RenderState<'_>,
+        convert_deleted_text: bool,
+        promoted_namespaces: &[(String, String)],
+    ) -> Result<Vec<u8>> {
+        let element = &self.elements[index];
+        let mut output = Vec::new();
+        let mut cursor = element.open_end;
+        let mut child_index = 0;
+        while child_index < element.children.len() {
+            let child = element.children[child_index];
+            let child_element = &self.elements[child];
+            output.extend_from_slice(&self.source[cursor..child_element.start]);
+            if child_element.word
+                && child_element.local == "p"
+                && self.paragraph_mark_removes(child, state)
+            {
+                let mut paragraphs = vec![child];
+                let mut next_index = child_index + 1;
+                loop {
+                    let next = element.children.get(next_index).copied().ok_or_else(|| {
+                        Error::Other("cannot remove the final paragraph mark".to_owned())
+                    })?;
+                    if !self.elements[next].word || self.elements[next].local != "p" {
+                        return Err(Error::Other(
+                            "paragraph mark removal requires an adjacent paragraph".to_owned(),
+                        ));
+                    }
+                    paragraphs.push(next);
+                    next_index += 1;
+                    if !self.paragraph_mark_removes(next, state) {
+                        break;
+                    }
+                }
+                output.extend_from_slice(&self.render_merged_paragraphs(&paragraphs, state)?);
+                cursor = self.elements[*paragraphs.last().expect("paragraph chain exists")].end;
+                child_index = next_index;
+                continue;
+            }
+            output.extend_from_slice(&self.render_with_namespaces(
+                child,
+                state,
+                convert_deleted_text,
+                promoted_namespaces,
+            )?);
+            cursor = child_element.end;
+            child_index += 1;
+        }
+        output.extend_from_slice(&self.source[cursor..element.close_start]);
+        Ok(output)
+    }
+
+    fn selected_property_change(
+        &self,
+        index: usize,
+        state: &RenderState<'_>,
+    ) -> Result<Option<(usize, usize)>> {
+        let element = &self.elements[index];
+        let expected = match element.local.as_str() {
+            "rPr" => RevisionKind::RunPropertyChange,
+            "pPr" => RevisionKind::ParagraphPropertyChange,
+            "tblPr" => RevisionKind::TablePropertyChange,
+            "sectPr" => RevisionKind::SectionPropertyChange,
+            _ => return Ok(None),
+        };
+        element
+            .children
+            .iter()
+            .find_map(|child| {
+                let metadata = self.elements[*child].revision.as_ref()?;
+                (metadata.kind == expected && state.scope.matches(metadata)).then_some(*child)
+            })
+            .map(|change| {
+                self.prior_property(change, expected)
+                    .map(|prior| (change, prior))
+            })
+            .transpose()
+    }
+
+    fn prior_property(&self, change: usize, kind: RevisionKind) -> Result<usize> {
+        let expected = match kind {
+            RevisionKind::RunPropertyChange => "rPr",
+            RevisionKind::ParagraphPropertyChange => "pPr",
+            RevisionKind::TablePropertyChange => "tblPr",
+            RevisionKind::SectionPropertyChange => "sectPr",
+            _ => {
+                return Err(Error::Other(
+                    "selected revision is not a property change".to_owned(),
+                ));
+            }
+        };
+        let children = &self.elements[change].children;
+        if children.len() != 1 {
+            return Err(Error::Other(format!(
+                "selected property revision requires exactly one prior w:{expected} value"
+            )));
+        }
+        children
+            .first()
+            .copied()
+            .filter(|prior| self.elements[*prior].word && self.elements[*prior].local == expected)
+            .ok_or_else(|| {
+                Error::Other(format!(
+                    "selected property revision requires a prior w:{expected} value"
+                ))
+            })
+    }
+
+    fn selected_owner_markers(&self, index: usize, state: &RenderState<'_>) -> Vec<usize> {
+        let owner = &self.elements[index];
+        let property_local = match owner.local.as_str() {
+            "r" => "rPr",
+            "tr" => "trPr",
+            "numPr" => "numPr",
+            _ => return Vec::new(),
+        };
+        let property = if owner.local == "numPr" {
+            index
+        } else {
+            let Some(property) = owner.children.iter().find(|child| {
+                self.elements[**child].word && self.elements[**child].local == property_local
+            }) else {
+                return Vec::new();
+            };
+            *property
+        };
+        self.elements[property]
+            .children
+            .iter()
+            .filter_map(|child| {
+                let metadata = self.elements[*child].revision.as_ref()?;
+                (matches!(
+                    metadata.kind,
+                    RevisionKind::Insertion | RevisionKind::Deletion
+                ) && state.scope.matches(metadata))
+                .then_some(*child)
+            })
+            .collect()
+    }
+
+    fn is_contextual_marker(&self, index: usize) -> bool {
+        self.elements[index].parent.is_some_and(|parent| {
+            matches!(
+                self.elements[parent].local.as_str(),
+                "rPr" | "trPr" | "numPr"
+            )
+        })
+    }
+
+    fn validate_selected_descendants(
+        &self,
+        index: usize,
+        state: &mut RenderState<'_>,
+    ) -> Result<()> {
+        for child in &self.elements[index].children {
+            self.render(*child, state, false)?;
+        }
+        Ok(())
+    }
+
+    fn paragraph_mark_removes(&self, index: usize, state: &RenderState<'_>) -> bool {
+        self.paragraph_markers(index, state).iter().any(|marker| {
+            let kind = self.elements[*marker]
+                .revision
+                .as_ref()
+                .expect("paragraph marker is a revision")
+                .kind;
+            removes_content(state.resolution, kind)
+        })
+    }
+
+    fn paragraph_markers(&self, index: usize, state: &RenderState<'_>) -> Vec<usize> {
+        let paragraph = &self.elements[index];
+        let Some(properties) = paragraph
+            .children
+            .iter()
+            .find(|child| self.elements[**child].word && self.elements[**child].local == "pPr")
+        else {
+            return Vec::new();
+        };
+        let Some(run_properties) = self.elements[*properties]
+            .children
+            .iter()
+            .find(|child| self.elements[**child].word && self.elements[**child].local == "rPr")
+        else {
+            return Vec::new();
+        };
+        self.elements[*run_properties]
+            .children
+            .iter()
+            .filter_map(|child| {
+                let metadata = self.elements[*child].revision.as_ref()?;
+                (matches!(
+                    metadata.kind,
+                    RevisionKind::Insertion | RevisionKind::Deletion
+                ) && state.scope.matches(metadata))
+                .then_some(*child)
+            })
+            .collect()
+    }
+
+    fn render_merged_paragraphs(
+        &self,
+        paragraphs: &[usize],
+        state: &mut RenderState<'_>,
+    ) -> Result<Vec<u8>> {
+        let current = paragraphs[0];
+        let next = *paragraphs.last().expect("paragraph chain exists");
+        let current_element = &self.elements[current];
+        let next_element = &self.elements[next];
+        let mut output = self.source[current_element.start..current_element.open_end].to_vec();
+        if let Some(properties) = next_element
+            .children
+            .iter()
+            .find(|child| self.elements[**child].word && self.elements[**child].local == "pPr")
+        {
+            output.extend_from_slice(&self.render(*properties, state, false)?);
+        }
+        for paragraph in paragraphs {
+            for child in &self.elements[*paragraph].children {
+                let child_element = &self.elements[*child];
+                if child_element.word && child_element.local == "pPr" {
+                    if *paragraph != next {
+                        self.validate_selected_descendants(*child, state)?;
+                    }
+                } else {
+                    output.extend_from_slice(&self.render(*child, state, false)?);
+                }
+            }
+        }
+        output.extend_from_slice(&self.source[current_element.close_start..current_element.end]);
+        Ok(output)
+    }
+}
+
+fn push_element(
+    elements: &mut Vec<XmlElement>,
+    stack: &[usize],
+    start: &BytesStart<'_>,
+    scope: &NamespaceScope,
+    namespace_declarations: NamespaceDeclarations,
+    offset: usize,
+    end: usize,
+    empty: bool,
+) -> Result<usize> {
+    let name = std::str::from_utf8(start.name().as_ref())
+        .map_err(|error| Error::Other(error.to_string()))?
+        .to_owned();
+    let local = std::str::from_utf8(start.local_name().as_ref())
+        .map_err(|error| Error::Other(error.to_string()))?
+        .to_owned();
+    let word = element_namespace(&name, scope) == Some(WORD_NS);
+    let parent = stack.last().copied();
+    let modeled = parent.map_or(word && local == "document", |parent| {
+        modeled_child(&elements[parent], word, &local)
+    });
+    let revision = modeled
+        .then(|| revision_metadata(start, &local, scope))
+        .transpose()?
+        .flatten();
+    let index = elements.len();
+    elements.push(XmlElement {
+        start: offset,
+        open_end: end,
+        close_start: end,
+        end,
+        name,
+        local,
+        word,
+        modeled,
+        empty,
+        parent,
+        children: Vec::new(),
+        revision,
+        namespace_declarations,
+    });
+    if let Some(parent) = parent {
+        elements[parent].children.push(index);
+    }
+    Ok(index)
+}
+
+fn element_scope(
+    start: &BytesStart<'_>,
+    inherited: &NamespaceScope,
+) -> Result<(NamespaceScope, NamespaceDeclarations)> {
+    let mut scope = inherited.clone();
+    let mut declarations = Vec::new();
+    for attribute in start.attributes() {
+        let attribute = attribute.map_err(|error| Error::Other(error.to_string()))?;
+        let key = std::str::from_utf8(attribute.key.as_ref())
+            .map_err(|error| Error::Other(error.to_string()))?;
+        if key == "xmlns" || key.starts_with("xmlns:") {
+            let prefix = key.strip_prefix("xmlns:").unwrap_or("").to_owned();
+            let value = attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())
+                .map_err(xml_error)?
+                .into_owned();
+            scope.insert(prefix.clone(), value.clone());
+            declarations.push((prefix, value));
+        }
+    }
+    Ok((scope, declarations))
+}
+
+fn modeled_child(parent: &XmlElement, word: bool, local: &str) -> bool {
+    if !parent.modeled || !word {
+        return false;
+    }
+    match parent.local.as_str() {
+        "document" => local == "body",
+        "body" => matches!(local, "p" | "tbl" | "sdt" | "sectPr"),
+        "p" => matches!(
+            local,
+            "pPr" | "r" | "hyperlink" | "sdt" | "ins" | "del" | "moveFrom" | "moveTo"
+        ),
+        "hyperlink" => local == "r",
+        "pPr" => matches!(local, "rPr" | "numPr" | "sectPr" | "pPrChange"),
+        "r" => local == "rPr",
+        "rPr" => matches!(local, "ins" | "del" | "rPrChange"),
+        "tbl" => matches!(local, "tblPr" | "tblGrid" | "tr" | "sdt"),
+        "tblPr" => local == "tblPrChange",
+        "tr" => matches!(local, "trPr" | "tc" | "sdt"),
+        "trPr" => matches!(local, "ins" | "del"),
+        "tc" => matches!(local, "tcPr" | "p" | "tbl" | "sdt"),
+        "sdt" => matches!(local, "sdtPr" | "sdtContent"),
+        "sdtContent" => matches!(
+            local,
+            "p" | "tbl"
+                | "tr"
+                | "tc"
+                | "r"
+                | "sdt"
+                | "ins"
+                | "del"
+                | "moveFrom"
+                | "moveTo"
+                | "rPrChange"
+                | "pPrChange"
+                | "tblPrChange"
+                | "sectPrChange"
+        ),
+        "sectPr" => local == "sectPrChange",
+        "numPr" => local == "ins",
+        "ins" | "del" | "moveFrom" | "moveTo" => local == "r",
+        "rPrChange" | "pPrChange" | "tblPrChange" | "sectPrChange" => false,
+        _ => false,
+    }
+}
+
+fn merged_namespaces(
+    inherited: &[(String, String)],
+    local: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut merged = inherited.to_vec();
+    for (prefix, value) in local {
+        if let Some((_, existing)) = merged.iter_mut().find(|(name, _)| name == prefix) {
+            *existing = value.clone();
+        } else {
+            merged.push((prefix.clone(), value.clone()));
+        }
+    }
+    merged
+}
+
+fn inject_namespace_declarations(
+    open: &[u8],
+    local: &[(String, String)],
+    promoted: &[(String, String)],
+) -> Vec<u8> {
+    let missing = promoted
+        .iter()
+        .filter(|(prefix, _)| !local.iter().any(|(name, _)| name == prefix))
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return open.to_vec();
+    }
+
+    let insertion = open
+        .iter()
+        .rposition(|byte| *byte == b'>')
+        .map(|position| {
+            if position > 0 && open[position - 1] == b'/' {
+                position - 1
+            } else {
+                position
+            }
+        })
+        .unwrap_or(open.len());
+    let mut output = Vec::with_capacity(open.len() + missing.len() * 24);
+    output.extend_from_slice(&open[..insertion]);
+    for (prefix, value) in missing {
+        if prefix.is_empty() {
+            output.extend_from_slice(b" xmlns=\"");
+        } else {
+            output.extend_from_slice(b" xmlns:");
+            output.extend_from_slice(prefix.as_bytes());
+            output.extend_from_slice(b"=\"");
+        }
+        write_xml_attribute_value(&mut output, value);
+        output.push(b'"');
+    }
+    output.extend_from_slice(&open[insertion..]);
+    output
+}
+
+fn write_xml_attribute_value(output: &mut Vec<u8>, value: &str) {
+    for byte in value.bytes() {
+        match byte {
+            b'&' => output.extend_from_slice(b"&amp;"),
+            b'<' => output.extend_from_slice(b"&lt;"),
+            b'"' => output.extend_from_slice(b"&quot;"),
+            b'\r' => output.extend_from_slice(b"&#xD;"),
+            b'\n' => output.extend_from_slice(b"&#xA;"),
+            b'\t' => output.extend_from_slice(b"&#x9;"),
+            _ => output.push(byte),
+        }
+    }
+}
+
+fn element_namespace<'a>(name: &str, scope: &'a NamespaceScope) -> Option<&'a str> {
+    let prefix = name.split_once(':').map(|(prefix, _)| prefix).unwrap_or("");
+    scope.get(prefix).map(String::as_str)
+}
+
+fn revision_metadata(
+    start: &BytesStart<'_>,
+    local: &str,
+    scope: &NamespaceScope,
+) -> Result<Option<RevisionMetadata>> {
+    let kind = match local {
+        "ins" => RevisionKind::Insertion,
+        "del" => RevisionKind::Deletion,
+        "moveFrom" => RevisionKind::MoveFrom,
+        "moveTo" => RevisionKind::MoveTo,
+        "rPrChange" => RevisionKind::RunPropertyChange,
+        "pPrChange" => RevisionKind::ParagraphPropertyChange,
+        "tblPrChange" => RevisionKind::TablePropertyChange,
+        "sectPrChange" => RevisionKind::SectionPropertyChange,
+        _ => return Ok(None),
+    };
+    let mut id = None;
+    let mut author = None;
+    let mut timestamp = None;
+    for attribute in start.attributes() {
+        let attribute = attribute.map_err(|error| Error::Other(error.to_string()))?;
+        let key = std::str::from_utf8(attribute.key.as_ref())
+            .map_err(|error| Error::Other(error.to_string()))?;
+        let Some((prefix, local)) = key.split_once(':') else {
+            continue;
+        };
+        if scope.get(prefix).map(String::as_str) != Some(WORD_NS) {
+            continue;
+        }
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())
+            .map_err(xml_error)?
+            .into_owned();
+        match local {
+            "id" => id = value.parse().ok(),
+            "author" => author = Some(value),
+            "date" => timestamp = Some(value),
+            _ => {}
+        }
+    }
+    Ok(id.zip(author).map(|(id, author)| RevisionMetadata {
+        kind,
+        id,
+        author,
+        timestamp,
+    }))
+}
+
+fn is_property_change(kind: RevisionKind) -> bool {
+    matches!(
+        kind,
+        RevisionKind::RunPropertyChange
+            | RevisionKind::ParagraphPropertyChange
+            | RevisionKind::TablePropertyChange
+            | RevisionKind::SectionPropertyChange
+    )
+}
+
+fn keeps_content(resolution: Resolution, kind: RevisionKind) -> bool {
+    !removes_content(resolution, kind)
+}
+
+fn removes_content(resolution: Resolution, kind: RevisionKind) -> bool {
+    match resolution {
+        Resolution::Accept => matches!(kind, RevisionKind::Deletion | RevisionKind::MoveFrom),
+        Resolution::Reject => matches!(kind, RevisionKind::Insertion | RevisionKind::MoveTo),
+    }
+}
+
+fn rename_element(raw: &[u8], qualified_name: &str, local: &str) -> Vec<u8> {
+    let replacement = qualified_name
+        .split_once(':')
+        .map(|(prefix, _)| format!("{prefix}:{local}"))
+        .unwrap_or_else(|| local.to_owned());
+    let mut output = raw.to_vec();
+    if let Some(position) = raw
+        .windows(qualified_name.len())
+        .position(|window| window == qualified_name.as_bytes())
+    {
+        output.splice(
+            position..position + qualified_name.len(),
+            replacement.as_bytes().iter().copied(),
+        );
+    }
+    output
+}
+
+fn xml_error(error: quick_xml::Error) -> Error {
+    Error::Other(format!("revision XML transformation failed: {error}"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Instant {
+    seconds: i64,
+    fraction: String,
+}
+
+impl Instant {
+    fn parse(value: &str) -> Result<Self> {
+        parse_rfc3339(value)
+            .ok_or_else(|| Error::Other(format!("invalid RFC 3339 revision timestamp: {value}")))
+    }
+}
+
+fn parse_rfc3339(value: &str) -> Option<Instant> {
+    let separator = value
+        .as_bytes()
+        .iter()
+        .position(|byte| matches!(byte, b'T' | b't'))?;
+    if value.as_bytes()[separator + 1..]
+        .iter()
+        .any(|byte| matches!(byte, b'T' | b't'))
+    {
+        return None;
+    }
+    let date = &value[..separator];
+    let time_and_zone = &value[separator + 1..];
+    let date = date.as_bytes();
+    if date.len() != 10
+        || date[4] != b'-'
+        || date[7] != b'-'
+        || !date[..4].iter().all(u8::is_ascii_digit)
+        || !date[5..7].iter().all(u8::is_ascii_digit)
+        || !date[8..].iter().all(u8::is_ascii_digit)
+    {
+        return None;
+    }
+    let year: i64 = std::str::from_utf8(&date[..4]).ok()?.parse().ok()?;
+    let month: u32 = std::str::from_utf8(&date[5..7]).ok()?.parse().ok()?;
+    let day: u32 = std::str::from_utf8(&date[8..]).ok()?.parse().ok()?;
+    if !(1..=12).contains(&month) || day == 0 || day > days_in_month(year, month) {
+        return None;
+    }
+
+    let (time, offset_seconds) = if let Some(time) = time_and_zone
+        .strip_suffix('Z')
+        .or_else(|| time_and_zone.strip_suffix('z'))
+    {
+        (time, 0i64)
+    } else {
+        if time_and_zone.len() < 6 {
+            return None;
+        }
+        let position = time_and_zone.len() - 6;
+        let sign = if time_and_zone.as_bytes()[position] == b'+' {
+            1i64
+        } else if time_and_zone.as_bytes()[position] == b'-' {
+            -1i64
+        } else {
+            return None;
+        };
+        let offset = &time_and_zone[position + 1..];
+        if offset.len() != 5
+            || offset.as_bytes()[2] != b':'
+            || !offset[..2].bytes().all(|byte| byte.is_ascii_digit())
+            || !offset[3..].bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return None;
+        }
+        let (hours, minutes) = offset.split_once(':')?;
+        let hours: i64 = hours.parse().ok()?;
+        let minutes: i64 = minutes.parse().ok()?;
+        if hours > 23 || minutes > 59 {
+            return None;
+        }
+        (
+            &time_and_zone[..position],
+            sign * (hours * 3600 + minutes * 60),
+        )
+    };
+
+    let (clock, fraction) = time
+        .split_once('.')
+        .map_or((time, ""), |(clock, fraction)| (clock, fraction));
+    let clock = clock.as_bytes();
+    if clock.len() != 8
+        || clock[2] != b':'
+        || clock[5] != b':'
+        || !clock[..2].iter().all(u8::is_ascii_digit)
+        || !clock[3..5].iter().all(u8::is_ascii_digit)
+        || !clock[6..].iter().all(u8::is_ascii_digit)
+        || (time.contains('.')
+            && (fraction.is_empty() || !fraction.bytes().all(|byte| byte.is_ascii_digit())))
+    {
+        return None;
+    }
+    let hour: i64 = std::str::from_utf8(&clock[..2]).ok()?.parse().ok()?;
+    let minute: i64 = std::str::from_utf8(&clock[3..5]).ok()?.parse().ok()?;
+    let second: i64 = std::str::from_utf8(&clock[6..]).ok()?.parse().ok()?;
+    if hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    let days = days_from_civil(year, month, day);
+    let seconds = days
+        .checked_mul(86_400)?
+        .checked_add(hour.checked_mul(3600)?)?
+        .checked_add(minute.checked_mul(60)?)?
+        .checked_add(second)?
+        .checked_sub(offset_seconds)?;
+    Some(Instant {
+        seconds,
+        fraction: fraction.trim_end_matches('0').to_owned(),
+    })
+}
+
+impl Ord for Instant {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.seconds.cmp(&other.seconds).then_with(|| {
+            let length = self.fraction.len().max(other.fraction.len());
+            (0..length)
+                .map(|index| {
+                    self.fraction
+                        .as_bytes()
+                        .get(index)
+                        .copied()
+                        .unwrap_or(b'0')
+                        .cmp(
+                            &other
+                                .fraction
+                                .as_bytes()
+                                .get(index)
+                                .copied()
+                                .unwrap_or(b'0'),
+                        )
+                })
+                .find(|ordering| !ordering.is_eq())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    }
+}
+
+impl PartialOrd for Instant {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn days_in_month(year: i64, month: u32) -> u32 {
+    match month {
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let year = year - i64::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month = i64::from(month);
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
 }

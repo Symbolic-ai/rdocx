@@ -1,6 +1,6 @@
 # F-150, Accept and reject revisions
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S47
 **Size**: L
 **Depends on**: F-149
@@ -145,16 +145,16 @@ tracked revisions. Any delta is unexplained and blocks the sprint.
 
 ## Implementation checklist
 
-- [ ] Add total selectors for all revisions, author, inclusive date range, and id.
-- [ ] Resolve inserted, deleted, moved, and deleted-text content by placement.
-- [ ] Accept or restore run, paragraph, table, and section property changes.
-- [ ] Handle contextual insertion and deletion markers in their owning grammar.
-- [ ] Stage, serialize, reparse, commit atomically, and invalidate layout once.
-- [ ] Preserve every unselected revision subtree byte-for-byte.
-- [ ] Add selector, transformation, prior-property, nesting, and atomicity tests.
-- [ ] Add the pinned Word normalized-body regression without a binary fixture.
-- [ ] Run focused checks plus the parser, packaging, and oracle riders.
-- [ ] Update exactly HLD 03, HLD 04, and HLD 10 at completion.
+- [x] Add total selectors for all revisions, author, inclusive date range, and id.
+- [x] Resolve inserted, deleted, moved, and deleted-text content by placement.
+- [x] Accept or restore run, paragraph, table, and section property changes.
+- [x] Handle contextual insertion and deletion markers in their owning grammar.
+- [x] Stage, serialize, reparse, commit atomically, and invalidate layout once.
+- [x] Preserve every unselected revision subtree byte-for-byte.
+- [x] Add selector, transformation, prior-property, nesting, and atomicity tests.
+- [x] Add the pinned Word normalized-body regression without a binary fixture.
+- [x] Run focused checks plus the parser, packaging, and oracle riders.
+- [x] Update exactly HLD 03, HLD 04, and HLD 10 at completion.
 
 ## Open questions
 

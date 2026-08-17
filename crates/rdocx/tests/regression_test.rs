@@ -6,11 +6,14 @@
 use std::collections::HashMap;
 
 use rdocx::{Document, Length, RunPosition, RunRange};
+use rdocx_oxml::CT_Document;
+use rdocx_oxml::document::CT_Body;
 
 const CUSTOM_XML_REL_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml";
 const CUSTOM_XML_PROPS_REL_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps";
+const WORD_REVISION_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
 
 fn document_with_content_controls(document_xml: &str) -> Document {
     document_with_bound_content_controls(document_xml, None)
@@ -50,6 +53,319 @@ fn wrap_word_body(body: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}</w:body></w:document>"#
     )
+}
+
+fn body_from_document(document: &mut Document) -> CT_Body {
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    CT_Document::from_xml(package.get_part("/word/document.xml").unwrap())
+        .unwrap()
+        .body
+}
+
+fn document_xml(document: &mut Document) -> String {
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap()
+}
+
+fn body_from_xml(body: &str) -> CT_Body {
+    CT_Document::from_xml(wrap_word_body(body).as_bytes())
+        .unwrap()
+        .body
+}
+
+#[test]
+fn accepting_every_revision_matches_word_normalized_body_xml() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:jc w:val="center"/><w:pPrChange w:id="5" w:author="Ada"><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange></w:pPr><w:r><w:rPr><w:b/><w:rPrChange w:id="6" w:author="Ada"><w:rPr><w:i/></w:rPr></w:rPrChange></w:rPr><w:t>kept</w:t></w:r><w:ins w:id="1" w:author="Ada"><w:r><w:t> inserted</w:t></w:r></w:ins><w:del w:id="2" w:author="Ada"><w:r><w:delText> deleted</w:delText></w:r></w:del><w:moveFrom w:id="3" w:author="Ada"><w:r><w:t> old-place</w:t></w:r></w:moveFrom><w:moveTo w:id="4" w:author="Ada"><w:r><w:t> moved</w:t></w:r></w:moveTo></w:p><w:tbl><w:tblPr><w:jc w:val="center"/><w:tblPrChange w:id="7" w:author="Ada"><w:tblPr><w:jc w:val="right"/></w:tblPr></w:tblPrChange></w:tblPr><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:sectPr><w:titlePg/><w:sectPrChange w:id="8" w:author="Ada"><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:sectPrChange></w:sectPr>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+
+    assert_eq!(document.accept_all().unwrap(), 8);
+    assert!(document.revisions().is_empty());
+    let expected = body_from_xml(
+        r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>kept</w:t></w:r><w:r><w:t> inserted</w:t></w:r><w:r><w:t> moved</w:t></w:r></w:p><w:tbl><w:tblPr><w:jc w:val="center"/></w:tblPr><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:sectPr><w:titlePg/></w:sectPr>"#,
+    );
+    assert_eq!(
+        body_from_document(&mut document),
+        expected,
+        "normalized body must match the pinned {WORD_REVISION_ORACLE} oracle"
+    );
+}
+
+#[test]
+fn rejecting_insertions_and_deletions_restores_the_recorded_content() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:jc w:val="center"/><w:pPrChange w:id="5" w:author="Ada"><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange></w:pPr><w:r><w:rPr><w:b/><w:rPrChange w:id="6" w:author="Ada"><w:rPr><w:i/></w:rPr></w:rPrChange></w:rPr><w:t>kept</w:t></w:r><w:ins w:id="1" w:author="Ada"><w:r><w:t> inserted</w:t></w:r></w:ins><w:del w:id="2" w:author="Ada"><w:r><w:delText> deleted</w:delText></w:r></w:del><w:moveFrom w:id="3" w:author="Ada"><w:r><w:t> old-place</w:t></w:r></w:moveFrom><w:moveTo w:id="4" w:author="Ada"><w:r><w:t> moved</w:t></w:r></w:moveTo></w:p><w:tbl><w:tblPr><w:jc w:val="center"/><w:tblPrChange w:id="7" w:author="Ada"><w:tblPr><w:jc w:val="right"/></w:tblPr></w:tblPrChange></w:tblPr><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:sectPr><w:titlePg/><w:sectPrChange w:id="8" w:author="Ada"><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:sectPrChange></w:sectPr>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+
+    assert_eq!(document.reject_all().unwrap(), 8);
+    assert!(document.revisions().is_empty());
+    let expected = body_from_xml(
+        r#"<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>kept</w:t></w:r><w:r><w:t> deleted</w:t></w:r><w:r><w:t> old-place</w:t></w:r></w:p><w:tbl><w:tblPr><w:jc w:val="right"/></w:tblPr><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>"#,
+    );
+    assert_eq!(body_from_document(&mut document), expected);
+}
+
+#[test]
+fn scoped_revision_actions_change_only_matching_revisions() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:ins w:id="7" w:author="Ada" w:date="2026-08-17T09:00:00+01:00"><w:r><w:t>A</w:t></w:r></w:ins><w:ins w:id="7" w:author="Ben" w:date="2026-08-17T09:00:00Z"><w:r><w:t>B</w:t></w:r></w:ins><w:del w:id="8" w:author="Ada"><w:r><w:delText>C</w:delText></w:r></w:del></w:p>"#,
+    );
+
+    let mut by_author = document_with_content_controls(&xml);
+    assert_eq!(by_author.accept_revisions_by_author("Ada").unwrap(), 2);
+    assert!(document_xml(&mut by_author).contains(
+        r#"<w:ins w:id="7" w:author="Ben" w:date="2026-08-17T09:00:00Z"><w:r><w:t>B</w:t></w:r></w:ins>"#
+    ));
+    assert_eq!(
+        by_author
+            .revisions()
+            .iter()
+            .map(|revision| revision.author())
+            .collect::<Vec<_>>(),
+        vec!["Ben"]
+    );
+
+    let mut by_id = document_with_content_controls(&xml);
+    assert_eq!(by_id.reject_revision_id(7).unwrap(), 2);
+    assert_eq!(
+        by_id
+            .revisions()
+            .iter()
+            .map(|revision| revision.id())
+            .collect::<Vec<_>>(),
+        vec![8]
+    );
+
+    let mut by_date = document_with_content_controls(&xml);
+    assert_eq!(
+        by_date
+            .accept_revisions_in_date_range("2026-08-17T08:00:00Z", "2026-08-17T08:00:00Z")
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        by_date
+            .revisions()
+            .iter()
+            .map(|revision| revision.author())
+            .collect::<Vec<_>>(),
+        vec!["Ben", "Ada"]
+    );
+
+    let mut by_lowercase_date = document_with_content_controls(&xml);
+    assert_eq!(
+        by_lowercase_date
+            .reject_revisions_in_date_range("2026-08-17t08:00:00z", "2026-08-17t08:00:00z",)
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn unmodelled_revision_lookalikes_remain_byte_identical() {
+    let xml = wrap_word_body(
+        r#"<w:customXml><w:ins w:id="99" w:author="raw"><w:r><w:t>opaque</w:t></w:r></w:ins></w:customXml><w:p><w:r><w:t>typed</w:t></w:r></w:p>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+    let before = document.to_bytes().unwrap();
+
+    assert_eq!(document.accept_all().unwrap(), 0);
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn unwrapped_revisions_keep_wrapper_namespace_bindings() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:ins xmlns:vendor="urn:vendor" w:id="1" w:author="Ada"><w:r><w:t>kept</w:t><vendor:opaque vendor:value="yes"/></w:r></w:ins></w:p>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+
+    assert_eq!(document.accept_all().unwrap(), 1);
+    let saved = document_xml(&mut document);
+    assert!(saved.contains("xmlns:vendor=\"urn:vendor\""));
+    assert!(saved.contains("<vendor:opaque"));
+    assert!(saved.contains("vendor:value=\"yes\""));
+}
+
+#[test]
+fn rejected_property_changes_keep_owner_namespace_bindings() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:r><w:rPr xmlns:vendor="urn:vendor"><w:b/><w:rPrChange w:id="1" w:author="Ada"><w:rPr><vendor:rPrChange vendor:value="prior"/></w:rPr></w:rPrChange></w:rPr><w:t>text</w:t></w:r></w:p>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+
+    assert_eq!(document.reject_all().unwrap(), 1);
+    let saved = document_xml(&mut document);
+    assert!(saved.contains("xmlns:vendor=\"urn:vendor\""));
+    assert!(saved.contains("<vendor:rPrChange"));
+    assert!(saved.contains("vendor:value=\"prior\""));
+}
+
+#[test]
+fn invalid_date_ranges_leave_the_document_unchanged() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:ins w:id="1" w:author="Ada" w:date="2026-08-17T09:00:00Z"><w:r><w:t>A</w:t></w:r></w:ins></w:p>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+    let before = document.to_bytes().unwrap();
+
+    assert!(
+        document
+            .accept_revisions_in_date_range("not-a-date", "2026-08-17T09:00:00Z")
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert!(
+        document
+            .reject_revisions_in_date_range("2026-08-18T09:00:00Z", "2026-08-17T09:00:00Z")
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    for malformed in [
+        "2026-08-17T-1:00:00Z",
+        "2026-8-17T09:00:00Z",
+        "2026-08-17T9:00:00Z",
+        "9223372036854775807-08-17T09:00:00Z",
+        "2026-08-17T12:00:60Z",
+        "2016-12-31T23:59:60Z",
+    ] {
+        assert!(
+            document
+                .accept_revisions_in_date_range(malformed, "2026-08-17T09:00:00Z")
+                .is_err(),
+            "{malformed} must not parse as RFC 3339"
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn contextual_row_markers_keep_or_remove_the_owning_row() {
+    let xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:trPr><w:ins w:id="1" w:author="Ada"/></w:trPr><w:tc><w:p><w:r><w:t>inserted</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:trPr><w:del w:id="2" w:author="Ada"/></w:trPr><w:tc><w:p><w:r><w:t>deleted</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+
+    let mut accepted = document_with_content_controls(&xml);
+    assert_eq!(accepted.accept_all().unwrap(), 2);
+    assert!(accepted.text().contains("inserted"));
+    assert!(!accepted.text().contains("deleted"));
+
+    let mut rejected = document_with_content_controls(&xml);
+    assert_eq!(rejected.reject_all().unwrap(), 2);
+    assert!(!rejected.text().contains("inserted"));
+    assert!(rejected.text().contains("deleted"));
+
+    let conflicting_xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:trPr><w:ins w:id="3" w:author="Ada"/><w:del w:id="4" w:author="Ada"/></w:trPr><w:tc><w:p><w:r><w:t>ambiguous</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let mut conflicting = document_with_content_controls(&conflicting_xml);
+    assert_eq!(conflicting.accept_all().unwrap(), 2);
+    assert!(!conflicting.text().contains("ambiguous"));
+}
+
+#[test]
+fn contextual_paragraph_markers_merge_the_adjacent_paragraphs() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:rPr><w:del w:id="1" w:author="Ada"/></w:rPr></w:pPr><w:r><w:t>first</w:t></w:r></w:p><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t> second</w:t></w:r></w:p>"#,
+    );
+    let mut accepted = document_with_content_controls(&xml);
+    assert_eq!(accepted.accept_all().unwrap(), 1);
+    assert_eq!(accepted.paragraph_count(), 1);
+    assert_eq!(accepted.text(), "first second\n");
+    assert_eq!(
+        body_from_document(&mut accepted),
+        body_from_xml(
+            r#"<w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t>first</w:t></w:r><w:r><w:t> second</w:t></w:r></w:p>"#,
+        )
+    );
+
+    let insertion_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:rPr><w:ins w:id="2" w:author="Ada"/></w:rPr></w:pPr><w:r><w:t>first</w:t></w:r></w:p><w:p><w:r><w:t> second</w:t></w:r></w:p>"#,
+    );
+    let mut rejected = document_with_content_controls(&insertion_xml);
+    assert_eq!(rejected.reject_all().unwrap(), 1);
+    assert_eq!(rejected.paragraph_count(), 1);
+    assert_eq!(rejected.text(), "first second\n");
+
+    let chained_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:rPr><w:del w:id="3" w:author="Ada"/></w:rPr></w:pPr><w:r><w:t>one</w:t></w:r></w:p><w:p><w:pPr><w:rPr><w:del w:id="4" w:author="Ada"/></w:rPr></w:pPr><w:r><w:t> two</w:t></w:r></w:p><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t> three</w:t></w:r></w:p>"#,
+    );
+    let mut chained = document_with_content_controls(&chained_xml);
+    assert_eq!(chained.accept_all().unwrap(), 2);
+    assert_eq!(chained.paragraph_count(), 1);
+    assert_eq!(chained.text(), "one two three\n");
+    assert_eq!(
+        body_from_document(&mut chained),
+        body_from_xml(
+            r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>one</w:t></w:r><w:r><w:t> two</w:t></w:r><w:r><w:t> three</w:t></w:r></w:p>"#,
+        )
+    );
+}
+
+#[test]
+fn malformed_selected_property_changes_fail_atomically() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:jc w:val="center"/><w:pPrChange w:id="1" w:author="Ada"/></w:pPr><w:r><w:t>text</w:t></w:r></w:p>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+    let before = document.to_bytes().unwrap();
+    let normal_layout = document.layout_page(0).unwrap();
+    let deterministic_layout = document.to_pdf_deterministic().unwrap();
+
+    assert!(document.reject_all().is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert_eq!(document.revisions().len(), 1);
+    assert_eq!(
+        format!("{:?}", document.layout_page(0).unwrap()),
+        format!("{normal_layout:?}")
+    );
+    assert_eq!(
+        document.to_pdf_deterministic().unwrap(),
+        deterministic_layout
+    );
+
+    let wrong_prior_xml = wrap_word_body(
+        r#"<w:p><w:r><w:rPr><w:b/><w:rPrChange w:id="2" w:author="Ada"><w:pPr/></w:rPrChange></w:rPr><w:t>text</w:t></w:r></w:p>"#,
+    );
+    let mut wrong_prior = document_with_content_controls(&wrong_prior_xml);
+    let wrong_prior_before = wrong_prior.to_bytes().unwrap();
+    assert!(wrong_prior.reject_all().is_err());
+    assert_eq!(wrong_prior.to_bytes().unwrap(), wrong_prior_before);
+
+    let extra_prior_xml = wrap_word_body(
+        r#"<w:p><w:r><w:rPr><w:b/><w:rPrChange w:id="5" w:author="Ada"><w:rPr><w:i/></w:rPr><w:rPr/></w:rPrChange></w:rPr><w:t>text</w:t></w:r></w:p>"#,
+    );
+    let mut extra_prior = document_with_content_controls(&extra_prior_xml);
+    let extra_prior_before = extra_prior.to_bytes().unwrap();
+    assert!(extra_prior.accept_all().is_err());
+    assert_eq!(extra_prior.to_bytes().unwrap(), extra_prior_before);
+
+    let hidden_xml = wrap_word_body(
+        r#"<w:p><w:ins w:id="3" w:author="Ada"><w:r><w:rPr><w:rPrChange w:id="4" w:author="Ada"/></w:rPr><w:t>hidden</w:t></w:r></w:ins></w:p>"#,
+    );
+    let mut hidden = document_with_content_controls(&hidden_xml);
+    let hidden_before = hidden.to_bytes().unwrap();
+    assert!(hidden.reject_all().is_err());
+    assert_eq!(hidden.to_bytes().unwrap(), hidden_before);
+}
+
+#[test]
+fn nested_selected_revisions_resolve_inside_out_and_count_once() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:ins w:id="1" w:author="Ada"><w:r><w:rPr><w:b/><w:rPrChange w:id="2" w:author="Ada"><w:rPr><w:i/></w:rPr></w:rPrChange></w:rPr><w:t>nested</w:t></w:r></w:ins></w:p>"#,
+    );
+    let mut accepted = document_with_content_controls(&xml);
+
+    assert_eq!(accepted.accept_all().unwrap(), 2);
+    assert!(accepted.revisions().is_empty());
+    assert_eq!(accepted.text(), "nested\n");
 }
 
 #[test]

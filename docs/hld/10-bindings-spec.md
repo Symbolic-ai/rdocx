@@ -248,6 +248,15 @@ captured raw WordprocessingML subtree. This is an additive native Rust API.
 Python, WASM, and CLI surfaces do not gain revision methods, and their existing
 load and save paths preserve the revision XML.
 
+Native callers resolve tracked changes through `accept_all`, `reject_all`, the
+exact-author pair, the inclusive RFC 3339 date-range pair, and the id pair.
+Each method returns the number of modeled revision elements resolved. Shared
+ids select every matching placement, author matching is case-sensitive, and
+missing dates do not match a date range. Invalid bounds and malformed selected
+changes return an error before mutation. These eight methods are additive on
+`rdocx::Document` only. Python, WASM, and CLI surfaces remain unchanged and
+continue to preserve the resulting document when they save it.
+
 The stable Rust family moves to 0.5.0 for the numbering preservation model.
 `CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
 producer extensions survive typed mutations. Full struct literals written for
