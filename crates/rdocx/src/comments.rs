@@ -472,14 +472,14 @@ fn first_para_id(comment: &CT_Comment) -> Option<&str> {
 fn body_paragraph(content: &[BodyContent], index: usize) -> Option<&CT_P> {
     match content.get(index)? {
         BodyContent::Paragraph(paragraph) => Some(paragraph),
-        BodyContent::Table(_) | BodyContent::RawXml(_) => None,
+        BodyContent::Table(_) | BodyContent::ContentControl(_) | BodyContent::RawXml(_) => None,
     }
 }
 
 fn body_paragraph_mut(content: &mut [BodyContent], index: usize) -> Option<&mut CT_P> {
     match content.get_mut(index)? {
         BodyContent::Paragraph(paragraph) => Some(paragraph),
-        BodyContent::Table(_) | BodyContent::RawXml(_) => None,
+        BodyContent::Table(_) | BodyContent::ContentControl(_) | BodyContent::RawXml(_) => None,
     }
 }
 
@@ -643,6 +643,7 @@ fn remove_anchors_from_body_content(content: &mut BodyContent, ids: &HashSet<i32
     match content {
         BodyContent::Paragraph(paragraph) => remove_anchors_from_paragraph(paragraph, ids),
         BodyContent::Table(table) => remove_anchors_from_table(table, ids),
+        BodyContent::ContentControl(_) => {}
         BodyContent::RawXml(_) => {}
     }
 }
@@ -656,6 +657,7 @@ fn remove_anchors_from_table(table: &mut CT_Tbl, ids: &HashSet<i32>) {
                         remove_anchors_from_paragraph(paragraph, ids)
                     }
                     CellContent::Table(table) => remove_anchors_from_table(table, ids),
+                    CellContent::ContentControl(_) => {}
                 }
             }
         }

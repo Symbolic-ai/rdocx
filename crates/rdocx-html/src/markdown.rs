@@ -26,6 +26,7 @@ pub(crate) fn emit_markdown(
             BodyContent::Table(tbl) => {
                 emit_table(&mut out, tbl, hyperlink_urls);
             }
+            BodyContent::ContentControl(_) => {}
             BodyContent::RawXml(_) => {}
         }
     }
@@ -321,6 +322,7 @@ fn collect_cell_text(
             CellContent::Table(_) => {
                 parts.push("(nested table)".to_string());
             }
+            CellContent::ContentControl(_) => {}
         }
     }
 

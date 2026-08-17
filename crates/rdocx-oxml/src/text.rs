@@ -3,6 +3,7 @@
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 
+use crate::content_control::CT_Sdt;
 use crate::drawing::CT_Drawing;
 use crate::error::{OxmlError, Result};
 use crate::namespace::matches_local_name;
@@ -386,6 +387,9 @@ pub struct CT_P {
     pub comment_ranges: Vec<CommentRangeMarker>,
     /// Unknown child elements captured as raw XML with their insertion position (run index).
     pub extra_xml: Vec<(usize, Vec<u8>)>,
+    /// Typed run controls at
+    /// `(run index, raw children before, comment markers before, control)`.
+    pub content_controls: Vec<(usize, usize, usize, CT_Sdt)>,
 }
 
 #[allow(non_snake_case)]
@@ -397,12 +401,20 @@ impl CT_P {
             hyperlinks: Vec::new(),
             comment_ranges: Vec::new(),
             extra_xml: Vec::new(),
+            content_controls: Vec::new(),
         }
     }
 
     /// Get the combined text of all runs in this paragraph.
     pub fn text(&self) -> String {
-        self.runs.iter().map(|r| r.text()).collect()
+        self.runs().iter().map(|run| run.text()).collect()
+    }
+
+    /// Return direct and content-control-wrapped runs in document order.
+    pub fn runs(&self) -> Vec<&CT_R> {
+        let mut runs = Vec::new();
+        self.collect_runs(&mut runs);
+        runs
     }
 
     /// Add a run with the given text.
@@ -424,6 +436,7 @@ impl CT_P {
         let mut hyperlinks = Vec::new();
         let mut comment_ranges = Vec::new();
         let mut extra_xml = Vec::new();
+        let mut content_controls = Vec::new();
         let mut buf = Vec::new();
 
         loop {
@@ -436,6 +449,22 @@ impl CT_P {
                         properties = Some(parse_scoped_ppr(&raw, &prefixes)?);
                     } else if matches_local_name(name.as_ref(), b"r") {
                         runs.push(CT_R::from_xml_with_prefixes(reader, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
+                        let raw = capture_element(reader, e)?;
+                        if let Some(sdt) = CT_Sdt::from_raw(&raw, &prefixes) {
+                            let raw_before =
+                                extra_xml.iter().filter(|(at, _)| *at == runs.len()).count();
+                            let markers_before = comment_ranges
+                                .iter()
+                                .filter(|marker: &&CommentRangeMarker| {
+                                    marker.run_index() == runs.len()
+                                        && marker.raw_before() == raw_before
+                                })
+                                .count();
+                            content_controls.push((runs.len(), raw_before, markers_before, sdt));
+                        } else {
+                            extra_xml.push((runs.len(), raw));
+                        }
                     } else if matches_local_name(name.as_ref(), b"hyperlink") {
                         // Parse hyperlink: extract r:id and/or w:anchor, then parse child runs
                         let mut rel_id = None;
@@ -563,6 +592,7 @@ impl CT_P {
             hyperlinks,
             comment_ranges,
             extra_xml,
+            content_controls,
         })
     }
 
@@ -596,14 +626,21 @@ impl CT_P {
 
         let mut current_hyperlink: Option<usize> = None;
         for (run_idx, run) in self.runs.iter().enumerate() {
-            write_paragraph_boundary(writer, &self.extra_xml, &self.comment_ranges, run_idx)?;
             let in_hl = hyperlink_runs.get(&run_idx).copied();
 
-            // Close hyperlink if we left it
+            // Paragraph boundary content is a sibling of the hyperlink.
             if current_hyperlink.is_some() && current_hyperlink != in_hl {
                 writer.write_event(Event::End(BytesEnd::new("w:hyperlink")))?;
                 current_hyperlink = None;
             }
+
+            write_paragraph_boundary(
+                writer,
+                &self.extra_xml,
+                &self.content_controls,
+                &self.comment_ranges,
+                run_idx,
+            )?;
 
             // Open hyperlink if entering one
             if let Some(hl_idx) = in_hl
@@ -654,12 +691,35 @@ impl CT_P {
         write_paragraph_boundary(
             writer,
             &self.extra_xml,
+            &self.content_controls,
             &self.comment_ranges,
             self.runs.len(),
         )?;
 
         writer.write_event(Event::End(BytesEnd::new("w:p")))?;
         Ok(())
+    }
+
+    pub(crate) fn collect_runs<'a>(&'a self, runs: &mut Vec<&'a CT_R>) {
+        for index in 0..=self.runs.len() {
+            for (_, _, _, sdt) in self
+                .content_controls
+                .iter()
+                .filter(|(at, _, _, _)| *at == index)
+            {
+                sdt.collect_runs(runs);
+            }
+            if let Some(run) = self.runs.get(index) {
+                runs.push(run);
+            }
+        }
+    }
+
+    pub(crate) fn collect_controls<'a>(&'a self, controls: &mut Vec<&'a CT_Sdt>) {
+        for (_, _, _, sdt) in &self.content_controls {
+            controls.push(sdt);
+            sdt.collect_controls(controls);
+        }
     }
 }
 
@@ -693,6 +753,7 @@ fn push_comment_marker(
 fn write_paragraph_boundary<W: std::io::Write>(
     writer: &mut Writer<W>,
     extra_xml: &[(usize, Vec<u8>)],
+    content_controls: &[(usize, usize, usize, CT_Sdt)],
     markers: &[CommentRangeMarker],
     run_index: usize,
 ) -> Result<()> {
@@ -702,17 +763,35 @@ fn write_paragraph_boundary<W: std::io::Write>(
         .map(|(_, raw)| raw)
         .collect::<Vec<_>>();
     for raw_index in 0..=extras.len() {
-        for marker in markers.iter().filter(|marker| {
-            marker.run_index() == run_index && marker.raw_before().min(extras.len()) == raw_index
-        }) {
-            let (tag, id) = match marker {
-                CommentRangeMarker::Start { id, .. } => ("w:commentRangeStart", *id),
-                CommentRangeMarker::End { id, .. } => ("w:commentRangeEnd", *id),
-            };
-            let mut value = itoa::Buffer::new();
-            let mut element = BytesStart::new(tag);
-            element.push_attribute(("w:id", value.format(id)));
-            writer.write_event(Event::Empty(element))?;
+        let boundary_markers = markers
+            .iter()
+            .filter(|marker| {
+                marker.run_index() == run_index
+                    && marker.raw_before().min(extras.len()) == raw_index
+            })
+            .collect::<Vec<_>>();
+        for marker_index in 0..=boundary_markers.len() {
+            for (_, _, _, sdt) in
+                content_controls
+                    .iter()
+                    .filter(|(at, raw_before, markers_before, _)| {
+                        *at == run_index
+                            && (*raw_before).min(extras.len()) == raw_index
+                            && (*markers_before).min(boundary_markers.len()) == marker_index
+                    })
+            {
+                sdt.to_xml(writer)?;
+            }
+            if let Some(marker) = boundary_markers.get(marker_index) {
+                let (tag, id) = match marker {
+                    CommentRangeMarker::Start { id, .. } => ("w:commentRangeStart", *id),
+                    CommentRangeMarker::End { id, .. } => ("w:commentRangeEnd", *id),
+                };
+                let mut value = itoa::Buffer::new();
+                let mut element = BytesStart::new(tag);
+                element.push_attribute(("w:id", value.format(id)));
+                writer.write_event(Event::Empty(element))?;
+            }
         }
         if let Some(raw) = extras.get(raw_index) {
             writer.get_mut().write_all(raw)?;

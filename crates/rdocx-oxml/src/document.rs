@@ -3,6 +3,7 @@
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
+use crate::content_control::CT_Sdt;
 use crate::error::Result;
 use crate::header_footer::{HdrFtrRef, HdrFtrType};
 use crate::namespace::{W_NS, matches_local_name};
@@ -19,7 +20,8 @@ use crate::units::Twips;
 pub enum BodyContent {
     Paragraph(CT_P),
     Table(CT_Tbl),
-    /// Raw XML for unknown elements (bookmarks, SDTs, mc:AlternateContent, etc.)
+    ContentControl(CT_Sdt),
+    /// Raw XML for unknown elements and controls that cannot be typed safely.
     RawXml(Vec<u8>),
 }
 
@@ -499,10 +501,15 @@ impl CT_Body {
 
     /// Get an iterator over only the paragraphs.
     pub fn paragraphs(&self) -> impl Iterator<Item = &CT_P> {
-        self.content.iter().filter_map(|c| match c {
-            BodyContent::Paragraph(p) => Some(p),
-            _ => None,
-        })
+        let mut paragraphs = Vec::new();
+        for content in &self.content {
+            match content {
+                BodyContent::Paragraph(paragraph) => paragraphs.push(paragraph),
+                BodyContent::ContentControl(sdt) => sdt.collect_paragraphs(&mut paragraphs),
+                BodyContent::Table(_) | BodyContent::RawXml(_) => {}
+            }
+        }
+        paragraphs.into_iter()
     }
 
     /// Get a mutable iterator over only the paragraphs.
@@ -515,10 +522,15 @@ impl CT_Body {
 
     /// Get an iterator over only the tables.
     pub fn tables(&self) -> impl Iterator<Item = &CT_Tbl> {
-        self.content.iter().filter_map(|c| match c {
-            BodyContent::Table(t) => Some(t),
-            _ => None,
-        })
+        let mut tables = Vec::new();
+        for content in &self.content {
+            match content {
+                BodyContent::Table(table) => tables.push(table),
+                BodyContent::ContentControl(sdt) => sdt.collect_tables(&mut tables),
+                BodyContent::Paragraph(_) | BodyContent::RawXml(_) => {}
+            }
+        }
+        tables.into_iter()
     }
 
     /// Get a mutable iterator over only the tables.
@@ -562,8 +574,32 @@ impl CT_Body {
     pub fn find_paragraph_index(&self, text: &str) -> Option<usize> {
         self.content.iter().position(|c| match c {
             BodyContent::Paragraph(p) => p.text().contains(text),
+            BodyContent::ContentControl(sdt) => {
+                let mut paragraphs = Vec::new();
+                sdt.collect_paragraphs(&mut paragraphs);
+                paragraphs
+                    .iter()
+                    .any(|paragraph| paragraph.text().contains(text))
+            }
             _ => false,
         })
+    }
+
+    /// Return every content control in document order, including nested controls.
+    pub fn content_controls(&self) -> Vec<&CT_Sdt> {
+        let mut controls = Vec::new();
+        for content in &self.content {
+            match content {
+                BodyContent::Paragraph(paragraph) => paragraph.collect_controls(&mut controls),
+                BodyContent::Table(table) => table.collect_controls(&mut controls),
+                BodyContent::ContentControl(sdt) => {
+                    controls.push(sdt);
+                    sdt.collect_controls(&mut controls);
+                }
+                BodyContent::RawXml(_) => {}
+            }
+        }
+        controls
     }
 
     /// Remove and return the content at the given index, or `None` if out of bounds.
@@ -610,6 +646,13 @@ impl CT_Body {
                         content.push(BodyContent::Table(CT_Tbl::from_xml_with_prefixes(
                             reader, &prefixes,
                         )?));
+                    } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
+                        let raw = capture_element(reader, e)?;
+                        if let Some(sdt) = CT_Sdt::from_raw(&raw, &prefixes) {
+                            content.push(BodyContent::ContentControl(sdt));
+                        } else {
+                            content.push(BodyContent::RawXml(raw));
+                        }
                     } else if matches_local_name(name.as_ref(), b"sectPr") {
                         sect_pr = Some(CT_SectPr::from_xml(reader)?);
                     } else {
@@ -643,6 +686,7 @@ impl CT_Body {
             match item {
                 BodyContent::Paragraph(p) => p.to_xml(writer)?,
                 BodyContent::Table(t) => t.to_xml(writer)?,
+                BodyContent::ContentControl(sdt) => sdt.to_xml(writer)?,
                 BodyContent::RawXml(raw) => {
                     writer.get_mut().write_all(raw)?;
                 }
@@ -689,7 +733,7 @@ impl CT_Document {
     /// Parse from XML bytes (the content of word/document.xml).
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         let mut reader = Reader::from_reader(xml);
-        reader.config_mut().trim_text(true);
+        reader.config_mut().trim_text(false);
 
         let mut body = None;
         let mut extra_namespaces = Vec::new();

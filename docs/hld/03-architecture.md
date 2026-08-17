@@ -154,6 +154,14 @@ with unmodelled attributes and root children retained at their original
 boundaries. The `rdocx` facade owns the relationship-resolved pair of comment
 parts and coordinates them with the anchors in the main document.
 
+The content-control model owns one recursive `CT_Sdt` grammar at block, row,
+cell, paragraph, and run placement boundaries. It reports tag, alias, numeric
+id, bounded control type, and custom XML binding metadata from `CT_SdtPr`.
+Unmodelled attributes, properties, and content children remain in ordered raw
+slots. Empty or malformed controls remain opaque. Prefix-tolerant readers and
+fixed-prefix writers follow the same boundary rules as the surrounding
+WordprocessingML model.
+
 `rdocx-layout` keeps the flow model: the engine, the paginator, blocks, tables
 and the style resolver. Slides do not paginate, so none of it transfers. The
 flow engine resolves Word relationship IDs to content-addressed `MediaId`
@@ -294,6 +302,12 @@ setters, preserving the distinction between inherited, explicitly false, and
 explicitly true formatting without bypassing the facade.
 The binding-only underline variants travel through a bounded integer-code
 accessor so the published exhaustive Rust `UnderlineStyle` enum stays stable.
+
+Low-level content-control traversal is recursive and ordered. Body, table,
+row, cell, and paragraph accessors expose each wrapped ordinary paragraph,
+table, row, cell, and run once while retaining the surrounding `CT_Sdt` for
+metadata lookup. The facade consumes this single WordprocessingML ownership
+tree and does not maintain a second content-control representation.
 
 Word comment mutation uses `RunPosition` and half-open `RunRange` values whose
 body indexes select top-level paragraphs and whose run indexes select insertion

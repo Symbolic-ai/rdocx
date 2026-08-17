@@ -353,6 +353,7 @@ fn layout_cell_content(
                     }
                 }
             }
+            CellContent::ContentControl(_) => {}
         }
     }
     Ok(blocks)

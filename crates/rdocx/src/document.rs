@@ -644,6 +644,7 @@ impl Document {
                         result.push('\n');
                     }
                 }
+                BodyContent::ContentControl(_) => {}
                 BodyContent::RawXml(_) => {}
             }
         }
@@ -1928,6 +1929,7 @@ impl Document {
             BodyContent::Table(tbl) => {
                 Self::remap_table_num_ids(tbl, offset);
             }
+            BodyContent::ContentControl(_) => {}
             BodyContent::RawXml(_) => {}
         }
     }
@@ -1952,6 +1954,7 @@ impl Document {
                         rdocx_oxml::table::CellContent::Table(nested) => {
                             Self::remap_table_num_ids(nested, offset);
                         }
+                        rdocx_oxml::table::CellContent::ContentControl(_) => {}
                     }
                 }
             }
@@ -2221,6 +2224,7 @@ impl Document {
                 BodyContent::Table(t) => {
                     count += placeholder::replace_in_table(t, placeholder, replacement);
                 }
+                BodyContent::ContentControl(_) => {}
                 BodyContent::RawXml(_) => {}
             }
         }
@@ -2307,6 +2311,7 @@ impl Document {
                 BodyContent::Table(t) => {
                     count += placeholder::replace_regex_in_table(t, re, replacement);
                 }
+                BodyContent::ContentControl(_) => {}
                 BodyContent::RawXml(_) => {}
             }
         }
@@ -2890,6 +2895,7 @@ impl Document {
         match content {
             BodyContent::Paragraph(p) => Self::collect_images_from_paragraph(p, result),
             BodyContent::Table(tbl) => Self::collect_images_from_table(tbl, result),
+            BodyContent::ContentControl(_) => {}
             BodyContent::RawXml(_) => {}
         }
     }
@@ -2935,6 +2941,7 @@ impl Document {
                         CellContent::Table(nested) => {
                             Self::collect_images_from_table(nested, result)
                         }
+                        CellContent::ContentControl(_) => {}
                     }
                 }
             }
@@ -2999,6 +3006,7 @@ impl Document {
         match content {
             BodyContent::Paragraph(p) => p.text().split_whitespace().count(),
             BodyContent::Table(tbl) => Self::word_count_in_table(tbl),
+            BodyContent::ContentControl(_) => 0,
             BodyContent::RawXml(_) => 0,
         }
     }
@@ -3017,6 +3025,7 @@ impl Document {
                         CellContent::Table(nested) => {
                             count += Self::word_count_in_table(nested);
                         }
+                        CellContent::ContentControl(_) => {}
                     }
                 }
             }

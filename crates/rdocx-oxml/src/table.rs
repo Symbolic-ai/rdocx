@@ -4,6 +4,7 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::borders::CT_BorderEdge;
+use crate::content_control::CT_Sdt;
 use crate::error::Result;
 use crate::namespace::matches_local_name;
 use crate::numbering::word_prefixes_at;
@@ -27,6 +28,31 @@ fn write_extras_at<W: std::io::Write>(
 ) -> Result<()> {
     for (at, raw) in extra_xml {
         if *at == pos {
+            writer.get_mut().write_all(raw)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_boundary<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    extra_xml: &[(usize, Vec<u8>)],
+    controls: &[(usize, usize, CT_Sdt)],
+    pos: usize,
+) -> Result<()> {
+    let extras = extra_xml
+        .iter()
+        .filter(|(at, _)| *at == pos)
+        .map(|(_, raw)| raw)
+        .collect::<Vec<_>>();
+    for raw_before in 0..=extras.len() {
+        for (_, _, control) in controls
+            .iter()
+            .filter(|(at, before, _)| *at == pos && *before == raw_before)
+        {
+            control.to_xml(writer)?;
+        }
+        if let Some(raw) = extras.get(raw_before) {
             writer.get_mut().write_all(raw)?;
         }
     }
@@ -887,6 +913,8 @@ pub enum CellContent {
     Paragraph(CT_P),
     /// A nested table.
     Table(CT_Tbl),
+    /// A paragraph-level content control.
+    ContentControl(CT_Sdt),
 }
 
 /// `CT_Tc` — A table cell containing paragraphs and possibly nested tables.
@@ -895,9 +923,8 @@ pub struct CT_Tc {
     pub properties: Option<CT_TcPr>,
     /// Cell content (paragraphs and nested tables).
     pub content: Vec<CellContent>,
-    /// Raw XML for children we do not model (content controls, bookmarks,
-    /// revision marks), tagged with the content index they appeared before so
-    /// they can be written back in place.
+    /// Raw XML for children we do not model, tagged with the content index they
+    /// appeared before so they can be written back in place.
     pub extra_xml: Vec<(usize, Vec<u8>)>,
 }
 
@@ -914,13 +941,9 @@ impl CT_Tc {
 
     /// Get all paragraphs in this cell (excludes nested tables).
     pub fn paragraphs(&self) -> Vec<&CT_P> {
-        self.content
-            .iter()
-            .filter_map(|c| match c {
-                CellContent::Paragraph(p) => Some(p),
-                CellContent::Table(_) => None,
-            })
-            .collect()
+        let mut paragraphs = Vec::new();
+        self.collect_paragraphs(&mut paragraphs);
+        paragraphs
     }
 
     /// Get mutable reference to paragraphs (backward compatibility).
@@ -929,7 +952,7 @@ impl CT_Tc {
             .iter_mut()
             .filter_map(|c| match c {
                 CellContent::Paragraph(p) => Some(p),
-                CellContent::Table(_) => None,
+                CellContent::Table(_) | CellContent::ContentControl(_) => None,
             })
             .collect()
     }
@@ -946,7 +969,7 @@ impl CT_Tc {
         Self::from_xml_with_prefixes(reader, &["w".to_string()])
     }
 
-    fn from_xml_with_prefixes(
+    pub(crate) fn from_xml_with_prefixes(
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
     ) -> Result<Self> {
@@ -970,6 +993,13 @@ impl CT_Tc {
                         content.push(CellContent::Table(CT_Tbl::from_xml_with_prefixes(
                             reader, &prefixes,
                         )?));
+                    } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
+                        let raw = capture_element(reader, e)?;
+                        if let Some(sdt) = CT_Sdt::from_raw(&raw, &prefixes) {
+                            content.push(CellContent::ContentControl(sdt));
+                        } else {
+                            extra_xml.push((content.len(), raw));
+                        }
                     } else {
                         // Content controls (w:sdt), bookmarks and revision
                         // marks live here. Keep them verbatim rather than
@@ -1013,12 +1043,46 @@ impl CT_Tc {
             match item {
                 CellContent::Paragraph(p) => p.to_xml(writer)?,
                 CellContent::Table(tbl) => tbl.to_xml(writer)?,
+                CellContent::ContentControl(sdt) => sdt.to_xml(writer)?,
             }
         }
         write_extras_at(writer, &self.extra_xml, self.content.len())?;
 
         writer.write_event(Event::End(BytesEnd::new("w:tc")))?;
         Ok(())
+    }
+
+    pub(crate) fn collect_controls<'a>(&'a self, controls: &mut Vec<&'a CT_Sdt>) {
+        for content in &self.content {
+            match content {
+                CellContent::Paragraph(paragraph) => paragraph.collect_controls(controls),
+                CellContent::Table(table) => table.collect_controls(controls),
+                CellContent::ContentControl(sdt) => {
+                    controls.push(sdt);
+                    sdt.collect_controls(controls);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn collect_paragraphs<'a>(&'a self, paragraphs: &mut Vec<&'a CT_P>) {
+        for content in &self.content {
+            match content {
+                CellContent::Paragraph(paragraph) => paragraphs.push(paragraph),
+                CellContent::ContentControl(sdt) => sdt.collect_paragraphs(paragraphs),
+                CellContent::Table(_) => {}
+            }
+        }
+    }
+
+    pub(crate) fn collect_tables<'a>(&'a self, tables: &mut Vec<&'a CT_Tbl>) {
+        for content in &self.content {
+            match content {
+                CellContent::Table(table) => tables.push(table),
+                CellContent::ContentControl(sdt) => sdt.collect_tables(tables),
+                CellContent::Paragraph(_) => {}
+            }
+        }
     }
 }
 
@@ -1038,6 +1102,8 @@ pub struct CT_Row {
     /// Raw XML for children we do not model, tagged with the cell index they
     /// appeared before so they can be written back in place.
     pub extra_xml: Vec<(usize, Vec<u8>)>,
+    /// Typed cell controls at `(cell index, raw children before, control)`.
+    pub content_controls: Vec<(usize, usize, CT_Sdt)>,
 }
 
 #[allow(non_snake_case)]
@@ -1047,6 +1113,7 @@ impl CT_Row {
             properties: None,
             cells: Vec::new(),
             extra_xml: Vec::new(),
+            content_controls: Vec::new(),
         }
     }
 
@@ -1054,13 +1121,14 @@ impl CT_Row {
         Self::from_xml_with_prefixes(reader, &["w".to_string()])
     }
 
-    fn from_xml_with_prefixes(
+    pub(crate) fn from_xml_with_prefixes(
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
     ) -> Result<Self> {
         let mut properties = None;
         let mut cells = Vec::new();
         let mut extra_xml = Vec::new();
+        let mut content_controls = Vec::new();
         let mut buf = Vec::new();
 
         loop {
@@ -1072,6 +1140,17 @@ impl CT_Row {
                         properties = Some(CT_TrPr::from_xml(reader)?);
                     } else if is_word_element(name.as_ref(), b"tc", &prefixes) {
                         cells.push(CT_Tc::from_xml_with_prefixes(reader, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
+                        let raw = capture_element(reader, e)?;
+                        if let Some(sdt) = CT_Sdt::from_raw(&raw, &prefixes) {
+                            let raw_before = extra_xml
+                                .iter()
+                                .filter(|(at, _)| *at == cells.len())
+                                .count();
+                            content_controls.push((cells.len(), raw_before, sdt));
+                        } else {
+                            extra_xml.push((cells.len(), raw));
+                        }
                     } else {
                         // A cell wrapped in a content control used to be
                         // dropped here, leaving a row with no cells at all.
@@ -1098,6 +1177,7 @@ impl CT_Row {
             properties,
             cells,
             extra_xml,
+            content_controls,
         })
     }
 
@@ -1109,13 +1189,71 @@ impl CT_Row {
         }
 
         for (idx, cell) in self.cells.iter().enumerate() {
-            write_extras_at(writer, &self.extra_xml, idx)?;
+            write_boundary(writer, &self.extra_xml, &self.content_controls, idx)?;
             cell.to_xml(writer)?;
         }
-        write_extras_at(writer, &self.extra_xml, self.cells.len())?;
+        write_boundary(
+            writer,
+            &self.extra_xml,
+            &self.content_controls,
+            self.cells.len(),
+        )?;
 
         writer.write_event(Event::End(BytesEnd::new("w:tr")))?;
         Ok(())
+    }
+
+    /// Return direct and content-control-wrapped cells in document order.
+    pub fn cells(&self) -> Vec<&CT_Tc> {
+        let mut cells = Vec::new();
+        self.collect_cells(&mut cells);
+        cells
+    }
+
+    pub(crate) fn collect_cells<'a>(&'a self, cells: &mut Vec<&'a CT_Tc>) {
+        for index in 0..=self.cells.len() {
+            for (_, _, sdt) in self
+                .content_controls
+                .iter()
+                .filter(|(at, _, _)| *at == index)
+            {
+                sdt.collect_cells(cells);
+            }
+            if let Some(cell) = self.cells.get(index) {
+                cells.push(cell);
+            }
+        }
+    }
+
+    pub(crate) fn collect_controls<'a>(&'a self, controls: &mut Vec<&'a CT_Sdt>) {
+        for index in 0..=self.cells.len() {
+            for (_, _, sdt) in self
+                .content_controls
+                .iter()
+                .filter(|(at, _, _)| *at == index)
+            {
+                controls.push(sdt);
+                sdt.collect_controls(controls);
+            }
+            if let Some(cell) = self.cells.get(index) {
+                cell.collect_controls(controls);
+            }
+        }
+    }
+
+    pub(crate) fn collect_paragraphs<'a>(&'a self, paragraphs: &mut Vec<&'a CT_P>) {
+        for index in 0..=self.cells.len() {
+            for (_, _, sdt) in self
+                .content_controls
+                .iter()
+                .filter(|(at, _, _)| *at == index)
+            {
+                sdt.collect_paragraphs(paragraphs);
+            }
+            if let Some(cell) = self.cells.get(index) {
+                cell.collect_paragraphs(paragraphs);
+            }
+        }
     }
 }
 
@@ -1136,6 +1274,8 @@ pub struct CT_Tbl {
     /// Raw XML for children we do not model, tagged with the row index they
     /// appeared before so they can be written back in place.
     pub extra_xml: Vec<(usize, Vec<u8>)>,
+    /// Typed row controls at `(row index, raw children before, control)`.
+    pub content_controls: Vec<(usize, usize, CT_Sdt)>,
 }
 
 #[allow(non_snake_case)]
@@ -1146,6 +1286,7 @@ impl CT_Tbl {
             grid: None,
             rows: Vec::new(),
             extra_xml: Vec::new(),
+            content_controls: Vec::new(),
         }
     }
 
@@ -1161,6 +1302,7 @@ impl CT_Tbl {
         let mut grid = None;
         let mut rows = Vec::new();
         let mut extra_xml = Vec::new();
+        let mut content_controls = Vec::new();
         let mut buf = Vec::new();
 
         loop {
@@ -1174,6 +1316,15 @@ impl CT_Tbl {
                         grid = Some(CT_TblGrid::from_xml(reader)?);
                     } else if is_word_element(name.as_ref(), b"tr", &prefixes) {
                         rows.push(CT_Row::from_xml_with_prefixes(reader, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
+                        let raw = capture_element(reader, e)?;
+                        if let Some(sdt) = CT_Sdt::from_raw(&raw, &prefixes) {
+                            let raw_before =
+                                extra_xml.iter().filter(|(at, _)| *at == rows.len()).count();
+                            content_controls.push((rows.len(), raw_before, sdt));
+                        } else {
+                            extra_xml.push((rows.len(), raw));
+                        }
                     } else {
                         // Rows wrapped in a content control used to be dropped
                         // here, which silently deleted whole tables.
@@ -1205,6 +1356,7 @@ impl CT_Tbl {
             grid,
             rows,
             extra_xml,
+            content_controls,
         })
     }
 
@@ -1220,13 +1372,71 @@ impl CT_Tbl {
         }
 
         for (idx, row) in self.rows.iter().enumerate() {
-            write_extras_at(writer, &self.extra_xml, idx)?;
+            write_boundary(writer, &self.extra_xml, &self.content_controls, idx)?;
             row.to_xml(writer)?;
         }
-        write_extras_at(writer, &self.extra_xml, self.rows.len())?;
+        write_boundary(
+            writer,
+            &self.extra_xml,
+            &self.content_controls,
+            self.rows.len(),
+        )?;
 
         writer.write_event(Event::End(BytesEnd::new("w:tbl")))?;
         Ok(())
+    }
+
+    /// Return direct and content-control-wrapped rows in document order.
+    pub fn rows(&self) -> Vec<&CT_Row> {
+        let mut rows = Vec::new();
+        self.collect_rows(&mut rows);
+        rows
+    }
+
+    pub(crate) fn collect_rows<'a>(&'a self, rows: &mut Vec<&'a CT_Row>) {
+        for index in 0..=self.rows.len() {
+            for (_, _, sdt) in self
+                .content_controls
+                .iter()
+                .filter(|(at, _, _)| *at == index)
+            {
+                sdt.collect_rows(rows);
+            }
+            if let Some(row) = self.rows.get(index) {
+                rows.push(row);
+            }
+        }
+    }
+
+    pub(crate) fn collect_controls<'a>(&'a self, controls: &mut Vec<&'a CT_Sdt>) {
+        for index in 0..=self.rows.len() {
+            for (_, _, sdt) in self
+                .content_controls
+                .iter()
+                .filter(|(at, _, _)| *at == index)
+            {
+                controls.push(sdt);
+                sdt.collect_controls(controls);
+            }
+            if let Some(row) = self.rows.get(index) {
+                row.collect_controls(controls);
+            }
+        }
+    }
+
+    pub(crate) fn collect_paragraphs<'a>(&'a self, paragraphs: &mut Vec<&'a CT_P>) {
+        for index in 0..=self.rows.len() {
+            for (_, _, sdt) in self
+                .content_controls
+                .iter()
+                .filter(|(at, _, _)| *at == index)
+            {
+                sdt.collect_paragraphs(paragraphs);
+            }
+            if let Some(row) = self.rows.get(index) {
+                row.collect_paragraphs(paragraphs);
+            }
+        }
     }
 }
 

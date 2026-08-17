@@ -1,6 +1,6 @@
 # F-152, Content control model
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S46
 **Size**: L
 **Depends on**: none
@@ -102,12 +102,12 @@ content controls, and ordinary table traversal must remain identical.
 
 ## Implementation checklist
 
-- [ ] Add `CT_Sdt`, typed properties, binding metadata, and ordered raw slots.
-- [ ] Integrate the model at block, row, cell, paragraph, and run levels.
-- [ ] Preserve ordinary traversal through each wrapped content sequence.
-- [ ] Add five-level, alias, malformed, traversal, and raw-byte tests.
-- [ ] Run focused checks plus the declared packaging rider.
-- [ ] Update exactly HLD 03 at completion.
+- [x] Add `CT_Sdt`, typed properties, binding metadata, and ordered raw slots.
+- [x] Integrate the model at block, row, cell, paragraph, and run levels.
+- [x] Preserve ordinary traversal through each wrapped content sequence.
+- [x] Add five-level, alias, malformed, traversal, and raw-byte tests.
+- [x] Run focused checks plus the declared packaging rider.
+- [x] Update exactly HLD 03 at completion.
 
 ## Open questions
 

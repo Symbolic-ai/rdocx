@@ -754,6 +754,7 @@ fn document_has_wrapping_drawing(input: &LayoutInput) -> bool {
                     // A drawing inside a nested table is rare enough that the
                     // conservative answer is to look no deeper.
                     rdocx_oxml::table::CellContent::Table(_) => false,
+                    rdocx_oxml::table::CellContent::ContentControl(_) => false,
                 }),
             _ => false,
         })

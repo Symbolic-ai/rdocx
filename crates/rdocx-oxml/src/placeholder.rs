@@ -240,24 +240,66 @@ pub fn replace_in_paragraphs(paras: &mut [CT_P], placeholder: &str, replacement:
 
 /// Replace all occurrences of `placeholder` in a table (recursively handles nested tables).
 pub fn replace_in_table(table: &mut CT_Tbl, placeholder: &str, replacement: &str) -> usize {
-    use crate::table::CellContent;
-
     let mut count = 0;
+    for (_, _, sdt) in &mut table.content_controls {
+        count += replace_in_sdt(sdt, placeholder, replacement);
+    }
     for row in &mut table.rows {
-        for cell in &mut row.cells {
-            for content in &mut cell.content {
-                match content {
-                    CellContent::Paragraph(p) => {
-                        count += replace_in_paragraph(p, placeholder, replacement);
-                    }
-                    CellContent::Table(nested) => {
-                        count += replace_in_table(nested, placeholder, replacement);
-                    }
-                }
-            }
-        }
+        count += replace_in_row(row, placeholder, replacement);
     }
     count
+}
+
+fn replace_in_sdt(
+    sdt: &mut crate::content_control::CT_Sdt,
+    placeholder: &str,
+    replacement: &str,
+) -> usize {
+    use crate::content_control::SdtContent;
+
+    let mut count = 0;
+    for content in &mut sdt.content {
+        count += match content {
+            SdtContent::Paragraph(paragraph) => {
+                replace_in_paragraph(paragraph, placeholder, replacement)
+            }
+            SdtContent::Table(table) => replace_in_table(table, placeholder, replacement),
+            SdtContent::Row(row) => replace_in_row(row, placeholder, replacement),
+            SdtContent::Cell(cell) => replace_in_cell(cell, placeholder, replacement),
+            SdtContent::ContentControl(nested) => replace_in_sdt(nested, placeholder, replacement),
+            SdtContent::Run(_) | SdtContent::RawXml(_) => 0,
+        };
+    }
+    count
+}
+
+fn replace_in_row(row: &mut crate::table::CT_Row, placeholder: &str, replacement: &str) -> usize {
+    let controls = row
+        .content_controls
+        .iter_mut()
+        .map(|(_, _, sdt)| replace_in_sdt(sdt, placeholder, replacement))
+        .sum::<usize>();
+    controls
+        + row
+            .cells
+            .iter_mut()
+            .map(|cell| replace_in_cell(cell, placeholder, replacement))
+            .sum::<usize>()
+}
+
+fn replace_in_cell(cell: &mut crate::table::CT_Tc, placeholder: &str, replacement: &str) -> usize {
+    use crate::table::CellContent;
+
+    cell.content
+        .iter_mut()
+        .map(|content| match content {
+            CellContent::Paragraph(paragraph) => {
+                replace_in_paragraph(paragraph, placeholder, replacement)
+            }
+            CellContent::Table(table) => replace_in_table(table, placeholder, replacement),
+            CellContent::ContentControl(sdt) => replace_in_sdt(sdt, placeholder, replacement),
+        })
+        .sum()
 }
 
 /// Replace all occurrences of `placeholder` in a header or footer.
@@ -606,24 +648,74 @@ pub fn replace_regex_in_paragraphs(
 
 /// Replace regex matches in a table (recursively handles nested tables).
 pub fn replace_regex_in_table(table: &mut CT_Tbl, re: &regex::Regex, replacement: &str) -> usize {
-    use crate::table::CellContent;
-
     let mut count = 0;
+    for (_, _, sdt) in &mut table.content_controls {
+        count += replace_regex_in_sdt(sdt, re, replacement);
+    }
     for row in &mut table.rows {
-        for cell in &mut row.cells {
-            for content in &mut cell.content {
-                match content {
-                    CellContent::Paragraph(p) => {
-                        count += replace_regex_in_paragraph(p, re, replacement);
-                    }
-                    CellContent::Table(nested) => {
-                        count += replace_regex_in_table(nested, re, replacement);
-                    }
-                }
-            }
-        }
+        count += replace_regex_in_row(row, re, replacement);
     }
     count
+}
+
+fn replace_regex_in_sdt(
+    sdt: &mut crate::content_control::CT_Sdt,
+    re: &regex::Regex,
+    replacement: &str,
+) -> usize {
+    use crate::content_control::SdtContent;
+
+    let mut count = 0;
+    for content in &mut sdt.content {
+        count += match content {
+            SdtContent::Paragraph(paragraph) => {
+                replace_regex_in_paragraph(paragraph, re, replacement)
+            }
+            SdtContent::Table(table) => replace_regex_in_table(table, re, replacement),
+            SdtContent::Row(row) => replace_regex_in_row(row, re, replacement),
+            SdtContent::Cell(cell) => replace_regex_in_cell(cell, re, replacement),
+            SdtContent::ContentControl(nested) => replace_regex_in_sdt(nested, re, replacement),
+            SdtContent::Run(_) | SdtContent::RawXml(_) => 0,
+        };
+    }
+    count
+}
+
+fn replace_regex_in_row(
+    row: &mut crate::table::CT_Row,
+    re: &regex::Regex,
+    replacement: &str,
+) -> usize {
+    let controls = row
+        .content_controls
+        .iter_mut()
+        .map(|(_, _, sdt)| replace_regex_in_sdt(sdt, re, replacement))
+        .sum::<usize>();
+    controls
+        + row
+            .cells
+            .iter_mut()
+            .map(|cell| replace_regex_in_cell(cell, re, replacement))
+            .sum::<usize>()
+}
+
+fn replace_regex_in_cell(
+    cell: &mut crate::table::CT_Tc,
+    re: &regex::Regex,
+    replacement: &str,
+) -> usize {
+    use crate::table::CellContent;
+
+    cell.content
+        .iter_mut()
+        .map(|content| match content {
+            CellContent::Paragraph(paragraph) => {
+                replace_regex_in_paragraph(paragraph, re, replacement)
+            }
+            CellContent::Table(table) => replace_regex_in_table(table, re, replacement),
+            CellContent::ContentControl(sdt) => replace_regex_in_sdt(sdt, re, replacement),
+        })
+        .sum()
 }
 
 /// Replace regex matches in a header or footer.
