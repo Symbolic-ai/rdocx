@@ -29,7 +29,7 @@ evaluation needs.
 |------|-------|------|--------|-------|
 | F-147 | Comment model and part | M | in-progress | codex |
 | F-152 | Content control model | L | in-progress | codex |
-| F-154 | Bookmarks and cross-references | M | pending | - |
+| F-154 | Bookmarks and cross-references | M | in-progress | codex |
 | F-148 | Comment API | M | in-progress | codex |
 | F-153 | Content control binding | M | in-progress | codex |
 
