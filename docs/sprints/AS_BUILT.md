@@ -7276,3 +7276,84 @@ to Microsoft Word 16.104 build 16.104.25121423.
 **Notes for future sessions.** Date scoping compares instants rather than
 lexical timestamp strings. Shared revision ids intentionally select every
 modeled element carrying that id, including paired move placements.
+
+### F-151, Revision display in the renderer
+
+**Sprint.** S48
+**Completed.** 2026-08-17
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Native render options now select an accepted or tracked
+revision view, with accepted as the compatibility default. The layout engine
+projects revision-wrapped runs in preserved order. Tracked insertions are
+underlined, tracked deletions are struck through, and changed paragraphs draw
+an outside-margin bar on every page portion they occupy. PDF, PNG, and layout
+entry points accept the same concrete options value.
+
+**Non-obvious choices.** Only default accepted layouts are cached. Tracked
+layouts are computed for the request so the existing font-mode cache does not
+gain another state dimension. Revision projection feeds headings, fields,
+bookmarks, hyperlinks, floating anchors, headers, footers, and notes so derived
+content follows the selected view consistently.
+
+**Deviations from the design plan.** None. Nine microscope passes extended the
+planned coverage to nested-only wrappers, shared-boundary field ordering,
+revision-only hyperlinks, note decorations, empty wrappers, and typed
+hyperlink-owner serialization.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, revision projection
+ownership, `docs/hld/08-rendering-spec.md`, revision views and tracked
+decorations, `docs/hld/10-bindings-spec.md`, additive native render options,
+and `docs/hld/12-testing-strategy.md`, the deterministic two-view gate.
+
+**Tests.** `both_revision_views_render_and_accepted_matches_resolved_document`,
+`revision_views_project_wrapped_runs_in_document_order`,
+`tracked_revision_decorations_override_only_underline_and_strike`,
+`a_split_changed_paragraph_draws_one_margin_bar_on_each_page`, and
+`default_render_methods_keep_the_accepted_view`, plus focused regressions for
+headers, footers, notes, fields, bookmarks, anchors, hyperlinks, nested and
+empty wrappers, and serialization ordering.
+
+**Hash harness.** Unchanged, 49 of 49. The deterministic golden PNG gate was
+pixel-identical for all 7 page-one baselines.
+
+**Notes for future sessions.** Add new revision-sensitive derived text to the
+ordered projection path. Do not parse preserved revision XML again in a
+renderer backend.
+
+### F-155, Document protection
+
+**Sprint.** S48
+**Completed.** 2026-08-17
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** A typed settings root now reports read-only,
+comments-only, tracked-changes-forced, and forms-only protection intent. The
+native document facade exposes the recorded enforcement, formatting,
+cryptographic provider, algorithm, spin-count, hash, and salt metadata through
+a borrowed accessor.
+
+**Non-obvious choices.** The settings relationship target is resolved from the
+package rather than assumed. Opened producer XML remains the serialization
+source. Unsupported modes and malformed numeric metadata stay opaque and
+unreported so callers never receive a partial policy that looks authoritative.
+
+**Deviations from the design plan.** None. The separately owned settings module
+was explicitly approved before implementation. Microscope review removed an
+unnecessary generic parsing helper before the clean second pass.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, settings ownership,
+`docs/hld/04-opc-and-packaging.md`, relationship-resolved loading and opaque
+preservation, and `docs/hld/10-bindings-spec.md`, the additive native
+protection accessor and unchanged binding surfaces.
+
+**Tests.** `each_document_protection_mode_is_reported_with_its_recorded_hash`,
+`document_protection_modes_and_metadata_parse_through_aliases`,
+`settings_keep_document_protection_and_unmodelled_children_byte_identical`,
+`malformed_document_protection_remains_opaque_and_unreported`, and
+`settings_relationship_target_is_resolved_instead_of_assumed`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Document protection records author intent. It is
+not an access-control boundary, and mutation methods must not treat it as one.

@@ -264,6 +264,8 @@ defended.
 | F-154 | S46 | M | 2 | 1 | 2026-08-17 | Typed bookmarks and single-pass REF and PAGEREF resolution |
 | F-149 | S47 | L | 4 | 1 | 2026-08-17 | Typed revision metadata, content, prior properties, and ordered traversal |
 | F-150 | S47 | L | 4 | 1 | 2026-08-17 | Atomic placement-aware revision acceptance and rejection |
+| F-151 | S48 | M | 2 | 1 | 2026-08-17 | Accepted and tracked revision views with deterministic decorations and margin bars |
+| F-155 | S48 | M | 2 | 1 | Typed document-protection intent and recorded verification metadata |
 
 ## Velocity
 
