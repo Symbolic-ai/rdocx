@@ -1048,8 +1048,13 @@ fn parse_raw_ppr(raw: &[u8], word_prefixes: &[String]) -> Result<CT_PPr> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref start)) => {
+                let owner_bindings = local_namespace_overrides(start, word_prefixes)?;
                 let prefixes = word_prefixes_at(start, word_prefixes)?;
-                return CT_PPr::from_xml_with_prefixes(&mut reader, &prefixes);
+                return CT_PPr::from_xml_with_prefixes_and_owner_bindings(
+                    &mut reader,
+                    &prefixes,
+                    &owner_bindings,
+                );
             }
             Ok(Event::Empty(_)) | Ok(Event::Eof) => return Ok(CT_PPr::default()),
             Err(error) => return Err(error.into()),
@@ -1071,12 +1076,22 @@ fn rpr_from_raw(raw: &[u8], word_prefixes: &[String]) -> Result<(CT_RPr, bool)> 
 }
 
 fn parse_raw_rpr(raw: &[u8], word_prefixes: &[String]) -> Result<CT_RPr> {
+    parse_raw_rpr_with_owner_bindings(raw, word_prefixes, &[])
+}
+
+fn parse_raw_rpr_with_owner_bindings(
+    raw: &[u8],
+    word_prefixes: &[String],
+    inherited_owner_bindings: &[(String, String)],
+) -> Result<CT_RPr> {
     let mut reader = Reader::from_reader(raw);
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref start)) => {
-                let owner_bindings = local_namespace_overrides(start, word_prefixes)?;
+                let local_bindings = local_namespace_overrides(start, word_prefixes)?;
+                let owner_bindings =
+                    merged_owner_bindings(inherited_owner_bindings, &local_bindings);
                 let prefixes = word_prefixes_at(start, word_prefixes)?;
                 return CT_RPr::from_xml_with_prefixes_and_owner_bindings(
                     &mut reader,
@@ -1092,7 +1107,7 @@ fn parse_raw_rpr(raw: &[u8], word_prefixes: &[String]) -> Result<CT_RPr> {
     }
 }
 
-fn local_namespace_overrides(
+pub(crate) fn local_namespace_overrides(
     start: &BytesStart<'_>,
     inherited: &[String],
 ) -> Result<Vec<(String, String)>> {
@@ -1125,6 +1140,26 @@ fn local_namespace_overrides(
 
 pub(crate) fn parse_scoped_rpr(raw: &[u8], word_prefixes: &[String]) -> Result<CT_RPr> {
     parse_raw_rpr(raw, word_prefixes)
+}
+
+pub(crate) fn parse_scoped_rpr_with_owner_bindings(
+    raw: &[u8],
+    word_prefixes: &[String],
+    owner_bindings: &[(String, String)],
+) -> Result<CT_RPr> {
+    parse_raw_rpr_with_owner_bindings(raw, word_prefixes, owner_bindings)
+}
+
+pub(crate) fn merged_owner_bindings(
+    inherited: &[(String, String)],
+    local: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut bindings = inherited.to_vec();
+    for (prefix, namespace) in local {
+        bindings.retain(|(candidate, _)| candidate != prefix);
+        bindings.push((prefix.clone(), namespace.clone()));
+    }
+    bindings
 }
 
 fn generated_property_children(raw: &[u8], kind: PropertyKind) -> Result<Vec<(usize, Vec<u8>)>> {

@@ -404,7 +404,7 @@ fn nested_selected_revisions_resolve_inside_out_and_count_once() {
 #[test]
 fn duplicate_property_revisions_round_trip_and_resolve_one_identity_at_a_time() {
     let xml = wrap_word_body(
-        r#"<w:p><w:pPr><w:numPr><w:ins w:id="501" w:author="Ada"/><w:ins w:id="502" w:author="Ada"/></w:numPr><w:pPrChange w:id="101" w:author="Ada"><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange><w:pPrChange w:id="102" w:author="Ada"><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange></w:pPr><w:r><w:rPr><w:rPrChange w:id="201" w:author="Ada"><w:rPr><w:b/></w:rPr></w:rPrChange><w:rPrChange w:id="202" w:author="Ada"><w:rPr><w:i/></w:rPr></w:rPrChange></w:rPr><w:t>x</w:t></w:r></w:p><w:tbl><w:tblPr><w:tblPrChange w:id="301" w:author="Ada"><w:tblPr><w:jc w:val="left"/></w:tblPr></w:tblPrChange><w:tblPrChange w:id="302" w:author="Ada"><w:tblPr><w:jc w:val="right"/></w:tblPr></w:tblPrChange></w:tblPr><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:sectPr><w:sectPrChange w:id="401" w:author="Ada"><w:sectPr><w:titlePg/></w:sectPr></w:sectPrChange><w:sectPrChange w:id="402" w:author="Ada"><w:sectPr><w:pgSz w:w="12240"/></w:sectPr></w:sectPrChange></w:sectPr>"#,
+        r#"<w:p><w:pPr><w:numPr><w:ins w:id="501" w:author="Ada"/><x:ins xmlns:x="urn:producer" x:mark="num"/><w:ins w:id="502" w:author="Ada"/></w:numPr><w:pPrChange w:id="101" w:author="Ada"><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange><x:pPrChange xmlns:x="urn:producer" x:mark="paragraph"/><w:pPrChange w:id="102" w:author="Ada"><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange></w:pPr><w:r><w:rPr><w:rPrChange w:id="201" w:author="Ada"><w:rPr><w:b/></w:rPr></w:rPrChange><x:rPrChange xmlns:x="urn:producer" x:mark="run"/><w:rPrChange w:id="202" w:author="Ada"><w:rPr><w:i/></w:rPr></w:rPrChange></w:rPr><w:t>x</w:t></w:r></w:p><w:tbl><w:tblPr><w:tblPrChange w:id="301" w:author="Ada"><w:tblPr><w:jc w:val="left"/></w:tblPr></w:tblPrChange><x:tblPrChange xmlns:x="urn:producer" x:mark="table"/><w:tblPrChange w:id="302" w:author="Ada"><w:tblPr><w:jc w:val="right"/></w:tblPr></w:tblPrChange></w:tblPr><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:sectPr><w:sectPrChange w:id="401" w:author="Ada"><w:sectPr><w:titlePg/></w:sectPr></w:sectPrChange><x:sectPrChange xmlns:x="urn:producer" x:mark="section"/><w:sectPrChange w:id="402" w:author="Ada"><w:sectPr><w:pgSz w:w="12240"/></w:sectPr></w:sectPrChange></w:sectPr>"#,
     );
     let mut document = document_with_content_controls(&xml);
     let sorted_ids = |document: &Document| {
@@ -422,6 +422,9 @@ fn duplicate_property_revisions_round_trip_and_resolve_one_identity_at_a_time() 
     for id in [101, 102, 201, 202, 301, 302, 401, 402, 501, 502] {
         assert_eq!(initial.matches(&format!(r#"w:id="{id}""#)).count(), 1);
     }
+    for mark in ["num", "paragraph", "run", "table", "section"] {
+        assert_eq!(initial.matches(&format!(r#"x:mark="{mark}""#)).count(), 1);
+    }
 
     for id in [102, 202, 302, 402, 502] {
         assert_eq!(document.accept_revision_id(id).unwrap(), 1);
@@ -433,6 +436,9 @@ fn duplicate_property_revisions_round_trip_and_resolve_one_identity_at_a_time() 
     }
     for id in [102, 202, 302, 402, 502] {
         assert!(!staged.contains(&format!(r#"w:id="{id}""#)));
+    }
+    for mark in ["num", "paragraph", "run", "table", "section"] {
+        assert_eq!(staged.matches(&format!(r#"x:mark="{mark}""#)).count(), 1);
     }
 
     let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();

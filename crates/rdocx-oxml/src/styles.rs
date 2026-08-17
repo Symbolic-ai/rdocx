@@ -106,7 +106,7 @@ impl CT_Style {
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(ename.as_ref(), b"pPr", &prefixes) {
                         let raw = capture_element(reader, e)?;
-                        ppr = Some(parse_scoped_ppr(&raw, &prefixes)?);
+                        ppr = Some(parse_scoped_ppr(&raw, word_prefixes)?);
                     } else if matches_local_name(ename.as_ref(), b"rPr") {
                         rpr = Some(CT_RPr::from_xml(reader)?);
                     } else {
@@ -263,7 +263,7 @@ impl CT_DocDefaults {
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(name.as_ref(), b"pPr", &prefixes) {
                         let raw = capture_element(reader, e)?;
-                        ppr = Some(parse_scoped_ppr(&raw, &prefixes)?);
+                        ppr = Some(parse_scoped_ppr(&raw, word_prefixes)?);
                     } else {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }

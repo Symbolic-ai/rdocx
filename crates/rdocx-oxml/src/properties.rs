@@ -7,7 +7,9 @@ use crate::borders::{CT_PBdr, CT_Tabs};
 use crate::document::CT_SectPr;
 use crate::error::Result;
 use crate::namespace::{W_NS, matches_local_name};
-use crate::numbering::parse_scoped_rpr;
+use crate::numbering::{
+    local_namespace_overrides, merged_owner_bindings, parse_scoped_rpr_with_owner_bindings,
+};
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::CT_Revision;
 use crate::shared::{ST_HighlightColor, ST_Jc, ST_OnOff, ST_Underline};
@@ -209,7 +211,17 @@ impl CT_PPr {
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
     ) -> Result<Self> {
+        Self::from_xml_with_prefixes_and_owner_bindings(reader, word_prefixes, &[])
+    }
+
+    pub(crate) fn from_xml_with_prefixes_and_owner_bindings(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
+    ) -> Result<Self> {
         let mut ppr = CT_PPr::default();
+        let mut change_raw_index = 0usize;
+        let mut numbering_change_raw_index = 0usize;
         let mut buf = Vec::new();
 
         loop {
@@ -219,21 +231,46 @@ impl CT_PPr {
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(name.as_ref(), b"rPr", &prefixes) {
                         let raw = capture_element(reader, e)?;
-                        ppr.rpr = Some(parse_scoped_rpr(&raw, word_prefixes)?);
+                        ppr.rpr = Some(parse_scoped_rpr_with_owner_bindings(
+                            &raw,
+                            word_prefixes,
+                            owner_bindings,
+                        )?);
                     } else if is_word_element(name.as_ref(), b"numPr", &prefixes) {
-                        Self::parse_num_pr(reader, &mut ppr, &prefixes)?;
+                        let local_bindings = local_namespace_overrides(e, word_prefixes)?;
+                        let num_pr_bindings =
+                            merged_owner_bindings(owner_bindings, &local_bindings);
+                        Self::parse_num_pr(
+                            reader,
+                            &mut ppr,
+                            &prefixes,
+                            &num_pr_bindings,
+                            &mut numbering_change_raw_index,
+                        )?;
                     } else if is_word_element(name.as_ref(), b"pBdr", &prefixes) {
                         ppr.borders = Some(CT_PBdr::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"tabs", &prefixes) {
                         ppr.tabs = Some(CT_Tabs::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"sectPr", &prefixes) {
-                        ppr.sect_pr = Some(CT_SectPr::from_xml_with_prefixes(reader, &prefixes)?);
+                        let local_bindings = local_namespace_overrides(e, word_prefixes)?;
+                        let sect_pr_bindings =
+                            merged_owner_bindings(owner_bindings, &local_bindings);
+                        ppr.sect_pr = Some(CT_SectPr::from_xml_with_prefixes_and_owner_bindings(
+                            reader,
+                            &prefixes,
+                            &sect_pr_bindings,
+                        )?);
                     } else if is_word_element(name.as_ref(), b"pPrChange", &prefixes) {
-                        let raw = capture_element(reader, e)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             if let Some(previous) = ppr.change.replace(revision) {
-                                ppr.revision_xml.push(previous.into_raw_xml());
+                                ppr.revision_xml
+                                    .insert(change_raw_index, previous.into_raw_xml());
                             }
+                            change_raw_index = ppr.revision_xml.len();
                         } else {
                             ppr.revision_xml.push(raw);
                         }
@@ -307,11 +344,16 @@ impl CT_PPr {
                     } else if is_word_element(name.as_ref(), b"shd", &prefixes) {
                         ppr.shading = Some(CT_Shd::from_xml_attrs(e)?);
                     } else if is_word_element(name.as_ref(), b"pPrChange", &prefixes) {
-                        let raw = capture_empty_element(e)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             if let Some(previous) = ppr.change.replace(revision) {
-                                ppr.revision_xml.push(previous.into_raw_xml());
+                                ppr.revision_xml
+                                    .insert(change_raw_index, previous.into_raw_xml());
                             }
+                            change_raw_index = ppr.revision_xml.len();
                         } else {
                             ppr.revision_xml.push(raw);
                         }
@@ -338,6 +380,8 @@ impl CT_PPr {
         reader: &mut Reader<&[u8]>,
         ppr: &mut CT_PPr,
         word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
+        change_raw_index: &mut usize,
     ) -> Result<()> {
         let mut buf = Vec::new();
         loop {
@@ -354,11 +398,16 @@ impl CT_PPr {
                     {
                         ppr.num_id = Some(val.parse()?);
                     } else if is_word_element(name.as_ref(), b"ins", &prefixes) {
-                        let raw = capture_empty_element(e)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             if let Some(previous) = ppr.numbering_revision.replace(revision) {
-                                ppr.numbering_revision_xml.push(previous.into_raw_xml());
+                                ppr.numbering_revision_xml
+                                    .insert(*change_raw_index, previous.into_raw_xml());
                             }
+                            *change_raw_index = ppr.numbering_revision_xml.len();
                         } else {
                             ppr.numbering_revision_xml.push(raw);
                         }
@@ -369,11 +418,16 @@ impl CT_PPr {
                 Ok(Event::Start(ref e)) => {
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(e.name().as_ref(), b"ins", &prefixes) {
-                        let raw = capture_element(reader, e)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             if let Some(previous) = ppr.numbering_revision.replace(revision) {
-                                ppr.numbering_revision_xml.push(previous.into_raw_xml());
+                                ppr.numbering_revision_xml
+                                    .insert(*change_raw_index, previous.into_raw_xml());
                             }
+                            *change_raw_index = ppr.numbering_revision_xml.len();
                         } else {
                             ppr.numbering_revision_xml.push(raw);
                         }
@@ -747,6 +801,7 @@ impl CT_RPr {
         owner_bindings: &[(String, String)],
     ) -> Result<Self> {
         let mut rpr = CT_RPr::default();
+        let mut change_raw_index = 0usize;
         let mut pending_raw = Vec::new();
         let mut occurrences = [0usize; RPR_END_SLOT as usize + 1];
         let mut buf = Vec::new();
@@ -991,12 +1046,10 @@ impl CT_RPr {
                         )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             if let Some(previous) = rpr.change.take() {
-                                record_rpr_raw_at(
-                                    &mut rpr,
-                                    previous.into_raw_xml(),
-                                    RPR_CHANGE_SLOT,
-                                    0,
-                                );
+                                rpr.revision_xml
+                                    .insert(change_raw_index, previous.into_raw_xml());
+                                rpr.revision_xml_positions
+                                    .insert(change_raw_index, (RPR_CHANGE_SLOT, 0));
                             }
                             record_rpr_modeled(
                                 &mut rpr,
@@ -1005,6 +1058,7 @@ impl CT_RPr {
                                 RPR_CHANGE_SLOT,
                             );
                             rpr.change = Some(revision);
+                            change_raw_index = rpr.revision_xml.len();
                         } else {
                             flush_rpr_raw(&mut rpr, &mut pending_raw, RPR_CHANGE_SLOT, 0);
                             record_rpr_raw_at(&mut rpr, raw, RPR_CHANGE_SLOT, 0);
@@ -1048,12 +1102,10 @@ impl CT_RPr {
                         )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             if let Some(previous) = rpr.change.take() {
-                                record_rpr_raw_at(
-                                    &mut rpr,
-                                    previous.into_raw_xml(),
-                                    RPR_CHANGE_SLOT,
-                                    0,
-                                );
+                                rpr.revision_xml
+                                    .insert(change_raw_index, previous.into_raw_xml());
+                                rpr.revision_xml_positions
+                                    .insert(change_raw_index, (RPR_CHANGE_SLOT, 0));
                             }
                             record_rpr_modeled(
                                 &mut rpr,
@@ -1062,6 +1114,7 @@ impl CT_RPr {
                                 RPR_CHANGE_SLOT,
                             );
                             rpr.change = Some(revision);
+                            change_raw_index = rpr.revision_xml.len();
                         } else {
                             flush_rpr_raw(&mut rpr, &mut pending_raw, RPR_CHANGE_SLOT, 0);
                             record_rpr_raw_at(&mut rpr, raw, RPR_CHANGE_SLOT, 0);

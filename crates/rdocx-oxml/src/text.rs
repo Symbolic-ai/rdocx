@@ -1032,7 +1032,7 @@ impl CT_P {
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(name.as_ref(), b"pPr", &prefixes) {
                         let raw = capture_element(reader, e)?;
-                        properties = Some(parse_scoped_ppr(&raw, &prefixes)?);
+                        properties = Some(parse_scoped_ppr(&raw, word_prefixes)?);
                     } else if is_word_element(name.as_ref(), b"r", &prefixes) {
                         runs.push(CT_R::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if matches_local_name(name.as_ref(), b"r")

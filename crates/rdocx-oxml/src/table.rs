@@ -7,7 +7,7 @@ use crate::borders::CT_BorderEdge;
 use crate::content_control::CT_Sdt;
 use crate::error::Result;
 use crate::namespace::matches_local_name;
-use crate::numbering::word_prefixes_at;
+use crate::numbering::{local_namespace_overrides, word_prefixes_at};
 use crate::properties::{
     CT_Shd, get_val_attr, get_word_val_attr, is_word_attribute, is_word_element,
 };
@@ -500,7 +500,16 @@ impl CT_TblPr {
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
     ) -> Result<Self> {
+        Self::from_xml_with_prefixes_and_owner_bindings(reader, word_prefixes, &[])
+    }
+
+    pub(crate) fn from_xml_with_prefixes_and_owner_bindings(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
+    ) -> Result<Self> {
         let mut pr = CT_TblPr::default();
+        let mut change_raw_index = 0usize;
         let mut buf = Vec::new();
 
         loop {
@@ -527,11 +536,16 @@ impl CT_TblPr {
                     } else if is_word_element(name.as_ref(), b"tblLook", &prefixes) {
                         pr.look = Some(CT_TblLook::from_xml_attrs_with_prefixes(e, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"tblPrChange", &prefixes) {
-                        let raw = capture_empty_element(e)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             if let Some(previous) = pr.change.replace(revision) {
-                                pr.revision_xml.push(previous.into_raw_xml());
+                                pr.revision_xml
+                                    .insert(change_raw_index, previous.into_raw_xml());
                             }
+                            change_raw_index = pr.revision_xml.len();
                         } else {
                             pr.revision_xml.push(raw);
                         }
@@ -549,11 +563,16 @@ impl CT_TblPr {
                         pr.cell_margin =
                             Some(CT_TblCellMar::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"tblPrChange", &prefixes) {
-                        let raw = capture_element(reader, e)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             if let Some(previous) = pr.change.replace(revision) {
-                                pr.revision_xml.push(previous.into_raw_xml());
+                                pr.revision_xml
+                                    .insert(change_raw_index, previous.into_raw_xml());
                             }
+                            change_raw_index = pr.revision_xml.len();
                         } else {
                             pr.revision_xml.push(raw);
                         }
@@ -1474,7 +1493,12 @@ impl CT_Tbl {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(name.as_ref(), b"tblPr", &prefixes) {
-                        properties = Some(CT_TblPr::from_xml_with_prefixes(reader, &prefixes)?);
+                        let owner_bindings = local_namespace_overrides(e, word_prefixes)?;
+                        properties = Some(CT_TblPr::from_xml_with_prefixes_and_owner_bindings(
+                            reader,
+                            &prefixes,
+                            &owner_bindings,
+                        )?);
                     } else if matches_local_name(name.as_ref(), b"tblGrid") {
                         grid = Some(CT_TblGrid::from_xml(reader)?);
                     } else if is_word_element(name.as_ref(), b"tr", &prefixes) {

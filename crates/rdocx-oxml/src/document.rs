@@ -7,7 +7,7 @@ use crate::content_control::CT_Sdt;
 use crate::error::Result;
 use crate::header_footer::{HdrFtrRef, HdrFtrType};
 use crate::namespace::{W_NS, matches_local_name};
-use crate::numbering::word_prefixes_at;
+use crate::numbering::{local_namespace_overrides, word_prefixes_at};
 use crate::properties::{get_word_val_attr, is_word_attribute, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::CT_Revision;
@@ -158,6 +158,14 @@ impl CT_SectPr {
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
     ) -> Result<Self> {
+        Self::from_xml_with_prefixes_and_owner_bindings(reader, word_prefixes, &[])
+    }
+
+    pub(crate) fn from_xml_with_prefixes_and_owner_bindings(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
+    ) -> Result<Self> {
         let mut sect = CT_SectPr {
             page_width: None,
             page_height: None,
@@ -177,6 +185,7 @@ impl CT_SectPr {
             extra_xml: Vec::new(),
             change: None,
         };
+        let mut change_raw_index = 0usize;
         let mut buf = Vec::new();
 
         loop {
@@ -275,11 +284,16 @@ impl CT_SectPr {
                     } else if is_word_element(name.as_ref(), b"titlePg", &prefixes) {
                         sect.title_pg = Some(true);
                     } else if is_word_element(name.as_ref(), b"sectPrChange", &prefixes) {
-                        let raw = capture_empty_element(e)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             if let Some(previous) = sect.change.replace(revision) {
-                                sect.extra_xml.push(previous.into_raw_xml());
+                                sect.extra_xml
+                                    .insert(change_raw_index, previous.into_raw_xml());
                             }
+                            change_raw_index = sect.extra_xml.len();
                         } else {
                             sect.extra_xml.push(raw);
                         }
@@ -294,11 +308,16 @@ impl CT_SectPr {
                     if is_word_element(name.as_ref(), b"cols", &prefixes) {
                         sect.columns = Some(Self::parse_cols_start(reader, e, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"sectPrChange", &prefixes) {
-                        let raw = capture_element(reader, e)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             if let Some(previous) = sect.change.replace(revision) {
-                                sect.extra_xml.push(previous.into_raw_xml());
+                                sect.extra_xml
+                                    .insert(change_raw_index, previous.into_raw_xml());
                             }
+                            change_raw_index = sect.extra_xml.len();
                         } else {
                             sect.extra_xml.push(raw);
                         }
@@ -705,7 +724,12 @@ impl CT_Body {
                             content.push(BodyContent::RawXml(raw));
                         }
                     } else if is_word_element(name.as_ref(), b"sectPr", &prefixes) {
-                        sect_pr = Some(CT_SectPr::from_xml_with_prefixes(reader, &prefixes)?);
+                        let owner_bindings = local_namespace_overrides(e, word_prefixes)?;
+                        sect_pr = Some(CT_SectPr::from_xml_with_prefixes_and_owner_bindings(
+                            reader,
+                            &prefixes,
+                            &owner_bindings,
+                        )?);
                     } else {
                         // Capture unknown elements as raw XML
                         content.push(BodyContent::RawXml(capture_element(reader, e)?));

@@ -429,25 +429,38 @@ fn parse_content(
                     let raw = crate::raw_xml::capture_element(reader, &start)?;
                     return Ok((
                         RevisionContent::PriorParagraphProperties(Box::new(parse_scoped_ppr(
-                            &raw, &prefixes,
+                            &raw,
+                            word_prefixes,
                         )?)),
                         nested_revisions,
                     ));
                 } else if is_word_element(name.as_ref(), b"tblPr", &prefixes)
                     && kind == RevisionKind::TablePropertyChange
                 {
+                    let owner_bindings =
+                        crate::numbering::local_namespace_overrides(&start, word_prefixes)?;
                     return Ok((
                         RevisionContent::PriorTableProperties(Box::new(
-                            CT_TblPr::from_xml_with_prefixes(reader, &prefixes)?,
+                            CT_TblPr::from_xml_with_prefixes_and_owner_bindings(
+                                reader,
+                                &prefixes,
+                                &owner_bindings,
+                            )?,
                         )),
                         nested_revisions,
                     ));
                 } else if is_word_element(name.as_ref(), b"sectPr", &prefixes)
                     && kind == RevisionKind::SectionPropertyChange
                 {
+                    let owner_bindings =
+                        crate::numbering::local_namespace_overrides(&start, word_prefixes)?;
                     return Ok((
                         RevisionContent::PriorSectionProperties(Box::new(
-                            CT_SectPr::from_xml_with_prefixes(reader, &prefixes)?,
+                            CT_SectPr::from_xml_with_prefixes_and_owner_bindings(
+                                reader,
+                                &prefixes,
+                                &owner_bindings,
+                            )?,
                         )),
                         nested_revisions,
                     ));
@@ -794,10 +807,10 @@ mod tests {
     #[test]
     fn duplicate_property_changes_are_retained_without_replacing_the_first_projection() {
         let xml = format!(
-            r#"<w:document xmlns:w="{W_NS}"><w:body>
-<w:p><w:pPr><w:numPr><w:ins w:id="501" w:author="Ada"/><w:ins w:id="502" w:author="Ada"/></w:numPr><w:pPrChange w:id="101" w:author="Ada"><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange><w:pPrChange w:id="102" w:author="Ada"><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange></w:pPr><w:r><w:rPr><w:rPrChange w:id="201" w:author="Ada"><w:rPr><w:b/></w:rPr></w:rPrChange><w:rPrChange w:id="202" w:author="Ada"><w:rPr><w:i/></w:rPr></w:rPrChange></w:rPr><w:t>x</w:t></w:r></w:p>
-<w:tbl><w:tblPr><w:tblPrChange w:id="301" w:author="Ada"><w:tblPr><w:jc w:val="left"/></w:tblPr></w:tblPrChange><w:tblPrChange w:id="302" w:author="Ada"><w:tblPr><w:jc w:val="right"/></w:tblPr></w:tblPrChange></w:tblPr><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>
-<w:sectPr><w:sectPrChange w:id="401" w:author="Ada"><w:sectPr><w:titlePg/></w:sectPr></w:sectPrChange><w:sectPrChange w:id="402" w:author="Ada"><w:sectPr><w:pgSz w:w="12240"/></w:sectPr></w:sectPrChange></w:sectPr>
+            r#"<w:document xmlns:w="{W_NS}" xmlns:x="urn:producer"><w:body>
+<w:p><w:pPr><w:numPr><w:ins w:id="501" w:author="Ada"/><x:ins x:mark="num"/><w:ins w:id="502" w:author="Ada"/></w:numPr><w:pPrChange w:id="101" w:author="Ada"><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange><x:pPrChange x:mark="paragraph"/><w:pPrChange w:id="102" w:author="Ada"><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange></w:pPr><w:r><w:rPr><w:rPrChange w:id="201" w:author="Ada"><w:rPr><w:b/></w:rPr></w:rPrChange><x:rPrChange x:mark="run"/><w:rPrChange w:id="202" w:author="Ada"><w:rPr><w:i/></w:rPr></w:rPrChange></w:rPr><w:t>x</w:t></w:r></w:p>
+<w:tbl><w:tblPr><w:tblPrChange w:id="301" w:author="Ada"><w:tblPr><w:jc w:val="left"/></w:tblPr></w:tblPrChange><x:tblPrChange x:mark="table"/><w:tblPrChange w:id="302" w:author="Ada"><w:tblPr><w:jc w:val="right"/></w:tblPr></w:tblPrChange></w:tblPr><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>
+<w:sectPr><w:sectPrChange w:id="401" w:author="Ada"><w:sectPr><w:titlePg/></w:sectPr></w:sectPrChange><x:sectPrChange x:mark="section"/><w:sectPrChange w:id="402" w:author="Ada"><w:sectPr><w:pgSz w:w="12240"/></w:sectPr></w:sectPrChange></w:sectPr>
 </w:body></w:document>"#
         );
         let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
@@ -840,7 +853,17 @@ mod tests {
                 first < typed,
                 "duplicate must precede typed schema-final change"
             );
+            let foreign = output
+                .find(&format!(r#"<x:{owner}Change x:mark="#))
+                .unwrap();
+            assert!(first < foreign && foreign < typed);
         }
+        let numbering_positions = [
+            output.find(r#"w:id="501""#).unwrap(),
+            output.find(r#"<x:ins x:mark="num"/>"#).unwrap(),
+            output.find(r#"w:id="502""#).unwrap(),
+        ];
+        assert!(numbering_positions.windows(2).all(|pair| pair[0] < pair[1]));
 
         let reopened = CT_Document::from_xml(output.as_bytes()).expect("output reparses");
         let mut reopened_ids = reopened
@@ -850,6 +873,51 @@ mod tests {
             .collect::<Vec<_>>();
         reopened_ids.sort_unstable();
         assert_eq!(reopened_ids, [102, 202, 302, 402, 502]);
+    }
+
+    #[test]
+    fn every_property_revision_keeps_owner_local_aliases() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}"><w:body>
+<w:p><w:pPr xmlns:pa="{W_NS}"><w:numPr xmlns:na="{W_NS}"><na:ins na:id="501" na:author="Ada"/><na:ins na:id="502" na:author="Ada"/></w:numPr><pa:pPrChange pa:id="101" pa:author="Ada"><pa:pPr/></pa:pPrChange><pa:pPrChange pa:id="102" pa:author="Ada"><pa:pPr/></pa:pPrChange></w:pPr><w:r><w:t>x</w:t></w:r></w:p>
+<w:tbl><w:tblPr xmlns:ta="{W_NS}"><ta:tblPrChange ta:id="301" ta:author="Ada"><ta:tblPr/></ta:tblPrChange><ta:tblPrChange ta:id="302" ta:author="Ada"><ta:tblPr/></ta:tblPrChange></w:tblPr><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>
+<w:sectPr xmlns:sa="{W_NS}"><sa:sectPrChange sa:id="401" sa:author="Ada"><sa:sectPr/></sa:sectPrChange><sa:sectPrChange sa:id="402" sa:author="Ada"><sa:sectPr/></sa:sectPrChange></w:sectPr>
+</w:body></w:document>"#
+        );
+        let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
+        let output = String::from_utf8(document.to_xml().expect("document writes")).unwrap();
+        for (prefix, local) in [
+            ("pa", "pPrChange"),
+            ("na", "ins"),
+            ("ta", "tblPrChange"),
+            ("sa", "sectPrChange"),
+        ] {
+            assert_eq!(output.matches(&format!("<{prefix}:{local} ")).count(), 2);
+            assert_eq!(
+                output
+                    .matches(&format!(r#"xmlns:{prefix}="{W_NS}""#))
+                    .count(),
+                2
+            );
+        }
+
+        let reopened = CT_Document::from_xml(output.as_bytes()).expect("output reparses");
+        let mut ids = reopened
+            .revisions()
+            .iter()
+            .map(|revision| revision.id())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, [102, 302, 402, 502]);
+        let rewritten = String::from_utf8(reopened.to_xml().expect("output rewrites")).unwrap();
+        for prefix in ["pa", "na", "ta", "sa"] {
+            assert_eq!(
+                rewritten
+                    .matches(&format!(r#"xmlns:{prefix}="{W_NS}""#))
+                    .count(),
+                2
+            );
+        }
     }
 
     #[test]
