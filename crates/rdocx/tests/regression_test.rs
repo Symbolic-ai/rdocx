@@ -447,6 +447,49 @@ fn duplicate_property_revisions_round_trip_and_resolve_one_identity_at_a_time() 
         assert_eq!(reopened.accept_revision_id(id).unwrap(), 1);
     }
     assert!(reopened.revisions().is_empty());
+
+    let mut rejected = document_with_content_controls(&xml);
+    for id in [102, 202, 302, 402, 502] {
+        assert_eq!(rejected.reject_revision_id(id).unwrap(), 1, "id {id}");
+    }
+    assert_eq!(sorted_ids(&rejected), [101, 201, 301, 401, 501]);
+    let rejected_xml = document_xml(&mut rejected);
+    for id in [101, 201, 301, 401, 501] {
+        assert_eq!(rejected_xml.matches(&format!(r#"w:id="{id}""#)).count(), 1);
+    }
+    for mark in ["num", "paragraph", "run", "table", "section"] {
+        assert_eq!(
+            rejected_xml.matches(&format!(r#"x:mark="{mark}""#)).count(),
+            1
+        );
+    }
+
+    let mut rejected = Document::from_bytes(&rejected.to_bytes().unwrap()).unwrap();
+    assert_eq!(sorted_ids(&rejected), [101, 201, 301, 401, 501]);
+    for id in [101, 201, 301, 401, 501] {
+        assert_eq!(rejected.reject_revision_id(id).unwrap(), 1);
+    }
+    assert!(rejected.revisions().is_empty());
+    let rejected_xml = document_xml(&mut rejected);
+    for mark in ["num", "paragraph", "run", "table", "section"] {
+        assert_eq!(
+            rejected_xml.matches(&format!(r#"x:mark="{mark}""#)).count(),
+            1
+        );
+    }
+
+    let mut rejected_all = document_with_content_controls(&xml);
+    assert_eq!(rejected_all.reject_all().unwrap(), 10);
+    assert!(rejected_all.revisions().is_empty());
+    let rejected_all_xml = document_xml(&mut rejected_all);
+    for mark in ["num", "paragraph", "run", "table", "section"] {
+        assert_eq!(
+            rejected_all_xml
+                .matches(&format!(r#"x:mark="{mark}""#))
+                .count(),
+            1
+        );
+    }
 }
 
 #[test]

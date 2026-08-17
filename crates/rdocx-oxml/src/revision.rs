@@ -879,9 +879,9 @@ mod tests {
     fn every_property_revision_keeps_owner_local_aliases() {
         let xml = format!(
             r#"<w:document xmlns:w="{W_NS}"><w:body>
-<w:p><w:pPr xmlns:pa="{W_NS}"><w:numPr xmlns:na="{W_NS}"><na:ins na:id="501" na:author="Ada"/><na:ins na:id="502" na:author="Ada"/></w:numPr><pa:pPrChange pa:id="101" pa:author="Ada"><pa:pPr/></pa:pPrChange><pa:pPrChange pa:id="102" pa:author="Ada"><pa:pPr/></pa:pPrChange></w:pPr><w:r><w:t>x</w:t></w:r></w:p>
-<w:tbl><w:tblPr xmlns:ta="{W_NS}"><ta:tblPrChange ta:id="301" ta:author="Ada"><ta:tblPr/></ta:tblPrChange><ta:tblPrChange ta:id="302" ta:author="Ada"><ta:tblPr/></ta:tblPrChange></w:tblPr><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>
-<w:sectPr xmlns:sa="{W_NS}"><sa:sectPrChange sa:id="401" sa:author="Ada"><sa:sectPr/></sa:sectPrChange><sa:sectPrChange sa:id="402" sa:author="Ada"><sa:sectPr/></sa:sectPrChange></w:sectPr>
+<w:p><w:pPr xmlns:pa="{W_NS}" xmlns:px="urn:paragraph"><w:numPr xmlns:na="{W_NS}" xmlns:nx="urn:numbering"><na:ins na:id="501" na:author="Ada"/><nx:ins nx:mark="raw"/><na:ins na:id="502" na:author="Ada"/></w:numPr><pa:pPrChange pa:id="101" pa:author="Ada"><pa:pPr/></pa:pPrChange><px:pPrChange px:mark="raw"/><pa:pPrChange pa:id="102" pa:author="Ada"><pa:pPr/></pa:pPrChange></w:pPr><w:r><w:t>x</w:t></w:r></w:p>
+<w:tbl><w:tblPr xmlns:ta="{W_NS}" xmlns:tx="urn:table"><ta:tblPrChange ta:id="301" ta:author="Ada"><ta:tblPr/></ta:tblPrChange><tx:tblPrChange tx:mark="raw"/><ta:tblPrChange ta:id="302" ta:author="Ada"><ta:tblPr/></ta:tblPrChange></w:tblPr><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>
+<w:sectPr xmlns:sa="{W_NS}" xmlns:sx="urn:section"><sa:sectPrChange sa:id="401" sa:author="Ada"><sa:sectPr/></sa:sectPrChange><sx:sectPrChange sx:mark="raw"/><sa:sectPrChange sa:id="402" sa:author="Ada"><sa:sectPr/></sa:sectPrChange></w:sectPr>
 </w:body></w:document>"#
         );
         let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
@@ -900,6 +900,33 @@ mod tests {
                 2
             );
         }
+        for (prefix, namespace, local) in [
+            ("px", "urn:paragraph", "pPrChange"),
+            ("nx", "urn:numbering", "ins"),
+            ("tx", "urn:table", "tblPrChange"),
+            ("sx", "urn:section", "sectPrChange"),
+        ] {
+            assert_eq!(output.matches(&format!("<{prefix}:{local} ")).count(), 1);
+            assert_eq!(
+                output
+                    .matches(&format!(r#"xmlns:{prefix}="{namespace}""#))
+                    .count(),
+                1
+            );
+        }
+        for (first, foreign, second) in [
+            (101, "<px:pPrChange", 102),
+            (501, "<nx:ins", 502),
+            (301, "<tx:tblPrChange", 302),
+            (401, "<sx:sectPrChange", 402),
+        ] {
+            let positions = [
+                output.find(&format!(r#"id="{first}""#)).unwrap(),
+                output.find(foreign).unwrap(),
+                output.find(&format!(r#"id="{second}""#)).unwrap(),
+            ];
+            assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        }
 
         let reopened = CT_Document::from_xml(output.as_bytes()).expect("output reparses");
         let mut ids = reopened
@@ -916,6 +943,19 @@ mod tests {
                     .matches(&format!(r#"xmlns:{prefix}="{W_NS}""#))
                     .count(),
                 2
+            );
+        }
+        for (prefix, namespace) in [
+            ("px", "urn:paragraph"),
+            ("nx", "urn:numbering"),
+            ("tx", "urn:table"),
+            ("sx", "urn:section"),
+        ] {
+            assert_eq!(
+                rewritten
+                    .matches(&format!(r#"xmlns:{prefix}="{namespace}""#))
+                    .count(),
+                1
             );
         }
     }

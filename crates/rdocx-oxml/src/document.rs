@@ -299,7 +299,10 @@ impl CT_SectPr {
                         }
                     } else {
                         // Capture unknown empty elements
-                        sect.extra_xml.push(capture_empty_element(e)?);
+                        sect.extra_xml.push(crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?);
                     }
                 }
                 Ok(Event::Start(ref e)) => {
@@ -323,7 +326,10 @@ impl CT_SectPr {
                         }
                     } else {
                         // Capture unknown start elements as raw XML
-                        sect.extra_xml.push(capture_element(reader, e)?);
+                        sect.extra_xml.push(crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?);
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"sectPr") => {

@@ -275,7 +275,11 @@ impl CT_PPr {
                             ppr.revision_xml.push(raw);
                         }
                     } else if matches_local_name(name.as_ref(), b"pPrChange") {
-                        ppr.revision_xml.push(capture_element(reader, e)?);
+                        ppr.revision_xml
+                            .push(crate::text::raw_with_external_bindings(
+                                &capture_element(reader, e)?,
+                                owner_bindings,
+                            )?);
                     } else {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
@@ -358,7 +362,11 @@ impl CT_PPr {
                             ppr.revision_xml.push(raw);
                         }
                     } else if matches_local_name(name.as_ref(), b"pPrChange") {
-                        ppr.revision_xml.push(capture_empty_element(e)?);
+                        ppr.revision_xml
+                            .push(crate::text::raw_with_external_bindings(
+                                &capture_empty_element(e)?,
+                                owner_bindings,
+                            )?);
                     }
                 }
                 Ok(Event::End(ref e))
@@ -412,7 +420,11 @@ impl CT_PPr {
                             ppr.numbering_revision_xml.push(raw);
                         }
                     } else if matches_local_name(name.as_ref(), b"ins") {
-                        ppr.numbering_revision_xml.push(capture_empty_element(e)?);
+                        ppr.numbering_revision_xml
+                            .push(crate::text::raw_with_external_bindings(
+                                &capture_empty_element(e)?,
+                                owner_bindings,
+                            )?);
                     }
                 }
                 Ok(Event::Start(ref e)) => {
@@ -432,7 +444,11 @@ impl CT_PPr {
                             ppr.numbering_revision_xml.push(raw);
                         }
                     } else if matches_local_name(e.name().as_ref(), b"ins") {
-                        ppr.numbering_revision_xml.push(capture_element(reader, e)?);
+                        ppr.numbering_revision_xml
+                            .push(crate::text::raw_with_external_bindings(
+                                &capture_element(reader, e)?,
+                                owner_bindings,
+                            )?);
                     } else {
                         reader.read_to_end_into(e.name(), &mut Vec::new())?;
                     }

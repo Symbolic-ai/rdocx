@@ -550,7 +550,11 @@ impl CT_TblPr {
                             pr.revision_xml.push(raw);
                         }
                     } else if matches_local_name(name.as_ref(), b"tblPrChange") {
-                        pr.revision_xml.push(capture_empty_element(e)?);
+                        pr.revision_xml
+                            .push(crate::text::raw_with_external_bindings(
+                                &capture_empty_element(e)?,
+                                owner_bindings,
+                            )?);
                     }
                 }
                 Ok(Event::Start(ref e)) => {
@@ -577,7 +581,11 @@ impl CT_TblPr {
                             pr.revision_xml.push(raw);
                         }
                     } else if matches_local_name(name.as_ref(), b"tblPrChange") {
-                        pr.revision_xml.push(capture_element(reader, e)?);
+                        pr.revision_xml
+                            .push(crate::text::raw_with_external_bindings(
+                                &capture_element(reader, e)?,
+                                owner_bindings,
+                            )?);
                     } else {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }

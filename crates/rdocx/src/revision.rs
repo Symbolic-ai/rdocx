@@ -324,15 +324,24 @@ impl<'a> XmlTree<'a> {
             return self.render_selected_revision(index, metadata.kind, state, promoted_namespaces);
         }
 
-        if let Some((change, prior)) = self.selected_property_change(index, state)? {
-            state.resolved.insert(change);
-            if matches!(state.resolution, Resolution::Reject) {
-                self.validate_selected_descendants(index, state)?;
+        if matches!(state.resolution, Resolution::Reject) {
+            let changes = self.selected_property_changes(index, state)?;
+            if let Some((change, prior)) = changes.first().copied() {
+                for (selected, _) in &changes {
+                    state.resolved.insert(*selected);
+                    self.validate_selected_descendants(*selected, state)?;
+                }
                 let namespaces = merged_namespaces(
                     &merged_namespaces(promoted_namespaces, &element.namespace_declarations),
                     &self.elements[change].namespace_declarations,
                 );
-                return self.render_with_namespaces(prior, state, false, &namespaces);
+                return self.render_rejected_property_owner(
+                    index,
+                    prior,
+                    &changes,
+                    state,
+                    &namespaces,
+                );
             }
         }
 
@@ -345,6 +354,14 @@ impl<'a> XmlTree<'a> {
                 .kind;
             removes_content(state.resolution, kind)
         }) {
+            if element.local == "numPr" {
+                return self.render_rejected_numbering_owner(
+                    index,
+                    &markers,
+                    state,
+                    promoted_namespaces,
+                );
+            }
             self.validate_selected_descendants(index, state)?;
             return Ok(Vec::new());
         }
@@ -497,23 +514,23 @@ impl<'a> XmlTree<'a> {
         Ok(output)
     }
 
-    fn selected_property_change(
+    fn selected_property_changes(
         &self,
         index: usize,
         state: &RenderState<'_>,
-    ) -> Result<Option<(usize, usize)>> {
+    ) -> Result<Vec<(usize, usize)>> {
         let element = &self.elements[index];
         let expected = match element.local.as_str() {
             "rPr" => RevisionKind::RunPropertyChange,
             "pPr" => RevisionKind::ParagraphPropertyChange,
             "tblPr" => RevisionKind::TablePropertyChange,
             "sectPr" => RevisionKind::SectionPropertyChange,
-            _ => return Ok(None),
+            _ => return Ok(Vec::new()),
         };
         element
             .children
             .iter()
-            .find_map(|child| {
+            .filter_map(|child| {
                 let metadata = self.elements[*child].revision.as_ref()?;
                 (metadata.kind == expected && state.scope.matches(metadata)).then_some(*child)
             })
@@ -521,7 +538,85 @@ impl<'a> XmlTree<'a> {
                 self.prior_property(change, expected)
                     .map(|prior| (change, prior))
             })
-            .transpose()
+            .collect()
+    }
+
+    fn render_rejected_property_owner(
+        &self,
+        owner: usize,
+        prior: usize,
+        selected: &[(usize, usize)],
+        state: &mut RenderState<'_>,
+        promoted_namespaces: &[(String, String)],
+    ) -> Result<Vec<u8>> {
+        let prior_xml = self.render_with_namespaces(prior, state, false, promoted_namespaces)?;
+        let selected = selected
+            .iter()
+            .map(|(change, _)| *change)
+            .collect::<HashSet<_>>();
+        let retained =
+            self.render_retained_owner_children(owner, &selected, state, promoted_namespaces)?;
+        append_children_to_element(&prior_xml, &retained)
+    }
+
+    fn render_rejected_numbering_owner(
+        &self,
+        owner: usize,
+        selected: &[usize],
+        state: &mut RenderState<'_>,
+        promoted_namespaces: &[(String, String)],
+    ) -> Result<Vec<u8>> {
+        let selected = selected.iter().copied().collect::<HashSet<_>>();
+        for marker in &selected {
+            state.resolved.insert(*marker);
+            self.validate_selected_descendants(*marker, state)?;
+        }
+        let retained =
+            self.render_retained_owner_children(owner, &selected, state, promoted_namespaces)?;
+        if retained.is_empty() {
+            return Ok(Vec::new());
+        }
+        let element = &self.elements[owner];
+        let mut output = self.source[element.start..element.open_end].to_vec();
+        output.extend_from_slice(&retained);
+        output.extend_from_slice(&self.source[element.close_start..element.end]);
+        Ok(output)
+    }
+
+    fn render_retained_owner_children(
+        &self,
+        owner: usize,
+        selected: &HashSet<usize>,
+        state: &mut RenderState<'_>,
+        promoted_namespaces: &[(String, String)],
+    ) -> Result<Vec<u8>> {
+        let element = &self.elements[owner];
+        let child_namespaces =
+            merged_namespaces(promoted_namespaces, &element.namespace_declarations);
+        let mut output = Vec::new();
+        for child in &element.children {
+            let child_element = &self.elements[*child];
+            if !selected.contains(child)
+                && (child_element.revision.is_some()
+                    || !child_element.word
+                    || retained_revision_local(&element.local, &child_element.local)
+                    || self.subtree_contains_revision(*child))
+            {
+                output.extend_from_slice(&self.render_with_namespaces(
+                    *child,
+                    state,
+                    false,
+                    &child_namespaces,
+                )?);
+            }
+        }
+        Ok(output)
+    }
+
+    fn subtree_contains_revision(&self, index: usize) -> bool {
+        self.elements[index].children.iter().any(|child| {
+            self.elements[*child].revision.is_some() || self.subtree_contains_revision(*child)
+        })
     }
 
     fn prior_property(&self, change: usize, kind: RevisionKind) -> Result<usize> {
@@ -814,6 +909,70 @@ fn merged_namespaces(
         }
     }
     merged
+}
+
+fn append_children_to_element(element_xml: &[u8], children: &[u8]) -> Result<Vec<u8>> {
+    if children.is_empty() {
+        return Ok(element_xml.to_vec());
+    }
+
+    let mut reader = Reader::from_reader(element_xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    loop {
+        let before = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer).map_err(xml_error)? {
+            Event::Start(_) => {
+                depth += 1;
+            }
+            Event::Empty(element) if depth == 0 => {
+                let end = reader.buffer_position() as usize;
+                let slash = element_xml[..end]
+                    .iter()
+                    .rposition(|byte| *byte == b'/')
+                    .ok_or_else(|| {
+                        Error::Other("empty XML element has no closing slash".to_owned())
+                    })?;
+                let name = element.name();
+                let mut output = element_xml[..slash].to_vec();
+                output.push(b'>');
+                output.extend_from_slice(children);
+                output.extend_from_slice(b"</");
+                output.extend_from_slice(name.as_ref());
+                output.push(b'>');
+                output.extend_from_slice(&element_xml[end..]);
+                return Ok(output);
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    let mut output = element_xml[..before].to_vec();
+                    output.extend_from_slice(children);
+                    output.extend_from_slice(&element_xml[before..]);
+                    return Ok(output);
+                }
+            }
+            Event::Eof => {
+                return Err(Error::Other(
+                    "property XML ended before its root element closed".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn retained_revision_local(owner: &str, child: &str) -> bool {
+    match owner {
+        "pPr" => child == "pPrChange",
+        "rPr" => matches!(child, "rPrChange" | "ins" | "del"),
+        "tblPr" => child == "tblPrChange",
+        "sectPr" => child == "sectPrChange",
+        "numPr" => child == "ins",
+        _ => false,
+    }
 }
 
 fn inject_namespace_declarations(
