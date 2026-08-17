@@ -407,6 +407,12 @@ pub struct ChartData {
     pub number_format: Option<String>,
 }
 
+pub fn authored_chart_parts(
+    kind: ChartKind,
+    data: &ChartData,
+    workbook_relationship_id: &str,
+) -> Result<(Vec<u8>, Vec<u8>)>;
+
 impl Presentation {
     pub fn add_chart(
         &mut self,
@@ -419,22 +425,35 @@ impl Presentation {
         data: &ChartData,
     ) -> Result<ShapeRef<'_>>;
 }
+
+impl Document {
+    pub fn add_chart(
+        &mut self,
+        kind: ChartKind,
+        width: Length,
+        height: Length,
+        data: &ChartData,
+    ) -> Result<Paragraph<'_>>;
+}
 ```
 
-The owning facade performs this mutation because the package parts and
-relationships are not available through `SlideMut`. `add_chart` validates the
-complete data value before mutation. Categories and series must be nonempty,
-series lengths must match the category count, numeric values must be finite,
-number formats must be valid, and both chart extents must be positive. Pie and
-doughnut charts accept one series. Scatter categories must parse as finite
-numeric values.
+`ChartKind`, `ChartData`, validation, and the concrete ChartML plus workbook
+construction live in `oxml-chart`. Both facades re-export the input types.
+The shared helper validates the complete data value before producing either
+part. Categories and series must be nonempty, series lengths must match the
+category count, numeric values must be finite, and number formats must be
+valid. Pie and doughnut charts accept one series. Scatter categories must
+parse as finite numeric values. Each owning facade validates that both chart
+extents are positive before staging package mutation.
 
-One call writes the typed chart part, one editable workbook part, the
-slide-to-chart and chart-to-workbook relationships, both content-type
-overrides, and the `p:graphicFrame` on the slide. Workbook cells and ChartML
-caches are derived from the same `ChartData`. The package and slide changes are
-staged and become visible together only after serialization succeeds. Chart
-parts use `/ppt/charts/chartN.xml` and `/ppt/embeddings/WorkbookN.xlsx`.
+The Presentation facade owns its mutation because package parts and
+relationships are not available through `SlideMut`. One call writes the typed
+chart part, one editable workbook part, the slide-to-chart and
+chart-to-workbook relationships, both content-type overrides, and the
+`p:graphicFrame` on the slide. Workbook cells and ChartML caches are derived
+from the same `ChartData`. The package and slide changes are staged and become
+visible together only after serialization succeeds. Chart parts use
+`/ppt/charts/chartN.xml` and `/ppt/embeddings/WorkbookN.xlsx`.
 Each numbered family independently takes the next positive suffix after its
 greatest occupied suffix, following the allocation rule in
 `04-opc-and-packaging.md`.
@@ -446,11 +465,14 @@ fixed `a:`, `c:`, and `r:` prefixes and emits the ChartML graphic payload in
 schema order. Opened inline and anchored elements retain their complete raw XML
 as the sole write-back source, including unmodelled producer children.
 
-The Word facade stages a typed chart, editable workbook, document-to-chart
-relationship, chart-to-workbook package relationship, both content-type
-overrides, and the drawing as one private package mutation. Chart and workbook
-names allocate independently after the greatest occupied positive suffix.
-Public chart-data construction remains outside this package seam.
+`Document::add_chart` uses Word flow placement rather than slide coordinates.
+It accepts width and height, appends one paragraph containing an inline chart
+drawing, and returns that paragraph for ordinary formatting. The Word facade
+stages the shared helper output, document-to-chart relationship,
+chart-to-workbook package relationship, both content-type overrides, and the
+drawing as one atomic package mutation. Serialization or validation failure
+leaves the document unchanged. Chart and workbook names allocate independently
+after the greatest occupied positive suffix.
 
 The reviewed Word candidate has SHA-256
 `79e9b9ff9e7557dbd09a365bb8c189806e700ed48ca768b27d7158cf2b41370b`.

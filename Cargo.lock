@@ -487,6 +487,7 @@ dependencies = [
  "oxml-layout",
  "oxml-opc",
  "oxml-pdf",
+ "oxml-sml",
  "quick-xml",
  "tiny-skia",
 ]

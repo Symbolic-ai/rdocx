@@ -1,6 +1,6 @@
 # F-158, Document::add_chart
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S45
 **Size**: M
 **Depends on**: F-157
@@ -118,12 +118,12 @@ call `Document::add_chart`.
 
 ## Implementation checklist
 
-- [ ] Move the common authoring data types, validation, and part serialization into `oxml-chart`.
-- [ ] Preserve the existing `rpptx` public paths through re-exports and shared calls.
-- [ ] Add the atomic inline `Document::add_chart` method.
-- [ ] Add bar, line, pie, cache, workbook, placement, and rollback regressions.
-- [ ] Run focused shared-chart, rdocx, rpptx, package, and unchanged-output checks.
-- [ ] Update exactly HLD 09.
+- [x] Move the common authoring data types, validation, and part serialization into `oxml-chart`.
+- [x] Preserve the existing `rpptx` public paths through re-exports and shared calls.
+- [x] Add the atomic inline `Document::add_chart` method.
+- [x] Add bar, line, pie, cache, workbook, placement, and rollback regressions.
+- [x] Run focused shared-chart, rdocx, rpptx, package, and unchanged-output checks.
+- [x] Update exactly HLD 09.
 
 ## Open questions
 

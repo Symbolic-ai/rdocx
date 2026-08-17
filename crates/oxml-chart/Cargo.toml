@@ -21,6 +21,7 @@ tag-name = "rpptx-v{{version}}"
 oxml-core.workspace = true
 oxml-drawing.workspace = true
 oxml-layout.workspace = true
+oxml-sml.workspace = true
 quick-xml.workspace = true
 
 [dev-dependencies]
