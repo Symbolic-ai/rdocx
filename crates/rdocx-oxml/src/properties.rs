@@ -157,20 +157,20 @@ const RPR_CAPS_SLOT: u8 = 6;
 const RPR_SMALL_CAPS_SLOT: u8 = 7;
 const RPR_STRIKE_SLOT: u8 = 8;
 const RPR_DSTRIKE_SLOT: u8 = 9;
-const RPR_VANISH_SLOT: u8 = 10;
-const RPR_COLOR_SLOT: u8 = 11;
-const RPR_SPACING_SLOT: u8 = 12;
-const RPR_WIDTH_SLOT: u8 = 13;
-const RPR_POSITION_SLOT: u8 = 14;
-const RPR_SIZE_SLOT: u8 = 15;
-const RPR_SIZE_CS_SLOT: u8 = 16;
-const RPR_HIGHLIGHT_SLOT: u8 = 17;
-const RPR_UNDERLINE_SLOT: u8 = 18;
-const RPR_SHADING_SLOT: u8 = 19;
-const RPR_VERT_ALIGN_SLOT: u8 = 20;
-const RPR_MARKER_SLOT: u8 = 21;
-const RPR_CHANGE_SLOT: u8 = 22;
-const RPR_END_SLOT: u8 = 23;
+const RPR_VANISH_SLOT: u8 = 16;
+const RPR_COLOR_SLOT: u8 = 18;
+const RPR_SPACING_SLOT: u8 = 19;
+const RPR_WIDTH_SLOT: u8 = 20;
+const RPR_POSITION_SLOT: u8 = 22;
+const RPR_SIZE_SLOT: u8 = 23;
+const RPR_SIZE_CS_SLOT: u8 = 24;
+const RPR_HIGHLIGHT_SLOT: u8 = 25;
+const RPR_UNDERLINE_SLOT: u8 = 26;
+const RPR_SHADING_SLOT: u8 = 29;
+const RPR_VERT_ALIGN_SLOT: u8 = 31;
+const RPR_MARKER_SLOT: u8 = 39;
+const RPR_CHANGE_SLOT: u8 = 40;
+const RPR_END_SLOT: u8 = 41;
 
 fn record_rpr_modeled(
     rpr: &mut CT_RPr,
@@ -178,9 +178,18 @@ fn record_rpr_modeled(
     occurrences: &mut [usize],
     slot: u8,
 ) {
-    let occurrence = occurrences[slot as usize];
+    let occurrence = if slot == RPR_MARKER_SLOT {
+        occurrences[slot as usize]
+    } else {
+        0
+    };
     flush_rpr_raw(rpr, pending_raw, slot, occurrence);
     occurrences[slot as usize] += 1;
+}
+
+fn record_rpr_raw_at(rpr: &mut CT_RPr, raw: Vec<u8>, slot: u8, occurrence: usize) {
+    rpr.revision_xml.push(raw);
+    rpr.revision_xml_positions.push((slot, occurrence));
 }
 
 fn flush_rpr_raw(rpr: &mut CT_RPr, pending_raw: &mut Vec<Vec<u8>>, slot: u8, occurrence: usize) {
@@ -970,7 +979,12 @@ impl CT_RPr {
                             pending_raw.push(raw);
                         }
                     } else {
-                        pending_raw.push(capture_empty_element(e)?);
+                        let raw = capture_empty_element(e)?;
+                        if let Some(slot) = rpr_schema_slot(name.as_ref(), &prefixes) {
+                            record_rpr_raw_at(&mut rpr, raw, slot, 0);
+                        } else {
+                            pending_raw.push(raw);
+                        }
                     }
                 }
                 Ok(Event::Start(ref e)) => {
@@ -1004,7 +1018,12 @@ impl CT_RPr {
                             pending_raw.push(raw);
                         }
                     } else {
-                        pending_raw.push(capture_element(reader, e)?);
+                        let raw = capture_element(reader, e)?;
+                        if let Some(slot) = rpr_schema_slot(e.name().as_ref(), &prefixes) {
+                            record_rpr_raw_at(&mut rpr, raw, slot, 0);
+                        } else {
+                            pending_raw.push(raw);
+                        }
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"rPr") => {
@@ -1017,12 +1036,12 @@ impl CT_RPr {
             buf.clear();
         }
 
-        flush_rpr_raw(
-            &mut rpr,
-            &mut pending_raw,
-            RPR_END_SLOT,
-            occurrences[RPR_END_SLOT as usize],
-        );
+        let final_slot = if rpr.change.is_some() {
+            RPR_CHANGE_SLOT
+        } else {
+            RPR_END_SLOT
+        };
+        flush_rpr_raw(&mut rpr, &mut pending_raw, final_slot, 0);
 
         Ok(rpr)
     }
@@ -1189,11 +1208,11 @@ impl CT_RPr {
         for revision in &self.revision_markers {
             revision.write_xml_with_word_override(writer, foreign_word_namespace)?;
         }
-        if let Some(change) = &self.change {
-            change.write_xml_with_word_override(writer, foreign_word_namespace)?;
-        }
         for raw in &self.revision_xml {
             crate::text::write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
+        }
+        if let Some(change) = &self.change {
+            change.write_xml_with_word_override(writer, foreign_word_namespace)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:rPr")))?;
@@ -1436,21 +1455,45 @@ fn rpr_slot_for_name(local: &[u8]) -> u8 {
         b"smallCaps" => RPR_SMALL_CAPS_SLOT,
         b"strike" => RPR_STRIKE_SLOT,
         b"dstrike" => RPR_DSTRIKE_SLOT,
+        b"outline" => 10,
+        b"shadow" => 11,
+        b"emboss" => 12,
+        b"imprint" => 13,
+        b"noProof" => 14,
+        b"snapToGrid" => 15,
         b"vanish" => RPR_VANISH_SLOT,
+        b"webHidden" => 17,
         b"color" => RPR_COLOR_SLOT,
         b"spacing" => RPR_SPACING_SLOT,
         b"w" => RPR_WIDTH_SLOT,
+        b"kern" => 21,
         b"position" => RPR_POSITION_SLOT,
         b"sz" => RPR_SIZE_SLOT,
         b"szCs" => RPR_SIZE_CS_SLOT,
         b"highlight" => RPR_HIGHLIGHT_SLOT,
         b"u" => RPR_UNDERLINE_SLOT,
+        b"effect" => 27,
+        b"bdr" => 28,
         b"shd" => RPR_SHADING_SLOT,
+        b"fitText" => 30,
         b"vertAlign" => RPR_VERT_ALIGN_SLOT,
+        b"rtl" => 32,
+        b"cs" => 33,
+        b"em" => 34,
+        b"lang" => 35,
+        b"eastAsianLayout" => 36,
+        b"specVanish" => 37,
+        b"oMath" => 38,
         b"ins" | b"del" => RPR_MARKER_SLOT,
         b"rPrChange" => RPR_CHANGE_SLOT,
         _ => RPR_END_SLOT,
     }
+}
+
+fn rpr_schema_slot(name: &[u8], word_prefixes: &[String]) -> Option<u8> {
+    let local = name.rsplit(|byte| *byte == b':').next().unwrap_or(name);
+    let slot = rpr_slot_for_name(local);
+    (slot != RPR_END_SLOT && is_word_element(name, local, word_prefixes)).then_some(slot)
 }
 
 pub(crate) fn word_prefixes_at(

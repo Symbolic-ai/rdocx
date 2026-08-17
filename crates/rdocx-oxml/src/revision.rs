@@ -885,7 +885,7 @@ mod tests {
             r#"<f:box xmlns:f="urn:foreign" xmlns:w2="urn:two" f:value=">"><w:nested/></f:box>"#;
         let raw_at_boundary = r#"<w:boundary/>"#;
         let xml = format!(
-            r#"<w:document xmlns:w="{W_NS}" xmlns:wx="{W_NS}"><w:body><w:p><wx:hyperlink xmlns:w="urn:foreign"><wx:r>{foreign_run_properties}<wx:rPr><w:pre/><wx:b/><w:b/><w:between/><wx:i/><w:beforeChange/><wx:rPrChange wx:id="62" wx:author="Ada"><wx:rPr><wx:b/></wx:rPr></wx:rPrChange><w:afterChange/></wx:rPr>{foreign_text}<wx:t>before</wx:t>{foreign_drawing}<wx:t>middle</wx:t>{foreign_after}{lexical_literal}{nested_word}</wx:r><wx:ins wx:id="61" wx:author="Ada"><wx:r><wx:t>reported</wx:t></wx:r></wx:ins>{raw_at_boundary}<wx:r><wx:t>after</wx:t></wx:r></wx:hyperlink></w:p></w:body></w:document>"#
+            r#"<w:document xmlns:w="{W_NS}" xmlns:wx="{W_NS}"><w:body><w:p><wx:hyperlink xmlns:w="urn:foreign"><wx:r>{foreign_run_properties}<wx:rPr><wx:rStyle><wx:opaque/></wx:rStyle><w:pre/><wx:b wx:val="0"/><w:betweenDuplicate/><wx:b/><w:b/><w:between/><wx:i/><w:beforeChange/><wx:rPrChange wx:id="62" wx:author="Ada"><wx:rPr><wx:b/></wx:rPr></wx:rPrChange><w:afterChange/></wx:rPr>{foreign_text}<wx:t>before</wx:t>{foreign_drawing}<wx:t>middle</wx:t>{foreign_after}{lexical_literal}{nested_word}</wx:r><wx:ins wx:id="61" wx:author="Ada"><wx:r><wx:t>reported</wx:t></wx:r></wx:ins>{raw_at_boundary}<wx:r><wx:t>after</wx:t></wx:r></wx:hyperlink></w:p></w:body></w:document>"#
         );
         let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
 
@@ -907,6 +907,7 @@ mod tests {
         let foreign_run_properties = r#"<w:rPr xmlns:w="urn:foreign"/>"#;
         let foreign_property = r#"<w:b xmlns:w="urn:foreign"/>"#;
         let foreign_before_property = r#"<w:pre xmlns:w="urn:foreign"/>"#;
+        let foreign_between_duplicate = r#"<w:betweenDuplicate xmlns:w="urn:foreign"/>"#;
         let foreign_between_property = r#"<w:between xmlns:w="urn:foreign"/>"#;
         let foreign_before_change = r#"<w:beforeChange xmlns:w="urn:foreign"/>"#;
         let foreign_after_change = r#"<w:afterChange xmlns:w="urn:foreign"/>"#;
@@ -916,6 +917,7 @@ mod tests {
         for raw in [
             foreign_run_properties,
             foreign_before_property,
+            foreign_between_duplicate,
             foreign_property,
             foreign_between_property,
             foreign_before_change,
@@ -934,14 +936,16 @@ mod tests {
         assert!(output.contains(&format!(r#"<w:r xmlns:w="{W_NS}">"#)));
         let positions = [
             output.find(foreign_run_properties).unwrap(),
+            output.find("<wx:rStyle>").unwrap(),
             output.find(foreign_before_property).unwrap(),
+            output.find(foreign_between_duplicate).unwrap(),
             output.find("<w:b/>").unwrap(),
             output.find(foreign_property).unwrap(),
             output.find(foreign_between_property).unwrap(),
             output.find("<w:i/>").unwrap(),
             output.find(foreign_before_change).unwrap(),
-            output.find(r#"wx:id="62""#).unwrap(),
             output.find(foreign_after_change).unwrap(),
+            output.find(r#"wx:id="62""#).unwrap(),
             output.find(foreign_text).unwrap(),
             output.find("<w:t>before</w:t>").unwrap(),
             output.find(foreign_drawing).unwrap(),

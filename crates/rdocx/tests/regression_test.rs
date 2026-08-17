@@ -635,7 +635,9 @@ fn run_mutations_keep_raw_children_at_live_boundaries() {
     ];
     assert!(appended_positions.windows(2).all(|pair| pair[0] < pair[1]));
 
-    let mut formatted = document_with_content_controls(&wrap_word_body(body));
+    let raw_property_body =
+        r#"<w:p><w:r><w:rPr><w:rStyle><w:opaque/></w:rStyle></w:rPr><w:t>A</w:t></w:r></w:p>"#;
+    let mut formatted = document_with_content_controls(&wrap_word_body(raw_property_body));
     formatted
         .paragraph_mut(0)
         .unwrap()
@@ -645,11 +647,9 @@ fn run_mutations_keep_raw_children_at_live_boundaries() {
     let formatted_xml = document_xml(&mut formatted);
     let formatted_positions = [
         formatted_xml.find("<w:rPr>").unwrap(),
-        formatted_xml.find("<w:before/>").unwrap(),
+        formatted_xml.find("<w:rStyle>").unwrap(),
+        formatted_xml.find("<w:b/>").unwrap(),
         formatted_xml.find("<w:t>A</w:t>").unwrap(),
-        formatted_xml.find("<w:between/>").unwrap(),
-        formatted_xml.find("<w:t>B</w:t>").unwrap(),
-        formatted_xml.find("<w:after/>").unwrap(),
     ];
     assert!(formatted_positions.windows(2).all(|pair| pair[0] < pair[1]));
 }
@@ -771,6 +771,33 @@ fn hyperlink_relationship_ids_use_expanded_names_and_safe_output_prefixes() {
     let spans = paragraph.hyperlink_spans();
     assert_eq!(spans[0].2, Some("right"));
     assert_eq!(spans[1].2, None);
+}
+
+#[test]
+fn content_control_display_insertion_keeps_trailing_raw_after_the_value() {
+    let xml = wrap_word_body(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="customer"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:before/><w:tab/><w:after/></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+
+    assert_eq!(
+        document
+            .set_content_control_value_by_tag("customer", "Ada")
+            .unwrap(),
+        1
+    );
+    let output = document_xml(&mut document);
+    let positions = [
+        output.find("<w:before/>").unwrap(),
+        output.find("<w:t>Ada</w:t>").unwrap(),
+        output.find("<w:after/>").unwrap(),
+    ];
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let reopened_xml = document_xml(&mut reopened);
+    assert_eq!(reopened_xml.matches("<w:before/>").count(), 1);
+    assert_eq!(reopened_xml.matches("<w:after/>").count(), 1);
 }
 
 #[test]
