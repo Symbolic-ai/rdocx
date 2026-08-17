@@ -180,6 +180,14 @@ cloned state, validates the resulting XML, then commits once and invalidates
 layout once. Any rejected control or binding leaves both document and package
 state unchanged.
 
+The revision model belongs to `rdocx-oxml`. Insertions, deletions, moves,
+property changes, deleted text, and contextual markers are typed read-only
+projections over captured WordprocessingML subtrees. The captured raw subtree
+is the sole serialization source until an explicit accept or reject operation
+replaces it. Invalid revision metadata remains preserved but is not reported.
+Prior run, paragraph, table, and section properties are projected with the
+namespace context of the revision element, including nested properties.
+
 `rdocx-layout` keeps the flow model: the engine, the paginator, blocks, tables
 and the style resolver. Slides do not paginate, so none of it transfers. The
 flow engine resolves Word relationship IDs to content-addressed `MediaId`
@@ -326,6 +334,12 @@ row, cell, and paragraph accessors expose each wrapped ordinary paragraph,
 table, row, cell, and run once while retaining the surrounding `CT_Sdt` for
 metadata lookup. The facade consumes this single WordprocessingML ownership
 tree and does not maintain a second content-control representation.
+
+Revision traversal follows that ownership tree through the main body, tables,
+cells, and content controls. `Document::revisions` reports every valid modeled
+revision once in document order as a borrowed `RevisionRef`. The facade does
+not copy or reparse the raw subtree, and revisions outside the main document
+part remain outside this traversal.
 
 Word comment mutation uses `RunPosition` and half-open `RunRange` values whose
 body indexes select top-level paragraphs and whose run indexes select insertion

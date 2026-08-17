@@ -396,7 +396,7 @@ fn replace_run_display(run: &mut CT_R, replacement: &mut DisplayReplacement<'_>)
     run.content.retain(|content| {
         matches!(
             content,
-            RunContent::Text(_) | RunContent::CommentReference { .. }
+            RunContent::Text(_) | RunContent::DeletedText(_) | RunContent::CommentReference { .. }
         )
     });
     for content in &mut run.content {

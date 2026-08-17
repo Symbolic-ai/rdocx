@@ -7,6 +7,9 @@ use crate::borders::{CT_PBdr, CT_Tabs};
 use crate::document::CT_SectPr;
 use crate::error::Result;
 use crate::namespace::{W_NS, matches_local_name};
+use crate::numbering::parse_scoped_rpr;
+use crate::raw_xml::{capture_element, capture_empty_element};
+use crate::revision::CT_Revision;
 use crate::shared::{ST_HighlightColor, ST_Jc, ST_OnOff, ST_Underline};
 use crate::units::{HalfPoint, Twips};
 
@@ -36,6 +39,30 @@ impl CT_Shd {
             } else if matches_local_name(key, b"color") {
                 color = Some(v.to_string());
             } else if matches_local_name(key, b"fill") {
+                fill = Some(v.to_string());
+            }
+        }
+
+        Ok(CT_Shd { val, color, fill })
+    }
+
+    pub(crate) fn from_xml_attrs_with_prefixes(
+        e: &BytesStart,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
+        let mut val = "clear".to_string();
+        let mut color = None;
+        let mut fill = None;
+
+        for attr in e.attributes() {
+            let attr = attr?;
+            let key = attr.key.as_ref();
+            let v = std::str::from_utf8(&attr.value)?;
+            if is_word_attribute(key, b"val", word_prefixes) {
+                val = v.to_string();
+            } else if is_word_attribute(key, b"color", word_prefixes) {
+                color = Some(v.to_string());
+            } else if is_word_attribute(key, b"fill", word_prefixes) {
                 fill = Some(v.to_string());
             }
         }
@@ -110,6 +137,14 @@ pub struct CT_PPr {
     pub num_id: Option<u32>,
     /// Section properties embedded in paragraph (section break)
     pub sect_pr: Option<CT_SectPr>,
+    /// Tracked insertion of the numbering properties.
+    pub numbering_revision: Option<CT_Revision>,
+    /// Malformed or foreign numbering markers retained inside `w:numPr`.
+    pub numbering_revision_xml: Vec<Vec<u8>>,
+    /// Prior paragraph properties from the schema-final `w:pPrChange`.
+    pub change: Option<CT_Revision>,
+    /// Malformed tracked-change elements retained without a typed projection.
+    pub revision_xml: Vec<Vec<u8>>,
 }
 
 #[allow(non_snake_case)]
@@ -118,7 +153,7 @@ impl CT_PPr {
         Self::from_xml_with_prefixes(reader, &["w".to_string()])
     }
 
-    fn from_xml_with_prefixes(
+    pub(crate) fn from_xml_with_prefixes(
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
     ) -> Result<Self> {
@@ -131,15 +166,25 @@ impl CT_PPr {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(name.as_ref(), b"rPr", &prefixes) {
-                        ppr.rpr = Some(CT_RPr::from_xml(reader)?);
+                        let raw = capture_element(reader, e)?;
+                        ppr.rpr = Some(parse_scoped_rpr(&raw, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"numPr", &prefixes) {
                         Self::parse_num_pr(reader, &mut ppr, &prefixes)?;
                     } else if is_word_element(name.as_ref(), b"pBdr", &prefixes) {
-                        ppr.borders = Some(CT_PBdr::from_xml(reader)?);
+                        ppr.borders = Some(CT_PBdr::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"tabs", &prefixes) {
                         ppr.tabs = Some(CT_Tabs::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"sectPr", &prefixes) {
-                        ppr.sect_pr = Some(CT_SectPr::from_xml(reader)?);
+                        ppr.sect_pr = Some(CT_SectPr::from_xml_with_prefixes(reader, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"pPrChange", &prefixes) {
+                        let raw = capture_element(reader, e)?;
+                        if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            ppr.change = Some(revision);
+                        } else {
+                            ppr.revision_xml.push(raw);
+                        }
+                    } else if matches_local_name(name.as_ref(), b"pPrChange") {
+                        ppr.revision_xml.push(capture_element(reader, e)?);
                     } else {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
@@ -207,6 +252,15 @@ impl CT_PPr {
                         }
                     } else if is_word_element(name.as_ref(), b"shd", &prefixes) {
                         ppr.shading = Some(CT_Shd::from_xml_attrs(e)?);
+                    } else if is_word_element(name.as_ref(), b"pPrChange", &prefixes) {
+                        let raw = capture_empty_element(e)?;
+                        if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            ppr.change = Some(revision);
+                        } else {
+                            ppr.revision_xml.push(raw);
+                        }
+                    } else if matches_local_name(name.as_ref(), b"pPrChange") {
+                        ppr.revision_xml.push(capture_empty_element(e)?);
                     }
                 }
                 Ok(Event::End(ref e))
@@ -243,6 +297,30 @@ impl CT_PPr {
                         && let Some(val) = get_word_val_attr(e, &prefixes)?
                     {
                         ppr.num_id = Some(val.parse()?);
+                    } else if is_word_element(name.as_ref(), b"ins", &prefixes) {
+                        let raw = capture_empty_element(e)?;
+                        if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            ppr.numbering_revision = Some(revision);
+                        } else {
+                            ppr.numbering_revision_xml.push(raw);
+                        }
+                    } else if matches_local_name(name.as_ref(), b"ins") {
+                        ppr.numbering_revision_xml.push(capture_empty_element(e)?);
+                    }
+                }
+                Ok(Event::Start(ref e)) => {
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(e.name().as_ref(), b"ins", &prefixes) {
+                        let raw = capture_element(reader, e)?;
+                        if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            ppr.numbering_revision = Some(revision);
+                        } else {
+                            ppr.numbering_revision_xml.push(raw);
+                        }
+                    } else if matches_local_name(e.name().as_ref(), b"ins") {
+                        ppr.numbering_revision_xml.push(capture_element(reader, e)?);
+                    } else {
+                        reader.read_to_end_into(e.name(), &mut Vec::new())?;
                     }
                 }
                 Ok(Event::End(ref e))
@@ -287,7 +365,11 @@ impl CT_PPr {
         }
 
         // numPr
-        if self.num_id.is_some() || self.num_ilvl.is_some() {
+        if self.num_id.is_some()
+            || self.num_ilvl.is_some()
+            || self.numbering_revision.is_some()
+            || !self.numbering_revision_xml.is_empty()
+        {
             writer.write_event(Event::Start(BytesStart::new("w:numPr")))?;
             if let Some(ilvl) = self.num_ilvl {
                 let mut e = BytesStart::new("w:ilvl");
@@ -298,6 +380,12 @@ impl CT_PPr {
                 let mut e = BytesStart::new("w:numId");
                 e.push_attribute(("w:val", buf.format(num_id)));
                 writer.write_event(Event::Empty(e))?;
+            }
+            if let Some(revision) = &self.numbering_revision {
+                revision.write_xml(writer)?;
+            }
+            for raw in &self.numbering_revision_xml {
+                writer.get_mut().write_all(raw)?;
             }
             writer.write_event(Event::End(BytesEnd::new("w:numPr")))?;
         }
@@ -394,6 +482,13 @@ impl CT_PPr {
             sect.to_xml(writer)?;
         }
 
+        if let Some(change) = &self.change {
+            change.write_xml(writer)?;
+        }
+        for raw in &self.revision_xml {
+            writer.get_mut().write_all(raw)?;
+        }
+
         writer.write_event(Event::End(BytesEnd::new("w:pPr")))?;
         Ok(())
     }
@@ -423,6 +518,10 @@ impl CT_PPr {
             && self.num_id.is_none()
             && self.num_ilvl.is_none()
             && self.sect_pr.is_none()
+            && self.numbering_revision.is_none()
+            && self.numbering_revision_xml.is_empty()
+            && self.change.is_none()
+            && self.revision_xml.is_empty()
     }
 
     /// Merge another CT_PPr into this one (non-None fields override).
@@ -558,11 +657,24 @@ pub struct CT_RPr {
     pub shading: Option<CT_Shd>,
     /// Vanish/hidden text (vanish)
     pub vanish: Option<bool>,
+    /// Contextual insertion and deletion markers retained in schema order.
+    pub revision_markers: Vec<CT_Revision>,
+    /// Prior run properties from the schema-final `w:rPrChange`.
+    pub change: Option<CT_Revision>,
+    /// Malformed tracked-change elements retained without a typed projection.
+    pub revision_xml: Vec<Vec<u8>>,
 }
 
 #[allow(non_snake_case)]
 impl CT_RPr {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_owned()])
+    }
+
+    pub(crate) fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut rpr = CT_RPr::default();
         let mut buf = Vec::new();
 
@@ -570,94 +682,140 @@ impl CT_RPr {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"rStyle") {
-                        rpr.style_id = get_val_attr(e)?;
-                    } else if matches_local_name(name.as_ref(), b"rFonts") {
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"rStyle", &prefixes) {
+                        rpr.style_id = get_word_val_attr(e, &prefixes)?;
+                    } else if is_word_element(name.as_ref(), b"rFonts", &prefixes) {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
                             let val = std::str::from_utf8(&attr.value)?.to_string();
-                            if matches_local_name(key, b"ascii") {
+                            if is_word_attribute(key, b"ascii", &prefixes) {
                                 rpr.font_ascii = Some(val);
-                            } else if matches_local_name(key, b"hAnsi") {
+                            } else if is_word_attribute(key, b"hAnsi", &prefixes) {
                                 rpr.font_hansi = Some(val);
-                            } else if matches_local_name(key, b"eastAsia") {
+                            } else if is_word_attribute(key, b"eastAsia", &prefixes) {
                                 rpr.font_east_asia = Some(val);
-                            } else if matches_local_name(key, b"cs") {
+                            } else if is_word_attribute(key, b"cs", &prefixes) {
                                 rpr.font_cs = Some(val);
-                            } else if matches_local_name(key, b"asciiTheme") {
+                            } else if is_word_attribute(key, b"asciiTheme", &prefixes) {
                                 rpr.font_ascii_theme = Some(val);
-                            } else if matches_local_name(key, b"hAnsiTheme") {
+                            } else if is_word_attribute(key, b"hAnsiTheme", &prefixes) {
                                 rpr.font_hansi_theme = Some(val);
                             }
                         }
-                    } else if matches_local_name(name.as_ref(), b"b") {
-                        rpr.bold = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"bCs") {
-                        rpr.bold_cs = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"i") {
-                        rpr.italic = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"iCs") {
-                        rpr.italic_cs = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"u") {
-                        if let Some(val) = get_val_attr(e)? {
+                    } else if is_word_element(name.as_ref(), b"b", &prefixes) {
+                        rpr.bold = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"bCs", &prefixes) {
+                        rpr.bold_cs = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"i", &prefixes) {
+                        rpr.italic = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"iCs", &prefixes) {
+                        rpr.italic_cs = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"u", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.underline = ST_Underline::from_str(&val).ok();
                         } else {
                             rpr.underline = Some(ST_Underline::Single);
                         }
-                    } else if matches_local_name(name.as_ref(), b"strike") {
-                        rpr.strike = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"dstrike") {
-                        rpr.dstrike = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"sz") {
-                        if let Some(val) = get_val_attr(e)? {
+                    } else if is_word_element(name.as_ref(), b"strike", &prefixes) {
+                        rpr.strike = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"dstrike", &prefixes) {
+                        rpr.dstrike = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"sz", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.sz = Some(HalfPoint(val.parse()?));
                         }
-                    } else if matches_local_name(name.as_ref(), b"szCs") {
-                        if let Some(val) = get_val_attr(e)? {
+                    } else if is_word_element(name.as_ref(), b"szCs", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.sz_cs = Some(HalfPoint(val.parse()?));
                         }
-                    } else if matches_local_name(name.as_ref(), b"color") {
+                    } else if is_word_element(name.as_ref(), b"color", &prefixes) {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
                             let v = std::str::from_utf8(&attr.value)?.to_string();
-                            if matches_local_name(key, b"val") {
+                            if is_word_attribute(key, b"val", &prefixes) {
                                 rpr.color = Some(v);
-                            } else if matches_local_name(key, b"themeColor") {
+                            } else if is_word_attribute(key, b"themeColor", &prefixes) {
                                 rpr.color_theme = Some(v);
                             }
                         }
-                    } else if matches_local_name(name.as_ref(), b"highlight") {
-                        if let Some(val) = get_val_attr(e)? {
+                    } else if is_word_element(name.as_ref(), b"highlight", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.highlight = ST_HighlightColor::from_str(&val).ok();
                         }
-                    } else if matches_local_name(name.as_ref(), b"caps") {
-                        rpr.caps = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"smallCaps") {
-                        rpr.small_caps = Some(parse_toggle(e)?);
-                    } else if matches_local_name(name.as_ref(), b"vertAlign") {
-                        rpr.vert_align = get_val_attr(e)?;
-                    } else if matches_local_name(name.as_ref(), b"spacing") {
-                        if let Some(val) = get_val_attr(e)? {
+                    } else if is_word_element(name.as_ref(), b"caps", &prefixes) {
+                        rpr.caps = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"smallCaps", &prefixes) {
+                        rpr.small_caps = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"vertAlign", &prefixes) {
+                        rpr.vert_align = get_word_val_attr(e, &prefixes)?;
+                    } else if is_word_element(name.as_ref(), b"spacing", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.spacing = Some(Twips(val.parse()?));
                         }
-                    } else if matches_local_name(name.as_ref(), b"w") {
-                        if let Some(val) = get_val_attr(e)? {
+                    } else if is_word_element(name.as_ref(), b"w", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.width_scale = Some(val.parse()?);
                         }
-                    } else if matches_local_name(name.as_ref(), b"position") {
-                        if let Some(val) = get_val_attr(e)? {
+                    } else if is_word_element(name.as_ref(), b"position", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             rpr.position = Some(val.parse()?);
                         }
-                    } else if matches_local_name(name.as_ref(), b"shd") {
+                    } else if is_word_element(name.as_ref(), b"shd", &prefixes) {
                         rpr.shading = Some(CT_Shd::from_xml_attrs(e)?);
-                    } else if matches_local_name(name.as_ref(), b"vanish") {
-                        rpr.vanish = Some(parse_toggle(e)?);
+                    } else if is_word_element(name.as_ref(), b"vanish", &prefixes) {
+                        rpr.vanish = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"ins", &prefixes)
+                        || is_word_element(name.as_ref(), b"del", &prefixes)
+                    {
+                        let raw = capture_empty_element(e)?;
+                        if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            rpr.revision_markers.push(revision);
+                        } else {
+                            rpr.revision_xml.push(raw);
+                        }
+                    } else if is_word_element(name.as_ref(), b"rPrChange", &prefixes) {
+                        let raw = capture_empty_element(e)?;
+                        if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            rpr.change = Some(revision);
+                        } else {
+                            rpr.revision_xml.push(raw);
+                        }
+                    } else if matches_local_name(name.as_ref(), b"ins")
+                        || matches_local_name(name.as_ref(), b"del")
+                        || matches_local_name(name.as_ref(), b"rPrChange")
+                    {
+                        rpr.revision_xml.push(capture_empty_element(e)?);
                     }
                 }
                 Ok(Event::Start(ref e)) => {
-                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(e.name().as_ref(), b"ins", &prefixes)
+                        || is_word_element(e.name().as_ref(), b"del", &prefixes)
+                    {
+                        let raw = capture_element(reader, e)?;
+                        if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            rpr.revision_markers.push(revision);
+                        } else {
+                            rpr.revision_xml.push(raw);
+                        }
+                    } else if is_word_element(e.name().as_ref(), b"rPrChange", &prefixes) {
+                        let raw = capture_element(reader, e)?;
+                        if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            rpr.change = Some(revision);
+                        } else {
+                            rpr.revision_xml.push(raw);
+                        }
+                    } else if matches_local_name(e.name().as_ref(), b"ins")
+                        || matches_local_name(e.name().as_ref(), b"del")
+                        || matches_local_name(e.name().as_ref(), b"rPrChange")
+                    {
+                        rpr.revision_xml.push(capture_element(reader, e)?);
+                    } else {
+                        reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                    }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"rPr") => {
                     break;
@@ -802,6 +960,16 @@ impl CT_RPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        for revision in &self.revision_markers {
+            revision.write_xml(writer)?;
+        }
+        if let Some(change) = &self.change {
+            change.write_xml(writer)?;
+        }
+        for raw in &self.revision_xml {
+            writer.get_mut().write_all(raw)?;
+        }
+
         writer.write_event(Event::End(BytesEnd::new("w:rPr")))?;
         Ok(())
     }
@@ -834,6 +1002,9 @@ impl CT_RPr {
             && self.position.is_none()
             && self.shading.is_none()
             && self.vanish.is_none()
+            && self.revision_markers.is_empty()
+            && self.change.is_none()
+            && self.revision_xml.is_empty()
     }
 
     /// Merge another CT_RPr into this one (non-None fields override).
@@ -962,7 +1133,7 @@ pub(crate) fn is_word_element(name: &[u8], local: &[u8], word_prefixes: &[String
     matches_local_name(name, local) && is_word_name(name, word_prefixes)
 }
 
-fn is_word_attribute(key: &[u8], local: &[u8], word_prefixes: &[String]) -> bool {
+pub(crate) fn is_word_attribute(key: &[u8], local: &[u8], word_prefixes: &[String]) -> bool {
     let Some(separator) = key.iter().position(|byte| *byte == b':') else {
         return false;
     };
@@ -972,7 +1143,10 @@ fn is_word_attribute(key: &[u8], local: &[u8], word_prefixes: &[String]) -> bool
             .any(|prefix| prefix.as_bytes() == &key[..separator])
 }
 
-fn get_word_val_attr(e: &BytesStart, word_prefixes: &[String]) -> Result<Option<String>> {
+pub(crate) fn get_word_val_attr(
+    e: &BytesStart,
+    word_prefixes: &[String],
+) -> Result<Option<String>> {
     for attr in e.attributes() {
         let attr = attr?;
         if is_word_attribute(attr.key.as_ref(), b"val", word_prefixes) {
@@ -996,12 +1170,6 @@ pub(crate) fn get_val_attr(e: &BytesStart) -> Result<Option<String>> {
         }
     }
     Ok(None)
-}
-
-/// Parse a toggle element (like `<w:b/>` or `<w:b w:val="false"/>`).
-fn parse_toggle(e: &BytesStart) -> Result<bool> {
-    let val = get_val_attr(e)?;
-    Ok(ST_OnOff::from_str_or_default(val.as_deref()).is_on())
 }
 
 /// Write a toggle element.

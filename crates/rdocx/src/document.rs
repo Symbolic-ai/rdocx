@@ -33,6 +33,7 @@ use rdocx_oxml::core_properties::CoreProperties;
 use crate::Length;
 use crate::error::{Error, Result};
 use crate::paragraph::{Paragraph, ParagraphRef};
+use crate::revision::RevisionRef;
 use crate::style::{self, Style, StyleBuilder};
 use crate::table::{Table, TableRef};
 
@@ -867,6 +868,15 @@ impl Document {
     /// Get the number of paragraphs.
     pub fn paragraph_count(&self) -> usize {
         self.document.body.paragraphs().count()
+    }
+
+    /// Return every valid modeled main-document revision in document order.
+    pub fn revisions(&self) -> Vec<RevisionRef<'_>> {
+        self.document
+            .revisions()
+            .into_iter()
+            .map(|inner| RevisionRef { inner })
+            .collect()
     }
 
     /// Get the plain text of body paragraphs and table cells in document order.

@@ -1,6 +1,6 @@
 # F-149, Revision model
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S47
 **Size**: L
 **Depends on**: none
@@ -175,16 +175,16 @@ tracked revisions. Any delta is unexplained and blocks the sprint.
 
 ## Implementation checklist
 
-- [ ] Add the approved low-level and facade revision modules and exports.
-- [ ] Parse namespace-correct revision metadata while retaining raw subtrees.
-- [ ] Project wrapper runs, deleted text, contextual markers, and prior properties.
-- [ ] Emit property changes once in their schema-final positions.
-- [ ] Reconcile numbering preservation with the new typed change slots.
-- [ ] Collect main-body revisions recursively in document order.
-- [ ] Add the native `RevisionRef` API without changing binding surfaces.
-- [ ] Add namespace, order, no-duplication, exact round-trip, and traversal tests.
-- [ ] Run focused checks plus the declared parser and packaging riders.
-- [ ] Update exactly HLD 03 and HLD 10 at completion.
+- [x] Add the approved low-level and facade revision modules and exports.
+- [x] Parse namespace-correct revision metadata while retaining raw subtrees.
+- [x] Project wrapper runs, deleted text, contextual markers, and prior properties.
+- [x] Emit property changes once in their schema-final positions.
+- [x] Reconcile numbering preservation with the new typed change slots.
+- [x] Collect main-body revisions recursively in document order.
+- [x] Add the native `RevisionRef` API without changing binding surfaces.
+- [x] Add namespace, order, no-duplication, exact round-trip, and traversal tests.
+- [x] Run focused checks plus the declared parser and packaging riders.
+- [x] Update exactly HLD 03 and HLD 10 at completion.
 
 ## Open questions
 

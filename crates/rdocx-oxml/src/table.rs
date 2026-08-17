@@ -8,8 +8,11 @@ use crate::content_control::CT_Sdt;
 use crate::error::Result;
 use crate::namespace::matches_local_name;
 use crate::numbering::word_prefixes_at;
-use crate::properties::{CT_Shd, get_val_attr, is_word_element};
+use crate::properties::{
+    CT_Shd, get_val_attr, get_word_val_attr, is_word_attribute, is_word_element,
+};
 use crate::raw_xml::{capture_element, capture_empty_element};
+use crate::revision::CT_Revision;
 #[cfg(test)]
 use crate::shared::ST_Border;
 use crate::shared::ST_Jc;
@@ -74,6 +77,13 @@ pub struct CT_TblBorders {
 
 impl CT_TblBorders {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_owned()])
+    }
+
+    fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut borders = CT_TblBorders::default();
         let mut buf = Vec::new();
 
@@ -81,23 +91,29 @@ impl CT_TblBorders {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
-                    let edge = CT_BorderEdge::from_xml_attrs(e)?;
-                    if matches_local_name(name.as_ref(), b"top") {
-                        borders.top = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"bottom") {
-                        borders.bottom = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"left")
-                        || matches_local_name(name.as_ref(), b"start")
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"top", &prefixes) {
+                        borders.top =
+                            Some(CT_BorderEdge::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"bottom", &prefixes) {
+                        borders.bottom =
+                            Some(CT_BorderEdge::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"left", &prefixes)
+                        || is_word_element(name.as_ref(), b"start", &prefixes)
                     {
-                        borders.left = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"right")
-                        || matches_local_name(name.as_ref(), b"end")
+                        borders.left =
+                            Some(CT_BorderEdge::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"right", &prefixes)
+                        || is_word_element(name.as_ref(), b"end", &prefixes)
                     {
-                        borders.right = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"insideH") {
-                        borders.inside_h = Some(edge);
-                    } else if matches_local_name(name.as_ref(), b"insideV") {
-                        borders.inside_v = Some(edge);
+                        borders.right =
+                            Some(CT_BorderEdge::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"insideH", &prefixes) {
+                        borders.inside_h =
+                            Some(CT_BorderEdge::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"insideV", &prefixes) {
+                        borders.inside_v =
+                            Some(CT_BorderEdge::from_xml_attrs_with_prefixes(e, &prefixes)?);
                     }
                 }
                 Ok(Event::End(ref e))
@@ -160,10 +176,10 @@ pub struct CT_TblCellMar {
 }
 
 impl CT_TblCellMar {
-    fn parse_edge(e: &BytesStart) -> Result<Option<Twips>> {
+    fn parse_edge(e: &BytesStart, word_prefixes: &[String]) -> Result<Option<Twips>> {
         for attr in e.attributes() {
             let attr = attr?;
-            if matches_local_name(attr.key.as_ref(), b"w") {
+            if is_word_attribute(attr.key.as_ref(), b"w", word_prefixes) {
                 let val: i32 = std::str::from_utf8(&attr.value)?.parse()?;
                 return Ok(Some(Twips(val)));
             }
@@ -172,6 +188,13 @@ impl CT_TblCellMar {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_owned()])
+    }
+
+    fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut mar = CT_TblCellMar::default();
         let mut buf = Vec::new();
 
@@ -179,18 +202,19 @@ impl CT_TblCellMar {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"top") {
-                        mar.top = Self::parse_edge(e)?;
-                    } else if matches_local_name(name.as_ref(), b"bottom") {
-                        mar.bottom = Self::parse_edge(e)?;
-                    } else if matches_local_name(name.as_ref(), b"left")
-                        || matches_local_name(name.as_ref(), b"start")
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"top", &prefixes) {
+                        mar.top = Self::parse_edge(e, &prefixes)?;
+                    } else if is_word_element(name.as_ref(), b"bottom", &prefixes) {
+                        mar.bottom = Self::parse_edge(e, &prefixes)?;
+                    } else if is_word_element(name.as_ref(), b"left", &prefixes)
+                        || is_word_element(name.as_ref(), b"start", &prefixes)
                     {
-                        mar.left = Self::parse_edge(e)?;
-                    } else if matches_local_name(name.as_ref(), b"right")
-                        || matches_local_name(name.as_ref(), b"end")
+                        mar.left = Self::parse_edge(e, &prefixes)?;
+                    } else if is_word_element(name.as_ref(), b"right", &prefixes)
+                        || is_word_element(name.as_ref(), b"end", &prefixes)
                     {
-                        mar.right = Self::parse_edge(e)?;
+                        mar.right = Self::parse_edge(e, &prefixes)?;
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tblCellMar") => {
@@ -291,6 +315,24 @@ impl CT_TblWidth {
         Ok(CT_TblWidth { w, width_type })
     }
 
+    fn from_xml_attrs_with_prefixes(e: &BytesStart, word_prefixes: &[String]) -> Result<Self> {
+        let mut w = 0;
+        let mut width_type = "dxa".to_string();
+
+        for attr in e.attributes() {
+            let attr = attr?;
+            let key = attr.key.as_ref();
+            let val = std::str::from_utf8(&attr.value)?;
+            if is_word_attribute(key, b"w", word_prefixes) {
+                w = val.parse().unwrap_or(0);
+            } else if is_word_attribute(key, b"type", word_prefixes) {
+                width_type = val.to_string();
+            }
+        }
+
+        Ok(CT_TblWidth { w, width_type })
+    }
+
     pub fn write_xml<W: std::io::Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
         let mut buf = itoa::Buffer::new();
         let mut e = BytesStart::new(tag);
@@ -333,6 +375,10 @@ pub struct CT_TblPr {
     pub shading: Option<CT_Shd>,
     /// Which parts of the table style's conditional formatting apply.
     pub look: Option<CT_TblLook>,
+    /// Prior table properties from the schema-final `w:tblPrChange`.
+    pub change: Option<CT_Revision>,
+    /// Malformed table property changes retained verbatim.
+    pub revision_xml: Vec<Vec<u8>>,
 }
 
 /// `w:tblLook` — which parts of a table style's conditional formatting apply.
@@ -398,6 +444,30 @@ impl CT_TblLook {
         Ok(look)
     }
 
+    fn from_xml_attrs_with_prefixes(e: &BytesStart, word_prefixes: &[String]) -> Result<Self> {
+        let mut look = CT_TblLook::default();
+        for attr in e.attributes().flatten() {
+            let value = std::str::from_utf8(&attr.value)?;
+            let key = attr.key.as_ref();
+            if is_word_attribute(key, b"val", word_prefixes) {
+                look.val = Some(value.to_string());
+            } else if is_word_attribute(key, b"firstRow", word_prefixes) {
+                look.first_row = parse_ooxml_bool(value);
+            } else if is_word_attribute(key, b"lastRow", word_prefixes) {
+                look.last_row = parse_ooxml_bool(value);
+            } else if is_word_attribute(key, b"firstColumn", word_prefixes) {
+                look.first_column = parse_ooxml_bool(value);
+            } else if is_word_attribute(key, b"lastColumn", word_prefixes) {
+                look.last_column = parse_ooxml_bool(value);
+            } else if is_word_attribute(key, b"noHBand", word_prefixes) {
+                look.no_h_band = parse_ooxml_bool(value);
+            } else if is_word_attribute(key, b"noVBand", word_prefixes) {
+                look.no_v_band = parse_ooxml_bool(value);
+            }
+        }
+        Ok(look)
+    }
+
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         let mut e = BytesStart::new("w:tblLook");
         if let Some(ref val) = self.val {
@@ -423,6 +493,13 @@ impl CT_TblLook {
 #[allow(non_snake_case)]
 impl CT_TblPr {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_owned()])
+    }
+
+    pub(crate) fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut pr = CT_TblPr::default();
         let mut buf = Vec::new();
 
@@ -430,32 +507,54 @@ impl CT_TblPr {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"tblStyle") {
-                        pr.style_id = get_val_attr(e)?;
-                    } else if matches_local_name(name.as_ref(), b"tblW") {
-                        pr.width = Some(CT_TblWidth::from_xml_attrs(e)?);
-                    } else if matches_local_name(name.as_ref(), b"jc") {
-                        if let Some(val) = get_val_attr(e)? {
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"tblStyle", &prefixes) {
+                        pr.style_id = get_word_val_attr(e, &prefixes)?;
+                    } else if is_word_element(name.as_ref(), b"tblW", &prefixes) {
+                        pr.width = Some(CT_TblWidth::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"jc", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             pr.jc = ST_Jc::from_str(&val).ok();
                         }
-                    } else if matches_local_name(name.as_ref(), b"tblLayout") {
-                        if let Some(val) = get_val_attr(e)? {
+                    } else if is_word_element(name.as_ref(), b"tblLayout", &prefixes) {
+                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             pr.layout = Some(val);
                         }
-                    } else if matches_local_name(name.as_ref(), b"tblInd") {
-                        pr.indent = Some(CT_TblWidth::from_xml_attrs(e)?);
-                    } else if matches_local_name(name.as_ref(), b"shd") {
-                        pr.shading = Some(CT_Shd::from_xml_attrs(e)?);
-                    } else if matches_local_name(name.as_ref(), b"tblLook") {
-                        pr.look = Some(CT_TblLook::from_xml_attrs(e)?);
+                    } else if is_word_element(name.as_ref(), b"tblInd", &prefixes) {
+                        pr.indent = Some(CT_TblWidth::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"shd", &prefixes) {
+                        pr.shading = Some(CT_Shd::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"tblLook", &prefixes) {
+                        pr.look = Some(CT_TblLook::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"tblPrChange", &prefixes) {
+                        let raw = capture_empty_element(e)?;
+                        if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            pr.change = Some(revision);
+                        } else {
+                            pr.revision_xml.push(raw);
+                        }
+                    } else if matches_local_name(name.as_ref(), b"tblPrChange") {
+                        pr.revision_xml.push(capture_empty_element(e)?);
                     }
                 }
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"tblBorders") {
-                        pr.borders = Some(CT_TblBorders::from_xml(reader)?);
-                    } else if matches_local_name(name.as_ref(), b"tblCellMar") {
-                        pr.cell_margin = Some(CT_TblCellMar::from_xml(reader)?);
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"tblBorders", &prefixes) {
+                        pr.borders =
+                            Some(CT_TblBorders::from_xml_with_prefixes(reader, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"tblCellMar", &prefixes) {
+                        pr.cell_margin =
+                            Some(CT_TblCellMar::from_xml_with_prefixes(reader, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"tblPrChange", &prefixes) {
+                        let raw = capture_element(reader, e)?;
+                        if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            pr.change = Some(revision);
+                        } else {
+                            pr.revision_xml.push(raw);
+                        }
+                    } else if matches_local_name(name.as_ref(), b"tblPrChange") {
+                        pr.revision_xml.push(capture_element(reader, e)?);
                     } else {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
@@ -518,6 +617,13 @@ impl CT_TblPr {
 
         if let Some(ref look) = self.look {
             look.to_xml(writer)?;
+        }
+
+        if let Some(change) = &self.change {
+            change.write_xml(writer)?;
+        }
+        for raw in &self.revision_xml {
+            writer.get_mut().write_all(raw)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:tblPr")))?;
@@ -610,11 +716,22 @@ pub struct CT_TrPr {
     /// Word writes this alongside `w:tblLook` and needs both to reproduce a
     /// styled table. Dropping it loses the header-row and banding emphasis.
     pub cnf_style: Option<String>,
+    /// Contextual row insertion and deletion markers in schema order.
+    pub revision_markers: Vec<CT_Revision>,
+    /// Malformed row markers retained verbatim.
+    pub revision_xml: Vec<Vec<u8>>,
 }
 
 #[allow(non_snake_case)]
 impl CT_TrPr {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_owned()])
+    }
+
+    pub(crate) fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut pr = CT_TrPr::default();
         let mut buf = Vec::new();
 
@@ -622,6 +739,7 @@ impl CT_TrPr {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if matches_local_name(name.as_ref(), b"trHeight") {
                         for attr in e.attributes() {
                             let attr = attr?;
@@ -643,6 +761,38 @@ impl CT_TrPr {
                         pr.cnf_style = get_val_attr(e)?;
                     } else if matches_local_name(name.as_ref(), b"cantSplit") {
                         pr.cant_split = Some(true);
+                    } else if is_word_element(name.as_ref(), b"ins", &prefixes)
+                        || is_word_element(name.as_ref(), b"del", &prefixes)
+                    {
+                        let raw = capture_empty_element(e)?;
+                        if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            pr.revision_markers.push(revision);
+                        } else {
+                            pr.revision_xml.push(raw);
+                        }
+                    } else if matches_local_name(name.as_ref(), b"ins")
+                        || matches_local_name(name.as_ref(), b"del")
+                    {
+                        pr.revision_xml.push(capture_empty_element(e)?);
+                    }
+                }
+                Ok(Event::Start(ref e)) => {
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(e.name().as_ref(), b"ins", &prefixes)
+                        || is_word_element(e.name().as_ref(), b"del", &prefixes)
+                    {
+                        let raw = capture_element(reader, e)?;
+                        if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            pr.revision_markers.push(revision);
+                        } else {
+                            pr.revision_xml.push(raw);
+                        }
+                    } else if matches_local_name(e.name().as_ref(), b"ins")
+                        || matches_local_name(e.name().as_ref(), b"del")
+                    {
+                        pr.revision_xml.push(capture_element(reader, e)?);
+                    } else {
+                        reader.read_to_end_into(e.name(), &mut Vec::new())?;
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"trPr") => {
@@ -698,6 +848,13 @@ impl CT_TrPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        for revision in &self.revision_markers {
+            revision.write_xml(writer)?;
+        }
+        for raw in &self.revision_xml {
+            writer.get_mut().write_all(raw)?;
+        }
+
         writer.write_event(Event::End(BytesEnd::new("w:trPr")))?;
         Ok(())
     }
@@ -708,6 +865,8 @@ impl CT_TrPr {
             && self.jc.is_none()
             && self.cant_split.is_none()
             && self.cnf_style.is_none()
+            && self.revision_markers.is_empty()
+            && self.revision_xml.is_empty()
     }
 }
 
@@ -1136,8 +1295,8 @@ impl CT_Row {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if matches_local_name(name.as_ref(), b"trPr") {
-                        properties = Some(CT_TrPr::from_xml(reader)?);
+                    if is_word_element(name.as_ref(), b"trPr", &prefixes) {
+                        properties = Some(CT_TrPr::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"tc", &prefixes) {
                         cells.push(CT_Tc::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
@@ -1310,8 +1469,8 @@ impl CT_Tbl {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if matches_local_name(name.as_ref(), b"tblPr") {
-                        properties = Some(CT_TblPr::from_xml(reader)?);
+                    if is_word_element(name.as_ref(), b"tblPr", &prefixes) {
+                        properties = Some(CT_TblPr::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if matches_local_name(name.as_ref(), b"tblGrid") {
                         grid = Some(CT_TblGrid::from_xml(reader)?);
                     } else if is_word_element(name.as_ref(), b"tr", &prefixes) {

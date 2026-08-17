@@ -239,6 +239,15 @@ package-preserving facade. These methods are additive native APIs. They do not
 implicitly add Python, WASM, or CLI methods, and the existing binding surfaces
 remain unchanged.
 
+Native Word callers inspect tracked changes through `Document::revisions`.
+Each immutable `RevisionRef` exposes the revision id, author, optional
+timestamp, and `RevisionKind`. Results recursively cover the main document
+body in document order, including tables, cells, and content controls. The
+facade reads a typed projection while serialization continues to use the
+captured raw WordprocessingML subtree. This is an additive native Rust API.
+Python, WASM, and CLI surfaces do not gain revision methods, and their existing
+load and save paths preserve the revision XML.
+
 The stable Rust family moves to 0.5.0 for the numbering preservation model.
 `CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
 producer extensions survive typed mutations. Full struct literals written for

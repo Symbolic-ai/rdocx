@@ -10,6 +10,7 @@ use crate::namespace::matches_local_name;
 use crate::numbering::{parse_scoped_ppr, word_prefixes_at};
 use crate::properties::{CT_PPr, CT_RPr, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
+use crate::revision::CT_Revision;
 
 /// `CT_Text` — The text content of a run, with optional xml:space="preserve".
 #[derive(Debug, Clone, PartialEq)]
@@ -52,6 +53,8 @@ pub enum FieldType {
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunContent {
     Text(CT_Text),
+    /// Deleted text projected from `w:delText` inside a deletion wrapper.
+    DeletedText(CT_Text),
     Tab,
     Break(BreakType),
     Drawing(CT_Drawing),
@@ -183,7 +186,7 @@ impl CT_R {
         let mut result = String::new();
         for item in &self.content {
             match item {
-                RunContent::Text(t) => result.push_str(&t.text),
+                RunContent::Text(t) | RunContent::DeletedText(t) => result.push_str(&t.text),
                 RunContent::Tab => result.push('\t'),
                 RunContent::Break(_) => result.push('\n'),
                 RunContent::Drawing(_) => {} // Drawings have no text content
@@ -215,8 +218,9 @@ impl CT_R {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if matches_local_name(name.as_ref(), b"rPr") {
-                        properties = Some(CT_RPr::from_xml(reader)?);
+                    if is_word_element(name.as_ref(), b"rPr", &prefixes) {
+                        let raw = capture_element(reader, e)?;
+                        properties = Some(crate::numbering::parse_scoped_rpr(&raw, &prefixes)?);
                     } else if matches_local_name(name.as_ref(), b"t") {
                         let preserve = e.attributes().any(|a| {
                             a.ok()
@@ -233,6 +237,20 @@ impl CT_R {
                             .map(|t| crate::xml_text::decode_escaped(&t))
                             .unwrap_or_default();
                         content.push(RunContent::Text(CT_Text {
+                            text,
+                            preserve_space: preserve,
+                        }));
+                    } else if is_word_element(name.as_ref(), b"delText", &prefixes) {
+                        let preserve = e.attributes().any(|a| {
+                            a.ok().is_some_and(|a| {
+                                a.key.as_ref() == b"xml:space" && a.value.as_ref() == b"preserve"
+                            })
+                        });
+                        let text = reader
+                            .read_text(name)
+                            .map(|t| crate::xml_text::decode_escaped(&t))
+                            .unwrap_or_default();
+                        content.push(RunContent::DeletedText(CT_Text {
                             text,
                             preserve_space: preserve,
                         }));
@@ -352,6 +370,15 @@ impl CT_R {
                     writer.write_event(Event::Text(BytesText::new(&t.text)))?;
                     writer.write_event(Event::End(BytesEnd::new("w:t")))?;
                 }
+                RunContent::DeletedText(t) => {
+                    let mut e = BytesStart::new("w:delText");
+                    if t.preserve_space {
+                        e.push_attribute(("xml:space", "preserve"));
+                    }
+                    writer.write_event(Event::Start(e))?;
+                    writer.write_event(Event::Text(BytesText::new(&t.text)))?;
+                    writer.write_event(Event::End(BytesEnd::new("w:delText")))?;
+                }
                 RunContent::Tab => {
                     writer.write_event(Event::Empty(BytesStart::new("w:tab")))?;
                 }
@@ -440,6 +467,8 @@ pub struct CT_P {
     /// Typed run controls at
     /// `(run index, raw children before, comment markers before, control)`.
     pub content_controls: Vec<(usize, usize, usize, CT_Sdt)>,
+    /// Read projections of revision wrappers retained in `extra_xml`.
+    pub revisions: Vec<(usize, usize, CT_Revision)>,
 }
 
 #[allow(non_snake_case)]
@@ -453,6 +482,7 @@ impl CT_P {
             bookmark_markers: Vec::new(),
             extra_xml: Vec::new(),
             content_controls: Vec::new(),
+            revisions: Vec::new(),
         }
     }
 
@@ -497,6 +527,11 @@ impl CT_P {
             }
         }
         for (at, _, _, _) in &mut self.content_controls {
+            if *at >= run_index {
+                *at += 1;
+            }
+        }
+        for (at, _, _) in &mut self.revisions {
             if *at >= run_index {
                 *at += 1;
             }
@@ -660,6 +695,11 @@ impl CT_P {
         for marker in &mut self.bookmark_markers {
             marker.run_index = boundary_map[marker.run_index.min(old_run_count)];
         }
+        for (run_index, raw_before, _) in &mut self.revisions {
+            let old_boundary = (*run_index).min(old_run_count);
+            *run_index = boundary_map[old_boundary];
+            *raw_before = raw_prefixes[old_boundary] + (*raw_before).min(raw_counts[old_boundary]);
+        }
         for (position, _) in &mut self.extra_xml {
             *position = boundary_map[(*position).min(old_run_count)];
         }
@@ -739,6 +779,7 @@ impl CT_P {
         let mut bookmark_markers = Vec::new();
         let mut extra_xml = Vec::new();
         let mut content_controls = Vec::new();
+        let mut revisions = Vec::new();
         let mut buf = Vec::new();
 
         loop {
@@ -893,6 +934,18 @@ impl CT_P {
                             run_index: runs.len(),
                         });
                         extra_xml.push((runs.len(), capture_element(reader, e)?));
+                    } else if is_word_element(name.as_ref(), b"ins", &prefixes)
+                        || is_word_element(name.as_ref(), b"del", &prefixes)
+                        || is_word_element(name.as_ref(), b"moveFrom", &prefixes)
+                        || is_word_element(name.as_ref(), b"moveTo", &prefixes)
+                    {
+                        let raw_before =
+                            extra_xml.iter().filter(|(at, _)| *at == runs.len()).count();
+                        let raw = capture_element(reader, e)?;
+                        if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                            revisions.push((runs.len(), raw_before, revision));
+                        }
+                        extra_xml.push((runs.len(), raw));
                     } else {
                         // Capture unknown elements (bookmarks, comments, etc.) as raw XML
                         extra_xml.push((runs.len(), capture_element(reader, e)?));
@@ -927,7 +980,18 @@ impl CT_P {
                         });
                         extra_xml.push((runs.len(), capture_empty_element(e)?));
                     } else if !matches_local_name(name.as_ref(), b"p") {
-                        extra_xml.push((runs.len(), capture_empty_element(e)?));
+                        let raw_before =
+                            extra_xml.iter().filter(|(at, _)| *at == runs.len()).count();
+                        let raw = capture_empty_element(e)?;
+                        if (is_word_element(name.as_ref(), b"ins", &prefixes)
+                            || is_word_element(name.as_ref(), b"del", &prefixes)
+                            || is_word_element(name.as_ref(), b"moveFrom", &prefixes)
+                            || is_word_element(name.as_ref(), b"moveTo", &prefixes))
+                            && let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes)
+                        {
+                            revisions.push((runs.len(), raw_before, revision));
+                        }
+                        extra_xml.push((runs.len(), raw));
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"p") => {
@@ -948,6 +1012,7 @@ impl CT_P {
             bookmark_markers,
             extra_xml,
             content_controls,
+            revisions,
         })
     }
 
