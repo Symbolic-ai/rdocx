@@ -709,6 +709,7 @@ version = "0.7.0"
 dependencies = [
  "oxml-chart",
  "oxml-core",
+ "oxml-drawing",
  "oxml-layout",
  "oxml-media",
  "oxml-opc",
@@ -719,6 +720,7 @@ dependencies = [
  "rdocx-layout",
  "rdocx-oxml",
  "regex",
+ "rpptx",
  "thiserror",
 ]
 
@@ -745,6 +747,8 @@ dependencies = [
 name = "rdocx-layout"
 version = "0.7.0"
 dependencies = [
+ "oxml-chart",
+ "oxml-drawing",
  "oxml-layout",
  "rdocx-oxml",
  "unicode-linebreak",

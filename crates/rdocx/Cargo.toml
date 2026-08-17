@@ -23,6 +23,7 @@ system-fonts = ["oxml-layout/system-fonts", "rdocx-layout/system-fonts"]
 [dependencies]
 oxml-chart = { workspace = true }
 oxml-core = { workspace = true }
+oxml-drawing = { workspace = true }
 oxml-layout = { workspace = true, default-features = false }
 oxml-media = { workspace = true }
 oxml-opc = { workspace = true }
@@ -36,3 +37,4 @@ thiserror = { workspace = true }
 regex = { workspace = true }
 
 [dev-dependencies]
+rpptx = { workspace = true, features = ["default-template", "render"] }

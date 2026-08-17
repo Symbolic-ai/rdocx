@@ -1,6 +1,6 @@
 # F-159, Chart rendering in the Word paginator
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S45
 **Size**: M
 **Depends on**: F-158
@@ -70,7 +70,10 @@ Build the golden comparison from one `ChartData` source and equal point bounds.
 Author it once into a Word document and once into a PowerPoint deck. Render
 both with bundled fonts at 150 DPI, crop the declared chart rectangles, require
 equal dimensions and zero differing RGBA pixels, and record both artifact
-SHAs plus the pinned rasterizer identity.
+SHAs plus the pinned rasterizer identity. The existing `rdocx` test location
+uses a dev-only `rpptx` dependency for the PowerPoint artifact. This adds no
+production dependency edge. Rasterisation uses the already pinned
+`pdftoppm 26.01.0` executable and adds no image-decoder dependency.
 
 ## Rejected alternatives
 
@@ -121,7 +124,9 @@ fallback, and exact cross-family golden gate.
   changing the ChartML serialization contract.
 - Crate dependency graph and new cross-family uses. Read HLD 03. Confirm
   `rdocx-layout -> oxml-chart` points inward, while `oxml-layout` remains free
-  of chart and format-family dependencies.
+  of chart and format-family dependencies. Verify both production and
+  all-target dependency trees, including the dev-only `rdocx -> rpptx` golden
+  edge, remain architecture-compliant.
 - Public API of a published crate. Read HLD 10 and the structural rules. State
   the additive non-exhaustive inline group variants and run affected package
   dry-runs and size assertions.
@@ -136,16 +141,23 @@ Word chart, so any delta is unrelated and blocks the sprint.
 
 ## Implementation checklist
 
-- [ ] Resolve Word chart parts, theme, and color map into layout input.
-- [ ] Add generic inline group transport to the shared line breaker and paginator.
-- [ ] Render inline and anchored chart relationships through `oxml-chart`.
-- [ ] Preserve wrapping, z-order, local bounds, diagnostics, and visible fallback.
-- [ ] Add exact deterministic Word-versus-PowerPoint pixel evidence.
-- [ ] Run focused layout, renderer, dependency, package, and unchanged-output checks.
-- [ ] Update exactly the listed HLD files.
+- [x] Resolve Word chart parts, theme, and color map into layout input.
+- [x] Add generic inline group transport to the shared line breaker and paginator.
+- [x] Render inline and anchored chart relationships through `oxml-chart`.
+- [x] Preserve wrapping, z-order, local bounds, diagnostics, and visible fallback.
+- [x] Add exact deterministic Word-versus-PowerPoint pixel evidence.
+- [x] Run focused layout, renderer, dependency, package, and unchanged-output checks.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 
 None. F-158 authors inline charts, the existing drawing model also parses
 anchors, and both placements can carry the same backend-neutral group through
 the established paginator paths.
+
+## Progress deviations
+
+- Approved on 2026-08-17: name `rpptx` as a dev-only dependency of `rdocx` for
+  the exact Word-versus-PowerPoint golden in the existing rdocx test location.
+  The production dependency graph remains unchanged. The gate uses pinned
+  `pdftoppm 26.01.0`, and the four-file HLD impact remains unchanged.

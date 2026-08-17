@@ -6,7 +6,7 @@ use rdocx_oxml::table::{CT_Tbl, CT_TblBorders, CT_TblGrid, ST_VerticalJc, VMerge
 use crate::block::ParagraphBlock;
 use crate::input::{LayoutInput, MediaRegistry};
 use crate::style_resolver::NumberingState;
-use oxml_layout::{Color, FontManager, Result};
+use oxml_layout::{Color, Diagnostic, FontManager, Result};
 
 /// A laid-out table.
 #[derive(Debug, Clone)]
@@ -88,6 +88,7 @@ pub fn layout_table(
     media: &MediaRegistry,
     fm: &mut FontManager,
     num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<TableBlock> {
     // 1. Compute column widths
     let col_widths = compute_column_widths(tbl.grid.as_ref(), available_width, tbl);
@@ -189,6 +190,7 @@ pub fn layout_table(
                     media,
                     fm,
                     num_state,
+                    diagnostics,
                 )?
             };
 
@@ -308,6 +310,7 @@ fn layout_cell_content(
     media: &MediaRegistry,
     fm: &mut FontManager,
     num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Vec<ParagraphBlock>> {
     use crate::engine;
     use rdocx_oxml::table::CellContent;
@@ -324,13 +327,22 @@ fn layout_cell_content(
                     media,
                     fm,
                     num_state,
+                    diagnostics,
                 )?;
                 blocks.push(block);
             }
             CellContent::Table(tbl) => {
                 // Recursively lay out the nested table
-                let _nested =
-                    layout_table(tbl, available_width, styles, input, media, fm, num_state)?;
+                let _nested = layout_table(
+                    tbl,
+                    available_width,
+                    styles,
+                    input,
+                    media,
+                    fm,
+                    num_state,
+                    diagnostics,
+                )?;
                 // For now, flatten: render nested table cell content as paragraph blocks
                 // (Full nested table rendering would require the paginator to handle tables within cells)
                 for row in &_nested.rows {
@@ -482,6 +494,9 @@ mod tests {
             headers: std::collections::HashMap::new(),
             footers: std::collections::HashMap::new(),
             images: std::collections::HashMap::new(),
+            charts: std::collections::HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
             hyperlink_urls: std::collections::HashMap::new(),
             footnotes: None,
             endnotes: None,
@@ -492,6 +507,7 @@ mod tests {
 
         let mut fm = FontManager::new();
         let mut num_state = crate::style_resolver::NumberingState::new();
+        let mut diagnostics = Vec::new();
         let media = MediaRegistry::new(&input.images);
 
         let result = layout_table(
@@ -502,6 +518,7 @@ mod tests {
             &media,
             &mut fm,
             &mut num_state,
+            &mut diagnostics,
         );
         assert!(result.is_ok());
         let block = result.unwrap();

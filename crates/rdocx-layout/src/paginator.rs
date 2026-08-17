@@ -728,6 +728,15 @@ impl<'a> Pager<'a> {
                         media_id: *media_id,
                     });
                 }
+                AnchoredContent::Group(group) => {
+                    let mut positioned = group.clone();
+                    positioned.transform = positioned.transform.then(oxml_layout::Transform {
+                        e: rect.x,
+                        f: rect.y,
+                        ..oxml_layout::Transform::IDENTITY
+                    });
+                    produced.push(PositionedElement::Group(positioned));
+                }
                 AnchoredContent::Shape { preset, fill, text } => {
                     // A shape with no fill draws no body. That is not a gap:
                     // Word uses unfilled rectangles as plain text boxes.
@@ -1011,7 +1020,10 @@ fn draw_note(
         for item in &line.items {
             let (segment, advance) = match item {
                 LineItem::Text(seg) | LineItem::Marker(seg) => (Some(seg), seg.width),
-                LineItem::Tab { width, .. } | LineItem::Image { width, .. } => (None, *width),
+                LineItem::Tab { width, .. }
+                | LineItem::Image { width, .. }
+                | LineItem::Group { width, .. } => (None, *width),
+                _ => (None, item.width()),
             };
             if let Some(seg) = segment {
                 elements.push(PositionedElement::Text(GlyphRun {
@@ -1860,6 +1872,17 @@ fn render_paragraph_lines(
                     });
                     x += width;
                 }
+                LineItem::Group { width, group, .. } => {
+                    let mut positioned = group.clone();
+                    positioned.transform = positioned.transform.then(oxml_layout::Transform {
+                        e: x,
+                        f: geometry.margin_top + y,
+                        ..oxml_layout::Transform::IDENTITY
+                    });
+                    elements.push(PositionedElement::Group(positioned));
+                    x += width;
+                }
+                _ => x += item.width(),
             }
         }
 

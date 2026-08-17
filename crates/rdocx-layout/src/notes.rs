@@ -17,7 +17,9 @@ use rdocx_oxml::styles::CT_Styles;
 use crate::engine::layout_paragraph;
 use crate::input::{LayoutInput, MediaRegistry};
 use crate::style_resolver::NumberingState;
-use oxml_layout::{Color, FontManager, LayoutLine, NoteRef, NoteStream, Result, TextSegment};
+use oxml_layout::{
+    Color, Diagnostic, FontManager, LayoutLine, NoteRef, NoteStream, Result, TextSegment,
+};
 
 /// Point size notes are set at.
 const NOTE_FONT_SIZE: f64 = 8.0;
@@ -95,6 +97,7 @@ impl NoteRegistry {
         fm: &mut FontManager,
         num_state: &mut NumberingState,
         content_widths: &[f64],
+        diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<Self> {
         let mut notes = HashMap::new();
         let mut continuation_separator = false;
@@ -145,7 +148,14 @@ impl NoteRegistry {
                     let mut lines = Vec::new();
                     for paragraph in &note.paragraphs {
                         let block = layout_paragraph(
-                            paragraph, note_width, styles, input, media, fm, num_state,
+                            paragraph,
+                            note_width,
+                            styles,
+                            input,
+                            media,
+                            fm,
+                            num_state,
+                            diagnostics,
                         )?;
                         lines.extend(block.lines);
                     }
@@ -242,6 +252,9 @@ mod tests {
             headers: HashMap::new(),
             footers: HashMap::new(),
             images: HashMap::new(),
+            charts: HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
             core_properties: None,
             hyperlink_urls: HashMap::new(),
             footnotes: Some(CT_Footnotes {
@@ -262,6 +275,7 @@ mod tests {
         let media = MediaRegistry::new(&HashMap::new());
         let mut fm = FontManager::new();
         let mut num_state = NumberingState::new();
+        let mut diagnostics = Vec::new();
         NoteRegistry::build(
             &input,
             &input.styles,
@@ -269,6 +283,7 @@ mod tests {
             &mut fm,
             &mut num_state,
             widths,
+            &mut diagnostics,
         )
         .expect("the registry builds")
     }

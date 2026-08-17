@@ -108,6 +108,21 @@ suite. That job installs the pinned Poppler 26.01.0 oracle first, so the decoded
 pixel comparison is unconditional, failure-propagating, and bound to the
 reviewed rasteriser identity.
 
+The cross-family native-chart golden constructs one Word document and one
+PowerPoint presentation from the same `ChartData`, page size, chart rectangle,
+and effective theme. The `rdocx` test target takes `rpptx` as a development-only
+dependency, so production dependency trees retain no Word to PowerPoint edge.
+Both deterministic PDFs use bundled fonts. Poppler
+`pdftoppm version 26.01.0` rasterises the chart rectangle at 150 DPI into
+750 by 450 pixel crops, and the decoded RGBA comparison requires exactly zero
+differing pixels.
+
+The SHA-bound Word artifact is
+`e50845637449e2af4b8e2dbf16f5f6f53e5f598a00401fcc34c13f5d5716a1c4`.
+The SHA-bound PowerPoint artifact is
+`7525e9a088c5fbf58fa1ed98cdfa0ec2fabf998662112ced7a6b6521f2c4edfc`.
+The recorded crop result is `750x450 differing=0`.
+
 ## The deck corpus
 
 Fifty real `.pptx` files are stored outside the published crates and fetched by

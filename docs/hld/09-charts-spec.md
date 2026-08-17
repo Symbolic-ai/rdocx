@@ -505,6 +505,20 @@ and top, and 28 on the bottom, then returns one identity group whose children
 use chart-local point coordinates. Invalid or too-small bounds, opaque or
 combination plots, and empty cached data return contextual errors.
 
+The Word render facade resolves each internal document chart relationship
+against the main document part and parses that target as `CT_ChartSpace`.
+External, missing, and malformed targets remain contextual errors for the
+layout layer. The effective chart theme comes from the document theme
+relationship. A missing or malformed theme uses the Office default, and the
+effective colour map is the standard DrawingML map.
+
+Inline charts enter the shared line model as local backend-neutral groups and
+take image-equivalent line metrics. Anchored charts enter the existing drawing
+placement path, which retains position, wrapping distances, and behind-text
+order. Both paths call the shared chart renderer with the document font manager.
+A failed chart projection produces a visible placeholder and a stable
+diagnostic instead of being omitted.
+
 Clustered bars derive their width from the category slot, `c:gapWidth`, series
 count, and `c:overlap`. Stacked bars accumulate positive and negative values
 separately, and percentage stacks normalise against the matching sign total.

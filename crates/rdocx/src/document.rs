@@ -2569,9 +2569,11 @@ impl Document {
         let mut headers: HashMap<String, CT_HdrFtr> = HashMap::new();
         let mut footers: HashMap<String, CT_HdrFtr> = HashMap::new();
         let mut images: HashMap<String, ImageData> = HashMap::new();
+        let mut charts = HashMap::new();
         let mut hyperlink_urls: HashMap<String, String> = HashMap::new();
         let mut footnotes = None;
         let mut endnotes = None;
+        let mut theme_part_name = None;
 
         // Extract embedded fonts from the DOCX package
         let fonts = self.extract_embedded_fonts();
@@ -2613,6 +2615,31 @@ impl Document {
                             );
                         }
                     }
+                    t if t == rel_types::CHART => {
+                        let chart = if rel.target_mode.as_deref() == Some("External") {
+                            Err(format!("external target {}", rel.target))
+                        } else {
+                            let part_name =
+                                OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
+                            match self.package.get_part(&part_name) {
+                                Some(xml) => {
+                                    CT_ChartSpace::from_xml(xml).map(Box::new).map_err(|error| {
+                                        format!("malformed target {part_name}: {error}")
+                                    })
+                                }
+                                None => Err(format!("missing target {part_name}")),
+                            }
+                        };
+                        charts.insert(rel.id.clone(), chart);
+                    }
+                    t if t == rel_types::THEME => {
+                        if rel.target_mode.as_deref() != Some("External") {
+                            theme_part_name = Some(OpcPackage::resolve_rel_target(
+                                &self.doc_part_name,
+                                &rel.target,
+                            ));
+                        }
+                    }
                     t if t == rel_types::HYPERLINK => {
                         if rel.target_mode.as_ref().is_some_and(|m| m == "External") {
                             hyperlink_urls.insert(rel.id.clone(), rel.target.clone());
@@ -2638,10 +2665,13 @@ impl Document {
         }
 
         // Parse theme if available
-        let theme = self
-            .package
-            .get_part("/word/theme/theme1.xml")
-            .and_then(|data| rdocx_oxml::theme::Theme::from_xml(data).ok());
+        let theme_xml = theme_part_name
+            .as_deref()
+            .and_then(|part_name| self.package.get_part(part_name));
+        let chart_theme = theme_xml
+            .and_then(|data| oxml_drawing::theme::CT_OfficeStyleSheet::from_xml(data).ok())
+            .unwrap_or_else(oxml_drawing::theme::CT_OfficeStyleSheet::office_default);
+        let theme = theme_xml.and_then(|data| rdocx_oxml::theme::Theme::from_xml(data).ok());
 
         LayoutInput {
             document: self.document.clone(),
@@ -2650,6 +2680,9 @@ impl Document {
             headers,
             footers,
             images,
+            charts,
+            chart_theme,
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
             core_properties: self.core_properties.clone(),
             hyperlink_urls,
             footnotes,
@@ -3870,6 +3903,391 @@ mod tests {
                 actual.values.format_code,
                 data.number_format.as_deref().unwrap_or("General")
             );
+        }
+    }
+
+    fn deterministic_chart_layout(document: &Document) -> oxml_layout::LayoutResult {
+        rdocx_layout::layout_document_deterministic(&document.build_layout_input())
+            .expect("deterministic Word chart layout")
+    }
+
+    fn chart_leaf_counts(layout: &oxml_layout::LayoutResult) -> (usize, usize, usize) {
+        let mut paths = 0;
+        let mut text = 0;
+        let mut images = 0;
+        oxml_layout::walk(&layout.pages[0].elements, &mut |element, _| match element {
+            oxml_layout::PositionedElement::Path(_) => paths += 1,
+            oxml_layout::PositionedElement::Text(_) => text += 1,
+            oxml_layout::PositionedElement::Image { .. } => images += 1,
+            _ => {}
+        });
+        (paths, text, images)
+    }
+
+    #[test]
+    fn inline_word_chart_renders_backend_neutral_group() {
+        let mut document = Document::new();
+        document
+            .add_chart(
+                ChartKind::Bar,
+                Length::inches(5.0),
+                Length::inches(3.0),
+                &f158_chart_data(2),
+            )
+            .expect("author inline chart");
+
+        let layout = deterministic_chart_layout(&document);
+        assert!(layout.diagnostics.is_empty());
+        assert!(
+            layout.pages[0]
+                .elements
+                .iter()
+                .any(|element| matches!(element, oxml_layout::PositionedElement::Group(_)))
+        );
+        let (paths, text, images) = chart_leaf_counts(&layout);
+        assert!(paths > 0, "chart should lower to backend-neutral paths");
+        assert!(text > 0, "chart should lower labels to shaped text");
+        assert_eq!(images, 0, "chart must not be rasterized before pagination");
+    }
+
+    #[test]
+    fn anchored_word_chart_uses_existing_wrap_and_z_order() {
+        let mut document = Document::new();
+        document
+            .add_chart(
+                ChartKind::Line,
+                Length::inches(3.0),
+                Length::inches(2.0),
+                &f158_chart_data(2),
+            )
+            .expect("author chart");
+        let BodyContent::Paragraph(paragraph) = &mut document.document.body.content[0] else {
+            panic!("chart paragraph");
+        };
+        let RunContent::Drawing(drawing) = &mut paragraph.runs[0].content[0] else {
+            panic!("chart drawing");
+        };
+        let inline = drawing.inline.take().expect("authored inline chart");
+        let mut anchor = rdocx_oxml::drawing::CT_Anchor::new_chart(
+            inline.chart_rel_id.as_deref().expect("chart relationship"),
+            inline.extent_cx.0,
+            inline.extent_cy.0,
+        );
+        anchor.behind_doc = true;
+        anchor.wrap = rdocx_oxml::drawing::WrapType::Square;
+        anchor.pos_h_relative_from = rdocx_oxml::drawing::ST_RelativeFromH::Page;
+        anchor.pos_v_relative_from = rdocx_oxml::drawing::ST_RelativeFromV::Page;
+        anchor.pos_h_offset = Length::inches(1.0).as_emu();
+        anchor.pos_v_offset = Length::inches(0.5).as_emu();
+        anchor.dist_l = Length::pt(12.0).as_emu();
+        anchor.dist_r = Length::pt(12.0).as_emu();
+        drawing.anchor = Some(anchor);
+        paragraph.add_run("Foreground text");
+
+        let layout = deterministic_chart_layout(&document);
+        assert!(layout.diagnostics.is_empty());
+        let group_index = layout.pages[0]
+            .elements
+            .iter()
+            .position(|element| matches!(element, oxml_layout::PositionedElement::Group(_)))
+            .expect("anchored chart group");
+        let text_index = layout.pages[0]
+            .elements
+            .iter()
+            .position(|element| matches!(element, oxml_layout::PositionedElement::Text(_)))
+            .expect("chart label text");
+        assert!(
+            group_index <= text_index,
+            "behind-text group must be emitted first"
+        );
+        let oxml_layout::PositionedElement::Group(group) = &layout.pages[0].elements[group_index]
+        else {
+            unreachable!()
+        };
+        assert_eq!((group.transform.e, group.transform.f), (72.0, 36.0));
+        let oxml_layout::PositionedElement::Text(foreground) =
+            &layout.pages[0].elements[text_index]
+        else {
+            unreachable!()
+        };
+        assert!(
+            foreground.origin.x >= 300.0,
+            "12 point wrap distance should clear the chart's 288 point right edge"
+        );
+    }
+
+    #[test]
+    fn word_chart_uses_document_theme_and_default_color_map() {
+        let mut document = Document::new();
+        document
+            .add_chart(
+                ChartKind::Bar,
+                Length::inches(5.0),
+                Length::inches(3.0),
+                &f158_chart_data(1),
+            )
+            .expect("author themed chart");
+        let themed = oxml_drawing::theme::OFFICE_DEFAULT_XML.replace("156082", "12AB34");
+        document
+            .package
+            .set_part("/word/theme/custom-chart-theme.xml", themed.into_bytes());
+        document.package.parts.remove("/word/theme/theme1.xml");
+        document
+            .package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(rel_types::THEME, "theme/custom-chart-theme.xml");
+
+        let input = document.build_layout_input();
+        assert_eq!(
+            input.chart_color_map,
+            oxml_drawing::color::ColorMap::default()
+        );
+        let layout =
+            rdocx_layout::layout_document_deterministic(&input).expect("layout themed Word chart");
+        let expected = oxml_layout::Color::from_hex("12AB34");
+        let mut found = false;
+        oxml_layout::walk(&layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Path(path) = element
+                && path.fill == Some(oxml_layout::Paint::Solid(expected))
+            {
+                found = true;
+            }
+        });
+        assert!(found, "chart series should use the document theme accent");
+    }
+
+    #[test]
+    fn missing_or_malformed_word_chart_is_visible() {
+        for (label, mutate) in [
+            ("missing", 0_u8),
+            ("malformed", 1_u8),
+            ("external", 2_u8),
+            ("unsupported", 3_u8),
+        ] {
+            let mut document = Document::new();
+            document
+                .add_chart(
+                    ChartKind::Bar,
+                    Length::inches(5.0),
+                    Length::inches(3.0),
+                    &f158_chart_data(1),
+                )
+                .expect("author chart before corrupting target");
+            match mutate {
+                0 => {
+                    document.package.parts.remove("/word/charts/chart1.xml");
+                }
+                1 => document
+                    .package
+                    .set_part("/word/charts/chart1.xml", b"<c:chartSpace".to_vec()),
+                2 => {
+                    let relationship = document
+                        .package
+                        .get_or_create_part_rels("/word/document.xml")
+                        .items
+                        .iter_mut()
+                        .find(|relationship| relationship.rel_type == rel_types::CHART)
+                        .expect("chart relationship");
+                    relationship.target = "https://example.invalid/chart.xml".to_owned();
+                    relationship.target_mode = Some("External".to_owned());
+                }
+                3 => document.package.set_part(
+                    "/word/charts/chart1.xml",
+                    format!(
+                        r#"<c:chartSpace xmlns:c="{}"><c:chart><c:plotArea/></c:chart></c:chartSpace>"#,
+                        oxml_chart::C_NS,
+                    )
+                    .into_bytes(),
+                ),
+                _ => unreachable!(),
+            }
+
+            let layout = deterministic_chart_layout(&document);
+            assert_eq!(layout.diagnostics.len(), 1, "{label}");
+            assert!(
+                layout.diagnostics[0]
+                    .message
+                    .contains("Word chart relationship")
+            );
+            let (_, text, images) = chart_leaf_counts(&layout);
+            assert!(text > 0, "{label} chart fallback should be visible");
+            assert_eq!(images, 0, "{label} chart must not become an empty image");
+        }
+    }
+
+    #[test]
+    fn word_and_powerpoint_chart_pixels_are_identical() {
+        const DPI: &str = "150";
+        const RASTERIZER: &str = "pdftoppm version 26.01.0";
+        const CROP_X: &str = "150";
+        const CROP_Y: &str = "150";
+        const CROP_WIDTH: &str = "750";
+        const CROP_HEIGHT: &str = "450";
+        const WORD_SHA256: &str =
+            "e50845637449e2af4b8e2dbf16f5f6f53e5f598a00401fcc34c13f5d5716a1c4";
+        const POWERPOINT_SHA256: &str =
+            "7525e9a088c5fbf58fa1ed98cdfa0ec2fabf998662112ced7a6b6521f2c4edfc";
+
+        let data = f158_chart_data(2);
+        let evidence_dir = std::env::temp_dir();
+        let word_path =
+            evidence_dir.join(format!("rdocx-f159-word-chart-{}.docx", std::process::id()));
+        let powerpoint_path = evidence_dir.join(format!(
+            "rdocx-f159-powerpoint-chart-{}.pptx",
+            std::process::id()
+        ));
+
+        let mut word = Document::new();
+        word.add_chart(
+            ChartKind::Bar,
+            Length::inches(5.0),
+            Length::inches(3.0),
+            &data,
+        )
+        .expect("author Word chart from shared data");
+        let mut powerpoint = rpptx::Presentation::new().expect("open bundled PowerPoint template");
+        powerpoint
+            .set_slide_size(Length::inches(8.5).as_emu(), Length::inches(11.0).as_emu())
+            .expect("match the Word page size");
+        powerpoint.add_slide(0).expect("add chart slide");
+        powerpoint
+            .add_chart(
+                0,
+                ChartKind::Bar,
+                Length::inches(1.0).as_emu(),
+                Length::inches(1.0).as_emu(),
+                Length::inches(5.0).as_emu(),
+                Length::inches(3.0).as_emu(),
+                &data,
+            )
+            .expect("author PowerPoint chart from shared data");
+        powerpoint
+            .save(&powerpoint_path)
+            .expect("save PowerPoint chart artifact");
+        let powerpoint_package = OpcPackage::from_reader(Cursor::new(
+            powerpoint
+                .to_bytes()
+                .expect("serialize PowerPoint artifact"),
+        ))
+        .expect("open PowerPoint artifact package");
+        let effective_theme = powerpoint_package
+            .get_part("/ppt/theme/theme1.xml")
+            .expect("PowerPoint effective theme")
+            .to_vec();
+        word.package
+            .set_part("/word/theme/theme1.xml", effective_theme);
+        word.package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(rel_types::THEME, "theme/theme1.xml");
+        word.save(&word_path).expect("save Word chart artifact");
+
+        let word_sha = sha256(&word_path);
+        let powerpoint_sha = sha256(&powerpoint_path);
+        assert_eq!(word_sha, WORD_SHA256);
+        assert_eq!(powerpoint_sha, POWERPOINT_SHA256);
+
+        let version = Command::new("pdftoppm")
+            .arg("-v")
+            .output()
+            .expect("run pinned rasterizer");
+        let reported = String::from_utf8_lossy(&version.stderr);
+        assert!(
+            reported
+                .lines()
+                .next()
+                .is_some_and(|line| line == RASTERIZER)
+        );
+
+        let word_pdf =
+            std::env::temp_dir().join(format!("rdocx-f159-word-chart-{}.pdf", std::process::id()));
+        let powerpoint_pdf = std::env::temp_dir().join(format!(
+            "rdocx-f159-powerpoint-chart-{}.pdf",
+            std::process::id()
+        ));
+        fs::write(
+            &word_pdf,
+            word.to_pdf_deterministic().expect("render Word chart PDF"),
+        )
+        .expect("write Word chart PDF");
+        fs::write(
+            &powerpoint_pdf,
+            powerpoint
+                .to_pdf_deterministic()
+                .expect("render PowerPoint chart PDF"),
+        )
+        .expect("write PowerPoint chart PDF");
+
+        let word_crop =
+            std::env::temp_dir().join(format!("rdocx-f159-word-chart-crop-{}", std::process::id()));
+        let powerpoint_crop = std::env::temp_dir().join(format!(
+            "rdocx-f159-powerpoint-chart-crop-{}",
+            std::process::id()
+        ));
+        for (pdf, crop) in [(&word_pdf, &word_crop), (&powerpoint_pdf, &powerpoint_crop)] {
+            let output = Command::new("pdftoppm")
+                .args([
+                    "-f",
+                    "1",
+                    "-l",
+                    "1",
+                    "-singlefile",
+                    "-r",
+                    DPI,
+                    "-x",
+                    CROP_X,
+                    "-y",
+                    CROP_Y,
+                    "-W",
+                    CROP_WIDTH,
+                    "-H",
+                    CROP_HEIGHT,
+                    "-png",
+                ])
+                .arg(pdf)
+                .arg(crop)
+                .output()
+                .expect("rasterize chart crop");
+            assert!(
+                output.status.success(),
+                "pdftoppm chart crop failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let word_png = word_crop.with_extension("png");
+        let powerpoint_png = powerpoint_crop.with_extension("png");
+        let comparison = Command::new("python3")
+            .args([
+                "-c",
+                "import sys\nsys.path.insert(0, sys.argv[3])\nfrom scripts.golden_png_harness import decode_png\na=decode_png(__import__('pathlib').Path(sys.argv[1]))\nb=decode_png(__import__('pathlib').Path(sys.argv[2]))\nassert a[:2] == b[:2] == (750, 450), (a[:2], b[:2])\ndiff=sum(a[2][i:i+4] != b[2][i:i+4] for i in range(0, len(a[2]), 4))\nprint(f'{a[0]}x{a[1]} differing={diff}')\nassert diff == 0, diff",
+            ])
+            .arg(&word_png)
+            .arg(&powerpoint_png)
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+            .output()
+            .expect("decode and compare chart RGBA pixels");
+        assert!(
+            comparison.status.success(),
+            "chart pixel comparison failed: {}{}",
+            String::from_utf8_lossy(&comparison.stdout),
+            String::from_utf8_lossy(&comparison.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(comparison.stdout)
+                .expect("pixel comparison output is utf8")
+                .trim(),
+            "750x450 differing=0"
+        );
+
+        for path in [
+            word_path,
+            powerpoint_path,
+            word_pdf,
+            powerpoint_pdf,
+            word_png,
+            powerpoint_png,
+        ] {
+            fs::remove_file(path).expect("remove temporary golden evidence");
         }
     }
 

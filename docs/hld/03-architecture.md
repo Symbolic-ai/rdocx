@@ -124,6 +124,18 @@ PresentationML resolver depends inward on the shared chart engine.
 `rpptx-render` and the format-neutral backends consume only the frozen group
 and do not parse ChartML.
 
+**`rdocx-layout` depends on `oxml-chart` for native chart projection.** The
+Word facade resolves document-scoped chart and theme relationships into layout
+input. The layout engine freezes each inline or anchored chart as a
+backend-neutral group before pagination. `oxml-layout` carries that group
+through line breaking and page placement without gaining a ChartML or document
+family dependency.
+
+The `rdocx` crate uses `rpptx` only as a development dependency for the exact
+cross-family chart golden. The production dependency tree has no Word to
+PowerPoint edge. The all-target tree admits this test-only edge and retains the
+rule that no `oxml-*` crate depends on either facade family.
+
 ## What stays put
 
 `rdocx-oxml` remains a real crate holding roughly 8,700 lines of
