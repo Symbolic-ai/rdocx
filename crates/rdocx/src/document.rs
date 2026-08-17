@@ -23,6 +23,7 @@ use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef, HdrFtrType};
 use rdocx_oxml::namespace::matches_local_name;
 use rdocx_oxml::numbering::{CT_Numbering, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
+use rdocx_oxml::settings::{CT_Settings, DocumentProtection};
 use rdocx_oxml::shared::{ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
@@ -65,6 +66,10 @@ pub struct Document {
     styles_part_name: String,
     /// Part name for numbering definitions, resolved the same way.
     numbering_part_name: String,
+    /// Typed document settings loaded through the main document relationship.
+    settings: Option<CT_Settings>,
+    /// Existing settings relationship target. No conventional target is assumed.
+    settings_part_name: Option<String>,
     /// Collision-free allocator for image media parts.
     image_namer: MediaNamer,
     /// Footnotes: loaded from word/footnotes.xml on open, written back on save.
@@ -399,6 +404,8 @@ impl Document {
             doc_part_name: "/word/document.xml".to_string(),
             styles_part_name: DEFAULT_STYLES_PART.to_string(),
             numbering_part_name: DEFAULT_NUMBERING_PART.to_string(),
+            settings: None,
+            settings_part_name: None,
             image_namer: MediaNamer::scan("/word/media", "image", std::iter::empty()),
             footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
             comments: None,
@@ -460,6 +467,15 @@ impl Document {
             None => None,
         };
 
+        let settings_part_name = resolve_part(rel_types::SETTINGS);
+        let settings = match settings_part_name
+            .as_deref()
+            .and_then(|part| package.get_part(part))
+        {
+            Some(xml) => Some(CT_Settings::from_xml(xml)?),
+            None => None,
+        };
+
         // Core properties are a package-level relationship, not a document part.
         let core_properties_part_name = package
             .package_rels
@@ -513,6 +529,8 @@ impl Document {
             styles_part_name: styles_part_name.unwrap_or_else(|| DEFAULT_STYLES_PART.to_string()),
             numbering_part_name: numbering_part_name
                 .unwrap_or_else(|| DEFAULT_NUMBERING_PART.to_string()),
+            settings,
+            settings_part_name,
             image_namer,
             footnotes,
             comments,
@@ -638,6 +656,13 @@ impl Document {
                 rel_types::NUMBERING,
                 NUMBERING_CONTENT_TYPE,
             );
+        }
+
+        // F-155 exposes settings as a read-only projection. Parsed settings
+        // retain their complete producer bytes and are written back only to
+        // the relationship-resolved part they came from.
+        if let (Some(settings), Some(part_name)) = (&self.settings, &self.settings_part_name) {
+            self.package.set_part(part_name, settings.to_xml()?);
         }
 
         // Serialize footnotes.xml when any footnotes exist
@@ -910,6 +935,14 @@ impl Document {
             .into_iter()
             .map(|inner| RevisionRef { inner })
             .collect()
+    }
+
+    /// Return valid document-protection metadata recorded in the settings part.
+    ///
+    /// This reports author intent and password-verification metadata. It does
+    /// not enforce an access-control boundary or verify a password.
+    pub fn document_protection(&self) -> Option<&DocumentProtection> {
+        self.settings.as_ref()?.document_protection()
     }
 
     /// Get the plain text of body paragraphs and table cells in document order.

@@ -16,6 +16,7 @@ pub mod numbering;
 pub mod placeholder;
 pub mod properties;
 pub mod revision;
+pub mod settings;
 pub mod shared;
 pub mod styles;
 pub mod table;

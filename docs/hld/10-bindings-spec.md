@@ -248,6 +248,16 @@ captured raw WordprocessingML subtree. This is an additive native Rust API.
 Python, WASM, and CLI surfaces do not gain revision methods, and their existing
 load and save paths preserve the revision XML.
 
+Native Word callers inspect document protection through the borrowed
+`Document::document_protection` accessor. `ProtectionMode` distinguishes
+read-only, comments-only, forced tracked changes, and forms-only intent.
+`DocumentProtection` also reports the recorded enforcement and formatting
+flags, provider type, algorithm class and type, algorithm SID, spin count,
+hash, and salt. The accessor reports metadata only. It does not verify a
+password or enforce access control. This additive Rust API does not add
+Python, WASM, or CLI methods. Those surfaces remain unchanged and preserve the
+relationship-resolved settings part when they save their owned document.
+
 The low-level revision storage is an intentional breaking pre-1.0 Rust
 boundary. `RunContent` adds `DeletedText`. `CT_R`, `CT_P`, `HyperlinkSpan`,
 `CT_PPr`, `CT_RPr`, `CT_SectPr`, `CT_TblPr`, and `CT_TrPr` add required

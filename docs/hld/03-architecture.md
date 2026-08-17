@@ -138,11 +138,20 @@ rule that no `oxml-*` crate depends on either facade family.
 
 ## What stays put
 
-`rdocx-oxml` remains a real crate holding roughly 8,700 lines of
-WordprocessingML: text, properties, tables, styles, numbering, borders, headers
-and footers, footnotes, comments, placeholder replacement, and `drawing.rs`. The
+`rdocx-oxml` remains a real crate holding the WordprocessingML grammar for
+text, properties, tables, styles, numbering, borders, headers and footers,
+footnotes, comments, settings, placeholder replacement, and `drawing.rs`. The
 `wp:` inline and anchor code in the latter is Word-only and has no pptx value,
 so it is not migrated.
+
+The settings model owns the separate `w:settings` root and a read-only
+`w:documentProtection` projection. It reports the four supported editing modes,
+the recorded enforcement and formatting flags, and password-verification
+metadata. Prefix aliases are accepted on read. Parsed producer bytes remain the
+sole serialization source, so root attributes, schema order, unmodelled
+children, and unsupported or malformed protection elements survive unchanged.
+An invalid protection element is preserved but is not reported through the
+typed projection.
 
 The comments model owns typed comment entries and the three body anchor forms.
 Comment bodies retain ordered paragraphs, producer attributes, and unmodelled

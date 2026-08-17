@@ -1,6 +1,6 @@
 # F-155, Document protection
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S48
 **Size**: M
 **Depends on**: none
@@ -114,14 +114,14 @@ serialization source, and existing samples do not change document protection.
 
 ## Implementation checklist
 
-- [ ] Add the approved settings root module with ordered raw preservation.
-- [ ] Parse the four supported protection modes and all recorded verification metadata.
-- [ ] Preserve malformed or unsupported protection elements as opaque XML.
-- [ ] Resolve and retain the existing settings relationship target in the facade.
-- [ ] Add the borrowed native protection accessor and re-export its concrete types.
-- [ ] Add parser, preservation, relationship-target, public API, and failure regressions.
-- [ ] Run focused checks plus parser, serializer, and published-package riders.
-- [ ] Update exactly HLD 03, HLD 04, and HLD 10 at completion.
+- [x] Add the approved settings root module with ordered raw preservation.
+- [x] Parse the four supported protection modes and all recorded verification metadata.
+- [x] Preserve malformed or unsupported protection elements as opaque XML.
+- [x] Resolve and retain the existing settings relationship target in the facade.
+- [x] Add the borrowed native protection accessor and re-export its concrete types.
+- [x] Add parser, preservation, relationship-target, public API, and failure regressions.
+- [x] Run focused checks plus parser, serializer, and published-package riders.
+- [x] Update exactly HLD 03, HLD 04, and HLD 10 at completion.
 
 ## Open questions
 

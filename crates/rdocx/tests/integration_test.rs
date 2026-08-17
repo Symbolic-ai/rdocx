@@ -10,6 +10,42 @@ use rdocx::{
 };
 use rdocx::{Document, RevisionKind};
 
+#[test]
+fn settings_relationship_target_is_resolved_instead_of_assumed() {
+    let settings = br#"<?xml version="1.0"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:documentProtection w:edit="comments" w:enforcement="true" w:hash="custom-hash" w:salt="custom-salt"/></w:settings>"#;
+    let mut seed = Document::new();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    package.set_part("/word/config/protection.xml", settings.to_vec());
+    package.content_types.add_override(
+        "/word/config/protection.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add(rel_types::SETTINGS, "config/protection.xml");
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+
+    let mut document = Document::from_bytes(input.get_ref()).unwrap();
+    let protection = document.document_protection().unwrap();
+    assert_eq!(protection.mode, rdocx::ProtectionMode::Comments);
+    assert_eq!(protection.hash.as_deref(), Some("custom-hash"));
+
+    let saved = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    assert_eq!(
+        package.get_part("/word/config/protection.xml").unwrap(),
+        settings
+    );
+    assert!(package.get_part("/word/settings.xml").is_none());
+    let relationship = package
+        .get_part_rels("/word/document.xml")
+        .and_then(|relationships| relationships.get_by_type(rel_types::SETTINGS))
+        .unwrap();
+    assert_eq!(relationship.target, "config/protection.xml");
+}
+
 fn document_xml(document: &mut Document) -> Vec<u8> {
     let bytes = document.to_bytes().unwrap();
     let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
