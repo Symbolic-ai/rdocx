@@ -819,4 +819,50 @@ mod tests {
             [11, 12, 21, 22, 23, 24]
         );
     }
+
+    #[test]
+    fn modeled_hyperlinks_preserve_unreported_raw_children_and_foreign_owners() {
+        let malformed = r#"<w:ins w:id="bad"><w:r><w:t>raw revision</w:t></w:r></w:ins>"#;
+        let foreign_child = r#"<x:opaque x:flag="1"/>"#;
+        let foreign_hyperlink = r#"<x:hyperlink xmlns:x="urn:not-word"><w:r><w:t>foreign owner</w:t></w:r></x:hyperlink>"#;
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:hyperlink r:id="rId5" xmlns:x="urn:opaque"><w:r><w:t>before</w:t></w:r>{malformed}<w:ins w:id="31" w:author="Ada"><w:r><w:t>reported</w:t></w:r></w:ins>{foreign_child}<w:r><w:t>after</w:t></w:r></w:hyperlink>{foreign_hyperlink}</w:p></w:body></w:document>"#
+        );
+        let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
+
+        assert_eq!(
+            document
+                .revisions()
+                .iter()
+                .map(|revision| revision.id())
+                .collect::<Vec<_>>(),
+            [31]
+        );
+        let output =
+            String::from_utf8(document.to_xml().expect("document writes")).expect("UTF-8 output");
+        assert!(
+            output.contains(malformed),
+            "missing malformed subtree in {output}"
+        );
+        assert!(
+            output.contains(foreign_child),
+            "missing foreign child in {output}"
+        );
+        assert!(
+            output.contains(foreign_hyperlink),
+            "foreign owner was promoted or lost in {output}"
+        );
+        let positions = [
+            output.find("<w:t>before</w:t>").unwrap(),
+            output.find(malformed).unwrap(),
+            output.find(r#"w:id="31""#).unwrap(),
+            output.find(foreign_child).unwrap(),
+            output.find("<w:t>after</w:t>").unwrap(),
+        ];
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+        let reopened = CT_Document::from_xml(output.as_bytes()).expect("output reparses");
+        assert_eq!(reopened.revisions().len(), 1);
+        assert_eq!(reopened.revisions()[0].id(), 31);
+    }
 }

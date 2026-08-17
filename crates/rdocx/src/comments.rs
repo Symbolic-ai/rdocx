@@ -1091,6 +1091,8 @@ mod tests {
             anchor: None,
             run_start: 0,
             run_end: 2,
+            extra_attributes: Vec::new(),
+            extra_xml: Vec::new(),
         });
 
         document

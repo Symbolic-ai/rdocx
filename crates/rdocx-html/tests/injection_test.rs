@@ -30,6 +30,8 @@ fn linked_paragraph(url: &str) -> HtmlInput {
         anchor: None,
         run_start: 0,
         run_end: 1,
+        extra_attributes: Vec::new(),
+        extra_xml: Vec::new(),
     });
     doc.body.add_paragraph(p);
 

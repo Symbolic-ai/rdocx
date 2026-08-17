@@ -1,12 +1,12 @@
 //! Text content elements: `CT_P` (paragraph), `CT_R` (run), `CT_Text`.
 
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::content_control::CT_Sdt;
 use crate::drawing::CT_Drawing;
 use crate::error::{OxmlError, Result};
-use crate::namespace::matches_local_name;
+use crate::namespace::{R_NS, matches_local_name};
 use crate::numbering::{parse_scoped_ppr, word_prefixes_at};
 use crate::properties::{CT_PPr, CT_RPr, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
@@ -448,10 +448,23 @@ pub struct HyperlinkSpan {
     pub run_start: usize,
     /// Index of the last run in the hyperlink (exclusive).
     pub run_end: usize,
+    /// Unmodeled owner attributes retained when the hyperlink came from XML.
+    #[doc(hidden)]
+    pub extra_attributes: Vec<(String, String)>,
+    /// Raw children at `(relative run boundary, typed revisions before, XML)`.
+    #[doc(hidden)]
+    pub extra_xml: Vec<(usize, usize, Vec<u8>)>,
 }
 
 const HYPERLINK_REVISION_FLAG: usize = 1usize << (usize::BITS - 1);
-type ParsedHyperlinkChildren = (Vec<CT_R>, Vec<(usize, CT_Revision)>);
+
+struct ParsedHyperlinkChildren {
+    runs: Vec<CT_R>,
+    revisions: Vec<(usize, CT_Revision)>,
+    extra_xml: Vec<(usize, usize, Vec<u8>)>,
+}
+
+type ParsedHyperlinkAttributes = (Option<String>, Option<String>, Vec<(String, String)>);
 
 pub(crate) fn hyperlink_revision_slot(hyperlink_index: usize) -> usize {
     HYPERLINK_REVISION_FLAG | hyperlink_index
@@ -560,7 +573,23 @@ impl CT_P {
                     anchor: hyperlink.anchor.clone(),
                     run_start: run_index + 1,
                     run_end: hyperlink.run_end + 1,
+                    extra_attributes: hyperlink.extra_attributes.clone(),
+                    extra_xml: hyperlink
+                        .extra_xml
+                        .iter()
+                        .filter(|(boundary, _, _)| *boundary > run_index - hyperlink.run_start)
+                        .map(|(boundary, before, raw)| {
+                            (
+                                boundary - (run_index - hyperlink.run_start),
+                                *before,
+                                raw.clone(),
+                            )
+                        })
+                        .collect(),
                 };
+                hyperlink
+                    .extra_xml
+                    .retain(|(boundary, _, _)| *boundary <= run_index - hyperlink.run_start);
                 hyperlink.run_end = run_index;
                 hyperlinks.push(hyperlink);
                 hyperlinks.push(suffix);
@@ -823,53 +852,41 @@ impl CT_P {
                         } else {
                             extra_xml.push((runs.len(), raw));
                         }
-                    } else if matches_local_name(name.as_ref(), b"hyperlink") {
-                        let mut rel_id = None;
-                        let mut anchor = None;
-                        for attr in e.attributes().flatten() {
-                            let key = attr.key.as_ref();
-                            if matches_local_name(key, b"id") {
-                                rel_id = Some(
-                                    std::str::from_utf8(&attr.value).unwrap_or("").to_string(),
-                                );
-                            } else if matches_local_name(key, b"anchor") {
-                                anchor = Some(
-                                    std::str::from_utf8(&attr.value).unwrap_or("").to_string(),
-                                );
-                            }
-                        }
+                    } else if is_word_element(name.as_ref(), b"hyperlink", &prefixes) {
+                        let (rel_id, anchor, extra_attributes) =
+                            parse_hyperlink_attributes(e, &prefixes)?;
                         let raw = capture_element(reader, e)?;
-                        let (hyperlink_runs, hyperlink_revisions) =
-                            parse_hyperlink_children(&raw, &prefixes)?;
+                        let parsed = parse_hyperlink_children(&raw, &prefixes)?;
                         let run_start = runs.len();
-                        if hyperlink_runs.is_empty() {
+                        if parsed.runs.is_empty() {
                             let raw_before =
                                 extra_xml.iter().filter(|(at, _)| *at == run_start).count();
                             revisions.extend(
-                                hyperlink_revisions
+                                parsed
+                                    .revisions
                                     .into_iter()
                                     .map(|(_, revision)| (run_start, raw_before, revision)),
                             );
                             extra_xml.push((run_start, raw));
                         } else {
                             let hyperlink_index = hyperlinks.len();
-                            let run_end = run_start + hyperlink_runs.len();
-                            runs.extend(hyperlink_runs);
+                            let run_end = run_start + parsed.runs.len();
+                            runs.extend(parsed.runs);
                             hyperlinks.push(HyperlinkSpan {
                                 rel_id,
                                 anchor,
                                 run_start,
                                 run_end,
+                                extra_attributes,
+                                extra_xml: parsed.extra_xml,
                             });
-                            revisions.extend(hyperlink_revisions.into_iter().map(
-                                |(at, revision)| {
-                                    (
-                                        run_start + at,
-                                        hyperlink_revision_slot(hyperlink_index),
-                                        revision,
-                                    )
-                                },
-                            ));
+                            revisions.extend(parsed.revisions.into_iter().map(|(at, revision)| {
+                                (
+                                    run_start + at,
+                                    hyperlink_revision_slot(hyperlink_index),
+                                    revision,
+                                )
+                            }));
                         }
                     } else if is_word_element(name.as_ref(), b"fldSimple", &prefixes) {
                         // Parse simple field: extract w:instr attribute
@@ -1058,10 +1075,11 @@ impl CT_P {
 
             // Paragraph boundary content is a sibling of the hyperlink.
             if current_hyperlink.is_some() && current_hyperlink != in_hl {
-                write_hyperlink_revisions(
+                write_hyperlink_boundary(
                     writer,
                     &self.revisions,
                     current_hyperlink.expect("open hyperlink exists"),
+                    &self.hyperlinks[current_hyperlink.expect("open hyperlink exists")],
                     run_idx,
                 )?;
                 writer.write_event(Event::End(BytesEnd::new("w:hyperlink")))?;
@@ -1090,12 +1108,21 @@ impl CT_P {
                 if let Some(ref anchor) = hl.anchor {
                     e.push_attribute(("w:anchor", anchor.as_str()));
                 }
+                for (name, value) in &hl.extra_attributes {
+                    e.push_attribute((name.as_str(), value.as_str()));
+                }
                 writer.write_event(Event::Start(e))?;
                 current_hyperlink = in_hl;
             }
 
             if let Some(hyperlink_index) = current_hyperlink {
-                write_hyperlink_revisions(writer, &self.revisions, hyperlink_index, run_idx)?;
+                write_hyperlink_boundary(
+                    writer,
+                    &self.revisions,
+                    hyperlink_index,
+                    &self.hyperlinks[hyperlink_index],
+                    run_idx,
+                )?;
             }
 
             // Check if this run is a field run
@@ -1135,7 +1162,13 @@ impl CT_P {
 
         // Close any remaining open hyperlink
         if let Some(hyperlink_index) = current_hyperlink {
-            write_hyperlink_revisions(writer, &self.revisions, hyperlink_index, self.runs.len())?;
+            write_hyperlink_boundary(
+                writer,
+                &self.revisions,
+                hyperlink_index,
+                &self.hyperlinks[hyperlink_index],
+                self.runs.len(),
+            )?;
             writer.write_event(Event::End(BytesEnd::new("w:hyperlink")))?;
         }
 
@@ -1210,6 +1243,8 @@ fn parse_hyperlink_children(
     reader.config_mut().trim_text(false);
     let mut runs = Vec::new();
     let mut revisions = Vec::new();
+    let mut extra_xml = Vec::new();
+    let mut revisions_at_boundary = 0usize;
     let mut buffer = Vec::new();
     let mut inside = false;
     loop {
@@ -1222,22 +1257,35 @@ fn parse_hyperlink_children(
                 let prefixes = word_prefixes_at(&element, word_prefixes)?;
                 if is_word_element(element.name().as_ref(), b"r", &prefixes) {
                     runs.push(CT_R::from_xml_with_prefixes(&mut reader, &prefixes)?);
+                    revisions_at_boundary = 0;
                 } else if is_content_revision_element(element.name().as_ref(), &prefixes) {
                     let raw = capture_element(&mut reader, &element)?;
-                    if let Some(revision) = CT_Revision::from_raw(raw, &prefixes) {
+                    if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                         revisions.push((runs.len(), revision));
+                        revisions_at_boundary += 1;
+                    } else {
+                        extra_xml.push((runs.len(), revisions_at_boundary, raw));
                     }
                 } else {
-                    reader.read_to_end_into(element.name(), &mut Vec::new())?;
+                    extra_xml.push((
+                        runs.len(),
+                        revisions_at_boundary,
+                        capture_element(&mut reader, &element)?,
+                    ));
                 }
             }
             Event::Empty(element) => {
                 let prefixes = word_prefixes_at(&element, word_prefixes)?;
-                if is_content_revision_element(element.name().as_ref(), &prefixes)
-                    && let Some(revision) =
-                        CT_Revision::from_raw(capture_empty_element(&element)?, &prefixes)
-                {
-                    revisions.push((runs.len(), revision));
+                let raw = capture_empty_element(&element)?;
+                if is_content_revision_element(element.name().as_ref(), &prefixes) {
+                    if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                        revisions.push((runs.len(), revision));
+                        revisions_at_boundary += 1;
+                    } else {
+                        extra_xml.push((runs.len(), revisions_at_boundary, raw));
+                    }
+                } else {
+                    extra_xml.push((runs.len(), revisions_at_boundary, raw));
                 }
             }
             Event::End(element)
@@ -1250,7 +1298,60 @@ fn parse_hyperlink_children(
         }
         buffer.clear();
     }
-    Ok((runs, revisions))
+    Ok(ParsedHyperlinkChildren {
+        runs,
+        revisions,
+        extra_xml,
+    })
+}
+
+fn parse_hyperlink_attributes(
+    element: &BytesStart<'_>,
+    scope: &[String],
+) -> Result<ParsedHyperlinkAttributes> {
+    let mut rel_id = None;
+    let mut anchor = None;
+    let mut extra = Vec::new();
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref();
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
+            .into_owned();
+        if attribute_in_namespace(name, b"id", R_NS, scope) {
+            rel_id = Some(value);
+        } else if attribute_in_namespace(name, b"anchor", crate::namespace::W_NS, scope) {
+            anchor = Some(value);
+        } else {
+            extra.push((std::str::from_utf8(name)?.to_owned(), value));
+        }
+    }
+    Ok((rel_id, anchor, extra))
+}
+
+fn attribute_in_namespace(name: &[u8], local: &[u8], namespace: &str, scope: &[String]) -> bool {
+    let Some(separator) = name.iter().position(|byte| *byte == b':') else {
+        return false;
+    };
+    if name.get(separator + 1..) != Some(local) {
+        return false;
+    }
+    let prefix = &name[..separator];
+    let bound_namespace = scope.iter().find_map(|binding| {
+        binding
+            .strip_prefix('\0')
+            .and_then(|binding| binding.split_once('\0'))
+            .filter(|(candidate, _)| candidate.as_bytes() == prefix)
+            .map(|(_, value)| value)
+    });
+    match bound_namespace {
+        Some(value) => value == namespace,
+        None if namespace == crate::namespace::W_NS => {
+            scope.iter().any(|candidate| candidate.as_bytes() == prefix)
+        }
+        None if namespace == R_NS => prefix == b"r",
+        None => false,
+    }
 }
 
 fn is_content_revision_element(name: &[u8], word_prefixes: &[String]) -> bool {
@@ -1310,16 +1411,31 @@ fn write_paragraph_boundary<W: std::io::Write>(
     Ok(())
 }
 
-fn write_hyperlink_revisions<W: std::io::Write>(
+fn write_hyperlink_boundary<W: std::io::Write>(
     writer: &mut Writer<W>,
     revisions: &[(usize, usize, CT_Revision)],
     hyperlink_index: usize,
+    hyperlink: &HyperlinkSpan,
     run_index: usize,
 ) -> Result<()> {
-    for (_, _, revision) in revisions.iter().filter(|(at, slot, _)| {
-        *at == run_index && hyperlink_revision_index(*slot) == Some(hyperlink_index)
-    }) {
-        revision.write_xml(writer)?;
+    let boundary_revisions = revisions
+        .iter()
+        .filter(|(at, slot, _)| {
+            *at == run_index && hyperlink_revision_index(*slot) == Some(hyperlink_index)
+        })
+        .map(|(_, _, revision)| revision)
+        .collect::<Vec<_>>();
+    let relative_boundary = run_index.saturating_sub(hyperlink.run_start);
+    for revision_index in 0..=boundary_revisions.len() {
+        for (_, _, raw) in hyperlink.extra_xml.iter().filter(|(boundary, before, _)| {
+            *boundary == relative_boundary
+                && (*before).min(boundary_revisions.len()) == revision_index
+        }) {
+            writer.get_mut().write_all(raw)?;
+        }
+        if let Some(revision) = boundary_revisions.get(revision_index) {
+            revision.write_xml(writer)?;
+        }
     }
     Ok(())
 }
@@ -1342,8 +1458,11 @@ fn write_empty_hyperlinks<W: std::io::Write>(
         if let Some(anchor) = &hyperlink.anchor {
             element.push_attribute(("w:anchor", anchor.as_str()));
         }
+        for (name, value) in &hyperlink.extra_attributes {
+            element.push_attribute((name.as_str(), value.as_str()));
+        }
         writer.write_event(Event::Start(element))?;
-        write_hyperlink_revisions(writer, revisions, hyperlink_index, run_index)?;
+        write_hyperlink_boundary(writer, revisions, hyperlink_index, hyperlink, run_index)?;
         writer.write_event(Event::End(BytesEnd::new("w:hyperlink")))?;
     }
     Ok(())
@@ -1613,6 +1732,8 @@ mod tests {
             anchor: None,
             run_start: 1,
             run_end: 2,
+            extra_attributes: Vec::new(),
+            extra_xml: Vec::new(),
         });
 
         let mut output = Vec::new();

@@ -2370,6 +2370,8 @@ impl Document {
                 anchor: Some(heading.bookmark_name.clone()),
                 run_start: 0,
                 run_end: 1, // Just the text run, not the tab
+                extra_attributes: Vec::new(),
+                extra_xml: Vec::new(),
             });
 
             toc_paragraphs.push(p);
@@ -5887,12 +5889,16 @@ mod hyperlink_span_tests {
             anchor: Some("bookmark".to_string()),
             run_start: 1,
             run_end: 99,
+            extra_attributes: Vec::new(),
+            extra_xml: Vec::new(),
         });
         p.hyperlinks.push(HyperlinkSpan {
             rel_id: None,
             anchor: Some("inverted".to_string()),
             run_start: 5,
             run_end: 1,
+            extra_attributes: Vec::new(),
+            extra_xml: Vec::new(),
         });
 
         let links = doc.links();
