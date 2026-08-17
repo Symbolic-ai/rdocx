@@ -12,6 +12,8 @@ use crate::properties::is_word_element;
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::text::CT_P;
 
+const W14_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordml";
+
 /// One entry in a Word comments part.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CT_Comment {
@@ -20,6 +22,8 @@ pub struct CT_Comment {
     pub date: Option<String>,
     pub initials: Option<String>,
     pub paragraphs: Vec<CT_P>,
+    /// `w14:paraId` values aligned with `paragraphs`.
+    pub paragraph_ids: Vec<Option<String>>,
     /// Unmodelled attributes, including producer namespace declarations.
     pub extra_attributes: Vec<(String, String)>,
     /// Unmodelled children retained at paragraph boundaries.
@@ -49,6 +53,7 @@ impl CT_Comments {
         let mut root_attributes = Vec::new();
         let mut extra_xml = Vec::new();
         let mut word_prefixes = Vec::new();
+        let mut w14_prefixes = Vec::new();
         let mut saw_root = false;
         let mut buf = Vec::new();
 
@@ -60,9 +65,15 @@ impl CT_Comments {
                     if is_word_element(name.as_ref(), b"comments", &prefixes) {
                         root_attributes = capture_attributes(element, &[], &prefixes)?;
                         word_prefixes = prefixes;
+                        w14_prefixes = namespace_prefixes_at(element, &w14_prefixes, W14_NS)?;
                         saw_root = true;
                     } else if is_word_element(name.as_ref(), b"comment", &prefixes) {
-                        comments.push(parse_comment(&mut reader, element, &prefixes)?);
+                        comments.push(parse_comment(
+                            &mut reader,
+                            element,
+                            &prefixes,
+                            &w14_prefixes,
+                        )?);
                     } else if saw_root {
                         extra_xml.push((comments.len(), capture_element(&mut reader, element)?));
                     } else {
@@ -74,6 +85,7 @@ impl CT_Comments {
                     let name = element.name();
                     if is_word_element(name.as_ref(), b"comments", &prefixes) {
                         root_attributes = capture_attributes(element, &[], &prefixes)?;
+                        w14_prefixes = namespace_prefixes_at(element, &w14_prefixes, W14_NS)?;
                         saw_root = true;
                     } else if is_word_element(name.as_ref(), b"comment", &prefixes) {
                         comments.push(parse_empty_comment(element, &prefixes)?);
@@ -109,6 +121,13 @@ impl CT_Comments {
 
         let mut root = BytesStart::new("w:comments");
         root.push_attribute(("xmlns:w", W_NS));
+        if self
+            .comments
+            .iter()
+            .any(|comment| comment.paragraph_ids.iter().any(Option::is_some))
+        {
+            root.push_attribute(("xmlns:w14", W14_NS));
+        }
         push_preserved_attributes(&mut root, &self.root_attributes, true);
         writer.write_event(Event::Start(root))?;
 
@@ -126,10 +145,13 @@ fn parse_comment(
     reader: &mut Reader<&[u8]>,
     start: &BytesStart<'_>,
     prefixes: &[String],
+    inherited_w14_prefixes: &[String],
 ) -> Result<CT_Comment> {
     let (id, author, date, initials, extra_attributes) = comment_attributes(start, prefixes)?;
     let mut paragraphs = Vec::new();
+    let mut paragraph_ids = Vec::new();
     let mut extra_xml = Vec::new();
+    let w14_prefixes = namespace_prefixes_at(start, inherited_w14_prefixes, W14_NS)?;
     let mut buf = Vec::new();
 
     loop {
@@ -137,6 +159,12 @@ fn parse_comment(
             Ok(Event::Start(ref element)) => {
                 let child_prefixes = word_prefixes_at(element, prefixes)?;
                 if is_word_element(element.name().as_ref(), b"p", &child_prefixes) {
+                    let child_w14_prefixes = namespace_prefixes_at(element, &w14_prefixes, W14_NS)?;
+                    paragraph_ids.push(namespace_attribute(
+                        element,
+                        b"paraId",
+                        &child_w14_prefixes,
+                    )?);
                     paragraphs.push(CT_P::from_xml_with_prefixes(reader, &child_prefixes)?);
                 } else {
                     extra_xml.push((paragraphs.len(), capture_element(reader, element)?));
@@ -145,6 +173,12 @@ fn parse_comment(
             Ok(Event::Empty(ref element)) => {
                 let child_prefixes = word_prefixes_at(element, prefixes)?;
                 if is_word_element(element.name().as_ref(), b"p", &child_prefixes) {
+                    let child_w14_prefixes = namespace_prefixes_at(element, &w14_prefixes, W14_NS)?;
+                    paragraph_ids.push(namespace_attribute(
+                        element,
+                        b"paraId",
+                        &child_w14_prefixes,
+                    )?);
                     paragraphs.push(CT_P::new());
                 } else {
                     extra_xml.push((paragraphs.len(), capture_empty_element(element)?));
@@ -168,6 +202,7 @@ fn parse_comment(
         date,
         initials,
         paragraphs,
+        paragraph_ids,
         extra_attributes,
         extra_xml,
     })
@@ -181,6 +216,7 @@ fn parse_empty_comment(start: &BytesStart<'_>, prefixes: &[String]) -> Result<CT
         date,
         initials,
         paragraphs: Vec::new(),
+        paragraph_ids: Vec::new(),
         extra_attributes,
         extra_xml: Vec::new(),
     })
@@ -288,7 +324,10 @@ fn write_comment<W: Write>(writer: &mut Writer<W>, comment: &CT_Comment) -> Resu
 
     write_raw_at(writer, &comment.extra_xml, 0)?;
     for (index, paragraph) in comment.paragraphs.iter().enumerate() {
-        paragraph.to_xml(writer)?;
+        paragraph.to_xml_with_para_id(
+            writer,
+            comment.paragraph_ids.get(index).and_then(Option::as_deref),
+        )?;
         write_raw_at(writer, &comment.extra_xml, index + 1)?;
     }
     writer.write_event(Event::End(BytesEnd::new("w:comment")))?;
@@ -301,11 +340,64 @@ fn push_preserved_attributes(
     root: bool,
 ) {
     for (name, value) in attributes {
-        if root && name == "xmlns:w" {
+        if root && (name == "xmlns:w" || name == "xmlns:w14") {
             continue;
         }
         start.push_attribute((name.as_str(), value.as_str()));
     }
+}
+
+fn namespace_prefixes_at(
+    start: &BytesStart<'_>,
+    inherited: &[String],
+    namespace: &str,
+) -> Result<Vec<String>> {
+    let mut prefixes = inherited.to_vec();
+    for attribute in start.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref();
+        let prefix = if name == b"xmlns" {
+            b"".as_slice()
+        } else if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+            prefix
+        } else {
+            continue;
+        };
+        let prefix = std::str::from_utf8(prefix)?.to_owned();
+        prefixes.retain(|candidate| candidate != &prefix);
+        let value =
+            attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())?;
+        if value.as_ref() == namespace {
+            prefixes.push(prefix);
+        }
+    }
+    Ok(prefixes)
+}
+
+fn namespace_attribute(
+    start: &BytesStart<'_>,
+    local: &[u8],
+    prefixes: &[String],
+) -> Result<Option<String>> {
+    for attribute in start.attributes() {
+        let attribute = attribute?;
+        let key = attribute.key.as_ref();
+        let Some(separator) = key.iter().position(|byte| *byte == b':') else {
+            continue;
+        };
+        if key.get(separator + 1..) == Some(local)
+            && prefixes
+                .iter()
+                .any(|prefix| prefix.as_bytes() == &key[..separator])
+        {
+            return Ok(Some(
+                attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())?
+                    .into_owned(),
+            ));
+        }
+    }
+    Ok(None)
 }
 
 fn write_raw_at<W: Write>(
@@ -355,5 +447,18 @@ mod tests {
     fn malformed_comment_id_is_rejected() {
         let xml = br#"<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:comment w:id="not-a-number"><w:p/></w:comment></w:comments>"#;
         assert!(CT_Comments::from_xml(xml).is_err());
+    }
+
+    #[test]
+    fn paragraph_ids_follow_the_bound_extension_namespace() {
+        let xml = br#"<x:comments xmlns:x="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:p14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:ext="urn:producer"><x:comment x:id="1"><x:p p14:paraId="0000000A" ext:paraId="foreign"><x:r><x:t>thread</x:t></x:r></x:p></x:comment></x:comments>"#;
+        let comments = CT_Comments::from_xml(xml).unwrap();
+        assert_eq!(
+            comments.comments[0].paragraph_ids[0].as_deref(),
+            Some("0000000A")
+        );
+        let output = String::from_utf8(comments.to_xml().unwrap()).unwrap();
+        assert!(output.contains("w14:paraId=\"0000000A\""));
+        assert!(!output.contains("w14:paraId=\"foreign\""));
     }
 }

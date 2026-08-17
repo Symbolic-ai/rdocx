@@ -6,8 +6,8 @@ use rdocx::Document;
 use rdocx::paragraph::Alignment;
 use rdocx::table::VerticalAlignment;
 use rdocx::{
-    BorderStyle, Length, ListLevel, SectionBreak, StyleBuilder, TabAlignment, TabLeader,
-    UnderlineStyle,
+    BorderStyle, Length, ListLevel, RunPosition, RunRange, SectionBreak, StyleBuilder,
+    TabAlignment, TabLeader, UnderlineStyle,
 };
 
 fn document_xml(document: &mut Document) -> Vec<u8> {
@@ -1313,6 +1313,128 @@ fn saving_without_comments_does_not_manufacture_a_comments_part() {
             .and_then(|rels| rels.get_by_type(rel_types::COMMENTS))
             .is_none()
     );
+}
+
+#[test]
+fn comment_parts_relationships_and_content_types_are_word_compatible() {
+    let mut document = Document::new();
+    document.add_paragraph("review this");
+    let id = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            Some("AL"),
+            "Please review",
+        )
+        .unwrap();
+    document.reply_to(id, "Ben", "Done").unwrap();
+    document.resolve_comment(id, true).unwrap();
+
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let relationships = package.get_part_rels("/word/document.xml").unwrap();
+    let comments = relationships.get_by_type(rel_types::COMMENTS).unwrap();
+    let extended = relationships
+        .get_by_type("http://schemas.microsoft.com/office/2011/relationships/commentsExtended")
+        .unwrap();
+    let comments_part = OpcPackage::resolve_rel_target("/word/document.xml", &comments.target);
+    let extended_part = OpcPackage::resolve_rel_target("/word/document.xml", &extended.target);
+
+    assert_eq!(
+        package.content_types.content_type_for(&comments_part),
+        Some("application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml")
+    );
+    assert_eq!(
+        package.content_types.content_type_for(&extended_part),
+        Some("application/vnd.ms-word.commentsExtended+xml")
+    );
+    let comments_xml =
+        String::from_utf8(package.get_part(&comments_part).unwrap().to_vec()).unwrap();
+    let extended_xml =
+        String::from_utf8(package.get_part(&extended_part).unwrap().to_vec()).unwrap();
+    assert!(
+        comments_xml.contains("xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\"")
+    );
+    assert!(comments_xml.contains("w14:paraId="));
+    assert!(
+        extended_xml.contains("xmlns:w15=\"http://schemas.microsoft.com/office/word/2012/wordml\"")
+    );
+    assert!(extended_xml.contains("w15:paraIdParent="));
+    assert!(extended_xml.contains("w15:done=\"1\""));
+}
+
+#[test]
+fn comments_extended_part_uses_its_existing_relationship_target() {
+    const COMMENTS_EXTENDED_REL_TYPE: &str =
+        "http://schemas.microsoft.com/office/2011/relationships/commentsExtended";
+    const COMMENTS_EXTENDED_CONTENT_TYPE: &str = "application/vnd.ms-word.commentsExtended+xml";
+
+    let mut document = Document::new();
+    document.add_paragraph("review this");
+    let id = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "Review",
+        )
+        .unwrap();
+    let bytes = document.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let extension = package.parts.remove("/word/commentsExtended.xml").unwrap();
+    package.set_part("/custom/thread-data.xml", extension);
+    package
+        .content_types
+        .overrides
+        .remove("/word/commentsExtended.xml");
+    package
+        .content_types
+        .add_override("/custom/thread-data.xml", COMMENTS_EXTENDED_CONTENT_TYPE);
+    package
+        .part_rels
+        .get_mut("/word/document.xml")
+        .unwrap()
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.rel_type == COMMENTS_EXTENDED_REL_TYPE)
+        .unwrap()
+        .target = "../custom/thread-data.xml".to_owned();
+    let mut seeded = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut seeded).unwrap();
+
+    let mut reopened = Document::from_bytes(seeded.get_ref()).unwrap();
+    assert!(reopened.resolve_comment(id, true).unwrap());
+    let saved = reopened.to_bytes().unwrap();
+    let saved_package = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    assert!(
+        saved_package
+            .get_part("/word/commentsExtended.xml")
+            .is_none()
+    );
+    assert!(saved_package.get_part("/custom/thread-data.xml").is_some());
+    let relationship = saved_package
+        .get_part_rels("/word/document.xml")
+        .and_then(|relationships| relationships.get_by_type(COMMENTS_EXTENDED_REL_TYPE))
+        .unwrap();
+    assert_eq!(relationship.target, "../custom/thread-data.xml");
 }
 
 #[test]

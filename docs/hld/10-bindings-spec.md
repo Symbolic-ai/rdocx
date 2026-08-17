@@ -208,6 +208,16 @@ stable APIs. Existing binding surfaces do not gain new methods implicitly, but
 their owned `rdocx::Document` remains package-preserving when native code uses
 the new operations.
 
+Native Word callers can inspect comments through `Document::comments` and
+author threads through `add_comment`, `reply_to`, `resolve_comment`, and
+`remove_comment`. `RunPosition` and `RunRange` define top-level paragraph run
+boundaries with an inclusive start and exclusive end. `CommentRef` exposes
+comment metadata, text, parent identity, and resolved state without permitting
+part-local mutation. These additions do not implicitly expand the Python,
+WASM, or CLI surfaces. Those consumers continue to own the same
+package-preserving `Document`, so native comment edits remain intact when a
+binding subsequently saves it.
+
 The stable Rust family moves to 0.5.0 for the numbering preservation model.
 `CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
 producer extensions survive typed mutations. Full struct literals written for

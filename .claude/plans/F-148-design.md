@@ -1,6 +1,6 @@
 # F-148, Comment API
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S46
 **Size**: M
 **Depends on**: F-147
@@ -133,13 +133,13 @@ author comments.
 
 ## Implementation checklist
 
-- [ ] Add the stable run-position and half-open run-range values.
-- [ ] Add read, add, reply, resolve, and remove facade operations.
-- [ ] Parse and write comments-extended paragraph linkage and resolved state.
-- [ ] Make multi-part comment mutations atomic and collision-safe.
-- [ ] Add invalid-range, intact-thread, removal, and package graph tests.
-- [ ] Produce SHA-bound Word acceptance evidence or classify it human-action.
-- [ ] Update exactly HLD 03, HLD 04, and HLD 10 at completion.
+- [x] Add the stable run-position and half-open run-range values.
+- [x] Add read, add, reply, resolve, and remove facade operations.
+- [x] Parse and write comments-extended paragraph linkage and resolved state.
+- [x] Make multi-part comment mutations atomic and collision-safe.
+- [x] Add invalid-range, intact-thread, removal, and package graph tests.
+- [x] Produce SHA-bound Word acceptance evidence or classify it human-action.
+- [x] Update exactly HLD 03, HLD 04, and HLD 10 at completion.
 
 ## Open questions
 

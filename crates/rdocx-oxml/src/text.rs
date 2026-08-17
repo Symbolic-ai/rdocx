@@ -567,7 +567,19 @@ impl CT_P {
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        writer.write_event(Event::Start(BytesStart::new("w:p")))?;
+        self.to_xml_with_para_id(writer, None)
+    }
+
+    pub(crate) fn to_xml_with_para_id<W: std::io::Write>(
+        &self,
+        writer: &mut Writer<W>,
+        para_id: Option<&str>,
+    ) -> Result<()> {
+        let mut start = BytesStart::new("w:p");
+        if let Some(para_id) = para_id {
+            start.push_attribute(("w14:paraId", para_id));
+        }
+        writer.write_event(Event::Start(start))?;
 
         if let Some(ref props) = self.properties {
             props.to_xml(writer)?;

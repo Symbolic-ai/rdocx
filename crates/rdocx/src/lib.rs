@@ -21,6 +21,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
+mod comments;
 mod document;
 mod error;
 pub mod paragraph;
@@ -28,6 +29,7 @@ pub mod run;
 pub mod style;
 pub mod table;
 
+pub use comments::{CommentRef, RunPosition, RunRange};
 pub use document::{
     AccessibilityIssue, Document, ImageInfo, IssueSeverity, LinkInfo, ListLevel, ListNumberFormat,
     OutlineNode,

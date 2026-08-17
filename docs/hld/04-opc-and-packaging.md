@@ -123,6 +123,13 @@ neighbouring paragraph and run XML. A document without a comments relationship
 does not gain a comments part, relationship, or override during an ordinary
 save.
 
+Threaded comments add a document relationship using the Microsoft
+`commentsExtended` relationship type. The facade retains its resolved target
+and writes the comments-extended content type at that exact part. New comment
+state creates both relationships and both overrides together. Existing custom
+targets remain authoritative, and removal of the final API-owned thread removes
+only the parts, relationships, and overrides created by the typed model.
+
 ## Part naming
 
 **Numeric suffixes are allocated after the greatest positive parsed suffix,
@@ -145,10 +152,14 @@ docx                      pptx
 /word/charts/chartN.xml   /ppt/slideMasters/slideMasterN.xml
 /word/embeddings/         /ppt/notesSlides/notesSlideN.xml
   WorkbookN.xlsx          /ppt/theme/themeN.xml
-                          /ppt/media/imageN.ext
-                          /ppt/charts/chartN.xml
+/word/comments.xml        /ppt/media/imageN.ext
+/word/commentsExtended.xml /ppt/charts/chartN.xml
                           /ppt/embeddings/WorkbookN.xlsx
 ```
+
+Comment part creation uses the conventional names when free and scans numbered
+alternatives when either path is occupied. It never overwrites an unrelated
+part merely because the conventional comment path exists.
 
 Word chart assembly follows the same independent suffix rule as PowerPoint.
 The document relationship targets `/word/charts/chartN.xml`, and that chart's
@@ -259,3 +270,9 @@ automatically under `debug_assertions` before `save`. It checks dangling
 relationship ids, missing content-type overrides, relationship targets that
 resolve to no part, and orphan media. `rpptx` adds its own presentation-specific
 checks, listed in `06-presentationml-model.md`.
+
+Comment mutations validate coordinates and allocate every required id before
+changing package or document state. Saving keeps the comments and
+comments-extended relationship graph reachable from the main document, with
+matching overrides and namespace declarations. A failed validation or
+allocation leaves anchors, typed parts, relationships, and overrides unchanged.

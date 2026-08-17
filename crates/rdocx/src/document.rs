@@ -39,15 +39,15 @@ use crate::table::{Table, TableRef};
 /// This is the main entry point for reading, creating, and modifying
 /// DOCX documents.
 pub struct Document {
-    package: OpcPackage,
-    document: CT_Document,
+    pub(crate) package: OpcPackage,
+    pub(crate) document: CT_Document,
     styles: CT_Styles,
     numbering: Option<CT_Numbering>,
     core_properties: Option<CoreProperties>,
     /// Package part containing the core properties, resolved from `_rels/.rels`.
     core_properties_part_name: String,
     /// Part name for the main document
-    doc_part_name: String,
+    pub(crate) doc_part_name: String,
     /// Part name the styles were loaded from, and where they are written back.
     /// Resolved through the relationship rather than assumed, so a document
     /// that keeps its styles somewhere other than `/word/styles.xml` is
@@ -60,9 +60,17 @@ pub struct Document {
     /// Footnotes: loaded from word/footnotes.xml on open, written back on save.
     footnotes: rdocx_oxml::footnotes::CT_Footnotes,
     /// Typed comments loaded through the main document relationship.
-    comments: Option<rdocx_oxml::comments::CT_Comments>,
+    pub(crate) comments: Option<rdocx_oxml::comments::CT_Comments>,
     /// Existing comments relationship target. No target is invented on read.
-    comments_part_name: Option<String>,
+    pub(crate) comments_part_name: Option<String>,
+    /// Typed reply linkage and resolved state for comments.
+    pub(crate) comments_extended: Option<rdocx_oxml::comments_extended::CT_CommentsEx>,
+    /// Existing comments-extended relationship target.
+    pub(crate) comments_extended_part_name: Option<String>,
+    /// Whether this facade created the comments part and may remove it when empty.
+    pub(crate) comments_owned: bool,
+    /// Whether this facade created the comments-extended part and may remove it when empty.
+    pub(crate) comments_extended_owned: bool,
     /// Normal layout, including system font discovery, computed on first use.
     layout_cache: Mutex<Option<Arc<oxml_layout::LayoutResult>>>,
     /// Bundled-font-only layout used by deterministic rendering.
@@ -140,6 +148,10 @@ impl Document {
             footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
             comments: None,
             comments_part_name: None,
+            comments_extended: None,
+            comments_extended_part_name: None,
+            comments_owned: false,
+            comments_extended_owned: false,
             layout_cache: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
         }
@@ -225,6 +237,14 @@ impl Document {
             Some(xml) => Some(rdocx_oxml::comments::CT_Comments::from_xml(xml)?),
             None => None,
         };
+        let comments_extended_part_name = resolve_part(crate::comments::COMMENTS_EXTENDED_REL_TYPE);
+        let comments_extended = match comments_extended_part_name
+            .as_deref()
+            .and_then(|part| package.get_part(part))
+        {
+            Some(xml) => Some(rdocx_oxml::comments_extended::CT_CommentsEx::from_xml(xml)?),
+            None => None,
+        };
 
         Ok(Document {
             package,
@@ -242,13 +262,17 @@ impl Document {
             footnotes,
             comments,
             comments_part_name,
+            comments_extended,
+            comments_extended_part_name,
+            comments_owned: false,
+            comments_extended_owned: false,
             layout_cache: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
         })
     }
 
     /// Clear layouts derived from the current document state.
-    fn invalidate_layout(&mut self) {
+    pub(crate) fn invalidate_layout(&mut self) {
         self.layout_cache
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -362,7 +386,20 @@ impl Document {
             self.ensure_part_relationship(
                 &part_name,
                 rel_types::COMMENTS,
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+                crate::comments::COMMENTS_CONTENT_TYPE,
+            );
+        }
+
+        if let (Some(comments), Some(part_name)) = (
+            &self.comments_extended,
+            self.comments_extended_part_name.clone(),
+        ) {
+            let xml = comments.to_xml()?;
+            self.package.set_part(&part_name, xml);
+            self.ensure_part_relationship(
+                &part_name,
+                crate::comments::COMMENTS_EXTENDED_REL_TYPE,
+                crate::comments::COMMENTS_EXTENDED_CONTENT_TYPE,
             );
         }
 

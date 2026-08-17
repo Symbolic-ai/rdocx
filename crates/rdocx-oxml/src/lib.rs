@@ -5,6 +5,7 @@
 
 pub mod borders;
 pub mod comments;
+pub mod comments_extended;
 pub mod document;
 pub mod drawing;
 pub mod footnotes;

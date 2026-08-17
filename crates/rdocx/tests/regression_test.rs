@@ -5,7 +5,187 @@
 
 use std::collections::HashMap;
 
-use rdocx::{Document, Length};
+use rdocx::{Document, Length, RunPosition, RunRange};
+
+#[test]
+fn run_ranges_reject_reverse_missing_and_nonparagraph_positions() {
+    let mut document = Document::new();
+    document.add_paragraph("first");
+    document.add_table(1, 1);
+    document.add_paragraph("second");
+    let before = document.to_bytes().unwrap();
+
+    let invalid = [
+        RunRange {
+            start: RunPosition {
+                body_index: 2,
+                run_index: 0,
+            },
+            end: RunPosition {
+                body_index: 0,
+                run_index: 1,
+            },
+        },
+        RunRange {
+            start: RunPosition {
+                body_index: 99,
+                run_index: 0,
+            },
+            end: RunPosition {
+                body_index: 99,
+                run_index: 0,
+            },
+        },
+        RunRange {
+            start: RunPosition {
+                body_index: 1,
+                run_index: 0,
+            },
+            end: RunPosition {
+                body_index: 1,
+                run_index: 0,
+            },
+        },
+    ];
+
+    for range in invalid {
+        assert!(
+            document
+                .add_comment(range, "Ada", Some("AL"), "review")
+                .is_err()
+        );
+    }
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn a_ranged_comment_reply_and_resolution_keep_one_intact_thread() {
+    let mut document = Document::new();
+    let mut paragraph = document.add_paragraph("");
+    paragraph.add_run("first ");
+    paragraph.add_run("second");
+
+    let comment_id = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 2,
+                },
+            },
+            "Ada",
+            Some("AL"),
+            "Please review",
+        )
+        .unwrap();
+    let reply_id = document.reply_to(comment_id, "Ben", "Looks good").unwrap();
+    assert!(document.resolve_comment(comment_id, true).unwrap());
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let comments = reopened.comments();
+    assert_eq!(comments.len(), 2);
+    assert_eq!(comments[0].id(), comment_id);
+    assert_eq!(comments[0].text(), "Please review");
+    assert!(comments[0].resolved());
+    assert_eq!(comments[1].id(), reply_id);
+    assert_eq!(comments[1].text(), "Looks good");
+    assert_eq!(comments[1].parent_id(), Some(comment_id));
+}
+
+#[test]
+fn removing_a_comment_removes_only_its_anchors_and_thread_metadata() {
+    let mut document = Document::new();
+    let mut paragraph = document.add_paragraph("");
+    paragraph.add_run("left ");
+    paragraph.add_run("middle ");
+    paragraph.add_run("right");
+    let first = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "remove me",
+        )
+        .unwrap();
+    let second = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 2,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 3,
+                },
+            },
+            "Ben",
+            None,
+            "keep me",
+        )
+        .unwrap();
+
+    let bytes = document.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let extension = String::from_utf8(
+        package
+            .get_part("/word/commentsExtended.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap()
+    .replace(
+        "<w15:commentsEx ",
+        "<w15:commentsEx xmlns:ext=\"urn:producer\" ",
+    )
+    .replace(
+        "</w15:commentsEx>",
+        "<ext:kept token=\"same\"/></w15:commentsEx>",
+    );
+    package.set_part("/word/commentsExtended.xml", extension.into_bytes());
+    let mut seeded = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut seeded).unwrap();
+
+    let mut reopened = Document::from_bytes(seeded.get_ref()).unwrap();
+    assert!(reopened.remove_comment(first).unwrap());
+    let saved = reopened.to_bytes().unwrap();
+    let saved_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let document_xml = String::from_utf8(
+        saved_package
+            .get_part("/word/document.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let extension_xml = String::from_utf8(
+        saved_package
+            .get_part("/word/commentsExtended.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    assert_eq!(reopened.text(), "left middle right\n");
+    assert_eq!(reopened.comments().len(), 1);
+    assert_eq!(reopened.comments()[0].id(), second);
+    assert!(!document_xml.contains(&format!("w:id=\"{first}\"")));
+    assert!(document_xml.contains(&format!("w:id=\"{second}\"")));
+    assert!(extension_xml.contains("<ext:kept token=\"same\"/>"));
+}
 
 #[test]
 fn mislabelled_jpeg_uses_sniffed_package_metadata() {

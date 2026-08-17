@@ -149,6 +149,10 @@ Comment bodies retain ordered paragraphs, producer attributes, and unmodelled
 children. Paragraph and run models retain each anchor at its insertion boundary
 without moving neighbouring raw XML. Parsing accepts in-scope aliases for the
 WordprocessingML namespace, while serialization uses the fixed `w:` prefix.
+The comments-extended model owns paragraph-id parent linkage and resolved state,
+with unmodelled attributes and root children retained at their original
+boundaries. The `rdocx` facade owns the relationship-resolved pair of comment
+parts and coordinates them with the anchors in the main document.
 
 `rdocx-layout` keeps the flow model: the engine, the paginator, blocks, tables
 and the style resolver. Slides do not paginate, so none of it transfers. The
@@ -290,6 +294,16 @@ setters, preserving the distinction between inherited, explicitly false, and
 explicitly true formatting without bypassing the facade.
 The binding-only underline variants travel through a bounded integer-code
 accessor so the published exhaustive Rust `UnderlineStyle` enum stays stable.
+
+Word comment mutation uses `RunPosition` and half-open `RunRange` values whose
+body indexes select top-level paragraphs and whose run indexes select insertion
+boundaries. `Document` validates both endpoints before mutation, allocates
+collision-free comment and paragraph ids, updates the comment parts and all
+three anchors together, then invalidates layout once. `CommentRef` is a
+read-only view over the typed comment and its comments-extended thread entry.
+Replies follow paragraph-id parent linkage, resolution applies to the thread
+root, and removal deletes the selected comment plus descendant replies without
+deleting unrelated runs or producer XML.
 
 The `rpptx` facade provides the same total lookup boundary for slides, nested
 shape trees, placeholders, text frames, paragraphs, regular runs, tables and
