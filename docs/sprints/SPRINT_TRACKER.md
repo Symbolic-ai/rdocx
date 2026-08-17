@@ -250,6 +250,10 @@ defended.
 | F-X027 | S44 | S | 1 | 1 | 2026-08-16 | Golden-PNG checks run in CI under pinned Poppler |
 | F-X028 | S44 | M | 2 | 1 | 2026-08-16 | Agent-facing paths, versions, fonts, and gates agree with the tree |
 | F-X029 | S44 | M | 2 | 1 | 2026-08-16 | Path-filtered CI with a stable aggregate gate |
+| F-156 | S45 | L | 4 | 1 | 2026-08-17 | Shared oxml-chart crate with a source-compatible rpptx-chart shim |
+| F-157 | S45 | M | 2 | 1 | 2026-08-17 | Native Word chart parts with editable embedded workbooks |
+| F-158 | S45 | M | 2 | 1 | 2026-08-17 | Atomic inline Document::add_chart authoring |
+| F-159 | S45 | M | 2 | 1 | 2026-08-17 | Word paginator chart rendering with exact cross-family pixels |
 
 ## Velocity
 
