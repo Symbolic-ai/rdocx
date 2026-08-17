@@ -31,7 +31,7 @@ protection metadata, then proves the full collaboration-layer milestone gate.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-151 | Revision display in the renderer | M | in-progress | codex |
-| F-155 | Document protection | M | pending | - |
+| F-155 | Document protection | M | in-progress | codex |
 
 ## Sequencing note
 
