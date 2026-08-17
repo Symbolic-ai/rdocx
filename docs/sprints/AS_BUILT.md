@@ -7179,3 +7179,83 @@ regressions.
 
 **Notes for future sessions.** Keep page targets in the existing layout result.
 Do not add a Word-specific type to `oxml-layout` or a second pagination pass.
+
+### F-149, Revision model
+
+**Sprint.** S47
+**Completed.** 2026-08-17
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** WordprocessingML insertions, deletions, moves, deleted text,
+contextual change markers, and run, paragraph, table, and section property
+changes now have a typed revision model. The native facade reports revision
+identity, author, timestamp, and kind in main-body document order, including
+content nested in tables and content controls.
+
+**Non-obvious choices.** The captured revision subtree remains the sole
+serialization source while the typed content is a read-only projection. This
+keeps untouched producer prefixes, whitespace, namespace bindings, and unknown
+descendants byte-identical. Malformed revisions remain raw and unreported so a
+previously readable document still opens.
+
+**Deviations from the design plan.** None. The approved scope included every
+reachable main-document placement of the listed insertion and deletion
+elements, including contextual paragraph, row, and numbering markers.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, revision ownership,
+preservation, and traversal, and `docs/hld/10-bindings-spec.md`, the additive
+native revision metadata API.
+
+**Tests.** `revision_elements_round_trip_unchanged_and_report_metadata`,
+`revision_attributes_are_prefix_tolerant_and_namespace_checked`,
+`property_changes_write_in_their_schema_final_slots`, and
+`nested_revisions_are_reported_once_in_document_order`, plus namespace
+collision, schema-order, raw-preservation, and duplicate-emission regressions.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep raw revision XML as the write source until
+an explicit resolution operation replaces it. Revision discovery remains
+bounded to the main document tree in this story.
+
+### F-150, Accept and reject revisions
+
+**Sprint.** S47
+**Completed.** 2026-08-17
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native Word facade can accept or reject every modeled
+revision, or scope the operation by exact author, inclusive RFC 3339 date
+range, or revision id. Resolution covers content wrappers, moves, deleted
+text, all four property-change forms, contextual paragraph markers, numbering
+markers, and row markers.
+
+**Non-obvious choices.** Operations transform a cloned document from the
+inside out, promote namespace bindings needed by retained content, serialize
+and reparse the complete candidate, and commit only after every selected
+revision validates. Paragraph-mark deletion chains merge adjacent paragraphs
+while retaining the final paragraph's formatting. Layout caches are
+invalidated once after a successful commit.
+
+**Deviations from the design plan.** None. Microscope review strengthened the
+approved contract with malformed nested-selection checks, strict RFC 3339
+edge cases, owner namespace recovery, and chained paragraph merge coverage.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, placement-aware
+document mutation, `docs/hld/04-opc-and-packaging.md`, atomic staged package
+integrity, and `docs/hld/10-bindings-spec.md`, the eight additive native
+accept and reject methods.
+
+**Tests.** `accepting_every_revision_matches_word_normalized_body_xml`,
+`rejecting_insertions_and_deletions_restores_the_recorded_content`,
+`scoped_revision_actions_change_only_matching_revisions`,
+`contextual_paragraph_markers_merge_the_adjacent_paragraphs`,
+`rejected_property_changes_keep_owner_namespace_bindings`, and
+`malformed_selected_property_changes_fail_atomically`. The normalized oracle
+is pinned to Microsoft Word 16.104 build 16.104.25121423.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Date scoping compares instants rather than
+lexical timestamp strings. Shared revision ids intentionally select every
+modeled element carrying that id, including paired move placements.

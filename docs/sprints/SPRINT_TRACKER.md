@@ -261,6 +261,8 @@ defended.
 | F-152 | S46 | L | 4 | 1 | 2026-08-17 | Recursive content controls at all five Word placements |
 | F-153 | S46 | M | 2 | 1 | 2026-08-17 | Bounded custom XML data binding with atomic display updates |
 | F-154 | S46 | M | 2 | 1 | 2026-08-17 | Typed bookmarks and single-pass REF and PAGEREF resolution |
+| F-149 | S47 | L | 4 | 1 | 2026-08-17 | Typed revision metadata, content, prior properties, and ordered traversal |
+| F-150 | S47 | L | 4 | 1 | 2026-08-17 | Atomic placement-aware revision acceptance and rejection |
 
 ## Velocity
 

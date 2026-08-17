@@ -28,8 +28,8 @@ then adds accept and reject operations that reproduce Word's document state.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-149 | Revision model | L | in-progress | codex |
-| F-150 | Accept and reject revisions | L | in-progress | codex |
+| F-149 | Revision model | L | done | |
+| F-150 | Accept and reject revisions | L | done | |
 
 ## Sequencing note
 
