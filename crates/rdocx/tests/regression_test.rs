@@ -398,6 +398,49 @@ fn hyperlink_nested_revisions_resolve_inside_out_when_scoped() {
 }
 
 #[test]
+fn targetless_revision_only_hyperlinks_keep_sibling_order_when_resolved() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:hyperlink><w:ins w:id="21" w:author="Ada"><w:r><w:t>H</w:t></w:r></w:ins></w:hyperlink><w:del w:id="22" w:author="Ben"><w:r><w:delText>B</w:delText></w:r></w:del><w:ins w:id="23" w:author="Cy"><w:r><w:t>C</w:t></w:r></w:ins><w:hyperlink><w:del w:id="24" w:author="Dee"><w:r><w:delText>D</w:delText></w:r></w:del></w:hyperlink></w:p>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+
+    assert_eq!(
+        document
+            .revisions()
+            .iter()
+            .map(|revision| revision.id())
+            .collect::<Vec<_>>(),
+        [21, 22, 23, 24]
+    );
+    assert_eq!(document.accept_revision_id(21).unwrap(), 1);
+    assert_eq!(document.reject_revision_id(24).unwrap(), 1);
+    assert_eq!(
+        document
+            .revisions()
+            .iter()
+            .map(|revision| revision.id())
+            .collect::<Vec<_>>(),
+        [22, 23]
+    );
+
+    let staged = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(staged)).unwrap();
+    let document_xml =
+        std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let positions = [
+        document_xml.find("<w:t>H</w:t>").unwrap(),
+        document_xml.find(r#"w:id="22""#).unwrap(),
+        document_xml.find(r#"w:id="23""#).unwrap(),
+        document_xml.find("<w:t>D</w:t>").unwrap(),
+    ];
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+    assert_eq!(document.accept_all().unwrap(), 2);
+    assert!(document.revisions().is_empty());
+    assert_eq!(document.text(), "HCD\n");
+}
+
+#[test]
 fn tag_precedes_alias_and_each_control_updates_once() {
     let xml = wrap_word_body(
         r#"<w:sdt><w:sdtPr><w:tag w:val="customer"/><w:alias w:val="shared"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>one</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:alias w:val="shared"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>two</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="missing"/><w:alias w:val="shared"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>three</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,

@@ -7254,8 +7254,9 @@ accept and reject methods.
 `contextual_paragraph_markers_merge_the_adjacent_paragraphs`,
 `rejected_property_changes_keep_owner_namespace_bindings`, and
 `malformed_selected_property_changes_fail_atomically`, plus
-`hyperlink_nested_revisions_resolve_inside_out_when_scoped`. The normalized
-oracle is pinned to Microsoft Word 16.104 build 16.104.25121423.
+`hyperlink_nested_revisions_resolve_inside_out_when_scoped` and
+`targetless_revision_only_hyperlinks_keep_sibling_order_when_resolved`. The
+normalized oracle is pinned to Microsoft Word 16.104 build 16.104.25121423.
 
 **Hash harness.** Unchanged, 49 of 49.
 

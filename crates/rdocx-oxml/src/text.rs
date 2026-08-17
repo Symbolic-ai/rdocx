@@ -451,6 +451,7 @@ pub struct HyperlinkSpan {
 }
 
 const HYPERLINK_REVISION_FLAG: usize = 1usize << (usize::BITS - 1);
+type ParsedHyperlinkChildren = (Vec<CT_R>, Vec<(usize, CT_Revision)>);
 
 pub(crate) fn hyperlink_revision_slot(hyperlink_index: usize) -> usize {
     HYPERLINK_REVISION_FLAG | hyperlink_index
@@ -785,6 +786,7 @@ impl CT_P {
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
     ) -> Result<Self> {
+        reader.config_mut().trim_text(false);
         let mut properties = None;
         let mut runs = Vec::new();
         let mut hyperlinks = Vec::new();
@@ -822,7 +824,6 @@ impl CT_P {
                             extra_xml.push((runs.len(), raw));
                         }
                     } else if matches_local_name(name.as_ref(), b"hyperlink") {
-                        // Parse hyperlink: extract r:id and/or w:anchor, then parse child runs
                         let mut rel_id = None;
                         let mut anchor = None;
                         for attr in e.attributes().flatten() {
@@ -837,111 +838,38 @@ impl CT_P {
                                 );
                             }
                         }
-
+                        let raw = capture_element(reader, e)?;
+                        let (hyperlink_runs, hyperlink_revisions) =
+                            parse_hyperlink_children(&raw, &prefixes)?;
                         let run_start = runs.len();
-                        let hyperlink_index = hyperlinks.len();
-                        let mut hyperlink_revisions = Vec::new();
-                        // Parse child runs within the hyperlink
-                        let mut inner_buf = Vec::new();
-                        loop {
-                            match reader.read_event_into(&mut inner_buf) {
-                                Ok(Event::Start(ref ie)) => {
-                                    let iname = ie.name();
-                                    if matches_local_name(iname.as_ref(), b"r") {
-                                        let run_prefixes = word_prefixes_at(ie, &prefixes)?;
-                                        runs.push(CT_R::from_xml_with_prefixes(
-                                            reader,
-                                            &run_prefixes,
-                                        )?);
-                                    } else {
-                                        let child_prefixes = word_prefixes_at(ie, &prefixes)?;
-                                        if is_word_element(iname.as_ref(), b"ins", &child_prefixes)
-                                            || is_word_element(
-                                                iname.as_ref(),
-                                                b"del",
-                                                &child_prefixes,
-                                            )
-                                            || is_word_element(
-                                                iname.as_ref(),
-                                                b"moveFrom",
-                                                &child_prefixes,
-                                            )
-                                            || is_word_element(
-                                                iname.as_ref(),
-                                                b"moveTo",
-                                                &child_prefixes,
-                                            )
-                                        {
-                                            let raw = capture_element(reader, ie)?;
-                                            if let Some(revision) =
-                                                CT_Revision::from_raw(raw, &child_prefixes)
-                                            {
-                                                hyperlink_revisions.push((
-                                                    runs.len(),
-                                                    hyperlink_revision_slot(hyperlink_index),
-                                                    revision,
-                                                ));
-                                            }
-                                        } else {
-                                            reader.read_to_end_into(iname, &mut Vec::new())?;
-                                        }
-                                    }
-                                }
-                                Ok(Event::Empty(ref ie)) => {
-                                    let child_prefixes = word_prefixes_at(ie, &prefixes)?;
-                                    let revision_element = is_word_element(
-                                        ie.name().as_ref(),
-                                        b"ins",
-                                        &child_prefixes,
-                                    ) || is_word_element(
-                                        ie.name().as_ref(),
-                                        b"del",
-                                        &child_prefixes,
-                                    ) || is_word_element(
-                                        ie.name().as_ref(),
-                                        b"moveFrom",
-                                        &child_prefixes,
-                                    ) || is_word_element(
-                                        ie.name().as_ref(),
-                                        b"moveTo",
-                                        &child_prefixes,
-                                    );
-                                    if revision_element
-                                        && let Some(revision) = CT_Revision::from_raw(
-                                            capture_empty_element(ie)?,
-                                            &child_prefixes,
-                                        )
-                                    {
-                                        hyperlink_revisions.push((
-                                            runs.len(),
-                                            hyperlink_revision_slot(hyperlink_index),
-                                            revision,
-                                        ));
-                                    }
-                                }
-                                Ok(Event::End(ref ie))
-                                    if matches_local_name(ie.name().as_ref(), b"hyperlink") =>
-                                {
-                                    break;
-                                }
-                                Ok(Event::Eof) => break,
-                                Err(e) => return Err(e.into()),
-                                _ => {}
-                            }
-                            inner_buf.clear();
-                        }
-
-                        let run_end = runs.len();
-                        if (run_start < run_end || !hyperlink_revisions.is_empty())
-                            && (rel_id.is_some() || anchor.is_some())
-                        {
+                        if hyperlink_runs.is_empty() {
+                            let raw_before =
+                                extra_xml.iter().filter(|(at, _)| *at == run_start).count();
+                            revisions.extend(
+                                hyperlink_revisions
+                                    .into_iter()
+                                    .map(|(_, revision)| (run_start, raw_before, revision)),
+                            );
+                            extra_xml.push((run_start, raw));
+                        } else {
+                            let hyperlink_index = hyperlinks.len();
+                            let run_end = run_start + hyperlink_runs.len();
+                            runs.extend(hyperlink_runs);
                             hyperlinks.push(HyperlinkSpan {
                                 rel_id,
                                 anchor,
                                 run_start,
                                 run_end,
                             });
-                            revisions.extend(hyperlink_revisions);
+                            revisions.extend(hyperlink_revisions.into_iter().map(
+                                |(at, revision)| {
+                                    (
+                                        run_start + at,
+                                        hyperlink_revision_slot(hyperlink_index),
+                                        revision,
+                                    )
+                                },
+                            ));
                         }
                     } else if is_word_element(name.as_ref(), b"fldSimple", &prefixes) {
                         // Parse simple field: extract w:instr attribute
@@ -1272,6 +1200,64 @@ fn push_comment_marker(
         }
     };
     markers.push(marker);
+}
+
+fn parse_hyperlink_children(
+    raw: &[u8],
+    word_prefixes: &[String],
+) -> Result<ParsedHyperlinkChildren> {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut runs = Vec::new();
+    let mut revisions = Vec::new();
+    let mut buffer = Vec::new();
+    let mut inside = false;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) if !inside => {
+                inside = true;
+                let _ = word_prefixes_at(&element, word_prefixes)?;
+            }
+            Event::Start(element) => {
+                let prefixes = word_prefixes_at(&element, word_prefixes)?;
+                if is_word_element(element.name().as_ref(), b"r", &prefixes) {
+                    runs.push(CT_R::from_xml_with_prefixes(&mut reader, &prefixes)?);
+                } else if is_content_revision_element(element.name().as_ref(), &prefixes) {
+                    let raw = capture_element(&mut reader, &element)?;
+                    if let Some(revision) = CT_Revision::from_raw(raw, &prefixes) {
+                        revisions.push((runs.len(), revision));
+                    }
+                } else {
+                    reader.read_to_end_into(element.name(), &mut Vec::new())?;
+                }
+            }
+            Event::Empty(element) => {
+                let prefixes = word_prefixes_at(&element, word_prefixes)?;
+                if is_content_revision_element(element.name().as_ref(), &prefixes)
+                    && let Some(revision) =
+                        CT_Revision::from_raw(capture_empty_element(&element)?, &prefixes)
+                {
+                    revisions.push((runs.len(), revision));
+                }
+            }
+            Event::End(element)
+                if inside && matches_local_name(element.name().as_ref(), b"hyperlink") =>
+            {
+                break;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok((runs, revisions))
+}
+
+fn is_content_revision_element(name: &[u8], word_prefixes: &[String]) -> bool {
+    is_word_element(name, b"ins", word_prefixes)
+        || is_word_element(name, b"del", word_prefixes)
+        || is_word_element(name, b"moveFrom", word_prefixes)
+        || is_word_element(name, b"moveTo", word_prefixes)
 }
 
 fn write_paragraph_boundary<W: std::io::Write>(

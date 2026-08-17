@@ -769,8 +769,14 @@ mod tests {
     #[test]
     fn hyperlink_and_nested_content_revisions_round_trip_and_report_in_order() {
         let nested = r#"<w:ins w:id="11" w:author="Ada"><w:del w:id="12" w:author="Ben"><w:r><w:delText>nested</w:delText></w:r></w:del></w:ins>"#;
+        let hyperlink_before = r#"<w:hyperlink><w:ins w:id="21" w:author="Cy"><w:r><w:t>before</w:t></w:r></w:ins></w:hyperlink>"#;
+        let direct_after =
+            r#"<w:del w:id="22" w:author="Dee"><w:r><w:delText>after</w:delText></w:r></w:del>"#;
+        let direct_before =
+            r#"<w:ins w:id="23" w:author="Eve"><w:r><w:t>before</w:t></w:r></w:ins>"#;
+        let hyperlink_after = r#"<w:hyperlink><w:del w:id="24" w:author="Fox"><w:r><w:delText>after</w:delText></w:r></w:del></w:hyperlink>"#;
         let xml = format!(
-            r#"<w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:hyperlink r:id="rId5"><w:r><w:t xml:space="preserve">before </w:t></w:r>{nested}<w:r><w:t xml:space="preserve"> after</w:t></w:r></w:hyperlink></w:p></w:body></w:document>"#
+            r#"<w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:hyperlink r:id="rId5"><w:r><w:t xml:space="preserve">before </w:t></w:r>{nested}<w:r><w:t xml:space="preserve"> after</w:t></w:r></w:hyperlink></w:p><w:p>{hyperlink_before}{direct_after}{direct_before}{hyperlink_after}</w:p></w:body></w:document>"#
         );
         let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
 
@@ -780,11 +786,28 @@ mod tests {
                 .iter()
                 .map(|revision| revision.id())
                 .collect::<Vec<_>>(),
-            [11, 12]
+            [11, 12, 21, 22, 23, 24]
         );
         let output =
             String::from_utf8(document.to_xml().expect("document writes")).expect("UTF-8 output");
         assert!(output.contains(nested), "missing exact subtree in {output}");
+        for raw in [
+            hyperlink_before,
+            direct_after,
+            direct_before,
+            hyperlink_after,
+        ] {
+            assert!(
+                output.contains(raw),
+                "missing exact subtree {raw} in {output}"
+            );
+        }
+        let positions = [21, 22, 23, 24].map(|id| {
+            output
+                .find(&format!(r#"w:id="{id}""#))
+                .expect("revision id remains present")
+        });
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
 
         let reopened = CT_Document::from_xml(output.as_bytes()).expect("output reparses");
         assert_eq!(
@@ -793,7 +816,7 @@ mod tests {
                 .iter()
                 .map(|revision| revision.id())
                 .collect::<Vec<_>>(),
-            [11, 12]
+            [11, 12, 21, 22, 23, 24]
         );
     }
 }
