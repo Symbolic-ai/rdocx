@@ -1678,6 +1678,16 @@ session quadratic.
 **Test gate**: regression. Editing one paragraph of a thousand-page document
 re-lays out a bounded number of pages, asserted by counting layout invocations.
 
+### F-203, Reader compatibility corrections (M)
+Namespace-aware table-cell property recognition and schema-slot preservation for
+numbering-level raw XML. Foreign same-local-name elements remain opaque,
+byte-identical XML, and raw content before `w:suff` remains before that typed
+element after a round trip.
+**Depends on**: none.
+**Test gate**: regression. Foreign `tcW` XML remains unmodelled and
+byte-identical, and an `isLgl` raw child stays before `suff` after parse and
+write.
+
 ---
 
 ## Cross-cutting
