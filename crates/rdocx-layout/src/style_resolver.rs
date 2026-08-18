@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use rdocx_oxml::numbering::{CT_Numbering, ST_NumberFormat};
+use rdocx_oxml::numbering::{CT_Numbering, ST_LvlSuffix, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::styles::{CT_Style, CT_Styles, StyleType};
 
@@ -36,6 +36,8 @@ pub struct ResolvedNumbering {
     pub marker_text: String,
     /// Run properties for the marker.
     pub marker_rpr: CT_RPr,
+    /// Item that follows the marker before paragraph content begins.
+    pub suffix: ST_LvlSuffix,
 }
 
 /// Tracks numbering counters across paragraphs.
@@ -205,6 +207,7 @@ pub fn generate_marker(
     Some(ResolvedNumbering {
         marker_text,
         marker_rpr,
+        suffix: lvl.suffix.unwrap_or(ST_LvlSuffix::Tab),
     })
 }
 
@@ -413,6 +416,18 @@ mod tests {
         generate_marker(num_id, 0, &numbering, &mut state);
         let sub2 = generate_marker(num_id, 1, &numbering, &mut state).unwrap();
         assert_eq!(sub2.marker_text, "a."); // reset
+    }
+
+    #[test]
+    fn numbering_marker_uses_the_level_suffix() {
+        let mut numbering = CT_Numbering::new();
+        let num_id = numbering.add_numbered_list();
+        numbering.abstract_nums[0].levels[0].suffix = Some(ST_LvlSuffix::Nothing);
+
+        let marker = generate_marker(num_id, 0, &numbering, &mut NumberingState::new())
+            .expect("numbered marker resolves");
+
+        assert_eq!(marker.suffix, ST_LvlSuffix::Nothing);
     }
 
     #[test]

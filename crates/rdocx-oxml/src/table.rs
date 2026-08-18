@@ -5,7 +5,7 @@ use quick_xml::{Reader, Writer};
 
 use crate::borders::CT_BorderEdge;
 use crate::content_control::CT_Sdt;
-use crate::error::Result;
+use crate::error::{OxmlError, Result};
 use crate::namespace::matches_local_name;
 use crate::numbering::{local_namespace_overrides, word_prefixes_at};
 use crate::properties::{
@@ -961,45 +961,14 @@ impl CT_TcPr {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
-                    let name = e.name();
-                    if matches_local_name(name.as_ref(), b"tcW") {
-                        pr.width = Some(CT_TblWidth::from_xml_attrs(e)?);
-                    } else if matches_local_name(name.as_ref(), b"gridSpan") {
-                        if let Some(val) = get_val_attr(e)? {
-                            pr.grid_span = Some(val.parse()?);
-                        }
-                    } else if matches_local_name(name.as_ref(), b"vMerge") {
-                        if let Some(val) = get_val_attr(e)? {
-                            pr.v_merge = Some(if val == "restart" {
-                                VMerge::Restart
-                            } else {
-                                VMerge::Continue
-                            });
-                        } else {
-                            // Empty vMerge means "continue"
-                            pr.v_merge = Some(VMerge::Continue);
-                        }
-                    } else if matches_local_name(name.as_ref(), b"vAlign") {
-                        if let Some(val) = get_val_attr(e)? {
-                            pr.v_align = Some(ST_VerticalJc::from_str(&val));
-                        }
-                    } else if matches_local_name(name.as_ref(), b"shd") {
-                        pr.shading = Some(CT_Shd::from_xml_attrs(e)?);
-                    } else if matches_local_name(name.as_ref(), b"cnfStyle") {
-                        pr.cnf_style = get_val_attr(e)?;
-                    } else if matches_local_name(name.as_ref(), b"noWrap") {
-                        pr.no_wrap = Some(true);
-                    } else if matches_local_name(name.as_ref(), b"textDirection")
-                        && let Some(val) = get_val_attr(e)?
-                    {
-                        pr.text_direction = Some(val);
-                    }
+                    Self::parse_property_element(e, &mut pr)?;
                 }
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     if matches_local_name(name.as_ref(), b"tcBorders") {
                         pr.borders = Some(CT_TblBorders::from_xml(reader)?);
                     } else {
+                        Self::parse_property_element(e, &mut pr)?;
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
@@ -1014,6 +983,48 @@ impl CT_TcPr {
         }
 
         Ok(pr)
+    }
+
+    fn parse_property_element(e: &BytesStart<'_>, pr: &mut Self) -> Result<()> {
+        let name = e.name();
+        if matches_local_name(name.as_ref(), b"tcW") {
+            pr.width = Some(CT_TblWidth::from_xml_attrs(e)?);
+        } else if matches_local_name(name.as_ref(), b"gridSpan") {
+            if let Some(val) = get_val_attr(e)? {
+                let span: u32 = val.parse()?;
+                if span == 0 {
+                    return Err(OxmlError::InvalidValue(
+                        "w:gridSpan must be positive".to_owned(),
+                    ));
+                }
+                pr.grid_span = Some(span);
+            }
+        } else if matches_local_name(name.as_ref(), b"vMerge") {
+            pr.v_merge = Some(match get_val_attr(e)?.as_deref() {
+                Some("restart") => VMerge::Restart,
+                Some("continue") | None => VMerge::Continue,
+                Some(value) => {
+                    return Err(OxmlError::InvalidValue(format!(
+                        "invalid w:vMerge value {value}"
+                    )));
+                }
+            });
+        } else if matches_local_name(name.as_ref(), b"vAlign") {
+            if let Some(val) = get_val_attr(e)? {
+                pr.v_align = Some(ST_VerticalJc::from_str(&val));
+            }
+        } else if matches_local_name(name.as_ref(), b"shd") {
+            pr.shading = Some(CT_Shd::from_xml_attrs(e)?);
+        } else if matches_local_name(name.as_ref(), b"cnfStyle") {
+            pr.cnf_style = get_val_attr(e)?;
+        } else if matches_local_name(name.as_ref(), b"noWrap") {
+            pr.no_wrap = Some(true);
+        } else if matches_local_name(name.as_ref(), b"textDirection")
+            && let Some(val) = get_val_attr(e)?
+        {
+            pr.text_direction = Some(val);
+        }
+        Ok(())
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -1790,6 +1801,56 @@ mod tests {
             tbl.rows[2].cells[0].properties.as_ref().unwrap().v_merge,
             Some(VMerge::Continue)
         );
+    }
+
+    #[test]
+    fn expanded_presentation_cell_properties_are_read() {
+        let table = parse_table(
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="72" w:type="dxa"></w:tcW><w:shd w:val="clear" w:fill="FF0000"></w:shd><w:noWrap></w:noWrap><w:vAlign w:val="center"></w:vAlign><w:textDirection w:val="btLr"></w:textDirection><w:cnfStyle w:val="100000000000"></w:cnfStyle></w:tcPr><w:p/></w:tc></w:tr>"#,
+        );
+
+        let properties = table.rows[0].cells[0]
+            .properties
+            .as_ref()
+            .expect("cell properties parse");
+        assert_eq!(properties.width.as_ref().map(|width| width.w), Some(72));
+        assert_eq!(
+            properties
+                .shading
+                .as_ref()
+                .and_then(|shading| shading.fill.as_deref()),
+            Some("FF0000")
+        );
+        assert_eq!(properties.no_wrap, Some(true));
+        assert_eq!(properties.v_align, Some(ST_VerticalJc::Center));
+        assert_eq!(properties.text_direction.as_deref(), Some("btLr"));
+        assert_eq!(properties.cnf_style.as_deref(), Some("100000000000"));
+    }
+
+    #[test]
+    fn invalid_structural_cell_merge_values_fail_to_parse() {
+        let zero_span = r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:gridSpan w:val="0"/></w:tcPr><w:p/></w:tc></w:tr>"#;
+        let bad_merge = r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:vMerge w:val="sideways"/></w:tcPr><w:p/></w:tc></w:tr>"#;
+
+        for xml in [zero_span, bad_merge] {
+            let table_xml = format!("<w:tbl>{xml}</w:tbl>");
+            let mut reader = Reader::from_str(&table_xml);
+            let mut buffer = Vec::new();
+            loop {
+                match reader.read_event_into(&mut buffer) {
+                    Ok(Event::Start(element))
+                        if matches_local_name(element.name().as_ref(), b"tbl") =>
+                    {
+                        assert!(CT_Tbl::from_xml(&mut reader).is_err(), "{xml}");
+                        break;
+                    }
+                    Ok(Event::Eof) => panic!("missing table"),
+                    Ok(_) => {}
+                    Err(error) => panic!("invalid fixture: {error}"),
+                }
+                buffer.clear();
+            }
+        }
     }
 
     #[test]

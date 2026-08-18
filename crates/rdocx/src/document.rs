@@ -3402,6 +3402,17 @@ impl Document {
                         rel_id: hl.rel_id.clone(),
                     });
                 }
+                for field in p.complex_field_hyperlinks() {
+                    let start = field.run_start.min(p.runs.len());
+                    let end = field.run_end.clamp(start, p.runs.len());
+                    let text: String = p.runs[start..end].iter().map(|run| run.text()).collect();
+                    result.push(LinkInfo {
+                        text,
+                        url: Some(field.target),
+                        anchor: None,
+                        rel_id: None,
+                    });
+                }
             }
         }
         result
@@ -5791,6 +5802,41 @@ mod tests {
         let mut doc = Document::new();
         doc.add_paragraph("No links here.");
         assert!(doc.links().is_empty());
+    }
+
+    #[test]
+    fn links_exposes_a_complex_field_hyperlink_target() {
+        let mut doc = Document::new();
+        let mut paragraph = CT_P::new();
+        for xml in [
+            br#"<w:fldChar w:fldCharType="begin"/>"#.as_slice(),
+            br#"<w:instrText> HYPERLINK &quot;https://example.test&quot; </w:instrText>"#
+                .as_slice(),
+            br#"<w:fldChar w:fldCharType="separate"/>"#.as_slice(),
+        ] {
+            let mut run = CT_R::new("");
+            run.extra_xml.push(xml.to_vec());
+            paragraph.runs.push(run);
+        }
+        paragraph.runs.push(CT_R::new("Cached link"));
+        let mut end = CT_R::new("");
+        end.extra_xml
+            .push(br#"<w:fldChar w:fldCharType="end"/>"#.to_vec());
+        paragraph.runs.push(end);
+        doc.document
+            .body
+            .content
+            .push(BodyContent::Paragraph(paragraph));
+
+        assert_eq!(
+            doc.links(),
+            vec![LinkInfo {
+                text: "Cached link".to_owned(),
+                url: Some("https://example.test".to_owned()),
+                anchor: None,
+                rel_id: None,
+            }]
+        );
     }
 
     #[test]
