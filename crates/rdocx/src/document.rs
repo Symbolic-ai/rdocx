@@ -5980,6 +5980,39 @@ mod tests {
     }
 
     #[test]
+    fn writer_hyperlink_tooltip_and_table_indent_round_trip() {
+        let mut doc = Document::new();
+        let relationship_id = doc.add_hyperlink_relationship("https://example.com");
+        doc.add_paragraph("").add_hyperlink_with_tooltip(
+            "linked",
+            &relationship_id,
+            Some("Example site"),
+        );
+        doc.add_table(1, 1).set_indent(Length::twips(720));
+
+        let bytes = doc.to_bytes().expect("document writes");
+        let reopened = Document::from_bytes(&bytes).expect("document reopens");
+
+        let BodyContent::Paragraph(paragraph) = &reopened.document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        assert_eq!(
+            paragraph.hyperlinks[0].extra_attributes,
+            vec![("w:tooltip".to_string(), "Example site".to_string())]
+        );
+        let BodyContent::Table(table) = &reopened.document.body.content[1] else {
+            panic!("expected table");
+        };
+        assert_eq!(
+            table
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.indent.as_ref()),
+            Some(&rdocx_oxml::table::CT_TblWidth::dxa(720))
+        );
+    }
+
+    #[test]
     fn rejected_list_level_update_does_not_materialize_numbering() {
         let mut doc = Document::new();
         assert!(doc.numbering.is_none());

@@ -153,6 +153,16 @@ impl<'a> Paragraph<'a> {
     /// allows the hyperlink text to receive the same direct formatting as any
     /// other run.
     pub fn add_hyperlink(&mut self, text: &str, relationship_id: &str) -> Run<'_> {
+        self.add_hyperlink_with_tooltip(text, relationship_id, None)
+    }
+
+    /// Add a hyperlink run and optionally set its user-facing hover tooltip.
+    pub fn add_hyperlink_with_tooltip(
+        &mut self,
+        text: &str,
+        relationship_id: &str,
+        tooltip: Option<&str>,
+    ) -> Run<'_> {
         let run_start = self.inner.runs.len();
         self.inner.runs.push(CT_R::new(text));
         self.inner.hyperlinks.push(HyperlinkSpan {
@@ -160,7 +170,9 @@ impl<'a> Paragraph<'a> {
             anchor: None,
             run_start,
             run_end: run_start + 1,
-            extra_attributes: Vec::new(),
+            extra_attributes: tooltip
+                .map(|tooltip| vec![("w:tooltip".to_string(), tooltip.to_string())])
+                .unwrap_or_default(),
             extra_xml: Vec::new(),
             preserved_raw_before: None,
         });
