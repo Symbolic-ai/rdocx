@@ -950,26 +950,51 @@ pub struct CT_TcPr {
     pub text_direction: Option<String>,
     /// `w:cnfStyle` — which conditional parts of the table style this cell is.
     pub cnf_style: Option<String>,
+    /// Unmodelled property children retained at their schema insertion slots.
+    #[doc(hidden)]
+    pub extra_xml: Vec<(usize, Vec<u8>)>,
 }
 
 #[allow(non_snake_case)]
 impl CT_TcPr {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_owned()])
+    }
+
+    fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut pr = CT_TcPr::default();
+        let mut boundary = 0;
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
-                    Self::parse_property_element(e, &mut pr)?;
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    let (at, next) = tc_pr_raw_boundary(e.name().as_ref(), boundary);
+                    if Self::parse_property_element(e, &mut pr, &prefixes)? {
+                        boundary = next;
+                    } else {
+                        pr.extra_xml.push((at, capture_empty_element(e)?));
+                        boundary = next;
+                    }
                 }
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
-                    if matches_local_name(name.as_ref(), b"tcBorders") {
-                        pr.borders = Some(CT_TblBorders::from_xml(reader)?);
-                    } else {
-                        Self::parse_property_element(e, &mut pr)?;
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    let (at, next) = tc_pr_raw_boundary(name.as_ref(), boundary);
+                    if is_word_element(name.as_ref(), b"tcBorders", &prefixes) {
+                        pr.borders =
+                            Some(CT_TblBorders::from_xml_with_prefixes(reader, &prefixes)?);
+                        boundary = next;
+                    } else if Self::parse_property_element(e, &mut pr, &prefixes)? {
                         reader.read_to_end_into(name, &mut Vec::new())?;
+                        boundary = next;
+                    } else {
+                        pr.extra_xml.push((at, capture_element(reader, e)?));
+                        boundary = next;
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tcPr") => {
@@ -985,12 +1010,16 @@ impl CT_TcPr {
         Ok(pr)
     }
 
-    fn parse_property_element(e: &BytesStart<'_>, pr: &mut Self) -> Result<()> {
+    fn parse_property_element(
+        e: &BytesStart<'_>,
+        pr: &mut Self,
+        word_prefixes: &[String],
+    ) -> Result<bool> {
         let name = e.name();
-        if matches_local_name(name.as_ref(), b"tcW") {
-            pr.width = Some(CT_TblWidth::from_xml_attrs(e)?);
-        } else if matches_local_name(name.as_ref(), b"gridSpan") {
-            if let Some(val) = get_val_attr(e)? {
+        if is_word_element(name.as_ref(), b"tcW", word_prefixes) {
+            pr.width = Some(CT_TblWidth::from_xml_attrs_with_prefixes(e, word_prefixes)?);
+        } else if is_word_element(name.as_ref(), b"gridSpan", word_prefixes) {
+            if let Some(val) = get_word_val_attr(e, word_prefixes)? {
                 let span: u32 = val.parse()?;
                 if span == 0 {
                     return Err(OxmlError::InvalidValue(
@@ -999,8 +1028,8 @@ impl CT_TcPr {
                 }
                 pr.grid_span = Some(span);
             }
-        } else if matches_local_name(name.as_ref(), b"vMerge") {
-            pr.v_merge = Some(match get_val_attr(e)?.as_deref() {
+        } else if is_word_element(name.as_ref(), b"vMerge", word_prefixes) {
+            pr.v_merge = Some(match get_word_val_attr(e, word_prefixes)?.as_deref() {
                 Some("restart") => VMerge::Restart,
                 Some("continue") | None => VMerge::Continue,
                 Some(value) => {
@@ -1009,22 +1038,24 @@ impl CT_TcPr {
                     )));
                 }
             });
-        } else if matches_local_name(name.as_ref(), b"vAlign") {
-            if let Some(val) = get_val_attr(e)? {
+        } else if is_word_element(name.as_ref(), b"vAlign", word_prefixes) {
+            if let Some(val) = get_word_val_attr(e, word_prefixes)? {
                 pr.v_align = Some(ST_VerticalJc::from_str(&val));
             }
-        } else if matches_local_name(name.as_ref(), b"shd") {
-            pr.shading = Some(CT_Shd::from_xml_attrs(e)?);
-        } else if matches_local_name(name.as_ref(), b"cnfStyle") {
-            pr.cnf_style = get_val_attr(e)?;
-        } else if matches_local_name(name.as_ref(), b"noWrap") {
+        } else if is_word_element(name.as_ref(), b"shd", word_prefixes) {
+            pr.shading = Some(CT_Shd::from_xml_attrs_with_prefixes(e, word_prefixes)?);
+        } else if is_word_element(name.as_ref(), b"cnfStyle", word_prefixes) {
+            pr.cnf_style = get_word_val_attr(e, word_prefixes)?;
+        } else if is_word_element(name.as_ref(), b"noWrap", word_prefixes) {
             pr.no_wrap = Some(true);
-        } else if matches_local_name(name.as_ref(), b"textDirection")
-            && let Some(val) = get_val_attr(e)?
+        } else if is_word_element(name.as_ref(), b"textDirection", word_prefixes)
+            && let Some(val) = get_word_val_attr(e, word_prefixes)?
         {
             pr.text_direction = Some(val);
+        } else {
+            return Ok(false);
         }
-        Ok(())
+        Ok(true)
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -1034,16 +1065,19 @@ impl CT_TcPr {
 
         writer.write_event(Event::Start(BytesStart::new("w:tcPr")))?;
 
+        write_extras_at(writer, &self.extra_xml, 0)?;
         if let Some(ref cnf) = self.cnf_style {
             let mut e = BytesStart::new("w:cnfStyle");
             e.push_attribute(("w:val", cnf.as_str()));
             writer.write_event(Event::Empty(e))?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 1)?;
         if let Some(ref width) = self.width {
             width.write_xml(writer, "w:tcW")?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 2)?;
         if let Some(grid_span) = self.grid_span
             && grid_span > 1
         {
@@ -1053,6 +1087,7 @@ impl CT_TcPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 3)?;
         if let Some(ref vm) = self.v_merge {
             let mut e = BytesStart::new("w:vMerge");
             match vm {
@@ -1062,31 +1097,38 @@ impl CT_TcPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 4)?;
         if let Some(ref borders) = self.borders
             && !borders.is_empty()
         {
             borders.to_xml(writer, "w:tcBorders")?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 5)?;
         if let Some(ref shd) = self.shading {
             shd.write_xml(writer, "w:shd")?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 6)?;
         if let Some(true) = self.no_wrap {
             writer.write_event(Event::Empty(BytesStart::new("w:noWrap")))?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 7)?;
         if let Some(ref va) = self.v_align {
             let mut e = BytesStart::new("w:vAlign");
             e.push_attribute(("w:val", va.to_str()));
             writer.write_event(Event::Empty(e))?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 8)?;
         if let Some(ref td) = self.text_direction {
             let mut e = BytesStart::new("w:textDirection");
             e.push_attribute(("w:val", td.as_str()));
             writer.write_event(Event::Empty(e))?;
         }
+
+        write_extras_at(writer, &self.extra_xml, 9)?;
 
         writer.write_event(Event::End(BytesEnd::new("w:tcPr")))?;
         Ok(())
@@ -1102,6 +1144,31 @@ impl CT_TcPr {
             && self.no_wrap.is_none()
             && self.text_direction.is_none()
             && self.cnf_style.is_none()
+            && self.extra_xml.is_empty()
+    }
+}
+
+fn tc_pr_raw_boundary(name: &[u8], current: usize) -> (usize, usize) {
+    if matches_local_name(name, b"cnfStyle") {
+        (0, 1)
+    } else if matches_local_name(name, b"tcW") {
+        (1, 2)
+    } else if matches_local_name(name, b"gridSpan") {
+        (2, 3)
+    } else if matches_local_name(name, b"vMerge") {
+        (3, 4)
+    } else if matches_local_name(name, b"tcBorders") {
+        (4, 5)
+    } else if matches_local_name(name, b"shd") {
+        (5, 6)
+    } else if matches_local_name(name, b"noWrap") {
+        (6, 7)
+    } else if matches_local_name(name, b"vAlign") {
+        (7, 8)
+    } else if matches_local_name(name, b"textDirection") {
+        (8, 9)
+    } else {
+        (current, current)
     }
 }
 
@@ -1184,8 +1251,8 @@ impl CT_Tc {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if matches_local_name(name.as_ref(), b"tcPr") {
-                        properties = Some(CT_TcPr::from_xml(reader)?);
+                    if is_word_element(name.as_ref(), b"tcPr", &prefixes) {
+                        properties = Some(CT_TcPr::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"p", &prefixes) {
                         content.push(CellContent::Paragraph(CT_P::from_xml_with_prefixes(
                             reader, &prefixes,
@@ -1211,7 +1278,8 @@ impl CT_Tc {
                 }
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
-                    if !matches_local_name(name.as_ref(), b"tcPr") {
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if !is_word_element(name.as_ref(), b"tcPr", &prefixes) {
                         extra_xml.push((content.len(), capture_empty_element(e)?));
                     }
                 }
@@ -1825,6 +1893,74 @@ mod tests {
         assert_eq!(properties.v_align, Some(ST_VerticalJc::Center));
         assert_eq!(properties.text_direction.as_deref(), Some("btLr"));
         assert_eq!(properties.cnf_style.as_deref(), Some("100000000000"));
+    }
+
+    #[test]
+    fn foreign_cell_width_remains_raw_and_unmodelled() {
+        let table = parse_table(
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:tc><w:tcPr><ext:tcW xmlns:ext="urn:producer" ext:w="72" ext:type="dxa"/><w:tcW w:w="90" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>"#,
+        );
+        let properties = table.rows[0].cells[0]
+            .properties
+            .as_ref()
+            .expect("cell properties parse");
+
+        assert_eq!(properties.width.as_ref().map(|width| width.w), Some(90));
+        assert_eq!(
+            properties.extra_xml,
+            vec![(
+                1,
+                br#"<ext:tcW xmlns:ext="urn:producer" ext:w="72" ext:type="dxa"/>"#.to_vec(),
+            )]
+        );
+
+        let mut output = Vec::new();
+        table
+            .to_xml(&mut Writer::new(&mut output))
+            .expect("table writes");
+        let output = String::from_utf8(output).expect("XML is UTF-8");
+        let foreign = output
+            .find(r#"<ext:tcW xmlns:ext="urn:producer" ext:w="72" ext:type="dxa"/>"#)
+            .expect("foreign width writes");
+        let typed = output.find("<w:tcW").expect("typed width writes");
+        assert!(
+            foreign < typed,
+            "foreign width stays before typed width: {output}"
+        );
+    }
+
+    #[test]
+    fn aliased_cell_width_uses_in_scope_word_bindings() {
+        let word_namespace = crate::namespace::W_NS;
+        let xml = format!(
+            r#"<q:tbl xmlns:q="{word_namespace}"><q:tblGrid><q:gridCol q:w="100"/></q:tblGrid><q:tr><q:tc><q:tcPr><q:tcW q:w="72" q:type="dxa"/></q:tcPr><q:p/></q:tc></q:tr></q:tbl>"#
+        );
+        let mut reader = Reader::from_str(&xml);
+        let mut buffer = Vec::new();
+        let table = loop {
+            match reader.read_event_into(&mut buffer) {
+                Ok(Event::Start(element))
+                    if matches_local_name(element.name().as_ref(), b"tbl") =>
+                {
+                    let prefixes = word_prefixes_at(&element, &[]).expect("root bindings");
+                    break CT_Tbl::from_xml_with_prefixes(&mut reader, &prefixes)
+                        .expect("table parses");
+                }
+                Ok(Event::Eof) => panic!("missing table"),
+                Ok(_) => {}
+                Err(error) => panic!("invalid fixture: {error}"),
+            }
+            buffer.clear();
+        };
+
+        assert_eq!(
+            table.rows[0].cells[0]
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.width.as_ref())
+                .map(|width| width.w),
+            Some(72)
+        );
     }
 
     #[test]

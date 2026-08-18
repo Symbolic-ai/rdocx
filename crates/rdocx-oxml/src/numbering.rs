@@ -2358,7 +2358,7 @@ impl CT_Lvl {
             writer.write_event(Event::Empty(e))?;
         }
 
-        for boundary in 2..=4 {
+        for boundary in 2..=5 {
             write_extras_at(writer, &self.extra_xml, boundary)?;
         }
         if let Some(suffix) = self.suffix {
@@ -2368,9 +2368,7 @@ impl CT_Lvl {
             e.push_attribute((val_name.as_str(), suffix.to_str()));
             writer.write_event(Event::Empty(e))?;
         }
-        for boundary in 5..=6 {
-            write_extras_at(writer, &self.extra_xml, boundary)?;
-        }
+        write_extras_at(writer, &self.extra_xml, 6)?;
         if let Some(ref text) = self.lvl_text {
             let name = qualified(word_prefix, "lvlText");
             let val_name = qualified(word_prefix, "val");
@@ -3163,6 +3161,18 @@ mod tests {
         let suffix = output.find("<w:suff").expect("suffix writes");
         let text = output.find("<w:lvlText").expect("level text writes");
         assert!(suffix < text, "suffix must precede level text: {output}");
+    }
+
+    #[test]
+    fn level_raw_is_lgl_stays_before_suffix() {
+        let xml = br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:isLgl/><w:suff w:val="space"/></w:lvl></w:abstractNum></w:numbering>"#;
+        let numbering = CT_Numbering::from_xml(xml).expect("numbering parses");
+        let output =
+            String::from_utf8(numbering.to_xml().expect("numbering writes")).expect("XML is UTF-8");
+
+        let is_lgl = output.find("<w:isLgl/>").expect("raw isLgl writes");
+        let suffix = output.find("<w:suff").expect("suffix writes");
+        assert!(is_lgl < suffix, "isLgl must precede suffix: {output}");
     }
 
     #[test]

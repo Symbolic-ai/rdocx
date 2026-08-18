@@ -166,10 +166,16 @@ parts and coordinates them with the anchors in the main document.
 The Word text model also projects bookmark starts and ends at direct-run
 boundaries while retaining every marker as ordered raw XML. Structured simple
 fields distinguish `REF` and `PAGEREF`, keep the complete instruction including
-switches, and retain the stored display. The `rdocx` facade correlates bookmark
-ids and owns mutation across top-level body paragraphs. `rdocx-layout` resolves
-bookmark text and maps page targets, while the shared `oxml-layout` boundary
-exposes only format-neutral `Target` and `TargetPage` field kinds.
+switches, and retain the stored display. Complex fields use the same tokenizer
+and expose the normalized name, arguments, switches, cached result, dirty
+state, and nested fields. Markers are recognized only through their in-scope
+WordprocessingML namespace bindings. Malformed or unsupported sequences remain
+opaque raw XML, and dirty fields are not reported as `Document::links()` until
+the update policy defines how to handle them. The `rdocx` facade correlates
+bookmark ids and owns mutation across top-level body paragraphs.
+`rdocx-layout` resolves bookmark text and maps page targets, while the shared
+`oxml-layout` boundary exposes only format-neutral `Target` and `TargetPage`
+field kinds.
 
 The content-control model owns one recursive `CT_Sdt` grammar at block, row,
 cell, paragraph, and run placement boundaries. It reports tag, alias, numeric
