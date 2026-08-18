@@ -1468,6 +1468,15 @@ impl Document {
         self.get_header_footer_text(false, HdrFtrType::Default)
     }
 
+    /// Whether the document references any header or footer part.
+    ///
+    /// This is broader than [`Self::header_text`] and [`Self::footer_text`]:
+    /// a referenced part can contain drawings, fields, tables, or other visible
+    /// content without contributing literal text.
+    pub fn has_header_footer_content(&self) -> bool {
+        !self.header_footer_rel_ids().is_empty()
+    }
+
     /// Set the default header to an inline image.
     ///
     /// Creates a header part with an image paragraph. The image is embedded
@@ -5485,9 +5494,12 @@ mod tests {
     #[test]
     fn replace_text_in_header_and_footer() {
         let mut doc = Document::new();
+        assert!(!doc.has_header_footer_content());
         doc.set_header("Header: {{title}}");
         doc.set_footer("Footer: {{title}}");
         doc.add_paragraph("Body: {{title}}");
+
+        assert!(doc.has_header_footer_content());
 
         let count = doc.replace_text("{{title}}", "My Doc");
         assert_eq!(count, 3);
@@ -5495,6 +5507,9 @@ mod tests {
         assert_eq!(doc.paragraphs()[0].text(), "Body: My Doc");
         assert_eq!(doc.header_text().unwrap(), "Header: My Doc");
         assert_eq!(doc.footer_text().unwrap(), "Footer: My Doc");
+
+        let reopened = Document::from_bytes(&doc.to_bytes().unwrap()).unwrap();
+        assert!(reopened.has_header_footer_content());
     }
 
     #[test]
