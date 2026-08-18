@@ -68,6 +68,11 @@ impl<'a> Table<'a> {
         self.ensure_tbl_pr().width = Some(CT_TblWidth::dxa(length.as_twips().0));
     }
 
+    /// Set the table indentation from the left margin in place.
+    pub fn set_indent(&mut self, length: Length) {
+        self.ensure_tbl_pr().indent = Some(CT_TblWidth::dxa(length.as_twips().0));
+    }
+
     /// Set the table width as a percentage (0–100).
     pub fn width_pct(mut self, percent: f64) -> Self {
         self.set_width_pct(percent);
