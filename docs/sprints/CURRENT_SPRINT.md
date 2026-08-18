@@ -21,9 +21,10 @@ cached-result policy, and later templating build on.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-160 | Field instruction parser | L | pending | - |
+| F-160 | Field instruction parser | L | in-progress | codex |
 | F-161 | Field evaluation engine | L | pending | - |
 | F-162 | Field update policy | M | pending | - |
+| F-203 | Reader compatibility corrections | M | in-progress | codex |
 
 ## Sequencing note
 
@@ -31,7 +32,8 @@ Rows are listed in dependency order, not F-ID order.
 
 F-160 defines the recursive field structure. F-161 consumes that structure and
 also depends on F-154. F-162 depends on evaluation because it decides when a
-field result may be recomputed.
+field result may be recomputed. F-203 independently corrects reader
+preservation found during upstream review.
 
 ## Definition of done for this sprint
 
