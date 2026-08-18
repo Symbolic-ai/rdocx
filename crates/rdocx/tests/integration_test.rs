@@ -1193,6 +1193,25 @@ fn mixed_lists_round_trip() {
 }
 
 #[test]
+fn paragraph_facade_exposes_exact_bottom_border_facts() {
+    let mut document = Document::new();
+    document
+        .add_paragraph("")
+        .border_bottom(BorderStyle::Single, 8, "808080");
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let border = paragraph.bottom_border().unwrap();
+
+    assert_eq!(paragraph.border_count(), 1);
+    assert_eq!(border.style(), "single");
+    assert_eq!(border.size_eighths_pt(), Some(8));
+    assert_eq!(border.space_points(), Some(1));
+    assert_eq!(border.color(), Some("808080"));
+}
+
+#[test]
 fn custom_list_definitions_restart_numbering_per_list() {
     let mut doc = Document::new();
     let first = doc.add_list_definition(&[ListLevel::decimal()]);
