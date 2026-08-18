@@ -610,6 +610,7 @@ fn parse_content(
                         content: Vec::new(),
                         extra_xml: Vec::new(),
                         extra_xml_positions: Vec::new(),
+                        field_markers: Vec::new(),
                         alt_drawings: Vec::new(),
                     }));
                 } else {
