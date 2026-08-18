@@ -9,9 +9,9 @@ use std::cell::Cell;
 
 use oxml_chart::{CT_ChartSpace, ChartData, ChartKind};
 use oxml_media::MediaNamer;
-use oxml_opc::OpcPackage;
 use oxml_opc::content_types;
 use oxml_opc::relationship::rel_types;
+use oxml_opc::{OpcPackage, PackageReadLimits};
 use oxml_sml::Workbook;
 use quick_xml::events::Event;
 use quick_xml::name::{Namespace, ResolveResult};
@@ -427,8 +427,13 @@ impl Document {
 
     /// Open a document from bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        Self::from_bytes_with_limits(bytes, PackageReadLimits::UNBOUNDED)
+    }
+
+    /// Open a document from bytes while bounding OPC archive expansion.
+    pub fn from_bytes_with_limits(bytes: &[u8], limits: PackageReadLimits) -> Result<Self> {
         let cursor = std::io::Cursor::new(bytes);
-        let package = OpcPackage::from_reader(cursor)?;
+        let package = OpcPackage::from_reader_with_limits(cursor, limits)?;
         Self::from_package(package)
     }
 
