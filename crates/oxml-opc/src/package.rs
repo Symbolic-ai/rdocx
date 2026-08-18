@@ -21,6 +21,22 @@ pub struct PackagePart {
     pub data: Vec<u8>,
 }
 
+/// Resource limits applied while expanding an OPC ZIP archive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PackageReadLimits {
+    pub max_entries: usize,
+    pub max_part_uncompressed_bytes: u64,
+    pub max_total_uncompressed_bytes: u64,
+}
+
+impl PackageReadLimits {
+    pub const UNBOUNDED: Self = Self {
+        max_entries: usize::MAX,
+        max_part_uncompressed_bytes: u64::MAX,
+        max_total_uncompressed_bytes: u64::MAX,
+    };
+}
+
 /// An in-memory representation of an OPC package (ZIP archive).
 #[derive(Debug, Clone)]
 pub struct OpcPackage {
@@ -45,8 +61,23 @@ impl OpcPackage {
 
     /// Open an OPC package from any reader that implements Read + Seek.
     pub fn from_reader<R: Read + Seek>(reader: R) -> Result<Self> {
+        Self::from_reader_with_limits(reader, PackageReadLimits::UNBOUNDED)
+    }
+
+    /// Open an OPC package while bounding archive expansion.
+    pub fn from_reader_with_limits<R: Read + Seek>(
+        reader: R,
+        limits: PackageReadLimits,
+    ) -> Result<Self> {
         let mut archive = ZipArchive::new(reader)?;
+        if archive.len() > limits.max_entries {
+            return Err(OpcError::PackageLimitExceeded {
+                kind: "entry count",
+                limit: limits.max_entries as u64,
+            });
+        }
         let mut raw_parts: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut total_uncompressed_bytes = 0_u64;
 
         // Read all entries from the ZIP
         for i in 0..archive.len() {
@@ -54,10 +85,45 @@ impl OpcPackage {
             if entry.is_dir() {
                 continue;
             }
+            if entry.size() > limits.max_part_uncompressed_bytes {
+                return Err(OpcError::PackageLimitExceeded {
+                    kind: "part size",
+                    limit: limits.max_part_uncompressed_bytes,
+                });
+            }
+            if total_uncompressed_bytes
+                .checked_add(entry.size())
+                .is_none_or(|total| total > limits.max_total_uncompressed_bytes)
+            {
+                return Err(OpcError::PackageLimitExceeded {
+                    kind: "total uncompressed size",
+                    limit: limits.max_total_uncompressed_bytes,
+                });
+            }
             let name = normalize_part_name(entry.name());
             let name = name.strip_prefix('/').unwrap_or(&name).to_string();
             let mut data = Vec::new();
-            entry.read_to_end(&mut data)?;
+            let read_limit = limits
+                .max_part_uncompressed_bytes
+                .min(limits.max_total_uncompressed_bytes - total_uncompressed_bytes);
+            entry
+                .by_ref()
+                .take(read_limit.saturating_add(1))
+                .read_to_end(&mut data)?;
+            let data_len = data.len() as u64;
+            if data_len > limits.max_part_uncompressed_bytes {
+                return Err(OpcError::PackageLimitExceeded {
+                    kind: "part size",
+                    limit: limits.max_part_uncompressed_bytes,
+                });
+            }
+            total_uncompressed_bytes = total_uncompressed_bytes
+                .checked_add(data_len)
+                .filter(|total| *total <= limits.max_total_uncompressed_bytes)
+                .ok_or(OpcError::PackageLimitExceeded {
+                    kind: "total uncompressed size",
+                    limit: limits.max_total_uncompressed_bytes,
+                })?;
             raw_parts.insert(name, data);
         }
 
@@ -344,6 +410,72 @@ mod tests {
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="xml" ContentType="application/xml"/>
 </Types>"#;
+
+    #[test]
+    fn bounded_reader_rejects_too_many_entries() {
+        let archive = package_zip(&[
+            ("[Content_Types].xml", MINIMAL_CONTENT_TYPES),
+            ("word/document.xml", b"<document/>"),
+        ]);
+        let error = OpcPackage::from_reader_with_limits(
+            archive,
+            PackageReadLimits {
+                max_entries: 1,
+                max_part_uncompressed_bytes: 1_024,
+                max_total_uncompressed_bytes: 2_048,
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            OpcError::PackageLimitExceeded {
+                kind: "entry count",
+                limit: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn bounded_reader_rejects_oversized_parts_and_totals() {
+        let entries = [
+            ("[Content_Types].xml", MINIMAL_CONTENT_TYPES),
+            ("word/document.xml", b"<document/>".as_slice()),
+        ];
+        let part_error = OpcPackage::from_reader_with_limits(
+            package_zip(&entries),
+            PackageReadLimits {
+                max_entries: 8,
+                max_part_uncompressed_bytes: 16,
+                max_total_uncompressed_bytes: 1_024,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            part_error,
+            OpcError::PackageLimitExceeded {
+                kind: "part size",
+                limit: 16
+            }
+        ));
+
+        let total_error = OpcPackage::from_reader_with_limits(
+            package_zip(&entries),
+            PackageReadLimits {
+                max_entries: 8,
+                max_part_uncompressed_bytes: 1_024,
+                max_total_uncompressed_bytes: MINIMAL_CONTENT_TYPES.len() as u64,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            total_error,
+            OpcError::PackageLimitExceeded {
+                kind: "total uncompressed size",
+                ..
+            }
+        ));
+    }
 
     fn independently_built_pptx() -> std::io::Cursor<Vec<u8>> {
         const CONTENT_TYPES: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>

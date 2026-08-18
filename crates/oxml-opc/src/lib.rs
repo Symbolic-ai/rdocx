@@ -13,5 +13,5 @@ pub mod relationship;
 
 pub use content_types::{ContentType, ContentTypes};
 pub use error::OpcError;
-pub use package::{OpcPackage, PackagePart};
+pub use package::{OpcPackage, PackagePart, PackageReadLimits};
 pub use relationship::{Relationship, Relationships};

@@ -8,7 +8,7 @@ use rdocx::{
     BorderStyle, Length, ListLevel, RunPosition, RunRange, SectionBreak, StyleBuilder,
     TabAlignment, TabLeader, UnderlineStyle,
 };
-use rdocx::{Document, RevisionKind};
+use rdocx::{Document, PackageReadLimits, RevisionKind};
 
 #[test]
 fn settings_relationship_target_is_resolved_instead_of_assumed() {
@@ -50,6 +50,29 @@ fn document_xml(document: &mut Document) -> Vec<u8> {
     let bytes = document.to_bytes().unwrap();
     let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
     package.get_part("/word/document.xml").unwrap().to_vec()
+}
+
+#[test]
+fn bounded_document_reader_rejects_package_expansion() {
+    let bytes = Document::new().to_bytes().unwrap();
+    let result = Document::from_bytes_with_limits(
+        &bytes,
+        PackageReadLimits {
+            max_entries: 1,
+            max_part_uncompressed_bytes: 1_024 * 1_024,
+            max_total_uncompressed_bytes: 2 * 1_024 * 1_024,
+        },
+    );
+
+    assert!(matches!(
+        result,
+        Err(rdocx::Error::Opc(
+            oxml_opc::OpcError::PackageLimitExceeded {
+                kind: "entry count",
+                limit: 1
+            }
+        ))
+    ));
 }
 
 #[test]
@@ -1190,6 +1213,25 @@ fn mixed_lists_round_trip() {
     assert_eq!(paras[1].text(), "Bullet 1");
     assert_eq!(paras[3].text(), "Transition");
     assert_eq!(paras[4].text(), "Step 1");
+}
+
+#[test]
+fn paragraph_facade_exposes_exact_bottom_border_facts() {
+    let mut document = Document::new();
+    document
+        .add_paragraph("")
+        .border_bottom(BorderStyle::Single, 8, "808080");
+
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let paragraph = reopened.paragraph(0).unwrap();
+    let border = paragraph.bottom_border().unwrap();
+
+    assert_eq!(paragraph.border_count(), 1);
+    assert_eq!(border.style(), "single");
+    assert_eq!(border.size_eighths_pt(), Some(8));
+    assert_eq!(border.space_points(), Some(1));
+    assert_eq!(border.color(), Some("808080"));
 }
 
 #[test]

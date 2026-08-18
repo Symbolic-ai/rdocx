@@ -9,9 +9,9 @@ use std::cell::Cell;
 
 use oxml_chart::{CT_ChartSpace, ChartData, ChartKind};
 use oxml_media::MediaNamer;
-use oxml_opc::OpcPackage;
 use oxml_opc::content_types;
 use oxml_opc::relationship::rel_types;
+use oxml_opc::{OpcPackage, PackageReadLimits};
 use oxml_sml::Workbook;
 use quick_xml::events::Event;
 use quick_xml::name::{Namespace, ResolveResult};
@@ -427,8 +427,13 @@ impl Document {
 
     /// Open a document from bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        Self::from_bytes_with_limits(bytes, PackageReadLimits::UNBOUNDED)
+    }
+
+    /// Open a document from bytes while bounding OPC archive expansion.
+    pub fn from_bytes_with_limits(bytes: &[u8], limits: PackageReadLimits) -> Result<Self> {
         let cursor = std::io::Cursor::new(bytes);
-        let package = OpcPackage::from_reader(cursor)?;
+        let package = OpcPackage::from_reader_with_limits(cursor, limits)?;
         Self::from_package(package)
     }
 
@@ -5976,6 +5981,39 @@ mod tests {
         assert_eq!(
             reopened.hyperlink_url(spans[0].2.expect("relationship id")),
             Some("https://example.com/table".to_string())
+        );
+    }
+
+    #[test]
+    fn writer_hyperlink_tooltip_and_table_indent_round_trip() {
+        let mut doc = Document::new();
+        let relationship_id = doc.add_hyperlink_relationship("https://example.com");
+        doc.add_paragraph("").add_hyperlink_with_tooltip(
+            "linked",
+            &relationship_id,
+            Some("Example site"),
+        );
+        doc.add_table(1, 1).set_indent(Length::twips(720));
+
+        let bytes = doc.to_bytes().expect("document writes");
+        let reopened = Document::from_bytes(&bytes).expect("document reopens");
+
+        let BodyContent::Paragraph(paragraph) = &reopened.document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        assert_eq!(
+            paragraph.hyperlinks[0].extra_attributes,
+            vec![("w:tooltip".to_string(), "Example site".to_string())]
+        );
+        let BodyContent::Table(table) = &reopened.document.body.content[1] else {
+            panic!("expected table");
+        };
+        assert_eq!(
+            table
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.indent.as_ref()),
+            Some(&rdocx_oxml::table::CT_TblWidth::dxa(720))
         );
     }
 

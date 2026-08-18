@@ -526,8 +526,13 @@ impl CT_TblPr {
                             pr.jc = ST_Jc::from_str(&val).ok();
                         }
                     } else if is_word_element(name.as_ref(), b"tblLayout", &prefixes) {
-                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
-                            pr.layout = Some(val);
+                        for attribute in e.attributes() {
+                            let attribute = attribute?;
+                            if is_word_attribute(attribute.key.as_ref(), b"type", &prefixes) {
+                                pr.layout =
+                                    Some(std::str::from_utf8(&attribute.value)?.to_string());
+                                break;
+                            }
                         }
                     } else if is_word_element(name.as_ref(), b"tblInd", &prefixes) {
                         pr.indent = Some(CT_TblWidth::from_xml_attrs_with_prefixes(e, &prefixes)?);
@@ -2051,6 +2056,16 @@ mod tests {
         assert_eq!(tr_pr.height, Some(Twips(720)));
         assert_eq!(tr_pr.height_rule, Some("exact".to_string()));
         assert_eq!(tr_pr.header, Some(true));
+    }
+
+    #[test]
+    fn table_layout_reads_the_schema_type_attribute() {
+        let table = parse_table(concat!(
+            r#"<w:tblPr><w:tblLayout w:type="fixed"/></w:tblPr>"#,
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid>"#,
+        ));
+
+        assert_eq!(table.properties.unwrap().layout.as_deref(), Some("fixed"));
     }
 
     #[test]
