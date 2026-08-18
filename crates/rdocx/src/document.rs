@@ -32,6 +32,7 @@ use rdocx_oxml::text::{CT_P, CT_R, RunContent};
 use rdocx_oxml::core_properties::CoreProperties;
 
 use crate::Length;
+use crate::content_control::ContentControlRef;
 use crate::error::{Error, Result};
 use crate::paragraph::{Paragraph, ParagraphRef};
 use crate::revision::RevisionRef;
@@ -43,6 +44,18 @@ use crate::table::{Table, TableRef};
 pub struct RenderOptions {
     /// The tracked-revision view to render.
     pub revision_view: rdocx_layout::RevisionView,
+}
+
+/// One direct child of a document body, in source order.
+pub enum BodyItemRef<'a> {
+    /// A body paragraph.
+    Paragraph(ParagraphRef<'a>),
+    /// A body table.
+    Table(TableRef<'a>),
+    /// A body-level content control.
+    ContentControl(ContentControlRef<'a>),
+    /// A preserved body child that rdocx does not model.
+    UnsupportedXml(&'a [u8]),
 }
 
 /// A Word document (.docx file).
@@ -850,6 +863,24 @@ impl Document {
     }
 
     // ---- Paragraph access ----
+
+    /// Iterate over direct body items in source order.
+    ///
+    /// Unlike [`Self::paragraphs`] and [`Self::tables`], this retains the
+    /// interleaving of paragraphs, tables, content controls, and preserved
+    /// unmodelled XML.
+    pub fn body_items(&self) -> impl Iterator<Item = BodyItemRef<'_>> {
+        self.document.body.content.iter().map(|item| match item {
+            BodyContent::Paragraph(paragraph) => {
+                BodyItemRef::Paragraph(ParagraphRef { inner: paragraph })
+            }
+            BodyContent::Table(table) => BodyItemRef::Table(TableRef { inner: table }),
+            BodyContent::ContentControl(control) => {
+                BodyItemRef::ContentControl(ContentControlRef { inner: control })
+            }
+            BodyContent::RawXml(raw) => BodyItemRef::UnsupportedXml(raw),
+        })
+    }
 
     /// Get immutable references to all paragraphs.
     pub fn paragraphs(&self) -> Vec<ParagraphRef<'_>> {
@@ -4139,6 +4170,55 @@ mod tests {
 
     fn layout_invocations() -> usize {
         LAYOUT_INVOCATIONS.get()
+    }
+
+    #[test]
+    fn body_items_preserve_paragraph_table_control_and_raw_order() {
+        let mut doc = Document::new();
+        doc.add_paragraph("first");
+        doc.add_table(1, 1);
+        doc.document
+            .body
+            .content
+            .push(BodyContent::RawXml(b"<w:custom/>".to_vec()));
+
+        let mut reader = quick_xml::Reader::from_reader(
+            br#"<w:sdt xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:sdtContent><w:p><w:r><w:t>inside</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+                .as_slice(),
+        );
+        let mut buffer = Vec::new();
+        let control = match reader.read_event_into(&mut buffer).unwrap() {
+            Event::Start(start) => CT_Sdt::from_xml(&mut reader, &start).unwrap(),
+            event => panic!("expected content control start, got {event:?}"),
+        };
+        doc.document
+            .body
+            .content
+            .push(BodyContent::ContentControl(control));
+        doc.add_paragraph("last");
+
+        let items = doc
+            .body_items()
+            .map(|item| match item {
+                BodyItemRef::Paragraph(paragraph) => format!("paragraph:{}", paragraph.text()),
+                BodyItemRef::Table(_) => "table".to_owned(),
+                BodyItemRef::ContentControl(control) => format!("control:{}", control.text()),
+                BodyItemRef::UnsupportedXml(raw) => {
+                    format!("raw:{}", std::str::from_utf8(raw).unwrap())
+                }
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            items,
+            [
+                "paragraph:first",
+                "table",
+                "raw:<w:custom/>",
+                "control:inside",
+                "paragraph:last",
+            ]
+        );
     }
 
     #[test]
