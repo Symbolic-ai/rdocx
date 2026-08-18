@@ -49,6 +49,43 @@ pub enum FieldType {
     Other(String),
 }
 
+/// One parsed field switch, without the leading backslash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldSwitch {
+    pub name: String,
+    pub argument: Option<String>,
+}
+
+/// A tokenized Word field instruction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldInstruction {
+    pub original: String,
+    pub name: String,
+    pub arguments: Vec<String>,
+    pub switches: Vec<FieldSwitch>,
+}
+
+/// A complete complex field projected from `w:fldChar` and `w:instrText` runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComplexField {
+    pub instruction: FieldInstruction,
+    pub run_start: usize,
+    pub run_end: usize,
+    pub cached_text: String,
+    pub dirty: bool,
+    pub children: Vec<ComplexField>,
+}
+
+/// A namespace-resolved complex-field marker retained alongside raw run XML.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FieldMarker {
+    Begin { dirty: bool },
+    Instruction(String),
+    Separate { dirty: bool },
+    End { dirty: bool },
+}
+
 /// Content that can appear inside a run.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunContent {
@@ -180,6 +217,9 @@ pub struct CT_R {
     /// Parsed raw-child positions among properties and typed run content.
     #[doc(hidden)]
     pub extra_xml_positions: Vec<usize>,
+    /// Namespace-resolved field markers retained alongside `extra_xml`.
+    #[doc(hidden)]
+    pub field_markers: Vec<FieldMarker>,
     /// Drawings read out of an `mc:AlternateContent` block, for layout only.
     ///
     /// Never serialised. The verbatim copy in `extra_xml` is what gets
@@ -195,6 +235,7 @@ impl CT_R {
             content: vec![RunContent::Text(CT_Text::new(text))],
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
+            field_markers: Vec::new(),
             alt_drawings: Vec::new(),
         }
     }
@@ -302,6 +343,7 @@ impl CT_R {
         let mut content = Vec::new();
         let mut extra_xml = Vec::new();
         let mut extra_xml_positions = Vec::new();
+        let mut field_markers = Vec::new();
         let mut alt_drawings = Vec::new();
         let mut modeled_children = 0usize;
         let mut buf = Vec::new();
@@ -379,7 +421,12 @@ impl CT_R {
                         extra_xml_positions.push(modeled_children);
                     } else {
                         // Capture unknown child elements as raw XML
-                        extra_xml.push(capture_element(reader, e)?);
+                        let marker = field_marker_from_element(e, &prefixes)?;
+                        let raw = capture_element(reader, e)?;
+                        if let Some(marker) = marker {
+                            field_markers.push(field_marker_with_instruction(marker, &raw)?);
+                        }
+                        extra_xml.push(raw);
                         extra_xml_positions.push(modeled_children);
                     }
                 }
@@ -429,6 +476,9 @@ impl CT_R {
                         // capturing it here would move it past <w:t> and
                         // produce schema-invalid output. An empty rPr carries
                         // no formatting, so dropping it loses nothing.
+                        if let Some(marker) = field_marker_from_element(e, &prefixes)? {
+                            field_markers.push(marker);
+                        }
                         extra_xml.push(capture_empty_element(e)?);
                         extra_xml_positions.push(modeled_children);
                     }
@@ -448,6 +498,7 @@ impl CT_R {
             content,
             extra_xml,
             extra_xml_positions,
+            field_markers,
             alt_drawings,
         })
     }
@@ -611,7 +662,7 @@ struct ParsedHyperlinkChildren {
     extra_xml: Vec<(usize, usize, Vec<u8>)>,
 }
 
-/// A hyperlink represented by a complex field sequence rather than `w:hyperlink`.
+/// A HYPERLINK represented by a valid complex field sequence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComplexFieldHyperlink {
     pub run_start: usize,
@@ -620,19 +671,12 @@ pub struct ComplexFieldHyperlink {
 }
 
 #[derive(Debug)]
-enum ComplexFieldPart {
-    Begin { dirty: bool },
-    Instruction(String),
-    Separate { dirty: bool },
-    End { dirty: bool },
-}
-
-#[derive(Debug)]
 struct OpenComplexField {
     instruction: String,
     result_start: Option<usize>,
-    cached_text: String,
     dirty: bool,
+    valid: bool,
+    children: Vec<ComplexField>,
 }
 
 type ParsedHyperlinkAttributes = (Option<String>, Option<String>, Vec<(String, String)>);
@@ -687,12 +731,36 @@ impl CT_P {
         self.runs().iter().map(|run| run.text()).collect()
     }
 
+    /// Return recursively parsed complex fields with complete cached results.
+    pub fn complex_fields(&self) -> Vec<ComplexField> {
+        parse_complex_fields(&self.runs)
+    }
+
     /// Return the cached-result spans of valid complex `HYPERLINK` fields.
     ///
     /// Complex fields stay in their original run form for round-trip writing.
     /// This projection supplies their external targets to reader consumers.
     pub fn complex_field_hyperlinks(&self) -> Vec<ComplexFieldHyperlink> {
-        parse_complex_fields(&self.runs).unwrap_or_default()
+        self.complex_fields()
+            .into_iter()
+            .filter(|field| {
+                !field.dirty
+                    && !field.cached_text.is_empty()
+                    && field.instruction.name == "HYPERLINK"
+            })
+            .filter_map(|field| {
+                field
+                    .instruction
+                    .arguments
+                    .first()
+                    .cloned()
+                    .map(|target| ComplexFieldHyperlink {
+                        run_start: field.run_start,
+                        run_end: field.run_end,
+                        target,
+                    })
+            })
+            .collect()
     }
 
     /// Return direct and content-control-wrapped runs in document order.
@@ -1204,6 +1272,7 @@ impl CT_P {
                             }],
                             extra_xml: Vec::new(),
                             extra_xml_positions: Vec::new(),
+                            field_markers: Vec::new(),
                             alt_drawings: Vec::new(),
                         });
                     } else if is_word_element(name.as_ref(), b"commentRangeStart", &prefixes)
@@ -1310,7 +1379,7 @@ impl CT_P {
             buf.clear();
         }
 
-        let paragraph = CT_P {
+        Ok(CT_P {
             properties,
             runs,
             hyperlinks,
@@ -1319,9 +1388,7 @@ impl CT_P {
             extra_xml,
             content_controls,
             revisions,
-        };
-        parse_complex_fields(&paragraph.runs)?;
-        Ok(paragraph)
+        })
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -2254,232 +2321,196 @@ fn optional_word_attribute(
     None
 }
 
-/// Parse a field instruction string into a FieldType.
+impl FieldInstruction {
+    fn parse(instruction: &str) -> Self {
+        let original = instruction.to_owned();
+        let tokens = field_instruction_tokens(instruction);
+        let name = tokens
+            .first()
+            .map(|token| token.to_ascii_uppercase())
+            .unwrap_or_default();
+        let mut arguments = Vec::new();
+        let mut switches = Vec::new();
+        let mut index = 1;
+
+        while let Some(token) = tokens.get(index) {
+            if let Some(name) = token.strip_prefix('\\') {
+                index += 1;
+                let argument = tokens
+                    .get(index)
+                    .filter(|next| !next.starts_with('\\'))
+                    .cloned();
+                if argument.is_some() {
+                    index += 1;
+                }
+                switches.push(FieldSwitch {
+                    name: name.to_owned(),
+                    argument,
+                });
+            } else {
+                arguments.push(token.clone());
+                index += 1;
+            }
+        }
+
+        Self {
+            original,
+            name,
+            arguments,
+            switches,
+        }
+    }
+}
+
+fn field_instruction_tokens(instruction: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut token = String::new();
+    let mut quoted = false;
+
+    for character in instruction.chars() {
+        match character {
+            '"' => quoted = !quoted,
+            character if character.is_whitespace() && !quoted => {
+                if !token.is_empty() {
+                    tokens.push(std::mem::take(&mut token));
+                }
+            }
+            _ => token.push(character),
+        }
+    }
+    if !token.is_empty() {
+        tokens.push(token);
+    }
+    tokens
+}
+
+/// Parse a field instruction string into the existing renderer field type.
 fn parse_field_instruction(instr: &str) -> FieldType {
-    let instruction = instr.trim();
-    let trimmed = instruction.to_uppercase();
-    // Field instruction may have switches like "PAGE \* MERGEFORMAT"
-    let keyword = trimmed.split_whitespace().next().unwrap_or("");
-    match keyword {
+    let parsed = FieldInstruction::parse(instr.trim());
+    let bookmark = parsed.arguments.first().cloned().unwrap_or_default();
+    match parsed.name.as_str() {
         "PAGE" => FieldType::Page,
         "NUMPAGES" => FieldType::NumPages,
-        "REF" | "PAGEREF" => {
-            let bookmark = instruction
-                .split_whitespace()
-                .nth(1)
-                .unwrap_or("")
-                .trim_matches('"')
-                .to_owned();
-            if bookmark.is_empty() {
-                FieldType::Other(instruction.to_owned())
-            } else if keyword == "REF" {
-                FieldType::Ref {
-                    bookmark,
-                    instruction: instruction.to_owned(),
-                }
-            } else {
-                FieldType::PageRef {
-                    bookmark,
-                    instruction: instruction.to_owned(),
-                }
-            }
-        }
-        _ => FieldType::Other(instruction.to_owned()),
+        "REF" if !bookmark.is_empty() => FieldType::Ref {
+            bookmark,
+            instruction: parsed.original,
+        },
+        "PAGEREF" if !bookmark.is_empty() => FieldType::PageRef {
+            bookmark,
+            instruction: parsed.original,
+        },
+        _ => FieldType::Other(parsed.original.trim().to_owned()),
     }
 }
 
-fn parse_complex_fields(runs: &[CT_R]) -> Result<Vec<ComplexFieldHyperlink>> {
-    let mut field = None;
-    let mut hyperlinks = Vec::new();
+fn parse_complex_fields(runs: &[CT_R]) -> Vec<ComplexField> {
+    let mut roots = Vec::new();
+    let mut stack = Vec::<OpenComplexField>::new();
 
     for (run_index, run) in runs.iter().enumerate() {
-        let parts = complex_field_parts(run)?;
-        let had_result = field
-            .as_ref()
-            .is_some_and(|field: &OpenComplexField| field.result_start.is_some());
-        let mut ended = None;
-
-        for part in parts {
-            match part {
-                ComplexFieldPart::Begin { dirty } => {
-                    if field.is_some() {
-                        return Err(OxmlError::MissingElement(
-                            "nested complex field is unsupported".to_owned(),
-                        ));
-                    }
-                    field = Some(OpenComplexField {
-                        instruction: String::new(),
-                        result_start: None,
-                        cached_text: String::new(),
-                        dirty,
-                    });
-                }
-                ComplexFieldPart::Instruction(instruction) => {
-                    let Some(field) = field.as_mut() else {
-                        return Err(OxmlError::MissingElement(
-                            "w:instrText without a complex field begin".to_owned(),
-                        ));
-                    };
-                    if field.result_start.is_some() {
-                        return Err(OxmlError::MissingElement(
-                            "w:instrText after a complex field separator".to_owned(),
-                        ));
-                    }
-                    field.instruction.push_str(&instruction);
-                }
-                ComplexFieldPart::Separate { dirty } => {
-                    let Some(field) = field.as_mut() else {
-                        return Err(OxmlError::MissingElement(
-                            "complex field separator without a begin".to_owned(),
-                        ));
-                    };
-                    if field.result_start.replace(run_index + 1).is_some() {
-                        return Err(OxmlError::MissingElement(
-                            "complex field has more than one separator".to_owned(),
-                        ));
-                    }
-                    field.dirty |= dirty;
-                }
-                ComplexFieldPart::End { dirty } => {
-                    let Some(completed) = field.take() else {
-                        return Err(OxmlError::MissingElement(
-                            "complex field end without a begin".to_owned(),
-                        ));
-                    };
-                    ended = Some(OpenComplexField {
-                        dirty: completed.dirty || dirty,
-                        ..completed
-                    });
-                }
-            }
-        }
-
-        if (had_result
-            || field
-                .as_ref()
-                .is_some_and(|field| field.result_start == Some(run_index)))
-            && let Some(field) = field.as_mut()
-        {
-            field.cached_text.push_str(&run.text());
-        }
-        if let Some(mut completed) = ended {
-            if had_result {
-                completed.cached_text.push_str(&run.text());
-            }
-            let Some(result_start) = completed.result_start else {
-                return Err(OxmlError::MissingElement(
-                    "complex field has no cached result".to_owned(),
-                ));
-            };
-            if completed.instruction.trim().is_empty() {
-                return Err(OxmlError::MissingElement(
-                    "complex field has no instruction".to_owned(),
-                ));
-            }
-            if completed.dirty || completed.cached_text.is_empty() {
-                return Err(OxmlError::MissingElement(
-                    "complex field has an unsafe cached result".to_owned(),
-                ));
-            }
-            if complex_field_is_hyperlink(&completed.instruction) {
-                let target = hyperlink_target(&completed.instruction).ok_or_else(|| {
-                    OxmlError::InvalidValue("complex HYPERLINK field has no target".to_owned())
-                })?;
-                hyperlinks.push(ComplexFieldHyperlink {
-                    run_start: result_start,
-                    run_end: run_index + 1,
-                    target,
-                });
-            }
-        }
-    }
-
-    if field.is_some() {
-        return Err(OxmlError::MissingElement(
-            "unclosed complex field".to_owned(),
-        ));
-    }
-    Ok(hyperlinks)
-}
-
-fn complex_field_parts(run: &CT_R) -> Result<Vec<ComplexFieldPart>> {
-    let mut parts = Vec::new();
-    for raw in &run.extra_xml {
-        let mut reader = Reader::from_reader(raw.as_slice());
-        let mut buffer = Vec::new();
-        loop {
-            match reader.read_event_into(&mut buffer)? {
-                Event::Start(element)
-                    if is_standard_word_element(element.name().as_ref(), b"instrText") =>
-                {
-                    let text = reader
-                        .read_text(element.name())
-                        .map(|text| crate::xml_text::decode_escaped(&text))?;
-                    parts.push(ComplexFieldPart::Instruction(text));
-                    break;
-                }
-                Event::Start(element) | Event::Empty(element)
-                    if is_standard_word_element(element.name().as_ref(), b"fldChar") =>
-                {
-                    let mut field_type = None;
-                    let mut dirty = false;
-                    for attribute in element.attributes() {
-                        let attribute = attribute?;
-                        if matches_local_name(attribute.key.as_ref(), b"fldCharType") {
-                            field_type = Some(std::str::from_utf8(&attribute.value)?.to_owned());
-                        } else if matches_local_name(attribute.key.as_ref(), b"dirty") {
-                            dirty = matches!(
-                                std::str::from_utf8(&attribute.value)?,
-                                "true" | "1" | "on"
-                            );
+        for marker in &run.field_markers {
+            match marker {
+                FieldMarker::Begin { dirty } => stack.push(OpenComplexField {
+                    instruction: String::new(),
+                    result_start: None,
+                    dirty: *dirty,
+                    valid: true,
+                    children: Vec::new(),
+                }),
+                FieldMarker::Instruction(instruction) => {
+                    if let Some(field) = stack.last_mut() {
+                        if field.result_start.is_some() {
+                            field.valid = false;
+                        } else {
+                            field.instruction.push_str(instruction);
                         }
                     }
-                    match field_type.as_deref() {
-                        Some("begin") => parts.push(ComplexFieldPart::Begin { dirty }),
-                        Some("separate") => parts.push(ComplexFieldPart::Separate { dirty }),
-                        Some("end") => parts.push(ComplexFieldPart::End { dirty }),
-                        _ => {}
-                    }
-                    break;
                 }
-                Event::Eof => break,
-                _ => {}
+                FieldMarker::Separate { dirty } => {
+                    if let Some(field) = stack.last_mut() {
+                        if field.result_start.replace(run_index + 1).is_some() {
+                            field.valid = false;
+                        }
+                        field.dirty |= *dirty;
+                    }
+                }
+                FieldMarker::End { dirty } => {
+                    let Some(mut field) = stack.pop() else {
+                        continue;
+                    };
+                    field.dirty |= *dirty;
+                    let parsed = field.result_start.and_then(|result_start| {
+                        let instruction = FieldInstruction::parse(&field.instruction);
+                        (!instruction.name.is_empty() && field.valid).then(|| ComplexField {
+                            instruction,
+                            run_start: result_start,
+                            run_end: run_index + 1,
+                            cached_text: runs[result_start..run_index + 1]
+                                .iter()
+                                .map(CT_R::text)
+                                .collect(),
+                            dirty: field.dirty,
+                            children: field.children,
+                        })
+                    });
+                    if let Some(parent) = stack.last_mut() {
+                        if let Some(parsed) = parsed {
+                            parent.children.push(parsed);
+                        } else {
+                            parent.valid = false;
+                        }
+                    } else if let Some(parsed) = parsed {
+                        roots.push(parsed);
+                    }
+                }
             }
-            buffer.clear();
         }
     }
-    Ok(parts)
+    roots
 }
 
-fn is_standard_word_element(name: &[u8], local: &[u8]) -> bool {
-    name.strip_prefix(b"w:") == Some(local)
-}
-
-fn hyperlink_target(instruction: &str) -> Option<String> {
-    let instruction = instruction.trim();
-    let rest = instruction.get(9..)?;
-    if !instruction
-        .get(..9)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("HYPERLINK"))
-        || (!rest.is_empty() && !rest.chars().next().is_some_and(char::is_whitespace))
-    {
-        return None;
+fn field_marker_from_element(
+    element: &BytesStart<'_>,
+    word_prefixes: &[String],
+) -> Result<Option<FieldMarker>> {
+    if is_word_element(element.name().as_ref(), b"instrText", word_prefixes) {
+        return Ok(Some(FieldMarker::Instruction(String::new())));
     }
-    let rest = rest.trim_start();
-    if let Some(rest) = rest.strip_prefix('"') {
-        return rest.split_once('"').map(|(target, _)| target.to_owned());
+    if !is_word_element(element.name().as_ref(), b"fldChar", word_prefixes) {
+        return Ok(None);
     }
-    rest.split_whitespace()
-        .next()
-        .filter(|target| !target.starts_with('\\'))
-        .map(str::to_owned)
+
+    let dirty = optional_word_attribute(element, b"dirty", word_prefixes)
+        .is_some_and(|value| matches!(value.as_str(), "true" | "1" | "on"));
+    Ok(
+        match optional_word_attribute(element, b"fldCharType", word_prefixes).as_deref() {
+            Some("begin") => Some(FieldMarker::Begin { dirty }),
+            Some("separate") => Some(FieldMarker::Separate { dirty }),
+            Some("end") => Some(FieldMarker::End { dirty }),
+            _ => None,
+        },
+    )
 }
 
-fn complex_field_is_hyperlink(instruction: &str) -> bool {
-    instruction
-        .split_whitespace()
-        .next()
-        .is_some_and(|keyword| keyword.eq_ignore_ascii_case("HYPERLINK"))
+fn field_marker_with_instruction(marker: FieldMarker, raw: &[u8]) -> Result<FieldMarker> {
+    let FieldMarker::Instruction(_) = marker else {
+        return Ok(marker);
+    };
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let instruction = reader
+                    .read_text(element.name())
+                    .map(|text| crate::xml_text::decode_escaped(&text))?;
+                return Ok(FieldMarker::Instruction(instruction));
+            }
+            Event::Empty(_) | Event::Eof => return Ok(FieldMarker::Instruction(String::new())),
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 impl Default for CT_P {
@@ -2550,7 +2581,122 @@ mod tests {
     }
 
     #[test]
-    fn unsafe_complex_fields_fail_closed() {
+    fn complex_fields_parse_nested_operands_and_split_instructions() {
+        let p = parse_paragraph(concat!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText> HYPER</w:instrText></w:r>"#,
+            r#"<w:r><w:instrText>LINK </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText> REF destination </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:t>https://example.test</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:t>Example link</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        ));
+
+        assert_eq!(p.text(), "https://example.testExample link");
+        let field = &p.complex_fields()[0];
+        assert_eq!(field.instruction.name, "HYPERLINK");
+        assert_eq!(field.children[0].instruction.name, "REF");
+    }
+
+    #[test]
+    fn simple_and_complex_fields_share_the_instruction_tokenizer() {
+        let instruction = r#" REF "destination name" \h \* MERGEFORMAT "#;
+        let simple = parse_field_instruction(instruction);
+        let parsed = FieldInstruction::parse(instruction);
+
+        assert!(matches!(simple, FieldType::Ref { .. }));
+        assert_eq!(parsed.arguments, vec!["destination name"]);
+        assert_eq!(
+            parsed.switches,
+            vec![
+                FieldSwitch {
+                    name: "h".to_owned(),
+                    argument: None,
+                },
+                FieldSwitch {
+                    name: "*".to_owned(),
+                    argument: Some("MERGEFORMAT".to_owned()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn complex_fields_accept_aliases_and_default_word_namespaces() {
+        let word_namespace = crate::namespace::W_NS;
+        let alias = parse_paragraph(&format!(
+            r#"<q:r xmlns:q="{word_namespace}"><q:fldChar q:fldCharType="begin"/></q:r><q:r xmlns:q="{word_namespace}"><q:instrText> HYPERLINK &quot;https://alias.test&quot; </q:instrText></q:r><q:r xmlns:q="{word_namespace}"><q:fldChar q:fldCharType="separate"/></q:r><q:r xmlns:q="{word_namespace}"><q:t>Alias</q:t></q:r><q:r xmlns:q="{word_namespace}"><q:fldChar q:fldCharType="end"/></q:r>"#
+        ));
+        let default = parse_paragraph(&format!(
+            r#"<r xmlns="{word_namespace}" xmlns:w="{word_namespace}"><fldChar w:fldCharType="begin"/></r><r xmlns="{word_namespace}"><instrText> HYPERLINK &quot;https://default.test&quot; </instrText></r><r xmlns="{word_namespace}" xmlns:w="{word_namespace}"><fldChar w:fldCharType="separate"/></r><r xmlns="{word_namespace}"><t>Default</t></r><r xmlns="{word_namespace}" xmlns:w="{word_namespace}"><fldChar w:fldCharType="end"/></r>"#
+        ));
+
+        assert_eq!(
+            alias.complex_field_hyperlinks()[0].target,
+            "https://alias.test"
+        );
+        assert_eq!(
+            default.complex_field_hyperlinks()[0].target,
+            "https://default.test"
+        );
+    }
+
+    #[test]
+    fn foreign_field_marker_collisions_remain_opaque() {
+        let p = parse_paragraph(concat!(
+            r#"<ext:r xmlns:ext="urn:producer"><ext:fldChar ext:fldCharType="begin"/></ext:r>"#,
+            r#"<ext:r xmlns:ext="urn:producer"><ext:instrText> HYPERLINK https://foreign.test </ext:instrText></ext:r>"#,
+        ));
+
+        assert!(p.complex_fields().is_empty());
+        let mut output = Vec::new();
+        p.to_xml(&mut Writer::new(&mut output))
+            .expect("paragraph writes");
+        assert!(
+            String::from_utf8(output)
+                .expect("XML is UTF-8")
+                .contains(r#"<ext:fldChar ext:fldCharType="begin"/>"#)
+        );
+    }
+
+    #[test]
+    fn unsupported_complex_fields_remain_raw_without_failing_document_open() {
+        let xml = concat!(
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin" w:dirty="true"/></w:r>"#,
+            r#"<w:r><w:instrText> HYPERLINK &quot;https://example.test&quot; </w:instrText></w:r>"#,
+            r#"</w:p>"#,
+        );
+        let mut reader = Reader::from_str(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer) {
+                Ok(Event::Start(element)) if matches_local_name(element.name().as_ref(), b"p") => {
+                    let paragraph = CT_P::from_xml(&mut reader).expect("paragraph opens");
+                    let mut output = Vec::new();
+                    paragraph
+                        .to_xml(&mut Writer::new(&mut output))
+                        .expect("paragraph writes");
+                    assert!(
+                        String::from_utf8(output)
+                            .expect("XML is UTF-8")
+                            .contains(r#"<w:fldChar w:fldCharType="begin" w:dirty="true"/>"#)
+                    );
+                    break;
+                }
+                Ok(Event::Eof) => panic!("missing paragraph"),
+                Ok(_) => {}
+                Err(error) => panic!("invalid fixture: {error}"),
+            }
+            buffer.clear();
+        }
+    }
+
+    #[test]
+    fn unsafe_complex_fields_do_not_expose_hyperlinks() {
         let cases = [
             concat!(
                 r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
@@ -2594,7 +2740,8 @@ mod tests {
                     Ok(Event::Start(element))
                         if matches_local_name(element.name().as_ref(), b"p") =>
                     {
-                        assert!(CT_P::from_xml(&mut reader).is_err(), "{case}");
+                        let paragraph = CT_P::from_xml(&mut reader).expect("paragraph opens");
+                        assert!(paragraph.complex_field_hyperlinks().is_empty(), "{case}");
                         break;
                     }
                     Ok(Event::Eof) => panic!("missing paragraph"),
@@ -3066,6 +3213,7 @@ mod tests {
             }],
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
+            field_markers: Vec::new(),
             alt_drawings: Vec::new(),
         });
 
@@ -3149,6 +3297,7 @@ mod tests {
             content: vec![RunContent::FootnoteRef { id: 2 }],
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
+            field_markers: Vec::new(),
             alt_drawings: Vec::new(),
         });
         p.add_run(" text after");

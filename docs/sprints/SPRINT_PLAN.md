@@ -837,9 +837,11 @@ M16 rests on this.
 | F-160 | Field instruction parser | L |
 | F-161 | Field evaluation engine | L |
 | F-162 | Field update policy | M |
+| F-203 | Reader compatibility corrections | M |
 
-Strictly ordered. F-161 also depends on F-154 from S46, which is why bookmarks
-landed early.
+F-160 through F-162 are strictly ordered. F-203 is an independent corrective
+story for reader preservation. F-161 also depends on F-154 from S46, which is
+why bookmarks landed early.
 
 #### Sprint S50, Templating
 
