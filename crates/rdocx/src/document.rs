@@ -2618,23 +2618,43 @@ impl Document {
         count
     }
 
-    /// Relationship IDs of the section's headers and footers, with a flag
+    /// Relationship IDs of every section's headers and footers, with a flag
     /// saying which kind each one is.
     fn header_footer_rel_ids(&self) -> Vec<(String, bool)> {
-        let Some(sect_pr) = self.document.body.sect_pr.as_ref() else {
-            return Vec::new();
-        };
-        sect_pr
-            .header_refs
+        let mut rel_ids = Vec::new();
+        let mut seen = HashSet::new();
+        let sections = self
+            .document
+            .body
+            .content
             .iter()
-            .map(|r| (r.rel_id.clone(), true))
-            .chain(
-                sect_pr
-                    .footer_refs
-                    .iter()
-                    .map(|r| (r.rel_id.clone(), false)),
-            )
-            .collect()
+            .filter_map(|content| match content {
+                BodyContent::Paragraph(paragraph) => paragraph
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.sect_pr.as_ref()),
+                BodyContent::Table(_) | BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {
+                    None
+                }
+            })
+            .chain(self.document.body.sect_pr.iter());
+
+        for section in sections {
+            for reference in &section.header_refs {
+                let rel_id = (reference.rel_id.clone(), true);
+                if seen.insert(rel_id.clone()) {
+                    rel_ids.push(rel_id);
+                }
+            }
+            for reference in &section.footer_refs {
+                let rel_id = (reference.rel_id.clone(), false);
+                if seen.insert(rel_id.clone()) {
+                    rel_ids.push(rel_id);
+                }
+            }
+        }
+
+        rel_ids
     }
 
     // ---- Regex replacement ----
@@ -5507,6 +5527,44 @@ mod tests {
         assert_eq!(doc.paragraphs()[0].text(), "Body: My Doc");
         assert_eq!(doc.header_text().unwrap(), "Header: My Doc");
         assert_eq!(doc.footer_text().unwrap(), "Footer: My Doc");
+
+        let reopened = Document::from_bytes(&doc.to_bytes().unwrap()).unwrap();
+        assert!(reopened.has_header_footer_content());
+    }
+
+    #[test]
+    fn header_footer_content_includes_earlier_sections_after_round_trip() {
+        let mut doc = Document::new();
+        doc.set_header("Earlier section header");
+        doc.add_paragraph("First section");
+
+        let header_reference = doc
+            .document
+            .body
+            .sect_pr
+            .as_mut()
+            .expect("final section")
+            .header_refs
+            .pop()
+            .expect("header reference");
+        let BodyContent::Paragraph(paragraph) = doc
+            .document
+            .body
+            .content
+            .last_mut()
+            .expect("first section paragraph")
+        else {
+            panic!("expected paragraph");
+        };
+        paragraph.properties = Some(CT_PPr {
+            sect_pr: Some(CT_SectPr {
+                header_refs: vec![header_reference],
+                ..CT_SectPr::default_letter()
+            }),
+            ..Default::default()
+        });
+
+        assert!(doc.has_header_footer_content());
 
         let reopened = Document::from_bytes(&doc.to_bytes().unwrap()).unwrap();
         assert!(reopened.has_header_footer_content());
