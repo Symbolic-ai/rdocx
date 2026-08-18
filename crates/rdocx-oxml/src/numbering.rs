@@ -2075,6 +2075,33 @@ pub enum ST_NumberFormat {
     None,
 }
 
+/// The character or layout item that follows a numbering level marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ST_LvlSuffix {
+    Tab,
+    Space,
+    Nothing,
+}
+
+impl ST_LvlSuffix {
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "tab" => Some(Self::Tab),
+            "space" => Some(Self::Space),
+            "nothing" => Some(Self::Nothing),
+            _ => None,
+        }
+    }
+
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Tab => "tab",
+            Self::Space => "space",
+            Self::Nothing => "nothing",
+        }
+    }
+}
+
 impl ST_NumberFormat {
     pub fn from_str(s: &str) -> Self {
         match s {
@@ -2113,6 +2140,8 @@ pub struct CT_Lvl {
     pub start: Option<u32>,
     /// Number format
     pub num_fmt: Option<ST_NumberFormat>,
+    /// Item emitted between the marker and the paragraph content.
+    pub suffix: Option<ST_LvlSuffix>,
     /// Level text (e.g., "%1.", "%1.%2.", bullet char)
     pub lvl_text: Option<String>,
     /// Level justification
@@ -2138,6 +2167,7 @@ impl CT_Lvl {
             ilvl,
             start: None,
             num_fmt: None,
+            suffix: None,
             lvl_text: None,
             lvl_jc: None,
             ppr: None,
@@ -2179,6 +2209,19 @@ impl CT_Lvl {
                         }
                         reader.read_to_end_into(name, &mut Vec::new())?;
                         boundary = 2;
+                    } else if is_word_element(name.as_ref(), b"suff", &prefixes) {
+                        if let Some(value) = word_attribute_value(e, b"val", &prefixes)?
+                            && let Some(suffix) = ST_LvlSuffix::from_str(&value)
+                        {
+                            lvl.suffix = Some(suffix);
+                        } else {
+                            let (at, next) = level_raw_boundary(name.as_ref(), boundary, &prefixes);
+                            lvl.extra_xml.push((at, capture_element(reader, e)?));
+                            boundary = next;
+                            continue;
+                        }
+                        reader.read_to_end_into(name, &mut Vec::new())?;
+                        boundary = 6;
                     } else if is_word_element(name.as_ref(), b"lvlText", &prefixes) {
                         lvl.lvl_text = word_attribute_value(e, b"val", &prefixes)?;
                         reader.read_to_end_into(name, &mut Vec::new())?;
@@ -2224,6 +2267,17 @@ impl CT_Lvl {
                             lvl.num_fmt = Some(ST_NumberFormat::from_str(&val));
                         }
                         boundary = 2;
+                    } else if is_word_element(name.as_ref(), b"suff", &prefixes) {
+                        if let Some(value) = word_attribute_value(e, b"val", &prefixes)?
+                            && let Some(suffix) = ST_LvlSuffix::from_str(&value)
+                        {
+                            lvl.suffix = Some(suffix);
+                            boundary = 6;
+                        } else {
+                            let (at, next) = level_raw_boundary(name.as_ref(), boundary, &prefixes);
+                            lvl.extra_xml.push((at, capture_empty_element(e)?));
+                            boundary = next;
+                        }
                     } else if is_word_element(name.as_ref(), b"lvlText", &prefixes) {
                         lvl.lvl_text = word_attribute_value(e, b"val", &prefixes)?;
                         boundary = 7;
@@ -2304,7 +2358,17 @@ impl CT_Lvl {
             writer.write_event(Event::Empty(e))?;
         }
 
-        for boundary in 2..=6 {
+        for boundary in 2..=4 {
+            write_extras_at(writer, &self.extra_xml, boundary)?;
+        }
+        if let Some(suffix) = self.suffix {
+            let name = qualified(word_prefix, "suff");
+            let val_name = qualified(word_prefix, "val");
+            let mut e = BytesStart::new(name.as_str());
+            e.push_attribute((val_name.as_str(), suffix.to_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
+        for boundary in 5..=6 {
             write_extras_at(writer, &self.extra_xml, boundary)?;
         }
         if let Some(ref text) = self.lvl_text {
@@ -3084,6 +3148,21 @@ mod tests {
         assert_eq!(abs.levels[0].num_fmt, Some(ST_NumberFormat::Decimal));
         assert_eq!(abs.levels[0].lvl_text, Some("%1.".to_string()));
         assert_eq!(abs.levels[1].num_fmt, Some(ST_NumberFormat::LowerLetter));
+    }
+
+    #[test]
+    fn level_suffix_round_trips_in_its_schema_slot() {
+        let xml = br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:suff w:val="space"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num></w:numbering>"#;
+        let numbering = CT_Numbering::from_xml(xml).expect("numbering parses");
+        let level = &numbering.abstract_nums[0].levels[0];
+
+        assert_eq!(level.suffix, Some(ST_LvlSuffix::Space));
+
+        let output =
+            String::from_utf8(numbering.to_xml().expect("numbering writes")).expect("XML is UTF-8");
+        let suffix = output.find("<w:suff").expect("suffix writes");
+        let text = output.find("<w:lvlText").expect("level text writes");
+        assert!(suffix < text, "suffix must precede level text: {output}");
     }
 
     #[test]
@@ -4604,6 +4683,7 @@ mod tests {
             ilvl: 0,
             start: Some(1),
             num_fmt: Some(ST_NumberFormat::Decimal),
+            suffix: None,
             lvl_text: Some("%1.".to_string()),
             lvl_jc: Some(ST_Jc::Left),
             ppr: Some(CT_PPr {

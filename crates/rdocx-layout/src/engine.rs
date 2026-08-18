@@ -6,6 +6,7 @@ use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_SectPr};
 use rdocx_oxml::drawing::WrapType;
 use rdocx_oxml::header_footer::HdrFtrType;
+use rdocx_oxml::numbering::ST_LvlSuffix;
 use rdocx_oxml::properties::CT_PPr;
 use rdocx_oxml::revision::{CT_Revision, RevisionContent, RevisionKind};
 use rdocx_oxml::shared::ST_HighlightColor;
@@ -684,8 +685,35 @@ pub fn layout_paragraph(
                     note: None,
                 }));
 
-                // Add a space/tab after the marker
-                inline_items.push(InlineItem::Tab);
+                match marker.suffix {
+                    ST_LvlSuffix::Tab => inline_items.push(InlineItem::Tab),
+                    ST_LvlSuffix::Space => {
+                        let shaped = fm.shape_text(font_id, " ", marker_font_size)?;
+                        inline_items.push(InlineItem::Text(TextSegment {
+                            text: " ".to_owned(),
+                            font_id,
+                            font_size: marker_font_size,
+                            glyph_ids: shaped.glyph_ids,
+                            advances: shaped.advances,
+                            width: shaped.width,
+                            ascent: metrics.ascent,
+                            descent: metrics.descent,
+                            line_gap: 0.0,
+                            color,
+                            bold: marker_bold,
+                            italic: marker_italic,
+                            underline: None,
+                            strike: false,
+                            dstrike: false,
+                            highlight: None,
+                            baseline_offset: 0.0,
+                            hyperlink_url: None,
+                            field_kind: None,
+                            note: None,
+                        }));
+                    }
+                    ST_LvlSuffix::Nothing => {}
+                }
             }
         }
     }
