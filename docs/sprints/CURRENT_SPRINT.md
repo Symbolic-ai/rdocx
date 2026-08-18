@@ -1,60 +1,46 @@
-# Current Sprint, S48
+# Current Sprint, S49
 
-**Milestone**: M14 Word collaboration layer.
+**Milestone**: M16 Document generation and analysis.
 
-**Goal**: close M14 by making tracked revisions visible during rendering and
-making the author's document-protection intent readable through the public API.
-The sprint combines the revision model completed in S47 with settings-level
-protection metadata, then proves the full collaboration-layer milestone gate.
+**Goal**: evaluate the field codes real documents are full of. The field
+instruction parser establishes the structured representation that evaluation,
+cached-result policy, and later templating build on.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for the `rdocx-oxml` ownership boundary, the
-  typed revision model, and facade coordination across document and settings
-  state.
-- `docs/hld/04-opc-and-packaging.md`, for package integrity, preservation of
-  settings metadata, and atomic document changes.
-- `docs/hld/08-rendering-spec.md`, for the shared renderer input, Word
-  pagination, and deterministic PDF and raster lowering used by the revision
-  display gate.
-- `docs/hld/10-bindings-spec.md`, for native Word facade stability and the
-  requirement that new inspection options leave existing Python, WASM, and CLI
-  surfaces compatible.
-- `docs/hld/12-testing-strategy.md`, for deterministic golden tests, in-code
-  fixtures, and the mixed-document milestone regression.
-- `docs/hld/14-development-backlog.md`, for the M14 end gate, the revision
-  display and document-protection stories, their dependencies, and their exact
-  acceptance gates.
+- `docs/hld/03-architecture.md`, for `rdocx-oxml` ownership of the
+  WordprocessingML grammar, prefix-tolerant readers, and raw subtree
+  preservation.
+- `docs/hld/04-opc-and-packaging.md`, for package-preserving reader behaviour
+  and schema-ordered serialization.
+- `docs/hld/12-testing-strategy.md`, for unit and round-trip evidence.
+- `docs/hld/14-development-backlog.md`, for the field-parser, evaluator, and
+  update-policy story contracts and acceptance gates.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-151 | Revision display in the renderer | M | done | |
-| F-155 | Document protection | M | done | |
+| F-160 | Field instruction parser | L | pending | - |
+| F-161 | Field evaluation engine | L | pending | - |
+| F-162 | Field update policy | M | pending | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-F-151 depends on the typed revision model completed by F-149 in S47. F-155 is
-independent and works through the document settings part, so the two stories
-may be implemented in parallel. Both must land before the combined M14 gate can
-run because it covers revisions, comments, content controls, and bookmarks in
-one document.
+F-160 defines the recursive field structure. F-161 consumes that structure and
+also depends on F-154. F-162 depends on evaluation because it decides when a
+field result may be recomputed.
 
 ## Definition of done for this sprint
 
-- A render option selects the accepted view or the tracked-change view, with
-  the accepted view as the default.
-- The tracked-change view underlines insertions, strikes through deletions, and
-  draws a change bar in the margin.
-- The accepted view is pixel-identical to rendering the same document after all
-  revisions have been accepted and removed.
-- Read-only, comments-only, tracked-changes-forced, and forms-only protection
-  modes round-trip with the recorded hash and salt intact.
-- The public native Word API reports the document-protection mode and its
-  recorded metadata without changing existing binding surfaces.
-- One document carrying tracked changes, comments, content controls, and
-  bookmarks round-trips byte-identically in every unmodelled part, and all four
-  subsystems are readable and writable through the public API.
+- Every supported simple and complex field form parses into field name,
+  arguments, switches, and cached-result structure without discarding unknown
+  WordprocessingML XML.
+- Supported fields evaluate to the value Word computes for the pinned expected
+  set.
+- Field-result update policies preserve cached results unless the selected
+  policy permits recomputation.
+- The M16 end gate is ready for template syntax, loops, conditionals, and
+  repeating table rows to consume the field representation.
