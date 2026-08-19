@@ -80,7 +80,7 @@ pub struct ComplexField {
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FieldMarker {
-    Begin { dirty: bool },
+    Begin { dirty: bool, has_form_data: bool },
     Instruction(String),
     Separate { dirty: bool },
     End { dirty: bool },
@@ -241,6 +241,10 @@ pub struct CT_R {
     /// Never serialised. The verbatim copy in `extra_xml` is what gets
     /// written, so emitting these as well would duplicate the element.
     pub alt_drawings: Vec<CT_Drawing>,
+    /// Raw `mc:AlternateContent` blocks whose decorative shapes can be omitted
+    /// from a text-only reader while remaining available for round-trip output.
+    #[doc(hidden)]
+    pub omitted_alt_drawing_raw_indices: Vec<usize>,
 }
 
 #[allow(non_snake_case)]
@@ -256,6 +260,7 @@ impl CT_R {
             field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
             alt_drawings: Vec::new(),
+            omitted_alt_drawing_raw_indices: Vec::new(),
         }
     }
 
@@ -366,6 +371,7 @@ impl CT_R {
         let mut field_marker_raw_indices = Vec::new();
         let modeled_field_marker_raw_indices = Vec::new();
         let mut alt_drawings = Vec::new();
+        let mut omitted_alt_drawing_raw_indices = Vec::new();
         let mut modeled_children = 0usize;
         let mut buf = Vec::new();
 
@@ -438,6 +444,12 @@ impl CT_R {
                         // serialised, the raw copy below is what gets written.
                         let raw = capture_element(reader, e)?;
                         if let Some(drawing) = crate::drawing::parse_alternate_content(&raw) {
+                            // A shape without text has no text-reader
+                            // representation. Retain its XML for writing, but
+                            // omit the decorative shape from reader content.
+                            if alternate_content_is_decorative_shape(&drawing) {
+                                omitted_alt_drawing_raw_indices.push(extra_xml.len());
+                            }
                             alt_drawings.push(drawing);
                         }
                         extra_xml.push(raw);
@@ -528,6 +540,7 @@ impl CT_R {
             field_marker_raw_indices,
             modeled_field_marker_raw_indices,
             alt_drawings,
+            omitted_alt_drawing_raw_indices,
         })
     }
 
@@ -716,6 +729,7 @@ struct OpenModeledComplexField {
     result_start: Option<usize>,
     dirty: bool,
     valid: bool,
+    has_form_data: bool,
     raw_indices: Vec<(usize, usize)>,
 }
 
@@ -1357,6 +1371,7 @@ impl CT_P {
                             field_marker_raw_indices: Vec::new(),
                             modeled_field_marker_raw_indices: Vec::new(),
                             alt_drawings: Vec::new(),
+                            omitted_alt_drawing_raw_indices: Vec::new(),
                         });
                     } else if is_word_element(name.as_ref(), b"commentRangeStart", &prefixes)
                         || is_word_element(name.as_ref(), b"commentRangeEnd", &prefixes)
@@ -1485,6 +1500,7 @@ impl CT_P {
                             field_marker_raw_indices: Vec::new(),
                             modeled_field_marker_raw_indices: Vec::new(),
                             alt_drawings: Vec::new(),
+                            omitted_alt_drawing_raw_indices: Vec::new(),
                         });
                     } else if !matches_local_name(name.as_ref(), b"p") {
                         let raw_before =
@@ -1512,7 +1528,7 @@ impl CT_P {
             buf.clear();
         }
 
-        mark_modeled_complex_hyperlink_xml(&mut runs);
+        mark_modeled_complex_field_xml(&mut runs);
 
         Ok(CT_P {
             properties,
@@ -2562,7 +2578,7 @@ fn parse_complex_fields(runs: &[CT_R]) -> Vec<ComplexField> {
     for (run_index, run) in runs.iter().enumerate() {
         for marker in &run.field_markers {
             match marker {
-                FieldMarker::Begin { dirty } => stack.push(OpenComplexField {
+                FieldMarker::Begin { dirty, .. } => stack.push(OpenComplexField {
                     instruction: String::new(),
                     result_start: None,
                     dirty: *dirty,
@@ -2621,7 +2637,7 @@ fn parse_complex_fields(runs: &[CT_R]) -> Vec<ComplexField> {
     roots
 }
 
-fn mark_modeled_complex_hyperlink_xml(runs: &mut [CT_R]) {
+fn mark_modeled_complex_field_xml(runs: &mut [CT_R]) {
     for run in runs.iter_mut() {
         run.modeled_field_marker_raw_indices.clear();
     }
@@ -2634,11 +2650,15 @@ fn mark_modeled_complex_hyperlink_xml(runs: &mut [CT_R]) {
             let raw_index = *raw_index;
             let raw_is_safe = field_marker_raw_is_safe_to_hide(marker, run, raw_index);
             match marker {
-                FieldMarker::Begin { dirty } => stack.push(OpenModeledComplexField {
+                FieldMarker::Begin {
+                    dirty,
+                    has_form_data,
+                } => stack.push(OpenModeledComplexField {
                     instruction: String::new(),
                     result_start: None,
                     dirty: *dirty,
                     valid: raw_is_safe,
+                    has_form_data: *has_form_data,
                     raw_indices: vec![(run_index, raw_index)],
                 }),
                 FieldMarker::Instruction(instruction) => {
@@ -2680,12 +2700,13 @@ fn mark_modeled_complex_hyperlink_xml(runs: &mut [CT_R]) {
                         .unwrap_or_default();
                     let complete =
                         field.result_start.is_some() && field.valid && !instruction.name.is_empty();
-                    if complete
-                        && !field.dirty
+                    let is_hyperlink = !field.dirty
                         && !cached_text.is_empty()
                         && instruction.name == "HYPERLINK"
-                        && !instruction.arguments.is_empty()
-                    {
+                        && !instruction.arguments.is_empty();
+                    let is_legacy_form = field.has_form_data
+                        && matches!(instruction.name.as_str(), "FORMTEXT" | "FORMCHECKBOX");
+                    if complete && (is_hyperlink || is_legacy_form) {
                         modeled_raw_indices.extend(field.raw_indices.iter().copied());
                     }
                     if let Some(parent) = stack.last_mut()
@@ -2712,6 +2733,10 @@ fn field_marker_raw_is_safe_to_hide(marker: &FieldMarker, run: &CT_R, raw_index:
     };
     match marker {
         FieldMarker::Instruction(_) => true,
+        FieldMarker::Begin {
+            has_form_data: true,
+            ..
+        } => true,
         FieldMarker::Begin { .. } | FieldMarker::Separate { .. } | FieldMarker::End { .. } => raw
             .iter()
             .rev()
@@ -2784,7 +2809,10 @@ fn field_marker_from_element(
         .is_some_and(|value| matches!(value.as_str(), "true" | "1" | "on"));
     Ok(
         match optional_word_attribute(element, b"fldCharType", word_prefixes).as_deref() {
-            Some("begin") => Some(FieldMarker::Begin { dirty }),
+            Some("begin") => Some(FieldMarker::Begin {
+                dirty,
+                has_form_data: false,
+            }),
             Some("separate") => Some(FieldMarker::Separate { dirty }),
             Some("end") => Some(FieldMarker::End { dirty }),
             _ => None,
@@ -2792,7 +2820,41 @@ fn field_marker_from_element(
     )
 }
 
+fn has_form_field_data(raw: &[u8]) -> bool {
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) | Ok(Event::Empty(element))
+                if matches_local_name(element.name().as_ref(), b"ffData") =>
+            {
+                return true;
+            }
+            Ok(Event::Eof) | Err(_) => return false,
+            Ok(_) => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn alternate_content_is_decorative_shape(drawing: &CT_Drawing) -> bool {
+    drawing
+        .anchor
+        .as_ref()
+        .and_then(|anchor| anchor.shape.as_ref())
+        .is_some_and(|shape| shape.text.is_empty())
+}
+
 fn field_marker_with_instruction(marker: FieldMarker, raw: &[u8]) -> Result<FieldMarker> {
+    if let FieldMarker::Begin { dirty, .. } = marker {
+        // `ffData` controls interactive legacy form behavior. The raw XML
+        // remains attached to the run for round-trip writing while the reader
+        // projects the completed field's cached presentation value.
+        return Ok(FieldMarker::Begin {
+            dirty,
+            has_form_data: has_form_field_data(raw),
+        });
+    }
     let FieldMarker::Instruction(_) = marker else {
         return Ok(marker);
     };
@@ -2920,6 +2982,59 @@ mod tests {
             r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
             r#"<w:r><w:t>1</w:t></w:r>"#,
             r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        ));
+
+        assert!(
+            p.runs
+                .iter()
+                .all(|run| run.modeled_field_marker_raw_indices.is_empty())
+        );
+    }
+
+    #[test]
+    fn legacy_form_text_fields_expose_cached_text_without_reader_raw_xml() {
+        let p = parse_paragraph(concat!(
+            r#"<w:r><w:fldChar w:fldCharType="begin" w:fldLock="0"><w:ffData><w:name w:val="resident"/><w:enabled/><w:textInput/></w:ffData></w:fldChar></w:r>"#,
+            r#"<w:r><w:instrText xml:space="preserve"> FORMTEXT </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:t>Visible resident</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        ));
+
+        assert_eq!(p.text(), "Visible resident");
+        assert_eq!(
+            p.runs
+                .iter()
+                .map(|run| run.modeled_field_marker_raw_indices.as_slice())
+                .collect::<Vec<_>>(),
+            [&[0][..], &[0][..], &[0][..], &[][..], &[0][..]]
+        );
+    }
+
+    #[test]
+    fn legacy_form_checkbox_fields_are_modeled_as_nontext_content() {
+        let p = parse_paragraph(concat!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="consent"/><w:checkBox><w:checked/></w:checkBox></w:ffData></w:fldChar></w:r>"#,
+            r#"<w:r><w:instrText xml:space="preserve"> FORMCHECKBOX </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        ));
+
+        assert_eq!(p.text(), "");
+        assert!(
+            p.runs
+                .iter()
+                .all(|run| run.modeled_field_marker_raw_indices == [0])
+        );
+    }
+
+    #[test]
+    fn incomplete_legacy_form_fields_remain_raw_reader_content() {
+        let p = parse_paragraph(concat!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:textInput/></w:ffData></w:fldChar></w:r>"#,
+            r#"<w:r><w:instrText> FORMTEXT </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:t>Visible resident</w:t></w:r>"#,
         ));
 
         assert!(
@@ -3368,6 +3483,7 @@ mod tests {
         );
         assert_eq!(shape.text.len(), 1);
         assert_eq!(shape.text[0].text(), "boxed");
+        assert!(run.omitted_alt_drawing_raw_indices.is_empty());
 
         // Preserved verbatim, exactly once.
         let mut output = Vec::new();
@@ -3397,12 +3513,29 @@ mod tests {
         ));
 
         assert!(p.runs[0].alt_drawings.is_empty());
+        assert!(p.runs[0].omitted_alt_drawing_raw_indices.is_empty());
         let mut output = Vec::new();
         p.to_xml(&mut Writer::new(&mut output))
             .expect("paragraph writes");
         let xml = String::from_utf8(output).expect("XML is UTF-8");
         assert_eq!(xml.matches("<mc:AlternateContent").count(), 1, "{xml}");
         assert!(xml.contains(r#"<v:shape id="legacy"/>"#), "{xml}");
+    }
+
+    #[test]
+    fn textless_alternate_content_shapes_are_omitted_from_reader_content() {
+        let p = parse_paragraph(concat!(
+            r#"<w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing>"#,
+            r#"<wp:anchor><wp:extent cx="914400" cy="457200"/>"#,
+            r#"<a:graphic><a:graphicData><wps:wsp><wps:spPr>"#,
+            r#"<a:prstGeom prst="line"/></wps:spPr></wps:wsp>"#,
+            r#"</a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice>"#,
+            r#"<mc:Fallback><w:pict><v:shape id="fallback"/></w:pict></mc:Fallback>"#,
+            r#"</mc:AlternateContent></w:r>"#,
+        ));
+
+        assert_eq!(p.runs[0].alt_drawings.len(), 1);
+        assert_eq!(p.runs[0].omitted_alt_drawing_raw_indices, vec![0]);
     }
 
     #[test]
@@ -3594,6 +3727,7 @@ mod tests {
             field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
             alt_drawings: Vec::new(),
+            omitted_alt_drawing_raw_indices: Vec::new(),
         });
 
         let mut output = Vec::new();
@@ -3681,6 +3815,7 @@ mod tests {
             field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
             alt_drawings: Vec::new(),
+            omitted_alt_drawing_raw_indices: Vec::new(),
         });
         p.add_run(" text after");
 

@@ -615,6 +615,7 @@ fn parse_content(
                         field_marker_raw_indices: Vec::new(),
                         modeled_field_marker_raw_indices: Vec::new(),
                         alt_drawings: Vec::new(),
+                        omitted_alt_drawing_raw_indices: Vec::new(),
                     }));
                 } else {
                     let raw = capture_empty_element(&child)?;

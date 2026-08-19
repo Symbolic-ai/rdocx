@@ -649,6 +649,10 @@ impl<'a> RunRef<'a> {
                             .inner
                             .modeled_field_marker_raw_indices
                             .contains(raw_index)
+                            && !self
+                                .inner
+                                .omitted_alt_drawing_raw_indices
+                                .contains(raw_index)
                     })
                     .map(|(_, (_, raw))| {
                         RunContentRef::UnsupportedXml(crate::UnsupportedXmlRef::new(raw))
@@ -682,6 +686,10 @@ impl<'a> RunRef<'a> {
                             .inner
                             .modeled_field_marker_raw_indices
                             .contains(raw_index)
+                            && !self
+                                .inner
+                                .omitted_alt_drawing_raw_indices
+                                .contains(raw_index)
                     })
                     .map(|(_, (_, raw))| RunItemRef::UnsupportedXml(raw.as_slice())),
             );
@@ -943,6 +951,7 @@ mod tests {
             field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
             alt_drawings: Vec::new(),
+            omitted_alt_drawing_raw_indices: Vec::new(),
         };
         let run = RunRef { inner: &run };
 
@@ -979,6 +988,34 @@ mod tests {
     }
 
     #[test]
+    fn reader_models_legacy_form_text_fields() {
+        let xml = br#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="resident"/><w:enabled/><w:textInput/></w:ffData></w:fldChar></w:r><w:r><w:instrText xml:space="preserve"> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Visible resident</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+        let mut reader = quick_xml::Reader::from_reader(xml.as_slice());
+        let mut buffer = Vec::new();
+        let paragraph = match reader.read_event_into(&mut buffer).unwrap() {
+            quick_xml::events::Event::Start(_) => {
+                rdocx_oxml::text::CT_P::from_xml(&mut reader).unwrap()
+            }
+            event => panic!("expected paragraph start, got {event:?}"),
+        };
+
+        for index in [0, 1, 2, 4] {
+            let run = RunRef {
+                inner: &paragraph.runs[index],
+            };
+            assert!(run.items().next().is_none());
+            assert!(run.content().next().is_none());
+        }
+        assert_eq!(
+            RunRef {
+                inner: &paragraph.runs[3]
+            }
+            .text(),
+            "Visible resident"
+        );
+    }
+
+    #[test]
     fn reader_retains_complex_field_markers_with_unknown_attributes() {
         let xml = br#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:fldChar w:fldCharType="begin" w:fldLock="0" w:unknown="value"/></w:r>"#;
         let mut reader = quick_xml::Reader::from_reader(xml.as_slice());
@@ -994,6 +1031,25 @@ mod tests {
             panic!("unmodeled marker attribute is retained");
         };
         assert!(std::str::from_utf8(raw).unwrap().contains("w:unknown"));
+    }
+
+    #[test]
+    fn reader_omits_textless_alternate_content_shapes() {
+        let xml = br#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml"><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor><wp:extent cx="914400" cy="457200"/><a:graphic><a:graphicData><wps:wsp><wps:spPr><a:prstGeom prst="line"/></wps:spPr></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape id="fallback"/></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>"#;
+        let mut reader = quick_xml::Reader::from_reader(xml.as_slice());
+        let mut buffer = Vec::new();
+        let paragraph = match reader.read_event_into(&mut buffer).unwrap() {
+            quick_xml::events::Event::Start(_) => {
+                rdocx_oxml::text::CT_P::from_xml(&mut reader).unwrap()
+            }
+            event => panic!("expected paragraph start, got {event:?}"),
+        };
+        let run = RunRef {
+            inner: &paragraph.runs[0],
+        };
+
+        assert!(run.items().next().is_none());
+        assert!(run.content().next().is_none());
     }
 
     #[test]

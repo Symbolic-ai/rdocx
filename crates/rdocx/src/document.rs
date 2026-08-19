@@ -853,6 +853,7 @@ impl Document {
             field_markers: Vec::new(),
             field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
+            omitted_alt_drawing_raw_indices: Vec::new(),
         };
         let mut paragraph = CT_P::new();
         paragraph.runs.push(run);
@@ -1263,6 +1264,7 @@ impl Document {
             field_markers: Vec::new(),
             field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
+            omitted_alt_drawing_raw_indices: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1360,6 +1362,7 @@ impl Document {
             field_markers: Vec::new(),
             field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
+            omitted_alt_drawing_raw_indices: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1400,6 +1403,7 @@ impl Document {
             field_markers: Vec::new(),
             field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
+            omitted_alt_drawing_raw_indices: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1917,6 +1921,7 @@ impl Document {
             field_markers: Vec::new(),
             field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
+            omitted_alt_drawing_raw_indices: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -2720,6 +2725,7 @@ impl Document {
                 field_markers: Vec::new(),
                 field_marker_raw_indices: Vec::new(),
                 modeled_field_marker_raw_indices: Vec::new(),
+                omitted_alt_drawing_raw_indices: Vec::new(),
             });
 
             // Wrap the text run in a hyperlink to the bookmark
@@ -6333,7 +6339,10 @@ mod tests {
         for (xml, marker) in [
             (
                 br#"<w:fldChar w:fldCharType="begin"/>"#.as_slice(),
-                rdocx_oxml::text::FieldMarker::Begin { dirty: false },
+                rdocx_oxml::text::FieldMarker::Begin {
+                    dirty: false,
+                    has_form_data: false,
+                },
             ),
             (
                 br#"<w:instrText> HYPERLINK &quot;https://example.test&quot; </w:instrText>"#

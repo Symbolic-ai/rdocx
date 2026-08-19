@@ -809,6 +809,7 @@ fn comment_reference_run(id: i32) -> CT_R {
         field_marker_raw_indices: Vec::new(),
         modeled_field_marker_raw_indices: Vec::new(),
         alt_drawings: Vec::new(),
+        omitted_alt_drawing_raw_indices: Vec::new(),
     }
 }
 
@@ -1172,6 +1173,7 @@ mod tests {
             field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
             alt_drawings: Vec::new(),
+            omitted_alt_drawing_raw_indices: Vec::new(),
         });
         let mut reference = comment_reference_run(7);
         reference.properties = Some(Default::default());

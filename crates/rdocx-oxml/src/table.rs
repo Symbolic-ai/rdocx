@@ -228,7 +228,10 @@ impl CT_TblCellMar {
                         mar.right = Self::parse_edge(e, &prefixes)?;
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tblCellMar") => {
+                Ok(Event::End(ref e))
+                    if matches_local_name(e.name().as_ref(), b"tblCellMar")
+                        || matches_local_name(e.name().as_ref(), b"tcMar") =>
+                {
                     break;
                 }
                 Ok(Event::Eof) => break,
@@ -242,7 +245,11 @@ impl CT_TblCellMar {
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        writer.write_event(Event::Start(BytesStart::new("w:tblCellMar")))?;
+        self.to_xml_with_tag(writer, "w:tblCellMar")
+    }
+
+    fn to_xml_with_tag<W: std::io::Write>(&self, writer: &mut Writer<W>, tag: &str) -> Result<()> {
+        writer.write_event(Event::Start(BytesStart::new(tag)))?;
 
         fn write_edge<W: std::io::Write>(
             writer: &mut Writer<W>,
@@ -270,7 +277,7 @@ impl CT_TblCellMar {
             write_edge(writer, "w:right", r)?;
         }
 
-        writer.write_event(Event::End(BytesEnd::new("w:tblCellMar")))?;
+        writer.write_event(Event::End(BytesEnd::new(tag)))?;
         Ok(())
     }
 }
@@ -1020,6 +1027,8 @@ pub struct CT_TcPr {
     pub v_align: Option<ST_VerticalJc>,
     /// No-wrap text
     pub no_wrap: Option<bool>,
+    /// Per-cell margins.
+    pub cell_margin: Option<CT_TblCellMar>,
     /// Text direction
     pub text_direction: Option<String>,
     /// `w:cnfStyle` — which conditional parts of the table style this cell is.
@@ -1062,6 +1071,10 @@ impl CT_TcPr {
                     if is_word_element(name.as_ref(), b"tcBorders", &prefixes) {
                         pr.borders =
                             Some(CT_TblBorders::from_xml_with_prefixes(reader, &prefixes)?);
+                        boundary = next;
+                    } else if is_word_element(name.as_ref(), b"tcMar", &prefixes) {
+                        pr.cell_margin =
+                            Some(CT_TblCellMar::from_xml_with_prefixes(reader, &prefixes)?);
                         boundary = next;
                     } else if Self::parse_property_element(e, &mut pr, &prefixes)? {
                         reader.read_to_end_into(name, &mut Vec::new())?;
@@ -1199,13 +1212,18 @@ impl CT_TcPr {
         }
 
         write_extras_at(writer, &self.extra_xml, 8)?;
+        if let Some(ref cell_margin) = self.cell_margin {
+            cell_margin.to_xml_with_tag(writer, "w:tcMar")?;
+        }
+
+        write_extras_at(writer, &self.extra_xml, 9)?;
         if let Some(ref va) = self.v_align {
             let mut e = BytesStart::new("w:vAlign");
             e.push_attribute(("w:val", va.to_str()));
             writer.write_event(Event::Empty(e))?;
         }
 
-        write_extras_at(writer, &self.extra_xml, 9)?;
+        write_extras_at(writer, &self.extra_xml, 10)?;
         if let Some(ref td) = self.text_direction {
             let mut e = BytesStart::new("w:textDirection");
             e.push_attribute(("w:val", td.as_str()));
@@ -1227,6 +1245,7 @@ impl CT_TcPr {
             && self.shading.is_none()
             && self.v_align.is_none()
             && self.no_wrap.is_none()
+            && self.cell_margin.is_none()
             && self.text_direction.is_none()
             && self.cnf_style.is_none()
             && self.extra_xml.is_empty()
@@ -1250,10 +1269,12 @@ fn tc_pr_raw_boundary(name: &[u8], current: usize) -> (usize, usize) {
         (6, 7)
     } else if matches_local_name(name, b"noWrap") {
         (7, 8)
-    } else if matches_local_name(name, b"vAlign") {
+    } else if matches_local_name(name, b"tcMar") {
         (8, 9)
-    } else if matches_local_name(name, b"textDirection") {
+    } else if matches_local_name(name, b"vAlign") {
         (9, 10)
+    } else if matches_local_name(name, b"textDirection") {
+        (10, 11)
     } else {
         (current, current)
     }
@@ -1467,6 +1488,12 @@ impl Default for CT_Tc {
 /// `CT_Row` — A table row containing cells.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CT_Row {
+    /// The optional Word table-property exception for this row.
+    ///
+    /// Its contents affect table presentation only. The complete raw element
+    /// remains the serialization source because the layout model does not
+    /// interpret every table-property variant.
+    pub table_property_exception: Option<Vec<u8>>,
     pub properties: Option<CT_TrPr>,
     pub cells: Vec<CT_Tc>,
     /// Raw XML for children we do not model, tagged with the cell index they
@@ -1480,6 +1507,7 @@ pub struct CT_Row {
 impl CT_Row {
     pub fn new() -> Self {
         CT_Row {
+            table_property_exception: None,
             properties: None,
             cells: Vec::new(),
             extra_xml: Vec::new(),
@@ -1503,6 +1531,7 @@ impl CT_Row {
         word_prefixes: &[String],
         table_depth: usize,
     ) -> Result<Self> {
+        let mut table_property_exception = None;
         let mut properties = None;
         let mut cells = Vec::new();
         let mut extra_xml = Vec::new();
@@ -1514,7 +1543,11 @@ impl CT_Row {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if is_word_element(name.as_ref(), b"trPr", &prefixes) {
+                    if is_word_element(name.as_ref(), b"tblPrEx", &prefixes)
+                        && table_property_exception.is_none()
+                    {
+                        table_property_exception = Some(capture_element(reader, e)?);
+                    } else if is_word_element(name.as_ref(), b"trPr", &prefixes) {
                         properties = Some(CT_TrPr::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"tc", &prefixes) {
                         cells.push(CT_Tc::from_xml_with_prefixes_at_depth(
@@ -1542,7 +1575,11 @@ impl CT_Row {
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if is_word_element(name.as_ref(), b"tc", &prefixes) {
+                    if is_word_element(name.as_ref(), b"tblPrEx", &prefixes)
+                        && table_property_exception.is_none()
+                    {
+                        table_property_exception = Some(capture_empty_element(e)?);
+                    } else if is_word_element(name.as_ref(), b"tc", &prefixes) {
                         cells.push(CT_Tc::new());
                     } else if !is_word_element(name.as_ref(), b"trPr", &prefixes) {
                         extra_xml.push((cells.len(), capture_empty_element(e)?));
@@ -1559,6 +1596,7 @@ impl CT_Row {
         }
 
         Ok(CT_Row {
+            table_property_exception,
             properties,
             cells,
             extra_xml,
@@ -1568,6 +1606,10 @@ impl CT_Row {
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         writer.write_event(Event::Start(BytesStart::new("w:tr")))?;
+
+        if let Some(raw) = &self.table_property_exception {
+            writer.get_mut().write_all(raw)?;
+        }
 
         if let Some(ref props) = self.properties {
             props.to_xml(writer)?;
@@ -2361,6 +2403,58 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn table_property_exception_is_preserved_as_row_formatting() {
+        let table = parse_table(
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:tblPrEx><w:shd w:val="clear" w:color="auto" w:fill="ced7e7"/></w:tblPrEx><w:trPr><w:trHeight w:val="290" w:hRule="atLeast"/></w:trPr><w:tc><w:p/></w:tc></w:tr>"#,
+        );
+        let row = &table.rows[0];
+
+        assert_eq!(
+            row.table_property_exception.as_deref(),
+            Some(
+                br#"<w:tblPrEx><w:shd w:val="clear" w:color="auto" w:fill="ced7e7"/></w:tblPrEx>"#
+                    .as_slice()
+            )
+        );
+
+        let xml = table_to_xml(&table);
+        let exception = xml.find("<w:tblPrEx>").expect("exception writes");
+        let properties = xml.find("<w:trPr>").expect("row properties write");
+        assert!(exception < properties, "tblPrEx must precede trPr: {xml}");
+    }
+
+    #[test]
+    fn cell_margins_are_modeled_and_preserved() {
+        let table = parse_table(
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcMar><w:top w:w="80" w:type="dxa"/><w:left w:w="187" w:type="dxa"/></w:tcMar><w:vAlign w:val="top"/></w:tcPr><w:p/></w:tc></w:tr>"#,
+        );
+        let properties = table.rows[0].cells[0]
+            .properties
+            .as_ref()
+            .expect("cell properties parse");
+        assert_eq!(
+            properties
+                .cell_margin
+                .as_ref()
+                .and_then(|margin| margin.top),
+            Some(Twips(80))
+        );
+        assert_eq!(
+            properties
+                .cell_margin
+                .as_ref()
+                .and_then(|margin| margin.left),
+            Some(Twips(187))
+        );
+        assert!(properties.extra_xml.is_empty());
+
+        let xml = table_to_xml(&table);
+        assert!(xml.contains(
+            r#"<w:tcMar><w:top w:w="80" w:type="dxa"/><w:left w:w="187" w:type="dxa"/></w:tcMar>"#
+        ));
     }
 
     #[test]

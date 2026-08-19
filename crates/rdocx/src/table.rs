@@ -416,6 +416,7 @@ impl<'a> Cell<'a> {
             field_markers: Vec::new(),
             field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
+            omitted_alt_drawing_raw_indices: Vec::new(),
         };
         let mut p = CT_P::new();
         p.runs.push(run);
@@ -803,13 +804,14 @@ impl<'a> RowRef<'a> {
     /// Whether the row carries formatting outside the restricted table
     /// projection.
     pub fn has_formatting(&self) -> bool {
-        self.inner.properties.as_ref().is_some_and(|properties| {
-            properties.height.is_some()
-                || properties.height_rule.is_some()
-                || properties.jc.is_some()
-                || properties.cant_split.is_some()
-                || properties.cnf_style.is_some()
-        })
+        self.inner.table_property_exception.is_some()
+            || self.inner.properties.as_ref().is_some_and(|properties| {
+                properties.height.is_some()
+                    || properties.height_rule.is_some()
+                    || properties.jc.is_some()
+                    || properties.cant_split.is_some()
+                    || properties.cnf_style.is_some()
+            })
     }
 }
 
@@ -1036,7 +1038,7 @@ impl<'a> CellRef<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rdocx_oxml::table::{CT_Row, CT_TblGrid, CT_TblGridCol};
+    use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_TblGrid, CT_TblGridCol};
     use rdocx_oxml::units::Twips;
 
     #[test]
@@ -1072,6 +1074,23 @@ mod tests {
                 "paragraph:last",
             ]
         );
+    }
+
+    #[test]
+    fn table_property_exception_is_row_formatting_not_unsupported_content() {
+        let xml = br#"<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:tblPrEx><w:shd w:val="clear" w:color="auto" w:fill="ced7e7"/></w:tblPrEx><w:trPr><w:trHeight w:val="290" w:hRule="atLeast"/></w:trPr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#;
+        let mut reader = quick_xml::Reader::from_reader(xml.as_slice());
+        let mut buffer = Vec::new();
+        let table = match reader.read_event_into(&mut buffer).unwrap() {
+            quick_xml::events::Event::Start(_) => CT_Tbl::from_xml(&mut reader).unwrap(),
+            event => panic!("expected table start, got {event:?}"),
+        };
+        let table_ref = TableRef { inner: &table };
+        let row = table_ref.row(0).unwrap();
+
+        assert!(!row.has_unsupported_content());
+        assert!(!row.has_unmodeled_properties());
+        assert!(row.has_formatting());
     }
 
     #[test]
