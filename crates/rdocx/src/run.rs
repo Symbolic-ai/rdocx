@@ -26,20 +26,6 @@ pub enum FieldKind<'a> {
     Page,
     /// The document's total page count.
     NumPages,
-    /// Text of the named bookmark.
-    Reference {
-        /// The bookmark name.
-        bookmark: &'a str,
-        /// The original field instruction.
-        instruction: &'a str,
-    },
-    /// Page containing the named bookmark.
-    PageReference {
-        /// The bookmark name.
-        bookmark: &'a str,
-        /// The original field instruction.
-        instruction: &'a str,
-    },
     /// Any other field instruction.
     Other(&'a str),
 }
@@ -224,6 +210,24 @@ pub enum RunItemRef<'a> {
     CommentReference(i32),
     /// A preserved run child that rdocx does not model.
     UnsupportedXml(&'a [u8]),
+}
+
+/// One run child exposed through the compatibility reader facade.
+pub enum RunContentRef<'a> {
+    /// Literal text.
+    Text(&'a str),
+    /// A tab character.
+    Tab,
+    /// A line, page, or column break.
+    Break(BreakKind),
+    /// An inline or anchored drawing.
+    Drawing(DrawingRef<'a>),
+    /// A footnote reference ID.
+    FootnoteReference(i32),
+    /// An endnote reference ID.
+    EndnoteReference(i32),
+    /// Content that the compatibility facade does not model.
+    UnsupportedXml(crate::UnsupportedXmlRef<'a>),
 }
 
 /// Underline style for runs.
@@ -627,6 +631,30 @@ impl<'a> RunRef<'a> {
         self.inner.text()
     }
 
+    /// Iterate over run content through the compatibility facade.
+    pub fn content(&self) -> impl Iterator<Item = RunContentRef<'a>> {
+        self.inner.content.iter().map(|content| match content {
+            RunContent::Text(text) | RunContent::DeletedText(text) => {
+                RunContentRef::Text(&text.text)
+            }
+            RunContent::Tab => RunContentRef::Tab,
+            RunContent::Break(kind) => RunContentRef::Break(match kind {
+                BreakType::Line => BreakKind::Line,
+                BreakType::Page => BreakKind::Page,
+                BreakType::Column => BreakKind::Column,
+            }),
+            RunContent::Drawing(drawing) => RunContentRef::Drawing(DrawingRef { inner: drawing }),
+            RunContent::FootnoteRef { id } => RunContentRef::FootnoteReference(*id),
+            RunContent::EndnoteRef { id } => RunContentRef::EndnoteReference(*id),
+            RunContent::CommentReference { .. } | RunContent::Field { .. } => {
+                RunContentRef::UnsupportedXml(crate::UnsupportedXmlRef::modeled(
+                    crate::unsupported_xml::WORD_NAMESPACE,
+                    "unsupportedRunContent",
+                ))
+            }
+        })
+    }
+
     /// Iterate over direct run items in source order.
     ///
     /// This retains deleted text, comments, controls, drawings, fields, note
@@ -664,20 +692,10 @@ impl<'a> RunRef<'a> {
                         kind: match field_type {
                             FieldType::Page => FieldKind::Page,
                             FieldType::NumPages => FieldKind::NumPages,
-                            FieldType::Ref {
-                                bookmark,
-                                instruction,
-                            } => FieldKind::Reference {
-                                bookmark,
-                                instruction,
-                            },
-                            FieldType::PageRef {
-                                bookmark,
-                                instruction,
-                            } => FieldKind::PageReference {
-                                bookmark,
-                                instruction,
-                            },
+                            FieldType::Ref { instruction, .. }
+                            | FieldType::PageRef { instruction, .. } => {
+                                FieldKind::Other(instruction)
+                            }
                             FieldType::Other(instruction) => FieldKind::Other(instruction),
                         },
                         display,
@@ -893,10 +911,7 @@ mod tests {
         assert!(matches!(
             items.as_slice(),
             [RunItemRef::Field {
-                kind: FieldKind::Reference {
-                    bookmark: "target",
-                    instruction: " REF target \\h ",
-                },
+                kind: FieldKind::Other(" REF target \\h "),
                 display: "Target text",
             }]
         ));

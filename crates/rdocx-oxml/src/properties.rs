@@ -203,6 +203,15 @@ fn flush_rpr_raw(rpr: &mut CT_RPr, pending_raw: &mut Vec<Vec<u8>>, slot: u8, occ
 
 #[allow(non_snake_case)]
 impl CT_PPr {
+    /// Whether this property set retains semantics that the reader facade does
+    /// not expose as ordinary paragraph formatting.
+    pub fn has_unmodeled_properties(&self) -> bool {
+        self.numbering_revision.is_some()
+            || !self.numbering_revision_xml.is_empty()
+            || self.change.is_some()
+            || !self.revision_xml.is_empty()
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_prefixes(reader, &["w".to_string()])
     }
@@ -800,6 +809,12 @@ pub struct CT_RPr {
 
 #[allow(non_snake_case)]
 impl CT_RPr {
+    /// Whether this property set retains semantics that the reader facade does
+    /// not expose as ordinary run formatting.
+    pub fn has_unmodeled_properties(&self) -> bool {
+        !self.revision_markers.is_empty() || self.change.is_some() || !self.revision_xml.is_empty()
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_prefixes(reader, &["w".to_owned()])
     }

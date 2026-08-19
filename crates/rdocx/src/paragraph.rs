@@ -7,11 +7,13 @@ use rdocx_oxml::shared::{
     ST_Border, ST_Jc, ST_PageOrientation, ST_SectionType, ST_TabJc, ST_TabLeader,
 };
 use rdocx_oxml::text::{
-    BreakType, CT_P, CT_R, CommentRangeMarker, HyperlinkSpan, RunContent, hyperlink_revision_index,
+    BreakType, CT_P, CT_R, CommentRangeMarker, FieldType, HyperlinkSpan, RunContent,
+    hyperlink_revision_index,
 };
 use rdocx_oxml::units::Twips;
 
-use crate::run::{Run, RunRef};
+use crate::run::{FieldKind, Run, RunRef};
+use crate::unsupported_xml::{UnsupportedXmlRef, WORD_NAMESPACE};
 use crate::{ContentControlRef, Length, RevisionRef};
 
 /// Paragraph alignment options.
@@ -53,6 +55,109 @@ pub enum ParagraphItemRef<'a> {
     UnsupportedXml(&'a [u8]),
 }
 
+/// One paragraph child exposed through the compatibility reader facade.
+pub enum ParagraphContentRef<'a> {
+    /// A direct run.
+    Run(RunRef<'a>),
+    /// A paragraph-level hyperlink.
+    Hyperlink(HyperlinkRef<'a>),
+    /// A simple Word field.
+    SimpleField(SimpleFieldRef<'a>),
+    /// A tracked insertion.
+    Insertion(InsertionRef<'a>),
+    /// Content that the compatibility facade does not model.
+    UnsupportedXml(UnsupportedXmlRef<'a>),
+}
+
+/// One child inside a hyperlink or simple field through the compatibility facade.
+pub enum InlineContentRef<'a> {
+    /// A run.
+    Run(RunRef<'a>),
+    /// A simple Word field.
+    SimpleField(SimpleFieldRef<'a>),
+    /// Content that the compatibility facade does not model.
+    UnsupportedXml(UnsupportedXmlRef<'a>),
+}
+
+/// A simple field projection retained by the current reader model.
+#[derive(Clone, Copy)]
+pub struct SimpleFieldRef<'a> {
+    run: &'a CT_R,
+    field_type: &'a FieldType,
+    display: &'a str,
+}
+
+impl<'a> SimpleFieldRef<'a> {
+    /// The parsed field instruction kind.
+    pub fn kind(&self) -> FieldKind<'a> {
+        match self.field_type {
+            FieldType::Page => FieldKind::Page,
+            FieldType::NumPages => FieldKind::NumPages,
+            FieldType::Ref { instruction, .. } | FieldType::PageRef { instruction, .. } => {
+                FieldKind::Other(instruction)
+            }
+            FieldType::Other(instruction) => FieldKind::Other(instruction),
+        }
+    }
+
+    /// The original field instruction.
+    pub fn instruction(&self) -> &'a str {
+        match self.field_type {
+            FieldType::Page => " PAGE ",
+            FieldType::NumPages => " NUMPAGES ",
+            FieldType::Ref { instruction, .. }
+            | FieldType::PageRef { instruction, .. }
+            | FieldType::Other(instruction) => instruction,
+        }
+    }
+
+    /// The cached display result.
+    pub fn cached_text(&self) -> String {
+        self.display.to_owned()
+    }
+
+    /// Whether Word stored a non-empty cached result.
+    pub fn has_cached_content(&self) -> bool {
+        !self.display.is_empty()
+    }
+
+    /// Whether Word marked the cached result as stale.
+    pub fn dirty(&self) -> Option<bool> {
+        None
+    }
+
+    /// The compact field projection cannot preserve inner result-run structure.
+    pub fn has_unmodeled_semantic_attributes(&self) -> bool {
+        true
+    }
+
+    /// Inner field content is deliberately reported as unsupported until its
+    /// formatting and nested semantics are represented losslessly.
+    pub fn content(&self) -> impl Iterator<Item = InlineContentRef<'a>> {
+        let _ = self.run;
+        std::iter::once(InlineContentRef::UnsupportedXml(
+            UnsupportedXmlRef::modeled(WORD_NAMESPACE, "fldSimple"),
+        ))
+    }
+}
+
+/// A tracked insertion projection.
+#[derive(Clone, Copy)]
+pub struct InsertionRef<'a> {
+    revision: RevisionRef<'a>,
+}
+
+impl<'a> InsertionRef<'a> {
+    /// Insertion content remains an explicit unsupported fact until revision
+    /// child order and formatting are exposed through this facade.
+    pub fn content(&'a self) -> impl Iterator<Item = ParagraphContentRef<'a>> {
+        let _ = self.revision;
+        std::iter::once(ParagraphContentRef::UnsupportedXml(
+            UnsupportedXmlRef::modeled(WORD_NAMESPACE, "ins"),
+        ))
+    }
+}
+
 /// One child within a hyperlink, in source order.
 pub enum HyperlinkItemRef<'a> {
     /// A run in the hyperlink.
@@ -83,6 +188,23 @@ impl<'a> HyperlinkRef<'a> {
     /// The bookmark anchor for this hyperlink, when it has an internal target.
     pub fn anchor(&self) -> Option<&'a str> {
         self.inner().anchor.as_deref()
+    }
+
+    /// The optional hyperlink tooltip. The compact span model does not retain
+    /// this attribute, so callers must treat its absence as unreported.
+    pub fn tooltip(&self) -> Option<&'a str> {
+        None
+    }
+
+    /// The optional hyperlink document location. The compact span model does
+    /// not retain this attribute.
+    pub fn doc_location(&self) -> Option<&'a str> {
+        None
+    }
+
+    /// Whether the hyperlink has attributes outside the semantic facade.
+    pub fn has_unmodeled_semantic_attributes(&self) -> bool {
+        !self.inner().extra_attributes.is_empty()
     }
 
     /// Get the combined text of the hyperlink runs.
@@ -131,6 +253,38 @@ impl<'a> HyperlinkRef<'a> {
         }
         items.into_iter()
     }
+
+    /// Iterate over hyperlink content through the compatibility facade.
+    pub fn content(&self) -> impl Iterator<Item = InlineContentRef<'a>> {
+        self.items().map(move |item| match item {
+            HyperlinkItemRef::Run(run) => simple_field_ref(run.inner)
+                .map(InlineContentRef::SimpleField)
+                .unwrap_or(InlineContentRef::Run(run)),
+            HyperlinkItemRef::Revision(_) => InlineContentRef::UnsupportedXml(
+                UnsupportedXmlRef::modeled(WORD_NAMESPACE, "revision"),
+            ),
+            HyperlinkItemRef::UnsupportedXml(raw) => {
+                InlineContentRef::UnsupportedXml(UnsupportedXmlRef::new(raw))
+            }
+        })
+    }
+}
+
+fn simple_field_ref(run: &CT_R) -> Option<SimpleFieldRef<'_>> {
+    let [
+        RunContent::Field {
+            field_type,
+            display,
+        },
+    ] = run.content.as_slice()
+    else {
+        return None;
+    };
+    Some(SimpleFieldRef {
+        run,
+        field_type,
+        display,
+    })
 }
 
 impl Alignment {
@@ -866,11 +1020,47 @@ impl<'a> ParagraphRef<'a> {
         self.inner.text()
     }
 
+    /// Iterate over paragraph content through the compatibility facade.
+    pub fn content(&'a self) -> impl Iterator<Item = ParagraphContentRef<'a>> {
+        self.items().map(move |item| match item {
+            ParagraphItemRef::Run(run) => simple_field_ref(run.inner)
+                .map(ParagraphContentRef::SimpleField)
+                .unwrap_or(ParagraphContentRef::Run(run)),
+            ParagraphItemRef::Hyperlink(hyperlink) => ParagraphContentRef::Hyperlink(hyperlink),
+            ParagraphItemRef::Revision(revision)
+                if revision.kind() == rdocx_oxml::RevisionKind::Insertion =>
+            {
+                ParagraphContentRef::Insertion(InsertionRef { revision })
+            }
+            ParagraphItemRef::ContentControl(_) => ParagraphContentRef::UnsupportedXml(
+                UnsupportedXmlRef::modeled(WORD_NAMESPACE, "sdt"),
+            ),
+            ParagraphItemRef::Revision(_) => ParagraphContentRef::UnsupportedXml(
+                UnsupportedXmlRef::modeled(WORD_NAMESPACE, "revision"),
+            ),
+            ParagraphItemRef::CommentRangeStart(_) | ParagraphItemRef::CommentRangeEnd(_) => {
+                ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled(
+                    WORD_NAMESPACE,
+                    "commentRange",
+                ))
+            }
+            ParagraphItemRef::BookmarkStart { .. } | ParagraphItemRef::BookmarkEnd { .. } => {
+                ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled(
+                    WORD_NAMESPACE,
+                    "bookmark",
+                ))
+            }
+            ParagraphItemRef::UnsupportedXml(raw) => {
+                ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::new(raw))
+            }
+        })
+    }
+
     /// Iterate over direct paragraph items in source order.
     ///
     /// Unlike [`Self::runs`], this retains hyperlinks, content controls,
     /// revisions, comment ranges, bookmarks, and preserved unmodelled XML.
-    pub fn items(&self) -> impl Iterator<Item = ParagraphItemRef<'_>> {
+    pub fn items(&'a self) -> impl Iterator<Item = ParagraphItemRef<'a>> {
         let mut items = Vec::new();
         let mut run_index = 0;
         while run_index <= self.inner.runs.len() {
