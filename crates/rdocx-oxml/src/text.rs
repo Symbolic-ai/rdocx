@@ -2345,7 +2345,9 @@ impl CT_P {
                     {
                         let raw_before = raw_xml_count_at(&extra_xml, runs.len());
                         let raw = capture_element(reader, e)?;
-                        if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
+                        if let Some(revision) =
+                            CT_Revision::from_raw_content(raw.clone(), &prefixes)
+                        {
                             revisions.push((runs.len(), raw_before, revision));
                         }
                         extra_xml.push((runs.len(), raw));
@@ -2390,7 +2392,8 @@ impl CT_P {
                             || is_word_element(name.as_ref(), b"del", &prefixes)
                             || is_word_element(name.as_ref(), b"moveFrom", &prefixes)
                             || is_word_element(name.as_ref(), b"moveTo", &prefixes))
-                            && let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes)
+                            && let Some(revision) =
+                                CT_Revision::from_raw_content(raw.clone(), &prefixes)
                         {
                             revisions.push((runs.len(), raw_before, revision));
                         }
