@@ -1110,8 +1110,9 @@ impl<'a> ParagraphRef<'a> {
                 .inner
                 .extra_xml
                 .iter()
-                .filter(|(at, _)| *at == run_index)
-                .map(|(_, raw)| raw)
+                .enumerate()
+                .filter(|(_, (at, _))| *at == run_index)
+                .map(|(source_index, (_, raw))| (source_index, raw))
                 .collect::<Vec<_>>();
             for raw_index in 0..=extras.len() {
                 let markers = self
@@ -1152,23 +1153,28 @@ impl<'a> ParagraphRef<'a> {
                             CommentRangeMarker::Start { id, .. } => {
                                 ParagraphItemRef::CommentRangeStart {
                                     id: *id,
-                                    has_child_content: extras.get(raw_index).is_some_and(|raw| {
-                                        UnsupportedXmlRef::new(raw).has_child_content()
-                                    }),
+                                    has_child_content: extras.get(raw_index).is_some_and(
+                                        |(_, raw)| UnsupportedXmlRef::new(raw).has_child_content(),
+                                    ),
                                 }
                             }
                             CommentRangeMarker::End { id, .. } => {
                                 ParagraphItemRef::CommentRangeEnd {
                                     id: *id,
-                                    has_child_content: extras.get(raw_index).is_some_and(|raw| {
-                                        UnsupportedXmlRef::new(raw).has_child_content()
-                                    }),
+                                    has_child_content: extras.get(raw_index).is_some_and(
+                                        |(_, raw)| UnsupportedXmlRef::new(raw).has_child_content(),
+                                    ),
                                 }
                             }
                         });
                     }
                 }
-                if let Some(raw) = extras.get(raw_index) {
+                if let Some((source_index, raw)) = extras.get(raw_index)
+                    && !self
+                        .inner
+                        .omitted_proof_error_raw_indices
+                        .contains(source_index)
+                {
                     let revision =
                         self.inner
                             .revisions
@@ -1515,6 +1521,24 @@ mod tests {
         assert!(
             matches!(&content[2], ParagraphContentRef::SimpleField(field) if field.cached_text() == "4")
         );
+    }
+
+    #[test]
+    fn reader_omits_safe_proofing_markers() {
+        let xml = format!(
+            r#"<w:p xmlns:w="{W_NS}"><w:proofErr w:type="spellStart"/><w:r><w:t>word</w:t></w:r><w:proofErr w:type="spellEnd"/></w:p>"#
+        );
+        let mut reader = Reader::from_reader(xml.as_bytes());
+        let mut buffer = Vec::new();
+        assert!(matches!(
+            reader.read_event_into(&mut buffer),
+            Ok(Event::Start(_))
+        ));
+        let paragraph = CT_P::from_xml(&mut reader).expect("paragraph parses");
+        let paragraph = ParagraphRef { inner: &paragraph };
+
+        let items = paragraph.items().collect::<Vec<_>>();
+        assert!(matches!(items.as_slice(), [ParagraphItemRef::Run(run)] if run.text() == "word"));
     }
 
     #[test]

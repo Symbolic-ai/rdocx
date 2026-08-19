@@ -8,7 +8,7 @@ use crate::drawing::CT_Drawing;
 use crate::error::{OxmlError, Result};
 use crate::namespace::{R_NS, matches_local_name};
 use crate::numbering::{parse_scoped_ppr, word_prefixes_at};
-use crate::properties::{CT_PPr, CT_RPr, is_word_element};
+use crate::properties::{CT_PPr, CT_RPr, is_word_attribute, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::CT_Revision;
 
@@ -241,8 +241,8 @@ pub struct CT_R {
     /// Never serialised. The verbatim copy in `extra_xml` is what gets
     /// written, so emitting these as well would duplicate the element.
     pub alt_drawings: Vec<CT_Drawing>,
-    /// Raw `mc:AlternateContent` blocks whose decorative shapes can be omitted
-    /// from a text-only reader while remaining available for round-trip output.
+    /// Raw children intentionally omitted from the semantic text reader while
+    /// remaining available for round-trip output.
     #[doc(hidden)]
     pub omitted_alt_drawing_raw_indices: Vec<usize>,
 }
@@ -253,6 +253,21 @@ impl CT_R {
         CT_R {
             properties: None,
             content: vec![RunContent::Text(CT_Text::new(text))],
+            simple_field: None,
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            field_markers: Vec::new(),
+            field_marker_raw_indices: Vec::new(),
+            modeled_field_marker_raw_indices: Vec::new(),
+            alt_drawings: Vec::new(),
+            omitted_alt_drawing_raw_indices: Vec::new(),
+        }
+    }
+
+    fn empty() -> Self {
+        CT_R {
+            properties: None,
+            content: Vec::new(),
             simple_field: None,
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
@@ -501,6 +516,15 @@ impl CT_R {
                             raw_before: extra_xml.len(),
                         });
                         modeled_children += 1;
+                    } else if is_word_element(name.as_ref(), b"lastRenderedPageBreak", &prefixes)
+                        && e.attributes().next().is_none()
+                    {
+                        // This is Word's stale layout bookkeeping, not an
+                        // author-visible page break. Keep the XML for writing
+                        // while omitting it from the semantic reader.
+                        omitted_alt_drawing_raw_indices.push(extra_xml.len());
+                        extra_xml.push(capture_empty_element(e)?);
+                        extra_xml_positions.push(modeled_children);
                     } else if !is_word_element(name.as_ref(), b"rPr", &prefixes) {
                         // Capture unknown empty child elements (e.g.
                         // w:commentReference) as raw XML, mirroring the
@@ -764,6 +788,9 @@ pub struct CT_P {
     pub bookmark_markers: Vec<BookmarkMarker>,
     /// Unknown child elements captured as raw XML with their insertion position (run index).
     pub extra_xml: Vec<(usize, Vec<u8>)>,
+    /// Raw proofing markers omitted from the semantic reader while retained for writing.
+    #[doc(hidden)]
+    pub omitted_proof_error_raw_indices: Vec<usize>,
     /// Typed run controls at
     /// `(run index, raw children before, comment markers before, control)`.
     pub content_controls: Vec<(usize, usize, usize, CT_Sdt)>,
@@ -781,6 +808,7 @@ impl CT_P {
             comment_ranges: Vec::new(),
             bookmark_markers: Vec::new(),
             extra_xml: Vec::new(),
+            omitted_proof_error_raw_indices: Vec::new(),
             content_controls: Vec::new(),
             revisions: Vec::new(),
         }
@@ -1220,6 +1248,7 @@ impl CT_P {
         let mut comment_ranges = Vec::new();
         let mut bookmark_markers = Vec::new();
         let mut extra_xml = Vec::new();
+        let mut omitted_proof_error_raw_indices = Vec::new();
         let mut content_controls = Vec::new();
         let mut revisions = Vec::new();
         let mut buf = Vec::new();
@@ -1502,6 +1531,15 @@ impl CT_P {
                             alt_drawings: Vec::new(),
                             omitted_alt_drawing_raw_indices: Vec::new(),
                         });
+                    } else if is_word_element(name.as_ref(), b"r", &prefixes)
+                        && e.attributes().next().is_none()
+                    {
+                        runs.push(CT_R::empty());
+                    } else if is_word_element(name.as_ref(), b"proofErr", &prefixes)
+                        && proof_error_marker_is_safe(e, &prefixes)?
+                    {
+                        omitted_proof_error_raw_indices.push(extra_xml.len());
+                        extra_xml.push((runs.len(), capture_empty_element(e)?));
                     } else if !matches_local_name(name.as_ref(), b"p") {
                         let raw_before =
                             extra_xml.iter().filter(|(at, _)| *at == runs.len()).count();
@@ -1537,6 +1575,7 @@ impl CT_P {
             comment_ranges,
             bookmark_markers,
             extra_xml,
+            omitted_proof_error_raw_indices,
             content_controls,
             revisions,
         })
@@ -2837,6 +2876,28 @@ fn has_form_field_data(raw: &[u8]) -> bool {
     }
 }
 
+fn proof_error_marker_is_safe(element: &BytesStart<'_>, word_prefixes: &[String]) -> Result<bool> {
+    let mut has_type = false;
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref();
+        if name == b"xmlns" || name.starts_with(b"xmlns:") {
+            continue;
+        }
+        if is_word_attribute(name, b"type", word_prefixes)
+            && matches!(
+                attribute.value.as_ref(),
+                b"spellStart" | b"spellEnd" | b"gramStart" | b"gramEnd"
+            )
+        {
+            has_type = true;
+            continue;
+        }
+        return Ok(false);
+    }
+    Ok(has_type)
+}
+
 fn alternate_content_is_decorative_shape(drawing: &CT_Drawing) -> bool {
     drawing
         .anchor
@@ -2905,6 +2966,34 @@ mod tests {
         let p = parse_paragraph(r#"<w:r><w:t>Hello World</w:t></w:r>"#);
         assert_eq!(p.text(), "Hello World");
         assert_eq!(p.runs.len(), 1);
+    }
+
+    #[test]
+    fn omits_safe_proofing_and_layout_markers_from_reader_projection() {
+        let p = parse_paragraph(
+            r#"<w:proofErr w:type="spellStart"/><w:r><w:t>before</w:t><w:lastRenderedPageBreak/><w:t>after</w:t></w:r><w:r/><w:proofErr w:type="spellEnd"/>"#,
+        );
+
+        assert_eq!(p.text(), "beforeafter");
+        assert_eq!(p.runs.len(), 2);
+        assert!(p.runs[1].content.is_empty());
+        assert_eq!(p.omitted_proof_error_raw_indices, vec![0, 1]);
+        assert_eq!(p.runs[0].omitted_alt_drawing_raw_indices, vec![0]);
+
+        let mut output = Vec::new();
+        p.to_xml(&mut Writer::new(&mut output))
+            .expect("paragraph writes");
+        let xml = String::from_utf8(output).expect("XML is UTF-8");
+        assert!(xml.contains(r#"<w:proofErr w:type="spellStart"/>"#));
+        assert!(xml.contains("<w:lastRenderedPageBreak/>"));
+    }
+
+    #[test]
+    fn preserves_unknown_proofing_markers_as_raw_xml() {
+        let p = parse_paragraph(r#"<w:proofErr w:type="custom"/>"#);
+
+        assert!(p.omitted_proof_error_raw_indices.is_empty());
+        assert_eq!(p.extra_xml.len(), 1);
     }
 
     #[test]
