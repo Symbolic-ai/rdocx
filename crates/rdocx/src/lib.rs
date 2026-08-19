@@ -50,7 +50,7 @@ pub use rdocx_oxml::settings::{
     CryptAlgorithmClass, CryptAlgorithmType, CryptProviderType, DocumentProtection, ProtectionMode,
 };
 pub use revision::{RevisionKind, RevisionRef};
-pub use run::{Run, RunRef, UnderlineStyle};
+pub use run::{BreakKind, DrawingRef, FieldKind, Run, RunItemRef, RunRef, UnderlineStyle};
 pub use style::{Style, StyleBuilder};
 pub use table::{Cell, CellItemRef, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment};
 
