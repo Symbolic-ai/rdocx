@@ -191,7 +191,7 @@ pub fn generate_marker(
     // sequence at every block, so a two item list rendered as "1." twice.
     let counter_id = abs.abstract_num_id;
 
-    let num_fmt = lvl.num_fmt.unwrap_or(ST_NumberFormat::Decimal);
+    let num_fmt = lvl.num_fmt.clone().unwrap_or(ST_NumberFormat::Decimal);
     let start = lvl.start.unwrap_or(1);
     let lvl_text = lvl.lvl_text.as_deref().unwrap_or("%1.");
 
@@ -239,7 +239,7 @@ fn format_lvl_text(
                 .levels
                 .iter()
                 .find(|l| l.ilvl == lvl_idx)
-                .and_then(|l| l.num_fmt)
+                .and_then(|l| l.num_fmt.clone())
                 .unwrap_or(ST_NumberFormat::Decimal);
             let formatted = format_number(count, fmt);
             result = result.replace(&placeholder, &formatted);
@@ -257,7 +257,9 @@ fn format_number(n: u32, fmt: ST_NumberFormat) -> String {
         ST_NumberFormat::UpperLetter => to_letter(n, true),
         ST_NumberFormat::LowerLetter => to_letter(n, false),
         ST_NumberFormat::Ordinal => format!("{n}"),
-        ST_NumberFormat::Bullet | ST_NumberFormat::None => String::new(),
+        ST_NumberFormat::Bullet | ST_NumberFormat::None | ST_NumberFormat::Other(_) => {
+            String::new()
+        }
     }
 }
 

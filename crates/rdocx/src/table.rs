@@ -12,6 +12,7 @@ use rdocx_oxml::text::CT_P;
 use crate::Length;
 use crate::content_control::ContentControlRef;
 use crate::paragraph::{Paragraph, ParagraphRef};
+use crate::unsupported_xml::{UnsupportedXmlRef, WORD_NAMESPACE};
 
 /// Vertical alignment within a table cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +20,15 @@ pub enum VerticalAlignment {
     Top,
     Center,
     Bottom,
+}
+
+/// Vertical merge state for an immutable cell view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerticalMergeKind {
+    /// The first cell of a vertical merge group.
+    Restart,
+    /// A continuation of the merge group above.
+    Continue,
 }
 
 impl VerticalAlignment {
@@ -603,6 +613,20 @@ impl<'a> TableRef<'a> {
             .unwrap_or(0)
     }
 
+    /// Whether the table contains child content the compatibility facade does
+    /// not model as a table row.
+    pub fn has_unsupported_content(&self) -> bool {
+        !self.inner.extra_xml.is_empty() || !self.inner.content_controls.is_empty()
+    }
+
+    /// Whether table properties contain presentation or revision data that the
+    /// semantic reader does not expose.
+    pub fn has_unmodeled_properties(&self) -> bool {
+        self.inner.properties.as_ref().is_some_and(|properties| {
+            properties.change.is_some() || !properties.revision_xml.is_empty()
+        })
+    }
+
     /// Get an immutable row reference.
     pub fn row(&self, index: usize) -> Option<RowRef<'_>> {
         self.inner.rows.get(index).map(|r| RowRef { inner: r })
@@ -645,6 +669,63 @@ impl<'a> TableRef<'a> {
         let width = self.inner.properties.as_ref()?.width.as_ref()?;
         (width.width_type == "dxa").then(|| Length::twips(width.w))
     }
+
+    /// Whether explicit table width is present.
+    pub fn has_width(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.width.is_some())
+    }
+
+    /// Whether explicit table borders are present.
+    pub fn has_borders(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.borders.as_ref())
+            .is_some_and(|borders| !borders.is_empty())
+    }
+
+    /// Whether explicit table shading is present.
+    pub fn has_shading(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.shading.is_some())
+    }
+
+    /// Whether an explicit table layout mode is present.
+    pub fn has_layout(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.layout.is_some())
+    }
+
+    /// Whether default table-cell margins are present.
+    pub fn has_cell_margins(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.cell_margin.is_some())
+    }
+
+    /// Whether an explicit table indentation is present.
+    pub fn has_indent(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.indent.is_some())
+    }
+
+    /// Whether table-style conditional formatting flags are present.
+    pub fn has_style_look(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.look.is_some())
+    }
 }
 
 /// An immutable reference to a table row.
@@ -656,6 +737,36 @@ impl<'a> RowRef<'a> {
     /// Get the number of cells.
     pub fn cell_count(&self) -> usize {
         self.inner.cells.len()
+    }
+
+    /// Whether the row contains child content the compatibility facade does
+    /// not model as a cell.
+    pub fn has_unsupported_content(&self) -> bool {
+        !self.inner.extra_xml.is_empty() || !self.inner.content_controls.is_empty()
+    }
+
+    /// Whether row properties contain revision data the semantic reader does
+    /// not expose.
+    pub fn has_unmodeled_properties(&self) -> bool {
+        self.inner.properties.as_ref().is_some_and(|properties| {
+            !properties.revision_markers.is_empty() || !properties.revision_xml.is_empty()
+        })
+    }
+
+    /// Number of table grid columns omitted before the first cell.
+    pub fn grid_before(&self) -> Option<u32> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.grid_before)
+    }
+
+    /// Number of table grid columns omitted after the last cell.
+    pub fn grid_after(&self) -> Option<u32> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.grid_after)
     }
 
     /// Get a cell reference by index.
@@ -670,6 +781,18 @@ impl<'a> RowRef<'a> {
             .as_ref()
             .and_then(|pr| pr.header)
             .unwrap_or(false)
+    }
+
+    /// Whether the row carries formatting outside the restricted table
+    /// projection.
+    pub fn has_formatting(&self) -> bool {
+        self.inner.properties.as_ref().is_some_and(|properties| {
+            properties.height.is_some()
+                || properties.height_rule.is_some()
+                || properties.jc.is_some()
+                || properties.cant_split.is_some()
+                || properties.cnf_style.is_some()
+        })
     }
 }
 
@@ -690,7 +813,25 @@ pub enum CellItemRef<'a> {
     UnsupportedXml(&'a [u8]),
 }
 
+/// One cell child exposed through the compatibility reader facade.
+pub enum CellContentRef<'a> {
+    /// A cell paragraph.
+    Paragraph(ParagraphRef<'a>),
+    /// A nested table.
+    Table(TableRef<'a>),
+    /// Content that the compatibility facade does not model.
+    UnsupportedXml(UnsupportedXmlRef<'a>),
+}
+
 impl<'a> CellRef<'a> {
+    /// Whether cell properties contain XML the semantic reader does not model.
+    pub fn has_unmodeled_properties(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| !properties.extra_xml.is_empty())
+    }
+
     /// Get the combined text of all paragraphs.
     pub fn text(&self) -> String {
         self.inner.text()
@@ -719,6 +860,33 @@ impl<'a> CellRef<'a> {
                     CellContent::ContentControl(control) => {
                         CellItemRef::ContentControl(ContentControlRef { inner: control })
                     }
+                });
+            }
+        }
+        items.into_iter()
+    }
+
+    /// Iterate over cell paragraphs, nested tables, and unsupported content in
+    /// source order.
+    pub fn content(&self) -> impl Iterator<Item = CellContentRef<'_>> {
+        let mut items = Vec::with_capacity(self.inner.content.len() + self.inner.extra_xml.len());
+        for index in 0..=self.inner.content.len() {
+            items.extend(
+                self.inner
+                    .extra_xml
+                    .iter()
+                    .filter(|(at, _)| *at == index)
+                    .map(|(_, raw)| CellContentRef::UnsupportedXml(UnsupportedXmlRef::new(raw))),
+            );
+            if let Some(content) = self.inner.content.get(index) {
+                items.push(match content {
+                    CellContent::Paragraph(paragraph) => {
+                        CellContentRef::Paragraph(ParagraphRef { inner: paragraph })
+                    }
+                    CellContent::Table(table) => CellContentRef::Table(TableRef { inner: table }),
+                    CellContent::ContentControl(_) => CellContentRef::UnsupportedXml(
+                        UnsupportedXmlRef::modeled(WORD_NAMESPACE, "sdt"),
+                    ),
                 });
             }
         }
@@ -757,12 +925,26 @@ impl<'a> CellRef<'a> {
         self.inner.properties.as_ref().and_then(|pr| pr.grid_span)
     }
 
+    /// Whether the cell uses the legacy horizontal-merge property.
+    pub fn has_horizontal_merge(&self) -> bool {
+        self.inner.properties.as_ref().is_some_and(|properties| {
+            properties
+                .extra_xml
+                .iter()
+                .any(|(_, raw)| raw.starts_with(b"<w:hMerge") || raw.starts_with(b"<hMerge"))
+        })
+    }
+
     /// Get the vertical merge state, if set.
-    pub fn v_merge(&self) -> Option<&VMerge> {
+    pub fn v_merge(&self) -> Option<VerticalMergeKind> {
         self.inner
             .properties
             .as_ref()
-            .and_then(|pr| pr.v_merge.as_ref())
+            .and_then(|pr| pr.v_merge)
+            .map(|merge| match merge {
+                VMerge::Restart => VerticalMergeKind::Restart,
+                VMerge::Continue => VerticalMergeKind::Continue,
+            })
     }
 
     /// Get the shading fill color, if set.
@@ -772,6 +954,55 @@ impl<'a> CellRef<'a> {
             .as_ref()
             .and_then(|pr| pr.shading.as_ref())
             .and_then(|shd| shd.fill.as_deref())
+    }
+
+    /// Whether explicit cell width is present.
+    pub fn has_width(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.width.is_some())
+    }
+
+    /// Whether explicit cell borders are present.
+    pub fn has_borders(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.borders.as_ref())
+            .is_some_and(|borders| !borders.is_empty())
+    }
+
+    /// Whether explicit cell shading is present.
+    pub fn has_shading(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.shading.is_some())
+    }
+
+    /// Whether no-wrap formatting is present.
+    pub fn has_wrapping_formatting(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.no_wrap.is_some())
+    }
+
+    /// Whether text-direction formatting is present.
+    pub fn has_text_direction(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.text_direction.is_some())
+    }
+
+    /// Whether conditional table-style formatting is present.
+    pub fn has_conditional_formatting(&self) -> bool {
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.cnf_style.is_some())
     }
 
     /// Get the vertical alignment, if set.

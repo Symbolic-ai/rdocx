@@ -44,6 +44,26 @@ pub enum FieldKind<'a> {
     Other(&'a str),
 }
 
+/// Semantic kind of drawing exposed by the reader facade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawingKind {
+    /// A DrawingML picture with an image relationship.
+    Image,
+    /// An anchored DrawingML shape.
+    Shape,
+    /// Any other drawing construct.
+    Other,
+}
+
+/// How an image relationship obtains its content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawingRelationshipKind {
+    /// The drawing refers to an image part within the package.
+    Embedded,
+    /// The drawing refers to an external image relationship.
+    Linked,
+}
+
 /// An immutable drawing embedded in a run.
 #[derive(Debug, Clone, Copy)]
 pub struct DrawingRef<'a> {
@@ -51,6 +71,22 @@ pub struct DrawingRef<'a> {
 }
 
 impl<'a> DrawingRef<'a> {
+    /// Semantic content kind.
+    pub fn kind(&self) -> DrawingKind {
+        if self.relationship_id().is_some() {
+            DrawingKind::Image
+        } else if self
+            .inner
+            .anchor
+            .as_ref()
+            .is_some_and(|anchor| anchor.shape.is_some())
+        {
+            DrawingKind::Shape
+        } else {
+            DrawingKind::Other
+        }
+    }
+
     /// Whether this drawing is inline with the surrounding text.
     pub fn is_inline(&self) -> bool {
         self.inner.inline.is_some()
@@ -61,19 +97,46 @@ impl<'a> DrawingRef<'a> {
         self.inner.anchor.is_some()
     }
 
-    /// The relationship ID for the drawing's embedded image, when present.
+    /// The relationship ID for the drawing's embedded or linked image, when
+    /// present.
     pub fn relationship_id(&self) -> Option<&str> {
         self.inner
             .inline
             .as_ref()
-            .map(|inline| inline.embed_id.as_str())
+            .and_then(|inline| {
+                (!inline.embed_id.is_empty())
+                    .then_some(inline.embed_id.as_str())
+                    .or(inline.link_id.as_deref())
+            })
+            .or_else(|| {
+                self.inner.anchor.as_ref().and_then(|anchor| {
+                    (!anchor.embed_id.is_empty())
+                        .then_some(anchor.embed_id.as_str())
+                        .or(anchor.link_id.as_deref())
+                })
+            })
+    }
+
+    /// Whether the image relationship is embedded in the package or linked.
+    pub fn relationship_kind(&self) -> Option<DrawingRelationshipKind> {
+        self.inner
+            .inline
+            .as_ref()
+            .map(|inline| inline.embed_id.is_empty() && inline.link_id.is_some())
             .or_else(|| {
                 self.inner
                     .anchor
                     .as_ref()
-                    .map(|anchor| anchor.embed_id.as_str())
+                    .map(|anchor| anchor.embed_id.is_empty() && anchor.link_id.is_some())
             })
-            .filter(|id| !id.is_empty())
+            .filter(|_| self.relationship_id().is_some())
+            .map(|linked| {
+                if linked {
+                    DrawingRelationshipKind::Linked
+                } else {
+                    DrawingRelationshipKind::Embedded
+                }
+            })
     }
 
     /// The drawing description, commonly used as image alt text.
@@ -837,5 +900,28 @@ mod tests {
                 display: "Target text",
             }]
         ));
+    }
+
+    #[test]
+    fn drawing_facts_distinguish_linked_images() {
+        let xml = br#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:drawing><wp:inline><wp:extent cx="10" cy="20"/><a:graphic><a:blip r:link="rId7"/></a:graphic></wp:inline></w:drawing></w:r>"#;
+        let mut reader = quick_xml::Reader::from_reader(xml.as_slice());
+        let mut buffer = Vec::new();
+        let run = match reader.read_event_into(&mut buffer).unwrap() {
+            quick_xml::events::Event::Start(_) => CT_R::from_xml(&mut reader).unwrap(),
+            event => panic!("expected run start, got {event:?}"),
+        };
+        let run = RunRef { inner: &run };
+
+        let items = run.items().collect::<Vec<_>>();
+        let [RunItemRef::Drawing(drawing)] = items.as_slice() else {
+            panic!("expected one drawing item");
+        };
+        assert_eq!(drawing.kind(), DrawingKind::Image);
+        assert_eq!(drawing.relationship_id(), Some("rId7"));
+        assert_eq!(
+            drawing.relationship_kind(),
+            Some(DrawingRelationshipKind::Linked)
+        );
     }
 }

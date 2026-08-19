@@ -36,6 +36,7 @@ use crate::content_control::ContentControlRef;
 use crate::error::{Error, Result};
 use crate::paragraph::{Paragraph, ParagraphRef};
 use crate::revision::RevisionRef;
+use crate::run::RunRef;
 use crate::style::{self, Style, StyleBuilder};
 use crate::table::{Table, TableRef};
 use crate::unsupported_xml::{UnsupportedXmlRef, WORD_NAMESPACE};
@@ -911,6 +912,28 @@ impl Document {
         })
     }
 
+    /// Whether the document declares a page background that may affect its
+    /// visible appearance.
+    pub fn has_document_background(&self) -> bool {
+        self.document.background_xml.is_some()
+    }
+
+    /// Whether any document section carries layout formatting.
+    ///
+    /// This includes the final body section and sections attached to paragraph
+    /// properties. Callers that cannot preserve page layout can reject such
+    /// documents without treating section XML as ordinary body content.
+    pub fn has_section_layout_formatting(&self) -> bool {
+        self.section_properties_in_order().any(section_has_layout)
+    }
+
+    /// Whether any document section retains XML that the semantic section
+    /// reader does not model.
+    pub fn has_unmodeled_section_properties(&self) -> bool {
+        self.section_properties_in_order()
+            .any(|properties| !properties.extra_xml.is_empty() || properties.change.is_some())
+    }
+
     /// Get immutable references to all paragraphs.
     pub fn paragraphs(&self) -> Vec<ParagraphRef<'_>> {
         self.document
@@ -1422,8 +1445,48 @@ impl Document {
     pub fn numbering_is_bullet(&self, num_id: u32) -> Option<bool> {
         let numbering = self.numbering.as_ref()?;
         let abstract_num = numbering.get_abstract_num_for(num_id)?;
-        let fmt = abstract_num.levels.first()?.num_fmt?;
+        let fmt = abstract_num.levels.first()?.num_fmt.clone()?;
         Some(fmt == rdocx_oxml::numbering::ST_NumberFormat::Bullet)
+    }
+
+    /// Resolve the complete metadata for one numbering level.
+    ///
+    /// The returned completeness fact is true when the selected definition or
+    /// its instance contains XML that is not represented by this reader API.
+    pub fn numbering_level(&self, num_id: u32, level: u32) -> Option<NumberingLevel<'_>> {
+        if num_id == 0 {
+            return None;
+        }
+        let numbering = self.numbering.as_ref()?;
+        let instance = numbering.nums.iter().find(|item| item.num_id == num_id)?;
+        let definition = numbering
+            .abstract_nums
+            .iter()
+            .find(|item| item.abstract_num_id == instance.abstract_num_id)?;
+        let level = definition.levels.iter().find(|item| item.ilvl == level)?;
+        let format = level.num_fmt.as_ref();
+
+        Some(NumberingLevel {
+            level: level.ilvl,
+            format: format
+                .map(ListNumberFormat::from_st)
+                .unwrap_or(ListNumberFormat::Decimal),
+            format_name: format.map(ST_NumberFormat::to_str).unwrap_or("decimal"),
+            start: level.start.unwrap_or(1),
+            level_text: level.lvl_text.as_deref(),
+            has_unmodeled_properties: !instance.extra_xml.is_empty()
+                || !instance.extra_attributes.is_empty()
+                || !definition.extra_xml.is_empty()
+                || !definition.extra_attributes.is_empty()
+                || !level.extra_xml.is_empty()
+                || !level.extra_attributes.is_empty()
+                || level.ppr_raw.is_some()
+                || level.rpr_raw.is_some(),
+            has_marker_presentation: level
+                .rpr
+                .as_ref()
+                .is_some_and(|properties| properties != &CT_RPr::default()),
+        })
     }
 
     /// Append an external hyperlink to the last paragraph (creating one if
@@ -1892,7 +1955,7 @@ impl Document {
                 numbering
                     .get_abstract_num_for(n.num_id)
                     .map(|a| {
-                        a.levels.first().and_then(|l| l.num_fmt)
+                        a.levels.first().and_then(|l| l.num_fmt.clone())
                             == Some(rdocx_oxml::numbering::ST_NumberFormat::Bullet)
                     })
                     .unwrap_or(false)
@@ -1936,7 +1999,7 @@ impl Document {
                 numbering
                     .get_abstract_num_for(n.num_id)
                     .map(|a| {
-                        a.levels.first().and_then(|l| l.num_fmt)
+                        a.levels.first().and_then(|l| l.num_fmt.clone())
                             == Some(rdocx_oxml::numbering::ST_NumberFormat::Decimal)
                     })
                     .unwrap_or(false)
@@ -2046,6 +2109,27 @@ impl Document {
         style::resolve_paragraph_properties(style_id, &self.styles)
     }
 
+    /// Resolve inherited, numbering-level, and direct properties for a
+    /// concrete paragraph.
+    pub fn effective_paragraph_properties(&self, paragraph: &ParagraphRef<'_>) -> CT_PPr {
+        let direct = paragraph.inner.properties.as_ref();
+        let mut effective = style::resolve_paragraph_properties(
+            direct.and_then(|properties| properties.style_id.as_deref()),
+            &self.styles,
+        );
+
+        if let Some((num_id, level)) = paragraph.numbering()
+            && let Some(definition) = self.numbering_definition(num_id, level)
+            && let Some(properties) = &definition.ppr
+        {
+            effective.merge_from(properties);
+        }
+        if let Some(properties) = direct {
+            effective.merge_from(properties);
+        }
+        effective
+    }
+
     /// Resolve the effective run properties for the given paragraph and character styles,
     /// walking the full inheritance chain.
     pub fn resolve_run_properties(
@@ -2054,6 +2138,71 @@ impl Document {
         run_style_id: Option<&str>,
     ) -> CT_RPr {
         style::resolve_run_properties(para_style_id, run_style_id, &self.styles)
+    }
+
+    /// Resolve inherited, numbering-level, paragraph-mark, and direct
+    /// properties for one run in a paragraph.
+    pub fn effective_run_properties(
+        &self,
+        paragraph: &ParagraphRef<'_>,
+        run: &RunRef<'_>,
+    ) -> CT_RPr {
+        let paragraph_properties = paragraph.inner.properties.as_ref();
+        let direct = run.inner.properties.as_ref();
+        let mut effective = style::resolve_run_properties(
+            paragraph_properties.and_then(|properties| properties.style_id.as_deref()),
+            direct.and_then(|properties| properties.style_id.as_deref()),
+            &self.styles,
+        );
+
+        if let Some((num_id, level)) = paragraph.numbering()
+            && let Some(definition) = self.numbering_definition(num_id, level)
+            && let Some(properties) = &definition.rpr
+        {
+            effective.merge_from(properties);
+        }
+        if let Some(properties) =
+            paragraph_properties.and_then(|properties| properties.rpr.as_ref())
+        {
+            effective.merge_from(properties);
+        }
+        if let Some(properties) = direct {
+            effective.merge_from(properties);
+        }
+        effective
+    }
+
+    fn numbering_definition(
+        &self,
+        num_id: u32,
+        level: u32,
+    ) -> Option<&rdocx_oxml::numbering::CT_Lvl> {
+        if num_id == 0 {
+            return None;
+        }
+        self.numbering
+            .as_ref()?
+            .get_abstract_num_for(num_id)?
+            .levels
+            .iter()
+            .find(|definition| definition.ilvl == level)
+    }
+
+    fn section_properties_in_order(&self) -> impl Iterator<Item = &CT_SectPr> {
+        self.document
+            .body
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                BodyContent::Paragraph(paragraph) => paragraph
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.sect_pr.as_ref()),
+                BodyContent::Table(_) | BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {
+                    None
+                }
+            })
+            .chain(self.document.body.sect_pr.iter())
     }
 
     // ---- Section/Page setup ----
@@ -3757,8 +3906,24 @@ fn relative_target(source_part: &str, target_part: &str) -> String {
     }
 }
 
+fn section_has_layout(properties: &CT_SectPr) -> bool {
+    properties.page_width.is_some()
+        || properties.page_height.is_some()
+        || properties.orientation.is_some()
+        || properties.margin_top.is_some()
+        || properties.margin_right.is_some()
+        || properties.margin_bottom.is_some()
+        || properties.margin_left.is_some()
+        || properties.gutter.is_some()
+        || properties.header_distance.is_some()
+        || properties.footer_distance.is_some()
+        || properties.section_type.is_some()
+        || properties.columns.is_some()
+        || properties.title_pg.is_some()
+}
+
 /// Numbering format for one level of a custom list definition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListNumberFormat {
     Bullet,
     Decimal,
@@ -3767,10 +3932,27 @@ pub enum ListNumberFormat {
     LowerRoman,
     UpperRoman,
     Ordinal,
+    None,
+    /// A producer-defined format value that rdocx preserves but does not model.
+    Other(String),
 }
 
 impl ListNumberFormat {
-    fn to_st(self) -> ST_NumberFormat {
+    fn from_st(value: &ST_NumberFormat) -> Self {
+        match value {
+            ST_NumberFormat::Bullet => Self::Bullet,
+            ST_NumberFormat::Decimal => Self::Decimal,
+            ST_NumberFormat::LowerLetter => Self::LowerLetter,
+            ST_NumberFormat::UpperLetter => Self::UpperLetter,
+            ST_NumberFormat::LowerRoman => Self::LowerRoman,
+            ST_NumberFormat::UpperRoman => Self::UpperRoman,
+            ST_NumberFormat::Ordinal => Self::Ordinal,
+            ST_NumberFormat::None => Self::None,
+            ST_NumberFormat::Other(value) => Self::Other(value.clone()),
+        }
+    }
+
+    fn to_st(&self) -> ST_NumberFormat {
         match self {
             Self::Bullet => ST_NumberFormat::Bullet,
             Self::Decimal => ST_NumberFormat::Decimal,
@@ -3779,12 +3961,34 @@ impl ListNumberFormat {
             Self::LowerRoman => ST_NumberFormat::LowerRoman,
             Self::UpperRoman => ST_NumberFormat::UpperRoman,
             Self::Ordinal => ST_NumberFormat::Ordinal,
+            Self::None => ST_NumberFormat::None,
+            Self::Other(value) => ST_NumberFormat::Other(value.clone()),
         }
     }
 }
 
+/// Resolved metadata for one level of a numbering definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NumberingLevel<'a> {
+    /// The zero-based list level.
+    pub level: u32,
+    /// The marker format at this level.
+    pub format: ListNumberFormat,
+    /// The exact OOXML format name, including producer-defined values.
+    pub format_name: &'a str,
+    /// The first marker value, defaulting to one when Word omits it.
+    pub start: u32,
+    /// The Word level-text template or bullet glyph.
+    pub level_text: Option<&'a str>,
+    /// Whether the level or its instance contains semantic XML this API does
+    /// not model.
+    pub has_unmodeled_properties: bool,
+    /// Whether the marker has run-level presentation properties.
+    pub has_marker_presentation: bool,
+}
+
 /// One level of a custom list definition for [`Document::add_list_definition`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListLevel {
     /// Numbering format for this level.
     pub format: ListNumberFormat,
@@ -6298,6 +6502,93 @@ mod tests {
             paragraph.inner.properties.as_ref().unwrap().num_ilvl,
             Some(8)
         );
+    }
+
+    #[test]
+    fn reader_exposes_complete_numbering_level_facts() {
+        let mut doc = Document::new();
+        let num_id = doc.add_list_definition(&[ListLevel::new(ListNumberFormat::Other(
+            "chicago".to_owned(),
+        ))]);
+
+        let level = doc.numbering_level(num_id, 0).expect("numbering level");
+        assert_eq!(level.format, ListNumberFormat::Other("chicago".to_owned()));
+        assert_eq!(level.format_name, "chicago");
+        assert_eq!(level.start, 1);
+        assert!(!level.has_unmodeled_properties);
+
+        doc.numbering.as_mut().unwrap().nums[0]
+            .extra_xml
+            .push((0, b"<w:lvlOverride/>".to_vec()));
+        assert!(
+            doc.numbering_level(num_id, 0)
+                .expect("numbering level")
+                .has_unmodeled_properties
+        );
+    }
+
+    #[test]
+    fn reader_exposes_background_and_section_completeness_facts() {
+        let mut doc = Document::new();
+        assert!(!doc.has_document_background());
+        assert!(doc.has_section_layout_formatting());
+        assert!(!doc.has_unmodeled_section_properties());
+
+        doc.document.background_xml = Some(b"<w:background/>".to_vec());
+        doc.document
+            .body
+            .sect_pr
+            .as_mut()
+            .unwrap()
+            .extra_xml
+            .push(b"<w:printerSettings r:id=\"rId1\"/>".to_vec());
+
+        assert!(doc.has_document_background());
+        assert!(doc.has_unmodeled_section_properties());
+    }
+
+    #[test]
+    fn reader_resolves_concrete_paragraph_and_run_properties() {
+        let mut doc = Document::new();
+        doc.add_style(
+            StyleBuilder::paragraph("import", "Import")
+                .paragraph_properties(CT_PPr {
+                    keep_next: Some(true),
+                    ..Default::default()
+                })
+                .run_properties(CT_RPr {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
+        );
+        doc.add_paragraph("text");
+        let BodyContent::Paragraph(paragraph) = &mut doc.document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        paragraph.properties = Some(CT_PPr {
+            style_id: Some("import".to_owned()),
+            ind_left: Some(Twips(720)),
+            rpr: Some(CT_RPr {
+                italic: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        paragraph.runs[0].properties = Some(CT_RPr {
+            vanish: Some(true),
+            ..Default::default()
+        });
+
+        let paragraph = doc.paragraph(0).expect("paragraph");
+        let run = paragraph.runs().next().expect("run");
+        let paragraph_properties = doc.effective_paragraph_properties(&paragraph);
+        let run_properties = doc.effective_run_properties(&paragraph, &run);
+
+        assert_eq!(paragraph_properties.keep_next, Some(true));
+        assert_eq!(paragraph_properties.ind_left, Some(Twips(720)));
+        assert_eq!(run_properties.bold, Some(true));
+        assert_eq!(run_properties.italic, Some(true));
+        assert_eq!(run_properties.vanish, Some(true));
     }
 
     #[test]

@@ -36,7 +36,7 @@ pub use comments::{BookmarkRef, CommentRef, RunPosition, RunRange};
 pub use content_control::ContentControlRef;
 pub use document::{
     AccessibilityIssue, BodyContentRef, BodyItemRef, Document, ImageInfo, IssueSeverity, LinkInfo,
-    ListLevel, ListNumberFormat, OutlineNode, RenderOptions,
+    ListLevel, ListNumberFormat, NumberingLevel, OutlineNode, RenderOptions,
 };
 pub use error::{Error, Result};
 pub use oxml_chart::{ChartData, ChartKind};
@@ -51,9 +51,15 @@ pub use rdocx_oxml::settings::{
     CryptAlgorithmClass, CryptAlgorithmType, CryptProviderType, DocumentProtection, ProtectionMode,
 };
 pub use revision::{RevisionKind, RevisionRef};
-pub use run::{BreakKind, DrawingRef, FieldKind, Run, RunItemRef, RunRef, UnderlineStyle};
+pub use run::{
+    BreakKind, DrawingKind, DrawingRef, DrawingRelationshipKind, FieldKind, Run, RunItemRef,
+    RunRef, UnderlineStyle,
+};
 pub use style::{Style, StyleBuilder};
-pub use table::{Cell, CellItemRef, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment};
+pub use table::{
+    Cell, CellContentRef, CellItemRef, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment,
+    VerticalMergeKind,
+};
 pub use unsupported_xml::UnsupportedXmlRef;
 
 #[cfg(test)]

@@ -745,6 +745,10 @@ pub struct CT_TrPr {
     pub header: Option<bool>,
     /// Row alignment
     pub jc: Option<ST_Jc>,
+    /// Number of grid columns omitted before the first cell.
+    pub grid_before: Option<u32>,
+    /// Number of grid columns omitted after the final cell.
+    pub grid_after: Option<u32>,
     /// Allow row to break across pages
     pub cant_split: Option<bool>,
     /// `w:cnfStyle` — which conditional parts of the table style this row is.
@@ -793,6 +797,10 @@ impl CT_TrPr {
                         if let Some(val) = get_val_attr(e)? {
                             pr.jc = ST_Jc::from_str(&val).ok();
                         }
+                    } else if matches_local_name(name.as_ref(), b"gridBefore") {
+                        pr.grid_before = get_val_attr(e)?.map(|value| value.parse()).transpose()?;
+                    } else if matches_local_name(name.as_ref(), b"gridAfter") {
+                        pr.grid_after = get_val_attr(e)?.map(|value| value.parse()).transpose()?;
                     } else if matches_local_name(name.as_ref(), b"cnfStyle") {
                         pr.cnf_style = get_val_attr(e)?;
                     } else if matches_local_name(name.as_ref(), b"cantSplit") {
@@ -884,6 +892,20 @@ impl CT_TrPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        if let Some(grid_before) = self.grid_before {
+            let mut buffer = itoa::Buffer::new();
+            let mut e = BytesStart::new("w:gridBefore");
+            e.push_attribute(("w:val", buffer.format(grid_before)));
+            writer.write_event(Event::Empty(e))?;
+        }
+
+        if let Some(grid_after) = self.grid_after {
+            let mut buffer = itoa::Buffer::new();
+            let mut e = BytesStart::new("w:gridAfter");
+            e.push_attribute(("w:val", buffer.format(grid_after)));
+            writer.write_event(Event::Empty(e))?;
+        }
+
         for revision in &self.revision_markers {
             revision.write_xml(writer)?;
         }
@@ -901,6 +923,8 @@ impl CT_TrPr {
             && self.jc.is_none()
             && self.cant_split.is_none()
             && self.cnf_style.is_none()
+            && self.grid_before.is_none()
+            && self.grid_after.is_none()
             && self.revision_markers.is_empty()
             && self.revision_xml.is_empty()
     }
@@ -2364,6 +2388,23 @@ mod tests {
         );
         assert!(
             xml.contains(r#"<w:tcPr><w:cnfStyle w:val="001000000000"/></w:tcPr>"#),
+            "{xml}"
+        );
+    }
+
+    #[test]
+    fn row_grid_offsets_round_trip() {
+        let tbl = parse_table(concat!(
+            r#"<w:tblGrid><w:gridCol w:w="100"/><w:gridCol w:w="100"/></w:tblGrid>"#,
+            r#"<w:tr><w:trPr><w:gridBefore w:val="1"/><w:gridAfter w:val="2"/></w:trPr><w:tc><w:p/></w:tc></w:tr>"#,
+        ));
+        let properties = tbl.rows[0].properties.as_ref().expect("row properties");
+        assert_eq!(properties.grid_before, Some(1));
+        assert_eq!(properties.grid_after, Some(2));
+
+        let xml = table_to_xml(&tbl);
+        assert!(
+            xml.contains(r#"<w:gridBefore w:val="1"/><w:gridAfter w:val="2"/>"#),
             "{xml}"
         );
     }
