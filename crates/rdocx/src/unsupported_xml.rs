@@ -12,6 +12,7 @@ enum UnsupportedXmlSource<'a> {
     Modeled {
         namespace_uri: &'static str,
         local_name: &'static str,
+        has_child_content: bool,
     },
 }
 
@@ -34,6 +35,21 @@ impl<'a> UnsupportedXmlRef<'a> {
             source: UnsupportedXmlSource::Modeled {
                 namespace_uri,
                 local_name,
+                has_child_content: true,
+            },
+        }
+    }
+
+    pub(crate) fn modeled_with_child_content(
+        namespace_uri: &'static str,
+        local_name: &'static str,
+        has_child_content: bool,
+    ) -> Self {
+        Self {
+            source: UnsupportedXmlSource::Modeled {
+                namespace_uri,
+                local_name,
+                has_child_content,
             },
         }
     }
@@ -95,13 +111,16 @@ impl<'a> UnsupportedXmlRef<'a> {
                 let Some(start_end) = raw.iter().position(|byte| *byte == b'>') else {
                     return false;
                 };
-                let content = &raw[start_end + 1..];
-                content.starts_with(b"<") && !content.starts_with(b"</")
-                    || content
-                        .iter()
-                        .any(|byte| !byte.is_ascii_whitespace() && *byte != b'<')
+                let content = raw[start_end + 1..]
+                    .iter()
+                    .skip_while(|byte| byte.is_ascii_whitespace())
+                    .copied()
+                    .collect::<Vec<_>>();
+                !content.starts_with(b"</") && !content.is_empty()
             }
-            UnsupportedXmlSource::Modeled { .. } => true,
+            UnsupportedXmlSource::Modeled {
+                has_child_content, ..
+            } => has_child_content,
         }
     }
 }

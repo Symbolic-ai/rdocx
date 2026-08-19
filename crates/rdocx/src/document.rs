@@ -4365,12 +4365,12 @@ mod tests {
                 }
                 ParagraphItemRef::ContentControl(control) => format!("control:{}", control.text()),
                 ParagraphItemRef::Revision(revision) => format!("revision:{}", revision.id()),
-                ParagraphItemRef::CommentRangeStart(id) => format!("comment-start:{id}"),
-                ParagraphItemRef::CommentRangeEnd(id) => format!("comment-end:{id}"),
-                ParagraphItemRef::BookmarkStart { id, name } => {
+                ParagraphItemRef::CommentRangeStart { id, .. } => format!("comment-start:{id}"),
+                ParagraphItemRef::CommentRangeEnd { id, .. } => format!("comment-end:{id}"),
+                ParagraphItemRef::BookmarkStart { id, name, .. } => {
                     format!("bookmark-start:{}:{}", id.unwrap(), name.unwrap())
                 }
-                ParagraphItemRef::BookmarkEnd { id } => format!("bookmark-end:{}", id.unwrap()),
+                ParagraphItemRef::BookmarkEnd { id, .. } => format!("bookmark-end:{}", id.unwrap()),
                 ParagraphItemRef::UnsupportedXml(raw) => {
                     format!("raw:{}", std::str::from_utf8(raw).unwrap())
                 }

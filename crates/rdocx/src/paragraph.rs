@@ -36,20 +36,22 @@ pub enum ParagraphItemRef<'a> {
     /// A tracked insertion, deletion, or move.
     Revision(RevisionRef<'a>),
     /// The start of a comment range.
-    CommentRangeStart(i32),
+    CommentRangeStart { id: i32, has_child_content: bool },
     /// The end of a comment range.
-    CommentRangeEnd(i32),
+    CommentRangeEnd { id: i32, has_child_content: bool },
     /// The start of a bookmark.
     BookmarkStart {
         /// The bookmark ID, when present.
         id: Option<i32>,
         /// The bookmark name, when present.
         name: Option<&'a str>,
+        has_child_content: bool,
     },
     /// The end of a bookmark.
     BookmarkEnd {
         /// The bookmark ID, when present.
         id: Option<i32>,
+        has_child_content: bool,
     },
     /// A preserved paragraph child that rdocx does not model.
     UnsupportedXml(&'a [u8]),
@@ -1036,16 +1038,40 @@ impl<'a> ParagraphRef<'a> {
             ParagraphItemRef::Revision(_) => ParagraphContentRef::UnsupportedXml(
                 UnsupportedXmlRef::modeled(WORD_NAMESPACE, "revision"),
             ),
-            ParagraphItemRef::CommentRangeStart(_) | ParagraphItemRef::CommentRangeEnd(_) => {
-                ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled(
+            ParagraphItemRef::CommentRangeStart {
+                has_child_content, ..
+            } => {
+                ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled_with_child_content(
                     WORD_NAMESPACE,
-                    "commentRange",
+                    "commentRangeStart",
+                    has_child_content,
                 ))
             }
-            ParagraphItemRef::BookmarkStart { .. } | ParagraphItemRef::BookmarkEnd { .. } => {
-                ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled(
+            ParagraphItemRef::CommentRangeEnd {
+                has_child_content, ..
+            } => {
+                ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled_with_child_content(
                     WORD_NAMESPACE,
-                    "bookmark",
+                    "commentRangeEnd",
+                    has_child_content,
+                ))
+            }
+            ParagraphItemRef::BookmarkStart {
+                has_child_content, ..
+            } => {
+                ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled_with_child_content(
+                    WORD_NAMESPACE,
+                    "bookmarkStart",
+                    has_child_content,
+                ))
+            }
+            ParagraphItemRef::BookmarkEnd {
+                has_child_content, ..
+            } => {
+                ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled_with_child_content(
+                    WORD_NAMESPACE,
+                    "bookmarkEnd",
+                    has_child_content,
                 ))
             }
             ParagraphItemRef::UnsupportedXml(raw) => {
@@ -1106,10 +1132,20 @@ impl<'a> ParagraphRef<'a> {
                     if let Some(marker) = markers.get(marker_index) {
                         items.push(match marker {
                             CommentRangeMarker::Start { id, .. } => {
-                                ParagraphItemRef::CommentRangeStart(*id)
+                                ParagraphItemRef::CommentRangeStart {
+                                    id: *id,
+                                    has_child_content: extras.get(raw_index).is_some_and(|raw| {
+                                        UnsupportedXmlRef::new(raw).has_child_content()
+                                    }),
+                                }
                             }
                             CommentRangeMarker::End { id, .. } => {
-                                ParagraphItemRef::CommentRangeEnd(*id)
+                                ParagraphItemRef::CommentRangeEnd {
+                                    id: *id,
+                                    has_child_content: extras.get(raw_index).is_some_and(|raw| {
+                                        UnsupportedXmlRef::new(raw).has_child_content()
+                                    }),
+                                }
                             }
                         });
                     }
@@ -1141,9 +1177,13 @@ impl<'a> ParagraphRef<'a> {
                             ParagraphItemRef::BookmarkStart {
                                 id: bookmark.id(),
                                 name: bookmark.name(),
+                                has_child_content: UnsupportedXmlRef::new(raw).has_child_content(),
                             }
                         } else {
-                            ParagraphItemRef::BookmarkEnd { id: bookmark.id() }
+                            ParagraphItemRef::BookmarkEnd {
+                                id: bookmark.id(),
+                                has_child_content: UnsupportedXmlRef::new(raw).has_child_content(),
+                            }
                         }
                     } else if let Some((index, _)) = empty_hyperlink {
                         ParagraphItemRef::Hyperlink(HyperlinkRef {
