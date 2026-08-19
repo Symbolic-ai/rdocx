@@ -6,6 +6,7 @@ use std::ops::Deref;
 pub(crate) const WORD_NAMESPACE: &str =
     "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
+#[derive(Clone, Copy)]
 enum UnsupportedXmlSource<'a> {
     Raw(&'a [u8]),
     Modeled {
@@ -16,6 +17,7 @@ enum UnsupportedXmlSource<'a> {
 
 /// A preserved XML subtree, or a modeled construct retained as an unsupported
 /// reader fact for a compatibility iterator.
+#[derive(Clone, Copy)]
 pub struct UnsupportedXmlRef<'a> {
     source: UnsupportedXmlSource<'a>,
 }
