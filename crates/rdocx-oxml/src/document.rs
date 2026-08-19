@@ -4,7 +4,7 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::content_control::CT_Sdt;
-use crate::error::Result;
+use crate::error::{OxmlError, Result};
 use crate::header_footer::{HdrFtrRef, HdrFtrType};
 use crate::namespace::{W_NS, matches_local_name};
 use crate::numbering::{local_namespace_overrides, word_prefixes_at};
@@ -104,6 +104,28 @@ pub struct CT_SectPr {
 
 #[allow(non_snake_case)]
 impl CT_SectPr {
+    fn empty() -> Self {
+        CT_SectPr {
+            page_width: None,
+            page_height: None,
+            orientation: None,
+            margin_top: None,
+            margin_right: None,
+            margin_bottom: None,
+            margin_left: None,
+            gutter: None,
+            header_distance: None,
+            footer_distance: None,
+            section_type: None,
+            columns: None,
+            title_pg: None,
+            header_refs: Vec::new(),
+            footer_refs: Vec::new(),
+            extra_xml: Vec::new(),
+            change: None,
+        }
+    }
+
     /// Default US Letter page with 1-inch margins.
     pub fn default_letter() -> Self {
         CT_SectPr {
@@ -743,14 +765,23 @@ impl CT_Body {
                 }
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
-                    if !matches_local_name(name.as_ref(), b"body") {
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"p", &prefixes) {
+                        content.push(BodyContent::Paragraph(CT_P::new()));
+                    } else if is_word_element(name.as_ref(), b"tbl", &prefixes) {
+                        content.push(BodyContent::Table(CT_Tbl::new()));
+                    } else if is_word_element(name.as_ref(), b"sectPr", &prefixes) {
+                        sect_pr = Some(CT_SectPr::empty());
+                    } else if !matches_local_name(name.as_ref(), b"body") {
                         content.push(BodyContent::RawXml(capture_empty_element(e)?));
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"body") => {
                     break;
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("w:body end".to_owned()));
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -821,6 +852,8 @@ impl CT_Document {
         let mut background_xml = None;
         let mut buf = Vec::new();
         let mut word_prefixes = Vec::new();
+        let mut document_open = false;
+        let mut document_closed = false;
 
         // Known namespace prefixes that we always emit ourselves
         let known_ns: &[&[u8]] = &[b"xmlns:w", b"xmlns:r", b"xmlns:mc", b"xmlns"];
@@ -830,9 +863,10 @@ impl CT_Document {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, &word_prefixes)?;
-                    if matches_local_name(name.as_ref(), b"body") {
-                        body = Some(CT_Body::from_xml_with_prefixes(&mut reader, &prefixes)?);
-                    } else if matches_local_name(name.as_ref(), b"document") {
+                    if matches_local_name(name.as_ref(), b"document") {
+                        if document_open || document_closed {
+                            return Err(OxmlError::UnexpectedElement("w:document".to_owned()));
+                        }
                         // Capture extra namespace declarations from the document element
                         for attr in e.attributes().flatten() {
                             let key = attr.key.as_ref();
@@ -845,8 +879,13 @@ impl CT_Document {
                                 extra_namespaces.push((key_str, val_str));
                             }
                         }
-                        // Continue into document element
+                        document_open = true;
                         word_prefixes = prefixes;
+                    } else if matches_local_name(name.as_ref(), b"body") {
+                        if !document_open || document_closed || body.is_some() {
+                            return Err(OxmlError::UnexpectedElement("w:body".to_owned()));
+                        }
+                        body = Some(CT_Body::from_xml_with_prefixes(&mut reader, &prefixes)?);
                     } else if matches_local_name(name.as_ref(), b"background") {
                         background_xml = Some(capture_element(&mut reader, e)?);
                     } else {
@@ -858,7 +897,19 @@ impl CT_Document {
                         background_xml = Some(capture_empty_element(e)?);
                     }
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"document") => {
+                    if !document_open {
+                        return Err(OxmlError::UnexpectedElement("w:document end".to_owned()));
+                    }
+                    document_open = false;
+                    document_closed = true;
+                }
+                Ok(Event::Eof) => {
+                    if document_open || !document_closed {
+                        return Err(OxmlError::MissingElement("w:document end".to_owned()));
+                    }
+                    break;
+                }
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -866,7 +917,7 @@ impl CT_Document {
         }
 
         Ok(CT_Document {
-            body: body.unwrap_or_default(),
+            body: body.ok_or_else(|| OxmlError::MissingElement("w:body".to_owned()))?,
             extra_namespaces,
             background_xml,
         })
@@ -1016,6 +1067,36 @@ mod tests {
         assert_eq!(paragraph.properties.as_ref().unwrap().jc, None);
     }
     use super::*;
+
+    #[test]
+    fn parses_empty_body_paragraph_and_section_properties_as_modeled_content() {
+        let xml = concat!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+            "<w:body><w:p/><w:sectPr/></w:body></w:document>"
+        );
+
+        let document = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        assert!(matches!(
+            document.body.content.as_slice(),
+            [BodyContent::Paragraph(_)]
+        ));
+        assert!(document.body.sect_pr.is_some());
+    }
+
+    #[test]
+    fn rejects_truncated_and_multiple_document_roots() {
+        let truncated = concat!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+            "<w:body><w:p/>"
+        );
+        assert!(CT_Document::from_xml(truncated.as_bytes()).is_err());
+
+        let multiple_roots = concat!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>"#,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>"#,
+        );
+        assert!(CT_Document::from_xml(multiple_roots.as_bytes()).is_err());
+    }
 
     #[test]
     fn round_trip_document() {

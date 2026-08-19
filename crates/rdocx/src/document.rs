@@ -1479,14 +1479,26 @@ impl Document {
                 || !definition.extra_xml.is_empty()
                 || !definition.extra_attributes.is_empty()
                 || !level.extra_xml.is_empty()
-                || !level.extra_attributes.is_empty()
-                || level.ppr_raw.is_some()
-                || level.rpr_raw.is_some(),
+                || !level.extra_attributes.is_empty(),
+            has_paragraph_presentation: level.ppr.as_ref().is_some_and(|properties| {
+                Self::has_list_paragraph_presentation(level.ilvl, properties)
+            }),
             has_marker_presentation: level
                 .rpr
                 .as_ref()
                 .is_some_and(|properties| properties != &CT_RPr::default()),
         })
+    }
+
+    fn has_list_paragraph_presentation(level: u32, properties: &CT_PPr) -> bool {
+        let standard = CT_PPr {
+            ind_left: Some(rdocx_oxml::units::Twips(
+                (level.saturating_add(1) * 720) as i32,
+            )),
+            ind_hanging: Some(rdocx_oxml::units::Twips(360)),
+            ..CT_PPr::default()
+        };
+        properties != &standard
     }
 
     /// Append an external hyperlink to the last paragraph (creating one if
@@ -3983,6 +3995,8 @@ pub struct NumberingLevel<'a> {
     /// Whether the level or its instance contains semantic XML this API does
     /// not model.
     pub has_unmodeled_properties: bool,
+    /// Whether the list item has paragraph-level presentation properties.
+    pub has_paragraph_presentation: bool,
     /// Whether the marker has run-level presentation properties.
     pub has_marker_presentation: bool,
 }
@@ -6516,6 +6530,7 @@ mod tests {
         assert_eq!(level.format_name, "chicago");
         assert_eq!(level.start, 1);
         assert!(!level.has_unmodeled_properties);
+        assert!(!level.has_paragraph_presentation);
 
         doc.numbering.as_mut().unwrap().nums[0]
             .extra_xml
@@ -6525,6 +6540,21 @@ mod tests {
                 .expect("numbering level")
                 .has_unmodeled_properties
         );
+    }
+
+    #[test]
+    fn reader_reports_list_paragraph_presentation_separately_from_unknown_xml() {
+        let mut doc = Document::new();
+        let num_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
+        level.ppr = Some(CT_PPr {
+            ind_left: Some(Twips(360)),
+            ..CT_PPr::default()
+        });
+
+        let level = doc.numbering_level(num_id, 0).expect("numbering level");
+        assert!(level.has_paragraph_presentation);
+        assert!(!level.has_unmodeled_properties);
     }
 
     #[test]
