@@ -42,8 +42,8 @@ pub use oxml_chart::{ChartData, ChartKind};
 pub use oxml_core::Length;
 pub use oxml_opc::PackageReadLimits;
 pub use paragraph::{
-    Alignment, BorderStyle, Paragraph, ParagraphBorderRef, ParagraphRef, SectionBreak,
-    TabAlignment, TabLeader,
+    Alignment, BorderStyle, HyperlinkItemRef, HyperlinkRef, Paragraph, ParagraphBorderRef,
+    ParagraphItemRef, ParagraphRef, SectionBreak, TabAlignment, TabLeader,
 };
 pub use rdocx_layout::RevisionView;
 pub use rdocx_oxml::settings::{
