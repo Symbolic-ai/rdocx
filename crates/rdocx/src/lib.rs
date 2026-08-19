@@ -30,12 +30,13 @@ mod revision;
 pub mod run;
 pub mod style;
 pub mod table;
+mod unsupported_xml;
 
 pub use comments::{BookmarkRef, CommentRef, RunPosition, RunRange};
 pub use content_control::ContentControlRef;
 pub use document::{
-    AccessibilityIssue, BodyItemRef, Document, ImageInfo, IssueSeverity, LinkInfo, ListLevel,
-    ListNumberFormat, OutlineNode, RenderOptions,
+    AccessibilityIssue, BodyContentRef, BodyItemRef, Document, ImageInfo, IssueSeverity, LinkInfo,
+    ListLevel, ListNumberFormat, OutlineNode, RenderOptions,
 };
 pub use error::{Error, Result};
 pub use oxml_chart::{ChartData, ChartKind};
@@ -53,6 +54,7 @@ pub use revision::{RevisionKind, RevisionRef};
 pub use run::{BreakKind, DrawingRef, FieldKind, Run, RunItemRef, RunRef, UnderlineStyle};
 pub use style::{Style, StyleBuilder};
 pub use table::{Cell, CellItemRef, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment};
+pub use unsupported_xml::UnsupportedXmlRef;
 
 #[cfg(test)]
 mod tests {
