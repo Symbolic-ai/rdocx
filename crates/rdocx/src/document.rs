@@ -2680,6 +2680,8 @@ impl Document {
             p.hyperlinks.push(HyperlinkSpan {
                 rel_id: None,
                 anchor: Some(heading.bookmark_name.clone()),
+                tooltip: None,
+                doc_location: None,
                 run_start: 0,
                 run_end: 1, // Just the text run, not the tab
                 extra_attributes: Vec::new(),
@@ -6465,8 +6467,8 @@ mod tests {
             panic!("expected paragraph");
         };
         assert_eq!(
-            paragraph.hyperlinks[0].extra_attributes,
-            vec![("w:tooltip".to_string(), "Example site".to_string())]
+            paragraph.hyperlinks[0].tooltip.as_deref(),
+            Some("Example site")
         );
         let BodyContent::Table(table) = &reopened.document.body.content[1] else {
             panic!("expected table");
@@ -6717,6 +6719,8 @@ mod hyperlink_span_tests {
         p.hyperlinks.push(HyperlinkSpan {
             rel_id: None,
             anchor: Some("bookmark".to_string()),
+            tooltip: None,
+            doc_location: None,
             run_start: 1,
             run_end: 99,
             extra_attributes: Vec::new(),
@@ -6726,6 +6730,8 @@ mod hyperlink_span_tests {
         p.hyperlinks.push(HyperlinkSpan {
             rel_id: None,
             anchor: Some("inverted".to_string()),
+            tooltip: None,
+            doc_location: None,
             run_start: 5,
             run_end: 1,
             extra_attributes: Vec::new(),
