@@ -150,13 +150,28 @@ pub struct InsertionRef<'a> {
 }
 
 impl<'a> InsertionRef<'a> {
-    /// Insertion content remains an explicit unsupported fact until revision
-    /// child order and formatting are exposed through this facade.
-    pub fn content(&'a self) -> impl Iterator<Item = ParagraphContentRef<'a>> {
-        let _ = self.revision;
-        std::iter::once(ParagraphContentRef::UnsupportedXml(
-            UnsupportedXmlRef::modeled(WORD_NAMESPACE, "ins"),
-        ))
+    /// Iterate over the visible result runs in a tracked insertion.
+    pub fn content(&self) -> impl Iterator<Item = ParagraphContentRef<'a>> {
+        let mut content = Vec::new();
+        match self.revision.inner.content() {
+            rdocx_oxml::RevisionContent::Runs(runs) => {
+                if let Some(paragraph) = self.revision.inner.content_paragraph() {
+                    let paragraph = ParagraphRef { inner: paragraph };
+                    content.extend(paragraph.content());
+                } else {
+                    content.extend(runs.iter().map(|run| {
+                        let run = RunRef { inner: run };
+                        simple_field_ref(run.inner)
+                            .map(ParagraphContentRef::SimpleField)
+                            .unwrap_or(ParagraphContentRef::Run(run))
+                    }));
+                }
+            }
+            _ => content.push(ParagraphContentRef::UnsupportedXml(
+                UnsupportedXmlRef::modeled(WORD_NAMESPACE, "ins"),
+            )),
+        }
+        content.into_iter()
     }
 }
 
@@ -1021,70 +1036,73 @@ impl<'a> ParagraphRef<'a> {
     }
 
     /// Iterate over paragraph content through the compatibility facade.
-    pub fn content(&'a self) -> impl Iterator<Item = ParagraphContentRef<'a>> {
-        self.items().map(move |item| match item {
-            ParagraphItemRef::Run(run) => simple_field_ref(run.inner)
-                .map(ParagraphContentRef::SimpleField)
-                .unwrap_or(ParagraphContentRef::Run(run)),
-            ParagraphItemRef::Hyperlink(hyperlink) => ParagraphContentRef::Hyperlink(hyperlink),
-            ParagraphItemRef::Revision(revision)
-                if revision.kind() == rdocx_oxml::RevisionKind::Insertion =>
-            {
-                ParagraphContentRef::Insertion(InsertionRef { revision })
-            }
-            ParagraphItemRef::ContentControl(_) => ParagraphContentRef::UnsupportedXml(
-                UnsupportedXmlRef::modeled(WORD_NAMESPACE, "sdt"),
-            ),
-            ParagraphItemRef::Revision(_) => ParagraphContentRef::UnsupportedXml(
-                UnsupportedXmlRef::modeled(WORD_NAMESPACE, "revision"),
-            ),
-            ParagraphItemRef::CommentRangeStart {
-                has_child_content, ..
-            } => {
-                ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled_with_child_content(
-                    WORD_NAMESPACE,
-                    "commentRangeStart",
-                    has_child_content,
-                ))
-            }
-            ParagraphItemRef::CommentRangeEnd {
-                has_child_content, ..
-            } => {
-                ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled_with_child_content(
-                    WORD_NAMESPACE,
-                    "commentRangeEnd",
-                    has_child_content,
-                ))
-            }
-            ParagraphItemRef::BookmarkStart {
-                has_child_content, ..
-            } => {
-                ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled_with_child_content(
-                    WORD_NAMESPACE,
-                    "bookmarkStart",
-                    has_child_content,
-                ))
-            }
-            ParagraphItemRef::BookmarkEnd {
-                has_child_content, ..
-            } => {
-                ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled_with_child_content(
-                    WORD_NAMESPACE,
-                    "bookmarkEnd",
-                    has_child_content,
-                ))
-            }
-            ParagraphItemRef::UnsupportedXml(raw) => {
-                ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::new(raw))
-            }
-        })
+    pub fn content(&self) -> impl Iterator<Item = ParagraphContentRef<'a>> {
+        self.items().map(paragraph_content_item)
     }
+}
 
+fn paragraph_content_item<'a>(item: ParagraphItemRef<'a>) -> ParagraphContentRef<'a> {
+    match item {
+        ParagraphItemRef::Run(run) => simple_field_ref(run.inner)
+            .map(ParagraphContentRef::SimpleField)
+            .unwrap_or(ParagraphContentRef::Run(run)),
+        ParagraphItemRef::Hyperlink(hyperlink) => ParagraphContentRef::Hyperlink(hyperlink),
+        ParagraphItemRef::Revision(revision)
+            if revision.kind() == rdocx_oxml::RevisionKind::Insertion =>
+        {
+            ParagraphContentRef::Insertion(InsertionRef { revision })
+        }
+        ParagraphItemRef::Revision(revision)
+            if revision.kind() == rdocx_oxml::RevisionKind::Deletion =>
+        {
+            ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled(WORD_NAMESPACE, "del"))
+        }
+        ParagraphItemRef::ContentControl(_) => {
+            ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled(WORD_NAMESPACE, "sdt"))
+        }
+        ParagraphItemRef::Revision(_) => ParagraphContentRef::UnsupportedXml(
+            UnsupportedXmlRef::modeled(WORD_NAMESPACE, "revision"),
+        ),
+        ParagraphItemRef::CommentRangeStart {
+            has_child_content, ..
+        } => ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled_with_child_content(
+            WORD_NAMESPACE,
+            "commentRangeStart",
+            has_child_content,
+        )),
+        ParagraphItemRef::CommentRangeEnd {
+            has_child_content, ..
+        } => ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled_with_child_content(
+            WORD_NAMESPACE,
+            "commentRangeEnd",
+            has_child_content,
+        )),
+        ParagraphItemRef::BookmarkStart {
+            has_child_content, ..
+        } => ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled_with_child_content(
+            WORD_NAMESPACE,
+            "bookmarkStart",
+            has_child_content,
+        )),
+        ParagraphItemRef::BookmarkEnd {
+            has_child_content, ..
+        } => ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::modeled_with_child_content(
+            WORD_NAMESPACE,
+            "bookmarkEnd",
+            has_child_content,
+        )),
+        ParagraphItemRef::UnsupportedXml(raw) => {
+            ParagraphContentRef::UnsupportedXml(UnsupportedXmlRef::new(raw))
+        }
+    }
+}
+
+impl<'a> ParagraphRef<'a> {
     /// Iterate over direct paragraph items in source order.
     ///
     /// Unlike [`Self::runs`], this retains hyperlinks, content controls,
     /// revisions, comment ranges, bookmarks, and preserved unmodelled XML.
-    pub fn items(&'a self) -> impl Iterator<Item = ParagraphItemRef<'a>> {
+    pub fn items(&self) -> impl Iterator<Item = ParagraphItemRef<'a>> {
         let mut items = Vec::new();
         let mut run_index = 0;
         while run_index <= self.inner.runs.len() {
@@ -1444,6 +1462,8 @@ impl<'a> ParagraphRef<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use quick_xml::{Reader, events::Event};
+    use rdocx_oxml::namespace::{R_NS, W_NS};
 
     #[test]
     fn reader_exposes_hyperlink_tooltip_and_document_location() {
@@ -1468,5 +1488,32 @@ mod tests {
         assert_eq!(hyperlink.tooltip(), Some("Open link"));
         assert_eq!(hyperlink.doc_location(), Some("section-two"));
         assert!(!hyperlink.has_unmodeled_semantic_attributes());
+    }
+
+    #[test]
+    fn reader_preserves_ordered_inline_content_inside_insertions() {
+        let xml = format!(
+            r#"<w:p xmlns:w="{W_NS}" xmlns:r="{R_NS}"><w:ins w:id="1"><w:r><w:t>before </w:t></w:r><w:hyperlink r:id="rId1"><w:r><w:t>linked</w:t></w:r></w:hyperlink><w:fldSimple w:instr=" PAGE "><w:r><w:t>4</w:t></w:r></w:fldSimple></w:ins></w:p>"#
+        );
+        let mut reader = Reader::from_reader(xml.as_bytes());
+        let mut buffer = Vec::new();
+        assert!(matches!(
+            reader.read_event_into(&mut buffer),
+            Ok(Event::Start(_))
+        ));
+        let paragraph = CT_P::from_xml(&mut reader).expect("paragraph parses");
+        let paragraph = ParagraphRef { inner: &paragraph };
+        let paragraph_content = paragraph.content().collect::<Vec<_>>();
+        let [ParagraphContentRef::Insertion(insertion)] = paragraph_content.as_slice() else {
+            panic!("insertion is exposed");
+        };
+        let content = insertion.content().collect::<Vec<_>>();
+        assert!(matches!(&content[0], ParagraphContentRef::Run(run) if run.text() == "before "));
+        assert!(
+            matches!(&content[1], ParagraphContentRef::Hyperlink(link) if link.relationship_id() == Some("rId1") && link.text() == "linked")
+        );
+        assert!(
+            matches!(&content[2], ParagraphContentRef::SimpleField(field) if field.cached_text() == "4")
+        );
     }
 }

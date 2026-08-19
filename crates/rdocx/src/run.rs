@@ -648,9 +648,10 @@ impl<'a> RunRef<'a> {
             RunContent::EndnoteRef { id } => RunContentRef::EndnoteReference(*id),
             RunContent::Field { display, .. } => RunContentRef::Text(display),
             RunContent::CommentReference { .. } => {
-                RunContentRef::UnsupportedXml(crate::UnsupportedXmlRef::modeled(
+                RunContentRef::UnsupportedXml(crate::UnsupportedXmlRef::modeled_with_child_content(
                     crate::unsupported_xml::WORD_NAMESPACE,
-                    "unsupportedRunContent",
+                    "commentReference",
+                    false,
                 ))
             }
         })
