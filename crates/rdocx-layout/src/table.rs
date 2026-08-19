@@ -373,6 +373,7 @@ mod tests {
                 CT_TblGridCol { width: Twips(2880) }, // 2 inches = 144pt
                 CT_TblGridCol { width: Twips(2880) },
             ],
+            extra_xml: Vec::new(),
         };
 
         // 288pt total in a 468pt text column: the author asked for a narrow
@@ -392,6 +393,7 @@ mod tests {
                 CT_TblGridCol { width: Twips(7200) }, // 5 inches = 360pt
                 CT_TblGridCol { width: Twips(7200) },
             ],
+            extra_xml: Vec::new(),
         };
 
         // 720pt total will not fit a 468pt column, so scale it down.
@@ -420,6 +422,7 @@ mod tests {
                 CT_TblGridCol { width: Twips(0) },
                 CT_TblGridCol { width: Twips(0) },
             ],
+            extra_xml: Vec::new(),
         };
         let widths = compute_column_widths(Some(&grid), 468.0, &tbl);
         assert_eq!(widths.len(), 3);
@@ -452,6 +455,7 @@ mod tests {
         let mut outer = CT_Tbl::new();
         outer.grid = Some(CT_TblGrid {
             columns: vec![CT_TblGridCol { width: Twips(4680) }], // 3.25"
+            extra_xml: Vec::new(),
         });
 
         let mut outer_row = CT_Row::new();
@@ -465,6 +469,7 @@ mod tests {
                 CT_TblGridCol { width: Twips(2000) },
                 CT_TblGridCol { width: Twips(2000) },
             ],
+            extra_xml: Vec::new(),
         });
         let mut nr = CT_Row::new();
         let mut nc1 = CT_Tc::new();

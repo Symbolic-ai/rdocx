@@ -19,6 +19,8 @@ use crate::shared::ST_Jc;
 use crate::text::CT_P;
 use crate::units::Twips;
 
+const MAX_RECOGNIZED_TABLE_NESTING: usize = 32;
+
 /// Write any captured raw XML that belongs immediately before position `pos`.
 ///
 /// Table children we do not model are stored as `(position, raw)` pairs so
@@ -73,6 +75,8 @@ pub struct CT_TblBorders {
     pub right: Option<CT_BorderEdge>,
     pub inside_h: Option<CT_BorderEdge>,
     pub inside_v: Option<CT_BorderEdge>,
+    /// Other border edges retained verbatim.
+    pub extra_xml: Vec<Vec<u8>>,
 }
 
 impl CT_TblBorders {
@@ -114,8 +118,11 @@ impl CT_TblBorders {
                     } else if is_word_element(name.as_ref(), b"insideV", &prefixes) {
                         borders.inside_v =
                             Some(CT_BorderEdge::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else {
+                        borders.extra_xml.push(capture_empty_element(e)?);
                     }
                 }
+                Ok(Event::Start(ref e)) => borders.extra_xml.push(capture_element(reader, e)?),
                 Ok(Event::End(ref e))
                     if matches_local_name(e.name().as_ref(), b"tblBorders")
                         || matches_local_name(e.name().as_ref(), b"tcBorders") =>
@@ -152,6 +159,9 @@ impl CT_TblBorders {
         if let Some(ref e) = self.inside_v {
             e.to_xml(writer, "w:insideV")?;
         }
+        for raw in &self.extra_xml {
+            writer.get_mut().write_all(raw)?;
+        }
         writer.write_event(Event::End(BytesEnd::new(tag)))?;
         Ok(())
     }
@@ -163,6 +173,7 @@ impl CT_TblBorders {
             && self.right.is_none()
             && self.inside_h.is_none()
             && self.inside_v.is_none()
+            && self.extra_xml.is_empty()
     }
 }
 
@@ -379,6 +390,8 @@ pub struct CT_TblPr {
     pub change: Option<CT_Revision>,
     /// Malformed table property changes retained verbatim.
     pub revision_xml: Vec<Vec<u8>>,
+    /// Other table properties retained verbatim.
+    pub extra_xml: Vec<Vec<u8>>,
 }
 
 /// `w:tblLook` — which parts of a table style's conditional formatting apply.
@@ -560,6 +573,11 @@ impl CT_TblPr {
                                 &capture_empty_element(e)?,
                                 owner_bindings,
                             )?);
+                    } else {
+                        pr.extra_xml.push(crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?);
                     }
                 }
                 Ok(Event::Start(ref e)) => {
@@ -592,7 +610,10 @@ impl CT_TblPr {
                                 owner_bindings,
                             )?);
                     } else {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
+                        pr.extra_xml.push(crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?);
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tblPr") => {
@@ -661,6 +682,9 @@ impl CT_TblPr {
         if let Some(change) = &self.change {
             change.write_xml(writer)?;
         }
+        for raw in &self.extra_xml {
+            writer.get_mut().write_all(raw)?;
+        }
 
         writer.write_event(Event::End(BytesEnd::new("w:tblPr")))?;
         Ok(())
@@ -673,12 +697,15 @@ impl CT_TblPr {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CT_TblGrid {
     pub columns: Vec<CT_TblGridCol>,
+    /// Other grid children retained verbatim.
+    pub extra_xml: Vec<Vec<u8>>,
 }
 
 #[allow(non_snake_case)]
 impl CT_TblGrid {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         let mut columns = Vec::new();
+        let mut extra_xml = Vec::new();
         let mut buf = Vec::new();
 
         loop {
@@ -693,7 +720,12 @@ impl CT_TblGrid {
                             }
                         }
                         columns.push(CT_TblGridCol { width });
+                    } else {
+                        extra_xml.push(capture_empty_element(e)?);
                     }
+                }
+                Ok(Event::Start(ref e)) => {
+                    extra_xml.push(capture_element(reader, e)?);
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tblGrid") => {
                     break;
@@ -705,7 +737,7 @@ impl CT_TblGrid {
             buf.clear();
         }
 
-        Ok(CT_TblGrid { columns })
+        Ok(CT_TblGrid { columns, extra_xml })
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -716,6 +748,9 @@ impl CT_TblGrid {
             let mut e = BytesStart::new("w:gridCol");
             e.push_attribute(("w:w", buf.format(col.width.0)));
             writer.write_event(Event::Empty(e))?;
+        }
+        for raw in &self.extra_xml {
+            writer.get_mut().write_all(raw)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:tblGrid")))?;
@@ -760,6 +795,8 @@ pub struct CT_TrPr {
     pub revision_markers: Vec<CT_Revision>,
     /// Malformed row markers retained verbatim.
     pub revision_xml: Vec<Vec<u8>>,
+    /// Other row properties retained verbatim.
+    pub extra_xml: Vec<Vec<u8>>,
 }
 
 #[allow(non_snake_case)]
@@ -818,6 +855,8 @@ impl CT_TrPr {
                         || matches_local_name(name.as_ref(), b"del")
                     {
                         pr.revision_xml.push(capture_empty_element(e)?);
+                    } else {
+                        pr.extra_xml.push(capture_empty_element(e)?);
                     }
                 }
                 Ok(Event::Start(ref e)) => {
@@ -836,7 +875,7 @@ impl CT_TrPr {
                     {
                         pr.revision_xml.push(capture_element(reader, e)?);
                     } else {
-                        reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                        pr.extra_xml.push(capture_element(reader, e)?);
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"trPr") => {
@@ -912,6 +951,9 @@ impl CT_TrPr {
         for raw in &self.revision_xml {
             writer.get_mut().write_all(raw)?;
         }
+        for raw in &self.extra_xml {
+            writer.get_mut().write_all(raw)?;
+        }
 
         writer.write_event(Event::End(BytesEnd::new("w:trPr")))?;
         Ok(())
@@ -927,6 +969,7 @@ impl CT_TrPr {
             && self.grid_after.is_none()
             && self.revision_markers.is_empty()
             && self.revision_xml.is_empty()
+            && self.extra_xml.is_empty()
     }
 }
 
@@ -965,6 +1008,8 @@ pub struct CT_TcPr {
     pub width: Option<CT_TblWidth>,
     /// Horizontal merge (number of grid columns spanned)
     pub grid_span: Option<u32>,
+    /// Legacy horizontal merge state.
+    pub h_merge: Option<String>,
     /// Vertical merge
     pub v_merge: Option<VMerge>,
     /// Cell borders
@@ -1057,6 +1102,8 @@ impl CT_TcPr {
                 }
                 pr.grid_span = Some(span);
             }
+        } else if is_word_element(name.as_ref(), b"hMerge", word_prefixes) {
+            pr.h_merge = Some(get_word_val_attr(e, word_prefixes)?.unwrap_or_default());
         } else if is_word_element(name.as_ref(), b"vMerge", word_prefixes) {
             pr.v_merge = Some(match get_word_val_attr(e, word_prefixes)?.as_deref() {
                 Some("restart") => VMerge::Restart,
@@ -1117,6 +1164,14 @@ impl CT_TcPr {
         }
 
         write_extras_at(writer, &self.extra_xml, 3)?;
+        if let Some(h_merge) = &self.h_merge {
+            let mut e = BytesStart::new("w:hMerge");
+            if !h_merge.is_empty() {
+                e.push_attribute(("w:val", h_merge.as_str()));
+            }
+            writer.write_event(Event::Empty(e))?;
+        }
+        write_extras_at(writer, &self.extra_xml, 4)?;
         if let Some(ref vm) = self.v_merge {
             let mut e = BytesStart::new("w:vMerge");
             match vm {
@@ -1126,38 +1181,38 @@ impl CT_TcPr {
             writer.write_event(Event::Empty(e))?;
         }
 
-        write_extras_at(writer, &self.extra_xml, 4)?;
+        write_extras_at(writer, &self.extra_xml, 5)?;
         if let Some(ref borders) = self.borders
             && !borders.is_empty()
         {
             borders.to_xml(writer, "w:tcBorders")?;
         }
 
-        write_extras_at(writer, &self.extra_xml, 5)?;
+        write_extras_at(writer, &self.extra_xml, 6)?;
         if let Some(ref shd) = self.shading {
             shd.write_xml(writer, "w:shd")?;
         }
 
-        write_extras_at(writer, &self.extra_xml, 6)?;
+        write_extras_at(writer, &self.extra_xml, 7)?;
         if let Some(true) = self.no_wrap {
             writer.write_event(Event::Empty(BytesStart::new("w:noWrap")))?;
         }
 
-        write_extras_at(writer, &self.extra_xml, 7)?;
+        write_extras_at(writer, &self.extra_xml, 8)?;
         if let Some(ref va) = self.v_align {
             let mut e = BytesStart::new("w:vAlign");
             e.push_attribute(("w:val", va.to_str()));
             writer.write_event(Event::Empty(e))?;
         }
 
-        write_extras_at(writer, &self.extra_xml, 8)?;
+        write_extras_at(writer, &self.extra_xml, 9)?;
         if let Some(ref td) = self.text_direction {
             let mut e = BytesStart::new("w:textDirection");
             e.push_attribute(("w:val", td.as_str()));
             writer.write_event(Event::Empty(e))?;
         }
 
-        write_extras_at(writer, &self.extra_xml, 9)?;
+        write_extras_at(writer, &self.extra_xml, 10)?;
 
         writer.write_event(Event::End(BytesEnd::new("w:tcPr")))?;
         Ok(())
@@ -1166,6 +1221,7 @@ impl CT_TcPr {
     fn is_empty(&self) -> bool {
         self.width.is_none()
             && self.grid_span.is_none()
+            && self.h_merge.is_none()
             && self.v_merge.is_none()
             && self.borders.is_none()
             && self.shading.is_none()
@@ -1184,18 +1240,20 @@ fn tc_pr_raw_boundary(name: &[u8], current: usize) -> (usize, usize) {
         (1, 2)
     } else if matches_local_name(name, b"gridSpan") {
         (2, 3)
-    } else if matches_local_name(name, b"vMerge") {
+    } else if matches_local_name(name, b"hMerge") {
         (3, 4)
-    } else if matches_local_name(name, b"tcBorders") {
+    } else if matches_local_name(name, b"vMerge") {
         (4, 5)
-    } else if matches_local_name(name, b"shd") {
+    } else if matches_local_name(name, b"tcBorders") {
         (5, 6)
-    } else if matches_local_name(name, b"noWrap") {
+    } else if matches_local_name(name, b"shd") {
         (6, 7)
-    } else if matches_local_name(name, b"vAlign") {
+    } else if matches_local_name(name, b"noWrap") {
         (7, 8)
-    } else if matches_local_name(name, b"textDirection") {
+    } else if matches_local_name(name, b"vAlign") {
         (8, 9)
+    } else if matches_local_name(name, b"textDirection") {
+        (9, 10)
     } else {
         (current, current)
     }
@@ -1270,6 +1328,14 @@ impl CT_Tc {
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
     ) -> Result<Self> {
+        Self::from_xml_with_prefixes_at_depth(reader, word_prefixes, 0)
+    }
+
+    fn from_xml_with_prefixes_at_depth(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        table_depth: usize,
+    ) -> Result<Self> {
         let mut properties = None;
         let mut content = Vec::new();
         let mut extra_xml = Vec::new();
@@ -1287,8 +1353,10 @@ impl CT_Tc {
                             reader, &prefixes,
                         )?));
                     } else if is_word_element(name.as_ref(), b"tbl", &prefixes) {
-                        content.push(CellContent::Table(CT_Tbl::from_xml_with_prefixes(
-                            reader, &prefixes,
+                        content.push(CellContent::Table(CT_Tbl::from_xml_with_prefixes_at_depth(
+                            reader,
+                            &prefixes,
+                            table_depth.saturating_add(1),
                         )?));
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
                         let raw = capture_element(reader, e)?;
@@ -1427,6 +1495,14 @@ impl CT_Row {
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
     ) -> Result<Self> {
+        Self::from_xml_with_prefixes_at_depth(reader, word_prefixes, 0)
+    }
+
+    fn from_xml_with_prefixes_at_depth(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        table_depth: usize,
+    ) -> Result<Self> {
         let mut properties = None;
         let mut cells = Vec::new();
         let mut extra_xml = Vec::new();
@@ -1441,7 +1517,11 @@ impl CT_Row {
                     if is_word_element(name.as_ref(), b"trPr", &prefixes) {
                         properties = Some(CT_TrPr::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"tc", &prefixes) {
-                        cells.push(CT_Tc::from_xml_with_prefixes(reader, &prefixes)?);
+                        cells.push(CT_Tc::from_xml_with_prefixes_at_depth(
+                            reader,
+                            &prefixes,
+                            table_depth,
+                        )?);
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
                         let raw = capture_element(reader, e)?;
                         if let Some(sdt) = CT_Sdt::from_raw(&raw, &prefixes) {
@@ -1461,7 +1541,10 @@ impl CT_Row {
                 }
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
-                    if !matches_local_name(name.as_ref(), b"trPr") {
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"tc", &prefixes) {
+                        cells.push(CT_Tc::new());
+                    } else if !is_word_element(name.as_ref(), b"trPr", &prefixes) {
                         extra_xml.push((cells.len(), capture_empty_element(e)?));
                     }
                 }
@@ -1600,6 +1683,19 @@ impl CT_Tbl {
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
     ) -> Result<Self> {
+        Self::from_xml_with_prefixes_at_depth(reader, word_prefixes, 0)
+    }
+
+    fn from_xml_with_prefixes_at_depth(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        table_depth: usize,
+    ) -> Result<Self> {
+        if table_depth >= MAX_RECOGNIZED_TABLE_NESTING {
+            return Err(OxmlError::InvalidValue(
+                "recognized model nesting exceeds table limit".to_owned(),
+            ));
+        }
         let mut properties = None;
         let mut grid = None;
         let mut rows = Vec::new();
@@ -1622,7 +1718,11 @@ impl CT_Tbl {
                     } else if matches_local_name(name.as_ref(), b"tblGrid") {
                         grid = Some(CT_TblGrid::from_xml(reader)?);
                     } else if is_word_element(name.as_ref(), b"tr", &prefixes) {
-                        rows.push(CT_Row::from_xml_with_prefixes(reader, &prefixes)?);
+                        rows.push(CT_Row::from_xml_with_prefixes_at_depth(
+                            reader,
+                            &prefixes,
+                            table_depth,
+                        )?);
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
                         let raw = capture_element(reader, e)?;
                         if let Some(sdt) = CT_Sdt::from_raw(&raw, &prefixes) {
@@ -1640,10 +1740,13 @@ impl CT_Tbl {
                 }
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
                     // tblPr and tblGrid have fixed positions ahead of the rows,
                     // so a self-closing one must not be re-emitted from here.
-                    if !matches_local_name(name.as_ref(), b"tblPr")
-                        && !matches_local_name(name.as_ref(), b"tblGrid")
+                    if is_word_element(name.as_ref(), b"tr", &prefixes) {
+                        rows.push(CT_Row::new());
+                    } else if !is_word_element(name.as_ref(), b"tblPr", &prefixes)
+                        && !is_word_element(name.as_ref(), b"tblGrid", &prefixes)
                     {
                         extra_xml.push((rows.len(), capture_empty_element(e)?));
                     }
@@ -2114,6 +2217,7 @@ mod tests {
                     space: Some(0),
                     color: Some("000000".to_string()),
                 }),
+                extra_xml: Vec::new(),
                 ..Default::default()
             }),
             ..Default::default()
@@ -2123,6 +2227,7 @@ mod tests {
                 CT_TblGridCol { width: Twips(4500) },
                 CT_TblGridCol { width: Twips(4500) },
             ],
+            extra_xml: Vec::new(),
         });
 
         let mut row = CT_Row::new();
@@ -2173,6 +2278,7 @@ mod tests {
         let mut nested_tbl = CT_Tbl::new();
         nested_tbl.grid = Some(CT_TblGrid {
             columns: vec![CT_TblGridCol { width: Twips(2000) }],
+            extra_xml: Vec::new(),
         });
         let mut nested_row = CT_Row::new();
         let mut nested_cell = CT_Tc::new();
@@ -2233,6 +2339,28 @@ mod tests {
         assert_eq!(tables.len(), 1);
         assert_eq!(tables[0].rows.len(), 1);
         assert_eq!(tables[0].rows[0].cells[0].text(), "Nested content");
+    }
+
+    #[test]
+    fn unmodeled_table_property_groups_are_retained() {
+        let table = parse_table(
+            r#"<w:tblPr><w:bidiVisual/></w:tblPr><w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:trPr><w:tblCellSpacing/></w:trPr><w:tc><w:tcPr><w:fitText/></w:tcPr><w:p/></w:tc></w:tr>"#,
+        );
+
+        assert_eq!(table.properties.unwrap().extra_xml.len(), 1);
+        assert_eq!(
+            table.rows[0].properties.as_ref().unwrap().extra_xml.len(),
+            1
+        );
+        assert_eq!(
+            table.rows[0].cells[0]
+                .properties
+                .as_ref()
+                .unwrap()
+                .extra_xml
+                .len(),
+            1
+        );
     }
 
     #[test]

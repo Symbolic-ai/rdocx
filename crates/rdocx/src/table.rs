@@ -135,6 +135,7 @@ impl<'a> Table<'a> {
             right: Some(edge.clone()),
             inside_h: Some(edge.clone()),
             inside_v: Some(edge),
+            extra_xml: Vec::new(),
         });
     }
 
@@ -563,6 +564,7 @@ impl<'a> Cell<'a> {
             columns: (0..cols)
                 .map(|_| CT_TblGridCol { width: col_width })
                 .collect(),
+            extra_xml: Vec::new(),
         };
 
         let mut tbl = CT_Tbl::new();
@@ -624,8 +626,18 @@ impl<'a> TableRef<'a> {
     /// semantic reader does not expose.
     pub fn has_unmodeled_properties(&self) -> bool {
         self.inner.properties.as_ref().is_some_and(|properties| {
-            properties.change.is_some() || !properties.revision_xml.is_empty()
-        })
+            properties.change.is_some()
+                || !properties.revision_xml.is_empty()
+                || !properties.extra_xml.is_empty()
+                || properties
+                    .borders
+                    .as_ref()
+                    .is_some_and(|borders| !borders.extra_xml.is_empty())
+        }) || self
+            .inner
+            .grid
+            .as_ref()
+            .is_some_and(|grid| !grid.extra_xml.is_empty())
     }
 
     /// Get an immutable row reference.
@@ -750,7 +762,9 @@ impl<'a> RowRef<'a> {
     /// not expose.
     pub fn has_unmodeled_properties(&self) -> bool {
         self.inner.properties.as_ref().is_some_and(|properties| {
-            !properties.revision_markers.is_empty() || !properties.revision_xml.is_empty()
+            !properties.revision_markers.is_empty()
+                || !properties.revision_xml.is_empty()
+                || !properties.extra_xml.is_empty()
         })
     }
 
@@ -827,10 +841,13 @@ pub enum CellContentRef<'a> {
 impl<'a> CellRef<'a> {
     /// Whether cell properties contain XML the semantic reader does not model.
     pub fn has_unmodeled_properties(&self) -> bool {
-        self.inner
-            .properties
-            .as_ref()
-            .is_some_and(|properties| !properties.extra_xml.is_empty())
+        self.inner.properties.as_ref().is_some_and(|properties| {
+            !properties.extra_xml.is_empty()
+                || properties
+                    .borders
+                    .as_ref()
+                    .is_some_and(|borders| !borders.extra_xml.is_empty())
+        })
     }
 
     /// Get the combined text of all paragraphs.
@@ -928,12 +945,10 @@ impl<'a> CellRef<'a> {
 
     /// Whether the cell uses the legacy horizontal-merge property.
     pub fn has_horizontal_merge(&self) -> bool {
-        self.inner.properties.as_ref().is_some_and(|properties| {
-            properties
-                .extra_xml
-                .iter()
-                .any(|(_, raw)| raw.starts_with(b"<w:hMerge") || raw.starts_with(b"<hMerge"))
-        })
+        self.inner
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.h_merge.is_some())
     }
 
     /// Get the vertical merge state, if set.
@@ -1072,6 +1087,7 @@ mod tests {
                     width: Twips(3_000),
                 },
             ],
+            extra_xml: Vec::new(),
         });
         let mut row = CT_Row::new();
         let mut spanning_cell = CT_Tc::new();
@@ -1107,6 +1123,7 @@ mod tests {
                     width: Twips(2_000),
                 },
             ],
+            extra_xml: Vec::new(),
         });
         inner.properties = Some(CT_TblPr {
             width: Some(CT_TblWidth::dxa(3_000)),
