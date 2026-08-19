@@ -2135,7 +2135,17 @@ impl Document {
             &self.styles,
         );
 
-        if let Some((num_id, level)) = paragraph.numbering()
+        if let Some(num_id) = effective.num_id {
+            let level = effective.num_ilvl.or_else(|| {
+                self.numbering_level_for_style(
+                    num_id,
+                    direct.and_then(|properties| properties.style_id.as_deref()),
+                )
+            });
+            effective.num_ilvl = level;
+        }
+
+        if let Some((num_id, level)) = effective.num_id.zip(effective.num_ilvl)
             && let Some(definition) = self.numbering_definition(num_id, level)
             && let Some(properties) = &definition.ppr
         {
@@ -2203,6 +2213,22 @@ impl Document {
             .levels
             .iter()
             .find(|definition| definition.ilvl == level)
+    }
+
+    fn numbering_level_for_style(&self, num_id: u32, style_id: Option<&str>) -> Option<u32> {
+        let definition = self.numbering.as_ref()?.get_abstract_num_for(num_id)?;
+        let mut style_id = style_id?;
+        for _ in 0..self.styles.styles.len() {
+            if let Some(level) = definition
+                .levels
+                .iter()
+                .find(|level| level.p_style.as_deref() == Some(style_id))
+            {
+                return Some(level.ilvl);
+            }
+            style_id = self.styles.get_by_id(style_id)?.based_on.as_deref()?;
+        }
+        None
     }
 
     fn section_properties_in_order(&self) -> impl Iterator<Item = &CT_SectPr> {

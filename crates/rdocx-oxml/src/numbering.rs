@@ -2143,6 +2143,8 @@ pub struct CT_Lvl {
     pub start: Option<u32>,
     /// Number format
     pub num_fmt: Option<ST_NumberFormat>,
+    /// Paragraph style associated with this numbering level.
+    pub p_style: Option<String>,
     /// Item emitted between the marker and the paragraph content.
     pub suffix: Option<ST_LvlSuffix>,
     /// Level text (e.g., "%1.", "%1.%2.", bullet char)
@@ -2170,6 +2172,7 @@ impl CT_Lvl {
             ilvl,
             start: None,
             num_fmt: None,
+            p_style: None,
             suffix: None,
             lvl_text: None,
             lvl_jc: None,
@@ -2212,6 +2215,10 @@ impl CT_Lvl {
                         }
                         reader.read_to_end_into(name, &mut Vec::new())?;
                         boundary = 2;
+                    } else if is_word_element(name.as_ref(), b"pStyle", &prefixes) {
+                        lvl.p_style = word_attribute_value(e, b"val", &prefixes)?;
+                        reader.read_to_end_into(name, &mut Vec::new())?;
+                        boundary = 4;
                     } else if is_word_element(name.as_ref(), b"suff", &prefixes) {
                         if let Some(value) = word_attribute_value(e, b"val", &prefixes)?
                             && let Some(suffix) = ST_LvlSuffix::from_str(&value)
@@ -2270,6 +2277,9 @@ impl CT_Lvl {
                             lvl.num_fmt = Some(ST_NumberFormat::from_str(&val));
                         }
                         boundary = 2;
+                    } else if is_word_element(name.as_ref(), b"pStyle", &prefixes) {
+                        lvl.p_style = word_attribute_value(e, b"val", &prefixes)?;
+                        boundary = 4;
                     } else if is_word_element(name.as_ref(), b"suff", &prefixes) {
                         if let Some(value) = word_attribute_value(e, b"val", &prefixes)?
                             && let Some(suffix) = ST_LvlSuffix::from_str(&value)
@@ -2361,7 +2371,15 @@ impl CT_Lvl {
             writer.write_event(Event::Empty(e))?;
         }
 
-        for boundary in 2..=5 {
+        write_extras_at(writer, &self.extra_xml, 2)?;
+        if let Some(style) = &self.p_style {
+            let name = qualified(word_prefix, "pStyle");
+            let val_name = qualified(word_prefix, "val");
+            let mut element = BytesStart::new(name.as_str());
+            element.push_attribute((val_name.as_str(), style.as_str()));
+            writer.write_event(Event::Empty(element))?;
+        }
+        for boundary in 3..=5 {
             write_extras_at(writer, &self.extra_xml, boundary)?;
         }
         if let Some(suffix) = self.suffix {
@@ -2471,8 +2489,12 @@ impl CT_Lvl {
 pub struct CT_AbstractNum {
     pub abstract_num_id: u32,
     pub levels: Vec<CT_Lvl>,
+    /// Producer identifier for this abstract numbering definition.
+    pub nsid: Option<String>,
     /// Optional multi-level type hint
     pub multi_level_type: Option<String>,
+    /// Producer template identifier for this abstract numbering definition.
+    pub tmpl: Option<String>,
     /// Unmodelled children retained at their modelled-child boundaries.
     pub extra_xml: Vec<(usize, Vec<u8>)>,
     /// Unmodelled attributes and namespace declarations from `w:abstractNum`.
@@ -2485,7 +2507,9 @@ impl CT_AbstractNum {
         CT_AbstractNum {
             abstract_num_id: id,
             levels: Vec::new(),
+            nsid: None,
             multi_level_type: None,
+            tmpl: None,
             extra_xml: Vec::new(),
             extra_attributes: Vec::new(),
         }
@@ -2509,10 +2533,18 @@ impl CT_AbstractNum {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if is_word_element(name.as_ref(), b"multiLevelType", &prefixes) {
+                    if is_word_element(name.as_ref(), b"nsid", &prefixes) {
+                        abs.nsid = word_attribute_value(e, b"val", &prefixes)?;
+                        reader.read_to_end_into(name, &mut Vec::new())?;
+                        boundary = 1;
+                    } else if is_word_element(name.as_ref(), b"multiLevelType", &prefixes) {
                         abs.multi_level_type = word_attribute_value(e, b"val", &prefixes)?;
                         reader.read_to_end_into(name, &mut Vec::new())?;
                         boundary = 2;
+                    } else if is_word_element(name.as_ref(), b"tmpl", &prefixes) {
+                        abs.tmpl = word_attribute_value(e, b"val", &prefixes)?;
+                        reader.read_to_end_into(name, &mut Vec::new())?;
+                        boundary = 3;
                     } else if is_word_element(name.as_ref(), b"lvl", &prefixes) {
                         let ilvl = u32_attribute(e, b"ilvl", &prefixes)?;
                         let mut level = CT_Lvl::from_xml_with_prefixes(reader, ilvl, &prefixes)?;
@@ -2529,9 +2561,15 @@ impl CT_AbstractNum {
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if is_word_element(name.as_ref(), b"multiLevelType", &prefixes) {
+                    if is_word_element(name.as_ref(), b"nsid", &prefixes) {
+                        abs.nsid = word_attribute_value(e, b"val", &prefixes)?;
+                        boundary = 1;
+                    } else if is_word_element(name.as_ref(), b"multiLevelType", &prefixes) {
                         abs.multi_level_type = word_attribute_value(e, b"val", &prefixes)?;
                         boundary = 2;
+                    } else if is_word_element(name.as_ref(), b"tmpl", &prefixes) {
+                        abs.tmpl = word_attribute_value(e, b"val", &prefixes)?;
+                        boundary = 3;
                     } else if is_word_element(name.as_ref(), b"lvl", &prefixes) {
                         let mut level = CT_Lvl::new(u32_attribute(e, b"ilvl", &prefixes)?);
                         level.extra_attributes =
@@ -2577,6 +2615,13 @@ impl CT_AbstractNum {
         writer.write_event(Event::Start(start))?;
 
         write_extras_at(writer, &self.extra_xml, 0)?;
+        if let Some(nsid) = &self.nsid {
+            let name = qualified(word_prefix, "nsid");
+            let val_name = qualified(word_prefix, "val");
+            let mut element = BytesStart::new(name.as_str());
+            element.push_attribute((val_name.as_str(), nsid.as_str()));
+            writer.write_event(Event::Empty(element))?;
+        }
         write_extras_at(writer, &self.extra_xml, 1)?;
         if let Some(ref mlt) = self.multi_level_type {
             let name = qualified(word_prefix, "multiLevelType");
@@ -2586,7 +2631,15 @@ impl CT_AbstractNum {
             writer.write_event(Event::Empty(e))?;
         }
 
-        for boundary in 2..=6 {
+        write_extras_at(writer, &self.extra_xml, 2)?;
+        if let Some(tmpl) = &self.tmpl {
+            let name = qualified(word_prefix, "tmpl");
+            let val_name = qualified(word_prefix, "val");
+            let mut element = BytesStart::new(name.as_str());
+            element.push_attribute((val_name.as_str(), tmpl.as_str()));
+            writer.write_event(Event::Empty(element))?;
+        }
+        for boundary in 3..=6 {
             write_extras_at(writer, &self.extra_xml, boundary)?;
         }
         for (index, lvl) in self.levels.iter().enumerate() {
@@ -3238,10 +3291,13 @@ mod tests {
         let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:abstractNum w:abstractNumId="0">
+    <w:nsid w:val="FFFFFF7C"/>
     <w:multiLevelType w:val="hybridMultilevel"/>
+    <w:tmpl w:val="C310EC42"/>
     <w:lvl w:ilvl="0">
       <w:start w:val="1"/>
       <w:numFmt w:val="decimal"/>
+      <w:pStyle w:val="ListNumber"/>
       <w:lvlText w:val="%1."/>
       <w:lvlJc w:val="left"/>
       <w:pPr>
@@ -3266,10 +3322,13 @@ mod tests {
 
         let abs = &numbering.abstract_nums[0];
         assert_eq!(abs.abstract_num_id, 0);
+        assert_eq!(abs.nsid.as_deref(), Some("FFFFFF7C"));
         assert_eq!(abs.multi_level_type, Some("hybridMultilevel".to_string()));
+        assert_eq!(abs.tmpl.as_deref(), Some("C310EC42"));
         assert_eq!(abs.levels.len(), 2);
         assert_eq!(abs.levels[0].start, Some(1));
         assert_eq!(abs.levels[0].num_fmt, Some(ST_NumberFormat::Decimal));
+        assert_eq!(abs.levels[0].p_style.as_deref(), Some("ListNumber"));
         assert_eq!(abs.levels[0].lvl_text, Some("%1.".to_string()));
         assert_eq!(
             abs.levels[0].ppr.as_ref().unwrap().ind_left,
@@ -4713,6 +4772,7 @@ mod tests {
             ilvl: 0,
             start: Some(1),
             num_fmt: Some(ST_NumberFormat::Decimal),
+            p_style: None,
             suffix: None,
             lvl_text: Some("%1.".to_string()),
             lvl_jc: Some(ST_Jc::Left),
@@ -4733,7 +4793,9 @@ mod tests {
             abstract_nums: vec![CT_AbstractNum {
                 abstract_num_id: 0,
                 levels: vec![level.clone()],
+                nsid: None,
                 multi_level_type: None,
+                tmpl: None,
                 extra_xml: Vec::new(),
                 extra_attributes: Vec::new(),
             }],
