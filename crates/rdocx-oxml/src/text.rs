@@ -3330,6 +3330,7 @@ mod tests {
                 field_type: FieldType::Page,
                 display: "1".to_owned(),
             }],
+            simple_field: None,
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
@@ -3414,6 +3415,7 @@ mod tests {
         p.runs.push(CT_R {
             properties: None,
             content: vec![RunContent::FootnoteRef { id: 2 }],
+            simple_field: None,
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
