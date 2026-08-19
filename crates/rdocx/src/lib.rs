@@ -52,7 +52,7 @@ pub use rdocx_oxml::settings::{
 pub use revision::{RevisionKind, RevisionRef};
 pub use run::{Run, RunRef, UnderlineStyle};
 pub use style::{Style, StyleBuilder};
-pub use table::{Cell, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment};
+pub use table::{Cell, CellItemRef, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment};
 
 #[cfg(test)]
 mod tests {
