@@ -1516,4 +1516,23 @@ mod tests {
             matches!(&content[2], ParagraphContentRef::SimpleField(field) if field.cached_text() == "4")
         );
     }
+
+    #[test]
+    fn reader_parses_tooltip_from_document_namespace_scope() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}" xmlns:r="{R_NS}"><w:body><w:p><w:hyperlink w:tooltip="Open &amp; inspect" r:id="rId1"><w:r><w:t>linked</w:t></w:r></w:hyperlink></w:p></w:body></w:document>"#
+        );
+        let document = rdocx_oxml::CT_Document::from_xml(xml.as_bytes()).expect("document parses");
+        let rdocx_oxml::BodyContent::Paragraph(paragraph) = &document.body.content[0] else {
+            panic!("paragraph is retained");
+        };
+        let paragraph = ParagraphRef { inner: paragraph };
+        let content = paragraph.content().collect::<Vec<_>>();
+        let [ParagraphContentRef::Hyperlink(hyperlink)] = content.as_slice() else {
+            panic!("hyperlink is exposed");
+        };
+        assert_eq!(hyperlink.relationship_id(), Some("rId1"));
+        assert_eq!(hyperlink.tooltip(), Some("Open & inspect"));
+        assert!(!hyperlink.has_unmodeled_semantic_attributes());
+    }
 }

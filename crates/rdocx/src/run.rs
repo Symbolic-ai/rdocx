@@ -633,28 +633,25 @@ impl<'a> RunRef<'a> {
 
     /// Iterate over run content through the compatibility facade.
     pub fn content(&self) -> impl Iterator<Item = RunContentRef<'a>> {
-        self.inner.content.iter().map(|content| match content {
-            RunContent::Text(text) | RunContent::DeletedText(text) => {
-                RunContentRef::Text(&text.text)
+        let property_boundary = usize::from(self.inner.properties.is_some());
+        let mut content = Vec::with_capacity(self.inner.content.len() + self.inner.extra_xml.len());
+        for index in 0..=self.inner.content.len() {
+            let boundary = property_boundary + index;
+            content.extend(
+                self.inner
+                    .extra_xml_positions
+                    .iter()
+                    .zip(&self.inner.extra_xml)
+                    .filter(|(position, _)| **position == boundary)
+                    .map(|(_, raw)| {
+                        RunContentRef::UnsupportedXml(crate::UnsupportedXmlRef::new(raw))
+                    }),
+            );
+            if let Some(item) = self.inner.content.get(index) {
+                content.push(run_content_from_modeled(item));
             }
-            RunContent::Tab => RunContentRef::Tab,
-            RunContent::Break(kind) => RunContentRef::Break(match kind {
-                BreakType::Line => BreakKind::Line,
-                BreakType::Page => BreakKind::Page,
-                BreakType::Column => BreakKind::Column,
-            }),
-            RunContent::Drawing(drawing) => RunContentRef::Drawing(DrawingRef { inner: drawing }),
-            RunContent::FootnoteRef { id } => RunContentRef::FootnoteReference(*id),
-            RunContent::EndnoteRef { id } => RunContentRef::EndnoteReference(*id),
-            RunContent::Field { display, .. } => RunContentRef::Text(display),
-            RunContent::CommentReference { .. } => {
-                RunContentRef::UnsupportedXml(crate::UnsupportedXmlRef::modeled_with_child_content(
-                    crate::unsupported_xml::WORD_NAMESPACE,
-                    "commentReference",
-                    false,
-                ))
-            }
-        })
+        }
+        content.into_iter()
     }
 
     /// Iterate over direct run items in source order.
@@ -842,6 +839,29 @@ impl<'a> RunRef<'a> {
     }
 }
 
+fn run_content_from_modeled<'a>(item: &'a RunContent) -> RunContentRef<'a> {
+    match item {
+        RunContent::Text(text) | RunContent::DeletedText(text) => RunContentRef::Text(&text.text),
+        RunContent::Tab => RunContentRef::Tab,
+        RunContent::Break(kind) => RunContentRef::Break(match kind {
+            BreakType::Line => BreakKind::Line,
+            BreakType::Page => BreakKind::Page,
+            BreakType::Column => BreakKind::Column,
+        }),
+        RunContent::Drawing(drawing) => RunContentRef::Drawing(DrawingRef { inner: drawing }),
+        RunContent::Field { display, .. } => RunContentRef::Text(display),
+        RunContent::FootnoteRef { id } => RunContentRef::FootnoteReference(*id),
+        RunContent::EndnoteRef { id } => RunContentRef::EndnoteReference(*id),
+        RunContent::CommentReference { .. } => {
+            RunContentRef::UnsupportedXml(crate::UnsupportedXmlRef::modeled_with_child_content(
+                crate::unsupported_xml::WORD_NAMESPACE,
+                "commentReference",
+                false,
+            ))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -918,6 +938,24 @@ mod tests {
                 display: "Target text",
             }]
         ));
+    }
+
+    #[test]
+    fn run_content_exposes_nested_modeled_leaves_as_raw_facts() {
+        let xml = br#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tab><w:t>must not disappear</w:t></w:tab></w:r>"#;
+        let mut reader = quick_xml::Reader::from_reader(xml.as_slice());
+        let mut buffer = Vec::new();
+        let run = match reader.read_event_into(&mut buffer).unwrap() {
+            quick_xml::events::Event::Start(_) => CT_R::from_xml(&mut reader).unwrap(),
+            event => panic!("expected run start, got {event:?}"),
+        };
+        let run = RunRef { inner: &run };
+        let content = run.content().collect::<Vec<_>>();
+        let [RunContentRef::UnsupportedXml(raw)] = content.as_slice() else {
+            panic!("nested tab is retained as raw XML");
+        };
+        assert_eq!(raw.local_name(), "tab");
+        assert!(raw.has_child_content());
     }
 
     #[test]
