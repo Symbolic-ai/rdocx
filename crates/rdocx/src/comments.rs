@@ -806,6 +806,7 @@ fn comment_reference_run(id: i32) -> CT_R {
         extra_xml: Vec::new(),
         extra_xml_positions: Vec::new(),
         field_markers: Vec::new(),
+        modeled_field_marker_raw_indices: Vec::new(),
         alt_drawings: Vec::new(),
     }
 }
@@ -1167,6 +1168,7 @@ mod tests {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            modeled_field_marker_raw_indices: Vec::new(),
             alt_drawings: Vec::new(),
         });
         let mut reference = comment_reference_run(7);

@@ -851,6 +851,7 @@ impl Document {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            modeled_field_marker_raw_indices: Vec::new(),
         };
         let mut paragraph = CT_P::new();
         paragraph.runs.push(run);
@@ -1259,6 +1260,7 @@ impl Document {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            modeled_field_marker_raw_indices: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1354,6 +1356,7 @@ impl Document {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            modeled_field_marker_raw_indices: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1392,6 +1395,7 @@ impl Document {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            modeled_field_marker_raw_indices: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1907,6 +1911,7 @@ impl Document {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            modeled_field_marker_raw_indices: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -2708,6 +2713,7 @@ impl Document {
                 extra_xml: Vec::new(),
                 extra_xml_positions: Vec::new(),
                 field_markers: Vec::new(),
+                modeled_field_marker_raw_indices: Vec::new(),
             });
 
             // Wrap the text run in a hyperlink to the bookmark

@@ -414,6 +414,7 @@ impl<'a> Cell<'a> {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            modeled_field_marker_raw_indices: Vec::new(),
         };
         let mut p = CT_P::new();
         p.runs.push(run);

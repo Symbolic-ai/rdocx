@@ -642,8 +642,15 @@ impl<'a> RunRef<'a> {
                     .extra_xml_positions
                     .iter()
                     .zip(&self.inner.extra_xml)
-                    .filter(|(position, _)| **position == boundary)
-                    .map(|(_, raw)| {
+                    .enumerate()
+                    .filter(|(_, (position, _))| **position == boundary)
+                    .filter(|(raw_index, _)| {
+                        !self
+                            .inner
+                            .modeled_field_marker_raw_indices
+                            .contains(raw_index)
+                    })
+                    .map(|(_, (_, raw))| {
                         RunContentRef::UnsupportedXml(crate::UnsupportedXmlRef::new(raw))
                     }),
             );
@@ -668,8 +675,15 @@ impl<'a> RunRef<'a> {
                     .extra_xml_positions
                     .iter()
                     .zip(&self.inner.extra_xml)
-                    .filter(|(position, _)| **position == boundary)
-                    .map(|(_, raw)| RunItemRef::UnsupportedXml(raw.as_slice())),
+                    .enumerate()
+                    .filter(|(_, (position, _))| **position == boundary)
+                    .filter(|(raw_index, _)| {
+                        !self
+                            .inner
+                            .modeled_field_marker_raw_indices
+                            .contains(raw_index)
+                    })
+                    .map(|(_, (_, raw))| RunItemRef::UnsupportedXml(raw.as_slice())),
             );
             if let Some(content) = self.inner.content.get(index) {
                 items.push(match content {
@@ -926,6 +940,7 @@ mod tests {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            modeled_field_marker_raw_indices: Vec::new(),
             alt_drawings: Vec::new(),
         };
         let run = RunRef { inner: &run };
@@ -938,6 +953,39 @@ mod tests {
                 display: "Target text",
             }]
         ));
+    }
+
+    #[test]
+    fn reader_models_unlocked_empty_complex_field_markers() {
+        let xml = br#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:fldChar w:fldCharType="begin" w:fldLock="0"/></w:r>"#;
+        let mut reader = quick_xml::Reader::from_reader(xml.as_slice());
+        let mut buffer = Vec::new();
+        let run = match reader.read_event_into(&mut buffer).unwrap() {
+            quick_xml::events::Event::Start(_) => CT_R::from_xml(&mut reader).unwrap(),
+            event => panic!("expected run start, got {event:?}"),
+        };
+        let run = RunRef { inner: &run };
+
+        assert!(run.items().next().is_none());
+        assert!(run.content().next().is_none());
+    }
+
+    #[test]
+    fn reader_retains_complex_field_markers_with_unknown_attributes() {
+        let xml = br#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:fldChar w:fldCharType="begin" w:fldLock="0" w:unknown="value"/></w:r>"#;
+        let mut reader = quick_xml::Reader::from_reader(xml.as_slice());
+        let mut buffer = Vec::new();
+        let run = match reader.read_event_into(&mut buffer).unwrap() {
+            quick_xml::events::Event::Start(_) => CT_R::from_xml(&mut reader).unwrap(),
+            event => panic!("expected run start, got {event:?}"),
+        };
+        let run = RunRef { inner: &run };
+
+        let items = run.items().collect::<Vec<_>>();
+        let [RunItemRef::UnsupportedXml(raw)] = items.as_slice() else {
+            panic!("unmodeled marker attribute is retained");
+        };
+        assert!(std::str::from_utf8(raw).unwrap().contains("w:unknown"));
     }
 
     #[test]

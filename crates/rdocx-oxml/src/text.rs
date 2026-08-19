@@ -229,6 +229,10 @@ pub struct CT_R {
     /// Namespace-resolved field markers retained alongside `extra_xml`.
     #[doc(hidden)]
     pub field_markers: Vec<FieldMarker>,
+    /// Raw child indices for empty field markers whose complete semantics are
+    /// modeled by `field_markers`.
+    #[doc(hidden)]
+    pub modeled_field_marker_raw_indices: Vec<usize>,
     /// Drawings read out of an `mc:AlternateContent` block, for layout only.
     ///
     /// Never serialised. The verbatim copy in `extra_xml` is what gets
@@ -246,6 +250,7 @@ impl CT_R {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            modeled_field_marker_raw_indices: Vec::new(),
             alt_drawings: Vec::new(),
         }
     }
@@ -354,6 +359,7 @@ impl CT_R {
         let mut extra_xml = Vec::new();
         let mut extra_xml_positions = Vec::new();
         let mut field_markers = Vec::new();
+        let mut modeled_field_marker_raw_indices = Vec::new();
         let mut alt_drawings = Vec::new();
         let mut modeled_children = 0usize;
         let mut buf = Vec::new();
@@ -490,6 +496,7 @@ impl CT_R {
                         // no formatting, so dropping it loses nothing.
                         if let Some(marker) = field_marker_from_element(e, &prefixes)? {
                             field_markers.push(marker);
+                            modeled_field_marker_raw_indices.push(extra_xml.len());
                         }
                         extra_xml.push(capture_empty_element(e)?);
                         extra_xml_positions.push(modeled_children);
@@ -512,6 +519,7 @@ impl CT_R {
             extra_xml,
             extra_xml_positions,
             field_markers,
+            modeled_field_marker_raw_indices,
             alt_drawings,
         })
     }
@@ -1331,6 +1339,7 @@ impl CT_P {
                             extra_xml: Vec::new(),
                             extra_xml_positions: Vec::new(),
                             field_markers: Vec::new(),
+                            modeled_field_marker_raw_indices: Vec::new(),
                             alt_drawings: Vec::new(),
                         });
                     } else if is_word_element(name.as_ref(), b"commentRangeStart", &prefixes)
@@ -1457,6 +1466,7 @@ impl CT_P {
                             extra_xml: Vec::new(),
                             extra_xml_positions: Vec::new(),
                             field_markers: Vec::new(),
+                            modeled_field_marker_raw_indices: Vec::new(),
                             alt_drawings: Vec::new(),
                         });
                     } else if !matches_local_name(name.as_ref(), b"p") {
@@ -2597,9 +2607,56 @@ fn field_marker_from_element(
     word_prefixes: &[String],
 ) -> Result<Option<FieldMarker>> {
     if is_word_element(element.name().as_ref(), b"instrText", word_prefixes) {
+        for attribute in element.attributes() {
+            let attribute = attribute?;
+            let name = attribute.key.as_ref();
+            if name == b"xmlns" || name.starts_with(b"xmlns:") {
+                continue;
+            }
+            if name == b"xml:space" && matches!(attribute.value.as_ref(), b"preserve" | b"default")
+            {
+                continue;
+            }
+            return Ok(None);
+        }
         return Ok(Some(FieldMarker::Instruction(String::new())));
     }
     if !is_word_element(element.name().as_ref(), b"fldChar", word_prefixes) {
+        return Ok(None);
+    }
+
+    // `w:fldChar` is retained verbatim for round-trip writing, but reader
+    // consumers need to distinguish standard field markers from unmodelled
+    // XML. `fldLock` is part of CT_FldChar and is routinely emitted as "0".
+    // Keep any other attribute in the unsupported stream so fail-closed
+    // consumers do not lose an unknown field semantic.
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref();
+        if name == b"xmlns" || name.starts_with(b"xmlns:") {
+            continue;
+        }
+        if attribute_in_namespace(name, b"fldCharType", crate::namespace::W_NS, word_prefixes)
+            && matches!(attribute.value.as_ref(), b"begin" | b"separate" | b"end")
+        {
+            continue;
+        }
+        if attribute_in_namespace(name, b"dirty", crate::namespace::W_NS, word_prefixes)
+            && matches!(
+                attribute.value.as_ref(),
+                b"true" | b"false" | b"on" | b"off" | b"1" | b"0"
+            )
+        {
+            continue;
+        }
+        if attribute_in_namespace(name, b"fldLock", crate::namespace::W_NS, word_prefixes)
+            && matches!(
+                attribute.value.as_ref(),
+                b"true" | b"false" | b"on" | b"off" | b"1" | b"0"
+            )
+        {
+            continue;
+        }
         return Ok(None);
     }
 
@@ -2683,11 +2740,11 @@ mod tests {
     #[test]
     fn complex_hyperlink_field_exposes_its_target_and_cached_text() {
         let p = parse_paragraph(concat!(
-            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
-            r#"<w:r><w:instrText xml:space="preserve"> HYPERLINK &quot;https://example.test/path&quot; </w:instrText></w:r>"#,
-            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="begin" w:fldLock="0"/></w:r>"#,
+            r#"<w:r><w:instrText xml:space="preserve"> HYPERLINK &quot;mailto:reader@example.test&quot; </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate" w:fldLock="0"/></w:r>"#,
             r#"<w:r><w:t>Example link</w:t></w:r>"#,
-            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end" w:fldLock="0"/></w:r>"#,
         ));
 
         assert_eq!(p.text(), "Example link");
@@ -2696,8 +2753,19 @@ mod tests {
             vec![ComplexFieldHyperlink {
                 run_start: 3,
                 run_end: 5,
-                target: "https://example.test/path".to_owned(),
+                target: "mailto:reader@example.test".to_owned(),
             }]
+        );
+
+        let mut output = Vec::new();
+        p.to_xml(&mut Writer::new(&mut output))
+            .expect("field writes");
+        assert_eq!(
+            String::from_utf8(output)
+                .expect("XML is UTF-8")
+                .matches(r#"w:fldLock="0""#)
+                .count(),
+            3
         );
     }
 
@@ -3363,6 +3431,7 @@ mod tests {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            modeled_field_marker_raw_indices: Vec::new(),
             alt_drawings: Vec::new(),
         });
 
@@ -3448,6 +3517,7 @@ mod tests {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            modeled_field_marker_raw_indices: Vec::new(),
             alt_drawings: Vec::new(),
         });
         p.add_run(" text after");
