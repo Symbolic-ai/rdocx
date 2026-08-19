@@ -1788,6 +1788,9 @@ fn parse_hyperlink_attributes(
         let value = attribute
             .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
             .into_owned();
+        if name == b"xmlns" || name.starts_with(b"xmlns:") {
+            continue;
+        }
         if attribute_in_namespace(name, b"id", R_NS, scope) {
             rel_id = Some(value);
         } else if attribute_in_namespace(name, b"anchor", crate::namespace::W_NS, scope) {
@@ -3000,6 +3003,15 @@ mod tests {
         assert_eq!(p.hyperlinks[0].rel_id, Some("rId5".to_string()));
         assert_eq!(p.hyperlinks[0].run_start, 0);
         assert_eq!(p.hyperlinks[0].run_end, 1);
+    }
+
+    #[test]
+    fn parse_hyperlink_ignores_local_namespace_declarations() {
+        let p = parse_paragraph(
+            r#"<w:hyperlink xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId5"><w:r><w:t>Click here</w:t></w:r></w:hyperlink>"#,
+        );
+        assert_eq!(p.hyperlinks[0].rel_id, Some("rId5".to_owned()));
+        assert!(p.hyperlinks[0].extra_attributes.is_empty());
     }
 
     #[test]
