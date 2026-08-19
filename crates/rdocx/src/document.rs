@@ -6470,6 +6470,14 @@ mod tests {
             paragraph.hyperlinks[0].tooltip.as_deref(),
             Some("Example site")
         );
+        let Some(BodyContentRef::Paragraph(paragraph)) = reopened.body_content().next() else {
+            panic!("expected paragraph facade");
+        };
+        let Some(crate::ParagraphContentRef::Hyperlink(hyperlink)) = paragraph.content().next()
+        else {
+            panic!("expected hyperlink facade");
+        };
+        assert_eq!(hyperlink.tooltip(), Some("Example site"));
         let BodyContent::Table(table) = &reopened.document.body.content[1] else {
             panic!("expected table");
         };
