@@ -1,7 +1,7 @@
 //! Parsing and writing of `.rels` relationship files.
 
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::error::{OpcError, Result};
 
@@ -159,25 +159,27 @@ impl Relationships {
 
                     for attr in e.attributes() {
                         let attr = attr?;
+                        let value = attr
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, e.decoder())?
+                            .into_owned();
                         match attr.key.as_ref() {
                             b"Id" => {
-                                let val = std::str::from_utf8(&attr.value)?.to_string();
                                 // Extract numeric suffix for next_id tracking
-                                if let Some(num_str) = val.strip_prefix("rId")
+                                if let Some(num_str) = value.strip_prefix("rId")
                                     && let Ok(n) = num_str.parse::<u32>()
                                 {
                                     max_id = max_id.max(n);
                                 }
-                                id = Some(val);
+                                id = Some(value);
                             }
                             b"Type" => {
-                                rel_type = Some(std::str::from_utf8(&attr.value)?.to_string());
+                                rel_type = Some(value);
                             }
                             b"Target" => {
-                                target = Some(std::str::from_utf8(&attr.value)?.to_string());
+                                target = Some(value);
                             }
                             b"TargetMode" => {
-                                target_mode = Some(std::str::from_utf8(&attr.value)?.to_string());
+                                target_mode = Some(value);
                             }
                             _ => {}
                         }
@@ -469,6 +471,15 @@ mod tests {
         assert_eq!(parsed.items[0].id, "rId1");
         assert_eq!(parsed.items[0].target, "word/document.xml");
         assert_eq!(parsed.items[1].id, "rId2");
+    }
+
+    #[test]
+    fn relationship_targets_decode_xml_entities() {
+        let xml = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="https://example.test/type" Target="https://example.test/path?a=1&amp;b=2" TargetMode="External"/></Relationships>"#;
+
+        let parsed = Relationships::from_xml(xml).expect("relationships parse");
+
+        assert_eq!(parsed.items[0].target, "https://example.test/path?a=1&b=2");
     }
 
     #[test]
