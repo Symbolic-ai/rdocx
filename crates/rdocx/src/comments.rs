@@ -802,6 +802,7 @@ fn comment_reference_run(id: i32) -> CT_R {
     CT_R {
         properties: None,
         content: vec![RunContent::CommentReference { id, raw_before: 0 }],
+        simple_field: None,
         extra_xml: Vec::new(),
         extra_xml_positions: Vec::new(),
         field_markers: Vec::new(),
@@ -1162,6 +1163,7 @@ mod tests {
         paragraph.runs.push(CT_R {
             properties: None,
             content: Vec::new(),
+            simple_field: None,
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),

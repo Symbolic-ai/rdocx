@@ -646,7 +646,8 @@ impl<'a> RunRef<'a> {
             RunContent::Drawing(drawing) => RunContentRef::Drawing(DrawingRef { inner: drawing }),
             RunContent::FootnoteRef { id } => RunContentRef::FootnoteReference(*id),
             RunContent::EndnoteRef { id } => RunContentRef::EndnoteReference(*id),
-            RunContent::CommentReference { .. } | RunContent::Field { .. } => {
+            RunContent::Field { display, .. } => RunContentRef::Text(display),
+            RunContent::CommentReference { .. } => {
                 RunContentRef::UnsupportedXml(crate::UnsupportedXmlRef::modeled(
                     crate::unsupported_xml::WORD_NAMESPACE,
                     "unsupportedRunContent",
@@ -900,6 +901,7 @@ mod tests {
                 },
                 display: "Target text".to_owned(),
             }],
+            simple_field: None,
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),

@@ -117,6 +117,13 @@ pub enum RunContent {
     },
 }
 
+/// Semantic attributes preserved for a `w:fldSimple` result run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SimpleFieldMetadata {
+    pub dirty: Option<bool>,
+    pub has_unmodeled_attributes: bool,
+}
+
 /// A typed comment range boundary at a run insertion point.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommentRangeMarker {
@@ -212,6 +219,8 @@ pub enum BreakType {
 pub struct CT_R {
     pub properties: Option<CT_RPr>,
     pub content: Vec<RunContent>,
+    /// Attributes from the simple field represented by this synthetic result run.
+    pub simple_field: Option<SimpleFieldMetadata>,
     /// Unknown child elements captured as raw XML.
     pub extra_xml: Vec<Vec<u8>>,
     /// Parsed raw-child positions among properties and typed run content.
@@ -233,6 +242,7 @@ impl CT_R {
         CT_R {
             properties: None,
             content: vec![RunContent::Text(CT_Text::new(text))],
+            simple_field: None,
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
@@ -496,6 +506,7 @@ impl CT_R {
         Ok(CT_R {
             properties,
             content,
+            simple_field: None,
             extra_xml,
             extra_xml_positions,
             field_markers,
@@ -1248,6 +1259,33 @@ impl CT_P {
                             optional_word_attribute(e, b"instr", &prefixes).unwrap_or_default();
 
                         let field_type = parse_field_instruction(&instr);
+                        let mut dirty = None;
+                        let mut has_unmodeled_attributes = false;
+                        for attribute in e.attributes() {
+                            let attribute = attribute?;
+                            let name = attribute.key.as_ref();
+                            let value = attribute
+                                .decoded_and_normalized_value(XmlVersion::Implicit1_0, e.decoder())?
+                                .into_owned();
+                            if attribute_in_namespace(
+                                name,
+                                b"instr",
+                                crate::namespace::W_NS,
+                                &prefixes,
+                            ) {
+                                continue;
+                            }
+                            if attribute_in_namespace(
+                                name,
+                                b"dirty",
+                                crate::namespace::W_NS,
+                                &prefixes,
+                            ) {
+                                dirty = Some(matches!(value.as_str(), "true" | "1" | "on"));
+                            } else {
+                                has_unmodeled_attributes = true;
+                            }
+                        }
 
                         let mut display = String::new();
                         let mut inner_buf = Vec::new();
@@ -1284,6 +1322,10 @@ impl CT_P {
                                 field_type,
                                 display,
                             }],
+                            simple_field: Some(SimpleFieldMetadata {
+                                dirty,
+                                has_unmodeled_attributes,
+                            }),
                             extra_xml: Vec::new(),
                             extra_xml_positions: Vec::new(),
                             field_markers: Vec::new(),
@@ -1368,6 +1410,51 @@ impl CT_P {
                                 .count(),
                         });
                         extra_xml.push((runs.len(), capture_empty_element(e)?));
+                    } else if is_word_element(name.as_ref(), b"fldSimple", &prefixes) {
+                        let instruction =
+                            optional_word_attribute(e, b"instr", &prefixes).unwrap_or_default();
+                        let mut dirty = None;
+                        let mut has_unmodeled_attributes = false;
+                        for attribute in e.attributes() {
+                            let attribute = attribute?;
+                            let name = attribute.key.as_ref();
+                            let value = attribute
+                                .decoded_and_normalized_value(XmlVersion::Implicit1_0, e.decoder())?
+                                .into_owned();
+                            if attribute_in_namespace(
+                                name,
+                                b"instr",
+                                crate::namespace::W_NS,
+                                &prefixes,
+                            ) {
+                                continue;
+                            }
+                            if attribute_in_namespace(
+                                name,
+                                b"dirty",
+                                crate::namespace::W_NS,
+                                &prefixes,
+                            ) {
+                                dirty = Some(matches!(value.as_str(), "true" | "1" | "on"));
+                            } else {
+                                has_unmodeled_attributes = true;
+                            }
+                        }
+                        runs.push(CT_R {
+                            properties: None,
+                            content: vec![RunContent::Field {
+                                field_type: parse_field_instruction(&instruction),
+                                display: String::new(),
+                            }],
+                            simple_field: Some(SimpleFieldMetadata {
+                                dirty,
+                                has_unmodeled_attributes,
+                            }),
+                            extra_xml: Vec::new(),
+                            extra_xml_positions: Vec::new(),
+                            field_markers: Vec::new(),
+                            alt_drawings: Vec::new(),
+                        });
                     } else if !matches_local_name(name.as_ref(), b"p") {
                         let raw_before =
                             extra_xml.iter().filter(|(at, _)| *at == runs.len()).count();

@@ -409,6 +409,7 @@ impl<'a> Cell<'a> {
             alt_drawings: Vec::new(),
             properties: None,
             content: vec![RunContent::Drawing(drawing)],
+            simple_field: None,
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),

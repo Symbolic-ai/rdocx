@@ -608,6 +608,7 @@ fn parse_content(
                     content.push(SdtContent::Run(CT_R {
                         properties: None,
                         content: Vec::new(),
+                        simple_field: None,
                         extra_xml: Vec::new(),
                         extra_xml_positions: Vec::new(),
                         field_markers: Vec::new(),

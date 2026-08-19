@@ -123,21 +123,21 @@ impl<'a> SimpleFieldRef<'a> {
 
     /// Whether Word marked the cached result as stale.
     pub fn dirty(&self) -> Option<bool> {
-        None
+        self.run.simple_field.as_ref().and_then(|field| field.dirty)
     }
 
     /// The compact field projection cannot preserve inner result-run structure.
     pub fn has_unmodeled_semantic_attributes(&self) -> bool {
-        true
+        self.run
+            .simple_field
+            .as_ref()
+            .is_none_or(|field| field.has_unmodeled_attributes)
     }
 
     /// Inner field content is deliberately reported as unsupported until its
     /// formatting and nested semantics are represented losslessly.
     pub fn content(&self) -> impl Iterator<Item = InlineContentRef<'a>> {
-        let _ = self.run;
-        std::iter::once(InlineContentRef::UnsupportedXml(
-            UnsupportedXmlRef::modeled(WORD_NAMESPACE, "fldSimple"),
-        ))
+        std::iter::once(InlineContentRef::Run(RunRef { inner: self.run }))
     }
 }
 
