@@ -1115,6 +1115,7 @@ impl Document {
             columns: (0..cols)
                 .map(|_| CT_TblGridCol { width: col_width })
                 .collect(),
+            extra_xml: Vec::new(),
         };
 
         let mut tbl = CT_Tbl::new();
@@ -1190,6 +1191,7 @@ impl Document {
             columns: (0..cols)
                 .map(|_| CT_TblGridCol { width: col_width })
                 .collect(),
+            extra_xml: Vec::new(),
         };
 
         let mut tbl = CT_Tbl::new();
@@ -6519,6 +6521,40 @@ mod tests {
                 .as_ref()
                 .and_then(|properties| properties.indent.as_ref()),
             Some(&rdocx_oxml::table::CT_TblWidth::dxa(720))
+        );
+    }
+
+    #[test]
+    fn reader_preserves_an_injected_hyperlink_tooltip() {
+        let mut document = Document::new();
+        let relationship_id =
+            document.add_hyperlink_relationship("https://example.com/story?a=1&b=2");
+        document
+            .add_paragraph("")
+            .add_hyperlink("linked", &relationship_id);
+        let bytes = document.to_bytes().expect("document writes");
+        let mut package = OpcPackage::from_reader(Cursor::new(bytes)).expect("package opens");
+        let document_xml = package
+            .get_part("/word/document.xml")
+            .expect("document part exists");
+        let document_xml = String::from_utf8(document_xml.to_vec())
+            .expect("document XML is UTF-8")
+            .replacen(
+                "<w:hyperlink ",
+                r#"<w:hyperlink w:tooltip="Open &amp; inspect" "#,
+                1,
+            );
+        package.set_part("/word/document.xml", document_xml.into_bytes());
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).expect("package writes");
+
+        let reopened = Document::from_bytes(bytes.get_ref()).expect("document reopens");
+        let BodyContent::Paragraph(paragraph) = &reopened.document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        assert_eq!(
+            paragraph.hyperlinks[0].tooltip.as_deref(),
+            Some("Open & inspect")
         );
     }
 
