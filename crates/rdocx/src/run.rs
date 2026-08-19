@@ -940,6 +940,7 @@ mod tests {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
             alt_drawings: Vec::new(),
         };
@@ -957,17 +958,24 @@ mod tests {
 
     #[test]
     fn reader_models_unlocked_empty_complex_field_markers() {
-        let xml = br#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:fldChar w:fldCharType="begin" w:fldLock="0"/></w:r>"#;
+        let xml = br#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:r><w:fldChar w:fldCharType="begin" w:fldLock="0"/></w:r><w:r><w:instrText xml:space="preserve"> HYPERLINK &quot;mailto:reader@example.test&quot; </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate" w:fldLock="0"/></w:r><w:r><w:t>Reader link</w:t></w:r><w:r><w:fldChar w:fldCharType="end" w:fldLock="0"/></w:r></w:p>"#;
         let mut reader = quick_xml::Reader::from_reader(xml.as_slice());
         let mut buffer = Vec::new();
-        let run = match reader.read_event_into(&mut buffer).unwrap() {
-            quick_xml::events::Event::Start(_) => CT_R::from_xml(&mut reader).unwrap(),
-            event => panic!("expected run start, got {event:?}"),
+        let paragraph = match reader.read_event_into(&mut buffer).unwrap() {
+            quick_xml::events::Event::Start(_) => {
+                rdocx_oxml::text::CT_P::from_xml(&mut reader).unwrap()
+            }
+            event => panic!("expected paragraph start, got {event:?}"),
         };
-        let run = RunRef { inner: &run };
+        let marker_runs = [0, 1, 2, 4];
 
-        assert!(run.items().next().is_none());
-        assert!(run.content().next().is_none());
+        for index in marker_runs {
+            let run = RunRef {
+                inner: &paragraph.runs[index],
+            };
+            assert!(run.items().next().is_none());
+            assert!(run.content().next().is_none());
+        }
     }
 
     #[test]

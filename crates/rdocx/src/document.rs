@@ -851,6 +851,7 @@ impl Document {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
         };
         let mut paragraph = CT_P::new();
@@ -1260,6 +1261,7 @@ impl Document {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
         };
 
@@ -1356,6 +1358,7 @@ impl Document {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
         };
 
@@ -1395,6 +1398,7 @@ impl Document {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
         };
 
@@ -1911,6 +1915,7 @@ impl Document {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
         };
 
@@ -2713,6 +2718,7 @@ impl Document {
                 extra_xml: Vec::new(),
                 extra_xml_positions: Vec::new(),
                 field_markers: Vec::new(),
+                field_marker_raw_indices: Vec::new(),
                 modeled_field_marker_raw_indices: Vec::new(),
             });
 

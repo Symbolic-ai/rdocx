@@ -229,8 +229,11 @@ pub struct CT_R {
     /// Namespace-resolved field markers retained alongside `extra_xml`.
     #[doc(hidden)]
     pub field_markers: Vec<FieldMarker>,
-    /// Raw child indices for empty field markers whose complete semantics are
-    /// modeled by `field_markers`.
+    /// Raw child indices corresponding to `field_markers` in the same order.
+    #[doc(hidden)]
+    pub field_marker_raw_indices: Vec<usize>,
+    /// Raw child indices for field markers whose complete semantics are modeled
+    /// by `field_markers`.
     #[doc(hidden)]
     pub modeled_field_marker_raw_indices: Vec<usize>,
     /// Drawings read out of an `mc:AlternateContent` block, for layout only.
@@ -250,6 +253,7 @@ impl CT_R {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
             alt_drawings: Vec::new(),
         }
@@ -359,7 +363,8 @@ impl CT_R {
         let mut extra_xml = Vec::new();
         let mut extra_xml_positions = Vec::new();
         let mut field_markers = Vec::new();
-        let mut modeled_field_marker_raw_indices = Vec::new();
+        let mut field_marker_raw_indices = Vec::new();
+        let modeled_field_marker_raw_indices = Vec::new();
         let mut alt_drawings = Vec::new();
         let mut modeled_children = 0usize;
         let mut buf = Vec::new();
@@ -443,6 +448,7 @@ impl CT_R {
                         let raw = capture_element(reader, e)?;
                         if let Some(marker) = marker {
                             field_markers.push(field_marker_with_instruction(marker, &raw)?);
+                            field_marker_raw_indices.push(extra_xml.len());
                         }
                         extra_xml.push(raw);
                         extra_xml_positions.push(modeled_children);
@@ -496,7 +502,7 @@ impl CT_R {
                         // no formatting, so dropping it loses nothing.
                         if let Some(marker) = field_marker_from_element(e, &prefixes)? {
                             field_markers.push(marker);
-                            modeled_field_marker_raw_indices.push(extra_xml.len());
+                            field_marker_raw_indices.push(extra_xml.len());
                         }
                         extra_xml.push(capture_empty_element(e)?);
                         extra_xml_positions.push(modeled_children);
@@ -519,6 +525,7 @@ impl CT_R {
             extra_xml,
             extra_xml_positions,
             field_markers,
+            field_marker_raw_indices,
             modeled_field_marker_raw_indices,
             alt_drawings,
         })
@@ -702,6 +709,14 @@ struct OpenComplexField {
     dirty: bool,
     valid: bool,
     children: Vec<ComplexField>,
+}
+
+struct OpenModeledComplexField {
+    instruction: String,
+    result_start: Option<usize>,
+    dirty: bool,
+    valid: bool,
+    raw_indices: Vec<(usize, usize)>,
 }
 
 type ParsedHyperlinkAttributes = (
@@ -1339,6 +1354,7 @@ impl CT_P {
                             extra_xml: Vec::new(),
                             extra_xml_positions: Vec::new(),
                             field_markers: Vec::new(),
+                            field_marker_raw_indices: Vec::new(),
                             modeled_field_marker_raw_indices: Vec::new(),
                             alt_drawings: Vec::new(),
                         });
@@ -1466,6 +1482,7 @@ impl CT_P {
                             extra_xml: Vec::new(),
                             extra_xml_positions: Vec::new(),
                             field_markers: Vec::new(),
+                            field_marker_raw_indices: Vec::new(),
                             modeled_field_marker_raw_indices: Vec::new(),
                             alt_drawings: Vec::new(),
                         });
@@ -1494,6 +1511,8 @@ impl CT_P {
             }
             buf.clear();
         }
+
+        mark_modeled_complex_hyperlink_xml(&mut runs);
 
         Ok(CT_P {
             properties,
@@ -2602,6 +2621,107 @@ fn parse_complex_fields(runs: &[CT_R]) -> Vec<ComplexField> {
     roots
 }
 
+fn mark_modeled_complex_hyperlink_xml(runs: &mut [CT_R]) {
+    for run in runs.iter_mut() {
+        run.modeled_field_marker_raw_indices.clear();
+    }
+
+    let mut modeled_raw_indices = Vec::new();
+    let mut stack = Vec::<OpenModeledComplexField>::new();
+
+    for (run_index, run) in runs.iter().enumerate() {
+        for (marker, raw_index) in run.field_markers.iter().zip(&run.field_marker_raw_indices) {
+            let raw_index = *raw_index;
+            let raw_is_safe = field_marker_raw_is_safe_to_hide(marker, run, raw_index);
+            match marker {
+                FieldMarker::Begin { dirty } => stack.push(OpenModeledComplexField {
+                    instruction: String::new(),
+                    result_start: None,
+                    dirty: *dirty,
+                    valid: raw_is_safe,
+                    raw_indices: vec![(run_index, raw_index)],
+                }),
+                FieldMarker::Instruction(instruction) => {
+                    if let Some(field) = stack.last_mut() {
+                        field.raw_indices.push((run_index, raw_index));
+                        if field.result_start.is_some() || !raw_is_safe {
+                            field.valid = false;
+                        } else {
+                            field.instruction.push_str(instruction);
+                        }
+                    }
+                }
+                FieldMarker::Separate { dirty } => {
+                    if let Some(field) = stack.last_mut() {
+                        field.raw_indices.push((run_index, raw_index));
+                        if field.result_start.replace(run_index + 1).is_some() || !raw_is_safe {
+                            field.valid = false;
+                        }
+                        field.dirty |= *dirty;
+                    }
+                }
+                FieldMarker::End { dirty } => {
+                    let Some(mut field) = stack.pop() else {
+                        continue;
+                    };
+                    field.raw_indices.push((run_index, raw_index));
+                    field.dirty |= *dirty;
+                    field.valid &= raw_is_safe;
+                    let instruction = FieldInstruction::parse(&field.instruction);
+                    let cached_text = field
+                        .result_start
+                        .filter(|start| *start <= run_index)
+                        .map(|start| {
+                            runs[start..=run_index]
+                                .iter()
+                                .map(CT_R::text)
+                                .collect::<String>()
+                        })
+                        .unwrap_or_default();
+                    let complete =
+                        field.result_start.is_some() && field.valid && !instruction.name.is_empty();
+                    if complete
+                        && !field.dirty
+                        && !cached_text.is_empty()
+                        && instruction.name == "HYPERLINK"
+                        && !instruction.arguments.is_empty()
+                    {
+                        modeled_raw_indices.extend(field.raw_indices.iter().copied());
+                    }
+                    if let Some(parent) = stack.last_mut()
+                        && !complete
+                    {
+                        parent.valid = false;
+                    }
+                }
+            }
+        }
+    }
+
+    for (run_index, raw_index) in modeled_raw_indices {
+        let modeled = &mut runs[run_index].modeled_field_marker_raw_indices;
+        if !modeled.contains(&raw_index) {
+            modeled.push(raw_index);
+        }
+    }
+}
+
+fn field_marker_raw_is_safe_to_hide(marker: &FieldMarker, run: &CT_R, raw_index: usize) -> bool {
+    let Some(raw) = run.extra_xml.get(raw_index) else {
+        return false;
+    };
+    match marker {
+        FieldMarker::Instruction(_) => true,
+        FieldMarker::Begin { .. } | FieldMarker::Separate { .. } | FieldMarker::End { .. } => raw
+            .iter()
+            .rev()
+            .skip_while(|byte| byte.is_ascii_whitespace())
+            .take(2)
+            .copied()
+            .eq(*b">/"),
+    }
+}
+
 fn field_marker_from_element(
     element: &BytesStart<'_>,
     word_prefixes: &[String],
@@ -2766,6 +2886,46 @@ mod tests {
                 .matches(r#"w:fldLock="0""#)
                 .count(),
             3
+        );
+        assert_eq!(
+            p.runs
+                .iter()
+                .map(|run| run.modeled_field_marker_raw_indices.as_slice())
+                .collect::<Vec<_>>(),
+            [&[0][..], &[0][..], &[0][..], &[][..], &[0][..]]
+        );
+    }
+
+    #[test]
+    fn incomplete_complex_hyperlink_fields_remain_raw_reader_content() {
+        let p = parse_paragraph(concat!(
+            r#"<w:r><w:fldChar w:fldCharType="begin" w:fldLock="0"/></w:r>"#,
+            r#"<w:r><w:instrText> HYPERLINK &quot;mailto:reader@example.test&quot; </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate" w:fldLock="0"/></w:r>"#,
+            r#"<w:r><w:t>Reader link</w:t></w:r>"#,
+        ));
+
+        assert!(
+            p.runs
+                .iter()
+                .all(|run| run.modeled_field_marker_raw_indices.is_empty())
+        );
+    }
+
+    #[test]
+    fn non_hyperlink_complex_fields_remain_raw_reader_content() {
+        let p = parse_paragraph(concat!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText> PAGE </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:t>1</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        ));
+
+        assert!(
+            p.runs
+                .iter()
+                .all(|run| run.modeled_field_marker_raw_indices.is_empty())
         );
     }
 
@@ -3431,6 +3591,7 @@ mod tests {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
             alt_drawings: Vec::new(),
         });
@@ -3517,6 +3678,7 @@ mod tests {
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             field_markers: Vec::new(),
+            field_marker_raw_indices: Vec::new(),
             modeled_field_marker_raw_indices: Vec::new(),
             alt_drawings: Vec::new(),
         });
