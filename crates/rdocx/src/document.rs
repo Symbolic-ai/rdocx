@@ -29,6 +29,7 @@ use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R, RunContent};
 
+use oxml_core::custom_properties::CustomProperties;
 use rdocx_oxml::core_properties::CoreProperties;
 
 use crate::Length;
@@ -52,9 +53,11 @@ pub struct RenderOptions {
 pub struct Document {
     pub(crate) package: OpcPackage,
     pub(crate) document: CT_Document,
-    styles: CT_Styles,
+    pub(crate) styles: CT_Styles,
     numbering: Option<CT_Numbering>,
-    core_properties: Option<CoreProperties>,
+    pub(crate) core_properties: Option<CoreProperties>,
+    /// Read-only custom document properties resolved from package relationships.
+    pub(crate) custom_properties: Option<CustomProperties>,
     /// Package part containing the core properties, resolved from `_rels/.rels`.
     core_properties_part_name: String,
     /// Part name for the main document
@@ -67,13 +70,13 @@ pub struct Document {
     /// Part name for numbering definitions, resolved the same way.
     numbering_part_name: String,
     /// Typed document settings loaded through the main document relationship.
-    settings: Option<CT_Settings>,
+    pub(crate) settings: Option<CT_Settings>,
     /// Existing settings relationship target. No conventional target is assumed.
     settings_part_name: Option<String>,
     /// Collision-free allocator for image media parts.
     image_namer: MediaNamer,
     /// Footnotes: loaded from word/footnotes.xml on open, written back on save.
-    footnotes: rdocx_oxml::footnotes::CT_Footnotes,
+    pub(crate) footnotes: rdocx_oxml::footnotes::CT_Footnotes,
     /// Typed comments loaded through the main document relationship.
     pub(crate) comments: Option<rdocx_oxml::comments::CT_Comments>,
     /// Existing comments relationship target. No target is invented on read.
@@ -400,6 +403,7 @@ impl Document {
             styles,
             numbering: None,
             core_properties: None,
+            custom_properties: None,
             core_properties_part_name: DEFAULT_CORE_PROPERTIES_PART.to_string(),
             doc_part_name: "/word/document.xml".to_string(),
             styles_part_name: DEFAULT_STYLES_PART.to_string(),
@@ -491,6 +495,13 @@ impl Document {
             .and_then(|part| package.get_part(part))
             .and_then(|xml| CoreProperties::from_xml(xml).ok());
 
+        let custom_properties = package
+            .package_rels
+            .get_by_type(rel_types::CUSTOM_PROPERTIES)
+            .map(|rel| OpcPackage::resolve_rel_target("/", &rel.target))
+            .and_then(|part| package.get_part(&part))
+            .and_then(|xml| CustomProperties::from_xml(xml).ok());
+
         let image_namer = MediaNamer::scan(
             "/word/media",
             "image",
@@ -528,6 +539,7 @@ impl Document {
             styles,
             numbering,
             core_properties,
+            custom_properties,
             core_properties_part_name: core_properties_part_name
                 .unwrap_or_else(|| DEFAULT_CORE_PROPERTIES_PART.to_string()),
             doc_part_name,

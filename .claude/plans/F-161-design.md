@@ -1,6 +1,6 @@
 # F-161, Field evaluation engine
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S49
 **Size**: L
 **Depends on**: F-160, F-154
@@ -182,16 +182,16 @@ field caches or change rendered output.
 
 ## Implementation checklist
 
-- [ ] Consume the approved F-160 field AST and source placement.
-- [ ] Add the approved native evaluation context, outcome, and document-order result API.
-- [ ] Load read-only custom properties and settings document variables.
-- [ ] Implement the approved field and formatting matrix.
-- [ ] Keep missing, malformed, and unsupported values on cached fallback with diagnostics.
-- [ ] Keep PAGE, NUMPAGES, and PAGEREF on the established pagination path.
-- [ ] Add explicit date-time, filename, merge, and included-text inputs with no ambient I/O.
-- [ ] Add the pinned Word regression matrix and focused negative tests.
-- [ ] Run parser, deterministic layout, package, oracle, and unchanged hash riders.
-- [ ] Update exactly HLD 03, HLD 08, HLD 10, and HLD 12 at completion.
+- [x] Consume the approved F-160 field AST and source placement.
+- [x] Add the approved native evaluation context, outcome, and document-order result API.
+- [x] Load read-only custom properties and settings document variables.
+- [x] Implement the approved field and formatting matrix.
+- [x] Keep missing, malformed, and unsupported values on cached fallback with diagnostics.
+- [x] Keep PAGE, NUMPAGES, and PAGEREF on the established pagination path.
+- [x] Add explicit date-time, filename, merge, and included-text inputs with no ambient I/O.
+- [x] Add the pinned Word regression matrix and focused negative tests.
+- [x] Run parser, deterministic layout, package, oracle, and unchanged hash riders.
+- [x] Update exactly HLD 03, HLD 08, HLD 10, and HLD 12 at completion.
 
 ## Open questions
 

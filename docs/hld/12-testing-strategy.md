@@ -25,6 +25,17 @@ a reintroduction is obvious from the test name alone rather than from a diff.
 The existing file is the model: `zero_column_tables_do_not_panic`,
 `saving_is_reproducible`.
 
+The Word field regression matrix records Microsoft Word 16.104 build
+16.104.25121423 with an en-US locale, Gregorian calendar, period decimal
+separator, comma grouping separator, and UTC clock context. Its readable
+in-code `F-161-readable-field-matrix-v1` input covers every supported field
+family and compares normalized document-order outcomes with exact literals.
+Focused tests cover recursive IF operands, story-isolated SEQ state, typed
+paragraph traversal, package properties and variables, explicit external
+inputs, formatting pictures, and stable cached-display fallbacks. The oracle
+is test metadata only. It is not a runtime dependency and adds no binary
+fixture.
+
 ## The hash harness
 
 The single highest-value mechanism in the plan is

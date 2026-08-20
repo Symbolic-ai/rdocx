@@ -34,7 +34,14 @@ pub struct Field {
     pub instruction: FieldInstruction,
     pub cached_result: String,
     pub dirty: Option<bool>,
+    nested_order: Vec<NestedFieldPosition>,
     source: FieldSource,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum NestedFieldPosition {
+    Argument(usize),
+    Switch(usize),
 }
 
 impl Field {
@@ -48,6 +55,7 @@ impl Field {
             instruction,
             cached_result: cached_result.to_owned(),
             dirty: None,
+            nested_order: Vec::new(),
         }
     }
 
@@ -66,6 +74,7 @@ impl Field {
             instruction,
             cached_result,
             dirty,
+            nested_order: Vec::new(),
             source: FieldSource::Parsed {
                 form,
                 raw_xml,
@@ -76,6 +85,88 @@ impl Field {
                 word_prefixes,
             },
         }
+    }
+
+    /// Return nested fields in their original instruction order.
+    #[doc(hidden)]
+    pub fn nested_fields_in_source_order(&self) -> Vec<&Field> {
+        let original = self.original_instruction();
+        let structured_unchanged = self.instruction.name == original.name
+            && self.instruction.arguments == original.arguments
+            && self.instruction.switches == original.switches;
+        if structured_unchanged && self.instruction.raw != original.raw {
+            return Vec::new();
+        }
+        self.nested_fields_from_instruction(&self.instruction, structured_unchanged)
+    }
+
+    /// Return the instruction selected by the public raw-versus-structured edit rules.
+    #[doc(hidden)]
+    pub fn effective_instruction(&self) -> FieldInstruction {
+        instruction_for_write(self)
+    }
+
+    /// Return nested fields from an effective instruction in evaluation order.
+    #[doc(hidden)]
+    pub fn effective_nested_fields_in_source_order<'a>(
+        &self,
+        instruction: &'a FieldInstruction,
+    ) -> Vec<&'a Field> {
+        self.nested_fields_from_instruction(
+            instruction,
+            self.instruction == *self.original_instruction(),
+        )
+    }
+
+    fn original_instruction(&self) -> &FieldInstruction {
+        match &self.source {
+            FieldSource::New {
+                original_instruction,
+            }
+            | FieldSource::Parsed {
+                original_instruction,
+                ..
+            } => original_instruction,
+        }
+    }
+
+    fn nested_fields_from_instruction<'a>(
+        &self,
+        instruction: &'a FieldInstruction,
+        preserve_source_order: bool,
+    ) -> Vec<&'a Field> {
+        let mut fields = Vec::new();
+        if preserve_source_order {
+            for position in &self.nested_order {
+                let argument = match *position {
+                    NestedFieldPosition::Argument(index) => instruction.arguments.get(index),
+                    NestedFieldPosition::Switch(index) => instruction
+                        .switches
+                        .get(index)
+                        .and_then(|switch| switch.argument.as_ref()),
+                };
+                if let Some(FieldArgument::Nested(field)) = argument {
+                    fields.push(field.as_ref());
+                }
+            }
+        }
+        for argument in instruction.arguments.iter().chain(
+            instruction
+                .switches
+                .iter()
+                .filter_map(|switch| switch.argument.as_ref()),
+        ) {
+            let FieldArgument::Nested(field) = argument else {
+                continue;
+            };
+            if !fields
+                .iter()
+                .any(|ordered| std::ptr::eq(*ordered, field.as_ref()))
+            {
+                fields.push(field.as_ref());
+            }
+        }
+        fields
     }
 
     fn is_unchanged(&self) -> bool {
@@ -1177,7 +1268,8 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
                         continue;
                     };
                     merge_field_dirty(&mut field.dirty, dirty);
-                    let instruction = parse_field_instruction_parts(field.instruction);
+                    let (instruction, nested_order) =
+                        parse_field_instruction_parts_with_order(field.instruction);
                     let source = complex_field_source(
                         field.start_run,
                         run_index,
@@ -1185,7 +1277,7 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
                         extra_xml,
                         hyperlinks,
                     );
-                    let parsed = Field::parsed(
+                    let mut parsed = Field::parsed(
                         instruction,
                         field.cached_result,
                         field.cached_segments,
@@ -1194,6 +1286,7 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
                         source,
                         word_prefixes.to_vec(),
                     );
+                    parsed.nested_order = nested_order;
                     let valid = field.valid
                         && !parsed.instruction.name.is_empty()
                         && run_sources[field.start_run..=run_index]
@@ -3844,6 +3937,12 @@ struct InstructionToken {
 }
 
 fn parse_field_instruction_parts(parts: Vec<InstructionPart>) -> FieldInstruction {
+    parse_field_instruction_parts_with_order(parts).0
+}
+
+fn parse_field_instruction_parts_with_order(
+    parts: Vec<InstructionPart>,
+) -> (FieldInstruction, Vec<NestedFieldPosition>) {
     let mut raw = String::new();
     let mut tokens = Vec::new();
     let mut text = String::new();
@@ -3873,6 +3972,7 @@ fn parse_field_instruction_parts(parts: Vec<InstructionPart>) -> FieldInstructio
     let remaining = tokens.collect::<Vec<_>>();
     let mut arguments = Vec::new();
     let mut switches = Vec::new();
+    let mut nested_order = Vec::new();
     let mut index = 0usize;
     while index < remaining.len() {
         let InstructionToken {
@@ -3880,6 +3980,9 @@ fn parse_field_instruction_parts(parts: Vec<InstructionPart>) -> FieldInstructio
             quoted,
         } = &remaining[index]
         else {
+            if matches!(&remaining[index].argument, FieldArgument::Nested(_)) {
+                nested_order.push(NestedFieldPosition::Argument(arguments.len()));
+            }
             arguments.push(remaining[index].argument.clone());
             index += 1;
             continue;
@@ -3889,6 +3992,9 @@ fn parse_field_instruction_parts(parts: Vec<InstructionPart>) -> FieldInstructio
             .flatten()
             .filter(|name| !name.is_empty())
         else {
+            if matches!(&remaining[index].argument, FieldArgument::Nested(_)) {
+                nested_order.push(NestedFieldPosition::Argument(arguments.len()));
+            }
             arguments.push(remaining[index].argument.clone());
             index += 1;
             continue;
@@ -3903,6 +4009,9 @@ fn parse_field_instruction_parts(parts: Vec<InstructionPart>) -> FieldInstructio
         } else {
             None
         };
+        if matches!(&argument, Some(FieldArgument::Nested(_))) {
+            nested_order.push(NestedFieldPosition::Switch(switches.len()));
+        }
         switches.push(FieldSwitch {
             name: switch_name.to_ascii_lowercase(),
             argument,
@@ -3910,12 +4019,15 @@ fn parse_field_instruction_parts(parts: Vec<InstructionPart>) -> FieldInstructio
         index += 1;
     }
 
-    FieldInstruction {
-        raw: raw.trim().to_owned(),
-        name,
-        arguments,
-        switches,
-    }
+    (
+        FieldInstruction {
+            raw: raw.trim().to_owned(),
+            name,
+            arguments,
+            switches,
+        },
+        nested_order,
+    )
 }
 
 fn switch_takes_argument(field_name: &str, switch_name: &str) -> bool {
@@ -5475,6 +5587,90 @@ mod tests {
         assert!(output.contains(
             r#"<ext:marker xmlns:ext="urn:producer"/><w:commentRangeStart w:id="7"/><w:r><w:t>inside</w:t></w:r><w:commentRangeEnd w:id="7"/><w:r><ext:runBefore xmlns:ext="urn:producer"/><w:commentReference w:id="7"/><ext:runAfter xmlns:ext="urn:producer"/></w:r><ext:tail xmlns:ext="urn:producer"/>"#
         ));
+    }
+
+    #[test]
+    fn edited_nested_field_order_matches_canonical_serialization() {
+        let mut paragraph = parse_paragraph(concat!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText xml:space="preserve">MERGEFIELD \b </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText>AUTHOR</w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:t>stored author</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            r#"<w:r><w:instrText xml:space="preserve"> </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText>MERGEFIELD Name</w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:t>stored name</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:t>stored outer</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        ));
+        assert_eq!(
+            parsed_field(&paragraph, 0)
+                .nested_fields_in_source_order()
+                .iter()
+                .map(|field| field.instruction.name.as_str())
+                .collect::<Vec<_>>(),
+            ["AUTHOR", "MERGEFIELD"]
+        );
+
+        let mut raw_edited = paragraph.clone();
+        let RunContent::Field(field) = &mut raw_edited.runs[0].content[0] else {
+            unreachable!()
+        };
+        field.instruction.raw = "AUTHOR".to_owned();
+        assert!(field.nested_fields_in_source_order().is_empty());
+        assert_eq!(field.effective_instruction().name, "AUTHOR");
+        let output = serialized_paragraph(&raw_edited);
+        let reparsed = parse_paragraph(
+            output
+                .strip_prefix("<w:p>")
+                .and_then(|value| value.strip_suffix("</w:p>"))
+                .unwrap(),
+        );
+        assert_eq!(parsed_field(&reparsed, 0).instruction.name, "AUTHOR");
+        assert!(
+            parsed_field(&reparsed, 0)
+                .nested_fields_in_source_order()
+                .is_empty()
+        );
+
+        let RunContent::Field(field) = &mut paragraph.runs[0].content[0] else {
+            unreachable!()
+        };
+        field.instruction.arguments.insert(
+            0,
+            FieldArgument::Nested(Box::new(Field::new("MERGEFIELD First", "stored first"))),
+        );
+        let expected = ["MERGEFIELD First", "MERGEFIELD Name", "AUTHOR"];
+        assert_eq!(
+            field
+                .nested_fields_in_source_order()
+                .iter()
+                .map(|field| field.instruction.raw.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+
+        let output = serialized_paragraph(&paragraph);
+        let reparsed = parse_paragraph(
+            output
+                .strip_prefix("<w:p>")
+                .and_then(|value| value.strip_suffix("</w:p>"))
+                .unwrap(),
+        );
+        assert_eq!(
+            parsed_field(&reparsed, 0)
+                .nested_fields_in_source_order()
+                .iter()
+                .map(|field| field.instruction.raw.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
     }
 
     #[test]

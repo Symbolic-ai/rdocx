@@ -229,6 +229,17 @@ dirty state, source form, and producer XML. These additions are native Rust
 APIs only. Python, WASM, and CLI consumers keep their existing surface and
 preserve the typed content when they save the owned document.
 
+Native Word callers evaluate fields with `Document::evaluate_fields` and an
+explicit `FieldEvaluationContext`. `FieldDateTime` supplies deterministic civil
+time. Caller maps supply merge values and included text, including
+`source#bookmark` keys for bookmark-scoped includes. Each `FieldEvaluation`
+records a snapshot-local document-order index, original instruction, stored
+display, and a `FieldOutcome` that is resolved text, pagination deferral, or a
+stable stored-display fallback. Evaluation is additive and read-only. It never
+reads the ambient clock or filesystem and never changes field caches. Python,
+WASM, and CLI surfaces gain no evaluator methods and continue to preserve the
+same package content.
+
 Native Word callers can also inspect content controls through
 `Document::content_controls` and the tag or alias lookup methods.
 `ContentControlRef` exposes immutable metadata and display text. Direct setters

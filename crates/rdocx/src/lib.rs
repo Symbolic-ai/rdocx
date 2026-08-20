@@ -25,6 +25,7 @@ mod comments;
 mod content_control;
 mod document;
 mod error;
+mod field;
 pub mod paragraph;
 mod revision;
 pub mod run;
@@ -38,6 +39,7 @@ pub use document::{
     OutlineNode, RenderOptions,
 };
 pub use error::{Error, Result};
+pub use field::{FieldDateTime, FieldEvaluation, FieldEvaluationContext, FieldOutcome};
 pub use oxml_chart::{ChartData, ChartKind};
 pub use oxml_core::Length;
 pub use oxml_opc::PackageReadLimits;
