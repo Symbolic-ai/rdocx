@@ -267,6 +267,10 @@ defended.
 | F-150 | S47 | L | 4 | 1 | 2026-08-17 | Atomic placement-aware revision acceptance and rejection |
 | F-151 | S48 | M | 2 | 1 | 2026-08-17 | Accepted and tracked revision views with deterministic decorations and margin bars |
 | F-155 | S48 | M | 2 | 1 | Typed document-protection intent and recorded verification metadata |
+| F-160 | S49 | L | 4 | 1 | 2026-08-20 | Recursive source-preserving field instruction grammar for simple and complex fields |
+| F-161 | S49 | L | 4 | 1 | 2026-08-20 | Deterministic native field evaluation with pinned Word results and cached fallback |
+| F-162 | S49 | M | 2 | 1 | 2026-08-20 | Atomic field cache updates with explicit update-aware save operations |
+| F-203 | S49 | M | 2 | 1 | 2026-08-20 | Namespace-aware table-property parsing with absolute schema-slot preservation |
 
 ## Velocity
 
