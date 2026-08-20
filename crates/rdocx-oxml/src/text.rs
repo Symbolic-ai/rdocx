@@ -1203,9 +1203,7 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
                         if !valid {
                             parent.valid = false;
                         } else if parent.separate_run.is_none() {
-                            if valid {
-                                parent.instruction.push(InstructionPart::Nested(parsed));
-                            }
+                            parent.instruction.push(InstructionPart::Nested(parsed));
                         }
                     } else if valid {
                         completed.push((field.start_run, run_index, parsed, None));
@@ -2692,6 +2690,7 @@ fn update_complex_phase(kind: Option<&str>, field_depth: &mut usize, outer_resul
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_rewritten_field_element<W: std::io::Write>(
     writer: &mut Writer<W>,
     source: &BytesStart<'_>,
@@ -4528,13 +4527,13 @@ mod tests {
     #[test]
     fn field_discovery_uses_direct_run_children_and_restores_namespace_scope() {
         let word_namespace = crate::namespace::W_NS;
-        let nested_marker = parse_paragraph(&format!(concat!(
+        let nested_marker = parse_paragraph(concat!(
             r#"<w:r><x:extension xmlns:x="urn:producer"><w:fldChar w:fldCharType="begin"/></x:extension></w:r>"#,
             r#"<w:r><w:instrText>DATE</w:instrText></w:r>"#,
             r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
             r#"<w:r><w:t>literal</w:t></w:r>"#,
             r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
-        ),));
+        ));
         assert!(!nested_marker.runs.iter().any(|run| {
             run.content
                 .iter()
