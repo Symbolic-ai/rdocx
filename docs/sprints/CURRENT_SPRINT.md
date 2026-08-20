@@ -28,7 +28,7 @@ depends on.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-160 | Field instruction parser | L | in-progress | codex |
-| F-161 | Field evaluation engine | L | pending | - |
+| F-161 | Field evaluation engine | L | in-progress | codex |
 | F-162 | Field update policy | M | pending | - |
 | F-203 | Reader compatibility corrections | M | in-progress | codex |
 
