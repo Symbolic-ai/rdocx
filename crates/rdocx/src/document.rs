@@ -4033,12 +4033,14 @@ fn has_consistent_sfnt_header(data: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FieldEvaluationContext;
     use crate::paragraph::Alignment;
     use oxml_chart::{
         Axis, AxisData, AxisId, AxisKind, AxisPosition, BarDirection, BarGrouping, CT_PlotArea,
         ChartData, ChartKind, NumericData, Plot, Series, StringRef,
     };
     use oxml_sml::Column;
+    use rdocx_oxml::text::Field;
     use rdocx_oxml::units::{HalfPoint, Twips};
     use std::fs;
     use std::io::Cursor;
@@ -4196,6 +4198,37 @@ mod tests {
         assert_eq!(layout_invocations(), 1);
 
         doc.add_paragraph("After mutation");
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        assert_eq!(layout_invocations(), 2);
+    }
+
+    #[test]
+    fn field_update_batch_invalidates_cached_layout_once() {
+        let mut doc = Document::new();
+        let mut paragraph = CT_P::new();
+        paragraph.runs.push(CT_R {
+            properties: None,
+            content: vec![RunContent::Field(Field::new("PAGE", "4"))],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        });
+        doc.document
+            .body
+            .content
+            .push(BodyContent::Paragraph(paragraph));
+
+        reset_layout_invocations();
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        assert_eq!(layout_invocations(), 1);
+
+        assert_eq!(
+            doc.update_fields(&FieldEvaluationContext::default())
+                .unwrap(),
+            1
+        );
         doc.render_page_to_png_deterministic(0, 1.0).unwrap();
         doc.render_page_to_png_deterministic(0, 1.0).unwrap();
         assert_eq!(layout_invocations(), 2);

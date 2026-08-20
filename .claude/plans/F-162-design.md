@@ -1,6 +1,6 @@
 # F-162, Field update policy
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S49
 **Size**: M
 **Depends on**: F-161
@@ -133,16 +133,16 @@ blocks integration.
 
 ## Implementation checklist
 
-- [ ] Retain and mutate field-local `w:dirty` on the F-160 model.
-- [ ] Traverse the approved F-161 story scope in document order.
-- [ ] Stage evaluation outcomes before changing any cache.
-- [ ] Apply resolved results, preserve unresolved results, and update dirty state.
-- [ ] Add explicit update-on-demand and update-on-save APIs.
-- [ ] Keep existing save and byte APIs leave alone.
-- [ ] Invalidate layout once after a successful mutation batch.
-- [ ] Add policy, unsupported fallback, atomicity, dirty, and round-trip regressions.
-- [ ] Run focused checks, package riders, and the unchanged hash harness.
-- [ ] Update exactly the approved HLD impact files at completion.
+- [x] Retain and mutate field-local `w:dirty` on the F-160 model.
+- [x] Traverse the approved F-161 story scope in document order.
+- [x] Stage evaluation outcomes before changing any cache.
+- [x] Apply resolved results, preserve unresolved results, and update dirty state.
+- [x] Add explicit update-on-demand and update-on-save APIs.
+- [x] Keep existing save and byte APIs leave alone.
+- [x] Invalidate layout once after a successful mutation batch.
+- [x] Add policy, unsupported fallback, atomicity, dirty, and round-trip regressions.
+- [x] Run focused checks, package riders, and the unchanged hash harness.
+- [x] Update exactly the approved HLD impact files at completion.
 
 ## Open questions
 

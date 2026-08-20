@@ -1,5 +1,7 @@
 //! Text content elements: `CT_P` (paragraph), `CT_R` (run), `CT_Text`.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 
@@ -11,6 +13,8 @@ use crate::numbering::{parse_scoped_ppr, word_prefixes_at};
 use crate::properties::{CT_PPr, CT_RPr, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::CT_Revision;
+
+static NEXT_FIELD_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// `CT_Text` — The text content of a run, with optional xml:space="preserve".
 #[derive(Debug, Clone, PartialEq)]
@@ -76,6 +80,7 @@ impl Field {
             dirty,
             nested_order: Vec::new(),
             source: FieldSource::Parsed {
+                source_id: NEXT_FIELD_SOURCE_ID.fetch_add(1, Ordering::Relaxed),
                 form,
                 raw_xml,
                 original_instruction,
@@ -91,9 +96,7 @@ impl Field {
     #[doc(hidden)]
     pub fn nested_fields_in_source_order(&self) -> Vec<&Field> {
         let original = self.original_instruction();
-        let structured_unchanged = self.instruction.name == original.name
-            && self.instruction.arguments == original.arguments
-            && self.instruction.switches == original.switches;
+        let structured_unchanged = instruction_structure_eq(&self.instruction, original);
         if structured_unchanged && self.instruction.raw != original.raw {
             return Vec::new();
         }
@@ -114,7 +117,7 @@ impl Field {
     ) -> Vec<&'a Field> {
         self.nested_fields_from_instruction(
             instruction,
-            self.instruction == *self.original_instruction(),
+            instruction_structure_eq(&self.instruction, self.original_instruction()),
         )
     }
 
@@ -225,6 +228,17 @@ impl Field {
         }
         vec![(self.cached_result.as_str(), None)]
     }
+
+    /// Return the parsed source fragment and its cache-aware replacement.
+    #[doc(hidden)]
+    pub fn source_replacement(&self) -> Result<Option<(&[u8], Vec<u8>)>> {
+        let FieldSource::Parsed { raw_xml, .. } = &self.source else {
+            return Ok(None);
+        };
+        let mut writer = Writer::new(Vec::new());
+        write_field(&mut writer, self, None)?;
+        Ok(Some((raw_xml, writer.into_inner())))
+    }
 }
 
 impl PartialEq for Field {
@@ -262,6 +276,7 @@ enum FieldSource {
         original_instruction: FieldInstruction,
     },
     Parsed {
+        source_id: u64,
         form: FieldForm,
         raw_xml: Vec<u8>,
         original_instruction: FieldInstruction,
@@ -1994,8 +2009,7 @@ impl CT_P {
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
                         let raw = capture_element(reader, e)?;
                         if let Some(sdt) = CT_Sdt::from_raw(&raw, &prefixes) {
-                            let raw_before =
-                                extra_xml.iter().filter(|(at, _)| *at == runs.len()).count();
+                            let raw_before = raw_xml_count_at(&extra_xml, runs.len());
                             let markers_before = comment_ranges
                                 .iter()
                                 .filter(|marker: &&CommentRangeMarker| {
@@ -2018,9 +2032,10 @@ impl CT_P {
                         } else {
                             let hyperlink_index = hyperlinks.len();
                             let run_end = run_start + parsed.runs.len();
-                            let preserved_raw_before = parsed.runs.is_empty().then(|| {
-                                extra_xml.iter().filter(|(at, _)| *at == run_start).count()
-                            });
+                            let preserved_raw_before = parsed
+                                .runs
+                                .is_empty()
+                                .then(|| raw_xml_count_at(&extra_xml, run_start));
                             runs.extend(parsed.runs);
                             run_sources.extend(parsed.run_sources);
                             hyperlinks.push(HyperlinkSpan {
@@ -2075,10 +2090,7 @@ impl CT_P {
                             id,
                             name: bookmark_name,
                             run_index: runs.len(),
-                            raw_before: extra_xml
-                                .iter()
-                                .filter(|(at, _)| *at == runs.len())
-                                .count(),
+                            raw_before: raw_xml_count_at(&extra_xml, runs.len()),
                         });
                         extra_xml.push((runs.len(), capture_element(reader, e)?));
                     } else if is_word_element(name.as_ref(), b"ins", &prefixes)
@@ -2086,8 +2098,7 @@ impl CT_P {
                         || is_word_element(name.as_ref(), b"moveFrom", &prefixes)
                         || is_word_element(name.as_ref(), b"moveTo", &prefixes)
                     {
-                        let raw_before =
-                            extra_xml.iter().filter(|(at, _)| *at == runs.len()).count();
+                        let raw_before = raw_xml_count_at(&extra_xml, runs.len());
                         let raw = capture_element(reader, e)?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             revisions.push((runs.len(), raw_before, revision));
@@ -2124,15 +2135,11 @@ impl CT_P {
                             id,
                             name: bookmark_name,
                             run_index: runs.len(),
-                            raw_before: extra_xml
-                                .iter()
-                                .filter(|(at, _)| *at == runs.len())
-                                .count(),
+                            raw_before: raw_xml_count_at(&extra_xml, runs.len()),
                         });
                         extra_xml.push((runs.len(), capture_empty_element(e)?));
                     } else if !matches_local_name(name.as_ref(), b"p") {
-                        let raw_before =
-                            extra_xml.iter().filter(|(at, _)| *at == runs.len()).count();
+                        let raw_before = raw_xml_count_at(&extra_xml, runs.len());
                         let raw = capture_empty_element(e)?;
                         if (is_word_element(name.as_ref(), b"ins", &prefixes)
                             || is_word_element(name.as_ref(), b"del", &prefixes)
@@ -2147,6 +2154,21 @@ impl CT_P {
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"p") => {
                     break;
+                }
+                Ok(Event::Text(ref text)) if is_xml_whitespace(text.as_ref()) => {
+                    extra_xml.push((runs.len(), text.as_ref().to_vec()));
+                }
+                Ok(Event::Comment(ref comment)) => {
+                    extra_xml.push((
+                        runs.len(),
+                        capture_standalone_event(Event::Comment(comment.to_owned().into_owned()))?,
+                    ));
+                }
+                Ok(Event::PI(ref instruction)) => {
+                    extra_xml.push((
+                        runs.len(),
+                        capture_standalone_event(Event::PI(instruction.to_owned().into_owned()))?,
+                    ));
                 }
                 Ok(Event::Eof) => break,
                 Err(e) => return Err(e.into()),
@@ -2166,6 +2188,12 @@ impl CT_P {
             hyperlinks: &mut hyperlinks,
             word_prefixes,
         })?;
+        extra_xml.retain(|(_, raw)| !is_xml_whitespace(raw));
+        for hyperlink in &mut hyperlinks {
+            hyperlink
+                .extra_xml
+                .retain(|(_, _, raw)| !is_xml_whitespace(raw));
+        }
 
         Ok(CT_P {
             properties,
@@ -2334,6 +2362,19 @@ impl CT_P {
     }
 }
 
+fn is_xml_whitespace(value: &[u8]) -> bool {
+    !value.is_empty()
+        && value
+            .iter()
+            .all(|byte| matches!(*byte, b' ' | b'\t' | b'\r' | b'\n'))
+}
+
+fn capture_standalone_event(event: Event<'static>) -> Result<Vec<u8>> {
+    let mut writer = Writer::new(Vec::new());
+    writer.write_event(event)?;
+    Ok(writer.into_inner())
+}
+
 fn write_field<W: std::io::Write>(
     writer: &mut Writer<W>,
     field: &Field,
@@ -2350,10 +2391,13 @@ fn write_field<W: std::io::Write>(
         raw_xml,
         original_instruction,
         original_cached_result,
+        original_dirty,
         word_prefixes,
         ..
     } = &field.source
-        && field.instruction == *original_instruction
+        && instruction_structure_eq(&field.instruction, original_instruction)
+        && instruction_source_identity_eq(&field.instruction, original_instruction)
+        && field.instruction.raw == original_instruction.raw
     {
         let cached_changed = field.cached_result != *original_cached_result;
         let updated = match form {
@@ -2361,7 +2405,12 @@ fn write_field<W: std::io::Write>(
                 update_simple_field_source(field, raw_xml, word_prefixes, cached_changed)?
             }
             FieldForm::Complex => {
-                update_complex_field_source(field, raw_xml, word_prefixes, cached_changed)?
+                let updated = update_nested_field_sources(field, raw_xml, word_prefixes)?;
+                if cached_changed || field.dirty != *original_dirty {
+                    update_complex_field_source(field, &updated, word_prefixes, cached_changed)?
+                } else {
+                    updated
+                }
             }
         };
         return write_raw_with_word_override(writer, &updated, foreign_word_namespace);
@@ -2383,6 +2432,282 @@ fn write_field<W: std::io::Write>(
         FieldForm::Simple => write_simple_field(writer, &field, foreign_word_namespace),
         FieldForm::Complex => write_complex_field(writer, &field, foreign_word_namespace),
     }
+}
+
+fn update_nested_field_sources(
+    field: &Field,
+    raw: &[u8],
+    word_prefixes: &[String],
+) -> Result<Vec<u8>> {
+    let scan = scan_complex_source(raw, word_prefixes)?;
+    let nested_fields = field.nested_fields_in_source_order();
+    if scan.nested.len() != nested_fields.len() {
+        return Err(OxmlError::MissingElement(
+            "nested field spans in owning complex field".to_owned(),
+        ));
+    }
+    let mut edits = Vec::new();
+    for (nested, span) in nested_fields.into_iter().zip(scan.nested) {
+        if nested.is_unchanged() {
+            continue;
+        }
+        let replacement =
+            rewrite_isolated_nested_field(nested, raw, &span, &scan.runs, word_prefixes)?;
+        edits.push((span.start, span.end, replacement));
+    }
+
+    let mut updated = raw.to_vec();
+    for (start, end, replacement) in edits.into_iter().rev() {
+        updated.splice(start..end, replacement);
+    }
+    Ok(updated)
+}
+
+#[derive(Debug)]
+struct ComplexSourceScan {
+    runs: Vec<RunSourceSpan>,
+    nested: Vec<NestedComplexSpan>,
+}
+
+#[derive(Debug)]
+struct RunSourceSpan {
+    start: usize,
+    content_start: usize,
+    content_end: usize,
+    end: usize,
+    field_content: Vec<(usize, usize)>,
+}
+
+#[derive(Debug)]
+struct NestedComplexSpan {
+    start: usize,
+    end: usize,
+    start_run: usize,
+    end_run: usize,
+}
+
+fn is_word_source_name(name: &[u8], word_prefixes: &[String]) -> bool {
+    let Some(separator) = name.iter().position(|byte| *byte == b':') else {
+        return word_prefixes.iter().any(String::is_empty);
+    };
+    word_prefixes
+        .iter()
+        .any(|prefix| prefix.as_bytes() == &name[..separator])
+}
+
+fn scan_complex_source(raw: &[u8], word_prefixes: &[String]) -> Result<ComplexSourceScan> {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut runs = Vec::new();
+    let mut open_fields = Vec::<OpenComplexSourceField>::new();
+    let mut nested = Vec::new();
+    loop {
+        let run_start = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let run_prefixes = word_prefixes_at(&element, word_prefixes)?;
+                if !is_word_element(element.name().as_ref(), b"r", &run_prefixes) {
+                    reader.read_to_end_into(element.name(), &mut Vec::new())?;
+                    buffer.clear();
+                    continue;
+                }
+                let run_index = runs.len();
+                let content_start = reader.buffer_position() as usize;
+                let mut field_content = Vec::new();
+                loop {
+                    buffer.clear();
+                    let child_start = reader.buffer_position() as usize;
+                    match reader.read_event_into(&mut buffer)? {
+                        Event::Start(child) => {
+                            let prefixes = word_prefixes_at(&child, &run_prefixes)?;
+                            let is_field_content =
+                                !is_word_element(child.name().as_ref(), b"rPr", &prefixes)
+                                    && is_word_source_name(child.name().as_ref(), &prefixes);
+                            if is_word_element(child.name().as_ref(), b"fldChar", &prefixes) {
+                                let kind =
+                                    optional_word_attribute(&child, b"fldCharType", &prefixes);
+                                reader.read_to_end_into(child.name(), &mut Vec::new())?;
+                                record_complex_source_marker(
+                                    kind.as_deref(),
+                                    child_start,
+                                    reader.buffer_position() as usize,
+                                    run_index,
+                                    &mut open_fields,
+                                    &mut nested,
+                                );
+                            } else {
+                                reader.read_to_end_into(child.name(), &mut Vec::new())?;
+                            }
+                            if is_field_content {
+                                field_content
+                                    .push((child_start, reader.buffer_position() as usize));
+                            }
+                        }
+                        Event::Empty(child) => {
+                            let prefixes = word_prefixes_at(&child, &run_prefixes)?;
+                            let is_field_content =
+                                !is_word_element(child.name().as_ref(), b"rPr", &prefixes)
+                                    && is_word_source_name(child.name().as_ref(), &prefixes);
+                            if is_word_element(child.name().as_ref(), b"fldChar", &prefixes) {
+                                let kind =
+                                    optional_word_attribute(&child, b"fldCharType", &prefixes);
+                                record_complex_source_marker(
+                                    kind.as_deref(),
+                                    child_start,
+                                    reader.buffer_position() as usize,
+                                    run_index,
+                                    &mut open_fields,
+                                    &mut nested,
+                                );
+                            }
+                            if is_field_content {
+                                field_content
+                                    .push((child_start, reader.buffer_position() as usize));
+                            }
+                        }
+                        Event::End(end) if matches_local_name(end.name().as_ref(), b"r") => {
+                            runs.push(RunSourceSpan {
+                                start: run_start,
+                                content_start,
+                                content_end: child_start,
+                                end: reader.buffer_position() as usize,
+                                field_content,
+                            });
+                            break;
+                        }
+                        Event::Eof => {
+                            return Err(OxmlError::MissingElement(
+                                "end of field source run".to_owned(),
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Event::Eof => return Ok(ComplexSourceScan { runs, nested }),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn record_complex_source_marker(
+    kind: Option<&str>,
+    start: usize,
+    end: usize,
+    run_index: usize,
+    open_fields: &mut Vec<OpenComplexSourceField>,
+    nested: &mut Vec<NestedComplexSpan>,
+) {
+    match kind {
+        Some("begin") => open_fields.push(OpenComplexSourceField {
+            start,
+            start_run: run_index,
+            separated: false,
+        }),
+        Some("separate") => {
+            if let Some(field) = open_fields.last_mut() {
+                field.separated = true;
+            }
+        }
+        Some("end") => {
+            let Some(field) = open_fields.pop() else {
+                return;
+            };
+            if open_fields.len() == 1 && !open_fields[0].separated {
+                nested.push(NestedComplexSpan {
+                    start: field.start,
+                    end,
+                    start_run: field.start_run,
+                    end_run: run_index,
+                });
+            }
+        }
+        _ => {}
+    }
+}
+
+struct OpenComplexSourceField {
+    start: usize,
+    start_run: usize,
+    separated: bool,
+}
+
+fn rewrite_isolated_nested_field(
+    field: &Field,
+    raw: &[u8],
+    field_span: &NestedComplexSpan,
+    runs: &[RunSourceSpan],
+    word_prefixes: &[String],
+) -> Result<Vec<u8>> {
+    let start_run = &runs[field_span.start_run];
+    let end_run = &runs[field_span.end_run];
+    let mut isolated = raw[start_run.start..start_run.content_start].to_vec();
+    if field_span.start_run == field_span.end_run {
+        isolated.extend_from_slice(&raw[field_span.start..field_span.end]);
+    } else {
+        isolated.extend_from_slice(&raw[field_span.start..start_run.end]);
+        isolated.extend_from_slice(&raw[start_run.end..end_run.content_start]);
+        isolated.extend_from_slice(&raw[end_run.content_start..field_span.end]);
+    }
+    isolated.extend_from_slice(&raw[end_run.content_end..end_run.end]);
+
+    let FieldSource::Parsed {
+        original_instruction,
+        original_cached_result,
+        original_dirty,
+        ..
+    } = &field.source
+    else {
+        return Err(OxmlError::MissingElement(
+            "parsed nested field source".to_owned(),
+        ));
+    };
+    let raw_only_instruction_changed = field.instruction.raw != original_instruction.raw
+        && instruction_structure_eq(&field.instruction, original_instruction);
+    let mut updated = if raw_only_instruction_changed {
+        remove_nested_field_sources(&isolated, word_prefixes)?
+    } else {
+        update_nested_field_sources(field, &isolated, word_prefixes)?
+    };
+    if raw_only_instruction_changed {
+        updated = update_complex_instruction_source(field, &updated, word_prefixes)?;
+    }
+    let cached_changed = field.cached_result != *original_cached_result;
+    if cached_changed || field.dirty != *original_dirty {
+        updated = update_complex_field_source(field, &updated, word_prefixes, cached_changed)?;
+    }
+    let updated_scan = scan_complex_source(&updated, word_prefixes)?;
+    let (Some(first_run), Some(last_run)) = (updated_scan.runs.first(), updated_scan.runs.last())
+    else {
+        return Err(OxmlError::MissingElement(
+            "updated nested field runs".to_owned(),
+        ));
+    };
+    Ok(updated[first_run.content_start..last_run.content_end].to_vec())
+}
+
+fn remove_nested_field_sources(raw: &[u8], word_prefixes: &[String]) -> Result<Vec<u8>> {
+    let scan = scan_complex_source(raw, word_prefixes)?;
+    let mut removals = Vec::new();
+    for span in &scan.nested {
+        for run in &scan.runs[span.start_run..=span.end_run] {
+            removals.extend(
+                run.field_content
+                    .iter()
+                    .copied()
+                    .filter(|(start, end)| *start >= span.start && *end <= span.end),
+            );
+        }
+    }
+    removals.sort_unstable();
+    removals.dedup();
+    let mut updated = raw.to_vec();
+    for (start, end) in removals.into_iter().rev() {
+        updated.drain(start..end);
+    }
+    Ok(updated)
 }
 
 struct FieldRewriteContext {
@@ -2534,6 +2859,139 @@ fn update_simple_field_source(
     Ok(output)
 }
 
+fn update_complex_instruction_source(
+    field: &Field,
+    raw: &[u8],
+    word_prefixes: &[String],
+) -> Result<Vec<u8>> {
+    let effective = instruction_for_write(field);
+    let instruction = format!(" {} ", canonical_instruction_text(&effective));
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut output = Vec::new();
+    let mut writer = Writer::new(&mut output);
+    let mut contexts = Vec::<FieldRewriteContext>::new();
+    let mut buffer = Vec::new();
+    let mut field_depth = 0usize;
+    let mut outer_result = false;
+    let mut wrote_instruction = false;
+    let canonical_word_binding = !word_prefixes.iter().any(|prefix| prefix == "w");
+
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let inherited = contexts
+                    .last()
+                    .map(|context| context.prefixes.as_slice())
+                    .unwrap_or(word_prefixes);
+                let prefixes = word_prefixes_at(&element, inherited)?;
+                let direct_run_child =
+                    contexts.len() == 1 && contexts.last().is_some_and(|context| context.word_run);
+                if direct_run_child
+                    && is_word_element(element.name().as_ref(), b"fldChar", &prefixes)
+                {
+                    let kind = optional_word_attribute(&element, b"fldCharType", &prefixes);
+                    update_complex_phase(kind.as_deref(), &mut field_depth, &mut outer_result);
+                }
+                if direct_run_child
+                    && field_depth == 1
+                    && !outer_result
+                    && is_word_element(element.name().as_ref(), b"instrText", &prefixes)
+                {
+                    reader.read_to_end_into(element.name(), &mut Vec::new())?;
+                    write_updated_instruction_text(
+                        &mut writer,
+                        &element,
+                        (!wrote_instruction).then_some(instruction.as_str()),
+                        canonical_word_binding,
+                    )?;
+                    wrote_instruction = true;
+                } else {
+                    let word_run = contexts.is_empty()
+                        && is_word_element(element.name().as_ref(), b"r", &prefixes);
+                    writer.write_event(Event::Start(element.into_owned()))?;
+                    contexts.push(FieldRewriteContext {
+                        prefixes,
+                        word_run,
+                        canonical_end: None,
+                    });
+                }
+            }
+            Event::Empty(element) => {
+                let inherited = contexts
+                    .last()
+                    .map(|context| context.prefixes.as_slice())
+                    .unwrap_or(word_prefixes);
+                let prefixes = word_prefixes_at(&element, inherited)?;
+                let direct_run_child =
+                    contexts.len() == 1 && contexts.last().is_some_and(|context| context.word_run);
+                if direct_run_child
+                    && is_word_element(element.name().as_ref(), b"fldChar", &prefixes)
+                {
+                    let kind = optional_word_attribute(&element, b"fldCharType", &prefixes);
+                    update_complex_phase(kind.as_deref(), &mut field_depth, &mut outer_result);
+                    writer.write_event(Event::Empty(element.into_owned()))?;
+                } else if direct_run_child
+                    && field_depth == 1
+                    && !outer_result
+                    && is_word_element(element.name().as_ref(), b"instrText", &prefixes)
+                {
+                    write_updated_instruction_text(
+                        &mut writer,
+                        &element,
+                        (!wrote_instruction).then_some(instruction.as_str()),
+                        canonical_word_binding,
+                    )?;
+                    wrote_instruction = true;
+                } else {
+                    writer.write_event(Event::Empty(element.into_owned()))?;
+                }
+            }
+            Event::End(element) => {
+                contexts.pop();
+                writer.write_event(Event::End(element.into_owned()))?;
+            }
+            Event::Eof => break,
+            event => writer.write_event(event.into_owned())?,
+        }
+        buffer.clear();
+    }
+    if !wrote_instruction {
+        return Err(OxmlError::MissingElement(
+            "nested complex field instruction text".to_owned(),
+        ));
+    }
+    Ok(output)
+}
+
+fn write_updated_instruction_text<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    source: &BytesStart<'_>,
+    value: Option<&str>,
+    canonical_word_binding: bool,
+) -> Result<()> {
+    let value = value.unwrap_or_default();
+    let mut element = BytesStart::new("w:instrText");
+    for attribute in source.attributes() {
+        let attribute = attribute?;
+        if attribute.key.as_ref() != b"xml:space"
+            && !(canonical_word_binding && attribute.key.as_ref() == b"xmlns:w")
+        {
+            element.push_attribute(attribute);
+        }
+    }
+    if canonical_word_binding {
+        element.push_attribute(("xmlns:w", crate::namespace::W_NS));
+    }
+    if needs_space_preservation(value) {
+        element.push_attribute(("xml:space", "preserve"));
+    }
+    writer.write_event(Event::Start(element))?;
+    writer.write_event(Event::Text(BytesText::new(value)))?;
+    writer.write_event(Event::End(BytesEnd::new("w:instrText")))?;
+    Ok(())
+}
+
 fn update_complex_field_source(
     field: &Field,
     raw: &[u8],
@@ -2549,6 +3007,7 @@ fn update_complex_field_source(
     let mut field_depth = 0usize;
     let mut outer_result = false;
     let mut wrote_result = false;
+    let canonical_word_binding = !word_prefixes.iter().any(|prefix| prefix == "w");
 
     loop {
         match reader.read_event_into(&mut buffer)? {
@@ -2574,7 +3033,11 @@ fn update_complex_field_source(
                         && !wrote_result
                         && cached_changed
                     {
-                        write_field_result_content(&mut writer, &field.cached_result)?;
+                        write_field_result_content_with_binding(
+                            &mut writer,
+                            &field.cached_result,
+                            canonical_word_binding,
+                        )?;
                         wrote_result = true;
                     }
                     if cached_changed
@@ -2583,7 +3046,11 @@ fn update_complex_field_source(
                         && kind.as_deref() == Some("begin")
                         && !wrote_result
                     {
-                        write_field_result_content(&mut writer, &field.cached_result)?;
+                        write_field_result_content_with_binding(
+                            &mut writer,
+                            &field.cached_result,
+                            canonical_word_binding,
+                        )?;
                         wrote_result = true;
                     }
                     update_complex_phase(kind.as_deref(), &mut field_depth, &mut outer_result);
@@ -2596,7 +3063,7 @@ fn update_complex_field_source(
                             &prefixes,
                             &[("fldCharType", kind)],
                             (kind == "begin").then_some(field.dirty).flatten(),
-                            false,
+                            canonical_word_binding,
                             false,
                         )?;
                         contexts.push(FieldRewriteContext {
@@ -2609,6 +3076,7 @@ fn update_complex_field_source(
                     }
                     if cached_changed
                         && wrote_result
+                        && outer_result
                         && (depth_before > 1
                             || depth_before == 1 && kind.as_deref() == Some("begin"))
                     {
@@ -2625,7 +3093,11 @@ fn update_complex_field_source(
                     if cached_changed {
                         reader.read_to_end_into(element.name(), &mut Vec::new())?;
                         if !wrote_result {
-                            write_field_result_content(&mut writer, &field.cached_result)?;
+                            write_field_result_content_with_binding(
+                                &mut writer,
+                                &field.cached_result,
+                                canonical_word_binding,
+                            )?;
                             wrote_result = true;
                         }
                     } else {
@@ -2642,7 +3114,8 @@ fn update_complex_field_source(
                         && field_depth == 1
                         && (is_word_element(element.name().as_ref(), b"tab", &prefixes)
                             || is_word_element(element.name().as_ref(), b"br", &prefixes)))
-                        || field_depth > 1
+                        || outer_result
+                            && field_depth > 1
                             && (is_word_element(element.name().as_ref(), b"instrText", &prefixes)
                                 || is_word_element(element.name().as_ref(), b"t", &prefixes)
                                 || is_word_element(element.name().as_ref(), b"tab", &prefixes)
@@ -2650,7 +3123,11 @@ fn update_complex_field_source(
                 {
                     reader.read_to_end_into(element.name(), &mut Vec::new())?;
                     if outer_result && field_depth == 1 && !wrote_result {
-                        write_field_result_content(&mut writer, &field.cached_result)?;
+                        write_field_result_content_with_binding(
+                            &mut writer,
+                            &field.cached_result,
+                            canonical_word_binding,
+                        )?;
                         wrote_result = true;
                     }
                 } else {
@@ -2685,7 +3162,11 @@ fn update_complex_field_source(
                         && !wrote_result
                         && cached_changed
                     {
-                        write_field_result_content(&mut writer, &field.cached_result)?;
+                        write_field_result_content_with_binding(
+                            &mut writer,
+                            &field.cached_result,
+                            canonical_word_binding,
+                        )?;
                         wrote_result = true;
                     }
                     if cached_changed
@@ -2694,7 +3175,11 @@ fn update_complex_field_source(
                         && kind.as_deref() == Some("begin")
                         && !wrote_result
                     {
-                        write_field_result_content(&mut writer, &field.cached_result)?;
+                        write_field_result_content_with_binding(
+                            &mut writer,
+                            &field.cached_result,
+                            canonical_word_binding,
+                        )?;
                         wrote_result = true;
                     }
                     update_complex_phase(kind.as_deref(), &mut field_depth, &mut outer_result);
@@ -2707,7 +3192,7 @@ fn update_complex_field_source(
                             &prefixes,
                             &[("fldCharType", kind)],
                             (kind == "begin").then_some(field.dirty).flatten(),
-                            false,
+                            canonical_word_binding,
                             true,
                         )?;
                         buffer.clear();
@@ -2715,6 +3200,7 @@ fn update_complex_field_source(
                     }
                     if cached_changed
                         && wrote_result
+                        && outer_result
                         && (depth_before > 1
                             || depth_before == 1 && kind.as_deref() == Some("begin"))
                     {
@@ -2729,7 +3215,11 @@ fn update_complex_field_source(
                 {
                     if cached_changed {
                         if !wrote_result {
-                            write_field_result_content(&mut writer, &field.cached_result)?;
+                            write_field_result_content_with_binding(
+                                &mut writer,
+                                &field.cached_result,
+                                canonical_word_binding,
+                            )?;
                             wrote_result = true;
                         }
                     } else {
@@ -2741,14 +3231,19 @@ fn update_complex_field_source(
                         && field_depth == 1
                         && (is_word_element(element.name().as_ref(), b"tab", &prefixes)
                             || is_word_element(element.name().as_ref(), b"br", &prefixes)))
-                        || field_depth > 1
+                        || outer_result
+                            && field_depth > 1
                             && (is_word_element(element.name().as_ref(), b"instrText", &prefixes)
                                 || is_word_element(element.name().as_ref(), b"t", &prefixes)
                                 || is_word_element(element.name().as_ref(), b"tab", &prefixes)
                                 || is_word_element(element.name().as_ref(), b"br", &prefixes)))
                 {
                     if outer_result && field_depth == 1 && !wrote_result {
-                        write_field_result_content(&mut writer, &field.cached_result)?;
+                        write_field_result_content_with_binding(
+                            &mut writer,
+                            &field.cached_result,
+                            canonical_word_binding,
+                        )?;
                         wrote_result = true;
                     }
                 } else {
@@ -2854,7 +3349,7 @@ fn write_updated_text_element<W: std::io::Write>(
     if let Some(value) = value {
         write_field_result_content_with_source(writer, value, Some(source))?;
     } else {
-        write_field_text_with_source(writer, "", Some(source))?;
+        write_field_text_with_source(writer, "", Some(source), false)?;
     }
     Ok(())
 }
@@ -2867,7 +3362,7 @@ fn write_updated_empty_text_element<W: std::io::Write>(
     if let Some(value) = value {
         write_field_result_content_with_source(writer, value, Some(source))?;
     } else {
-        write_field_text_with_source(writer, "", Some(source))?;
+        write_field_text_with_source(writer, "", Some(source), false)?;
     }
     Ok(())
 }
@@ -2876,13 +3371,30 @@ fn write_field_result_content<W: std::io::Write>(
     writer: &mut Writer<W>,
     value: &str,
 ) -> Result<()> {
-    write_field_result_content_with_source(writer, value, None)
+    write_field_result_content_with_binding(writer, value, false)
 }
 
 fn write_field_result_content_with_source<W: std::io::Write>(
     writer: &mut Writer<W>,
     value: &str,
     source: Option<&BytesStart<'_>>,
+) -> Result<()> {
+    write_field_result_content_inner(writer, value, source, false)
+}
+
+fn write_field_result_content_with_binding<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    value: &str,
+    canonical_word_binding: bool,
+) -> Result<()> {
+    write_field_result_content_inner(writer, value, None, canonical_word_binding)
+}
+
+fn write_field_result_content_inner<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    value: &str,
+    source: Option<&BytesStart<'_>>,
+    canonical_word_binding: bool,
 ) -> Result<()> {
     let mut start = 0usize;
     let mut used_source = false;
@@ -2903,15 +3415,19 @@ fn write_field_result_content_with_source<W: std::io::Write>(
                 writer,
                 &value[start..index],
                 (!used_source).then_some(source).flatten(),
+                canonical_word_binding,
             )?;
             used_source = true;
         }
         if let Some((name, break_type)) = element {
             if !used_source && source.is_some() {
-                write_field_text_with_source(writer, "", source)?;
+                write_field_text_with_source(writer, "", source, canonical_word_binding)?;
                 used_source = true;
             }
             let mut element = BytesStart::new(name);
+            if canonical_word_binding {
+                element.push_attribute(("xmlns:w", crate::namespace::W_NS));
+            }
             if let Some(break_type) = break_type {
                 element.push_attribute(("w:type", break_type));
             }
@@ -2926,6 +3442,7 @@ fn write_field_text_with_source<W: std::io::Write>(
     writer: &mut Writer<W>,
     value: &str,
     source: Option<&BytesStart<'_>>,
+    canonical_word_binding: bool,
 ) -> Result<()> {
     let mut element = BytesStart::new("w:t");
     if let Some(source) = source {
@@ -2935,6 +3452,8 @@ fn write_field_text_with_source<W: std::io::Write>(
                 element.push_attribute(attribute);
             }
         }
+    } else if canonical_word_binding {
+        element.push_attribute(("xmlns:w", crate::namespace::W_NS));
     }
     if needs_space_preservation(value) {
         element.push_attribute(("xml:space", "preserve"));
@@ -2961,9 +3480,7 @@ fn instruction_for_write(field: &Field) -> FieldInstruction {
         } => original_instruction,
     };
     let raw_changed = field.instruction.raw != original.raw;
-    let structured_changed = field.instruction.name != original.name
-        || field.instruction.arguments != original.arguments
-        || field.instruction.switches != original.switches;
+    let structured_changed = !instruction_structure_eq(&field.instruction, original);
 
     if raw_changed && !structured_changed {
         return parse_field_instruction(&field.instruction.raw);
@@ -2974,6 +3491,80 @@ fn instruction_for_write(field: &Field) -> FieldInstruction {
         return instruction;
     }
     field.instruction.clone()
+}
+
+fn instruction_structure_eq(left: &FieldInstruction, right: &FieldInstruction) -> bool {
+    left.name == right.name
+        && left.arguments.len() == right.arguments.len()
+        && left
+            .arguments
+            .iter()
+            .zip(&right.arguments)
+            .all(|(left, right)| match (left, right) {
+                (FieldArgument::Text(left), FieldArgument::Text(right)) => left == right,
+                (FieldArgument::Nested(left), FieldArgument::Nested(right)) => {
+                    instruction_structure_eq(&left.instruction, &right.instruction)
+                }
+                _ => false,
+            })
+        && left.switches.len() == right.switches.len()
+        && left
+            .switches
+            .iter()
+            .zip(&right.switches)
+            .all(|(left, right)| {
+                left.name == right.name
+                    && match (&left.argument, &right.argument) {
+                        (None, None) => true,
+                        (Some(FieldArgument::Text(left)), Some(FieldArgument::Text(right))) => {
+                            left == right
+                        }
+                        (Some(FieldArgument::Nested(left)), Some(FieldArgument::Nested(right))) => {
+                            instruction_structure_eq(&left.instruction, &right.instruction)
+                        }
+                        _ => false,
+                    }
+            })
+}
+
+fn instruction_source_identity_eq(left: &FieldInstruction, right: &FieldInstruction) -> bool {
+    let argument_identities_match =
+        left.arguments
+            .iter()
+            .zip(&right.arguments)
+            .all(|(left, right)| match (left, right) {
+                (FieldArgument::Nested(left), FieldArgument::Nested(right)) => {
+                    field_source_identity_eq(left, right)
+                }
+                (FieldArgument::Text(_), FieldArgument::Text(_)) => true,
+                _ => false,
+            });
+    let switch_identities_match = left
+        .switches
+        .iter()
+        .zip(&right.switches)
+        .all(|(left, right)| match (&left.argument, &right.argument) {
+            (Some(FieldArgument::Nested(left)), Some(FieldArgument::Nested(right))) => {
+                field_source_identity_eq(left, right)
+            }
+            (None, None) | (Some(FieldArgument::Text(_)), Some(FieldArgument::Text(_))) => true,
+            _ => false,
+        });
+    argument_identities_match && switch_identities_match
+}
+
+fn field_source_identity_eq(left: &Field, right: &Field) -> bool {
+    match (&left.source, &right.source) {
+        (
+            FieldSource::Parsed {
+                source_id: left, ..
+            },
+            FieldSource::Parsed {
+                source_id: right, ..
+            },
+        ) => left == right,
+        _ => false,
+    }
 }
 
 fn canonical_instruction_text(instruction: &FieldInstruction) -> String {
@@ -3169,10 +3760,7 @@ fn push_comment_marker(
     id: i32,
     start: bool,
 ) {
-    let raw_before = extra_xml
-        .iter()
-        .filter(|(position, _)| *position == run_index)
-        .count();
+    let raw_before = raw_xml_count_at(extra_xml, run_index);
     let marker = if start {
         CommentRangeMarker::Start {
             id,
@@ -3187,6 +3775,13 @@ fn push_comment_marker(
         }
     };
     markers.push(marker);
+}
+
+fn raw_xml_count_at(extra_xml: &[(usize, Vec<u8>)], run_index: usize) -> usize {
+    extra_xml
+        .iter()
+        .filter(|(position, raw)| *position == run_index && !is_xml_whitespace(raw))
+        .count()
 }
 
 fn parse_hyperlink_children(
@@ -3249,6 +3844,23 @@ fn parse_hyperlink_children(
                 if inside && matches_local_name(element.name().as_ref(), b"hyperlink") =>
             {
                 break;
+            }
+            Event::Text(text) if is_xml_whitespace(text.as_ref()) => {
+                extra_xml.push((runs.len(), revisions_at_boundary, text.as_ref().to_vec()));
+            }
+            Event::Comment(comment) => {
+                extra_xml.push((
+                    runs.len(),
+                    revisions_at_boundary,
+                    capture_standalone_event(Event::Comment(comment.into_owned()))?,
+                ));
+            }
+            Event::PI(instruction) => {
+                extra_xml.push((
+                    runs.len(),
+                    revisions_at_boundary,
+                    capture_standalone_event(Event::PI(instruction.into_owned()))?,
+                ));
             }
             Event::Eof => break,
             _ => {}
@@ -4791,6 +5403,439 @@ mod tests {
     }
 
     #[test]
+    fn nested_cache_mutation_preserves_operand_order_and_producer_xml() {
+        let word_namespace = crate::namespace::W_NS;
+        let mut paragraph = parse_paragraph(&format!(
+            concat!(
+                r#"<q:r xmlns:q="{0}" xmlns:x="urn:producer" data="outer-begin"><q:fldChar q:fldCharType="begin"><x:outerBegin/></q:fldChar></q:r>"#,
+                r#"<q:r xmlns:q="{0}" xmlns:x="urn:producer" data="outer-instruction"><q:rPr><q:b/></q:rPr><q:instrText xml:space="preserve">IF </q:instrText><x:outerInstruction/></q:r>"#,
+                r#"<q:r xmlns:q="{0}" xmlns:x="urn:producer" data="nested-begin"><q:fldChar q:fldCharType="begin" q:dirty="on"><x:nestedBegin/></q:fldChar></q:r>"#,
+                r#"<q:r xmlns:q="{0}" xmlns:x="urn:producer" data="nested-instruction"><q:rPr><q:i/></q:rPr><q:instrText>REF destination</q:instrText><x:nestedInstruction/></q:r>"#,
+                r#"<q:r xmlns:q="{0}" data="nested-separator"><q:fldChar q:fldCharType="separate"/></q:r>"#,
+                r#"<q:r xmlns:q="{0}" xmlns:x="urn:producer" data="nested-result"><q:rPr><q:u/></q:rPr><q:t>old</q:t><x:nestedResult/></q:r>"#,
+                r#"<q:r xmlns:q="{0}" data="nested-end"><q:fldChar q:fldCharType="end"/></q:r>"#,
+                r#"<q:r xmlns:q="{0}" xmlns:x="urn:producer" data="outer-tail"><q:instrText xml:space="preserve"> = &quot;x&quot; &quot;yes&quot; &quot;no&quot;</q:instrText><x:outerTail/></q:r>"#,
+                r#"<q:r xmlns:q="{0}" data="outer-separator"><q:fldChar q:fldCharType="separate"/></q:r>"#,
+                r#"<q:r xmlns:q="{0}" data="outer-result"><q:t>yes</q:t></q:r>"#,
+                r#"<q:r xmlns:q="{0}" data="outer-end"><q:fldChar q:fldCharType="end"/></q:r>"#,
+            ),
+            word_namespace,
+        ));
+        let RunContent::Field(field) = &mut paragraph.runs[0].content[0] else {
+            panic!("expected outer field")
+        };
+        let Some(FieldArgument::Nested(nested)) = field.instruction.arguments.first_mut() else {
+            panic!("expected first positional operand to be nested")
+        };
+        nested.cached_result = "x".to_owned();
+        nested.dirty = Some(false);
+
+        let output = serialized_paragraph(&paragraph);
+        for preserved in [
+            r#"data="outer-begin""#,
+            r#"<x:outerBegin/>"#,
+            r#"<q:rPr><q:b/></q:rPr>"#,
+            r#"<x:outerInstruction/>"#,
+            r#"data="nested-instruction""#,
+            r#"<q:rPr><q:i/></q:rPr>"#,
+            r#"<x:nestedInstruction/>"#,
+            r#"<q:rPr><q:u/></q:rPr>"#,
+            r#"<x:nestedResult/>"#,
+            r#"<x:outerTail/>"#,
+        ] {
+            assert!(output.contains(preserved), "missing {preserved}: {output}");
+        }
+        assert!(output.contains(r#"w:dirty="0""#), "{output}");
+        assert!(output.contains(">x</w:t>"), "{output}");
+        let nested_begin = output.find(r#"data="nested-begin""#).unwrap();
+        let comparison = output.find(" = &quot;x&quot;").unwrap();
+        assert!(nested_begin < comparison, "{output}");
+
+        let reparsed = parse_paragraph(
+            output
+                .strip_prefix("<w:p>")
+                .and_then(|value| value.strip_suffix("</w:p>"))
+                .unwrap(),
+        );
+        let field = parsed_field(&reparsed, 0);
+        assert!(matches!(
+            field.instruction.arguments.as_slice(),
+            [FieldArgument::Nested(nested), FieldArgument::Text(operator), FieldArgument::Text(right), FieldArgument::Text(yes), FieldArgument::Text(no)]
+                if nested.cached_result == "x"
+                    && operator == "="
+                    && right == "x"
+                    && yes == "yes"
+                    && no == "no"
+        ));
+    }
+
+    #[test]
+    fn same_instruction_nested_replacements_use_canonical_source_identity() {
+        let outer_source = concat!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText xml:space="preserve">IF </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText>REF destination</w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:t>old nested</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            r#"<w:r><w:instrText xml:space="preserve"> = &quot;x&quot; &quot;yes&quot; &quot;no&quot;</w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:t>old outer</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        );
+        let word_namespace = crate::namespace::W_NS;
+        let foreign = parse_paragraph(&format!(
+            r#"<q:fldSimple xmlns:q="{word_namespace}" xmlns:x="urn:foreign" q:instr="REF destination"><q:r><q:t>foreign replacement</q:t><x:foreign/></q:r></q:fldSimple>"#,
+        ));
+        let replacements = [
+            Field::new("REF destination", "new replacement"),
+            parsed_field(&foreign, 0).clone(),
+        ];
+
+        for (replacement, expected) in replacements
+            .into_iter()
+            .zip(["new replacement", "foreign replacement"])
+        {
+            let mut paragraph = parse_paragraph(outer_source);
+            let RunContent::Field(outer) = &mut paragraph.runs[0].content[0] else {
+                panic!("expected outer field")
+            };
+            let Some(FieldArgument::Nested(nested)) = outer.instruction.arguments.first_mut()
+            else {
+                panic!("expected nested positional field")
+            };
+            **nested = replacement;
+
+            let output = serialized_paragraph(&paragraph);
+            let reparsed = parse_paragraph(
+                output
+                    .strip_prefix("<w:p>")
+                    .and_then(|value| value.strip_suffix("</w:p>"))
+                    .unwrap(),
+            );
+            let field = parsed_field(&reparsed, 0);
+            let Some(FieldArgument::Nested(nested)) = field.instruction.arguments.first() else {
+                panic!("replacement field was discarded: {output}")
+            };
+            assert_eq!(nested.cached_result, expected, "{output}");
+        }
+    }
+
+    #[test]
+    fn nested_updates_skip_opaque_lookalikes_and_map_identical_siblings() {
+        let word_namespace = crate::namespace::W_NS;
+        let nested_source = format!(
+            concat!(
+                r#"<q:r xmlns:q="{0}"><q:fldChar q:fldCharType="begin"/></q:r>"#,
+                r#"<q:r xmlns:q="{0}"><q:instrText>REF destination</q:instrText></q:r>"#,
+                r#"<q:r xmlns:q="{0}"><q:fldChar q:fldCharType="separate"/></q:r>"#,
+                r#"<q:r xmlns:q="{0}"><q:t>stored nested</q:t></q:r>"#,
+                r#"<q:r xmlns:q="{0}"><q:fldChar q:fldCharType="end"/></q:r>"#,
+            ),
+            word_namespace,
+        );
+        let source = format!(
+            concat!(
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+                r#"<w:r xmlns:x="urn:producer"><w:instrText xml:space="preserve">IF </w:instrText><x:opaque>{0}</x:opaque></w:r>"#,
+                "{0}",
+                r#"<w:r><w:instrText xml:space="preserve"> </w:instrText></w:r>"#,
+                "{0}",
+                r#"<w:r><w:instrText xml:space="preserve"> = &quot;x&quot; &quot;yes&quot; &quot;no&quot;</w:instrText></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+                r#"<w:r><w:t>stored outer</w:t></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            ),
+            nested_source,
+        );
+        let mut paragraph = parse_paragraph(&source);
+        let RunContent::Field(outer) = &mut paragraph.runs[0].content[0] else {
+            panic!("expected outer field")
+        };
+        let mut nested =
+            outer
+                .instruction
+                .arguments
+                .iter_mut()
+                .filter_map(|argument| match argument {
+                    FieldArgument::Nested(field) => Some(field.as_mut()),
+                    FieldArgument::Text(_) => None,
+                });
+        nested.next().unwrap().cached_result = "first typed".to_owned();
+        nested.next().unwrap().cached_result = "second typed".to_owned();
+        assert!(nested.next().is_none());
+
+        let output = serialized_paragraph(&paragraph);
+        assert!(
+            output.contains(&format!("<x:opaque>{nested_source}</x:opaque>")),
+            "{output}"
+        );
+        assert_eq!(output.matches("stored nested").count(), 1, "{output}");
+        assert_eq!(output.matches("first typed").count(), 1, "{output}");
+        assert_eq!(output.matches("second typed").count(), 1, "{output}");
+        assert!(
+            output.find("stored nested").unwrap() < output.find("first typed").unwrap()
+                && output.find("first typed").unwrap() < output.find("second typed").unwrap(),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn same_run_nested_siblings_have_distinct_update_spans() {
+        let word_namespace = crate::namespace::W_NS;
+        let nested_source = concat!(
+            r#"<q:fldChar q:fldCharType="begin"/>"#,
+            r#"<q:instrText>MERGEFIELD Same</q:instrText>"#,
+            r#"<q:fldChar q:fldCharType="separate"/>"#,
+            r#"<q:t>stored sibling</q:t>"#,
+            r#"<q:fldChar q:fldCharType="end"/>"#,
+        );
+        let source = format!(
+            concat!(
+                r#"<q:r xmlns:q="{0}" xmlns:x="urn:producer"><x:before/>"#,
+                r#"<q:fldChar q:fldCharType="begin"/><q:instrText xml:space="preserve">IF </q:instrText>"#,
+                "{1}",
+                r#"<q:instrText xml:space="preserve"> </q:instrText>"#,
+                "{1}",
+                r#"<q:instrText xml:space="preserve"> = &quot;x&quot; &quot;yes&quot; &quot;no&quot;</q:instrText>"#,
+                r#"<q:fldChar q:fldCharType="separate"/><q:t>stored outer</q:t>"#,
+                r#"<q:fldChar q:fldCharType="end"/><x:after/></q:r>"#,
+            ),
+            word_namespace, nested_source,
+        );
+        let mut paragraph = parse_paragraph(&source);
+        let RunContent::Field(outer) = &mut paragraph.runs[0].content[0] else {
+            panic!("expected outer field")
+        };
+        let mut nested =
+            outer
+                .instruction
+                .arguments
+                .iter_mut()
+                .filter_map(|argument| match argument {
+                    FieldArgument::Nested(field) => Some(field.as_mut()),
+                    FieldArgument::Text(_) => None,
+                });
+        nested.next().unwrap().cached_result = "first same run".to_owned();
+        nested.next().unwrap().cached_result = "second same run".to_owned();
+        assert!(nested.next().is_none());
+
+        let output = serialized_paragraph(&paragraph);
+        assert_eq!(output.matches("first same run").count(), 1, "{output}");
+        assert_eq!(output.matches("second same run").count(), 1, "{output}");
+        assert!(!output.contains("stored sibling"), "{output}");
+        assert!(output.contains("<x:before/>"), "{output}");
+        assert!(output.contains("<x:after/>"), "{output}");
+        assert!(
+            output.find("first same run").unwrap() < output.find("second same run").unwrap(),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn shared_boundary_run_nested_siblings_have_non_overlapping_spans() {
+        let word_namespace = crate::namespace::W_NS;
+        let source = format!(
+            concat!(
+                r#"<q:r xmlns:q="{0}"><q:fldChar q:fldCharType="begin"/><q:instrText xml:space="preserve">IF </q:instrText></q:r>"#,
+                r#"<q:r xmlns:q="{0}"><q:fldChar q:fldCharType="begin"/><q:instrText>MERGEFIELD First</q:instrText></q:r>"#,
+                r#"<q:r xmlns:q="{0}" xmlns:x="urn:producer"><q:fldChar q:fldCharType="separate"/><q:t>stored first</q:t><q:fldChar q:fldCharType="end"/><x:between/><q:instrText xml:space="preserve"> = </q:instrText><q:fldChar q:fldCharType="begin"/></q:r>"#,
+                r#"<q:r xmlns:q="{0}"><q:instrText>MERGEFIELD Second</q:instrText><q:fldChar q:fldCharType="separate"/><q:t>stored second</q:t><q:fldChar q:fldCharType="end"/><q:instrText xml:space="preserve"> &quot;yes&quot; &quot;no&quot;</q:instrText></q:r>"#,
+                r#"<q:r xmlns:q="{0}"><q:fldChar q:fldCharType="separate"/><q:t>stored outer</q:t><q:fldChar q:fldCharType="end"/></q:r>"#,
+            ),
+            word_namespace,
+        );
+        let mut paragraph = parse_paragraph(&source);
+        let RunContent::Field(outer) = &mut paragraph.runs[0].content[0] else {
+            panic!("expected outer field")
+        };
+        let mut nested =
+            outer
+                .instruction
+                .arguments
+                .iter_mut()
+                .filter_map(|argument| match argument {
+                    FieldArgument::Nested(field) => Some(field.as_mut()),
+                    FieldArgument::Text(_) => None,
+                });
+        nested.next().unwrap().cached_result = "updated first".to_owned();
+        nested.next().unwrap().cached_result = "updated second".to_owned();
+        assert!(nested.next().is_none());
+
+        let output = serialized_paragraph(&paragraph);
+        assert_eq!(output.matches("updated first").count(), 1, "{output}");
+        assert_eq!(output.matches("updated second").count(), 1, "{output}");
+        assert!(!output.contains("stored first"), "{output}");
+        assert!(!output.contains("stored second"), "{output}");
+        assert!(output.contains("<x:between/>"), "{output}");
+        assert!(
+            output.find("updated first").unwrap() < output.find("<x:between/>").unwrap()
+                && output.find("<x:between/>").unwrap() < output.find("updated second").unwrap(),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn isolated_same_run_nested_field_applies_its_raw_instruction_edit() {
+        let word_namespace = crate::namespace::W_NS;
+        let source = format!(
+            concat!(
+                r#"<q:r xmlns:q="{0}" xmlns:x="urn:producer"><q:fldChar q:fldCharType="begin"/><q:instrText xml:space="preserve">IF </q:instrText>"#,
+                r#"<q:fldChar q:fldCharType="begin" q:dirty="on"/><q:instrText>MERGEFIELD Old</q:instrText><x:nestedInstruction/><q:fldChar q:fldCharType="separate"/><q:t>stored nested</q:t><q:fldChar q:fldCharType="end"/>"#,
+                r#"<q:instrText xml:space="preserve"> = &quot;new value&quot; &quot;yes&quot; &quot;no&quot;</q:instrText><q:fldChar q:fldCharType="separate"/><q:t>stored outer</q:t><q:fldChar q:fldCharType="end"/></q:r>"#,
+            ),
+            word_namespace,
+        );
+        let mut paragraph = parse_paragraph(&source);
+        let RunContent::Field(outer) = &mut paragraph.runs[0].content[0] else {
+            panic!("expected outer field")
+        };
+        let Some(FieldArgument::Nested(nested)) = outer.instruction.arguments.first_mut() else {
+            panic!("expected nested field")
+        };
+        nested.instruction.raw = "MERGEFIELD New".to_owned();
+        nested.cached_result = "new value".to_owned();
+        nested.dirty = Some(false);
+
+        let output = serialized_paragraph(&paragraph);
+        assert!(output.contains("MERGEFIELD New"), "{output}");
+        assert!(!output.contains("MERGEFIELD Old"), "{output}");
+        assert!(output.contains("new value"), "{output}");
+        assert!(output.contains(r#"w:dirty="0""#), "{output}");
+        assert!(output.contains("<x:nestedInstruction/>"), "{output}");
+
+        let reparsed = parse_paragraph(
+            output
+                .strip_prefix("<w:p>")
+                .and_then(|value| value.strip_suffix("</w:p>"))
+                .unwrap(),
+        );
+        let outer = parsed_field(&reparsed, 0);
+        let Some(FieldArgument::Nested(nested)) = outer.instruction.arguments.first() else {
+            panic!("expected reopened nested field")
+        };
+        assert_eq!(nested.instruction.name, "MERGEFIELD");
+        assert!(matches!(
+            nested.instruction.arguments.first(),
+            Some(FieldArgument::Text(value)) if value == "New"
+        ));
+        assert_eq!(nested.cached_result, "new value");
+        assert_eq!(nested.dirty, Some(false));
+    }
+
+    #[test]
+    fn complex_source_retains_comments_and_processing_instructions() {
+        let source = concat!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            "<!-- before instruction -->",
+            r#"<w:r><w:instrText>MERGEFIELD Producer</w:instrText></w:r>"#,
+            "<?producer before-separator?>",
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            "<!-- before result -->",
+            r#"<w:r><w:t>stored producer</w:t></w:r>"#,
+            "<?producer before-end?>",
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        );
+        let mut paragraph = parse_paragraph(source);
+        let field = parsed_field(&paragraph, 0);
+        let (captured, _) = field.source_replacement().unwrap().unwrap();
+        assert_eq!(captured, source.as_bytes());
+
+        let RunContent::Field(field) = &mut paragraph.runs[0].content[0] else {
+            panic!("expected field")
+        };
+        field.cached_result = "updated producer".to_owned();
+        field.dirty = Some(false);
+        let output = serialized_paragraph(&paragraph);
+        for preserved in [
+            "<!-- before instruction -->",
+            "<?producer before-separator?>",
+            "<!-- before result -->",
+            "<?producer before-end?>",
+        ] {
+            assert!(output.contains(preserved), "missing {preserved}: {output}");
+        }
+        assert!(output.contains("updated producer"), "{output}");
+    }
+
+    #[test]
+    fn pretty_printed_complex_source_retains_inter_run_whitespace() {
+        let source = concat!(
+            "\n    ",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            "\n    ",
+            r#"<w:r><w:instrText>MERGEFIELD Pretty</w:instrText></w:r>"#,
+            "\n    ",
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            "\n    ",
+            r#"<w:r><w:t>stored pretty</w:t></w:r>"#,
+            "\n    ",
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            "\n  ",
+        );
+        let paragraph = parse_paragraph(source);
+        let field = parsed_field(&paragraph, 0);
+        let (captured, _) = field.source_replacement().unwrap().unwrap();
+        assert!(
+            captured
+                .windows(b"</w:r>\n    <w:r>".len())
+                .any(|window| window == b"</w:r>\n    <w:r>"),
+            "{}",
+            String::from_utf8_lossy(captured)
+        );
+    }
+
+    #[test]
+    fn simple_and_complex_dirty_flags_preserve_aliases_and_unmodelled_content() {
+        let word_namespace = crate::namespace::W_NS;
+        let mut simple = parse_paragraph(&format!(
+            r#"<q:fldSimple xmlns:q="{word_namespace}" xmlns:x="urn:producer" q:instr="REF destination" q:dirty="on" x:token="simple"><x:before/><q:r><q:t>old</q:t><x:inside/></q:r><x:after/></q:fldSimple>"#,
+        ));
+        let RunContent::Field(field) = &mut simple.runs[0].content[0] else {
+            panic!("expected simple field")
+        };
+        assert_eq!(field.dirty, Some(true));
+        field.cached_result = "new".to_owned();
+        field.dirty = Some(false);
+        let output = serialized_paragraph(&simple);
+        assert!(output.contains(r#"<w:fldSimple xmlns:q="#,), "{output}");
+        assert!(output.contains(r#"w:dirty="0""#), "{output}");
+        assert!(output.contains(r#"x:token="simple""#), "{output}");
+        assert!(output.contains("<x:before/>"), "{output}");
+        assert!(output.contains("<x:inside/>"), "{output}");
+        assert!(output.contains("<x:after/>"), "{output}");
+
+        let mut complex = parse_paragraph(&format!(
+            concat!(
+                r#"<q:r xmlns:q="{}" xmlns:x="urn:producer"><q:fldChar q:fldCharType="begin" q:dirty="off"><x:begin/></q:fldChar></q:r>"#,
+                r#"<q:r xmlns:q="{}" xmlns:x="urn:producer"><q:instrText>DATE</q:instrText><x:instruction/></q:r>"#,
+                r#"<x:between xmlns:x="urn:producer"/>"#,
+                r#"<q:r xmlns:q="{}"><q:fldChar q:fldCharType="separate" q:dirty="off"/></q:r>"#,
+                r#"<q:r xmlns:q="{}" xmlns:x="urn:producer"><q:t>old</q:t><x:result/></q:r>"#,
+                r#"<q:r xmlns:q="{}"><q:fldChar q:fldCharType="end" q:dirty="off"/></q:r>"#,
+            ),
+            word_namespace, word_namespace, word_namespace, word_namespace, word_namespace,
+        ));
+        let RunContent::Field(field) = &mut complex.runs[0].content[0] else {
+            panic!("expected complex field")
+        };
+        assert_eq!(field.dirty, Some(false));
+        field.cached_result = "new".to_owned();
+        field.dirty = Some(true);
+        let output = serialized_paragraph(&complex);
+        assert!(
+            output.contains(r#"<w:fldChar w:fldCharType="begin" w:dirty="1">"#),
+            "{output}"
+        );
+        assert_eq!(output.matches(r#"w:dirty="1""#).count(), 1, "{output}");
+        assert!(output.contains("<x:begin/>"), "{output}");
+        assert!(output.contains("<x:instruction/>"), "{output}");
+        assert!(output.contains("<x:between"), "{output}");
+        assert!(output.contains("<x:result/>"), "{output}");
+    }
+
+    #[test]
     fn complex_field_projection_keeps_result_formatting_and_controls() {
         let paragraph = parse_paragraph(concat!(
             r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
@@ -5121,6 +6166,55 @@ mod tests {
             output.find("<x:producer").unwrap() < output.find("<w:instrText").unwrap(),
             "{output}"
         );
+    }
+
+    #[test]
+    fn hyperlink_complex_source_retains_inter_run_trivia() {
+        let mut paragraph = parse_paragraph(concat!(
+            r#"<w:hyperlink w:anchor="destination">"#,
+            "\n  ",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            "\n  <!-- hyperlink-before-instruction -->",
+            r#"<w:r><w:instrText>REF destination</w:instrText></w:r>"#,
+            "<?producer hyperlink-before-separator?>",
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            "\n  <!-- hyperlink-before-result -->",
+            r#"<w:r><w:t>cached</w:t></w:r>"#,
+            "<?producer hyperlink-before-end?>",
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            "\n",
+            r#"</w:hyperlink>"#,
+        ));
+        let RunContent::Field(field) = &mut paragraph.runs[0].content[0] else {
+            panic!("expected hyperlink field")
+        };
+        let (captured, _) = field.source_replacement().unwrap().unwrap();
+        for preserved in [
+            "\n  <!-- hyperlink-before-instruction -->",
+            "<?producer hyperlink-before-separator?>",
+            "\n  <!-- hyperlink-before-result -->",
+            "<?producer hyperlink-before-end?>",
+        ] {
+            assert!(
+                String::from_utf8_lossy(captured).contains(preserved),
+                "missing {preserved}: {}",
+                String::from_utf8_lossy(captured)
+            );
+        }
+
+        field.cached_result = "updated hyperlink".to_owned();
+        field.dirty = Some(false);
+        let output = serialized_paragraph(&paragraph);
+        for preserved in [
+            "<!-- hyperlink-before-instruction -->",
+            "<?producer hyperlink-before-separator?>",
+            "<!-- hyperlink-before-result -->",
+            "<?producer hyperlink-before-end?>",
+        ] {
+            assert!(output.contains(preserved), "missing {preserved}: {output}");
+        }
+        assert!(output.contains("updated hyperlink"), "{output}");
+        assert!(output.contains("<w:hyperlink"), "{output}");
     }
 
     #[test]

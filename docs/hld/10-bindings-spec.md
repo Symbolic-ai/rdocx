@@ -240,6 +240,15 @@ reads the ambient clock or filesystem and never changes field caches. Python,
 WASM, and CLI surfaces gain no evaluator methods and continue to preserve the
 same package content.
 
+Native Word callers opt into cache materialization with
+`Document::update_fields`, `Document::save_with_field_updates`, or
+`Document::to_bytes_with_field_updates`. The facade stages the full evaluation
+before mutation, updates resolved displays, and marks retained displays dirty.
+Existing `save` and `to_bytes` methods continue to preserve intentionally stale
+caches and producer dirty spellings. These methods are additive native Rust
+APIs. Python, WASM, and CLI surfaces gain no field update methods and continue
+to preserve updates already made through their owned `Document`.
+
 Native Word callers can also inspect content controls through
 `Document::content_controls` and the tag or alias lookup methods.
 `ContentControlRef` exposes immutable metadata and display text. Direct setters

@@ -1,18 +1,23 @@
 //! Pure evaluation of Word fields against an explicit document context.
 
 use std::collections::{BTreeMap, HashSet};
+use std::path::Path;
 
 use oxml_core::custom_properties::CustomPropertyValue;
 use oxml_opc::OpcPackage;
 use oxml_opc::relationship::rel_types;
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::name::{Namespace, ResolveResult};
+use quick_xml::reader::NsReader;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Body, CT_SectPr};
 use rdocx_oxml::footnotes::{CT_Footnotes, NoteType};
 use rdocx_oxml::header_footer::CT_HdrFtr;
+use rdocx_oxml::namespace::{W_NS, matches_local_name};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, Field, FieldArgument, FieldInstruction, RunContent};
 
-use crate::{Document, Result, style};
+use crate::{Document, Error, Result, style};
 
 /// A deterministic civil date and time supplied to field evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +94,146 @@ impl Document {
 
         Ok(evaluator.results)
     }
+
+    /// Evaluate and materialize every typed field cache in document order.
+    pub fn update_fields(&mut self, context: &FieldEvaluationContext) -> Result<usize> {
+        let evaluations = self.evaluate_fields(context)?;
+        let updates = evaluations
+            .iter()
+            .map(|evaluation| match &evaluation.outcome {
+                FieldOutcome::Resolved(value) => CachedFieldUpdate {
+                    cached_result: value.clone(),
+                    dirty: false,
+                },
+                FieldOutcome::DeferredPagination | FieldOutcome::KeepStored { .. } => {
+                    CachedFieldUpdate {
+                        cached_result: evaluation.cached_result.clone(),
+                        dirty: true,
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        if updates
+            .iter()
+            .any(|update| !update.cached_result.chars().all(valid_xml_character))
+        {
+            return Err(Error::Other(
+                "field result contains a character forbidden by XML 1.0".to_owned(),
+            ));
+        }
+        if updates.is_empty() {
+            return Ok(0);
+        }
+
+        let mut document = self.document.clone();
+        let mut footnotes = self.footnotes.clone();
+        let mut staged_parts = Vec::new();
+        let mut update_index = 0usize;
+
+        apply_updates_to_body(&mut document.body, &updates, &mut update_index);
+
+        for (part_name, xml) in referenced_header_footer_parts(self, true) {
+            if let Ok(mut part) = CT_HdrFtr::from_xml(&xml) {
+                let part_start = update_index;
+                apply_updates_to_paragraphs(&mut part.paragraphs, &updates, &mut update_index);
+                if update_index > part_start {
+                    let paragraphs = part.paragraphs.iter().collect::<Vec<_>>();
+                    let updated = patch_story_field_sources(
+                        &xml,
+                        &paragraphs,
+                        PackageStoryKind::HeaderFooter,
+                    )?;
+                    CT_HdrFtr::from_xml(&updated)?;
+                    staged_parts.push((part_name, updated));
+                }
+            }
+        }
+        for (part_name, xml) in referenced_header_footer_parts(self, false) {
+            if let Ok(mut part) = CT_HdrFtr::from_xml(&xml) {
+                let part_start = update_index;
+                apply_updates_to_paragraphs(&mut part.paragraphs, &updates, &mut update_index);
+                if update_index > part_start {
+                    let paragraphs = part.paragraphs.iter().collect::<Vec<_>>();
+                    let updated = patch_story_field_sources(
+                        &xml,
+                        &paragraphs,
+                        PackageStoryKind::HeaderFooter,
+                    )?;
+                    CT_HdrFtr::from_xml(&updated)?;
+                    staged_parts.push((part_name, updated));
+                }
+            }
+        }
+
+        apply_updates_to_notes(&mut footnotes, &updates, &mut update_index);
+
+        for (part_name, xml) in relationship_parts(self, rel_types::ENDNOTES) {
+            if let Ok(mut part) = CT_Footnotes::from_xml(&xml) {
+                let part_start = update_index;
+                apply_updates_to_notes(&mut part, &updates, &mut update_index);
+                if update_index > part_start {
+                    let paragraphs = normal_note_paragraphs(&part);
+                    let updated =
+                        patch_story_field_sources(&xml, &paragraphs, PackageStoryKind::Endnotes)?;
+                    CT_Footnotes::from_xml(&updated)?;
+                    staged_parts.push((part_name, updated));
+                }
+            }
+        }
+
+        if update_index != updates.len() {
+            return Err(Error::Other(format!(
+                "field update traversal consumed {update_index} of {} staged evaluations",
+                updates.len()
+            )));
+        }
+
+        let document_xml = document.to_xml()?;
+        rdocx_oxml::document::CT_Document::from_xml(&document_xml)?;
+        if !footnotes.footnotes.is_empty() {
+            let footnotes_xml = footnotes.to_xml_footnotes()?;
+            CT_Footnotes::from_xml(&footnotes_xml)?;
+        }
+
+        self.document = document;
+        self.footnotes = footnotes;
+        for (part_name, xml) in staged_parts {
+            self.package.set_part(&part_name, xml);
+        }
+        self.invalidate_layout();
+        Ok(updates.len())
+    }
+
+    /// Update typed field caches, then save the package to a file path.
+    pub fn save_with_field_updates<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        context: &FieldEvaluationContext,
+    ) -> Result<()> {
+        self.update_fields(context)?;
+        self.save(path)
+    }
+
+    /// Update typed field caches, then save the package to bytes.
+    pub fn to_bytes_with_field_updates(
+        &mut self,
+        context: &FieldEvaluationContext,
+    ) -> Result<Vec<u8>> {
+        self.update_fields(context)?;
+        self.to_bytes()
+    }
+}
+
+struct CachedFieldUpdate {
+    cached_result: String,
+    dirty: bool,
+}
+
+fn valid_xml_character(value: char) -> bool {
+    matches!(value, '\u{0009}' | '\u{000A}' | '\u{000D}')
+        || ('\u{0020}'..='\u{D7FF}').contains(&value)
+        || ('\u{E000}'..='\u{FFFD}').contains(&value)
+        || ('\u{10000}'..='\u{10FFFF}').contains(&value)
 }
 
 #[derive(Debug, Default)]
@@ -725,6 +870,511 @@ fn normal_note_paragraphs(notes: &CT_Footnotes) -> Vec<&CT_P> {
         .filter(|note| note.note_type == NoteType::Normal)
         .flat_map(|note| note.paragraphs.iter())
         .collect()
+}
+
+#[derive(Clone, Copy)]
+enum PackageStoryKind {
+    HeaderFooter,
+    Endnotes,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StoryElementKind {
+    HeaderFooterRoot,
+    EndnotesRoot,
+    NormalNote,
+    Paragraph,
+    Other,
+}
+
+struct StoryElement {
+    kind: StoryElementKind,
+    start: usize,
+}
+
+struct FieldSourceEdit {
+    start: usize,
+    end: usize,
+    replacement: Vec<u8>,
+}
+
+fn patch_story_field_sources(
+    xml: &[u8],
+    paragraphs: &[&CT_P],
+    story_kind: PackageStoryKind,
+) -> Result<Vec<u8>> {
+    let paragraph_spans = story_paragraph_spans(xml, story_kind)?;
+    if paragraph_spans.len() != paragraphs.len() {
+        return Err(Error::Other(format!(
+            "package story paragraph scan found {} of {} typed paragraphs",
+            paragraph_spans.len(),
+            paragraphs.len()
+        )));
+    }
+    let mut edits = Vec::new();
+    for (paragraph, (paragraph_start, paragraph_end)) in paragraphs.iter().zip(paragraph_spans) {
+        let mut search_start = 0usize;
+        for run in paragraph.runs() {
+            for content in &run.content {
+                let RunContent::Field(field) = content else {
+                    continue;
+                };
+                let Some((source, replacement)) = field.source_replacement()? else {
+                    return Err(Error::Other(
+                        "parsed package story field has no source XML".to_owned(),
+                    ));
+                };
+                let Some(start) = find_typed_field_source(
+                    xml,
+                    paragraph_start,
+                    paragraph_end,
+                    source,
+                    search_start,
+                )?
+                else {
+                    return Err(Error::Other(
+                        "package story field source was not found at its typed paragraph boundary"
+                            .to_owned(),
+                    ));
+                };
+                let end = start + source.len();
+                edits.push(FieldSourceEdit {
+                    start: paragraph_start + start,
+                    end: paragraph_start + end,
+                    replacement,
+                });
+                search_start = end;
+            }
+        }
+    }
+
+    let mut updated = xml.to_vec();
+    for edit in edits.into_iter().rev() {
+        updated.splice(edit.start..edit.end, edit.replacement);
+    }
+    Ok(updated)
+}
+
+fn story_paragraph_spans(xml: &[u8], story_kind: PackageStoryKind) -> Result<Vec<(usize, usize)>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut stack = Vec::<StoryElement>::new();
+    let mut paragraphs = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid package story XML: {error}")))?;
+        let word = namespace_is_word(&namespace);
+        match event {
+            Event::Start(element) => {
+                let parent = stack.last().map(|element| element.kind);
+                let kind = match story_kind {
+                    PackageStoryKind::HeaderFooter
+                        if stack.is_empty()
+                            && word
+                            && (matches_local_name(element.name().as_ref(), b"hdr")
+                                || matches_local_name(element.name().as_ref(), b"ftr")) =>
+                    {
+                        StoryElementKind::HeaderFooterRoot
+                    }
+                    PackageStoryKind::Endnotes
+                        if stack.is_empty()
+                            && word
+                            && matches_local_name(element.name().as_ref(), b"endnotes") =>
+                    {
+                        StoryElementKind::EndnotesRoot
+                    }
+                    PackageStoryKind::Endnotes
+                        if parent == Some(StoryElementKind::EndnotesRoot)
+                            && word
+                            && matches_local_name(element.name().as_ref(), b"endnote")
+                            && note_is_normal(&element) =>
+                    {
+                        StoryElementKind::NormalNote
+                    }
+                    PackageStoryKind::HeaderFooter
+                        if parent == Some(StoryElementKind::HeaderFooterRoot)
+                            && word
+                            && matches_local_name(element.name().as_ref(), b"p") =>
+                    {
+                        StoryElementKind::Paragraph
+                    }
+                    PackageStoryKind::Endnotes
+                        if parent == Some(StoryElementKind::NormalNote)
+                            && word
+                            && matches_local_name(element.name().as_ref(), b"p") =>
+                    {
+                        StoryElementKind::Paragraph
+                    }
+                    _ => StoryElementKind::Other,
+                };
+                stack.push(StoryElement {
+                    kind,
+                    start: before,
+                });
+            }
+            Event::End(_) => {
+                let Some(element) = stack.pop() else {
+                    return Err(Error::Other(
+                        "package story XML has an unmatched end element".to_owned(),
+                    ));
+                };
+                if element.kind == StoryElementKind::Paragraph {
+                    paragraphs.push((element.start, reader.buffer_position() as usize));
+                }
+            }
+            Event::Eof => {
+                if !stack.is_empty() {
+                    return Err(Error::Other(
+                        "package story XML has an unclosed element".to_owned(),
+                    ));
+                }
+                return Ok(paragraphs);
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn note_is_normal(element: &BytesStart<'_>) -> bool {
+    let mut id = 0i32;
+    let mut note_type = None;
+    for attribute in element.attributes().flatten() {
+        if matches_local_name(attribute.key.as_ref(), b"id") {
+            id = std::str::from_utf8(&attribute.value)
+                .unwrap_or("0")
+                .parse()
+                .unwrap_or(0);
+        } else if matches_local_name(attribute.key.as_ref(), b"type") {
+            note_type = Some(String::from_utf8_lossy(&attribute.value).into_owned());
+        }
+    }
+    !matches!(
+        note_type.as_deref(),
+        Some("separator" | "continuationSeparator" | "continuationNotice")
+    ) && id > 0
+}
+
+fn find_typed_field_source(
+    xml: &[u8],
+    paragraph_start: usize,
+    paragraph_end: usize,
+    source: &[u8],
+    search_start: usize,
+) -> Result<Option<usize>> {
+    let paragraph_xml = &xml[paragraph_start..paragraph_end];
+    let mut candidate_start = search_start;
+    while let Some(relative) = find_bytes(&paragraph_xml[candidate_start..], source) {
+        let candidate = candidate_start + relative;
+        if field_source_has_typed_ancestors(xml, paragraph_start + candidate, paragraph_start)? {
+            return Ok(Some(candidate));
+        }
+        candidate_start = candidate + source.len().max(1);
+    }
+    Ok(None)
+}
+
+fn field_source_has_typed_ancestors(
+    xml: &[u8],
+    source_start: usize,
+    paragraph_start: usize,
+) -> Result<bool> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut ancestors = Vec::<(usize, bool, Vec<u8>)>::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid package paragraph XML: {error}")))?;
+        let word = namespace_is_word(&namespace);
+        match event {
+            Event::Start(element) => {
+                if before == source_start {
+                    let name = element.name();
+                    let local = local_name(name.as_ref());
+                    return Ok(word
+                        && matches!(local, b"fldSimple" | b"r")
+                        && typed_field_ancestors(&ancestors, paragraph_start));
+                }
+                ancestors.push((before, word, local_name(element.name().as_ref()).to_vec()));
+            }
+            Event::Empty(element) => {
+                if before == source_start {
+                    let name = element.name();
+                    let local = local_name(name.as_ref());
+                    return Ok(word
+                        && matches!(local, b"fldSimple" | b"r")
+                        && typed_field_ancestors(&ancestors, paragraph_start));
+                }
+            }
+            Event::End(_) => {
+                ancestors.pop();
+            }
+            Event::Eof => return Ok(false),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn typed_field_ancestors(ancestors: &[(usize, bool, Vec<u8>)], paragraph_start: usize) -> bool {
+    let Some(paragraph_index) = ancestors
+        .iter()
+        .position(|(start, _, _)| *start == paragraph_start)
+    else {
+        return false;
+    };
+    let (_, paragraph_word, paragraph) = &ancestors[paragraph_index];
+    *paragraph_word
+        && paragraph.as_slice() == b"p"
+        && ancestors
+            .iter()
+            .skip(paragraph_index + 1)
+            .all(|(_, word, local)| {
+                *word
+                    && matches!(
+                        local.as_slice(),
+                        b"hyperlink"
+                            | b"sdt"
+                            | b"sdtContent"
+                            | b"ins"
+                            | b"del"
+                            | b"moveFrom"
+                            | b"moveTo"
+                    )
+            })
+}
+
+fn namespace_is_word(namespace: &ResolveResult<'_>) -> bool {
+    matches!(namespace, ResolveResult::Bound(Namespace(uri)) if *uri == W_NS.as_bytes())
+}
+
+fn local_name(name: &[u8]) -> &[u8] {
+    name.rsplit(|byte| *byte == b':').next().unwrap_or(name)
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        None
+    } else {
+        haystack
+            .windows(needle.len())
+            .position(|window| window == needle)
+    }
+}
+
+fn apply_updates_to_notes(
+    notes: &mut CT_Footnotes,
+    updates: &[CachedFieldUpdate],
+    update_index: &mut usize,
+) {
+    for note in &mut notes.footnotes {
+        if note.note_type == NoteType::Normal {
+            apply_updates_to_paragraphs(&mut note.paragraphs, updates, update_index);
+        }
+    }
+}
+
+fn apply_updates_to_paragraphs(
+    paragraphs: &mut [CT_P],
+    updates: &[CachedFieldUpdate],
+    update_index: &mut usize,
+) {
+    for paragraph in paragraphs {
+        apply_updates_to_paragraph(paragraph, updates, update_index);
+    }
+}
+
+fn apply_updates_to_body(
+    body: &mut CT_Body,
+    updates: &[CachedFieldUpdate],
+    update_index: &mut usize,
+) {
+    for content in &mut body.content {
+        match content {
+            BodyContent::Paragraph(paragraph) => {
+                apply_updates_to_paragraph(paragraph, updates, update_index);
+            }
+            BodyContent::Table(table) => apply_updates_to_table(table, updates, update_index),
+            BodyContent::ContentControl(control) => {
+                apply_updates_to_block_control(control, updates, update_index);
+            }
+            BodyContent::RawXml(_) => {}
+        }
+    }
+}
+
+fn apply_updates_to_table(
+    table: &mut CT_Tbl,
+    updates: &[CachedFieldUpdate],
+    update_index: &mut usize,
+) {
+    for boundary in 0..=table.rows.len() {
+        for (_, _, control) in table
+            .content_controls
+            .iter_mut()
+            .filter(|(position, _, _)| *position == boundary)
+        {
+            apply_updates_to_block_control(control, updates, update_index);
+        }
+        if let Some(row) = table.rows.get_mut(boundary) {
+            apply_updates_to_row(row, updates, update_index);
+        }
+    }
+}
+
+fn apply_updates_to_row(row: &mut CT_Row, updates: &[CachedFieldUpdate], update_index: &mut usize) {
+    for boundary in 0..=row.cells.len() {
+        for (_, _, control) in row
+            .content_controls
+            .iter_mut()
+            .filter(|(position, _, _)| *position == boundary)
+        {
+            apply_updates_to_block_control(control, updates, update_index);
+        }
+        if let Some(cell) = row.cells.get_mut(boundary) {
+            apply_updates_to_cell(cell, updates, update_index);
+        }
+    }
+}
+
+fn apply_updates_to_cell(
+    cell: &mut CT_Tc,
+    updates: &[CachedFieldUpdate],
+    update_index: &mut usize,
+) {
+    for content in &mut cell.content {
+        match content {
+            CellContent::Paragraph(paragraph) => {
+                apply_updates_to_paragraph(paragraph, updates, update_index);
+            }
+            CellContent::Table(table) => apply_updates_to_table(table, updates, update_index),
+            CellContent::ContentControl(control) => {
+                apply_updates_to_block_control(control, updates, update_index);
+            }
+        }
+    }
+}
+
+fn apply_updates_to_block_control(
+    control: &mut CT_Sdt,
+    updates: &[CachedFieldUpdate],
+    update_index: &mut usize,
+) {
+    for content in &mut control.content {
+        match content {
+            SdtContent::Paragraph(paragraph) => {
+                apply_updates_to_paragraph(paragraph, updates, update_index);
+            }
+            SdtContent::Table(table) => apply_updates_to_table(table, updates, update_index),
+            SdtContent::Row(row) => apply_updates_to_row(row, updates, update_index),
+            SdtContent::Cell(cell) => apply_updates_to_cell(cell, updates, update_index),
+            SdtContent::ContentControl(control) => {
+                apply_updates_to_block_control(control, updates, update_index);
+            }
+            SdtContent::Run(_) | SdtContent::RawXml(_) => {}
+        }
+    }
+}
+
+fn apply_updates_to_run_control(
+    control: &mut CT_Sdt,
+    updates: &[CachedFieldUpdate],
+    update_index: &mut usize,
+) {
+    for content in &mut control.content {
+        match content {
+            SdtContent::Run(run) => apply_updates_to_run(run, updates, update_index),
+            SdtContent::Paragraph(paragraph) => {
+                apply_updates_to_paragraph(paragraph, updates, update_index);
+            }
+            SdtContent::ContentControl(control) => {
+                apply_updates_to_run_control(control, updates, update_index);
+            }
+            SdtContent::Table(_)
+            | SdtContent::Row(_)
+            | SdtContent::Cell(_)
+            | SdtContent::RawXml(_) => {}
+        }
+    }
+}
+
+fn apply_updates_to_paragraph(
+    paragraph: &mut CT_P,
+    updates: &[CachedFieldUpdate],
+    update_index: &mut usize,
+) {
+    for boundary in 0..=paragraph.runs.len() {
+        for (_, _, _, control) in paragraph
+            .content_controls
+            .iter_mut()
+            .filter(|(position, _, _, _)| *position == boundary)
+        {
+            apply_updates_to_run_control(control, updates, update_index);
+        }
+        if let Some(run) = paragraph.runs.get_mut(boundary) {
+            apply_updates_to_run(run, updates, update_index);
+        }
+    }
+}
+
+fn apply_updates_to_run(
+    run: &mut rdocx_oxml::text::CT_R,
+    updates: &[CachedFieldUpdate],
+    update_index: &mut usize,
+) {
+    for content in &mut run.content {
+        if let RunContent::Field(field) = content {
+            apply_updates_to_field(field, updates, update_index);
+        }
+    }
+}
+
+fn apply_updates_to_field(
+    field: &mut Field,
+    updates: &[CachedFieldUpdate],
+    update_index: &mut usize,
+) {
+    let Some(update) = updates.get(*update_index) else {
+        return;
+    };
+    field.cached_result.clone_from(&update.cached_result);
+    field.dirty = Some(update.dirty);
+    *update_index += 1;
+
+    let nested_pointers = field
+        .nested_fields_in_source_order()
+        .into_iter()
+        .map(|nested| std::ptr::from_ref(nested) as usize)
+        .collect::<Vec<_>>();
+    for pointer in nested_pointers {
+        if let Some(nested) = nested_field_mut(field, pointer) {
+            apply_updates_to_field(nested, updates, update_index);
+        }
+    }
+}
+
+fn nested_field_mut(field: &mut Field, pointer: usize) -> Option<&mut Field> {
+    for argument in &mut field.instruction.arguments {
+        if let FieldArgument::Nested(nested) = argument
+            && std::ptr::from_ref(nested.as_ref()) as usize == pointer
+        {
+            return Some(nested.as_mut());
+        }
+    }
+    for field_switch in &mut field.instruction.switches {
+        if let Some(FieldArgument::Nested(nested)) = &mut field_switch.argument
+            && std::ptr::from_ref(nested.as_ref()) as usize == pointer
+        {
+            return Some(nested.as_mut());
+        }
+    }
+    None
 }
 
 fn collect_body_paragraphs<'a>(body: &'a CT_Body, output: &mut Vec<&'a CT_P>) {
@@ -1537,6 +2187,29 @@ mod tests {
         document
     }
 
+    fn document_with_parsed_paragraph(xml: &str) -> Document {
+        let mut reader = quick_xml::Reader::from_str(xml);
+        reader.config_mut().trim_text(false);
+        let mut buffer = Vec::new();
+        let paragraph = loop {
+            match reader.read_event_into(&mut buffer).unwrap() {
+                Event::Start(element) if matches_local_name(element.name().as_ref(), b"p") => {
+                    break CT_P::from_xml(&mut reader).unwrap();
+                }
+                Event::Eof => panic!("missing paragraph"),
+                _ => {}
+            }
+            buffer.clear();
+        };
+        let mut document = Document::new();
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(paragraph));
+        document
+    }
+
     #[test]
     fn a_typed_field_is_reported_without_mutating_its_cache() {
         let document = document_with_fields(&[("AUTHOR", "stored")]);
@@ -1566,6 +2239,214 @@ mod tests {
             results[0].outcome,
             FieldOutcome::Resolved("Ada Lovelace".to_owned())
         );
+    }
+
+    #[test]
+    fn same_run_nested_raw_instruction_edit_updates_saves_and_reopens() {
+        let word_namespace = rdocx_oxml::namespace::W_NS;
+        let xml = format!(
+            concat!(
+                r#"<w:p xmlns:w="{0}"><q:r xmlns:q="{0}" xmlns:x="urn:producer">"#,
+                r#"<q:fldChar q:fldCharType="begin"/><q:instrText xml:space="preserve">IF </q:instrText>"#,
+                r#"<q:fldChar q:fldCharType="begin" q:dirty="on"/><q:instrText>MERGEFIELD Old</q:instrText><x:nestedInstruction/><q:fldChar q:fldCharType="separate"/><q:t>stored nested</q:t><q:fldChar q:fldCharType="end"/>"#,
+                r#"<q:instrText xml:space="preserve"> = &quot;new value&quot; &quot;yes&quot; &quot;no&quot;</q:instrText><q:fldChar q:fldCharType="separate"/><q:t>stored outer</q:t><q:fldChar q:fldCharType="end"/>"#,
+                r#"</q:r></w:p>"#,
+            ),
+            word_namespace,
+        );
+        let mut document = document_with_parsed_paragraph(&xml);
+        let BodyContent::Paragraph(paragraph) = &mut document.document.body.content[0] else {
+            unreachable!()
+        };
+        let RunContent::Field(outer) = &mut paragraph.runs[0].content[0] else {
+            unreachable!()
+        };
+        let Some(FieldArgument::Nested(nested)) = outer.instruction.arguments.first_mut() else {
+            panic!("expected nested field")
+        };
+        nested.instruction.raw = "MERGEFIELD New".to_owned();
+
+        let context = FieldEvaluationContext {
+            merge_fields: BTreeMap::from([("New".to_owned(), "new value".to_owned())]),
+            ..FieldEvaluationContext::default()
+        };
+        assert_eq!(document.update_fields(&context).unwrap(), 2);
+        let saved = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let saved_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(saved_xml.contains("MERGEFIELD New"), "{saved_xml}");
+        assert!(!saved_xml.contains("MERGEFIELD Old"), "{saved_xml}");
+        assert_eq!(saved_xml.matches(">new value<").count(), 1, "{saved_xml}");
+        assert!(saved_xml.contains(r#"w:dirty="0""#), "{saved_xml}");
+        assert!(saved_xml.contains("<x:nestedInstruction/>"), "{saved_xml}");
+
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let evaluations = reopened.evaluate_fields(&context).unwrap();
+        assert_eq!(evaluations.len(), 2);
+        assert_eq!(evaluations[0].cached_result, "yes");
+        assert_eq!(evaluations[1].instruction, "MERGEFIELD New");
+        assert_eq!(evaluations[1].cached_result, "new value");
+        assert_eq!(
+            evaluations[1].outcome,
+            FieldOutcome::Resolved("new value".to_owned())
+        );
+    }
+
+    #[test]
+    fn raw_only_nested_edit_suppresses_its_stale_nested_operand() {
+        let word_namespace = rdocx_oxml::namespace::W_NS;
+        let xml = format!(
+            concat!(
+                r#"<w:p xmlns:w="{0}"><q:r xmlns:q="{0}" xmlns:x="urn:producer">"#,
+                r#"<q:fldChar q:fldCharType="begin" q:dirty="on"/><q:instrText xml:space="preserve">IF </q:instrText>"#,
+                r#"<q:fldChar q:fldCharType="begin" q:dirty="on"/><q:instrText xml:space="preserve">IF </q:instrText><x:middleBefore/>"#,
+                r#"<q:fldChar q:fldCharType="begin" q:dirty="on"/><q:instrText>MERGEFIELD Stale</q:instrText><q:fldChar q:fldCharType="separate"/><q:t>stored grandchild</q:t><q:fldChar q:fldCharType="end"/>"#,
+                r#"<x:middleAfter/><q:instrText xml:space="preserve"> = &quot;stale&quot; &quot;old yes&quot; &quot;old no&quot;</q:instrText><q:fldChar q:fldCharType="separate"/><q:t>stored middle</q:t><q:fldChar q:fldCharType="end"/>"#,
+                r#"<q:instrText xml:space="preserve"> = &quot;new value&quot; &quot;yes&quot; &quot;no&quot;</q:instrText><q:fldChar q:fldCharType="separate"/><q:t>stored outer</q:t><q:fldChar q:fldCharType="end"/>"#,
+                r#"</q:r></w:p>"#,
+            ),
+            word_namespace,
+        );
+        let mut document = document_with_parsed_paragraph(&xml);
+        let BodyContent::Paragraph(paragraph) = &mut document.document.body.content[0] else {
+            unreachable!()
+        };
+        let RunContent::Field(outer) = &mut paragraph.runs[0].content[0] else {
+            unreachable!()
+        };
+        let Some(FieldArgument::Nested(middle)) = outer.instruction.arguments.first_mut() else {
+            panic!("expected middle field")
+        };
+        assert!(matches!(
+            middle.instruction.arguments.first(),
+            Some(FieldArgument::Nested(_))
+        ));
+        middle.instruction.raw = "MERGEFIELD New".to_owned();
+
+        let context = FieldEvaluationContext {
+            merge_fields: BTreeMap::from([("New".to_owned(), "new value".to_owned())]),
+            ..FieldEvaluationContext::default()
+        };
+        let before_save = document.evaluate_fields(&context).unwrap();
+        assert_eq!(before_save.len(), 2);
+        assert_eq!(before_save[0].field_index, 0);
+        assert_eq!(before_save[1].field_index, 1);
+        assert_eq!(before_save[1].instruction, "MERGEFIELD New");
+        assert_eq!(
+            before_save[1].outcome,
+            FieldOutcome::Resolved("new value".to_owned())
+        );
+
+        assert_eq!(document.update_fields(&context).unwrap(), 2);
+        let saved = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let saved_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(saved_xml.contains("MERGEFIELD New"), "{saved_xml}");
+        assert!(!saved_xml.contains("MERGEFIELD Stale"), "{saved_xml}");
+        assert!(!saved_xml.contains("stored grandchild"), "{saved_xml}");
+        assert!(!saved_xml.contains("stored middle"), "{saved_xml}");
+        assert!(saved_xml.contains("<x:middleBefore/>"), "{saved_xml}");
+        assert!(saved_xml.contains("<x:middleAfter/>"), "{saved_xml}");
+        assert!(
+            saved_xml.find("<x:middleBefore/>").unwrap()
+                < saved_xml.find("<x:middleAfter/>").unwrap(),
+            "{saved_xml}"
+        );
+        assert_eq!(saved_xml.matches(r#"w:dirty="0""#).count(), 2);
+        assert_eq!(saved_xml.matches(">new value<").count(), 1, "{saved_xml}");
+
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let evaluations = reopened.evaluate_fields(&context).unwrap();
+        assert_eq!(evaluations.len(), 2);
+        assert_eq!(evaluations[0].field_index, 0);
+        assert_eq!(evaluations[0].cached_result, "yes");
+        assert_eq!(evaluations[1].field_index, 1);
+        assert_eq!(evaluations[1].instruction, "MERGEFIELD New");
+        assert_eq!(evaluations[1].cached_result, "new value");
+        assert_eq!(
+            evaluations[1].outcome,
+            FieldOutcome::Resolved("new value".to_owned())
+        );
+    }
+
+    #[test]
+    fn multi_run_raw_only_nested_edit_preserves_every_run_scaffold() {
+        let word_namespace = rdocx_oxml::namespace::W_NS;
+        let xml = format!(
+            concat!(
+                r#"<w:p xmlns:w="{0}">"#,
+                r#"<q:r xmlns:q="{0}" data-run="outer-start"><q:fldChar q:fldCharType="begin" q:dirty="on"/><q:instrText xml:space="preserve">IF </q:instrText></q:r>"#,
+                r#"<q:r xmlns:q="{0}" xmlns:a="urn:start" data-run="start"><q:rPr><q:i/></q:rPr><q:fldChar q:fldCharType="begin" q:dirty="on"/><q:instrText xml:space="preserve">IF </q:instrText><a:prefix/><q:fldChar q:fldCharType="begin" q:dirty="on"/></q:r>"#,
+                r#"<q:r xmlns:q="{0}" xmlns:m="urn:middle" data-run="middle"><q:rPr><q:u q:val="single"/></q:rPr><q:instrText>MERGEFIELD Stale</q:instrText><m:inside/></q:r>"#,
+                r#"<q:r xmlns:q="{0}" xmlns:z="urn:end" data-run="end"><q:rPr><q:b/></q:rPr><q:fldChar q:fldCharType="separate"/><q:t>stored grandchild</q:t><q:fldChar q:fldCharType="end"/><z:suffix/><q:instrText xml:space="preserve"> = &quot;stale&quot; &quot;old yes&quot; &quot;old no&quot;</q:instrText><q:fldChar q:fldCharType="separate"/><q:t>stored middle</q:t><q:fldChar q:fldCharType="end"/></q:r>"#,
+                r#"<q:r xmlns:q="{0}" data-run="outer-end"><q:instrText xml:space="preserve"> = &quot;new value&quot; &quot;yes&quot; &quot;no&quot;</q:instrText><q:fldChar q:fldCharType="separate"/><q:t>stored outer</q:t><q:fldChar q:fldCharType="end"/></q:r>"#,
+                r#"</w:p>"#,
+            ),
+            word_namespace,
+        );
+        let mut document = document_with_parsed_paragraph(&xml);
+        let BodyContent::Paragraph(paragraph) = &mut document.document.body.content[0] else {
+            unreachable!()
+        };
+        let RunContent::Field(outer) = &mut paragraph.runs[0].content[0] else {
+            unreachable!()
+        };
+        let Some(FieldArgument::Nested(middle)) = outer.instruction.arguments.first_mut() else {
+            panic!("expected middle field")
+        };
+        assert!(matches!(
+            middle.instruction.arguments.first(),
+            Some(FieldArgument::Nested(_))
+        ));
+        middle.instruction.raw = "MERGEFIELD New".to_owned();
+
+        let context = FieldEvaluationContext {
+            merge_fields: BTreeMap::from([("New".to_owned(), "new value".to_owned())]),
+            ..FieldEvaluationContext::default()
+        };
+        assert_eq!(document.update_fields(&context).unwrap(), 2);
+        let saved = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let saved_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(saved_xml.contains("MERGEFIELD New"), "{saved_xml}");
+        assert!(!saved_xml.contains("MERGEFIELD Stale"), "{saved_xml}");
+        assert!(!saved_xml.contains("stored grandchild"), "{saved_xml}");
+        for preserved in [
+            r#"data-run="start""#,
+            r#"data-run="middle""#,
+            r#"data-run="end""#,
+            r#"xmlns:a="urn:start""#,
+            r#"xmlns:m="urn:middle""#,
+            r#"xmlns:z="urn:end""#,
+            "<q:i/>",
+            r#"<q:u q:val="single"/>"#,
+            "<q:b/>",
+            "<a:prefix/>",
+            "<m:inside/>",
+            "<z:suffix/>",
+        ] {
+            assert!(
+                saved_xml.contains(preserved),
+                "missing {preserved}: {saved_xml}"
+            );
+        }
+        assert!(
+            saved_xml.find("<a:prefix/>").unwrap() < saved_xml.find("<m:inside/>").unwrap()
+                && saved_xml.find("<m:inside/>").unwrap() < saved_xml.find("<z:suffix/>").unwrap(),
+            "{saved_xml}"
+        );
+
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let evaluations = reopened.evaluate_fields(&context).unwrap();
+        assert_eq!(evaluations.len(), 2);
+        assert_eq!(evaluations[0].field_index, 0);
+        assert_eq!(evaluations[0].cached_result, "yes");
+        assert_eq!(evaluations[1].field_index, 1);
+        assert_eq!(evaluations[1].instruction, "MERGEFIELD New");
+        assert_eq!(evaluations[1].cached_result, "new value");
     }
 
     #[test]

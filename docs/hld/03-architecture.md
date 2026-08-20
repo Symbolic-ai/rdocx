@@ -191,6 +191,16 @@ pagination deferral, or a stable cached-display fallback without mutating the
 package. Sequence counters remain isolated by story. Raw text boxes and other
 untyped XML remain outside this evaluation boundary.
 
+The facade also owns explicit field cache updates across that same typed story
+scope. It evaluates the complete field set before changing cloned document and
+package-backed parts. Resolved values replace the stored display and clear the
+field-local dirty flag. Pagination deferrals and stored-display fallbacks keep
+their cache and become dirty so Word may retry them. Only validated staged XML
+is committed, then both layout caches are invalidated once. Existing save and
+byte methods remain leave alone operations that preserve cache content and
+dirty spelling. Update-aware save methods opt into the same atomic operation
+before writing. The settings-level `w:updateFields` value remains untouched.
+
 The content-control model owns one recursive `CT_Sdt` grammar at block, row,
 cell, paragraph, and run placement boundaries. It reports tag, alias, numeric
 id, bounded control type, and custom XML binding metadata from `CT_SdtPr`.
