@@ -29,6 +29,7 @@ use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R, RunContent};
 
+use oxml_core::custom_properties::CustomProperties;
 use rdocx_oxml::core_properties::CoreProperties;
 
 use crate::Length;
@@ -52,9 +53,11 @@ pub struct RenderOptions {
 pub struct Document {
     pub(crate) package: OpcPackage,
     pub(crate) document: CT_Document,
-    styles: CT_Styles,
+    pub(crate) styles: CT_Styles,
     numbering: Option<CT_Numbering>,
-    core_properties: Option<CoreProperties>,
+    pub(crate) core_properties: Option<CoreProperties>,
+    /// Read-only custom document properties resolved from package relationships.
+    pub(crate) custom_properties: Option<CustomProperties>,
     /// Package part containing the core properties, resolved from `_rels/.rels`.
     core_properties_part_name: String,
     /// Part name for the main document
@@ -67,13 +70,13 @@ pub struct Document {
     /// Part name for numbering definitions, resolved the same way.
     numbering_part_name: String,
     /// Typed document settings loaded through the main document relationship.
-    settings: Option<CT_Settings>,
+    pub(crate) settings: Option<CT_Settings>,
     /// Existing settings relationship target. No conventional target is assumed.
     settings_part_name: Option<String>,
     /// Collision-free allocator for image media parts.
     image_namer: MediaNamer,
     /// Footnotes: loaded from word/footnotes.xml on open, written back on save.
-    footnotes: rdocx_oxml::footnotes::CT_Footnotes,
+    pub(crate) footnotes: rdocx_oxml::footnotes::CT_Footnotes,
     /// Typed comments loaded through the main document relationship.
     pub(crate) comments: Option<rdocx_oxml::comments::CT_Comments>,
     /// Existing comments relationship target. No target is invented on read.
@@ -400,6 +403,7 @@ impl Document {
             styles,
             numbering: None,
             core_properties: None,
+            custom_properties: None,
             core_properties_part_name: DEFAULT_CORE_PROPERTIES_PART.to_string(),
             doc_part_name: "/word/document.xml".to_string(),
             styles_part_name: DEFAULT_STYLES_PART.to_string(),
@@ -491,6 +495,13 @@ impl Document {
             .and_then(|part| package.get_part(part))
             .and_then(|xml| CoreProperties::from_xml(xml).ok());
 
+        let custom_properties = package
+            .package_rels
+            .get_by_type(rel_types::CUSTOM_PROPERTIES)
+            .map(|rel| OpcPackage::resolve_rel_target("/", &rel.target))
+            .and_then(|part| package.get_part(&part))
+            .and_then(|xml| CustomProperties::from_xml(xml).ok());
+
         let image_namer = MediaNamer::scan(
             "/word/media",
             "image",
@@ -528,6 +539,7 @@ impl Document {
             styles,
             numbering,
             core_properties,
+            custom_properties,
             core_properties_part_name: core_properties_part_name
                 .unwrap_or_else(|| DEFAULT_CORE_PROPERTIES_PART.to_string()),
             doc_part_name,
@@ -824,7 +836,6 @@ impl Document {
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
-            field_markers: Vec::new(),
         };
         let mut paragraph = CT_P::new();
         paragraph.runs.push(run);
@@ -1171,7 +1182,6 @@ impl Document {
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
-            field_markers: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1265,7 +1275,6 @@ impl Document {
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
-            field_markers: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1302,7 +1311,6 @@ impl Document {
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
-            field_markers: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1764,7 +1772,6 @@ impl Document {
             content: vec![RunContent::Drawing(CT_Drawing::inline(inline))],
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
-            field_markers: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -2452,7 +2459,6 @@ impl Document {
                 content: vec![rdocx_oxml::text::RunContent::Tab],
                 extra_xml: Vec::new(),
                 extra_xml_positions: Vec::new(),
-                field_markers: Vec::new(),
             });
 
             // Wrap the text run in a hyperlink to the bookmark
@@ -4027,12 +4033,14 @@ fn has_consistent_sfnt_header(data: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FieldEvaluationContext;
     use crate::paragraph::Alignment;
     use oxml_chart::{
         Axis, AxisData, AxisId, AxisKind, AxisPosition, BarDirection, BarGrouping, CT_PlotArea,
         ChartData, ChartKind, NumericData, Plot, Series, StringRef,
     };
     use oxml_sml::Column;
+    use rdocx_oxml::text::Field;
     use rdocx_oxml::units::{HalfPoint, Twips};
     use std::fs;
     use std::io::Cursor;
@@ -4190,6 +4198,37 @@ mod tests {
         assert_eq!(layout_invocations(), 1);
 
         doc.add_paragraph("After mutation");
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        assert_eq!(layout_invocations(), 2);
+    }
+
+    #[test]
+    fn field_update_batch_invalidates_cached_layout_once() {
+        let mut doc = Document::new();
+        let mut paragraph = CT_P::new();
+        paragraph.runs.push(CT_R {
+            properties: None,
+            content: vec![RunContent::Field(Field::new("PAGE", "4"))],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        });
+        doc.document
+            .body
+            .content
+            .push(BodyContent::Paragraph(paragraph));
+
+        reset_layout_invocations();
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        doc.render_page_to_png_deterministic(0, 1.0).unwrap();
+        assert_eq!(layout_invocations(), 1);
+
+        assert_eq!(
+            doc.update_fields(&FieldEvaluationContext::default())
+                .unwrap(),
+            1
+        );
         doc.render_page_to_png_deterministic(0, 1.0).unwrap();
         doc.render_page_to_png_deterministic(0, 1.0).unwrap();
         assert_eq!(layout_invocations(), 2);
@@ -5891,36 +5930,27 @@ mod tests {
     #[test]
     fn links_exposes_a_complex_field_hyperlink_target() {
         let mut doc = Document::new();
-        let mut paragraph = CT_P::new();
-        for (xml, marker) in [
-            (
-                br#"<w:fldChar w:fldCharType="begin"/>"#.as_slice(),
-                rdocx_oxml::text::FieldMarker::Begin { dirty: false },
-            ),
-            (
-                br#"<w:instrText> HYPERLINK &quot;https://example.test&quot; </w:instrText>"#
-                    .as_slice(),
-                rdocx_oxml::text::FieldMarker::Instruction(
-                    " HYPERLINK \"https://example.test\" ".to_owned(),
-                ),
-            ),
-            (
-                br#"<w:fldChar w:fldCharType="separate"/>"#.as_slice(),
-                rdocx_oxml::text::FieldMarker::Separate { dirty: false },
-            ),
-        ] {
-            let mut run = CT_R::new("");
-            run.extra_xml.push(xml.to_vec());
-            run.field_markers.push(marker);
-            paragraph.runs.push(run);
-        }
-        paragraph.runs.push(CT_R::new("Cached link"));
-        let mut end = CT_R::new("");
-        end.extra_xml
-            .push(br#"<w:fldChar w:fldCharType="end"/>"#.to_vec());
-        end.field_markers
-            .push(rdocx_oxml::text::FieldMarker::End { dirty: false });
-        paragraph.runs.push(end);
+        let xml = concat!(
+            r#"<w:p>"#,
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText> HYPERLINK &quot;https://example.test&quot; </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:t>Cached link</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            r#"</w:p>"#,
+        );
+        let mut reader = quick_xml::Reader::from_str(xml);
+        let mut buffer = Vec::new();
+        let paragraph = loop {
+            match reader.read_event_into(&mut buffer).unwrap() {
+                Event::Start(element) if matches_local_name(element.name().as_ref(), b"p") => {
+                    break CT_P::from_xml(&mut reader).unwrap();
+                }
+                Event::Eof => panic!("missing paragraph"),
+                _ => {}
+            }
+            buffer.clear();
+        };
         doc.document
             .body
             .content

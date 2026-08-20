@@ -7,7 +7,7 @@ use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::error::{OxmlError, Result};
 use crate::namespace::matches_local_name;
-use crate::numbering::word_prefixes_at;
+use crate::numbering::{local_namespace_overrides, word_prefixes_at};
 use crate::properties::is_word_element;
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::CT_Revision;
@@ -568,9 +568,14 @@ fn parse_content(
                         reader, &prefixes,
                     )?));
                 } else if is_word_element(child.name().as_ref(), b"tc", &prefixes) {
-                    content.push(SdtContent::Cell(CT_Tc::from_xml_with_prefixes(
-                        reader, &prefixes,
-                    )?));
+                    let owner_bindings = local_namespace_overrides(&child, inherited)?;
+                    content.push(SdtContent::Cell(
+                        CT_Tc::from_xml_with_prefixes_and_owner_bindings(
+                            reader,
+                            &prefixes,
+                            &owner_bindings,
+                        )?,
+                    ));
                 } else if is_word_element(child.name().as_ref(), b"r", &prefixes) {
                     content.push(SdtContent::Run(CT_R::from_xml_with_prefixes(
                         reader, &prefixes,
@@ -610,7 +615,6 @@ fn parse_content(
                         content: Vec::new(),
                         extra_xml: Vec::new(),
                         extra_xml_positions: Vec::new(),
-                        field_markers: Vec::new(),
                         alt_drawings: Vec::new(),
                     }));
                 } else {
@@ -909,6 +913,33 @@ mod tests {
         let runs = paragraphs[0].runs();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].text(), "once");
+    }
+
+    #[test]
+    fn content_control_cell_preserves_child_binding_declared_on_cell() {
+        let document = parse_document(
+            r#"<w:sdt><w:sdtContent><w:tc xmlns:ext="urn:producer"><w:tcPr><ext:property ext:value="kept"/></w:tcPr><w:p/></w:tc></w:sdtContent></w:sdt>"#,
+        );
+        let BodyContent::ContentControl(control) = &document.body.content[0] else {
+            panic!("content control parses");
+        };
+        let SdtContent::Cell(cell) = &control.content[0] else {
+            panic!("content-control cell parses");
+        };
+        let properties = cell.properties.as_ref().expect("cell properties parse");
+        assert_eq!(
+            properties.extra_xml,
+            vec![(
+                0,
+                br#"<ext:property ext:value="kept" xmlns:ext="urn:producer"/>"#.to_vec(),
+            )]
+        );
+
+        let saved = String::from_utf8(document.to_xml().expect("serializes")).expect("UTF-8");
+        assert!(
+            saved.contains(r#"<ext:property ext:value="kept" xmlns:ext="urn:producer"/>"#),
+            "content-control cell child keeps its cell-local namespace binding: {saved}"
+        );
     }
 
     #[test]

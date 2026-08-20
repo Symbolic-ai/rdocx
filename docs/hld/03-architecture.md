@@ -144,14 +144,15 @@ footnotes, comments, settings, placeholder replacement, and `drawing.rs`. The
 `wp:` inline and anchor code in the latter is Word-only and has no pptx value,
 so it is not migrated.
 
-The settings model owns the separate `w:settings` root and a read-only
-`w:documentProtection` projection. It reports the four supported editing modes,
-the recorded enforcement and formatting flags, and password-verification
-metadata. Prefix aliases are accepted on read. Parsed producer bytes remain the
+The settings model owns the separate `w:settings` root and read-only
+projections for `w:documentProtection` and valid `w:docVars` entries. It reports
+the four supported editing modes, the recorded enforcement and formatting
+flags, password-verification metadata, and ordered document-variable names and
+values. Prefix aliases are accepted on read. Parsed producer bytes remain the
 sole serialization source, so root attributes, schema order, unmodelled
-children, and unsupported or malformed protection elements survive unchanged.
-An invalid protection element is preserved but is not reported through the
-typed projection.
+children, and unsupported or malformed protection and variable elements
+survive unchanged. Invalid elements are preserved but are not reported through
+the typed projections.
 
 The comments model owns typed comment entries and the three body anchor forms.
 Comment bodies retain ordered paragraphs, producer attributes, and unmodelled
@@ -164,18 +165,41 @@ boundaries. The `rdocx` facade owns the relationship-resolved pair of comment
 parts and coordinates them with the anchors in the main document.
 
 The Word text model also projects bookmark starts and ends at direct-run
-boundaries while retaining every marker as ordered raw XML. Structured simple
-fields distinguish `REF` and `PAGEREF`, keep the complete instruction including
-switches, and retain the stored display. Complex fields use the same tokenizer
-and expose the normalized name, arguments, switches, cached result, dirty
-state, and nested fields. Markers are recognized only through their in-scope
-WordprocessingML namespace bindings. Malformed or unsupported sequences remain
-opaque raw XML, and dirty fields are not reported as `Document::links()` until
-the update policy defines how to handle them. The `rdocx` facade correlates
-bookmark ids and owns mutation across top-level body paragraphs.
+boundaries while retaining every marker as ordered raw XML. Simple and complex
+fields share one recursive `Field` grammar with a normalized name, text or
+nested arguments, switches, cached result, and optional dirty state. Its private
+source records the original field form, run partition, and producer XML.
+Unchanged fields therefore write their original bytes. Cache and dirty updates
+rewrite only the typed values while preserving run formatting and unmodelled
+neighbours. Markers are recognized only as direct run children through their
+in-scope WordprocessingML namespace bindings. Malformed sequences remain opaque
+raw XML, while unsupported valid fields retain their cached display. Dirty
+complex hyperlinks are not reported as `Document::links()` until the update
+policy defines how to handle them. The `rdocx` facade correlates bookmark ids
+and owns mutation across top-level body paragraphs.
 `rdocx-layout` resolves bookmark text and maps page targets, while the shared
 `oxml-layout` boundary exposes only format-neutral `Target` and `TargetPage`
 field kinds.
+
+The `rdocx` facade owns pure field evaluation over that recursive grammar. It
+walks every typed paragraph in main text, tables, content controls, distinct
+header and footer parts, footnotes, and endnotes. Package-backed inputs come
+from unique bookmarks, styles, core and custom properties, and settings
+document variables. Date-time, filename, merge, and included-text values come
+only from an explicit caller context. Evaluation reports resolved text,
+pagination deferral, or a stable cached-display fallback without mutating the
+package. Sequence counters remain isolated by story. Raw text boxes and other
+untyped XML remain outside this evaluation boundary.
+
+The facade also owns explicit field cache updates across that same typed story
+scope. It evaluates the complete field set before changing cloned document and
+package-backed parts. Resolved values replace the stored display and clear the
+field-local dirty flag. Pagination deferrals and stored-display fallbacks keep
+their cache and become dirty so Word may retry them. Only validated staged XML
+is committed, then both layout caches are invalidated once. Existing save and
+byte methods remain leave alone operations that preserve cache content and
+dirty spelling. Update-aware save methods opt into the same atomic operation
+before writing. The settings-level `w:updateFields` value remains untouched.
 
 The content-control model owns one recursive `CT_Sdt` grammar at block, row,
 cell, paragraph, and run placement boundaries. It reports tag, alias, numeric

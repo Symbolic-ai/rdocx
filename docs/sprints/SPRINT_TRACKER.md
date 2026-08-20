@@ -63,6 +63,7 @@ defended.
 | S46 | M14 | 5 | 5 | 0 | 12 | 5 | Added typed comments, recursive content controls, custom XML binding, bookmarks, and cross-reference resolution. The full close gate passed with all 49 hashes unchanged. The SHA-bound Word comment thread candidate remains recorded for later human UI observation, and no package was published |
 | S47 | M14 | 2 | 2 | 0 | 8 | 2 | Added typed revision discovery and atomic accept and reject operations across content, properties, contextual markers, hyperlinks, tables, and controls. Microsoft Word 16.104 normalized-body parity passed, the full close gate passed with all 49 hashes unchanged, and no package was published. M14 continues in S48 for revision display and document protection |
 | S48 | M14 | 2 | 2 | 0 | 4 | 2 | Completed M14 with accepted and tracked revision rendering, deterministic change decorations, and typed document-protection intent. The mixed collaboration gate read and wrote revisions, comments, content controls, and bookmarks in one preserved package. The full close gate passed with all 49 hashes unchanged, and no package was published |
+| S49 | M16 | 4 | 4 | 0 | 12 | 4 | Established one recursive field grammar, deterministic evaluation against pinned Word results, atomic cache-update policies, and namespace-aware reader preservation. The full close gate passed with all 49 hashes unchanged, every package archive remained below 10 MiB, and the sprint review was clean on pass 1. M16 continues in S50 with template syntax, loops, conditionals, and repeating structures |
 
 ## Completed features
 
@@ -267,6 +268,10 @@ defended.
 | F-150 | S47 | L | 4 | 1 | 2026-08-17 | Atomic placement-aware revision acceptance and rejection |
 | F-151 | S48 | M | 2 | 1 | 2026-08-17 | Accepted and tracked revision views with deterministic decorations and margin bars |
 | F-155 | S48 | M | 2 | 1 | Typed document-protection intent and recorded verification metadata |
+| F-160 | S49 | L | 4 | 1 | 2026-08-20 | Recursive source-preserving field instruction grammar for simple and complex fields |
+| F-161 | S49 | L | 4 | 1 | 2026-08-20 | Deterministic native field evaluation with pinned Word results and cached fallback |
+| F-162 | S49 | M | 2 | 1 | 2026-08-20 | Atomic field cache updates with explicit update-aware save operations |
+| F-203 | S49 | M | 2 | 1 | 2026-08-20 | Namespace-aware table-property parsing with absolute schema-slot preservation |
 
 ## Velocity
 
@@ -330,6 +335,7 @@ five working days.
 | S46 | 5 | 5 | 5.00 |
 | S47 | 2 | 2 | 5.00 |
 | S48 | 2 | 2 | 5.00 |
+| S49 | 4 | 4 | 5.00 |
 
 ## Escalation record
 
@@ -381,3 +387,4 @@ was done about it. Empty is the expected state.
 | 2026-08-17 | Sprint estimate variance exceeded 30 percent | S46 | Record 5 actual days against 12 estimated. Three independent roots and two dependent stories reused one typed paragraph, package, and traversal foundation across isolated workers. Retain the dependency-defined boundaries |
 | 2026-08-17 | Sprint estimate variance exceeded 30 percent | S47 | Record 2 actual days against 8 estimated. F-150 reused F-149's typed revision model, and the extended sprint review concentrated namespace and ordering investigation into one integrated path. Retain the milestone-defined S48 boundary |
 | 2026-08-17 | Sprint estimate variance exceeded 30 percent | S48 | Record 2 actual days against 4 estimated. The two stories used isolated workers, while the integrated review concentrated the milestone interaction proof into one mixed-package gate. Retain the dependency-defined S49 boundary |
+| 2026-08-20 | Sprint estimate variance exceeded 30 percent | S49 | Record 4 actual days against 12 estimated. The three dependent field stories reused one recursive source-preserving model, while the independent reader correction and bounded review loop concentrated preservation investigation into the same integrated gate. Retain the dependency-defined S50 boundary |

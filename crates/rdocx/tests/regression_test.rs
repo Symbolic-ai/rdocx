@@ -3,9 +3,12 @@
 //! Each test names the failure it locks down, so a reintroduction is obvious
 //! from the test name alone rather than from a diff.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-use rdocx::{Document, Length, RenderOptions, RevisionView, RunPosition, RunRange};
+use rdocx::{
+    Document, FieldDateTime, FieldEvaluationContext, FieldOutcome, Length, RenderOptions,
+    RevisionView, RunPosition, RunRange,
+};
 use rdocx_oxml::CT_Document;
 use rdocx_oxml::document::CT_Body;
 
@@ -90,6 +93,1065 @@ const CUSTOM_XML_REL_TYPE: &str =
 const CUSTOM_XML_PROPS_REL_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps";
 const WORD_REVISION_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
+const WORD_FIELD_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
+const WORD_FIELD_ORACLE_ENVIRONMENT: &str =
+    "locale=en-US; calendar=Gregorian; decimal=.; grouping=,; timezone=UTC";
+const WORD_FIELD_ORACLE_INPUT: &str = "F-161-readable-field-matrix-v1";
+
+fn document_with_field_parts(
+    document_xml: &str,
+    settings_xml: Option<&str>,
+    custom_properties_xml: Option<&str>,
+) -> Document {
+    let mut seed = Document::new();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    package.set_part("/word/document.xml", document_xml.as_bytes().to_vec());
+    if let Some(settings_xml) = settings_xml {
+        package.set_part("/word/settings.xml", settings_xml.as_bytes().to_vec());
+        package.content_types.add_override(
+            "/word/settings.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
+        );
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(oxml_opc::relationship::rel_types::SETTINGS, "settings.xml");
+    }
+    if let Some(custom_properties_xml) = custom_properties_xml {
+        package.set_part(
+            "/metadata/producer-properties.xml",
+            custom_properties_xml.as_bytes().to_vec(),
+        );
+        package.content_types.add_override(
+            "/metadata/producer-properties.xml",
+            oxml_opc::content_types::CUSTOM_PROPERTIES,
+        );
+        package.package_rels.add(
+            oxml_opc::relationship::rel_types::CUSTOM_PROPERTIES,
+            "metadata/producer-properties.xml",
+        );
+    }
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    Document::from_bytes(output.get_ref()).unwrap()
+}
+
+#[test]
+fn every_supported_field_matches_the_pinned_word_result() {
+    assert_eq!(
+        WORD_FIELD_ORACLE,
+        "Microsoft Word 16.104 build 16.104.25121423"
+    );
+    assert_eq!(
+        WORD_FIELD_ORACLE_ENVIRONMENT,
+        "locale=en-US; calendar=Gregorian; decimal=.; grouping=,; timezone=UTC"
+    );
+    assert_eq!(WORD_FIELD_ORACLE_INPUT, "F-161-readable-field-matrix-v1");
+
+    let body = r#"
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:bookmarkStart w:id="7" w:name="destination"/><w:r><w:t>Introduction</w:t></w:r><w:bookmarkEnd w:id="7"/></w:p>
+        <w:p><w:fldSimple w:instr="IF &quot;10&quot; &gt;= &quot;2&quot; &quot;yes&quot; &quot;no&quot;"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="REF destination"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="PAGEREF destination"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="SEQ Figure"><w:r><w:t>0</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="DOCPROPERTY Title"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="DOCVARIABLE Region"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="STYLEREF &quot;Heading 1&quot;"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="INCLUDETEXT &quot;chapter.docx&quot;"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="DATE \@ &quot;MMMM d, yyyy&quot;"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="TIME \@ &quot;h:mm AM/PM&quot;"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="FILENAME"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="AUTHOR"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="MERGEFIELD Name \* Upper"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="NUMPAGES"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>
+    "#;
+    let settings = r#"<q:settings xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:docVars><q:docVar q:name="Region" q:val="West"/></q:docVars></q:settings>"#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), Some(settings), None);
+    document.set_title("Oracle title");
+    document.set_author("Ada Lovelace");
+    let context = FieldEvaluationContext {
+        now: Some(FieldDateTime {
+            year: 2025,
+            month: 12,
+            day: 14,
+            hour: 21,
+            minute: 7,
+            second: 5,
+        }),
+        file_name: Some("report.docx".to_owned()),
+        file_path: Some("/templates/report.docx".to_owned()),
+        merge_fields: BTreeMap::from([("Name".to_owned(), "Grace".to_owned())]),
+        included_text: BTreeMap::from([("chapter.docx".to_owned(), "Included chapter".to_owned())]),
+    };
+    let actual = document
+        .evaluate_fields(&context)
+        .unwrap()
+        .into_iter()
+        .map(|evaluation| evaluation.outcome)
+        .collect::<Vec<_>>();
+    let expected = vec![
+        FieldOutcome::Resolved("yes".to_owned()),
+        FieldOutcome::Resolved("Introduction".to_owned()),
+        FieldOutcome::DeferredPagination,
+        FieldOutcome::Resolved("1".to_owned()),
+        FieldOutcome::Resolved("Oracle title".to_owned()),
+        FieldOutcome::Resolved("West".to_owned()),
+        FieldOutcome::Resolved("Introduction".to_owned()),
+        FieldOutcome::Resolved("Included chapter".to_owned()),
+        FieldOutcome::Resolved("December 14, 2025".to_owned()),
+        FieldOutcome::Resolved("9:07 PM".to_owned()),
+        FieldOutcome::Resolved("report.docx".to_owned()),
+        FieldOutcome::Resolved("Ada Lovelace".to_owned()),
+        FieldOutcome::Resolved("GRACE".to_owned()),
+        FieldOutcome::DeferredPagination,
+        FieldOutcome::DeferredPagination,
+    ];
+    assert_eq!(actual, expected, "{WORD_FIELD_ORACLE_INPUT}");
+}
+
+#[test]
+fn document_properties_variables_and_author_use_package_values() {
+    let body = r#"
+        <w:p><w:fldSimple w:instr="DOCPROPERTY ClientTier"><w:r><w:t>stored tier</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="DOCVARIABLE Region"><w:r><w:t>stored region</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="AUTHOR"><w:r><w:t>stored author</w:t></w:r></w:fldSimple></w:p>
+    "#;
+    let settings = r#"<q:settings xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:docVars><q:docVar q:name="Region" q:val="North"/></q:docVars></q:settings>"#;
+    let custom = r#"<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="ClientTier"><vt:lpwstr>Gold</vt:lpwstr></property></Properties>"#;
+    let mut document =
+        document_with_field_parts(&wrap_word_body(body), Some(settings), Some(custom));
+    document.set_author("Package Author");
+    let before = document.to_bytes().unwrap();
+    let outcomes = document
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap()
+        .into_iter()
+        .map(|evaluation| evaluation.outcome)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outcomes,
+        [
+            FieldOutcome::Resolved("Gold".to_owned()),
+            FieldOutcome::Resolved("North".to_owned()),
+            FieldOutcome::Resolved("Package Author".to_owned()),
+        ]
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn resolved_values_drive_date_pictures_and_empty_merge_omits_affixes() {
+    let body = r#"
+        <w:p><w:fldSimple w:instr="DOCPROPERTY EventDate \@ &quot;MMMM d, yyyy&quot;"><w:r><w:t>stored property</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="MERGEFIELD MergeDate \@ &quot;yyyy-MM-dd&quot;"><w:r><w:t>stored merge date</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="MERGEFIELD Empty \b &quot;Dear &quot; \f &quot;!&quot;"><w:r><w:t>stored empty</w:t></w:r></w:fldSimple></w:p>
+    "#;
+    let custom = r#"<p:Properties xmlns:p="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:v="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><p:property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="EventDate"><v:filetime>2025-12-14T21:07:05Z</v:filetime></p:property></p:Properties>"#;
+    let document = document_with_field_parts(&wrap_word_body(body), None, Some(custom));
+    let context = FieldEvaluationContext {
+        now: Some(FieldDateTime {
+            year: 1999,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        }),
+        merge_fields: BTreeMap::from([
+            ("MergeDate".to_owned(), "2026-01-02".to_owned()),
+            ("Empty".to_owned(), String::new()),
+        ]),
+        ..FieldEvaluationContext::default()
+    };
+    assert_eq!(
+        document
+            .evaluate_fields(&context)
+            .unwrap()
+            .into_iter()
+            .map(|result| result.outcome)
+            .collect::<Vec<_>>(),
+        [
+            FieldOutcome::Resolved("December 14, 2025".to_owned()),
+            FieldOutcome::Resolved("2026-01-02".to_owned()),
+            FieldOutcome::Resolved(String::new()),
+        ]
+    );
+}
+
+#[test]
+fn foreign_custom_property_lookalikes_are_preserved_but_not_evaluated() {
+    let body = r#"<w:p><w:fldSimple w:instr="DOCPROPERTY ClientTier"><w:r><w:t>stored tier</w:t></w:r></w:fldSimple></w:p>"#;
+    let foreign = r#"<x:Properties xmlns:x="urn:not-custom-properties" xmlns:v="urn:not-variant-types"><x:property x:fmtid="foreign" x:pid="2" x:name="ClientTier"><v:lpwstr>Injected</v:lpwstr></x:property></x:Properties>"#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, Some(foreign));
+    assert!(matches!(
+        document
+            .evaluate_fields(&FieldEvaluationContext::default())
+            .unwrap()[0]
+            .outcome,
+        FieldOutcome::KeepStored { .. }
+    ));
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    assert_eq!(
+        package.get_part("/metadata/producer-properties.xml"),
+        Some(foreign.as_bytes())
+    );
+}
+
+#[test]
+fn nested_switch_and_positional_fields_keep_source_order_indices() {
+    let body = concat!(
+        r#"<w:p>"#,
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText xml:space="preserve">MERGEFIELD \b </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText>AUTHOR</w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t>stored author</w:t></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        r#"<w:r><w:instrText xml:space="preserve"> </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText>MERGEFIELD Name</w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t>stored name</w:t></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t>stored outer</w:t></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        r#"</w:p>"#,
+    );
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    document.set_author("Package Author");
+    let context = FieldEvaluationContext {
+        merge_fields: BTreeMap::from([("Name".to_owned(), "Ada".to_owned())]),
+        ..FieldEvaluationContext::default()
+    };
+    let evaluations = document.evaluate_fields(&context).unwrap();
+    assert_eq!(
+        evaluations
+            .iter()
+            .map(|evaluation| (evaluation.field_index, evaluation.instruction.as_str()))
+            .collect::<Vec<_>>(),
+        [(0, r"MERGEFIELD \b"), (1, "AUTHOR"), (2, "MERGEFIELD Name"),]
+    );
+    assert_eq!(
+        evaluations[1].outcome,
+        FieldOutcome::Resolved("Package Author".to_owned())
+    );
+    assert_eq!(
+        evaluations[2].outcome,
+        FieldOutcome::Resolved("Ada".to_owned())
+    );
+
+    assert_eq!(document.update_fields(&context).unwrap(), 3);
+    let updated = document.evaluate_fields(&context).unwrap();
+    assert_eq!(updated[0].cached_result, "stored outer");
+    assert_eq!(updated[1].cached_result, "Package Author");
+    assert_eq!(updated[2].cached_result, "Ada");
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let reopened = reopened.evaluate_fields(&context).unwrap();
+    assert_eq!(reopened[1].cached_result, "Package Author");
+    assert_eq!(reopened[2].cached_result, "Ada");
+}
+
+#[test]
+fn nested_if_operand_keeps_its_position_after_cache_updates() {
+    let body = concat!(
+        r#"<w:p><w:bookmarkStart w:id="7" w:name="destination"/><w:r><w:t>x</w:t></w:r><w:bookmarkEnd w:id="7"/></w:p>"#,
+        r#"<w:p>"#,
+        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+        r#"<w:r><w:instrText xml:space="preserve">IF </w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="begin" w:dirty="1"/></w:r>"#,
+        r#"<w:r><w:instrText>REF destination</w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t>old reference</w:t></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        r#"<w:r><w:instrText xml:space="preserve"> = &quot;x&quot; &quot;yes&quot; &quot;no&quot;</w:instrText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        r#"<w:r><w:t>old outcome</w:t></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        r#"</w:p>"#,
+    );
+    let context = FieldEvaluationContext::default();
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let initial = document.evaluate_fields(&context).unwrap();
+    assert_eq!(initial[0].outcome, FieldOutcome::Resolved("yes".to_owned()));
+    assert_eq!(initial[1].outcome, FieldOutcome::Resolved("x".to_owned()));
+
+    assert_eq!(document.update_fields(&context).unwrap(), 2);
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(
+        xml.find("REF destination").unwrap() < xml.find(" = &quot;x&quot;").unwrap(),
+        "{xml}"
+    );
+
+    let reopened = Document::from_bytes(&saved).unwrap();
+    let reopened = reopened.evaluate_fields(&context).unwrap();
+    assert_eq!(reopened[0].cached_result, "yes");
+    assert_eq!(
+        reopened[0].outcome,
+        FieldOutcome::Resolved("yes".to_owned())
+    );
+    assert_eq!(reopened[1].cached_result, "x");
+}
+
+#[test]
+fn missing_context_and_unsupported_fields_keep_their_cached_display() {
+    let body = r#"
+        <w:p><w:fldSimple w:instr="DATE"><w:r><w:t>stored date</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="UNKNOWN"><w:r><w:t>stored unknown</w:t></w:r></w:fldSimple></w:p>
+    "#;
+    let document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let results = document
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    assert_eq!(results[0].cached_result, "stored date");
+    assert_eq!(
+        results[0].outcome,
+        FieldOutcome::KeepStored {
+            diagnostic: "DATE requires an explicit date and time, stored display retained"
+                .to_owned(),
+        }
+    );
+    assert_eq!(results[1].cached_result, "stored unknown");
+    assert_eq!(
+        results[1].outcome,
+        FieldOutcome::KeepStored {
+            diagnostic: "field UNKNOWN is unsupported, stored display retained".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn field_update_policies_produce_the_expected_result_cache_and_dirty_flag() {
+    let body = concat!(
+        r#"<w:p><w:fldSimple w:instr="MERGEFIELD Name" w:dirty="1"><w:r><w:t>stored name</w:t></w:r></w:fldSimple></w:p>"#,
+        r#"<w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>7</w:t></w:r></w:fldSimple></w:p>"#,
+    );
+    let context = FieldEvaluationContext {
+        merge_fields: BTreeMap::from([("Name".to_owned(), "Ada".to_owned())]),
+        ..FieldEvaluationContext::default()
+    };
+
+    let mut on_demand = document_with_field_parts(&wrap_word_body(body), None, None);
+    assert_eq!(on_demand.update_fields(&context).unwrap(), 2);
+    let updated = document_xml(&mut on_demand);
+    assert!(updated.contains(r#"w:instr="MERGEFIELD Name" w:dirty="0""#));
+    assert!(updated.contains("<w:t>Ada</w:t>"));
+    assert!(updated.contains(r#"w:instr="PAGE" w:dirty="1""#));
+    assert!(updated.contains("<w:t>7</w:t>"));
+
+    let mut on_save = document_with_field_parts(&wrap_word_body(body), None, None);
+    let bytes = on_save.to_bytes_with_field_updates(&context).unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let outcomes = reopened.evaluate_fields(&context).unwrap();
+    assert_eq!(outcomes[0].cached_result, "Ada");
+    assert_eq!(outcomes[1].cached_result, "7");
+
+    let mut file_save = document_with_field_parts(&wrap_word_body(body), None, None);
+    let path = std::env::temp_dir().join(format!(
+        "rdocx-f162-field-update-{}.docx",
+        std::process::id()
+    ));
+    file_save.save_with_field_updates(&path, &context).unwrap();
+    let reopened = Document::open(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let outcomes = reopened.evaluate_fields(&context).unwrap();
+    assert_eq!(outcomes[0].cached_result, "Ada");
+    assert_eq!(outcomes[1].cached_result, "7");
+}
+
+#[test]
+fn unsupported_fields_keep_their_cached_result_when_updates_run() {
+    let body = concat!(
+        r#"<w:p><w:fldSimple w:instr="UNKNOWN"><w:r><w:t>producer display</w:t></w:r></w:fldSimple></w:p>"#,
+        r#"<w:p><w:fldSimple w:instr="DATE"><w:r><w:t>stored date</w:t></w:r></w:fldSimple></w:p>"#,
+    );
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+
+    assert_eq!(
+        document
+            .update_fields(&FieldEvaluationContext::default())
+            .unwrap(),
+        2
+    );
+    let xml = document_xml(&mut document);
+    assert!(xml.contains("<w:t>producer display</w:t>"));
+    assert!(xml.contains("<w:t>stored date</w:t>"));
+    assert_eq!(xml.matches(r#"w:dirty="1""#).count(), 2);
+}
+
+#[test]
+fn ordinary_save_leaves_cached_field_results_and_dirty_flags_alone() {
+    let body = concat!(
+        r#"<w:p xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:fldSimple q:instr="MERGEFIELD Name" q:dirty="on" data="producer"><q:r><q:t>stored</q:t><q:producer/></q:r></q:fldSimple></w:p>"#,
+        r#"<w:p><w:fldSimple w:instr="PAGE" w:dirty="off"><w:r><w:t>9</w:t></w:r></w:fldSimple></w:p>"#,
+    );
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+
+    let xml = document_xml(&mut document);
+    assert!(xml.contains(r#"q:dirty="on" data="producer""#));
+    assert!(xml.contains("<q:t>stored</q:t><q:producer/>"));
+    assert!(xml.contains(r#"w:dirty="off""#));
+    assert!(xml.contains("<w:t>9</w:t>"));
+}
+
+#[test]
+fn field_update_failure_leaves_document_bytes_unchanged() {
+    let body = r#"<w:p><w:fldSimple w:instr="MERGEFIELD Name"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>"#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let before = document.to_bytes().unwrap();
+    let context = FieldEvaluationContext {
+        merge_fields: BTreeMap::from([("Name".to_owned(), "invalid\0xml".to_owned())]),
+        ..FieldEvaluationContext::default()
+    };
+
+    assert!(document.update_fields(&context).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn typed_story_fields_have_stable_order_and_physical_parts_are_evaluated_once() {
+    let body = r#"
+        <w:p><w:fldSimple w:instr="MERGEFIELD Main"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:tbl><w:tblPr/><w:tblGrid/><w:sdt><w:sdtPr><w:richText/></w:sdtPr><w:sdtContent><w:tr><w:tc><w:p><w:fldSimple w:instr="MERGEFIELD TableControl"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p></w:tc></w:tr></w:sdtContent></w:sdt><w:tr><w:tc><w:tcPr/><w:sdt><w:sdtPr><w:richText/></w:sdtPr><w:sdtContent><w:p><w:fldSimple w:instr="MERGEFIELD CellControl"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p></w:sdtContent></w:sdt><w:p><w:fldSimple w:instr="MERGEFIELD Table"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p></w:tc></w:tr></w:tbl>
+        <w:sdt><w:sdtPr><w:richText/></w:sdtPr><w:sdtContent><w:p><w:fldSimple w:instr="MERGEFIELD Control"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p></w:sdtContent></w:sdt>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let header = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:fldSimple w:instr="MERGEFIELD Header"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p></w:hdr>"#;
+    let earlier_header = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:fldSimple w:instr="MERGEFIELD EarlierHeader"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p></w:hdr>"#;
+    let orphan_header = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:fldSimple w:instr="MERGEFIELD Orphan"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p></w:hdr>"#;
+    let footer = r#"<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:fldSimple w:instr="MERGEFIELD Footer"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p></w:ftr>"#;
+    let footnotes = r#"<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:footnote w:id="2"><w:p><w:fldSimple w:instr="MERGEFIELD Footnote"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p></w:footnote></w:footnotes>"#;
+    let endnotes = r#"<w:endnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:endnote w:id="2"><w:p><w:fldSimple w:instr="MERGEFIELD Endnote"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p></w:endnote></w:endnotes>"#;
+    package.set_part("/word/header1.xml", header.as_bytes().to_vec());
+    package.set_part("/word/header2.xml", earlier_header.as_bytes().to_vec());
+    package.set_part("/word/orphan-header.xml", orphan_header.as_bytes().to_vec());
+    package.set_part("/word/footer1.xml", footer.as_bytes().to_vec());
+    package.set_part("/word/footnotes.xml", footnotes.as_bytes().to_vec());
+    package.set_part("/word/notes/end-stream.xml", endnotes.as_bytes().to_vec());
+    let (header_id, duplicate_header_id, earlier_header_id, footer_id) = {
+        let relationships = package.get_or_create_part_rels("/word/document.xml");
+        let header_id = relationships.add(oxml_opc::relationship::rel_types::HEADER, "header1.xml");
+        let duplicate_header_id =
+            relationships.add(oxml_opc::relationship::rel_types::HEADER, "header1.xml");
+        let earlier_header_id =
+            relationships.add(oxml_opc::relationship::rel_types::HEADER, "header2.xml");
+        relationships.add(
+            oxml_opc::relationship::rel_types::HEADER,
+            "orphan-header.xml",
+        );
+        let footer_id = relationships.add(oxml_opc::relationship::rel_types::FOOTER, "footer1.xml");
+        relationships.add(
+            oxml_opc::relationship::rel_types::FOOTNOTES,
+            "footnotes.xml",
+        );
+        relationships.add(
+            oxml_opc::relationship::rel_types::ENDNOTES,
+            "notes/end-stream.xml",
+        );
+        (header_id, duplicate_header_id, earlier_header_id, footer_id)
+    };
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>{body}<w:p><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="{earlier_header_id}"/></w:sectPr></w:pPr></w:p><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/><w:headerReference w:type="even" r:id="{duplicate_header_id}"/><w:footerReference w:type="default" r:id="{footer_id}"/></w:sectPr></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let names = [
+        "Main",
+        "TableControl",
+        "CellControl",
+        "Table",
+        "Control",
+        "EarlierHeader",
+        "Header",
+        "Footer",
+        "Footnote",
+        "Endnote",
+    ];
+    let context = FieldEvaluationContext {
+        merge_fields: names
+            .iter()
+            .map(|name| ((*name).to_owned(), format!("{name} value")))
+            .collect(),
+        ..FieldEvaluationContext::default()
+    };
+    let results = document.evaluate_fields(&context).unwrap();
+    assert_eq!(
+        results
+            .iter()
+            .map(|result| result.field_index)
+            .collect::<Vec<_>>(),
+        (0..10).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        results
+            .into_iter()
+            .map(|result| result.outcome)
+            .collect::<Vec<_>>(),
+        names
+            .iter()
+            .map(|name| FieldOutcome::Resolved(format!("{name} value")))
+            .collect::<Vec<_>>()
+    );
+
+    assert_eq!(document.update_fields(&context).unwrap(), 10);
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    for (part_name, expected_values) in [
+        ("/word/document.xml", &names[..5]),
+        ("/word/header2.xml", &names[5..6]),
+        ("/word/header1.xml", &names[6..7]),
+        ("/word/footer1.xml", &names[7..8]),
+        ("/word/footnotes.xml", &names[8..9]),
+        ("/word/notes/end-stream.xml", &names[9..10]),
+    ] {
+        let xml = String::from_utf8(package.get_part(part_name).unwrap().to_vec()).unwrap();
+        for name in expected_values {
+            assert!(xml.contains(&format!("<w:t>{name} value</w:t>")), "{xml}");
+        }
+    }
+    let orphan = String::from_utf8(
+        package
+            .get_part("/word/orphan-header.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(orphan.contains("<w:t>stored</w:t>"));
+}
+
+#[test]
+fn package_story_updates_preserve_aliased_and_unmodelled_part_boundaries() {
+    let mut document = document_with_field_parts(&wrap_word_body(""), None, None);
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let word_namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let header = format!(
+        r#"<q:hdr xmlns:q="{word_namespace}" xmlns:x="urn:producer"><x:headerBefore data="A"/><q:p data="header-paragraph"><q:fldSimple q:instr="MERGEFIELD Header" q:dirty="on" x:token="header"><q:r><q:rPr><q:b/></q:rPr><q:t>stored header</q:t><x:insideHeader/></q:r></q:fldSimple></q:p><x:headerAfter data="B"/></q:hdr>"#,
+    );
+    let footer = format!(
+        r#"<q:ftr xmlns:q="{word_namespace}" xmlns:x="urn:producer"><x:footerBefore/><q:p><q:fldSimple q:instr="MERGEFIELD Footer"><q:r><q:t>stored footer</q:t></q:r></q:fldSimple></q:p><x:footerAfter/></q:ftr>"#,
+    );
+    let endnotes = format!(
+        r#"<q:endnotes xmlns:q="{word_namespace}" xmlns:x="urn:producer"><x:rootBefore/><q:endnote q:id="2" x:token="note"><x:noteBefore/><q:p data="endnote-paragraph"><q:fldSimple q:instr="MERGEFIELD Endnote"><q:r><q:rPr><q:i/></q:rPr><q:t>stored endnote</q:t><x:insideEndnote/></q:r></q:fldSimple></q:p><x:noteAfter/></q:endnote><x:rootAfter/></q:endnotes>"#,
+    );
+    package.set_part("/word/header-preserve.xml", header.as_bytes().to_vec());
+    package.set_part("/word/footer-preserve.xml", footer.as_bytes().to_vec());
+    package.set_part("/word/endnotes-preserve.xml", endnotes.as_bytes().to_vec());
+    let (header_id, footer_id) = {
+        let relationships = package.get_or_create_part_rels("/word/document.xml");
+        let header_id = relationships.add(
+            oxml_opc::relationship::rel_types::HEADER,
+            "header-preserve.xml",
+        );
+        let footer_id = relationships.add(
+            oxml_opc::relationship::rel_types::FOOTER,
+            "footer-preserve.xml",
+        );
+        relationships.add(
+            oxml_opc::relationship::rel_types::ENDNOTES,
+            "endnotes-preserve.xml",
+        );
+        (header_id, footer_id)
+    };
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="{word_namespace}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/><w:footerReference w:type="default" r:id="{footer_id}"/></w:sectPr></w:body></w:document>"#,
+        )
+        .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let context = FieldEvaluationContext {
+        merge_fields: BTreeMap::from([
+            ("Header".to_owned(), "updated header".to_owned()),
+            ("Footer".to_owned(), "updated footer".to_owned()),
+            ("Endnote".to_owned(), "updated endnote".to_owned()),
+        ]),
+        ..FieldEvaluationContext::default()
+    };
+
+    assert_eq!(document.update_fields(&context).unwrap(), 3);
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let header =
+        std::str::from_utf8(package.get_part("/word/header-preserve.xml").unwrap()).unwrap();
+    let footer =
+        std::str::from_utf8(package.get_part("/word/footer-preserve.xml").unwrap()).unwrap();
+    let endnotes =
+        std::str::from_utf8(package.get_part("/word/endnotes-preserve.xml").unwrap()).unwrap();
+
+    assert!(header.contains(r#"<x:headerBefore data="A"/>"#), "{header}");
+    assert!(header.contains(r#"x:token="header""#), "{header}");
+    assert!(header.contains(r#"<q:rPr><q:b/></q:rPr>"#), "{header}");
+    assert!(header.contains("<x:insideHeader/>"), "{header}");
+    assert!(header.contains("updated header"), "{header}");
+    assert!(
+        header.find("<x:headerBefore").unwrap()
+            < header.find(r#"<q:p data="header-paragraph""#).unwrap()
+            && header.find(r#"<q:p data="header-paragraph""#).unwrap()
+                < header.find("<x:headerAfter").unwrap(),
+        "{header}"
+    );
+    assert!(footer.contains("updated footer"), "{footer}");
+    assert!(
+        footer.find("<x:footerBefore").unwrap() < footer.find("<q:p>").unwrap()
+            && footer.find("<q:p>").unwrap() < footer.find("<x:footerAfter").unwrap(),
+        "{footer}"
+    );
+    for preserved in [
+        "<x:rootBefore/>",
+        r#"x:token="note""#,
+        "<x:noteBefore/>",
+        r#"<q:rPr><q:i/></q:rPr>"#,
+        "<x:insideEndnote/>",
+        "<x:noteAfter/>",
+        "<x:rootAfter/>",
+    ] {
+        assert!(
+            endnotes.contains(preserved),
+            "missing {preserved}: {endnotes}"
+        );
+    }
+    assert!(endnotes.contains("updated endnote"), "{endnotes}");
+    assert!(
+        endnotes.find("<x:rootBefore").unwrap() < endnotes.find(r#"<q:endnote q:id="2""#).unwrap()
+            && endnotes.find("<x:noteBefore").unwrap()
+                < endnotes.find(r#"<q:p data="endnote-paragraph""#).unwrap()
+            && endnotes.find(r#"<q:p data="endnote-paragraph""#).unwrap()
+                < endnotes.find("<x:noteAfter").unwrap()
+            && endnotes.find(r#"<q:endnote q:id="2""#).unwrap()
+                < endnotes.find("<x:rootAfter").unwrap(),
+        "{endnotes}"
+    );
+}
+
+#[test]
+fn pretty_printed_complex_package_field_updates_in_place() {
+    let mut document = document_with_field_parts(&wrap_word_body(""), None, None);
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let word_namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let header = format!(
+        r#"<q:hdr xmlns:q="{word_namespace}" xmlns:x="urn:producer">
+  <x:before/>
+  <q:p>
+    <q:r><q:fldChar q:fldCharType="begin" q:dirty="on"/></q:r>
+    <q:r><q:instrText>MERGEFIELD Pretty</q:instrText></q:r>
+    <q:r><q:fldChar q:fldCharType="separate"/></q:r>
+    <q:r><q:rPr><q:b/></q:rPr><q:t>stored pretty</q:t><x:inside/></q:r>
+    <q:r><q:fldChar q:fldCharType="end"/></q:r>
+  </q:p>
+  <x:after/>
+</q:hdr>"#,
+    );
+    package.set_part("/word/header-pretty.xml", header.as_bytes().to_vec());
+    let header_id = package.get_or_create_part_rels("/word/document.xml").add(
+        oxml_opc::relationship::rel_types::HEADER,
+        "header-pretty.xml",
+    );
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="{word_namespace}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/></w:sectPr></w:body></w:document>"#,
+        )
+        .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let context = FieldEvaluationContext {
+        merge_fields: BTreeMap::from([("Pretty".to_owned(), "updated pretty".to_owned())]),
+        ..FieldEvaluationContext::default()
+    };
+
+    assert_eq!(document.update_fields(&context).unwrap(), 1);
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let header = std::str::from_utf8(package.get_part("/word/header-pretty.xml").unwrap()).unwrap();
+    assert!(header.contains("updated pretty"), "{header}");
+    assert!(header.contains("\n    <q:r>"), "{header}");
+    assert!(header.contains("<q:rPr><q:b/></q:rPr>"), "{header}");
+    assert!(header.contains("<x:inside/>"), "{header}");
+    assert!(
+        header.find("<x:before").unwrap() < header.find("updated pretty").unwrap()
+            && header.find("updated pretty").unwrap() < header.find("<x:after").unwrap(),
+        "{header}"
+    );
+}
+
+#[test]
+fn complex_field_updates_preserve_inter_run_comments_and_instructions() {
+    let mut seed = document_with_field_parts(&wrap_word_body(""), None, None);
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let word_namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let header_field = concat!(
+        r#"<q:r><q:fldChar q:fldCharType="begin" q:dirty="on"/></q:r>"#,
+        "<!-- header-before-instruction -->",
+        r#"<q:r><q:instrText>MERGEFIELD Producer</q:instrText></q:r>"#,
+        "<?producer header-before-separator?>",
+        r#"<q:r><q:fldChar q:fldCharType="separate"/></q:r>"#,
+        "<!-- header-before-result -->",
+        r#"<q:r><q:t>stored header</q:t></q:r>"#,
+        "<?producer header-before-end?>",
+        r#"<q:r><q:fldChar q:fldCharType="end"/></q:r>"#,
+    );
+    let header = format!(r#"<q:hdr xmlns:q="{word_namespace}"><q:p>{header_field}</q:p></q:hdr>"#,);
+    package.set_part("/word/header-events.xml", header.into_bytes());
+    let header_id = package.get_or_create_part_rels("/word/document.xml").add(
+        oxml_opc::relationship::rel_types::HEADER,
+        "header-events.xml",
+    );
+    let main_field = concat!(
+        r#"<w:r><w:fldChar w:fldCharType="begin" w:dirty="on"/></w:r>"#,
+        "<!-- main-before-instruction -->",
+        r#"<w:r><w:instrText>MERGEFIELD Producer</w:instrText></w:r>"#,
+        "<?producer main-before-separator?>",
+        r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+        "<!-- main-before-result -->",
+        r#"<w:r><w:t>stored main</w:t></w:r>"#,
+        "<?producer main-before-end?>",
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+    );
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="{word_namespace}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p>{main_field}</w:p><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/></w:sectPr></w:body></w:document>"#,
+        )
+        .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let context = FieldEvaluationContext {
+        merge_fields: BTreeMap::from([("Producer".to_owned(), "updated producer".to_owned())]),
+        ..FieldEvaluationContext::default()
+    };
+
+    assert_eq!(document.update_fields(&context).unwrap(), 2);
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let main = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let header = std::str::from_utf8(package.get_part("/word/header-events.xml").unwrap()).unwrap();
+    for preserved in [
+        "<!-- main-before-instruction -->",
+        "<?producer main-before-separator?>",
+        "<!-- main-before-result -->",
+        "<?producer main-before-end?>",
+    ] {
+        assert!(main.contains(preserved), "missing {preserved}: {main}");
+    }
+    for preserved in [
+        "<!-- header-before-instruction -->",
+        "<?producer header-before-separator?>",
+        "<!-- header-before-result -->",
+        "<?producer header-before-end?>",
+    ] {
+        assert!(header.contains(preserved), "missing {preserved}: {header}");
+    }
+    assert_eq!(main.matches("updated producer").count(), 1, "{main}");
+    assert_eq!(header.matches("updated producer").count(), 1, "{header}");
+}
+
+#[test]
+fn hyperlink_field_trivia_survives_package_update() {
+    let mut seed = document_with_field_parts(&wrap_word_body(""), None, None);
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let word_namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let header = format!(
+        concat!(
+            r#"<q:hdr xmlns:q="{0}"><q:p><q:hyperlink q:anchor="destination">"#,
+            "\n  ",
+            r#"<q:r><q:fldChar q:fldCharType="begin" q:dirty="on"/></q:r>"#,
+            "\n  <!-- hyperlink-package-before-instruction -->",
+            r#"<q:r><q:instrText>MERGEFIELD Link</q:instrText></q:r>"#,
+            "<?producer hyperlink-package-before-separator?>",
+            r#"<q:r><q:fldChar q:fldCharType="separate"/></q:r>"#,
+            "\n  <!-- hyperlink-package-before-result -->",
+            r#"<q:r><q:t>stored link</q:t></q:r>"#,
+            "<?producer hyperlink-package-before-end?>",
+            r#"<q:r><q:fldChar q:fldCharType="end"/></q:r>"#,
+            "\n",
+            r#"</q:hyperlink></q:p></q:hdr>"#,
+        ),
+        word_namespace,
+    );
+    package.set_part("/word/header-hyperlink-events.xml", header.into_bytes());
+    let header_id = package.get_or_create_part_rels("/word/document.xml").add(
+        oxml_opc::relationship::rel_types::HEADER,
+        "header-hyperlink-events.xml",
+    );
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="{word_namespace}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/></w:sectPr></w:body></w:document>"#,
+        )
+        .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let context = FieldEvaluationContext {
+        merge_fields: BTreeMap::from([("Link".to_owned(), "updated link".to_owned())]),
+        ..FieldEvaluationContext::default()
+    };
+
+    assert_eq!(document.update_fields(&context).unwrap(), 1);
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let header = std::str::from_utf8(
+        package
+            .get_part("/word/header-hyperlink-events.xml")
+            .unwrap(),
+    )
+    .unwrap();
+    for preserved in [
+        "<!-- hyperlink-package-before-instruction -->",
+        "<?producer hyperlink-package-before-separator?>",
+        "<!-- hyperlink-package-before-result -->",
+        "<?producer hyperlink-package-before-end?>",
+    ] {
+        assert!(header.contains(preserved), "missing {preserved}: {header}");
+    }
+    assert_eq!(header.matches("updated link").count(), 1, "{header}");
+    assert!(header.contains("<q:hyperlink"), "{header}");
+}
+
+#[test]
+fn identical_aliased_same_run_nested_fields_update_and_reopen() {
+    let word_namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let nested = concat!(
+        r#"<q:fldChar q:fldCharType="begin" q:dirty="on"/>"#,
+        r#"<q:instrText>MERGEFIELD Same</q:instrText>"#,
+        r#"<q:fldChar q:fldCharType="separate"/>"#,
+        r#"<q:t>stored same run</q:t>"#,
+        r#"<q:fldChar q:fldCharType="end"/>"#,
+    );
+    let body = format!(
+        concat!(
+            r#"<w:p><q:r xmlns:q="{0}" xmlns:x="urn:producer"><x:before/>"#,
+            r#"<q:fldChar q:fldCharType="begin" q:dirty="on"/><q:instrText xml:space="preserve">IF </q:instrText>"#,
+            "{1}",
+            r#"<q:instrText xml:space="preserve"> = </q:instrText>"#,
+            "{1}",
+            r#"<q:instrText xml:space="preserve"> &quot;yes&quot; &quot;no&quot;</q:instrText>"#,
+            r#"<q:fldChar q:fldCharType="separate"/><q:t>stored outer</q:t>"#,
+            r#"<q:fldChar q:fldCharType="end"/><x:after/></q:r></w:p>"#,
+        ),
+        word_namespace, nested,
+    );
+    let context = FieldEvaluationContext {
+        merge_fields: BTreeMap::from([("Same".to_owned(), "updated same run".to_owned())]),
+        ..FieldEvaluationContext::default()
+    };
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+
+    assert_eq!(document.update_fields(&context).unwrap(), 3);
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert_eq!(xml.matches("updated same run").count(), 2, "{xml}");
+    assert!(!xml.contains("stored same run"), "{xml}");
+    assert!(xml.contains("<x:before/>"), "{xml}");
+    assert!(xml.contains("<x:after/>"), "{xml}");
+
+    let reopened = Document::from_bytes(&saved).unwrap();
+    let evaluations = reopened.evaluate_fields(&context).unwrap();
+    assert_eq!(evaluations.len(), 3);
+    assert_eq!(evaluations[0].cached_result, "yes");
+    assert_eq!(evaluations[1].cached_result, "updated same run");
+    assert_eq!(evaluations[2].cached_result, "updated same run");
+}
+
+#[test]
+fn shared_boundary_run_nested_fields_update_in_order_and_reopen() {
+    let word_namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let body = format!(
+        concat!(
+            r#"<w:p><q:r xmlns:q="{0}"><q:fldChar q:fldCharType="begin" q:dirty="on"/><q:instrText xml:space="preserve">IF </q:instrText></q:r>"#,
+            r#"<q:r xmlns:q="{0}"><q:fldChar q:fldCharType="begin" q:dirty="on"/><q:instrText>MERGEFIELD First</q:instrText></q:r>"#,
+            r#"<q:r xmlns:q="{0}" xmlns:x="urn:producer"><q:fldChar q:fldCharType="separate"/><q:t>stored first</q:t><q:fldChar q:fldCharType="end"/><x:between/><q:instrText xml:space="preserve"> = </q:instrText><q:fldChar q:fldCharType="begin" q:dirty="on"/></q:r>"#,
+            r#"<q:r xmlns:q="{0}"><q:instrText>MERGEFIELD Second</q:instrText><q:fldChar q:fldCharType="separate"/><q:t>stored second</q:t><q:fldChar q:fldCharType="end"/><q:instrText xml:space="preserve"> &quot;yes&quot; &quot;no&quot;</q:instrText></q:r>"#,
+            r#"<q:r xmlns:q="{0}"><q:fldChar q:fldCharType="separate"/><q:t>stored outer</q:t><q:fldChar q:fldCharType="end"/></q:r></w:p>"#,
+        ),
+        word_namespace,
+    );
+    let context = FieldEvaluationContext {
+        merge_fields: BTreeMap::from([
+            ("First".to_owned(), "updated first boundary".to_owned()),
+            ("Second".to_owned(), "updated second boundary".to_owned()),
+        ]),
+        ..FieldEvaluationContext::default()
+    };
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+
+    assert_eq!(document.update_fields(&context).unwrap(), 3);
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert_eq!(xml.matches("updated first boundary").count(), 1, "{xml}");
+    assert_eq!(xml.matches("updated second boundary").count(), 1, "{xml}");
+    assert!(xml.contains("<x:between/>"), "{xml}");
+    assert!(
+        xml.find("updated first boundary").unwrap() < xml.find("<x:between/>").unwrap()
+            && xml.find("<x:between/>").unwrap() < xml.find("updated second boundary").unwrap(),
+        "{xml}"
+    );
+
+    let reopened = Document::from_bytes(&saved).unwrap();
+    let evaluations = reopened.evaluate_fields(&context).unwrap();
+    assert_eq!(evaluations.len(), 3);
+    assert_eq!(evaluations[0].cached_result, "no");
+    assert_eq!(evaluations[1].cached_result, "updated first boundary");
+    assert_eq!(evaluations[2].cached_result, "updated second boundary");
+}
+
+#[test]
+fn package_field_patching_skips_opaque_lookalikes_and_maps_identical_aliases() {
+    let mut document = document_with_field_parts(&wrap_word_body(""), None, None);
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let word_namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let field =
+        r#"<q:fldSimple q:instr="MERGEFIELD Same"><q:r><q:t>stored same</q:t></q:r></q:fldSimple>"#;
+    let header = format!(
+        r#"<q:hdr xmlns:q="{word_namespace}" xmlns:x="urn:producer"><x:opaque>{field}</x:opaque><q:p data="first"><x:innerOpaque>{field}</x:innerOpaque>{field}</q:p><q:p data="second">{field}</q:p></q:hdr>"#,
+    );
+    package.set_part("/word/header-lookalike.xml", header.as_bytes().to_vec());
+    let header_id = package.get_or_create_part_rels("/word/document.xml").add(
+        oxml_opc::relationship::rel_types::HEADER,
+        "header-lookalike.xml",
+    );
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="{word_namespace}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/></w:sectPr></w:body></w:document>"#,
+        )
+        .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let context = FieldEvaluationContext {
+        merge_fields: BTreeMap::from([("Same".to_owned(), "updated same".to_owned())]),
+        ..FieldEvaluationContext::default()
+    };
+
+    assert_eq!(document.update_fields(&context).unwrap(), 2);
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let header =
+        std::str::from_utf8(package.get_part("/word/header-lookalike.xml").unwrap()).unwrap();
+    assert!(
+        header.contains(&format!(r#"<x:opaque>{field}</x:opaque>"#)),
+        "{header}"
+    );
+    assert!(
+        header.contains(&format!(r#"<x:innerOpaque>{field}</x:innerOpaque>"#)),
+        "{header}"
+    );
+    assert_eq!(header.matches("updated same").count(), 2, "{header}");
+    assert_eq!(header.matches("stored same").count(), 2, "{header}");
+    assert!(
+        header.find(r#"<q:p data="first""#).unwrap()
+            < header.find(r#"<q:p data="second""#).unwrap(),
+        "{header}"
+    );
+}
+
+#[test]
+fn styleref_searches_the_approved_direction_and_scope() {
+    let body = r#"
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>First heading</w:t></w:r></w:p>
+        <w:p><w:fldSimple w:instr="STYLEREF &quot;Heading 1&quot;"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="STYLEREF &quot;Heading 1&quot; \p"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Last heading</w:t></w:r></w:p>
+        <w:p><w:fldSimple w:instr="STYLEREF &quot;Heading 1&quot; \l"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+    "#;
+    let document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let outcomes = document
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap()
+        .into_iter()
+        .map(|result| result.outcome)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outcomes,
+        [
+            FieldOutcome::Resolved("First heading".to_owned()),
+            FieldOutcome::Resolved("First heading above".to_owned()),
+            FieldOutcome::Resolved("Last heading".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn date_time_filename_mergefield_and_includetext_use_only_explicit_context() {
+    let body = r#"
+        <w:p><w:fldSimple w:instr="DATE \@ &quot;yyyy-MM-dd&quot;"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="TIME \@ &quot;HH:mm:ss&quot;"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="FILENAME \p"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="MERGEFIELD Name \b &quot;Dear &quot; \f &quot;!&quot; \m \v"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="INCLUDETEXT &quot;chapter.docx&quot;"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="INCLUDETEXT &quot;chapter.docx&quot; &quot;summary&quot; \!"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+    "#;
+    let document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let context = FieldEvaluationContext {
+        now: Some(FieldDateTime {
+            year: 2025,
+            month: 12,
+            day: 14,
+            hour: 21,
+            minute: 7,
+            second: 5,
+        }),
+        file_name: Some("report.docx".to_owned()),
+        file_path: Some("/safe/input/report.docx".to_owned()),
+        merge_fields: BTreeMap::from([("Name".to_owned(), "Ada".to_owned())]),
+        included_text: BTreeMap::from([
+            ("chapter.docx".to_owned(), "Whole chapter".to_owned()),
+            (
+                "chapter.docx#summary".to_owned(),
+                "Chapter summary".to_owned(),
+            ),
+        ]),
+    };
+    assert_eq!(
+        document
+            .evaluate_fields(&context)
+            .unwrap()
+            .into_iter()
+            .map(|result| result.outcome)
+            .collect::<Vec<_>>(),
+        [
+            FieldOutcome::Resolved("2025-12-14".to_owned()),
+            FieldOutcome::Resolved("21:07:05".to_owned()),
+            FieldOutcome::Resolved("/safe/input/report.docx".to_owned()),
+            FieldOutcome::Resolved("Dear Ada!".to_owned()),
+            FieldOutcome::Resolved("Whole chapter".to_owned()),
+            FieldOutcome::Resolved("Chapter summary".to_owned()),
+        ]
+    );
+}
 
 #[test]
 fn both_revision_views_render_and_accepted_matches_resolved_document() {

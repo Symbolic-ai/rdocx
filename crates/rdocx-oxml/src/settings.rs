@@ -127,10 +127,18 @@ pub struct DocumentProtection {
     pub salt: Option<String>,
 }
 
+/// One valid document variable from `w:settings/w:docVars`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentVariable {
+    pub name: String,
+    pub value: String,
+}
+
 /// The typed contents of a Word settings part.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CT_Settings {
     document_protection: Option<DocumentProtection>,
+    document_variables: Vec<DocumentVariable>,
     /// Parsed parts keep their complete producer bytes as the serialization
     /// source. This retains root attributes, child order, whitespace, and all
     /// unmodelled content without interpreting it.
@@ -149,6 +157,9 @@ impl CT_Settings {
         let mut root_prefixes = Vec::new();
         let mut protection = None;
         let mut protection_count = 0usize;
+        let mut document_variables = Vec::new();
+        let mut doc_vars_depth = None;
+        let mut doc_vars_prefixes = Vec::new();
         let mut saw_root = false;
         let mut depth = 0usize;
         let mut buffer = Vec::new();
@@ -156,7 +167,12 @@ impl CT_Settings {
         loop {
             match reader.read_event_into(&mut buffer)? {
                 Event::Start(element) => {
-                    let prefixes = word_prefixes_at(&element, &root_prefixes)?;
+                    let inherited = if doc_vars_depth.is_some() {
+                        &doc_vars_prefixes
+                    } else {
+                        &root_prefixes
+                    };
+                    let prefixes = word_prefixes_at(&element, inherited)?;
                     if !saw_root {
                         if !is_word_element(element.name().as_ref(), b"settings", &prefixes) {
                             return Err(OxmlError::MissingElement("settings root".to_owned()));
@@ -174,12 +190,27 @@ impl CT_Settings {
                         {
                             protection_count += 1;
                             protection = parse_document_protection(&element, &prefixes);
+                        } else if depth == 1
+                            && is_word_element(element.name().as_ref(), b"docVars", &prefixes)
+                        {
+                            doc_vars_depth = Some(depth + 1);
+                            doc_vars_prefixes = prefixes.clone();
+                        } else if doc_vars_depth == Some(depth)
+                            && is_word_element(element.name().as_ref(), b"docVar", &prefixes)
+                            && let Some(variable) = parse_document_variable(&element, &prefixes)
+                        {
+                            document_variables.push(variable);
                         }
                         depth += 1;
                     }
                 }
                 Event::Empty(element) => {
-                    let prefixes = word_prefixes_at(&element, &root_prefixes)?;
+                    let inherited = if doc_vars_depth.is_some() {
+                        &doc_vars_prefixes
+                    } else {
+                        &root_prefixes
+                    };
+                    let prefixes = word_prefixes_at(&element, inherited)?;
                     if !saw_root {
                         if !is_word_element(element.name().as_ref(), b"settings", &prefixes) {
                             return Err(OxmlError::MissingElement("settings root".to_owned()));
@@ -194,9 +225,20 @@ impl CT_Settings {
                     {
                         protection_count += 1;
                         protection = parse_document_protection(&element, &prefixes);
+                    } else if doc_vars_depth == Some(depth)
+                        && is_word_element(element.name().as_ref(), b"docVar", &prefixes)
+                        && let Some(variable) = parse_document_variable(&element, &prefixes)
+                    {
+                        document_variables.push(variable);
                     }
                 }
-                Event::End(_) if depth > 0 => depth -= 1,
+                Event::End(_) if depth > 0 => {
+                    if doc_vars_depth == Some(depth) {
+                        doc_vars_depth = None;
+                        doc_vars_prefixes.clear();
+                    }
+                    depth -= 1;
+                }
                 Event::Eof => break,
                 _ => {}
             }
@@ -211,6 +253,7 @@ impl CT_Settings {
         }
         Ok(Self {
             document_protection: protection,
+            document_variables,
             source_xml: Some(xml.to_vec()),
         })
     }
@@ -218,6 +261,11 @@ impl CT_Settings {
     /// Return valid document-protection metadata, when the part records it.
     pub fn document_protection(&self) -> Option<&DocumentProtection> {
         self.document_protection.as_ref()
+    }
+
+    /// Return every valid document variable in package order.
+    pub fn document_variables(&self) -> &[DocumentVariable] {
+        &self.document_variables
     }
 
     /// Serialize settings with fixed Word prefixes and schema child order.
@@ -241,6 +289,16 @@ impl CT_Settings {
         writer.write_event(Event::End(BytesEnd::new("w:settings")))?;
         Ok(writer.into_inner())
     }
+}
+
+fn parse_document_variable(
+    element: &BytesStart<'_>,
+    prefixes: &[String],
+) -> Option<DocumentVariable> {
+    Some(DocumentVariable {
+        name: word_attribute(element, b"name", prefixes).ok().flatten()?,
+        value: word_attribute(element, b"val", prefixes).ok().flatten()?,
+    })
 }
 
 fn parse_document_protection(
@@ -411,6 +469,29 @@ mod tests {
     }
 
     #[test]
+    fn document_variables_are_alias_safe_and_leave_settings_bytes_unchanged() {
+        let xml = format!(
+            r#"<?xml version="1.0"?><q:settings xmlns:q="{W_NS}" xmlns:p="urn:producer"><q:docVars xmlns:v="{W_NS}"><v:docVar v:name="Customer" v:val="Ada"/><v:docVar v:name="Region" v:val="West"></v:docVar><p:docVar p:name="Foreign" p:val="ignored"/><v:docVar v:name="Malformed"/></q:docVars><p:after/></q:settings>"#
+        )
+        .into_bytes();
+        let settings = CT_Settings::from_xml(&xml).unwrap();
+        assert_eq!(
+            settings.document_variables(),
+            [
+                DocumentVariable {
+                    name: "Customer".to_owned(),
+                    value: "Ada".to_owned(),
+                },
+                DocumentVariable {
+                    name: "Region".to_owned(),
+                    value: "West".to_owned(),
+                },
+            ]
+        );
+        assert_eq!(settings.to_xml().unwrap(), xml);
+    }
+
+    #[test]
     fn constructed_settings_use_fixed_prefix_and_schema_order() {
         let settings = CT_Settings {
             document_protection: Some(DocumentProtection {
@@ -425,6 +506,7 @@ mod tests {
                 hash: Some("HASH".to_owned()),
                 salt: Some("SALT".to_owned()),
             }),
+            document_variables: Vec::new(),
             source_xml: None,
         };
         let xml = String::from_utf8(settings.to_xml().unwrap()).unwrap();

@@ -3,6 +3,8 @@
 use std::io::Write;
 
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::name::{Namespace, ResolveResult};
+use quick_xml::reader::NsReader;
 use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::error::{OxmlError, Result};
@@ -55,6 +57,11 @@ pub struct CustomProperties {
 impl CustomProperties {
     /// Parse a `docProps/custom.xml` part.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
+        if !custom_property_namespaces_are_valid(xml) {
+            return Err(OxmlError::UnexpectedElement(
+                "custom properties namespace".to_owned(),
+            ));
+        }
         let mut reader = Reader::from_reader(xml);
         let mut properties = Self::default();
         let mut root_open = false;
@@ -157,6 +164,65 @@ impl CustomProperties {
         writer.write_event(Event::End(BytesEnd::new("Properties")))?;
         Ok(writer.into_inner())
     }
+}
+
+fn custom_property_namespaces_are_valid(xml: &[u8]) -> bool {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut saw_root = false;
+    loop {
+        let Ok((namespace, event)) = reader.read_resolved_event_into(&mut buffer) else {
+            return false;
+        };
+        let is_start = matches!(event, Event::Start(_));
+        if let Event::Start(ref element) | Event::Empty(ref element) = event {
+            let valid = match depth {
+                0 => {
+                    matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == CUSTOM_PROPERTIES_NS.as_bytes())
+                        && local_name(element.name().as_ref()) == b"Properties"
+                }
+                1 => {
+                    matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == CUSTOM_PROPERTIES_NS.as_bytes())
+                        && local_name(element.name().as_ref()) == b"property"
+                        && property_attributes_are_unqualified(&reader, element)
+                }
+                2 => {
+                    matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == VARIANT_TYPES_NS.as_bytes())
+                }
+                _ => true,
+            };
+            if !valid {
+                return false;
+            }
+            saw_root = true;
+            if is_start {
+                let Some(next_depth) = depth.checked_add(1) else {
+                    return false;
+                };
+                depth = next_depth;
+            }
+        } else if matches!(event, Event::End(_)) {
+            depth = depth.saturating_sub(1);
+        } else if matches!(event, Event::Eof) {
+            return saw_root && depth == 0;
+        }
+        buffer.clear();
+    }
+}
+
+fn property_attributes_are_unqualified(reader: &NsReader<&[u8]>, element: &BytesStart<'_>) -> bool {
+    element.attributes().all(|attribute| {
+        let Ok(attribute) = attribute else {
+            return false;
+        };
+        let name = attribute.key.as_ref();
+        (name == b"xmlns" || name.starts_with(b"xmlns:"))
+            || matches!(
+                reader.resolver().resolve_attribute(attribute.key).0,
+                ResolveResult::Unbound
+            )
+    })
 }
 
 fn parse_property(reader: &mut Reader<&[u8]>, start: &BytesStart<'_>) -> Result<CustomProperty> {
@@ -451,6 +517,34 @@ mod tests {
                 r#"<Properties xmlns="{CUSTOM_PROPERTIES_NS}" xmlns:vt="{VARIANT_TYPES_NS}"><property fmtid="{FMTID}" pid="2">{value}</property></Properties>"#
             );
             assert!(CustomProperties::from_xml(empty_typed_value.as_bytes()).is_err());
+        }
+    }
+
+    #[test]
+    fn custom_property_projection_requires_expanded_names() {
+        let aliased = format!(
+            r#"<p:Properties xmlns:p="{CUSTOM_PROPERTIES_NS}" xmlns:v="{VARIANT_TYPES_NS}"><p:property fmtid="{FMTID}" pid="2" name="Tier"><v:lpwstr>Gold</v:lpwstr></p:property></p:Properties>"#
+        );
+        assert_eq!(
+            CustomProperties::from_xml(aliased.as_bytes())
+                .unwrap()
+                .properties[0]
+                .value,
+            CustomPropertyValue::Lpwstr("Gold".to_owned())
+        );
+        for foreign in [
+            r#"<x:Properties xmlns:x="urn:foreign"/>"#.to_owned(),
+            format!(
+                r#"<p:Properties xmlns:p="{CUSTOM_PROPERTIES_NS}" xmlns:v="{VARIANT_TYPES_NS}" xmlns:x="urn:foreign"><x:property fmtid="{FMTID}" pid="2"><v:i4>1</v:i4></x:property></p:Properties>"#
+            ),
+            format!(
+                r#"<p:Properties xmlns:p="{CUSTOM_PROPERTIES_NS}" xmlns:v="{VARIANT_TYPES_NS}" xmlns:x="urn:foreign"><p:property fmtid="{FMTID}" pid="2"><x:i4>1</x:i4></p:property></p:Properties>"#
+            ),
+            format!(
+                r#"<p:Properties xmlns:p="{CUSTOM_PROPERTIES_NS}" xmlns:v="{VARIANT_TYPES_NS}" xmlns:x="urn:foreign"><p:property x:fmtid="{FMTID}" x:pid="2"><v:i4>1</v:i4></p:property></p:Properties>"#
+            ),
+        ] {
+            assert!(CustomProperties::from_xml(foreign.as_bytes()).is_err());
         }
     }
 }

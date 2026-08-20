@@ -1,6 +1,6 @@
 # F-203, Reader compatibility corrections
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S49
 **Size**: M
 **Depends on**: none
@@ -29,8 +29,17 @@ Both failures violate the reader's preservation contract for producer XML.
 Thread the in-scope WordprocessingML namespace bindings from `CT_Tc` into
 `CT_TcPr`. Recognize table-cell property elements and their attributes only
 when both local name and WordprocessingML binding match. Preserve every other
-property child in a schema-slot sidecar, then emit it unchanged at the same
-slot during serialization.
+property child in a schema-slot sidecar, including any external namespace
+binding declared only on the `w:tcPr` owner or enclosing `w:tc`, then emit it
+unchanged at the same slot during serialization. Only WordprocessingML
+children advance the schema boundary. A foreign same-local-name child stays at
+the current boundary. Serialization follows the schema sequence with
+`w:textDirection`, preserved `w:tcFitText`, then `w:vAlign`. The public parser
+entry points call the owner-binding implementations directly. Standard
+unmodelled Word children use their absolute schema slots, including `w:hMerge`,
+`w:tcMar`, `w:hideMark`, `w:headers`, the three cell revision elements, and
+`w:tcPrChange`. The `CT_TcPr` preservation sidecar is part of the intentional
+pre-1.0 0.8 low-level Rust source break.
 
 Move boundary 5 emission before the typed `w:suff` element. The level parser
 already assigns `isLgl` to that boundary, so the writer change restores the
@@ -52,18 +61,25 @@ reader's existing model without changing public types.
 |---|---|---|
 | regression, gate | `foreign_cell_width_remains_raw_and_unmodelled` | A foreign same-local-name `tcW` child neither sets typed width nor changes its bytes or schema slot on write |
 | regression | `aliased_cell_width_uses_in_scope_word_bindings` | A WordprocessingML alias and matching alias attributes populate the typed width projection |
+| regression | `cell_property_preserves_child_binding_declared_on_owner` | A preserved child whose prefix is declared only on `w:tcPr` remains namespace-complete after round trip |
+| regression | `cell_property_preserves_child_binding_declared_on_cell` | A preserved child whose prefix is declared only on the enclosing `w:tc` remains namespace-complete after round trip |
+| regression | `foreign_same_name_after_later_property_keeps_current_boundary` | A foreign `tcW` after `w:textDirection` stays before preserved `w:tcFitText` and typed `w:vAlign` without setting typed width |
+| regression | `content_control_cell_preserves_child_binding_declared_on_cell` | The `w:sdtContent` cell parser promotes a cell-local binding onto its preserved property child |
+| regression | `unmodelled_standard_cell_properties_keep_absolute_slots_after_typed_mutation` | All standard unmodelled cell properties retain their absolute schema positions when later typed mutations fill earlier slots |
 | round-trip | `level_raw_is_lgl_stays_before_suffix` | A preserved raw `isLgl` child remains byte-identical and before typed `suff` after parse and write |
 
 The **test gate**, from the backlog, is regression. Foreign `tcW` XML remains
 unmodelled and byte-identical, and an `isLgl` raw child stays before `suff`
 after parse and write.
 
-Fixtures stay in the existing `table.rs` and `numbering.rs` unit modules.
+Fixtures stay in the existing `table.rs`, `content_control.rs`, and
+`numbering.rs` unit modules.
 
 ## HLD impact
 
-None. The architecture already requires namespace-aware readers and verbatim
-unmodelled-subtree preservation. This corrects the implementation to match it.
+- `docs/hld/10-bindings-spec.md`, "Native Word facade stability". Record the
+  `CT_TcPr` preservation sidecar in the intentional pre-1.0 0.8 low-level Rust
+  source break.
 
 ## Risk routing
 
@@ -80,12 +96,23 @@ hash-harness fixture changes a typed property.
 
 ## Implementation checklist
 
-- [ ] Record in-scope WordprocessingML bindings while parsing `CT_TcPr`.
-- [ ] Restrict typed cell-property and attribute parsing to those bindings.
-- [ ] Preserve non-Word and unsupported cell-property XML in schema slots.
-- [ ] Emit boundary 5 raw level XML before typed `w:suff`.
-- [ ] Add the regression and byte-preservation coverage in the test plan.
-- [ ] Run the changed-crate, package, and hash-harness checks.
+- [x] Record in-scope WordprocessingML bindings while parsing `CT_TcPr`.
+- [x] Restrict typed cell-property and attribute parsing to those bindings.
+- [x] Preserve non-Word and unsupported cell-property XML in schema slots.
+- [x] Retain external bindings declared only on the `w:tcPr` owner for
+  preserved property children.
+- [x] Retain external bindings declared only on the enclosing `w:tc`.
+- [x] Keep foreign same-local-name children at the current schema boundary.
+- [x] Emit `w:textDirection`, preserved `w:tcFitText`, and `w:vAlign` in schema
+  order.
+- [x] Remove forwarding-only `CT_TcPr` and `CT_Tc` parser wrappers.
+- [x] Cover the `w:sdtContent` cell-owner binding path.
+- [x] Assign every standard unmodelled `CT_TcPr` child its absolute schema slot.
+- [x] Cover typed mutations around all standard unmodelled cell properties.
+- [x] Emit boundary 5 raw level XML before typed `w:suff`.
+- [x] Add the regression and byte-preservation coverage in the test plan.
+- [x] Run the focused changed-crate tests and all-targets crate check.
+- [x] Run the package and hash-harness checks during full verification.
 
 ## Open questions
 

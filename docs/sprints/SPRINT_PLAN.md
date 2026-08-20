@@ -1041,3 +1041,130 @@ contribution, whose anchored-drawing placement was overtaken by the M7 anchor
 work before it could land.
 F-X031 carries the external branch-protection mutation deferred from F-X029 to
 the final planned sprint.
+
+## Future ideas
+
+These are discovery candidates, not scheduled work. They have no F-IDs, sizes,
+dependency promises or delivery order. Each candidate needs a scope decision,
+design plan and acceptance boundary before it can enter the backlog.
+
+### Presentation depth
+
+- Model and render animation timelines, entrance and exit effects, motion paths
+  and slide transitions, including morph transitions.
+- Read, write and render linked or embedded audio and video while preserving
+  unsupported media settings.
+- Add typed access to presentation comments, replies, slide sections, slide
+  numbers, dates, footers and handout settings.
+- Add safe inventory, extraction, replacement and removal APIs for OLE objects,
+  ActiveX controls and VBA projects. Preservation and inspection should come
+  before authoring executable content.
+- Expand SmartArt from relationship-safe preservation to typed inspection,
+  mutation and rendering where a bounded model is possible.
+- Add presentation passwords, encryption and signature handling on top of the
+  shared package security work.
+- Explore ODP input and output, macro-enabled presentation variants, templates
+  and slide-show packages.
+- Consider HTML and PDF content import, notes and handout export, animated GIF
+  generation and video frame generation as separate conversion stories.
+
+### Word depth
+
+- Add a shared OfficeMath model with equation authoring, layout, PDF rendering
+  and optional MathML or LaTeX export.
+- Extend field evaluation to TOC and TC fields, formula fields, mail-merge
+  control fields and barcode fields. Keep unsupported field results intact.
+- Rebuild existing tables of contents from headings, custom styles and TC
+  entries instead of limiting the API to creating a new static table.
+- Extend mail merge with regions, nested records, multiple named data sources,
+  images, document fragments and caller-provided formatting hooks.
+- Expand document comparison to headers, footers, comments, fields, text boxes,
+  footnotes and formatting. Add character and word granularity plus explicit
+  ignore options.
+- Add public inventory and extraction for embedded objects, macros, legacy form
+  fields, glossary entries and building blocks without weakening raw package
+  preservation.
+- Explore Flat OPC, Word 2003 XML, MHTML and macro-enabled Word packages before
+  deciding whether legacy binary DOC justifies its implementation cost.
+
+### Spreadsheet breadth
+
+- Extend the first spreadsheet milestone with CSV, TSV, JSON and ODS input and
+  output before considering legacy XLS or XLSB.
+- Add comments, images, drawings, hyperlinks, rich text cells, filters, sorting,
+  grouping, hidden rows and columns, freeze panes and page breaks.
+- Add worksheet copy and move operations, advanced paste options, named-range
+  mutation and structured data import and export.
+- Add sparklines and broaden chart manipulation after the shared chart path is
+  proven in spreadsheets.
+- Move pivot tables from preservation and inspection to mutation and refresh
+  only after a dependable calculation engine and corpus exist.
+- Treat VBA and XLM as compatibility surfaces. Preserve, inventory, extract and
+  optionally remove their projects and signatures without executing them. Do
+  not build a new authoring or execution runtime without a named user need.
+
+### Modern spreadsheet extensibility
+
+- Add a companion model for Office Scripts as external TypeScript artefacts.
+  Inspect and validate script metadata and source without treating scripts as
+  embedded workbook content or executing them.
+- Preserve and report workbook associations and worksheet buttons that refer to
+  externally stored scripts. Detect missing associations without deleting or
+  rewriting their package metadata.
+- Consider an optional TypeScript emitter that translates a bounded set of
+  explicit workbook operations into Office Scripts. Keep this separate from the
+  workbook reader and writer.
+- Preserve and inspect web-extension, task-pane and content-add-in parts,
+  manifests, permissions and external resource locations. HTML, CSS and
+  JavaScript assets should remain external web application content.
+- Preserve namespaced custom-function formulas, cached results and add-in
+  associations. The calculation engine should report unavailable custom
+  functions instead of replacing their cached values.
+- Preserve Python cell formulas, source, result previews and service metadata.
+  Keep cloud execution outside the core library and expose the dependency as a
+  diagnostic.
+- Model modern cell values such as formatted values, entity cards, linked
+  entities, web images and local images with their basic fallback values.
+- Support the IMAGE function, in-cell pictures, alternative text and explicit
+  external-content policy for remote image retrieval.
+- Make every network-backed feature opt-in with allowed schemes, size limits,
+  timeouts, caching controls and an offline fallback.
+
+### Conversion and output
+
+- Define a format-priority decision that weighs corpus prevalence, procurement
+  needs, implementation risk and maintenance cost before adding another reader
+  or writer.
+- Consider XPS, PCL and older binary Office formats only when named users or a
+  representative corpus justify them.
+- Add a platform-neutral print-layout contract before considering operating
+  system printer integration. PDF and image output should remain the portable
+  default.
+- Add per-page and per-shape rendering with explicit size, resolution, quality,
+  compression, transparency and page-range controls across document families.
+
+### Product surfaces
+
+- Explore a self-hostable HTTP service for conversion, rendering, inspection
+  and validation while keeping every operation available through local crates.
+- Consider optional adapters for document summarisation, translation, grammar
+  checking and presentation localisation. External model providers must remain
+  outside the core document model.
+- Add a browser viewer and lightweight editing surface only if the WASM APIs can
+  remain the single implementation rather than creating a second document
+  engine.
+
+### Guardrails
+
+Future breadth must preserve the properties that distinguish this workspace:
+
+- Pure Rust implementations with no Office runtime or hidden conversion
+  service.
+- First-class native, CLI, Python and WASM entry points where the feature is
+  technically available.
+- Deterministic bundled-font rendering and declared output-baseline changes.
+- Verbatim preservation of unmodelled XML and schema-correct child order.
+- Shared OPC, DrawingML, chart, layout and rendering infrastructure rather than
+  one implementation per document family.
+- Offline operation by default, with network access isolated behind explicit
+  adapters.

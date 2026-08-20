@@ -122,6 +122,32 @@ mod tests {
     }
 
     #[test]
+    fn complex_field_cached_display_reaches_html_and_markdown() {
+        let document = CT_Document::from_xml(
+            br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>DATE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>one</w:t><w:tab/><w:t>two</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:br/><w:t>three</w:t><w:br w:type="page"/><w:t>four</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>"#,
+        )
+        .unwrap();
+        let input = HtmlInput {
+            document,
+            styles: CT_Styles::new_default(),
+            numbering: None,
+            images: HashMap::new(),
+            hyperlink_urls: HashMap::new(),
+        };
+
+        let html = to_html_fragment(&input, &HtmlOptions::default());
+        assert!(
+            html.contains("<strong>one&emsp;two</strong><em><br>three<hr>four</em>"),
+            "{html}"
+        );
+        let markdown = to_markdown(&input);
+        assert!(
+            markdown.contains("**one\ttwo***  \nthree\n---\nfour*"),
+            "{markdown}"
+        );
+    }
+
+    #[test]
     fn html_heading() {
         let mut doc = CT_Document::new();
         let mut p = CT_P::new();

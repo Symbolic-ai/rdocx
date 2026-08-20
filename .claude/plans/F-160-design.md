@@ -1,122 +1,153 @@
 # F-160, Field instruction parser
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S49
 **Size**: L
 **Depends on**: none
 
 ## Problem
 
-`crates/rdocx-oxml/src/text.rs` parses `w:fldSimple` into the narrow
-`FieldType` projection, but complex `w:fldChar` fields have only a separate
-hyperlink-oriented parser. The latter rejects malformed, dirty, and nested
-fields from `CT_P::from_xml`, hardcodes the `w:` prefix, and does not return a
-general field name, arguments, switches, and cached result.
+The Word text model recognises only `PAGE`, `NUMPAGES`, `REF`, and `PAGEREF`,
+with every other instruction held as an opaque string
+(`crates/rdocx-oxml/src/text.rs:31`). `w:fldSimple` parsing flattens child runs
+to one display string (`crates/rdocx-oxml/src/text.rs:1131`), while the current
+instruction parser is a whitespace split that cannot retain quoted arguments,
+switch arguments, or nested fields (`crates/rdocx-oxml/src/text.rs:2223`).
+Complex `w:fldChar` and `w:instrText` sequences are not modelled at all.
 
-The merged reader changes must instead preserve unsupported complex sequences
-as raw XML while reporting safe, recursively structured fields. Prefix aliases
-and the default WordprocessingML namespace must be recognized without treating
-foreign same-local-name XML as WordprocessingML.
+The serializer also canonicalises every modelled field as `w:fldSimple` and
+reconstructs PAGE and NUMPAGES instructions without their original switches
+(`crates/rdocx-oxml/src/text.rs:1372`). F-160 needs one grammar for simple and
+complex fields without losing the source form, stored display, run boundaries,
+or producer XML that later stories do not interpret.
 
 ## Spec reference
 
-- `docs/hld/14-development-backlog.md`, "F-160, Field instruction parser".
-- `docs/hld/03-architecture.md`, "What stays put" and "Crate-level
-  conventions".
-- `docs/hld/04-opc-and-packaging.md`, "Facade conventions" and the Word
-  package-preservation rules.
-- `docs/hld/12-testing-strategy.md`, "Test taxonomy" and in-code fixtures.
+- `docs/hld/14-development-backlog.md`, "Milestone 16, Document automation"
+  and "F-160, Field instruction parser".
+- `docs/hld/03-architecture.md`, "What stays put" and its Word text model
+  ownership rules.
+- `docs/hld/10-bindings-spec.md`, "Native Word facade stability" and the
+  intentional pre-1.0 low-level break recorded for the 0.8 family.
+- `docs/hld/12-testing-strategy.md`, "Test taxonomy" and "The hash harness".
 
 ## Approach
 
-Replace the complex-field hyperlink scanner with one recursive parser in
-`rdocx-oxml::text`. The parser records field-marker ownership while each run is
-read with its in-scope WordprocessingML bindings. This keeps the original raw
-run children unchanged and allows complex-field recognition to distinguish
-WordprocessingML aliases from foreign collisions after paragraph parsing.
+Replace the narrow `FieldType` projection with a recursive field model:
 
-Expose a concrete parsed field projection with the normalized field name,
-arguments, switches, cached-result run range, dirty state, and child fields.
-`CT_P` reports complete structured fields, including dirty fields, while
-unsupported, malformed, or unclosed sequences remain opaque and never make the
-paragraph or document fail to open. The original raw XML remains the
-serialization source in every case. `Document::links()` excludes dirty fields
-until F-162 defines the update policy.
+```rust
+pub struct Field {
+    pub instruction: FieldInstruction,
+    pub cached_result: String,
+    pub dirty: Option<bool>,
+    source: FieldSource,
+}
 
-Use the same instruction tokenizer for `w:fldSimple` and complex fields. It
-keeps quoted arguments intact, identifies backslash-prefixed switches, and
-preserves the original instruction for compatibility with the existing
-`FieldType` writer and layout paths. The existing `Document::links()` method
-derives HYPERLINK links only from a valid parsed field and its cached result.
+pub struct FieldInstruction {
+    pub raw: String,
+    pub name: String,
+    pub arguments: Vec<FieldArgument>,
+    pub switches: Vec<FieldSwitch>,
+}
+
+pub enum FieldArgument {
+    Text(String),
+    Nested(Box<Field>),
+}
+
+pub struct FieldSwitch {
+    pub name: String,
+    pub argument: Option<FieldArgument>,
+}
+```
+
+`Box<Field>` is required only to make the recursive concrete AST finite. It is
+not dynamic dispatch. `FieldSource` remains private and retains whether a field
+was simple or complex plus the original complex run partition and raw slots.
+Unchanged fields therefore write their original form and boundaries. F-162
+will own dirty-flag mutation, but the flag is placed in the model now to avoid
+a second breaking public shape change.
+
+Implement a hand-written lexer for quoted and escaped arguments, field-specific
+and general switches, and nested field operands. A paragraph-level stack pairs
+complex begin, separate, and end markers, concatenates instruction text across
+runs, and parses it through the same lexer as `w:fldSimple`. Malformed,
+misplaced, or unbalanced sequences remain preserved raw content and do not
+become typed fields. Existing PAGE, NUMPAGES, REF, and PAGEREF layout behaviour
+continues through a private compatibility classifier over the new instruction.
+
+Keep the grammar, AST, and XML integration in `text.rs`. The approved new module
+belongs only to the facade evaluator in F-161, so F-160 adds no file.
 
 ## Rejected alternatives
 
-- Keep the hyperlink-only parser and merely make its failures non-fatal. It
-  cannot meet F-160's field-name, argument, switch, or nested-field contract.
-- Reparse preserved raw XML after paragraph parsing without namespace context.
-  Inherited aliases and default namespaces then become ambiguous, while foreign
-  collisions can be misclassified.
-- Materialize fields as synthetic runs. That would alter producer XML and lose
-  the exact run boundaries required for round-trip preservation.
+- Keep using `split_whitespace`. It cannot represent quoted, split-run, or
+  nested instructions required by the gate.
+- Add one `FieldType` variant per evaluated field. That mixes F-160 grammar
+  ownership with F-161 evaluation semantics.
+- Canonicalise complex fields as `w:fldSimple`. That loses run formatting,
+  source form, and unchanged producer structure.
+- Keep both `FieldType` and a second recursive AST. Two public models of the
+  same field would diverge and make F-162 mutation ambiguous.
 
 ## Test plan
 
 | Category | Test | Asserts |
 |---|---|---|
-| unit, gate | `complex_fields_parse_nested_operands_and_split_instructions` | Nested field operands and instructions split across runs produce a recursive projection with the expected names, arguments, and switches |
-| unit | `simple_and_complex_fields_share_the_instruction_tokenizer` | Quoted arguments and switches have the same parsed representation for both OOXML field forms |
-| unit | `complex_fields_accept_aliases_and_default_word_namespaces` | Aliased and default WordprocessingML field markers are parsed |
-| regression | `foreign_field_marker_collisions_remain_opaque` | Same-local-name foreign elements do not produce a field projection or alter the raw XML |
-| round-trip | `unsupported_complex_fields_remain_raw_without_failing_document_open` | Dirty, malformed, and unclosed sequences open, preserve their bytes, and report no projection |
-| regression | `links_uses_a_valid_complex_hyperlink_cached_result` | A valid HYPERLINK reports its target and cached visible text, while an invalid field reports no link |
+| unit, gate | `field_instruction_corpus_parses_every_simple_complex_split_and_nested_form` | A readable in-code matrix covers every S49 field name, quoted and escaped arguments, comparison operands, `\\*`, `\\#`, `\\@`, field-specific switches, split `instrText`, and nested fields |
+| unit | `malformed_complex_fields_remain_untyped_and_preserved` | Misplaced and unbalanced markers never invent a field or hide the literal stored result |
+| round-trip | `unchanged_complex_fields_keep_source_runs_and_unmodelled_neighbours` | Prefix aliases read, fixed prefixes write after mutation, and unchanged complex run partitions plus unmodelled XML survive byte for byte |
+| regression | existing PAGE, NUMPAGES, REF, and PAGEREF tests | Existing field rendering and complete instruction retention do not regress |
 
-The **test gate**, from the backlog, is unit. Every field form in the corpus
-parses, including nested fields and instructions split across runs.
-
-Fixtures are assembled in existing test modules. No new test binary or binary
-fixture is added.
+The **test gate**, from the backlog, is unit. Every field form in the readable
+in-code corpus parses, including nested fields and instructions split across
+runs. No binary fixture or new integration test binary is added.
 
 ## HLD impact
 
 - `docs/hld/03-architecture.md`
+- `docs/hld/10-bindings-spec.md`
 
-Record the recursive field projection, in-scope namespace identity, and opaque
-fallback for unsupported field sequences.
+Record the shared simple and complex recursive grammar, source-form and stored
+result preservation, the low-level 0.8 source break, and the unchanged native
+facade and binding surfaces.
 
 ## Risk routing
 
-- Any parser or serialiser. Read HLD 04 and HLD 06. Add alias,
-  default-namespace, foreign-collision, fixed-prefix, nested, and byte-preserving
-  round-trip coverage.
+- Any parser or serialiser. Read HLD 04 and HLD 06. Check prefix-tolerant read,
+  fixed-prefix mutation output, schema child order, malformed fallback, and a
+  round trip proving every unmodelled subtree stays byte-identical.
 - Public API of a published crate. Read HLD 10 and the structural rules. The
-  parsed-field accessor is additive and required by F-160. Run the package
-  dry-run and archive-size assertion during full verification.
+  `FieldType` replacement is the already-declared pre-1.0 low-level break for
+  the 0.8 family. Run the full package dry-run and assert every `.crate` remains
+  below 10 MiB.
+- Layout, pagination, line breaking, and text shaping if compatibility changes
+  reach `rdocx-layout`. Run render evidence with bundled deterministic fonts
+  and do not record a system-font baseline.
+- A new module or file only if the consolidated module approval is granted.
+  No trait, generic parameter, crate, or feature flag is introduced.
 
 ## Hash harness
 
-Expected unchanged. Parsed documents retain the original field XML as their
-serialization source, and the existing samples do not introduce a field
-projection mutation.
+Expected unchanged across all current entries. Parser expansion must retain
+the current serialized and rendered output for existing fields. Any delta is
+unexpected and blocks integration.
 
 ## Implementation checklist
 
-- [ ] Define the additive recursive field projection and instruction token
-  types in `rdocx-oxml::text`.
-- [ ] Record namespace-aware complex-field markers while parsing runs without
-  changing preserved raw XML.
-- [ ] Parse complete complex fields recursively, retain dirty state, and
-  degrade malformed, unsupported, or unclosed sequences to opaque XML.
-- [ ] Route simple fields through the shared instruction tokenizer without
-  changing their existing writer and layout behavior.
-- [ ] Derive public HYPERLINK links from valid complex-field projections and
-  cached result ranges.
-- [ ] Add the unit, regression, and byte-preservation coverage in the test
-  plan.
-- [ ] Run the parser, facade, layout, package, and hash-harness checks.
-- [ ] Update the listed HLD architecture section at completion.
+- [x] Define the recursive field, instruction, argument, switch, source, and dirty models.
+- [x] Replace the narrow `FieldType` projection and adapt exhaustive matches.
+- [x] Implement quoted, escaped, switch-aware instruction lexing.
+- [x] Parse `w:fldSimple` through the shared grammar.
+- [x] Parse nested complex fields and split `w:instrText` with a paragraph stack.
+- [x] Preserve malformed sequences, source form, run partitions, and raw neighbours.
+- [x] Preserve existing PAGE, NUMPAGES, REF, and PAGEREF layout behaviour.
+- [x] Add the in-code corpus gate plus malformed, prefix, order, and round-trip tests.
+- [x] Run focused checks, package riders, and the unchanged hash harness.
+- [x] Update exactly HLD 03 and HLD 10 at completion.
 
 ## Open questions
 
-None. The parser reports complete structured fields and dirty state, retains
-original XML for every other sequence, and leaves evaluation and update policy
-to F-161 and F-162.
+None. The approved gate is the readable in-code matrix described above, the
+unified low-level field AST replaces `FieldType`, and F-160 remains in
+`text.rs`.

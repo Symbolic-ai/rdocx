@@ -223,11 +223,31 @@ summaries and `Document::add_bookmark` for atomic insertion over the existing
 top-level half-open `RunRange`. A summary exposes an optional id, name, range,
 current text, and marker issue. Insertion validates the Word name and both
 boundaries, rejects duplicate or producer-reserved names, and returns the
-allocated nonnegative id. Structured `FieldType::Ref` and
-`FieldType::PageRef` variants retain their target and complete instruction.
-These additions are native Rust APIs only. Python, WASM, and CLI consumers keep
-their existing surface and preserve the typed content when they save the owned
-document.
+allocated nonnegative id. The shared recursive `Field` model retains the
+complete `REF` and `PAGEREF` instruction, target argument, cached display,
+dirty state, source form, and producer XML. These additions are native Rust
+APIs only. Python, WASM, and CLI consumers keep their existing surface and
+preserve the typed content when they save the owned document.
+
+Native Word callers evaluate fields with `Document::evaluate_fields` and an
+explicit `FieldEvaluationContext`. `FieldDateTime` supplies deterministic civil
+time. Caller maps supply merge values and included text, including
+`source#bookmark` keys for bookmark-scoped includes. Each `FieldEvaluation`
+records a snapshot-local document-order index, original instruction, stored
+display, and a `FieldOutcome` that is resolved text, pagination deferral, or a
+stable stored-display fallback. Evaluation is additive and read-only. It never
+reads the ambient clock or filesystem and never changes field caches. Python,
+WASM, and CLI surfaces gain no evaluator methods and continue to preserve the
+same package content.
+
+Native Word callers opt into cache materialization with
+`Document::update_fields`, `Document::save_with_field_updates`, or
+`Document::to_bytes_with_field_updates`. The facade stages the full evaluation
+before mutation, updates resolved displays, and marks retained displays dirty.
+Existing `save` and `to_bytes` methods continue to preserve intentionally stale
+caches and producer dirty spellings. These methods are additive native Rust
+APIs. Python, WASM, and CLI surfaces gain no field update methods and continue
+to preserve updates already made through their owned `Document`.
 
 Native Word callers can also inspect content controls through
 `Document::content_controls` and the tag or alias lookup methods.
@@ -258,15 +278,26 @@ password or enforce access control. This additive Rust API does not add
 Python, WASM, or CLI methods. Those surfaces remain unchanged and preserve the
 relationship-resolved settings part when they save their owned document.
 
-The low-level revision storage is an intentional breaking pre-1.0 Rust
-boundary. `RunContent` adds `DeletedText`. `CT_R`, `CT_P`, `HyperlinkSpan`,
+The low-level revision and field storage is an intentional breaking pre-1.0
+Rust boundary. `RunContent` adds `DeletedText` and replaces the narrow
+`FieldType` payload with the recursive `Field`, `FieldInstruction`,
+`FieldArgument`, and `FieldSwitch` model. `CT_R`, `CT_P`, `HyperlinkSpan`,
 `CT_PPr`, `CT_RPr`, `CT_SectPr`, `CT_TblPr`, and `CT_TrPr` add required
-preservation or revision fields, including ordered raw-child sidecars. Existing
-exhaustive matches and full struct literals must be updated or moved to the
-provided constructors. The workspace remains at 0.7 during development. Its
-next published stable-family version must be 0.8.0, not a 0.7 patch. The
-additive `rdocx::Document` facade and unchanged Python, WASM, and CLI surfaces
-do not inherit this low-level source break.
+preservation or revision fields, including ordered raw-child sidecars.
+`CT_TcPr` also adds an ordered raw-child sidecar that retains external
+namespace bindings declared only on the property owner or enclosing cell.
+Only WordprocessingML children advance its schema insertion boundary, so a
+foreign same-local-name child remains in its source slot. Serialization keeps
+`w:textDirection` before preserved `w:tcFitText` and `w:vAlign`. This sidecar
+assigns absolute schema slots to the unmodelled standard `w:hMerge`, `w:tcMar`,
+`w:hideMark`, `w:headers`, `w:cellIns`, `w:cellDel`, `w:cellMerge`, and
+`w:tcPrChange` children. This sidecar is part of the intentional pre-1.0 0.8
+low-level Rust source break. Existing exhaustive matches and full struct
+literals must be updated or moved to the provided constructors. The workspace
+remains at 0.7 during development. Its next published stable-family version
+must be 0.8.0, not a 0.7 patch. The additive `rdocx::Document` facade and
+unchanged Python, WASM, and CLI surfaces do not inherit this low-level source
+break.
 
 Native callers resolve tracked changes through `accept_all`, `reject_all`, the
 exact-author pair, the inclusive RFC 3339 date-range pair, and the id pair.

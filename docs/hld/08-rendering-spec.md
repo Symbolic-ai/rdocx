@@ -507,6 +507,14 @@ discovery and substitution path. Normal and deterministic layouts use this
 identical algorithm, with the deterministic entry point restricted to bundled
 and document-supplied fonts.
 
+The native facade exposes a separate read-only field evaluator for automation
+callers. `PAGE` and `NUMPAGES` always report pagination deferral. A valid
+`PAGEREF` also reports deferral, while a missing or ambiguous target keeps its
+stored display with a stable diagnostic. The evaluator does not replace the
+single post-pagination substitution pass and does not trigger layout. `REF`
+resolves the same unique top-level bookmark text used by layout, so pure
+evaluation and rendering share the same target-validity boundary.
+
 ## Word chart pagination
 
 The Word layout input owns document-scoped parsed chart targets, the effective

@@ -7357,3 +7357,169 @@ protection accessor and unchanged binding surfaces.
 
 **Notes for future sessions.** Document protection records author intent. It is
 not an access-control boundary, and mutation methods must not treat it as one.
+
+### F-160, Field instruction parser
+
+**Sprint.** S49
+**Completed.** 2026-08-20
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Simple and complex Word fields now share one recursive
+instruction model with normalized names, positional and switch arguments,
+nested fields, cached display segments, dirty state, and a private captured
+source used for package-preserving serialization. Instructions split across
+runs and quoted, escaped, field-specific operands parse through the same
+grammar.
+
+**Non-obvious choices.** Untouched producer XML remains the write source.
+Changed fields choose the effective public raw or structured instruction and
+rewrite only the field-owned content, retaining run formatting, controls,
+comments, processing instructions, namespace aliases, and unmodelled XML.
+Layout, HTML, and Markdown consume cached display segments instead of a second
+field classifier.
+
+**Deviations from the design plan.** None. Microscope review extended the
+planned preservation coverage to expanded controls, empty display runs,
+multi-run formatting, hyperlink-owned fields, and raw-only public edits.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, recursive field
+ownership and source preservation, and `docs/hld/10-bindings-spec.md`, the
+intentional 0.8 low-level Rust field-model break.
+
+**Tests.** `field_instruction_corpus_parses_every_simple_complex_split_and_nested_form`,
+`malformed_complex_fields_remain_untyped_and_preserved`,
+`unchanged_complex_fields_keep_source_runs_and_unmodelled_neighbours`, and
+focused cache, mutation, prefix, malformed, layout, HTML, and Markdown
+regressions.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Field serialization must keep the parser's
+source identity aligned with the public raw and structured edit rules. A text
+replacement that ignores run-level controls or producer trivia can change the
+display or invalidate otherwise readable OOXML.
+
+### F-161, Field evaluation engine
+
+**Sprint.** S49
+**Completed.** 2026-08-20
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native `Document` facade now evaluates the supported
+Word field families in deterministic source order and returns resolved,
+deferred-pagination, or cached-fallback outcomes with stable diagnostics.
+Explicit context supplies dates, filenames, merge records, and included text.
+Core and custom properties, document variables, bookmarks, styles, headers,
+footers, footnotes, and endnotes are read from their relationship-resolved
+package sources.
+
+**Non-obvious choices.** Results are reported in source preorder even when a
+parent requires child outcomes first. Each effective outer instruction owns a
+fresh nested-outcome frame so nested SEQ and IF operands evaluate exactly once
+without pointer identity leaking between cloned trees. Missing, malformed, or
+ambiguous inputs retain the stored display rather than producing blank text.
+
+**Deviations from the design plan.** None. Microscope review tightened lexical
+arity, overflow handling, namespace checks, structured and raw edit identity,
+STYLEREF numbering semantics, switch formatting, and nested source ordering.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, evaluator ownership,
+`docs/hld/08-rendering-spec.md`, pagination deferral and stored fallback,
+`docs/hld/10-bindings-spec.md`, the additive native evaluation API, and
+`docs/hld/12-testing-strategy.md`, the pinned Word oracle matrix.
+
+**Tests.** `every_supported_field_matches_the_pinned_word_result`,
+`nested_if_and_comparison_operators_evaluate_recursively`,
+`sequence_state_is_scoped_and_reset_by_supported_switches`,
+`formatting_switches_match_the_pinned_word_matrix`,
+`document_properties_variables_and_author_use_package_values`, and the
+existing REF and PAGEREF pagination regression.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Ambient time, filesystem access, and package
+iteration order are outside the evaluator contract. New data-backed fields
+need an explicit context or relationship-resolved source and a deterministic
+fallback diagnostic.
+
+### F-162, Field update policy
+
+**Sprint.** S49
+**Completed.** 2026-08-20
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `Document::update_fields`,
+`Document::save_with_field_updates`, and
+`Document::to_bytes_with_field_updates` now materialize F-161 outcomes into
+field caches and field-local dirty flags. Existing save and byte methods remain
+leave alone. Updates cover the complete typed story order and invalidate both
+layout caches once after a nonempty successful batch.
+
+**Non-obvious choices.** Evaluation and mutation run against cloned state, and
+the live document commits only after traversal counts and serialized XML
+validate. Package-backed header, footer, and endnote changes use anchored
+field-local patches rather than whole-part serialization. Nested changes use
+marker-level spans so producer run wrappers, properties, namespace scope,
+foreign children, whitespace, comments, and processing instructions survive.
+
+**Deviations from the design plan.** None. Eight microscope passes expanded
+the approved source-preservation proof across opaque lookalikes, identical
+nested siblings, shared boundary runs, hyperlink trivia, raw-only edits, stale
+descendants, and multi-run formatting scaffolds.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, atomic facade update
+ownership, and `docs/hld/10-bindings-spec.md`, the three additive native-only
+methods and unchanged binding surfaces.
+
+**Tests.** `field_update_policies_produce_the_expected_result_cache_and_dirty_flag`,
+`unsupported_fields_keep_their_cached_result_when_updates_run`,
+`ordinary_save_leaves_cached_field_results_and_dirty_flags_alone`,
+`field_update_failure_leaves_document_bytes_unchanged`, and the simple,
+complex, nested, package-story, dirty-alias, layout-cache, and save-reopen
+preservation regressions.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Do not replace package stories wholesale when
+updating a field. Exact producer preservation depends on typed placement
+anchors and on retaining physical run scaffolding outside the field-owned
+children.
+
+### F-203, Reader compatibility corrections
+
+**Sprint.** S49
+**Completed.** 2026-08-20
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Table-cell properties now recognize Word children and
+attributes through expanded names, preserve foreign same-local-name and
+unsupported children as raw XML, retain namespace bindings declared on the
+property or cell owner, and serialize every modeled and preserved child in its
+absolute `CT_TcPr` schema slot. Numbering levels retain raw `w:isLgl` before a
+typed suffix.
+
+**Non-obvious choices.** The raw sidecar maps the complete eighteen-child
+`CT_TcPr` sequence rather than assigning a relative boundary during parsing.
+That keeps later typed mutations valid even when standard unmodelled children
+appear before or after them. Content-control cells carry the same owner-binding
+rules as direct row cells.
+
+**Deviations from the design plan.** The plan was revised before completion to
+record the `CT_TcPr` preservation sidecar as part of the intentional pre-1.0
+0.8 low-level Rust source break and to add the owner-local namespace gate.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`, the intentional 0.8
+low-level table-property preservation boundary.
+
+**Tests.** `foreign_cell_width_remains_raw_and_unmodelled`,
+`aliased_cell_width_uses_in_scope_word_bindings`,
+`cell_property_preserves_child_binding_declared_on_owner`,
+`content_control_cell_preserves_child_binding_declared_on_cell`,
+`unmodelled_standard_cell_properties_keep_absolute_slots_after_typed_mutation`,
+and `level_raw_is_lgl_stays_before_suffix`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** New typed `CT_TcPr` properties must be placed in
+the existing absolute sequence. Namespace ownership can live above a preserved
+child, so raw serialization must carry the complete external binding scope.

@@ -213,8 +213,21 @@ fn collect_run_text(run: &CT_R) -> String {
                 BreakType::Page => raw.push_str("\n---\n"),
                 BreakType::Column => raw.push_str("  \n"),
             },
+            RunContent::Field(field) => {
+                for (text, properties) in field.cached_display_segments() {
+                    let mut display = String::new();
+                    for character in text.chars() {
+                        match character {
+                            '\t' => display.push('\t'),
+                            '\n' | '\u{000b}' => display.push_str("  \n"),
+                            '\u{000c}' => display.push_str("\n---\n"),
+                            character => display.push(character),
+                        }
+                    }
+                    raw.push_str(&format_markdown_run(&display, properties));
+                }
+            }
             RunContent::Drawing(_)
-            | RunContent::Field { .. }
             | RunContent::FootnoteRef { .. }
             | RunContent::EndnoteRef { .. }
             | RunContent::CommentReference { .. } => {}
@@ -226,7 +239,10 @@ fn collect_run_text(run: &CT_R) -> String {
     }
 
     // Apply formatting wrappers
-    let rpr = run.properties.as_ref();
+    format_markdown_run(&raw, run.properties.as_ref())
+}
+
+fn format_markdown_run(raw: &str, rpr: Option<&rdocx_oxml::properties::CT_RPr>) -> String {
     let bold = rpr.is_some_and(|r| r.bold == Some(true));
     let italic = rpr.is_some_and(|r| r.italic == Some(true));
     let strike = rpr.is_some_and(|r| r.strike == Some(true) || r.dstrike == Some(true));
@@ -240,7 +256,7 @@ fn collect_run_text(run: &CT_R) -> String {
     } else if strike {
         format!("~~{raw}~~")
     } else {
-        raw
+        raw.to_owned()
     }
 }
 
