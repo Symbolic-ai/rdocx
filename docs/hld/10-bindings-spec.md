@@ -261,12 +261,21 @@ relationship-resolved settings part when they save their owned document.
 The low-level revision storage is an intentional breaking pre-1.0 Rust
 boundary. `RunContent` adds `DeletedText`. `CT_R`, `CT_P`, `HyperlinkSpan`,
 `CT_PPr`, `CT_RPr`, `CT_SectPr`, `CT_TblPr`, and `CT_TrPr` add required
-preservation or revision fields, including ordered raw-child sidecars. Existing
-exhaustive matches and full struct literals must be updated or moved to the
-provided constructors. The workspace remains at 0.7 during development. Its
-next published stable-family version must be 0.8.0, not a 0.7 patch. The
-additive `rdocx::Document` facade and unchanged Python, WASM, and CLI surfaces
-do not inherit this low-level source break.
+preservation or revision fields, including ordered raw-child sidecars.
+`CT_TcPr` also adds an ordered raw-child sidecar that retains external
+namespace bindings declared only on the property owner or enclosing cell.
+Only WordprocessingML children advance its schema insertion boundary, so a
+foreign same-local-name child remains in its source slot. Serialization keeps
+`w:textDirection` before preserved `w:tcFitText` and `w:vAlign`. This sidecar
+assigns absolute schema slots to the unmodelled standard `w:hMerge`, `w:tcMar`,
+`w:hideMark`, `w:headers`, `w:cellIns`, `w:cellDel`, `w:cellMerge`, and
+`w:tcPrChange` children. This sidecar is part of the intentional pre-1.0 0.8
+low-level Rust source break. Existing exhaustive matches and full struct
+literals must be updated or moved to the provided constructors. The workspace
+remains at 0.7 during development. Its next published stable-family version
+must be 0.8.0, not a 0.7 patch. The additive `rdocx::Document` facade and
+unchanged Python, WASM, and CLI surfaces do not inherit this low-level source
+break.
 
 Native callers resolve tracked changes through `accept_all`, `reject_all`, the
 exact-author pair, the inclusive RFC 3339 date-range pair, and the id pair.

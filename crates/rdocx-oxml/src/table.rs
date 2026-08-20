@@ -7,7 +7,7 @@ use crate::borders::CT_BorderEdge;
 use crate::content_control::CT_Sdt;
 use crate::error::{OxmlError, Result};
 use crate::namespace::matches_local_name;
-use crate::numbering::{local_namespace_overrides, word_prefixes_at};
+use crate::numbering::{local_namespace_overrides, merged_owner_bindings, word_prefixes_at};
 use crate::properties::{
     CT_Shd, get_val_attr, get_word_val_attr, is_word_attribute, is_word_element,
 };
@@ -963,12 +963,13 @@ pub struct CT_TcPr {
 #[allow(non_snake_case)]
 impl CT_TcPr {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
-        Self::from_xml_with_prefixes(reader, &["w".to_owned()])
+        Self::from_xml_with_prefixes_and_owner_bindings(reader, &["w".to_owned()], &[])
     }
 
-    fn from_xml_with_prefixes(
+    fn from_xml_with_prefixes_and_owner_bindings(
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
     ) -> Result<Self> {
         let mut pr = CT_TcPr::default();
         let mut boundary = 0;
@@ -978,18 +979,24 @@ impl CT_TcPr {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    let (at, next) = tc_pr_raw_boundary(e.name().as_ref(), boundary);
+                    let (at, next) = tc_pr_raw_boundary(e.name().as_ref(), boundary, &prefixes);
                     if Self::parse_property_element(e, &mut pr, &prefixes)? {
                         boundary = next;
                     } else {
-                        pr.extra_xml.push((at, capture_empty_element(e)?));
+                        pr.extra_xml.push((
+                            at,
+                            crate::text::raw_with_external_bindings(
+                                &capture_empty_element(e)?,
+                                owner_bindings,
+                            )?,
+                        ));
                         boundary = next;
                     }
                 }
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    let (at, next) = tc_pr_raw_boundary(name.as_ref(), boundary);
+                    let (at, next) = tc_pr_raw_boundary(name.as_ref(), boundary, &prefixes);
                     if is_word_element(name.as_ref(), b"tcBorders", &prefixes) {
                         pr.borders =
                             Some(CT_TblBorders::from_xml_with_prefixes(reader, &prefixes)?);
@@ -998,7 +1005,13 @@ impl CT_TcPr {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                         boundary = next;
                     } else {
-                        pr.extra_xml.push((at, capture_element(reader, e)?));
+                        pr.extra_xml.push((
+                            at,
+                            crate::text::raw_with_external_bindings(
+                                &capture_element(reader, e)?,
+                                owner_bindings,
+                            )?,
+                        ));
                         boundary = next;
                     }
                 }
@@ -1092,7 +1105,9 @@ impl CT_TcPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        // Unmodelled w:hMerge is preserved at boundary 3.
         write_extras_at(writer, &self.extra_xml, 3)?;
+        write_extras_at(writer, &self.extra_xml, 4)?;
         if let Some(ref vm) = self.v_merge {
             let mut e = BytesStart::new("w:vMerge");
             match vm {
@@ -1102,38 +1117,45 @@ impl CT_TcPr {
             writer.write_event(Event::Empty(e))?;
         }
 
-        write_extras_at(writer, &self.extra_xml, 4)?;
+        write_extras_at(writer, &self.extra_xml, 5)?;
         if let Some(ref borders) = self.borders
             && !borders.is_empty()
         {
             borders.to_xml(writer, "w:tcBorders")?;
         }
 
-        write_extras_at(writer, &self.extra_xml, 5)?;
+        write_extras_at(writer, &self.extra_xml, 6)?;
         if let Some(ref shd) = self.shading {
             shd.write_xml(writer, "w:shd")?;
         }
 
-        write_extras_at(writer, &self.extra_xml, 6)?;
+        write_extras_at(writer, &self.extra_xml, 7)?;
         if let Some(true) = self.no_wrap {
             writer.write_event(Event::Empty(BytesStart::new("w:noWrap")))?;
         }
 
-        write_extras_at(writer, &self.extra_xml, 7)?;
-        if let Some(ref va) = self.v_align {
-            let mut e = BytesStart::new("w:vAlign");
-            e.push_attribute(("w:val", va.to_str()));
-            writer.write_event(Event::Empty(e))?;
-        }
-
+        // Unmodelled w:tcMar is preserved at boundary 8.
         write_extras_at(writer, &self.extra_xml, 8)?;
+        write_extras_at(writer, &self.extra_xml, 9)?;
         if let Some(ref td) = self.text_direction {
             let mut e = BytesStart::new("w:textDirection");
             e.push_attribute(("w:val", td.as_str()));
             writer.write_event(Event::Empty(e))?;
         }
 
-        write_extras_at(writer, &self.extra_xml, 9)?;
+        // Unmodelled w:tcFitText is preserved at boundary 10.
+        write_extras_at(writer, &self.extra_xml, 10)?;
+        write_extras_at(writer, &self.extra_xml, 11)?;
+        if let Some(ref va) = self.v_align {
+            let mut e = BytesStart::new("w:vAlign");
+            e.push_attribute(("w:val", va.to_str()));
+            writer.write_event(Event::Empty(e))?;
+        }
+
+        // The remaining standard Word children occupy boundaries 12 to 17.
+        for boundary in 12..=18 {
+            write_extras_at(writer, &self.extra_xml, boundary)?;
+        }
 
         writer.write_event(Event::End(BytesEnd::new("w:tcPr")))?;
         Ok(())
@@ -1153,25 +1175,43 @@ impl CT_TcPr {
     }
 }
 
-fn tc_pr_raw_boundary(name: &[u8], current: usize) -> (usize, usize) {
-    if matches_local_name(name, b"cnfStyle") {
+fn tc_pr_raw_boundary(name: &[u8], current: usize, word_prefixes: &[String]) -> (usize, usize) {
+    if is_word_element(name, b"cnfStyle", word_prefixes) {
         (0, 1)
-    } else if matches_local_name(name, b"tcW") {
+    } else if is_word_element(name, b"tcW", word_prefixes) {
         (1, 2)
-    } else if matches_local_name(name, b"gridSpan") {
+    } else if is_word_element(name, b"gridSpan", word_prefixes) {
         (2, 3)
-    } else if matches_local_name(name, b"vMerge") {
+    } else if is_word_element(name, b"hMerge", word_prefixes) {
         (3, 4)
-    } else if matches_local_name(name, b"tcBorders") {
+    } else if is_word_element(name, b"vMerge", word_prefixes) {
         (4, 5)
-    } else if matches_local_name(name, b"shd") {
+    } else if is_word_element(name, b"tcBorders", word_prefixes) {
         (5, 6)
-    } else if matches_local_name(name, b"noWrap") {
+    } else if is_word_element(name, b"shd", word_prefixes) {
         (6, 7)
-    } else if matches_local_name(name, b"vAlign") {
+    } else if is_word_element(name, b"noWrap", word_prefixes) {
         (7, 8)
-    } else if matches_local_name(name, b"textDirection") {
+    } else if is_word_element(name, b"tcMar", word_prefixes) {
         (8, 9)
+    } else if is_word_element(name, b"textDirection", word_prefixes) {
+        (9, 10)
+    } else if is_word_element(name, b"tcFitText", word_prefixes) {
+        (10, 11)
+    } else if is_word_element(name, b"vAlign", word_prefixes) {
+        (11, 12)
+    } else if is_word_element(name, b"hideMark", word_prefixes) {
+        (12, 13)
+    } else if is_word_element(name, b"headers", word_prefixes) {
+        (13, 14)
+    } else if is_word_element(name, b"cellIns", word_prefixes) {
+        (14, 15)
+    } else if is_word_element(name, b"cellDel", word_prefixes) {
+        (15, 16)
+    } else if is_word_element(name, b"cellMerge", word_prefixes) {
+        (16, 17)
+    } else if is_word_element(name, b"tcPrChange", word_prefixes) {
+        (17, 18)
     } else {
         (current, current)
     }
@@ -1239,12 +1279,13 @@ impl CT_Tc {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
-        Self::from_xml_with_prefixes(reader, &["w".to_string()])
+        Self::from_xml_with_prefixes_and_owner_bindings(reader, &["w".to_string()], &[])
     }
 
-    pub(crate) fn from_xml_with_prefixes(
+    pub(crate) fn from_xml_with_prefixes_and_owner_bindings(
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
     ) -> Result<Self> {
         let mut properties = None;
         let mut content = Vec::new();
@@ -1257,7 +1298,14 @@ impl CT_Tc {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
                     if is_word_element(name.as_ref(), b"tcPr", &prefixes) {
-                        properties = Some(CT_TcPr::from_xml_with_prefixes(reader, &prefixes)?);
+                        let local_bindings = local_namespace_overrides(e, word_prefixes)?;
+                        let property_bindings =
+                            merged_owner_bindings(owner_bindings, &local_bindings);
+                        properties = Some(CT_TcPr::from_xml_with_prefixes_and_owner_bindings(
+                            reader,
+                            &prefixes,
+                            &property_bindings,
+                        )?);
                     } else if is_word_element(name.as_ref(), b"p", &prefixes) {
                         content.push(CellContent::Paragraph(CT_P::from_xml_with_prefixes(
                             reader, &prefixes,
@@ -1413,7 +1461,12 @@ impl CT_Row {
                     if is_word_element(name.as_ref(), b"trPr", &prefixes) {
                         properties = Some(CT_TrPr::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"tc", &prefixes) {
-                        cells.push(CT_Tc::from_xml_with_prefixes(reader, &prefixes)?);
+                        let owner_bindings = local_namespace_overrides(e, word_prefixes)?;
+                        cells.push(CT_Tc::from_xml_with_prefixes_and_owner_bindings(
+                            reader,
+                            &prefixes,
+                            &owner_bindings,
+                        )?);
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
                         let raw = capture_element(reader, e)?;
                         if let Some(sdt) = CT_Sdt::from_raw(&raw, &prefixes) {
@@ -1914,7 +1967,7 @@ mod tests {
         assert_eq!(
             properties.extra_xml,
             vec![(
-                1,
+                0,
                 br#"<ext:tcW xmlns:ext="urn:producer" ext:w="72" ext:type="dxa"/>"#.to_vec(),
             )]
         );
@@ -1965,6 +2018,163 @@ mod tests {
                 .and_then(|properties| properties.width.as_ref())
                 .map(|width| width.w),
             Some(72)
+        );
+    }
+
+    #[test]
+    fn cell_property_preserves_child_binding_declared_on_owner() {
+        let table = parse_table(
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:tc><w:tcPr xmlns:ext="urn:producer"><ext:property ext:value="kept"/></w:tcPr><w:p/></w:tc></w:tr>"#,
+        );
+        let properties = table.rows[0].cells[0]
+            .properties
+            .as_ref()
+            .expect("cell properties parse");
+
+        assert_eq!(
+            properties.extra_xml,
+            vec![(
+                0,
+                br#"<ext:property ext:value="kept" xmlns:ext="urn:producer"/>"#.to_vec(),
+            )]
+        );
+
+        let mut output = Vec::new();
+        table
+            .to_xml(&mut Writer::new(&mut output))
+            .expect("table writes");
+        let output = String::from_utf8(output).expect("XML is UTF-8");
+        assert!(
+            output.contains(r#"<ext:property ext:value="kept" xmlns:ext="urn:producer"/>"#),
+            "preserved child keeps its owner-local namespace binding: {output}"
+        );
+    }
+
+    #[test]
+    fn cell_property_preserves_child_binding_declared_on_cell() {
+        let table = parse_table(
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:tc xmlns:ext="urn:producer"><w:tcPr><ext:property ext:value="kept"/></w:tcPr><w:p/></w:tc></w:tr>"#,
+        );
+        let properties = table.rows[0].cells[0]
+            .properties
+            .as_ref()
+            .expect("cell properties parse");
+
+        assert_eq!(
+            properties.extra_xml,
+            vec![(
+                0,
+                br#"<ext:property ext:value="kept" xmlns:ext="urn:producer"/>"#.to_vec(),
+            )]
+        );
+
+        let mut output = Vec::new();
+        table
+            .to_xml(&mut Writer::new(&mut output))
+            .expect("table writes");
+        let output = String::from_utf8(output).expect("XML is UTF-8");
+        assert!(
+            output.contains(r#"<ext:property ext:value="kept" xmlns:ext="urn:producer"/>"#),
+            "preserved child keeps its cell-local namespace binding: {output}"
+        );
+    }
+
+    #[test]
+    fn foreign_same_name_after_later_property_keeps_current_boundary() {
+        let table = parse_table(
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:textDirection w:val="btLr"/><ext:tcW xmlns:ext="urn:producer" ext:w="72"/><w:tcFitText/><w:vAlign w:val="center"/></w:tcPr><w:p/></w:tc></w:tr>"#,
+        );
+        let properties = table.rows[0].cells[0]
+            .properties
+            .as_ref()
+            .expect("cell properties parse");
+
+        assert!(properties.width.is_none());
+        assert_eq!(
+            properties.extra_xml,
+            vec![
+                (
+                    10,
+                    br#"<ext:tcW xmlns:ext="urn:producer" ext:w="72"/>"#.to_vec(),
+                ),
+                (10, br#"<w:tcFitText/>"#.to_vec()),
+            ]
+        );
+
+        let mut output = Vec::new();
+        table
+            .to_xml(&mut Writer::new(&mut output))
+            .expect("table writes");
+        let output = String::from_utf8(output).expect("XML is UTF-8");
+        let direction = output
+            .find("<w:textDirection")
+            .expect("text direction writes");
+        let foreign = output.find("<ext:tcW").expect("foreign width writes");
+        let fit = output.find("<w:tcFitText").expect("fit text writes");
+        let align = output.find("<w:vAlign").expect("alignment writes");
+        assert!(
+            direction < foreign && foreign < fit && fit < align,
+            "foreign child stays at its later schema boundary: {output}"
+        );
+    }
+
+    #[test]
+    fn unmodelled_standard_cell_properties_keep_absolute_slots_after_typed_mutation() {
+        let mut table = parse_table(
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:hMerge/><w:tcMar/><w:hideMark/><w:headers/><w:cellIns/><w:cellDel/><w:cellMerge/><w:tcPrChange/></w:tcPr><w:p/></w:tc></w:tr>"#,
+        );
+        let properties = table.rows[0].cells[0]
+            .properties
+            .as_ref()
+            .expect("cell properties parse");
+        assert_eq!(
+            properties.extra_xml,
+            vec![
+                (3, br#"<w:hMerge/>"#.to_vec()),
+                (8, br#"<w:tcMar/>"#.to_vec()),
+                (12, br#"<w:hideMark/>"#.to_vec()),
+                (13, br#"<w:headers/>"#.to_vec()),
+                (14, br#"<w:cellIns/>"#.to_vec()),
+                (15, br#"<w:cellDel/>"#.to_vec()),
+                (16, br#"<w:cellMerge/>"#.to_vec()),
+                (17, br#"<w:tcPrChange/>"#.to_vec()),
+            ]
+        );
+
+        let properties = table.rows[0].cells[0]
+            .properties
+            .as_mut()
+            .expect("cell properties parse");
+        properties.grid_span = Some(2);
+        properties.v_merge = Some(VMerge::Restart);
+        properties.no_wrap = Some(true);
+        properties.text_direction = Some("btLr".to_owned());
+        properties.v_align = Some(ST_VerticalJc::Center);
+
+        let mut output = Vec::new();
+        table
+            .to_xml(&mut Writer::new(&mut output))
+            .expect("table writes");
+        let output = String::from_utf8(output).expect("XML is UTF-8");
+        let positions = [
+            "<w:gridSpan",
+            "<w:hMerge",
+            "<w:vMerge",
+            "<w:noWrap",
+            "<w:tcMar",
+            "<w:textDirection",
+            "<w:vAlign",
+            "<w:hideMark",
+            "<w:headers",
+            "<w:cellIns",
+            "<w:cellDel",
+            "<w:cellMerge",
+            "<w:tcPrChange",
+        ]
+        .map(|element| output.find(element).expect("cell property writes"));
+        assert!(
+            positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "typed mutations retain the absolute cell-property order: {output}"
         );
     }
 
