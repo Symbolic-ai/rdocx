@@ -824,7 +824,6 @@ impl Document {
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
-            field_markers: Vec::new(),
         };
         let mut paragraph = CT_P::new();
         paragraph.runs.push(run);
@@ -1171,7 +1170,6 @@ impl Document {
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
-            field_markers: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1265,7 +1263,6 @@ impl Document {
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
-            field_markers: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1302,7 +1299,6 @@ impl Document {
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
-            field_markers: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -1764,7 +1760,6 @@ impl Document {
             content: vec![RunContent::Drawing(CT_Drawing::inline(inline))],
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
-            field_markers: Vec::new(),
         };
 
         let mut p = CT_P::new();
@@ -2452,7 +2447,6 @@ impl Document {
                 content: vec![rdocx_oxml::text::RunContent::Tab],
                 extra_xml: Vec::new(),
                 extra_xml_positions: Vec::new(),
-                field_markers: Vec::new(),
             });
 
             // Wrap the text run in a hyperlink to the bookmark
@@ -5891,36 +5885,27 @@ mod tests {
     #[test]
     fn links_exposes_a_complex_field_hyperlink_target() {
         let mut doc = Document::new();
-        let mut paragraph = CT_P::new();
-        for (xml, marker) in [
-            (
-                br#"<w:fldChar w:fldCharType="begin"/>"#.as_slice(),
-                rdocx_oxml::text::FieldMarker::Begin { dirty: false },
-            ),
-            (
-                br#"<w:instrText> HYPERLINK &quot;https://example.test&quot; </w:instrText>"#
-                    .as_slice(),
-                rdocx_oxml::text::FieldMarker::Instruction(
-                    " HYPERLINK \"https://example.test\" ".to_owned(),
-                ),
-            ),
-            (
-                br#"<w:fldChar w:fldCharType="separate"/>"#.as_slice(),
-                rdocx_oxml::text::FieldMarker::Separate { dirty: false },
-            ),
-        ] {
-            let mut run = CT_R::new("");
-            run.extra_xml.push(xml.to_vec());
-            run.field_markers.push(marker);
-            paragraph.runs.push(run);
-        }
-        paragraph.runs.push(CT_R::new("Cached link"));
-        let mut end = CT_R::new("");
-        end.extra_xml
-            .push(br#"<w:fldChar w:fldCharType="end"/>"#.to_vec());
-        end.field_markers
-            .push(rdocx_oxml::text::FieldMarker::End { dirty: false });
-        paragraph.runs.push(end);
+        let xml = concat!(
+            r#"<w:p>"#,
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText> HYPERLINK &quot;https://example.test&quot; </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:t>Cached link</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            r#"</w:p>"#,
+        );
+        let mut reader = quick_xml::Reader::from_str(xml);
+        let mut buffer = Vec::new();
+        let paragraph = loop {
+            match reader.read_event_into(&mut buffer).unwrap() {
+                Event::Start(element) if matches_local_name(element.name().as_ref(), b"p") => {
+                    break CT_P::from_xml(&mut reader).unwrap();
+                }
+                Event::Eof => panic!("missing paragraph"),
+                _ => {}
+            }
+            buffer.clear();
+        };
         doc.document
             .body
             .content

@@ -164,15 +164,18 @@ boundaries. The `rdocx` facade owns the relationship-resolved pair of comment
 parts and coordinates them with the anchors in the main document.
 
 The Word text model also projects bookmark starts and ends at direct-run
-boundaries while retaining every marker as ordered raw XML. Structured simple
-fields distinguish `REF` and `PAGEREF`, keep the complete instruction including
-switches, and retain the stored display. Complex fields use the same tokenizer
-and expose the normalized name, arguments, switches, cached result, dirty
-state, and nested fields. Markers are recognized only through their in-scope
-WordprocessingML namespace bindings. Malformed or unsupported sequences remain
-opaque raw XML, and dirty fields are not reported as `Document::links()` until
-the update policy defines how to handle them. The `rdocx` facade correlates
-bookmark ids and owns mutation across top-level body paragraphs.
+boundaries while retaining every marker as ordered raw XML. Simple and complex
+fields share one recursive `Field` grammar with a normalized name, text or
+nested arguments, switches, cached result, and optional dirty state. Its private
+source records the original field form, run partition, and producer XML.
+Unchanged fields therefore write their original bytes. Cache and dirty updates
+rewrite only the typed values while preserving run formatting and unmodelled
+neighbours. Markers are recognized only as direct run children through their
+in-scope WordprocessingML namespace bindings. Malformed sequences remain opaque
+raw XML, while unsupported valid fields retain their cached display. Dirty
+complex hyperlinks are not reported as `Document::links()` until the update
+policy defines how to handle them. The `rdocx` facade correlates bookmark ids
+and owns mutation across top-level body paragraphs.
 `rdocx-layout` resolves bookmark text and maps page targets, while the shared
 `oxml-layout` boundary exposes only format-neutral `Target` and `TargetPage`
 field kinds.

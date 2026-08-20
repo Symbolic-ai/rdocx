@@ -400,7 +400,6 @@ impl<'a> Cell<'a> {
             content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
-            field_markers: Vec::new(),
         };
         let mut p = CT_P::new();
         p.runs.push(run);

@@ -1,6 +1,6 @@
 # F-160, Field instruction parser
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S49
 **Size**: L
 **Depends on**: none
@@ -135,16 +135,16 @@ unexpected and blocks integration.
 
 ## Implementation checklist
 
-- [ ] Define the recursive field, instruction, argument, switch, source, and dirty models.
-- [ ] Replace the narrow `FieldType` projection and adapt exhaustive matches.
-- [ ] Implement quoted, escaped, switch-aware instruction lexing.
-- [ ] Parse `w:fldSimple` through the shared grammar.
-- [ ] Parse nested complex fields and split `w:instrText` with a paragraph stack.
-- [ ] Preserve malformed sequences, source form, run partitions, and raw neighbours.
-- [ ] Preserve existing PAGE, NUMPAGES, REF, and PAGEREF layout behaviour.
-- [ ] Add the in-code corpus gate plus malformed, prefix, order, and round-trip tests.
-- [ ] Run focused checks, package riders, and the unchanged hash harness.
-- [ ] Update exactly HLD 03 and HLD 10 at completion.
+- [x] Define the recursive field, instruction, argument, switch, source, and dirty models.
+- [x] Replace the narrow `FieldType` projection and adapt exhaustive matches.
+- [x] Implement quoted, escaped, switch-aware instruction lexing.
+- [x] Parse `w:fldSimple` through the shared grammar.
+- [x] Parse nested complex fields and split `w:instrText` with a paragraph stack.
+- [x] Preserve malformed sequences, source form, run partitions, and raw neighbours.
+- [x] Preserve existing PAGE, NUMPAGES, REF, and PAGEREF layout behaviour.
+- [x] Add the in-code corpus gate plus malformed, prefix, order, and round-trip tests.
+- [x] Run focused checks, package riders, and the unchanged hash harness.
+- [x] Update exactly HLD 03 and HLD 10 at completion.
 
 ## Open questions
 

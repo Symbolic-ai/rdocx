@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use rdocx_oxml::document::{BodyContent, CT_Body};
 use rdocx_oxml::numbering::CT_Numbering;
-use rdocx_oxml::properties::CT_PPr;
+use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::shared::ST_Jc;
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Tbl, CellContent, VMerge};
@@ -317,8 +317,12 @@ fn emit_run(
                     }
                 }
             }
-            RunContent::Field { .. }
-            | RunContent::FootnoteRef { .. }
+            RunContent::Field(field) => {
+                for (text, properties) in field.cached_display_segments() {
+                    emit_field_display(out, text, properties);
+                }
+            }
+            RunContent::FootnoteRef { .. }
             | RunContent::EndnoteRef { .. }
             | RunContent::CommentReference { .. } => {}
         }
@@ -344,6 +348,61 @@ fn emit_run(
         out.push_str("</strong>");
     }
     if has_style {
+        out.push_str("</span>");
+    }
+}
+
+fn emit_field_display(out: &mut String, text: &str, properties: Option<&CT_RPr>) {
+    let tags = css::run_tags(properties);
+    let style = css::run_style(properties);
+    if !style.is_empty() {
+        out.push_str(&format!("<span style=\"{}\">", escape_html_attr(&style)));
+    }
+    if tags.bold {
+        out.push_str("<strong>");
+    }
+    if tags.italic {
+        out.push_str("<em>");
+    }
+    if tags.underline {
+        out.push_str("<u>");
+    }
+    if tags.strike {
+        out.push_str("<s>");
+    }
+    if tags.superscript {
+        out.push_str("<sup>");
+    }
+    if tags.subscript {
+        out.push_str("<sub>");
+    }
+    for character in text.chars() {
+        match character {
+            '\t' => out.push_str("&emsp;"),
+            '\n' | '\u{000b}' => out.push_str("<br>"),
+            '\u{000c}' => out.push_str("<hr>"),
+            character => out.push_str(&escape_html(&character.to_string())),
+        }
+    }
+    if tags.subscript {
+        out.push_str("</sub>");
+    }
+    if tags.superscript {
+        out.push_str("</sup>");
+    }
+    if tags.strike {
+        out.push_str("</s>");
+    }
+    if tags.underline {
+        out.push_str("</u>");
+    }
+    if tags.italic {
+        out.push_str("</em>");
+    }
+    if tags.bold {
+        out.push_str("</strong>");
+    }
+    if !style.is_empty() {
         out.push_str("</span>");
     }
 }

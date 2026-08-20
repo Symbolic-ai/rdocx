@@ -12,7 +12,9 @@ use rdocx_oxml::revision::{CT_Revision, RevisionContent, RevisionKind};
 use rdocx_oxml::shared::ST_HighlightColor;
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
-use rdocx_oxml::text::{BreakType, CT_P, CT_R, FieldType, RunContent, hyperlink_revision_index};
+use rdocx_oxml::text::{
+    BreakType, CT_P, CT_R, Field, FieldArgument, RunContent, hyperlink_revision_index,
+};
 
 use crate::block::{self, LayoutBlock, ParagraphBlock};
 use crate::convert;
@@ -215,7 +217,7 @@ fn revision_is_visible(revision: &CT_Revision) -> bool {
                     RunContent::Tab
                     | RunContent::Break(_)
                     | RunContent::Drawing(_)
-                    | RunContent::Field { .. }
+                    | RunContent::Field(_)
                     | RunContent::FootnoteRef { .. }
                     | RunContent::EndnoteRef { .. } => true,
                 })
@@ -909,64 +911,170 @@ pub fn layout_paragraph(
                         }
                     }
                 }
-                RunContent::Field {
-                    field_type,
-                    display,
-                } => {
-                    let (value, field_kind) = match field_type {
-                        FieldType::Page => ("99".to_owned(), Some(FieldKind::Page)),
-                        FieldType::NumPages => ("99".to_owned(), Some(FieldKind::NumPages)),
-                        FieldType::Ref { bookmark, .. } => {
+                RunContent::Field(field) => {
+                    let (computed_value, field_kind) = match field.instruction.name.as_str() {
+                        "PAGE" => (Some("99".to_owned()), Some(FieldKind::Page)),
+                        "NUMPAGES" => (Some("99".to_owned()), Some(FieldKind::NumPages)),
+                        "REF" => {
+                            let Some(bookmark) = field_text_argument(field, 0) else {
+                                continue;
+                            };
                             if let Some(text) = bookmark_text(input, bookmark) {
-                                (text, None)
+                                (Some(text), None)
                             } else {
                                 diagnostics.push(Diagnostic {
                                     message: format!(
                                         "REF target {bookmark} was not found, stored display retained"
                                     ),
                                 });
-                                (display.clone(), None)
+                                (None, None)
                             }
                         }
-                        FieldType::PageRef { bookmark, .. } => {
+                        "PAGEREF" => {
+                            let Some(bookmark) = field_text_argument(field, 0) else {
+                                continue;
+                            };
                             if bookmark_text(input, bookmark).is_none() {
                                 diagnostics.push(Diagnostic {
                                     message: format!(
                                         "PAGEREF target {bookmark} was not found, stored display retained"
                                     ),
                                 });
-                                (display.clone(), None)
+                                (None, None)
                             } else if let Some(target) = page_ref_id(input, bookmark) {
-                                ("99".to_owned(), Some(FieldKind::TargetPage(target)))
+                                (Some("99".to_owned()), Some(FieldKind::TargetPage(target)))
                             } else {
-                                (display.clone(), None)
+                                (None, None)
                             }
                         }
-                        FieldType::Other(_) => continue,
+                        _ => (None, None),
                     };
-                    let shaped = fm.shape_text(font_id, &value, font_size)?;
-                    inline_items.push(InlineItem::Text(TextSegment {
-                        text: value,
-                        font_id,
-                        font_size,
-                        glyph_ids: shaped.glyph_ids,
-                        advances: shaped.advances,
-                        width: shaped.width,
-                        ascent: metrics.ascent,
-                        descent: metrics.descent,
-                        line_gap: 0.0,
-                        color,
-                        bold,
-                        italic,
-                        underline: None,
-                        strike: false,
-                        dstrike: false,
-                        highlight: None,
-                        baseline_offset,
-                        hyperlink_url: None,
-                        field_kind,
-                        note: None,
-                    }));
+                    let stored_segments = field.cached_display_segments();
+                    let segments = if let Some(value) = computed_value.as_deref() {
+                        let stored_properties = stored_segments
+                            .first()
+                            .and_then(|(_, properties)| *properties);
+                        vec![(value, stored_properties)]
+                    } else {
+                        stored_segments
+                    };
+                    for (value, stored_properties) in segments {
+                        let segment_style_id =
+                            stored_properties.and_then(|properties| properties.style_id.as_deref());
+                        let mut segment_rpr = if stored_properties.is_some() {
+                            style_resolver::resolve_run_properties(
+                                para_style_id,
+                                segment_style_id,
+                                styles,
+                            )
+                        } else {
+                            effective_rpr.clone()
+                        };
+                        if let Some(properties) = stored_properties {
+                            segment_rpr.merge_from(properties);
+                        }
+                        if segment_rpr.vanish == Some(true) {
+                            continue;
+                        }
+                        let mut segment_font_size =
+                            segment_rpr.sz.map(|hp| hp.to_pt()).unwrap_or(11.0);
+                        let segment_bold = segment_rpr.bold.unwrap_or(false);
+                        let segment_italic = segment_rpr.italic.unwrap_or(false);
+                        let segment_font_family =
+                            resolve_font_family(&segment_rpr, input.theme.as_ref());
+                        let segment_color = resolve_run_color(&segment_rpr, input.theme.as_ref());
+                        let segment_underline = if projected.force_underline {
+                            Some(Underline::Single)
+                        } else {
+                            convert::underline(segment_rpr.underline)
+                        };
+                        let segment_strike =
+                            projected.force_strike || segment_rpr.strike.unwrap_or(false);
+                        let segment_dstrike = segment_rpr.dstrike.unwrap_or(false);
+                        let segment_highlight = segment_rpr.highlight.and_then(highlight_to_color);
+                        let mut segment_baseline_offset = 0.0;
+                        if let Some(vertical) = segment_rpr.vert_align.as_deref() {
+                            match vertical {
+                                "superscript" => {
+                                    let original_size = segment_font_size;
+                                    segment_font_size *= 0.58;
+                                    segment_baseline_offset = original_size * 0.33;
+                                }
+                                "subscript" => {
+                                    let original_size = segment_font_size;
+                                    segment_font_size *= 0.58;
+                                    segment_baseline_offset = -(original_size * 0.14);
+                                }
+                                _ => {}
+                            }
+                        }
+                        if let Some(position) = segment_rpr.position {
+                            segment_baseline_offset += position as f64 / 2.0;
+                        }
+                        let segment_font_id = fm.resolve_font_for_text(
+                            segment_font_family.as_deref(),
+                            segment_bold,
+                            segment_italic,
+                            value,
+                        )?;
+                        let segment_metrics = fm.metrics(segment_font_id, segment_font_size)?;
+
+                        let mut start = 0usize;
+                        for (index, character) in value
+                            .char_indices()
+                            .chain(std::iter::once((value.len(), '\0')))
+                        {
+                            let control = match character {
+                                '\t' => Some(InlineItem::Tab),
+                                '\n' => Some(InlineItem::LineBreak),
+                                '\u{000c}' => Some(InlineItem::PageBreak),
+                                '\u{000b}' => Some(InlineItem::ColumnBreak),
+                                '\0' if index == value.len() => None,
+                                _ => continue,
+                            };
+                            if start < index {
+                                let mut text = value[start..index].to_owned();
+                                if segment_rpr.caps == Some(true) {
+                                    text = text.to_uppercase();
+                                }
+                                let mut shaped =
+                                    fm.shape_text(segment_font_id, &text, segment_font_size)?;
+                                if let Some(spacing) = segment_rpr.spacing {
+                                    let extra = spacing.to_pt();
+                                    for advance in &mut shaped.advances {
+                                        *advance += extra;
+                                    }
+                                    shaped.width += extra * shaped.advances.len() as f64;
+                                }
+                                inline_items.extend(convert::text_segments(TextSegment {
+                                    text,
+                                    font_id: segment_font_id,
+                                    font_size: segment_font_size,
+                                    glyph_ids: shaped.glyph_ids,
+                                    advances: shaped.advances,
+                                    width: shaped.width,
+                                    ascent: segment_metrics.ascent,
+                                    descent: segment_metrics.descent,
+                                    line_gap: 0.0,
+                                    color: segment_color,
+                                    bold: segment_bold,
+                                    italic: segment_italic,
+                                    underline: segment_underline,
+                                    strike: segment_strike,
+                                    dstrike: segment_dstrike,
+                                    highlight: segment_highlight,
+                                    baseline_offset: segment_baseline_offset,
+                                    hyperlink_url: current_hyperlink_url.clone(),
+                                    field_kind,
+                                    note: None,
+                                }));
+                            }
+                            if let Some(control) = control {
+                                inline_items.push(control);
+                                start = index + character.len_utf8();
+                            }
+                        }
+                    }
                 }
                 RunContent::FootnoteRef { id } | RunContent::EndnoteRef { id } => {
                     // The two streams number independently, so the marker has
@@ -1123,20 +1231,29 @@ fn page_ref_id(input: &LayoutInput, name: &str) -> Option<usize> {
         for projected in project_paragraph_runs(paragraph, input.revision_view) {
             let run = projected.run;
             for content in &run.content {
-                let RunContent::Field {
-                    field_type: FieldType::PageRef { bookmark, .. },
-                    ..
-                } = content
-                else {
+                let RunContent::Field(field) = content else {
                     continue;
                 };
-                if !names.contains(&bookmark.as_str()) {
+                if field.instruction.name != "PAGEREF" {
+                    continue;
+                }
+                let Some(bookmark) = field_text_argument(field, 0) else {
+                    continue;
+                };
+                if !names.contains(&bookmark) {
                     names.push(bookmark);
                 }
             }
         }
     });
     names.iter().position(|candidate| *candidate == name)
+}
+
+fn field_text_argument(field: &Field, index: usize) -> Option<&str> {
+    match field.instruction.arguments.get(index) {
+        Some(FieldArgument::Text(value)) => Some(value),
+        Some(FieldArgument::Nested(_)) | None => None,
+    }
 }
 
 fn document_has_page_ref(input: &LayoutInput, name: &str) -> bool {
@@ -4244,12 +4361,9 @@ mod tests {
         }
     }
 
-    fn cross_reference_run(field_type: FieldType, display: &str) -> rdocx_oxml::text::CT_R {
+    fn cross_reference_run(instruction: &str, display: &str) -> rdocx_oxml::text::CT_R {
         let mut run = rdocx_oxml::text::CT_R::new("");
-        run.content = vec![RunContent::Field {
-            field_type,
-            display: display.to_owned(),
-        }];
+        run.content = vec![RunContent::Field(Field::new(instruction, display))];
         run
     }
 
@@ -4294,19 +4408,78 @@ mod tests {
     }
 
     #[test]
+    fn an_unsupported_complex_field_keeps_its_cached_display() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>DATE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>17 August 2026</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>"#;
+        let mut input = make_input_with_text("");
+        input.document = rdocx_oxml::CT_Document::from_xml(xml).expect("field document parses");
+
+        let text = output_text(&deterministic_layout(&input));
+        assert!(text.concat().contains("17 August 2026"), "{text:?}");
+    }
+
+    #[test]
+    fn a_complex_field_keeps_each_cached_result_runs_formatting() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>DATE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>italic</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>"#;
+        let mut input = make_input_with_text("");
+        input.document = rdocx_oxml::CT_Document::from_xml(xml).expect("field document parses");
+
+        let output = deterministic_layout(&input);
+        let mut displays = Vec::new();
+        for page in &output.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let PositionedElement::Text(run) = element
+                    && matches!(run.text.as_str(), "bold" | "italic")
+                {
+                    displays.push((run.text.clone(), run.bold, run.italic));
+                }
+            });
+        }
+        assert_eq!(
+            displays,
+            vec![
+                ("bold".to_owned(), true, false),
+                ("italic".to_owned(), false, true)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_computed_complex_field_keeps_its_cached_result_run_formatting() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>PAGE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>99</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>"#;
+        let mut input = make_input_with_text("");
+        input.document = rdocx_oxml::CT_Document::from_xml(xml).expect("field document parses");
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        let RunContent::Field(field) = &mut paragraph.runs[0].content[0] else {
+            panic!("expected field")
+        };
+        field.cached_result = "edited stored value".to_owned();
+
+        let output = deterministic_layout(&input);
+        let mut displays = Vec::new();
+        for page in &output.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let PositionedElement::Text(run) = element
+                    && run.text == "1"
+                {
+                    displays.push((run.bold, run.italic));
+                }
+            });
+        }
+        assert_eq!(displays, vec![(true, true)]);
+    }
+
+    #[test]
     fn a_pageref_inside_a_table_uses_the_final_target_page() {
         use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 
         let mut input = make_input_with_text("");
         input.document.body.content.clear();
         let mut field = CT_P::new();
-        field.runs.push(cross_reference_run(
-            FieldType::PageRef {
-                bookmark: "destination".to_owned(),
-                instruction: "PAGEREF destination".to_owned(),
-            },
-            "cached",
-        ));
+        field
+            .runs
+            .push(cross_reference_run("PAGEREF destination", "cached"));
         let mut cell = CT_Tc::new();
         cell.content = vec![CellContent::Paragraph(field)];
         let mut row = CT_Row::new();
@@ -4332,13 +4505,9 @@ mod tests {
             let mut input = make_input_with_text("");
             input.document.body.content.clear();
             let mut field = CT_P::new();
-            field.runs.push(cross_reference_run(
-                FieldType::PageRef {
-                    bookmark: "destination".to_owned(),
-                    instruction: "PAGEREF destination".to_owned(),
-                },
-                display,
-            ));
+            field
+                .runs
+                .push(cross_reference_run("PAGEREF destination", display));
             input.document.body.add_paragraph(field);
             input.document.body.add_paragraph(target_paragraph(
                 &[(4, "destination", 0, 1)],
@@ -4360,13 +4529,9 @@ mod tests {
         input.document.body.content.clear();
         let mut fields = CT_P::new();
         for name in ["first", "second"] {
-            fields.runs.push(cross_reference_run(
-                FieldType::PageRef {
-                    bookmark: name.to_owned(),
-                    instruction: format!("PAGEREF {name}"),
-                },
-                "cached",
-            ));
+            fields
+                .runs
+                .push(cross_reference_run(&format!("PAGEREF {name}"), "cached"));
         }
         input.document.body.add_paragraph(fields);
         input.document.body.add_paragraph(target_paragraph(
@@ -4388,13 +4553,9 @@ mod tests {
         let mut input = make_input_with_text("");
         input.document.body.content.clear();
         let mut field = CT_P::new();
-        field.runs.push(cross_reference_run(
-            FieldType::PageRef {
-                bookmark: "destination".to_owned(),
-                instruction: "PAGEREF destination".to_owned(),
-            },
-            "cached",
-        ));
+        field
+            .runs
+            .push(cross_reference_run("PAGEREF destination", "cached"));
         input.document.body.add_paragraph(field);
         input.document.body.add_paragraph(target_paragraph(
             &[(4, "destination", 0, 1)],

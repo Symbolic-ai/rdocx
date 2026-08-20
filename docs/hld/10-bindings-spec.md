@@ -223,11 +223,11 @@ summaries and `Document::add_bookmark` for atomic insertion over the existing
 top-level half-open `RunRange`. A summary exposes an optional id, name, range,
 current text, and marker issue. Insertion validates the Word name and both
 boundaries, rejects duplicate or producer-reserved names, and returns the
-allocated nonnegative id. Structured `FieldType::Ref` and
-`FieldType::PageRef` variants retain their target and complete instruction.
-These additions are native Rust APIs only. Python, WASM, and CLI consumers keep
-their existing surface and preserve the typed content when they save the owned
-document.
+allocated nonnegative id. The shared recursive `Field` model retains the
+complete `REF` and `PAGEREF` instruction, target argument, cached display,
+dirty state, source form, and producer XML. These additions are native Rust
+APIs only. Python, WASM, and CLI consumers keep their existing surface and
+preserve the typed content when they save the owned document.
 
 Native Word callers can also inspect content controls through
 `Document::content_controls` and the tag or alias lookup methods.
@@ -258,8 +258,10 @@ password or enforce access control. This additive Rust API does not add
 Python, WASM, or CLI methods. Those surfaces remain unchanged and preserve the
 relationship-resolved settings part when they save their owned document.
 
-The low-level revision storage is an intentional breaking pre-1.0 Rust
-boundary. `RunContent` adds `DeletedText`. `CT_R`, `CT_P`, `HyperlinkSpan`,
+The low-level revision and field storage is an intentional breaking pre-1.0
+Rust boundary. `RunContent` adds `DeletedText` and replaces the narrow
+`FieldType` payload with the recursive `Field`, `FieldInstruction`,
+`FieldArgument`, and `FieldSwitch` model. `CT_R`, `CT_P`, `HyperlinkSpan`,
 `CT_PPr`, `CT_RPr`, `CT_SectPr`, `CT_TblPr`, and `CT_TrPr` add required
 preservation or revision fields, including ordered raw-child sidecars.
 `CT_TcPr` also adds an ordered raw-child sidecar that retains external
