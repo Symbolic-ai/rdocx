@@ -63,7 +63,7 @@ Refuse before any tag or push if one check fails:
    The other family's packages must not appear in the selected workflow
    allowlist.
 8. The exact locally patched `cargo publish --workspace --dry-run` command in
-   `/verify` step 10 passes from the clean tree. The 21 patches keep packaged
+   `/verify` step 10 passes from the clean tree. The 22 patches keep packaged
    internal dependencies on this reviewed source graph instead of the reserved
    registry placeholders, and they do not enter any archive. A dry run uploads
    nothing. It must stage exactly the 22-package union of the two family sets,

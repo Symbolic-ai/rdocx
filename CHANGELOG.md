@@ -3,8 +3,8 @@
 ## Unreleased
 
 The next stable rdocx release adopts the shared OOXML crates described below.
-No stable version or release date is assigned yet. The shared and PowerPoint
-crate family has been published separately at version 0.1.2.
+It is planned as version 0.8.0. The shared and PowerPoint crate family is
+prepared separately at version 0.4.0.
 
 ### Migration table
 
@@ -35,11 +35,11 @@ New direct users can select the format-neutral crate that owns each surface:
 
 ```toml
 [dependencies]
-oxml-core = "0.1.2"   # Length, units, XML helpers, document properties
-oxml-opc = "0.1.2"    # OPC package, relationships, and content types
-oxml-media = "0.1.2"  # Image detection, dimensions, and media naming
-oxml-layout = "0.1.2" # Layout output, fonts, and line breaking
-oxml-pdf = "0.1.2"    # PDF and PNG rendering backends
+oxml-core = "0.4.0"   # Length, units, XML helpers, document properties
+oxml-opc = "0.4.0"    # OPC package, relationships, and content types
+oxml-media = "0.4.0"  # Image detection, dimensions, and media naming
+oxml-layout = "0.4.0" # Layout output, fonts, and line breaking
+oxml-pdf = "0.4.0"    # PDF and PNG rendering backends
 ```
 
 ### Breaking API changes
@@ -99,3 +99,50 @@ greatest occupied suffix, so gaps do not overwrite an existing part.
 at its intrinsic size. It uses declared per-axis DPI when valid and a 72 DPI
 fallback otherwise. If dimensions cannot be determined, it returns
 `rdocx::Error::UnavailableImageDimensions` before changing the document.
+
+## rpptx-v0.4.0
+
+### Highlights
+
+The complete shared OOXML and PowerPoint family moves together to 0.4.0. This
+is the first release to publish `oxml-chart`, making the typed ChartML model,
+authoring surface, and renderer available from its format-neutral home.
+
+### Added
+
+- `oxml-chart` now owns shared ChartML parsing, editing, authoring, and render
+  geometry. `rpptx-chart` remains an exact compatibility re-export.
+- `oxml-layout` glyph runs can carry exact `SourceSpan` provenance through
+  shaping and line splitting, with generated or transformed text left
+  truthfully unattributed.
+- Normal host-font layout reuses a bounded process font snapshot, file-backed
+  bytes, and exact-key shaping results. Deterministic and caller-font paths
+  remain isolated from that state.
+
+### Fixed
+
+- Bounded OPC reads reject oversized declared ZIP entry counts before the ZIP
+  index is constructed, and retain the configured byte and entry ceilings
+  throughout package access.
+- Deterministic PDF output now writes font, Unicode-map, and image resources in
+  stable order, so identical inputs produce identical bytes.
+
+### Compatibility
+
+This is an intentional pre-1.0 source boundary. External exhaustive literals
+for `TextSegment` and `GlyphRun` must add `source: None` unless they own an
+exact `SourceSpan`. Existing `rpptx-chart` imports remain valid through the
+exact re-export, while new direct users should depend on `oxml-chart`.
+
+Normal system-font discovery is now a process-lifetime snapshot. Installing,
+removing, or replacing host fonts requires a process restart. Deterministic and
+caller-provided font behavior is unchanged. `rpptx-wasm` is prepared at 0.4.0
+but remains unpublished on crates.io.
+
+### Contributors
+
+Atul Sharma maintained the release. `@emptinessform` supplied the provenance
+and cache reports behind Issues 38 and 39. Pedro Assumpcao
+(`@pedroassumpcao`) contributed bounded OPC reads in PR 33 and carried the
+entry-limit hardening through PR 34. Jon Stokes (`@jonstokes`) authored the
+ZIP entry-admission hardening commit integrated by PR 34.

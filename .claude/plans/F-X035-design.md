@@ -119,17 +119,17 @@ release metadata only. Any output delta blocks release preparation.
 
 ## Implementation checklist
 
-- [ ] Move the 15 workspace dependency pins and 16 prepared manifests to
+- [x] Move the 15 workspace dependency pins and 16 prepared manifests to
   0.4.0 while leaving stable-family versions unchanged.
-- [ ] Update the exact 16 incubating lockfile package entries.
-- [ ] Update the 12 incubating README files and their 13 version strings.
-- [ ] Update source assertions, both WASM-related literals, CI, publish
+- [x] Update the exact 16 incubating lockfile package entries.
+- [x] Update the 12 incubating README files and their 13 version strings.
+- [x] Update source assertions, both WASM-related literals, CI, publish
   preflights, README checks, and workflow self-tests.
-- [ ] Rename and strengthen the incubating 0.4.0 metadata regression.
-- [ ] Prepare and validate the reviewed `rpptx-v0.4.0` changelog section with
+- [x] Rename and strengthen the incubating 0.4.0 metadata regression.
+- [x] Prepare and validate the reviewed `rpptx-v0.4.0` changelog section with
   verified family scope, compatibility guidance, and contributor credit.
-- [ ] Update exactly HLD 10 and HLD 15 for the prepared state.
-- [ ] Run full verification, the 49-entry hash gate, the patched 22-package
+- [x] Update exactly HLD 10 and HLD 15 for the prepared state.
+- [x] Run full verification, the 49-entry hash gate, the patched 22-package
   dry run, archive inventory and size checks, both WASM checks, no-default
   layout, docs, README tests, and supply-chain checks.
 - [ ] Run microscope and a clean sprint review at the exact prepared SHA.

@@ -174,11 +174,11 @@ The exact incubating crates.io allowlist now contains 15 implemented shared
 and PowerPoint packages. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`,
-`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. The original
-14-package set is published through 0.3.0. `oxml-chart` joins the next approved
-incubating release after its version preparation. Manifest eligibility and
-allowlist membership do not authorize publication without a separately
-approved `/release` invocation at the exact reviewed SHA.
+`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15 are prepared at
+0.4.0. The original 14-package set remains published through 0.3.0, while
+`oxml-chart` remains unpublished until the separately approved 0.4.0 release.
+Manifest eligibility and allowlist membership do not authorize publication
+without a separately approved `/release` invocation at the exact reviewed SHA.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
@@ -186,7 +186,7 @@ and incubating metadata regressions without external development tools. The
 stable regression requires workspace 0.7.0, nine internal pins, eleven
 inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
-set. The incubating regression requires the exact 0.3.0 versions, pins,
+set. The incubating regression requires the exact 0.4.0 versions, pins,
 lockfile entries, publication flags, and non-empty package descriptions.
 
 **The same regressions run in the canonical local gate.** `/verify` step 6 runs
@@ -267,12 +267,12 @@ exact seven-package stable family is published at 0.7.0 from the annotated
 registry releases remain available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
 The 16 implemented `oxml-*` and `rpptx*` package manifests are prepared at
-explicit version 0.3.0, use the named `incubating` group, and carry the
+explicit version 0.4.0, use the named `incubating` group, and carry the
 `rpptx-v{{version}}` template. That preparation group is the exact 15-package
 crates.io family listed above plus unpublished `rpptx-wasm`. The crates.io
 allowlist remains exactly 15 packages. The original 14 are published at 0.3.0
 from the annotated `rpptx-v0.3.0` tag at the reviewed sprint SHA. `oxml-chart`
-remains unpublished until the next incubating version preparation and release.
+remains unpublished until the separately approved 0.4.0 release.
 Earlier immutable registry releases remain available, and `rpptx-wasm`
 remains unpublished.
 Workspace settings consolidate the preparation commit, upgrade internal
