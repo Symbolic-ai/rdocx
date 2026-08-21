@@ -27,7 +27,7 @@ package-preserving and bounded to its declared document stories.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-166 | Mail merge | M | pending | - |
+| F-166 | Mail merge | M | in-progress | codex |
 | F-167 | Document comparison | L | pending | - |
 | F-168 | Watermarks | S | pending | - |
 
