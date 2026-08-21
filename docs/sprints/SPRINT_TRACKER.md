@@ -276,6 +276,10 @@ defended.
 | F-163 | S50 | L | 4 | 1 | 2026-08-21 | Atomic scalar template rendering across Word run boundaries |
 | F-164 | S50 | L | 4 | 1 | 2026-08-21 | Nested loops and conditionals over body entries and table rows |
 | F-165 | S50 | M | 2 | 1 | 2026-08-21 | Multi-row repetition with preserved table and numbering semantics |
+| F-166 | S51 | M | 2 | 1 | 2026-08-21 | Atomic separate and sectioned mail merge with missing fields empty |
+| F-167 | S51 | L | 4 | 1 | 2026-08-21 | Deterministic tracked comparison with exact accept and reject results |
+| F-168 | S51 | S | 1 | 1 | 2026-08-21 | Preserved VML text and image watermarks behind every applicable page |
+| F-X037 | S51 | M | 2 | 1 | 2026-08-21 | Exact Word story and Unicode scalar provenance for positioned glyph runs |
 
 ## Velocity
 

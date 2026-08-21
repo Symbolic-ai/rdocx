@@ -7633,3 +7633,153 @@ rejection of an invalid repeated numbering reference.
 **Notes for future sessions.** Repeated list items preserve their source
 `numId` and level. A missing definition is a render error rather than a reason
 to create or renumber package state.
+
+### F-166, Mail merge
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `Document` now produces one complete document per flat
+record or one document with a section per record. Merge fields use a private
+missing-as-empty policy, while the ordinary field evaluator keeps its cached
+fallback behavior. All record candidates are staged before output is exposed.
+
+**Non-obvious choices.** Section assembly retains final section properties and
+remaps bookmark, content-control, drawing, and reference identities across
+records. Record-varying non-body stories are rejected rather than silently
+reusing one record. Footnote updates patch the relationship-resolved source
+part while preserving unrelated raw XML.
+
+**Deviations from the design plan.** None. Microscope remediation expanded the
+identity and story scanners to namespace-aware preserved XML and unified the
+staging clone used by template and merge operations.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, mail-merge ownership,
+`docs/hld/04-opc-and-packaging.md`, staged package and section assembly,
+`docs/hld/10-bindings-spec.md`, native merge APIs, and
+`docs/hld/12-testing-strategy.md`, merge fixtures and atomicity.
+
+**Tests.** `a_fixture_record_set_produces_separate_and_sectioned_documents`,
+plus missing-field, boundary, non-body story, identity remapping, footnote raw
+preservation, and source-atomicity regressions.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Combined-section mode is deliberately bounded
+to record-varying main-body content. A future story that varies headers,
+footers, or notes per record must clone their parts and relationships rather
+than weakening this rejection.
+
+### F-167, Document comparison
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `Document::compare` creates tracked insertions, deletions,
+and property changes through deterministic hierarchical alignment of body
+paragraphs, tables, rows, cells, runs, and existing content-control shells.
+Accepting the result reproduces the edited document and rejecting it reproduces
+the original. Formatting-only changes also produce diagnostics.
+
+**Non-obvious choices.** Comparison uses the existing revision grammar and
+accept or reject resolver as postcondition oracles. It preserves paragraph,
+table, cell, field, control, and unsupported raw XML ownership rather than
+canonicalising the whole document. Unsupported shell changes fail atomically.
+
+**Deviations from the design plan.** None. Five microscope remediation rounds
+strengthened raw whitespace, field ownership, revision marker placement,
+numbering owner cleanup, nested control and row ownership, and attributed
+producer property restoration.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, comparison ownership,
+`docs/hld/04-opc-and-packaging.md`, preservation and atomic failure,
+`docs/hld/10-bindings-spec.md`, native comparison API, and
+`docs/hld/12-testing-strategy.md`, exact accept and reject gates.
+
+**Tests.** The regression gate compares body text, lists, tables, nested
+tables, and content controls, then proves both accept and reject postconditions.
+Focused regressions cover repeated rows, raw fields and controls, numbering
+addition and removal, namespace ownership, and formatting diagnostics.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Header, footer, note, comment, text-box, and
+character-granularity comparison remain future scope. Exactness is defined by
+the typed and preserved body representation rather than rendered appearance.
+
+### F-168, Watermarks
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Native text and image watermark setters author
+header-scoped VML, round-trip recognized shapes without rewriting unrelated
+header XML, and render deterministic rotated watermark groups behind body text
+on every applicable page and section.
+
+**Non-obvious choices.** Opened VML remains raw serialization authority while a
+conservative typed projection drives layout. Generated first, even, and default
+header variants match Word fallback behavior. Image relationships stay local
+to their header and use the collision-safe media registry.
+
+**Deviations from the design plan.** None. Microscope remediation added native
+section fallbacks, inherited-header preservation, page-number restart parity,
+canonical VML shape types, namespace-safe scans, named-color handling, and
+margin-relative placement.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, watermark ownership,
+`docs/hld/04-opc-and-packaging.md`, VML and header media relationships,
+`docs/hld/08-rendering-spec.md`, per-page behind-text lowering,
+`docs/hld/10-bindings-spec.md`, native setters, and
+`docs/hld/12-testing-strategy.md`, deterministic golden evidence.
+
+**Tests.** `watermark_renders_behind_body_text_on_every_page`, with exact
+five-page PNG digests, plus VML preservation, fixed-prefix writing, header
+inheritance, first and even variants, media collisions, section parity, and
+atomic setter regressions.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Only recognized API-owned text and image VML
+shapes are replaced or rendered. Other `w:pict` content remains opaque and
+byte-preserved.
+
+### F-X037, Trace Word glyphs to source paragraphs
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `SourceNodeId` and exclusive Unicode-scalar `SourceSpan`
+metadata now flow through shaping and both line-splitting stages. New Word
+layout entry points return `WordLayoutResult`, whose result-local side table
+resolves glyph runs to body, nested-table, header, footer, footnote, and
+endnote paragraph paths.
+
+**Non-obvious choices.** Generated markers, evaluated fields, note labels, and
+non-bijective text transformations remain truthfully unattributed. Existing
+low-level layout functions still return `LayoutResult` and discard provenance.
+Field scalar offsets and displayed projection now share one ownership function.
+
+**Deviations from the design plan.** None. Microscope review found and fixed an
+ambiguous repeated-text field offset by making `Field::projected_text` the one
+source of truth for both run text and source starts.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, provenance ownership,
+`docs/hld/08-rendering-spec.md`, shaping and revision projections,
+`docs/hld/10-bindings-spec.md`, low-level source boundary,
+`docs/hld/12-testing-strategy.md`, exact path and range gates, and
+`docs/hld/14-development-backlog.md`, the issue 38 contract.
+
+**Tests.** `every_sourced_glyph_run_resolves_to_its_exact_word_text`, plus
+Unicode split, repeated story, revision view, generated text, caller-font,
+deterministic, field ownership, and legacy result parity regressions.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Source ids are one-based and local to one
+result. F-X038 must rebind cached scalar ranges to current ids rather than
+retaining a prior layout's identity.

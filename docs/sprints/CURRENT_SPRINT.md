@@ -33,15 +33,15 @@ ceremony.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-166 | Mail merge | M | in-progress | codex |
-| F-167 | Document comparison | L | in-progress | codex |
-| F-168 | Watermarks | S | in-progress | codex |
+| F-166 | Mail merge | M | done | - |
+| F-167 | Document comparison | L | done | - |
+| F-168 | Watermarks | S | done | - |
 | F-X032 | Expose complete Word layout results | S | pending | - |
 | F-X033 | Integrate PR 36 ordered body items | S | pending | - |
 | F-X034 | Reviewed release notes for every release | S | in-progress | codex |
 | F-X035 | Tag rpptx-v0.4.0 | S | pending | - |
 | F-X036 | Tag v0.8.0 | S | pending | - |
-| F-X037 | Trace Word glyphs to source paragraphs | M | in-progress | codex |
+| F-X037 | Trace Word glyphs to source paragraphs | M | done | - |
 | F-X038 | Cache relayout work across document edits | L | pending | - |
 
 ## Sequencing note
