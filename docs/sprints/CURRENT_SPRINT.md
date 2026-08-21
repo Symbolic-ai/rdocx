@@ -37,7 +37,7 @@ the permanent publication contract before the incubating 0.4.0 and stable
 | F-168 | Watermarks | S | in-progress | codex |
 | F-X032 | Expose complete Word layout results | S | pending | - |
 | F-X033 | Integrate PR 36 ordered body items | S | pending | - |
-| F-X034 | Reviewed release notes for every release | S | pending | - |
+| F-X034 | Reviewed release notes for every release | S | in-progress | codex |
 | F-X035 | Tag rpptx-v0.4.0 | S | pending | - |
 | F-X036 | Tag v0.8.0 | S | pending | - |
 | F-X037 | Trace Word glyphs to source paragraphs | M | in-progress | codex |

@@ -36,8 +36,8 @@ regenerated, never hand-edited.
 | M18, Format breadth                            | 8  | 0 | 0 | 8  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
-| X, Cross-cutting (opportunistic)            | 40 | 32 | 1 | 6  |
-| **Total** | **251** | **206** | **4** | **40** |
+| X, Cross-cutting (opportunistic)            | 40 | 32 | 2 | 5  |
+| **Total** | **251** | **206** | **5** | **39** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -434,7 +434,7 @@ regenerated, never hand-edited.
 | F-X031 | Require the CI gate in branch protection    | S62 | S | pending |
 | F-X032 | Expose complete Word layout results         | S51 | S | pending |
 | F-X033 | Integrate PR 36 ordered body items          | S51 | S | pending |
-| F-X034 | Reviewed release notes for every release    | S51 | S | pending |
+| F-X034 | Reviewed release notes for every release    | S51 | S | in-progress |
 | F-X035 | Tag rpptx-v0.4.0                            | S51 | S | pending |
 | F-X036 | Tag v0.8.0                                  | S51 | S | pending |
 | F-X037 | Trace Word glyphs to source paragraphs     | S51 | M | in-progress |
