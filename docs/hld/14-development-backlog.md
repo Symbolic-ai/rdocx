@@ -2220,7 +2220,7 @@ the integrated sprint branch, run current-base GitHub CI, and merge it with a
 GitHub merge commit. Maintainer hardening and documentation remain separate
 from the contributor commit.
 
-**Depends on**: none.
+**Depends on**: F-X038.
 **Test gate**: integration. An in-code document with interleaved body
 paragraphs, tables, content controls, and unmodelled XML opens through the
 public facade and `body_items` reports every direct child once in exact source
@@ -2255,7 +2255,7 @@ stable `rdocx` graph and was not published at 0.3.0. All 15 crates.io packages
 move together, `rpptx-wasm` remains unpublished, and the reviewed release notes
 name the chart addition, compatibility position, and contributors.
 
-**Depends on**: F-X034, F-X037.
+**Depends on**: F-X034, F-X037, F-X038.
 **Test gate**: release. The incubating metadata regression, full verification,
 22-package dry run, archive inventory, supply-chain gate, and unchanged hash
 harness pass. After separate final approval, all 15 crates resolve from
@@ -2272,7 +2272,7 @@ stable crates publish. Python, WASM, npm, PyPI, and incubating publication stay
 unauthorised. The reviewed release notes describe the new APIs, fixes,
 compatibility boundary, and contributor credit.
 
-**Depends on**: F-166, F-167, F-168, F-X032, F-X033, F-X035.
+**Depends on**: F-166, F-167, F-168, F-X032, F-X033, F-X035, F-X038.
 **Test gate**: release. The stable metadata regression, full verification,
 22-package dry run, archive inventory, supply-chain gate, and unchanged hash
 harness pass. After separate final approval, all seven stable crates resolve
@@ -2309,6 +2309,36 @@ contiguous ranges. Generated markers, evaluated fields, and non-bijective text
 transformations remain unattributed. Caller-font and cached layouts carry the
 same complete source map, packaged crates remain below 10 MiB, WASM checks
 pass, and all 49 hash entries remain unchanged.
+
+### F-X038, Cache relayout work across document edits (L)
+
+Reuse the expensive normal-font work an interactive editor repeats after every
+document mutation. Discover bundled plus system fonts once per process, share
+file-backed face bytes by file identity, memoise shaping with complete exact
+keys, and retain one bounded normal-font paragraph cache per document. Keep
+deterministic and caller-provided fonts isolated from the system snapshot.
+
+Only context-independent body paragraphs may reuse blocks. Changes to styles,
+numbering, theme, embedded fonts, media, hyperlinks, relationships, or revision
+view invalidate or bypass affected entries. Cache diagnostics with each block,
+publish entries only after successful layout, and rebind cached scalar ranges
+to the current F-X037 result-local source nodes. Bounds and poisoned-lock
+recovery are required behavior for long-running processes.
+
+Issue 39 supplied the profiling, cache decomposition, and prototype. Credit
+`@emptinessform` in both release families. The reported 1,144 ms to 101 ms
+improvement is evidence, not a machine-independent CI threshold. Normal system
+font discovery becomes a process-lifetime snapshot, so installing or replacing
+system fonts requires a process restart. Deterministic and caller-font behavior
+does not change.
+
+**Depends on**: F-X037, F-X032.
+**Test gate**: regression. A warm normal-font relayout equals a cold result in
+pages, fonts, diagnostics, revision view, and resolved source provenance while
+rebuilding only the changed safe paragraph. Complete context changes cannot
+serve stale blocks, shaping keys never alias different content, process and
+engine caches stay bounded and recover from poison, `Document` remains
+`Send + Sync`, both WASM targets compile, and all 49 hashes remain unchanged.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

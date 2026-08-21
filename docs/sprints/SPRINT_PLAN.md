@@ -858,9 +858,9 @@ implementation gets wrong, and the two after it inherit whatever it decides.
 
 #### Sprint S51, Automation milestone and community release
 
-**Goal**: close M16, add the two requested native reader surfaces, establish a
-custom reviewed release-notes ceremony, and publish the coherent incubating
-and stable trains.
+**Goal**: close M16, add the requested native reader and editor surfaces,
+establish a custom reviewed release-notes ceremony, and publish the coherent
+incubating and stable trains.
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -873,15 +873,16 @@ and stable trains.
 | F-X035 | Tag rpptx-v0.4.0 | S |
 | F-X036 | Tag v0.8.0 | S |
 | F-X037 | Trace Word glyphs to source paragraphs | M |
+| F-X038 | Cache relayout work across document edits | L |
 
 F-167 is the flagship of every commercial library in this category. It is scoped
 to body text, tables and list structure, with formatting-only differences
 recorded as a diagnostic, which is what keeps it one story. The community API
-surface combines complete layouts, source provenance, and direct ordered body
-items. The incubating release precedes stable 0.8.0 because `oxml-chart` and
-the low-level provenance types must exist on crates.io before the stable
-dependency graph can publish. Both release tags retain separate final approval
-boundaries.
+surface combines complete layouts, source provenance, bounded relayout caches,
+and direct ordered body items. The incubating release precedes stable 0.8.0
+because `oxml-chart`, the low-level provenance types, and shared font-cache
+work must exist on crates.io before the stable dependency graph can publish.
+Both release tags retain separate final approval boundaries.
 
 #### Sprint S52, Encryption
 

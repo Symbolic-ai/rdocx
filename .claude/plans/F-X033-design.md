@@ -1,9 +1,9 @@
 # F-X033, Integrate PR 36 ordered body items
 
-**Status**: approved
+**Status**: draft
 **Sprint**: S51
 **Size**: S
-**Depends on**: none
+**Depends on**: F-X038
 
 ## Problem
 
