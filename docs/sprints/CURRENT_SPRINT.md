@@ -1,51 +1,56 @@
-# Current Sprint, S50
+# Current Sprint, S51
 
 **Milestone**: M16 Document automation.
 
-**Goal**: turn substitution into generation with a template model that remains
-correct when Word splits tags across formatted runs. Build nested structural
-loops and conditionals on that model, then preserve table and list behavior
-when rows and items repeat from a data source.
+**Goal**: close M16 with mail merge, document comparison, and watermarks, the
+three automation capabilities that depend on the field, template, revision,
+header, and rendering foundations already in place. Keep each operation
+package-preserving and bounded to its declared document stories.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for WordprocessingML tree ownership and the
-  native facade boundary that coordinates structural document mutation.
-- `docs/hld/04-opc-and-packaging.md`, for package preservation, schema child
-  order, numbering integrity, and fail-closed mutation.
-- `docs/hld/10-bindings-spec.md`, for the native Rust surface and unchanged
-  Python, WASM, and CLI compatibility boundaries.
-- `docs/hld/12-testing-strategy.md`, for readable in-code fixtures,
-  round-trip preservation, deterministic rendering, and regression gates.
+- `docs/hld/03-architecture.md`, for WordprocessingML ownership, field and
+  template evaluation boundaries, typed story traversal, and atomic facade
+  mutation.
+- `docs/hld/04-opc-and-packaging.md`, for staged package updates, relationship
+  integrity, media allocation, raw XML preservation, and fail-closed commits.
+- `docs/hld/08-rendering-spec.md`, for accepted and tracked revision views,
+  deterministic pagination, headers, and page-level visual output.
+- `docs/hld/10-bindings-spec.md`, for the native Rust revision surface and the
+  unchanged Python, WASM, and CLI compatibility boundaries.
+- `docs/hld/12-testing-strategy.md`, for readable in-code fixtures, regression
+  tests, deterministic golden rendering, and the hash-harness gate.
 - `docs/hld/14-development-backlog.md`, for the M16 end gate and the exact
-  F-163, F-164, and F-165 scope, dependencies, and test gates.
+  F-166, F-167, and F-168 scope, dependencies, and test gates.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-163 | Template syntax | L | done | |
-| F-164 | Loops and conditionals | L | done | |
-| F-165 | Repeating table rows and lists | M | done | |
+| F-166 | Mail merge | M | pending | - |
+| F-167 | Document comparison | L | pending | - |
+| F-168 | Watermarks | S | pending | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-F-163 defines how tags are recognized and rewritten across run boundaries.
-F-164 depends on that exact syntax and adds paragraph, row, and section block
-semantics over the data model. F-165 follows F-164 because repeating tables
-and lists reuse its structural iteration while adding merged-cell, banding,
-and continuous-numbering rules.
+All three stories have their dependencies satisfied before S51 and have no
+dependency on another row in this wave. F-166 comes first because it composes
+the existing field and structural-template evaluators. F-167 follows as the
+flagship comparison path over body text, tables, and lists. F-168 completes the
+milestone through the independent header and renderer path.
 
 ## Definition of done for this sprint
 
-- A tag split across five differently formatted runs resolves while preserving
-  the surrounding formatting and unmodelled XML.
-- A readable fixture with a nested loop and conditional produces the expected
-  document from its data model.
-- Repeating a three-row table template over ten records produces thirty rows
-  with merged cells and banding intact.
-- Repeated list items retain continuous numbering across every generated item.
-- Structural updates preserve package relationships, schema order, and the
-  unchanged hash-harness baseline unless a plan declares a reviewed delta.
+- A fixture record set drives `MERGEFIELD` into one document per record and
+  one section per record, with absent fields rendered empty.
+- Comparing a document with its edited copy produces tracked revisions that,
+  when accepted, reproduce the edited copy exactly.
+- Formatting-only comparison differences are reported as diagnostics rather
+  than revisions.
+- Text and image watermarks round-trip through header `w:pict` shapes and render
+  behind body text on every page.
+- Every operation preserves unrelated package parts, relationships, schema
+  order, and the unchanged hash-harness baseline unless a reviewed plan
+  declares an intentional delta.
