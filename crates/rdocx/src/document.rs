@@ -2559,12 +2559,17 @@ impl Document {
         self.replace_batch(&pairs)
     }
 
-    /// Render scalar template tags from structured JSON data.
+    /// Render scalar and structural template tags from structured JSON data.
     ///
     /// Tags use `{{ path.to.value }}` syntax and may cross ordinary Word run
     /// boundaries. String, number and boolean leaves render as text, while
     /// `null` renders as an empty string. Missing paths, malformed tags, and
     /// object or array leaves return an error without changing the document.
+    /// Dedicated main-body paragraphs and table rows may contain nested
+    /// `{% for item in path %}` or `{% if path %}` blocks with their matching
+    /// end markers. Loop paths require arrays and introduce lexical scopes.
+    /// Conditions use JSON truthiness, where false, null, zero, and empty
+    /// strings or collections are false.
     ///
     /// This additive API is native-only. Python, WASM, and CLI binding surfaces
     /// remain unchanged and continue to preserve documents rendered here.
@@ -5817,17 +5822,22 @@ mod tests {
     #[test]
     fn template_values_are_not_recursively_interpreted() {
         let mut doc = Document::new();
-        doc.add_paragraph("{{first}} {{second}} {% if later %}");
+        doc.add_paragraph("{{first}} {{second}}");
+        doc.add_paragraph("{% if later %}");
+        doc.add_paragraph("hidden");
+        doc.add_paragraph("{% endif %}");
 
         assert_eq!(
             doc.render_template(&serde_json::json!({
                 "first": "{{second}}",
-                "second": "done"
+                "second": "done",
+                "later": false
             }))
-            .expect("scalar values and reserved controls should render"),
+            .expect("scalar values and controls should render"),
             2
         );
-        assert_eq!(doc.paragraphs()[0].text(), "{{second}} done {% if later %}");
+        assert_eq!(doc.paragraphs().len(), 1);
+        assert_eq!(doc.paragraphs()[0].text(), "{{second}} done");
     }
 
     #[test]
@@ -5854,6 +5864,358 @@ mod tests {
         };
         assert_eq!(paragraph.text(), "Value: kept");
         assert_eq!(paragraph.extra_xml, vec![(1, raw)]);
+    }
+
+    #[test]
+    fn mismatched_or_cross_container_blocks_fail_without_mutation() {
+        let cases = [
+            vec!["{% if show %}", "content"],
+            vec!["{% endif %}"],
+            vec![
+                "{% for item in items %}",
+                "{% if item.show %}",
+                "{% endfor %}",
+                "{% endif %}",
+            ],
+        ];
+        for paragraphs in cases {
+            let mut document = Document::new();
+            for paragraph in paragraphs {
+                document.add_paragraph(paragraph);
+            }
+            let before = document.document.to_xml().unwrap();
+            assert!(
+                document
+                    .render_template(&serde_json::json!({
+                        "show": true,
+                        "items": [{"show": true}]
+                    }))
+                    .is_err()
+            );
+            assert_eq!(document.document.to_xml().unwrap(), before);
+        }
+
+        let mut document = Document::new();
+        document.add_paragraph("{% for item in items %}");
+        document
+            .add_table(1, 1)
+            .cell(0, 0)
+            .unwrap()
+            .set_text("{% endfor %}");
+        let before = document.document.to_xml().unwrap();
+        assert!(
+            document
+                .render_template(&serde_json::json!({"items": [1]}))
+                .is_err()
+        );
+        assert_eq!(document.document.to_xml().unwrap(), before);
+    }
+
+    #[test]
+    fn loop_scopes_shadow_root_values_and_restore_after_exit() {
+        let mut document = Document::new();
+        for text in [
+            "{% for item in items %}",
+            "outer {{ item.name }}",
+            "{% for item in item.children %}",
+            "inner {{ item.name }}",
+            "{% endfor %}",
+            "restored {{ item.name }}",
+            "{% endfor %}",
+            "root {{ item.name }}",
+        ] {
+            document.add_paragraph(text);
+        }
+
+        document
+            .render_template(&serde_json::json!({
+                "item": {"name": "root"},
+                "items": [{
+                    "name": "outer",
+                    "children": [{"name": "inner-a"}, {"name": "inner-b"}]
+                }]
+            }))
+            .unwrap();
+        assert_eq!(
+            document
+                .paragraphs()
+                .into_iter()
+                .map(|paragraph| paragraph.text())
+                .collect::<Vec<_>>(),
+            [
+                "outer outer",
+                "inner inner-a",
+                "inner inner-b",
+                "restored outer",
+                "root root"
+            ]
+        );
+    }
+
+    #[test]
+    fn structural_generation_preserves_schema_order_and_raw_xml() {
+        let mut document = Document::new();
+        document.add_paragraph("{% for item in items %}");
+        let mut generated = CT_P::new();
+        generated.runs.push(CT_R::new("section {{ item }}"));
+        generated
+            .extra_xml
+            .push((1, br#"<w:proofErr w:type="spellStart"/>"#.to_vec()));
+        generated.properties = Some(CT_PPr {
+            sect_pr: Some(CT_SectPr::default_letter()),
+            ..Default::default()
+        });
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(generated));
+        document.add_paragraph("{% endfor %}");
+
+        let row = |text: &str, raw: Option<Vec<u8>>| {
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(CT_R::new(text));
+            let mut cell = CT_Tc::new();
+            cell.content = vec![CellContent::Paragraph(paragraph)];
+            let mut row = CT_Row::new();
+            row.cells.push(cell);
+            if let Some(raw) = raw {
+                row.extra_xml.push((0, raw));
+            }
+            row
+        };
+        let mut table = CT_Tbl::new();
+        table.rows.push(row("{% for item in items %}", None));
+        table.rows.push(row(
+            "row {{ item }}",
+            Some(br#"<w:customRow w:val="kept"/>"#.to_vec()),
+        ));
+        table.rows.push(row("{% endfor %}", None));
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(table));
+
+        document
+            .render_template(&serde_json::json!({"items": ["one", "two"]}))
+            .unwrap();
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.document.body.content.len(), 3);
+        for content in &reopened.document.body.content[..2] {
+            let BodyContent::Paragraph(paragraph) = content else {
+                panic!("expected generated section-ending paragraph");
+            };
+            assert_eq!(
+                paragraph.extra_xml,
+                vec![(1, br#"<w:proofErr w:type="spellStart"/>"#.to_vec())]
+            );
+            assert!(
+                paragraph
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.sect_pr.as_ref())
+                    .is_some()
+            );
+        }
+        let BodyContent::Table(table) = &reopened.document.body.content[2] else {
+            panic!("expected generated table");
+        };
+        assert_eq!(table.rows.len(), 2);
+        assert_eq!(
+            table
+                .rows
+                .iter()
+                .map(|row| row.cells[0].text())
+                .collect::<Vec<_>>(),
+            ["row one", "row two"]
+        );
+        assert!(
+            table.rows.iter().all(|row| {
+                row.extra_xml == vec![(0, br#"<w:customRow w:val="kept"/>"#.to_vec())]
+            })
+        );
+        let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(xml.rfind("<w:p>").unwrap() < xml.rfind("<w:sectPr>").unwrap());
+    }
+
+    #[test]
+    fn conditions_use_explicit_json_truthiness() {
+        for (value, included) in [
+            (serde_json::json!(false), false),
+            (serde_json::Value::Null, false),
+            (serde_json::json!(0), false),
+            (serde_json::json!(""), false),
+            (serde_json::json!([]), false),
+            (serde_json::json!({}), false),
+            (serde_json::json!(true), true),
+            (serde_json::json!(-1), true),
+            (serde_json::json!("x"), true),
+            (serde_json::json!([1]), true),
+            (serde_json::json!({"x": 1}), true),
+        ] {
+            let mut document = Document::new();
+            document.add_paragraph("{% if value %}");
+            document.add_paragraph("included");
+            document.add_paragraph("{% endif %}");
+            assert_eq!(
+                document
+                    .render_template(&serde_json::json!({"value": value}))
+                    .unwrap(),
+                0
+            );
+            assert_eq!(document.paragraphs().len(), usize::from(included));
+        }
+    }
+
+    #[test]
+    fn structural_only_table_blocks_commit_the_candidate() {
+        let row = |text: &str| {
+            let mut cell = CT_Tc::new();
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(CT_R::new(text));
+            cell.content = vec![CellContent::Paragraph(paragraph)];
+            let mut row = CT_Row::new();
+            row.cells.push(cell);
+            row
+        };
+        let mut table = CT_Tbl::new();
+        table.rows.push(row("{% if show %}"));
+        table.rows.push(row("included"));
+        table.rows.push(row("{% endif %}"));
+        let mut document = Document::new();
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(table));
+
+        assert_eq!(
+            document
+                .render_template(&serde_json::json!({"show": false}))
+                .unwrap(),
+            0
+        );
+        let BodyContent::Table(table) = &document.document.body.content[0] else {
+            panic!("expected table");
+        };
+        assert!(table.rows.is_empty());
+    }
+
+    #[test]
+    fn nested_table_controls_stay_with_their_direct_table() {
+        let row = |text: &str| {
+            let mut cell = CT_Tc::new();
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(CT_R::new(text));
+            cell.content = vec![CellContent::Paragraph(paragraph)];
+            let mut row = CT_Row::new();
+            row.cells.push(cell);
+            row
+        };
+        let mut nested = CT_Tbl::new();
+        nested.rows.push(row("{% if show %}"));
+        nested.rows.push(row("nested"));
+        nested.rows.push(row("{% endif %}"));
+        let mut outer_cell = CT_Tc::new();
+        let mut outer_paragraph = CT_P::new();
+        outer_paragraph.runs.push(CT_R::new("outer"));
+        outer_cell
+            .content
+            .push(CellContent::Paragraph(outer_paragraph));
+        outer_cell.content.push(CellContent::Table(nested));
+        let mut outer_row = CT_Row::new();
+        outer_row.cells.push(outer_cell);
+        let mut outer = CT_Tbl::new();
+        outer.rows.push(outer_row);
+        let mut document = Document::new();
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(outer));
+
+        document
+            .render_template(&serde_json::json!({"show": true}))
+            .unwrap();
+        let BodyContent::Table(outer) = &document.document.body.content[0] else {
+            panic!("expected outer table");
+        };
+        let nested = outer.rows[0].cells[0]
+            .content
+            .iter()
+            .find_map(|content| match content {
+                CellContent::Table(table) => Some(table),
+                CellContent::Paragraph(_) | CellContent::ContentControl(_) => None,
+            })
+            .expect("expected nested table");
+        assert_eq!(nested.rows.len(), 1);
+        assert_eq!(nested.rows[0].cells[0].text(), "nested");
+    }
+
+    #[test]
+    fn direct_row_markers_reject_nested_table_content() {
+        let mut nested_cell = CT_Tc::new();
+        let mut nested_paragraph = CT_P::new();
+        nested_paragraph.runs.push(CT_R::new("must remain"));
+        nested_cell.content = vec![CellContent::Paragraph(nested_paragraph)];
+        let mut nested_row = CT_Row::new();
+        nested_row.cells.push(nested_cell);
+        let mut nested = CT_Tbl::new();
+        nested.rows.push(nested_row);
+
+        let mut marker_cell = CT_Tc::new();
+        let mut marker = CT_P::new();
+        marker.runs.push(CT_R::new("{% if show %}"));
+        marker_cell.content = vec![CellContent::Paragraph(marker)];
+        let mut nested_cell = CT_Tc::new();
+        nested_cell.content = vec![CellContent::Table(nested)];
+        let mut marker_row = CT_Row::new();
+        marker_row.cells.push(marker_cell);
+        marker_row.cells.push(nested_cell);
+        let mut table = CT_Tbl::new();
+        table.rows.push(marker_row);
+        for text in ["included", "{% endif %}"] {
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(CT_R::new(text));
+            let mut cell = CT_Tc::new();
+            cell.content = vec![CellContent::Paragraph(paragraph)];
+            let mut row = CT_Row::new();
+            row.cells.push(cell);
+            table.rows.push(row);
+        }
+        let mut document = Document::new();
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(table));
+        let before = document.document.to_xml().unwrap();
+
+        assert!(
+            document
+                .render_template(&serde_json::json!({"show": true}))
+                .is_err()
+        );
+        assert_eq!(document.document.to_xml().unwrap(), before);
+    }
+
+    #[test]
+    fn false_condition_scalar_leaves_are_preflighted() {
+        let mut document = Document::new();
+        document.add_paragraph("{% if show %}");
+        document.add_paragraph("{{ missing }}");
+        document.add_paragraph("{% endif %}");
+        let before = document.document.to_xml().unwrap();
+
+        assert!(
+            document
+                .render_template(&serde_json::json!({"show": false}))
+                .is_err()
+        );
+        assert_eq!(document.document.to_xml().unwrap(), before);
     }
 
     #[test]

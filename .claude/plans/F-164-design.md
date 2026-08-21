@@ -1,6 +1,6 @@
 # F-164, Loops and conditionals
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S50
 **Size**: L
 **Depends on**: F-163
@@ -110,13 +110,13 @@ it.
 
 ## Implementation checklist
 
-- [ ] Parse and pair nested `for` and `if` blocks with container boundaries.
-- [ ] Implement lexical loop scopes, dotted lookup, and explicit truthiness.
-- [ ] Evaluate paragraph, row, and section blocks into staged typed sequences.
-- [ ] Apply scalar rendering recursively inside produced clones.
-- [ ] Reject invalid templates atomically and invalidate layout once on success.
-- [ ] Add the nested regression fixture and structural preservation coverage.
-- [ ] Update the HLD with marker placement and scope semantics.
+- [x] Parse and pair nested `for` and `if` blocks with container boundaries.
+- [x] Implement lexical loop scopes, dotted lookup, and explicit truthiness.
+- [x] Evaluate paragraph, row, and section blocks into staged typed sequences.
+- [x] Apply scalar rendering recursively inside produced clones.
+- [x] Reject invalid templates atomically and invalidate layout once on success.
+- [x] Add the nested regression fixture and structural preservation coverage.
+- [x] Update the HLD with marker placement and scope semantics.
 
 ## Open questions
 

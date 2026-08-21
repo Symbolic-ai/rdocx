@@ -10,7 +10,7 @@ use rdocx::{
     RevisionView, RunPosition, RunRange,
 };
 use rdocx_oxml::CT_Document;
-use rdocx_oxml::document::CT_Body;
+use rdocx_oxml::document::{BodyContent, CT_Body};
 
 fn document_with_settings(settings_xml: &[u8], target: &str) -> Document {
     let mut seed = Document::new();
@@ -3221,4 +3221,70 @@ fn malformed_and_unmatched_bookmark_markers_are_reported_without_loss() {
         String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
     assert!(round_trip_xml.contains(r#"<w:bookmarkStart w:name="missing-id"/>"#));
     assert!(round_trip_xml.contains(r#"<w:bookmarkEnd w:id="9"/>"#));
+}
+
+#[test]
+fn a_nested_loop_and_conditional_generate_the_expected_document() {
+    let body = r#"
+        <w:p><w:r><w:t>{% for group in groups %}</w:t></w:r></w:p>
+        <w:p><w:r><w:t>Group {{ group.name }}</w:t></w:r></w:p>
+        <w:p><w:r><w:t>{% if group.visible %}</w:t></w:r></w:p>
+        <w:p><w:r><w:t>Visible {{ group.name }}</w:t></w:r></w:p>
+        <w:p><w:r><w:t>{% endif %}</w:t></w:r></w:p>
+        <w:tbl>
+          <w:tblPr/><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid>
+          <w:tr><w:tc><w:p><w:r><w:t>{% for item in group.items %}</w:t></w:r></w:p></w:tc></w:tr>
+          <w:tr><w:tc><w:p><w:r><w:t>{{ group.name }}:{{ item.label }}</w:t></w:r></w:p></w:tc></w:tr>
+          <w:tr><w:tc><w:p><w:r><w:t>{% endfor %}</w:t></w:r></w:p></w:tc></w:tr>
+        </w:tbl>
+        <w:p><w:r><w:t>{% endfor %}</w:t></w:r></w:p>
+        <w:p><w:r><w:t>Root {{ title }}</w:t></w:r></w:p>
+        <w:sectPr/>
+    "#;
+    let mut document = document_with_content_controls(&wrap_word_body(body));
+    let data = serde_json::json!({
+        "title": "Summary",
+        "groups": [
+            {
+                "name": "Alpha",
+                "visible": true,
+                "items": [{"label": "one"}, {"label": "two"}]
+            },
+            {
+                "name": "Beta",
+                "visible": false,
+                "items": [{"label": "three"}]
+            }
+        ]
+    });
+
+    assert_eq!(document.render_template(&data).unwrap(), 10);
+    let body = body_from_document(&mut document);
+    let paragraphs = body
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            BodyContent::Paragraph(paragraph) => Some(paragraph.text()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paragraphs,
+        ["Group Alpha", "Visible Alpha", "Group Beta", "Root Summary"]
+    );
+    let row_text = body
+        .tables()
+        .flat_map(|table| &table.rows)
+        .map(|row| {
+            row.cells
+                .iter()
+                .flat_map(|cell| &cell.content)
+                .filter_map(|content| match content {
+                    rdocx_oxml::table::CellContent::Paragraph(paragraph) => Some(paragraph.text()),
+                    _ => None,
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(row_text, ["Alpha:one", "Alpha:two", "Beta:three"]);
 }

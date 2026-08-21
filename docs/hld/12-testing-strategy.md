@@ -38,12 +38,16 @@ fixture.
 
 The scalar template unit gate splits one tag across five differently formatted
 runs and proves that the first matched run supplies replacement formatting
-while unmatched prefix and suffix formatting remain intact. Focused tests also
-cover dotted JSON lookup, every supported scalar conversion, null as empty
-text, non-recursive values, reserved control tags, atomic rejection, and the
-same body, table, header, footer, text-box, and chart-label scope as literal
-placeholder replacement. A readable in-code round trip retains an unmodelled
-paragraph subtree byte for byte after rendering, saving, and reopening.
+while unmatched prefix and suffix formatting remain intact. The structural
+regression gate combines a nested body loop, conditional inclusion, and table
+row loop in one readable JSON fixture. It compares exact paragraph and row
+order. Focused tests cover dotted and lexical lookup, loop shadowing and scope
+restoration, every JSON truthiness case, malformed and crossed controls, and
+atomic rejection. The round-trip test clones section-ending paragraphs and
+table rows, then proves their section properties and unmodelled XML remain in
+schema order after saving and reopening. Headers, footers, text boxes, and
+chart labels retain the scalar-only coverage shared with literal placeholder
+replacement.
 
 ## The hash harness
 
