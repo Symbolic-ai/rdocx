@@ -1,6 +1,6 @@
 # F-163, Template syntax
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S50
 **Size**: L
 **Depends on**: none
@@ -116,12 +116,12 @@ it.
 
 ## Implementation checklist
 
-- [ ] Add the approved template module and the `serde_json` dependency.
-- [ ] Implement byte-safe scalar tag discovery and dotted JSON lookup.
-- [ ] Stage and validate all scalar replacements before mutating the document.
-- [ ] Reuse the cross-run replacement mapper and invalidate layout once.
-- [ ] Add the unit and round-trip tests, including the five-run formatting gate.
-- [ ] Document the native-only additive API and unchanged binding surfaces.
+- [x] Add the approved template module and the `serde_json` dependency.
+- [x] Implement byte-safe scalar tag discovery and dotted JSON lookup.
+- [x] Stage and validate all scalar replacements before mutating the document.
+- [x] Reuse the cross-run replacement mapper and invalidate layout once.
+- [x] Add the unit and round-trip tests, including the five-run formatting gate.
+- [x] Document the native-only additive API and unchanged binding surfaces.
 
 ## Open questions
 

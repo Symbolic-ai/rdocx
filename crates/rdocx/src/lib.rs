@@ -31,6 +31,7 @@ mod revision;
 pub mod run;
 pub mod style;
 pub mod table;
+mod template;
 
 pub use comments::{BookmarkRef, CommentRef, RunPosition, RunRange};
 pub use content_control::ContentControlRef;

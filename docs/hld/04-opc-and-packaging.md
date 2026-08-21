@@ -312,3 +312,14 @@ owner are promoted to retained raw descendants. Any selector, revision-shape,
 namespace, parse, or serialization failure leaves the package part bytes and
 live document unchanged. The ordinary deterministic save path writes the
 validated result later and preserves every unrelated part and relationship.
+
+Template rendering follows the same staged package boundary. Scalar syntax and
+JSON values are validated against a private document clone before placeholder
+replacement reaches typed body content, relationship-resolved headers and
+footers, raw text boxes, or chart parts. Replacement values pass through
+collision-free sentinels, so a value that contains template syntax is not
+evaluated recursively. The live typed document and package are replaced only
+after every discovered tag is accounted for and the candidate document
+serializes successfully. Any syntax, lookup, scalar-type, parse, or
+serialization failure leaves package parts, typed content, and layout caches
+unchanged.

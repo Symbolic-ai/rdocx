@@ -249,6 +249,16 @@ caches and producer dirty spellings. These methods are additive native Rust
 APIs. Python, WASM, and CLI surfaces gain no field update methods and continue
 to preserve updates already made through their owned `Document`.
 
+Native Word callers render scalar templates with
+`Document::render_template(&serde_json::Value)`. Tags use
+`{{ path.to.value }}` syntax and may cross ordinary Word run boundaries.
+Dotted paths traverse JSON objects. Strings, numbers, and booleans render as
+text, while `null` renders as empty text. Arrays, objects, missing paths, and
+malformed tags fail without mutation. Complete `{% ... %}` control tags remain
+reserved for structural rendering. The method is additive on the pre-1.0
+native facade. Python, WASM, and CLI surfaces gain no template method and
+continue to preserve a document rendered by native code.
+
 Native Word callers can also inspect content controls through
 `Document::content_controls` and the tag or alias lookup methods.
 `ContentControlRef` exposes immutable metadata and display text. Direct setters

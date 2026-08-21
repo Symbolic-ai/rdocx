@@ -36,6 +36,15 @@ inputs, formatting pictures, and stable cached-display fallbacks. The oracle
 is test metadata only. It is not a runtime dependency and adds no binary
 fixture.
 
+The scalar template unit gate splits one tag across five differently formatted
+runs and proves that the first matched run supplies replacement formatting
+while unmatched prefix and suffix formatting remain intact. Focused tests also
+cover dotted JSON lookup, every supported scalar conversion, null as empty
+text, non-recursive values, reserved control tags, atomic rejection, and the
+same body, table, header, footer, text-box, and chart-label scope as literal
+placeholder replacement. A readable in-code round trip retains an unmodelled
+paragraph subtree byte for byte after rendering, saving, and reopening.
+
 ## The hash harness
 
 The single highest-value mechanism in the plan is

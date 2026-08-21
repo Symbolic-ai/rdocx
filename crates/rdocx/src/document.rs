@@ -2559,6 +2559,81 @@ impl Document {
         self.replace_batch(&pairs)
     }
 
+    /// Render scalar template tags from structured JSON data.
+    ///
+    /// Tags use `{{ path.to.value }}` syntax and may cross ordinary Word run
+    /// boundaries. String, number and boolean leaves render as text, while
+    /// `null` renders as an empty string. Missing paths, malformed tags, and
+    /// object or array leaves return an error without changing the document.
+    ///
+    /// This additive API is native-only. Python, WASM, and CLI binding surfaces
+    /// remain unchanged and continue to preserve documents rendered here.
+    pub fn render_template(&mut self, data: &serde_json::Value) -> Result<usize> {
+        crate::template::render(self, data)
+    }
+
+    pub(crate) fn clone_for_template(&self) -> Self {
+        Self {
+            package: self.package.clone(),
+            document: self.document.clone(),
+            styles: self.styles.clone(),
+            numbering: self.numbering.clone(),
+            core_properties: self.core_properties.clone(),
+            custom_properties: self.custom_properties.clone(),
+            core_properties_part_name: self.core_properties_part_name.clone(),
+            doc_part_name: self.doc_part_name.clone(),
+            styles_part_name: self.styles_part_name.clone(),
+            numbering_part_name: self.numbering_part_name.clone(),
+            settings: self.settings.clone(),
+            settings_part_name: self.settings_part_name.clone(),
+            image_namer: self.image_namer.clone(),
+            footnotes: self.footnotes.clone(),
+            comments: self.comments.clone(),
+            comments_part_name: self.comments_part_name.clone(),
+            comments_extended: self.comments_extended.clone(),
+            comments_extended_part_name: self.comments_extended_part_name.clone(),
+            comments_owned: self.comments_owned,
+            comments_extended_owned: self.comments_extended_owned,
+            layout_cache: Mutex::new(None),
+            deterministic_layout_cache: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn template_sources(&mut self) -> Result<Vec<String>> {
+        self.flush_to_package()?;
+        let mut sources = crate::template::body_sources(&self.document);
+
+        for (rel_id, _) in self.header_footer_rel_ids() {
+            if let Some(header_footer) = self.load_header_footer(&rel_id) {
+                sources.extend(crate::template::header_footer_sources(&header_footer));
+            }
+        }
+
+        for part_name in self.raw_text_bearing_part_names() {
+            if let Some(xml) = self.package.get_part(&part_name) {
+                sources.extend(crate::template::text_box_sources(xml)?);
+            }
+        }
+
+        for part_name in self.chart_part_names() {
+            if let Some(xml) = self.package.get_part(&part_name) {
+                sources.extend(crate::template::chart_sources(xml)?);
+            }
+        }
+
+        Ok(sources)
+    }
+
+    pub(crate) fn apply_template_pairs(&mut self, pairs: &[(&str, &str)]) -> usize {
+        self.replace_batch(pairs)
+    }
+
+    pub(crate) fn commit_template(&mut self, candidate: Self) {
+        self.package = candidate.package;
+        self.document = candidate.document;
+        self.invalidate_layout();
+    }
+
     /// Apply a batch of literal replacements across the whole document.
     fn replace_batch(&mut self, pairs: &[(&str, &str)]) -> usize {
         if pairs.is_empty() {
@@ -2775,6 +2850,38 @@ impl Document {
         names
     }
 
+    fn raw_text_bearing_part_names(&self) -> Vec<String> {
+        let mut names = vec![self.doc_part_name.clone()];
+        if let Some(section) = self.document.body.sect_pr.as_ref()
+            && let Some(rels) = self.package.get_part_rels(&self.doc_part_name)
+        {
+            for reference in section.header_refs.iter().chain(&section.footer_refs) {
+                if let Some(relationship) = rels.get_by_id(&reference.rel_id) {
+                    names.push(OpcPackage::resolve_rel_target(
+                        &self.doc_part_name,
+                        &relationship.target,
+                    ));
+                }
+            }
+        }
+        names
+    }
+
+    fn chart_part_names(&self) -> Vec<String> {
+        self.package
+            .get_part_rels(&self.doc_part_name)
+            .map(|relationships| {
+                relationships
+                    .get_all_by_type(rel_types::CHART)
+                    .iter()
+                    .map(|relationship| {
+                        OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Load a header/footer part by its relationship ID.
     fn load_header_footer(&self, rel_id: &str) -> Option<CT_HdrFtr> {
         let rels = self.package.get_part_rels(&self.doc_part_name)?;
@@ -2793,29 +2900,7 @@ impl Document {
         let mut count = 0;
 
         // Collect part names for XML parts to process (text boxes/shapes)
-        let mut xml_parts: Vec<String> = vec![self.doc_part_name.clone()];
-        if let Some(sect_pr) = self.document.body.sect_pr.as_ref()
-            && let Some(rels) = self.package.get_part_rels(&self.doc_part_name)
-        {
-            for href in &sect_pr.header_refs {
-                if let Some(rel) = rels.get_by_id(&href.rel_id) {
-                    xml_parts.push(OpcPackage::resolve_rel_target(
-                        &self.doc_part_name,
-                        &rel.target,
-                    ));
-                }
-            }
-            for fref in &sect_pr.footer_refs {
-                if let Some(rel) = rels.get_by_id(&fref.rel_id) {
-                    xml_parts.push(OpcPackage::resolve_rel_target(
-                        &self.doc_part_name,
-                        &rel.target,
-                    ));
-                }
-            }
-        }
-
-        for part_name in xml_parts {
+        for part_name in self.raw_text_bearing_part_names() {
             if let Some(xml) = self.package.get_part(&part_name) {
                 let xml = xml.to_vec();
                 if let Ok((new_xml, n)) = replace_many_in_xml_part(&xml, pairs)
@@ -2828,18 +2913,7 @@ impl Document {
         }
 
         // Collect chart part names
-        let chart_parts: Vec<String> = self
-            .package
-            .get_part_rels(&self.doc_part_name)
-            .map(|rels| {
-                rels.get_all_by_type(rel_types::CHART)
-                    .iter()
-                    .map(|rel| OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        for part_name in chart_parts {
+        for part_name in self.chart_part_names() {
             if let Some(xml) = self.package.get_part(&part_name) {
                 let xml = xml.to_vec();
                 if let Ok((new_xml, n)) = replace_many_in_chart_xml(&xml, pairs)
@@ -5548,6 +5622,238 @@ mod tests {
         let count = doc.replace_text("{{company}}", "Acme");
         assert_eq!(count, 1);
         assert_eq!(doc.paragraphs()[1].text(), "Welcome to Acme.");
+    }
+
+    #[test]
+    fn a_tag_split_across_five_formatted_runs_preserves_surrounding_formatting() {
+        let mut doc = Document::new();
+        let mut paragraph = CT_P::new();
+        for (text, properties) in [
+            (
+                "Before {",
+                CT_RPr {
+                    bold: Some(true),
+                    ..Default::default()
+                },
+            ),
+            (
+                "{ pro",
+                CT_RPr {
+                    italic: Some(true),
+                    ..Default::default()
+                },
+            ),
+            (
+                "file.",
+                CT_RPr {
+                    color: Some("112233".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "name ",
+                CT_RPr {
+                    strike: Some(true),
+                    ..Default::default()
+                },
+            ),
+            (
+                "}} after",
+                CT_RPr {
+                    italic: Some(false),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let mut run = CT_R::new(text);
+            run.properties = Some(properties);
+            paragraph.runs.push(run);
+        }
+        doc.document
+            .body
+            .content
+            .push(BodyContent::Paragraph(paragraph));
+
+        let count = doc
+            .render_template(&serde_json::json!({"profile": {"name": "Ada"}}))
+            .expect("valid template should render");
+
+        assert_eq!(count, 1);
+        let paragraph = doc.paragraph(0).expect("rendered paragraph");
+        assert_eq!(paragraph.text(), "Before Ada after");
+        assert_eq!(paragraph.run_count(), 2);
+        assert_eq!(paragraph.run(0).unwrap().text(), "Before Ada");
+        assert!(paragraph.run(0).unwrap().is_bold());
+        assert_eq!(paragraph.run(1).unwrap().text(), " after");
+        assert_eq!(paragraph.run(1).unwrap().italic_value(), Some(false));
+    }
+
+    #[test]
+    fn dotted_scalar_paths_render_supported_json_leaves() {
+        let mut doc = Document::new();
+        doc.add_paragraph("{{ person.name }}");
+        doc.add_paragraph("{{person.age}}");
+        doc.add_paragraph("{{ person.active }}");
+        doc.add_paragraph("x{{person.middle}}y");
+
+        let count = doc
+            .render_template(&serde_json::json!({
+                "person": {
+                    "name": "Ada",
+                    "age": 37,
+                    "active": true,
+                    "middle": null
+                }
+            }))
+            .expect("scalar leaves should render");
+
+        assert_eq!(count, 4);
+        assert_eq!(
+            doc.paragraphs()
+                .into_iter()
+                .map(|paragraph| paragraph.text())
+                .collect::<Vec<_>>(),
+            ["Ada", "37", "true", "xy"]
+        );
+    }
+
+    #[test]
+    fn invalid_template_input_leaves_the_document_unchanged() {
+        for (template, data) in [
+            (
+                "{{present}} {{missing}}",
+                serde_json::json!({"present": "value"}),
+            ),
+            ("{{value}}", serde_json::json!({"value": [1, 2]})),
+            ("{{value}}", serde_json::json!({"value": {"nested": 1}})),
+            ("{{ malformed", serde_json::json!({"malformed": "value"})),
+        ] {
+            let mut doc = Document::new();
+            doc.add_paragraph(template);
+            let before_xml = doc.document.to_xml().expect("serialize before render");
+            let before_parts = doc.package.parts.clone();
+
+            reset_layout_invocations();
+            doc.render_page_to_png_deterministic(0, 1.0)
+                .expect("warm deterministic layout cache");
+            assert_eq!(layout_invocations(), 1);
+
+            assert!(doc.render_template(&data).is_err());
+            assert_eq!(
+                doc.document.to_xml().expect("serialize after rejection"),
+                before_xml
+            );
+            assert_eq!(doc.package.parts, before_parts);
+            doc.render_page_to_png_deterministic(0, 1.0)
+                .expect("reuse deterministic layout after rejection");
+            assert_eq!(layout_invocations(), 1);
+        }
+    }
+
+    #[test]
+    fn template_scalar_coverage_matches_literal_replacement() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Body {{body}}");
+        doc.set_header("Header {{header}}");
+        doc.set_footer("Footer {{footer}}");
+        doc.add_table(1, 1)
+            .cell(0, 0)
+            .expect("template table cell")
+            .set_text("Table {{table}}");
+        doc.document.body.content.push(BodyContent::RawXml(
+            br#"<w:custom><w:txbxContent><w:p><w:r><w:t>Box {{box}}</w:t></w:r></w:p></w:txbxContent></w:custom>"#.to_vec(),
+        ));
+
+        let chart_part = "/word/charts/chart99.xml";
+        doc.package.set_part(
+            chart_part,
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:title><a:p><a:r><a:t>{{chart}}</a:t></a:r></a:p></c:title><c:strCache><c:pt><c:v>{{cache}}</c:v></c:pt></c:strCache></c:chartSpace>"#.to_vec(),
+        );
+        doc.package
+            .get_or_create_part_rels(&doc.doc_part_name.clone())
+            .add(rel_types::CHART, "charts/chart99.xml");
+
+        let count = doc
+            .render_template(&serde_json::json!({
+                "body": "B",
+                "header": "H",
+                "footer": "F",
+                "table": "T",
+                "box": "X",
+                "chart": "C",
+                "cache": "K"
+            }))
+            .expect("all literal-replacement locations should render");
+
+        assert_eq!(count, 7);
+        assert_eq!(doc.paragraphs()[0].text(), "Body B");
+        assert_eq!(
+            doc.table(0)
+                .expect("template table")
+                .cell(0, 0)
+                .expect("rendered table cell")
+                .text(),
+            "Table T"
+        );
+        assert_eq!(doc.header_text().as_deref(), Some("Header H"));
+        assert_eq!(doc.footer_text().as_deref(), Some("Footer F"));
+        let document_xml = std::str::from_utf8(
+            doc.package
+                .get_part(&doc.doc_part_name)
+                .expect("main document package part"),
+        )
+        .expect("main document XML");
+        assert!(document_xml.contains("Box X"));
+        let chart_xml = std::str::from_utf8(
+            doc.package
+                .get_part(chart_part)
+                .expect("chart package part"),
+        )
+        .expect("chart XML");
+        assert!(chart_xml.contains("<a:t>C</a:t>"));
+        assert!(chart_xml.contains("<c:v>K</c:v>"));
+    }
+
+    #[test]
+    fn template_values_are_not_recursively_interpreted() {
+        let mut doc = Document::new();
+        doc.add_paragraph("{{first}} {{second}} {% if later %}");
+
+        assert_eq!(
+            doc.render_template(&serde_json::json!({
+                "first": "{{second}}",
+                "second": "done"
+            }))
+            .expect("scalar values and reserved controls should render"),
+            2
+        );
+        assert_eq!(doc.paragraphs()[0].text(), "{{second}} done {% if later %}");
+    }
+
+    #[test]
+    fn template_render_preserves_unmodelled_paragraph_xml() {
+        let raw = br#"<w:proofErr w:type="spellStart"/>"#.to_vec();
+        let mut doc = Document::new();
+        let mut paragraph = CT_P::new();
+        paragraph.runs.push(CT_R::new("Value: {{ value }}"));
+        paragraph.extra_xml.push((1, raw.clone()));
+        doc.document
+            .body
+            .content
+            .push(BodyContent::Paragraph(paragraph));
+
+        assert_eq!(
+            doc.render_template(&serde_json::json!({"value": "kept"}))
+                .expect("valid template should render"),
+            1
+        );
+        let reopened = Document::from_bytes(&doc.to_bytes().expect("save rendered document"))
+            .expect("reopen rendered document");
+        let BodyContent::Paragraph(paragraph) = &reopened.document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        assert_eq!(paragraph.text(), "Value: kept");
+        assert_eq!(paragraph.extra_xml, vec![(1, raw)]);
     }
 
     #[test]
