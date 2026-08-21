@@ -31,13 +31,13 @@ regenerated, never hand-edited.
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
 | M14, Word collaboration layer                  | 9  | 9 | 0 | 0  |
 | M15, Charts beyond PowerPoint                  | 4  | 4 | 0 | 0  |
-| M16, Document automation                       | 10 | 4 | 0 | 6  |
+| M16, Document automation                       | 10 | 7 | 0 | 3  |
 | M17, Security and compliance                   | 7  | 0 | 0 | 7  |
 | M18, Format breadth                            | 8  | 0 | 0 | 8  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
 | X, Cross-cutting (opportunistic)            | 34 | 32 | 0 | 1  |
-| **Total** | **245** | **203** | **0** | **41** |
+| **Total** | **245** | **206** | **0** | **38** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -323,9 +323,9 @@ regenerated, never hand-edited.
 | F-161 | Field evaluation engine                      | S49  | L | done |
 | F-162 | Field update policy                          | S49  | M | done |
 | F-203 | Reader compatibility corrections             | S49  | M | done |
-| F-163 | Template syntax                              | S50  | L | pending |
-| F-164 | Loops and conditionals                       | S50  | L | pending |
-| F-165 | Repeating table rows and lists               | S50  | M | pending |
+| F-163 | Template syntax                              | S50  | L | done |
+| F-164 | Loops and conditionals                       | S50  | L | done |
+| F-165 | Repeating table rows and lists               | S50  | M | done |
 | F-166 | Mail merge                                   | S51  | M | pending |
 | F-167 | Document comparison                          | S51  | L | pending |
 | F-168 | Watermarks                                   | S51  | S | pending |

@@ -2559,6 +2559,98 @@ impl Document {
         self.replace_batch(&pairs)
     }
 
+    /// Render scalar and structural template tags from structured JSON data.
+    ///
+    /// Tags use `{{ path.to.value }}` syntax and may cross ordinary Word run
+    /// boundaries. String, number and boolean leaves render as text, while
+    /// `null` renders as an empty string. Missing paths, malformed tags, and
+    /// object or array leaves return an error without changing the document.
+    /// Dedicated main-body paragraphs and table rows may contain nested
+    /// `{% for item in path %}` or `{% if path %}` blocks with their matching
+    /// end markers. Loop paths require arrays and introduce lexical scopes.
+    /// Conditions use JSON truthiness, where false, null, zero, and empty
+    /// strings or collections are false.
+    ///
+    /// This additive API is native-only. Python, WASM, and CLI binding surfaces
+    /// remain unchanged and continue to preserve documents rendered here.
+    pub fn render_template(&mut self, data: &serde_json::Value) -> Result<usize> {
+        crate::template::render(self, data)
+    }
+
+    pub(crate) fn clone_for_template(&self) -> Self {
+        Self {
+            package: self.package.clone(),
+            document: self.document.clone(),
+            styles: self.styles.clone(),
+            numbering: self.numbering.clone(),
+            core_properties: self.core_properties.clone(),
+            custom_properties: self.custom_properties.clone(),
+            core_properties_part_name: self.core_properties_part_name.clone(),
+            doc_part_name: self.doc_part_name.clone(),
+            styles_part_name: self.styles_part_name.clone(),
+            numbering_part_name: self.numbering_part_name.clone(),
+            settings: self.settings.clone(),
+            settings_part_name: self.settings_part_name.clone(),
+            image_namer: self.image_namer.clone(),
+            footnotes: self.footnotes.clone(),
+            comments: self.comments.clone(),
+            comments_part_name: self.comments_part_name.clone(),
+            comments_extended: self.comments_extended.clone(),
+            comments_extended_part_name: self.comments_extended_part_name.clone(),
+            comments_owned: self.comments_owned,
+            comments_extended_owned: self.comments_extended_owned,
+            layout_cache: Mutex::new(None),
+            deterministic_layout_cache: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn template_numbering_reference_exists(&self, num_id: u32, level: u32) -> bool {
+        self.numbering
+            .as_ref()
+            .and_then(|numbering| numbering.get_abstract_num_for(num_id))
+            .is_some_and(|abstract_numbering| {
+                abstract_numbering
+                    .levels
+                    .iter()
+                    .any(|candidate| candidate.ilvl == level)
+            })
+    }
+
+    pub(crate) fn template_sources(&mut self) -> Result<Vec<String>> {
+        self.flush_to_package()?;
+        let mut sources = crate::template::body_sources(&self.document);
+
+        for (rel_id, _) in self.header_footer_rel_ids() {
+            if let Some(header_footer) = self.load_header_footer(&rel_id) {
+                sources.extend(crate::template::header_footer_sources(&header_footer));
+            }
+        }
+
+        for part_name in self.raw_text_bearing_part_names() {
+            if let Some(xml) = self.package.get_part(&part_name) {
+                sources.extend(crate::template::text_box_sources(xml)?);
+            }
+        }
+
+        for part_name in self.chart_part_names() {
+            if let Some(xml) = self.package.get_part(&part_name) {
+                sources.extend(crate::template::chart_sources(xml)?);
+            }
+        }
+
+        Ok(sources)
+    }
+
+    pub(crate) fn apply_template_pairs(&mut self, pairs: &[(&str, &str)]) -> usize {
+        self.replace_batch(pairs)
+    }
+
+    pub(crate) fn commit_template(&mut self, candidate: Self) {
+        self.package = candidate.package;
+        self.document = candidate.document;
+        self.invalidate_layout();
+    }
+
     /// Apply a batch of literal replacements across the whole document.
     fn replace_batch(&mut self, pairs: &[(&str, &str)]) -> usize {
         if pairs.is_empty() {
@@ -2775,6 +2867,38 @@ impl Document {
         names
     }
 
+    fn raw_text_bearing_part_names(&self) -> Vec<String> {
+        let mut names = vec![self.doc_part_name.clone()];
+        if let Some(section) = self.document.body.sect_pr.as_ref()
+            && let Some(rels) = self.package.get_part_rels(&self.doc_part_name)
+        {
+            for reference in section.header_refs.iter().chain(&section.footer_refs) {
+                if let Some(relationship) = rels.get_by_id(&reference.rel_id) {
+                    names.push(OpcPackage::resolve_rel_target(
+                        &self.doc_part_name,
+                        &relationship.target,
+                    ));
+                }
+            }
+        }
+        names
+    }
+
+    fn chart_part_names(&self) -> Vec<String> {
+        self.package
+            .get_part_rels(&self.doc_part_name)
+            .map(|relationships| {
+                relationships
+                    .get_all_by_type(rel_types::CHART)
+                    .iter()
+                    .map(|relationship| {
+                        OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Load a header/footer part by its relationship ID.
     fn load_header_footer(&self, rel_id: &str) -> Option<CT_HdrFtr> {
         let rels = self.package.get_part_rels(&self.doc_part_name)?;
@@ -2793,29 +2917,7 @@ impl Document {
         let mut count = 0;
 
         // Collect part names for XML parts to process (text boxes/shapes)
-        let mut xml_parts: Vec<String> = vec![self.doc_part_name.clone()];
-        if let Some(sect_pr) = self.document.body.sect_pr.as_ref()
-            && let Some(rels) = self.package.get_part_rels(&self.doc_part_name)
-        {
-            for href in &sect_pr.header_refs {
-                if let Some(rel) = rels.get_by_id(&href.rel_id) {
-                    xml_parts.push(OpcPackage::resolve_rel_target(
-                        &self.doc_part_name,
-                        &rel.target,
-                    ));
-                }
-            }
-            for fref in &sect_pr.footer_refs {
-                if let Some(rel) = rels.get_by_id(&fref.rel_id) {
-                    xml_parts.push(OpcPackage::resolve_rel_target(
-                        &self.doc_part_name,
-                        &rel.target,
-                    ));
-                }
-            }
-        }
-
-        for part_name in xml_parts {
+        for part_name in self.raw_text_bearing_part_names() {
             if let Some(xml) = self.package.get_part(&part_name) {
                 let xml = xml.to_vec();
                 if let Ok((new_xml, n)) = replace_many_in_xml_part(&xml, pairs)
@@ -2828,18 +2930,7 @@ impl Document {
         }
 
         // Collect chart part names
-        let chart_parts: Vec<String> = self
-            .package
-            .get_part_rels(&self.doc_part_name)
-            .map(|rels| {
-                rels.get_all_by_type(rel_types::CHART)
-                    .iter()
-                    .map(|rel| OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        for part_name in chart_parts {
+        for part_name in self.chart_part_names() {
             if let Some(xml) = self.package.get_part(&part_name) {
                 let xml = xml.to_vec();
                 if let Ok((new_xml, n)) = replace_many_in_chart_xml(&xml, pairs)
@@ -5548,6 +5639,965 @@ mod tests {
         let count = doc.replace_text("{{company}}", "Acme");
         assert_eq!(count, 1);
         assert_eq!(doc.paragraphs()[1].text(), "Welcome to Acme.");
+    }
+
+    #[test]
+    fn a_tag_split_across_five_formatted_runs_preserves_surrounding_formatting() {
+        let mut doc = Document::new();
+        let mut paragraph = CT_P::new();
+        for (text, properties) in [
+            (
+                "Before {",
+                CT_RPr {
+                    bold: Some(true),
+                    ..Default::default()
+                },
+            ),
+            (
+                "{ pro",
+                CT_RPr {
+                    italic: Some(true),
+                    ..Default::default()
+                },
+            ),
+            (
+                "file.",
+                CT_RPr {
+                    color: Some("112233".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "name ",
+                CT_RPr {
+                    strike: Some(true),
+                    ..Default::default()
+                },
+            ),
+            (
+                "}} after",
+                CT_RPr {
+                    italic: Some(false),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let mut run = CT_R::new(text);
+            run.properties = Some(properties);
+            paragraph.runs.push(run);
+        }
+        doc.document
+            .body
+            .content
+            .push(BodyContent::Paragraph(paragraph));
+
+        let count = doc
+            .render_template(&serde_json::json!({"profile": {"name": "Ada"}}))
+            .expect("valid template should render");
+
+        assert_eq!(count, 1);
+        let paragraph = doc.paragraph(0).expect("rendered paragraph");
+        assert_eq!(paragraph.text(), "Before Ada after");
+        assert_eq!(paragraph.run_count(), 2);
+        assert_eq!(paragraph.run(0).unwrap().text(), "Before Ada");
+        assert!(paragraph.run(0).unwrap().is_bold());
+        assert_eq!(paragraph.run(1).unwrap().text(), " after");
+        assert_eq!(paragraph.run(1).unwrap().italic_value(), Some(false));
+    }
+
+    #[test]
+    fn dotted_scalar_paths_render_supported_json_leaves() {
+        let mut doc = Document::new();
+        doc.add_paragraph("{{ person.name }}");
+        doc.add_paragraph("{{person.age}}");
+        doc.add_paragraph("{{ person.active }}");
+        doc.add_paragraph("x{{person.middle}}y");
+
+        let count = doc
+            .render_template(&serde_json::json!({
+                "person": {
+                    "name": "Ada",
+                    "age": 37,
+                    "active": true,
+                    "middle": null
+                }
+            }))
+            .expect("scalar leaves should render");
+
+        assert_eq!(count, 4);
+        assert_eq!(
+            doc.paragraphs()
+                .into_iter()
+                .map(|paragraph| paragraph.text())
+                .collect::<Vec<_>>(),
+            ["Ada", "37", "true", "xy"]
+        );
+    }
+
+    #[test]
+    fn invalid_template_input_leaves_the_document_unchanged() {
+        for (template, data) in [
+            (
+                "{{present}} {{missing}}",
+                serde_json::json!({"present": "value"}),
+            ),
+            ("{{value}}", serde_json::json!({"value": [1, 2]})),
+            ("{{value}}", serde_json::json!({"value": {"nested": 1}})),
+            ("{{ malformed", serde_json::json!({"malformed": "value"})),
+        ] {
+            let mut doc = Document::new();
+            doc.add_paragraph(template);
+            let before_xml = doc.document.to_xml().expect("serialize before render");
+            let before_parts = doc.package.parts.clone();
+
+            reset_layout_invocations();
+            doc.render_page_to_png_deterministic(0, 1.0)
+                .expect("warm deterministic layout cache");
+            assert_eq!(layout_invocations(), 1);
+
+            assert!(doc.render_template(&data).is_err());
+            assert_eq!(
+                doc.document.to_xml().expect("serialize after rejection"),
+                before_xml
+            );
+            assert_eq!(doc.package.parts, before_parts);
+            doc.render_page_to_png_deterministic(0, 1.0)
+                .expect("reuse deterministic layout after rejection");
+            assert_eq!(layout_invocations(), 1);
+        }
+    }
+
+    #[test]
+    fn template_scalar_coverage_matches_literal_replacement() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Body {{body}}");
+        doc.set_header("Header {{header}}");
+        doc.set_footer("Footer {{footer}}");
+        doc.add_table(1, 1)
+            .cell(0, 0)
+            .expect("template table cell")
+            .set_text("Table {{table}}");
+        doc.document.body.content.push(BodyContent::RawXml(
+            br#"<w:custom><w:txbxContent><w:p><w:r><w:t>Box {{box}}</w:t></w:r></w:p></w:txbxContent></w:custom>"#.to_vec(),
+        ));
+
+        let chart_part = "/word/charts/chart99.xml";
+        doc.package.set_part(
+            chart_part,
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:title><a:p><a:r><a:t>{{chart}}</a:t></a:r></a:p></c:title><c:strCache><c:pt><c:v>{{cache}}</c:v></c:pt></c:strCache></c:chartSpace>"#.to_vec(),
+        );
+        doc.package
+            .get_or_create_part_rels(&doc.doc_part_name.clone())
+            .add(rel_types::CHART, "charts/chart99.xml");
+
+        let count = doc
+            .render_template(&serde_json::json!({
+                "body": "B",
+                "header": "H",
+                "footer": "F",
+                "table": "T",
+                "box": "X",
+                "chart": "C",
+                "cache": "K"
+            }))
+            .expect("all literal-replacement locations should render");
+
+        assert_eq!(count, 7);
+        assert_eq!(doc.paragraphs()[0].text(), "Body B");
+        assert_eq!(
+            doc.table(0)
+                .expect("template table")
+                .cell(0, 0)
+                .expect("rendered table cell")
+                .text(),
+            "Table T"
+        );
+        assert_eq!(doc.header_text().as_deref(), Some("Header H"));
+        assert_eq!(doc.footer_text().as_deref(), Some("Footer F"));
+        let document_xml = std::str::from_utf8(
+            doc.package
+                .get_part(&doc.doc_part_name)
+                .expect("main document package part"),
+        )
+        .expect("main document XML");
+        assert!(document_xml.contains("Box X"));
+        let chart_xml = std::str::from_utf8(
+            doc.package
+                .get_part(chart_part)
+                .expect("chart package part"),
+        )
+        .expect("chart XML");
+        assert!(chart_xml.contains("<a:t>C</a:t>"));
+        assert!(chart_xml.contains("<c:v>K</c:v>"));
+    }
+
+    #[test]
+    fn template_values_are_not_recursively_interpreted() {
+        let mut doc = Document::new();
+        doc.add_paragraph("{{first}} {{second}}");
+        doc.add_paragraph("{% if later %}");
+        doc.add_paragraph("hidden");
+        doc.add_paragraph("{% endif %}");
+
+        assert_eq!(
+            doc.render_template(&serde_json::json!({
+                "first": "{{second}}",
+                "second": "done",
+                "later": false
+            }))
+            .expect("scalar values and controls should render"),
+            2
+        );
+        assert_eq!(doc.paragraphs().len(), 1);
+        assert_eq!(doc.paragraphs()[0].text(), "{{second}} done");
+    }
+
+    #[test]
+    fn template_render_preserves_unmodelled_paragraph_xml() {
+        let raw = br#"<w:proofErr w:type="spellStart"/>"#.to_vec();
+        let mut doc = Document::new();
+        let mut paragraph = CT_P::new();
+        paragraph.runs.push(CT_R::new("Value: {{ value }}"));
+        paragraph.extra_xml.push((1, raw.clone()));
+        doc.document
+            .body
+            .content
+            .push(BodyContent::Paragraph(paragraph));
+
+        assert_eq!(
+            doc.render_template(&serde_json::json!({"value": "kept"}))
+                .expect("valid template should render"),
+            1
+        );
+        let reopened = Document::from_bytes(&doc.to_bytes().expect("save rendered document"))
+            .expect("reopen rendered document");
+        let BodyContent::Paragraph(paragraph) = &reopened.document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        assert_eq!(paragraph.text(), "Value: kept");
+        assert_eq!(paragraph.extra_xml, vec![(1, raw)]);
+    }
+
+    #[test]
+    fn mismatched_or_cross_container_blocks_fail_without_mutation() {
+        let cases = [
+            vec!["{% if show %}", "content"],
+            vec!["{% endif %}"],
+            vec![
+                "{% for item in items %}",
+                "{% if item.show %}",
+                "{% endfor %}",
+                "{% endif %}",
+            ],
+        ];
+        for paragraphs in cases {
+            let mut document = Document::new();
+            for paragraph in paragraphs {
+                document.add_paragraph(paragraph);
+            }
+            let before = document.document.to_xml().unwrap();
+            assert!(
+                document
+                    .render_template(&serde_json::json!({
+                        "show": true,
+                        "items": [{"show": true}]
+                    }))
+                    .is_err()
+            );
+            assert_eq!(document.document.to_xml().unwrap(), before);
+        }
+
+        let mut document = Document::new();
+        document.add_paragraph("{% for item in items %}");
+        document
+            .add_table(1, 1)
+            .cell(0, 0)
+            .unwrap()
+            .set_text("{% endfor %}");
+        let before = document.document.to_xml().unwrap();
+        assert!(
+            document
+                .render_template(&serde_json::json!({"items": [1]}))
+                .is_err()
+        );
+        assert_eq!(document.document.to_xml().unwrap(), before);
+    }
+
+    #[test]
+    fn loop_scopes_shadow_root_values_and_restore_after_exit() {
+        let mut document = Document::new();
+        for text in [
+            "{% for item in items %}",
+            "outer {{ item.name }}",
+            "{% for item in item.children %}",
+            "inner {{ item.name }}",
+            "{% endfor %}",
+            "restored {{ item.name }}",
+            "{% endfor %}",
+            "root {{ item.name }}",
+        ] {
+            document.add_paragraph(text);
+        }
+
+        document
+            .render_template(&serde_json::json!({
+                "item": {"name": "root"},
+                "items": [{
+                    "name": "outer",
+                    "children": [{"name": "inner-a"}, {"name": "inner-b"}]
+                }]
+            }))
+            .unwrap();
+        assert_eq!(
+            document
+                .paragraphs()
+                .into_iter()
+                .map(|paragraph| paragraph.text())
+                .collect::<Vec<_>>(),
+            [
+                "outer outer",
+                "inner inner-a",
+                "inner inner-b",
+                "restored outer",
+                "root root"
+            ]
+        );
+    }
+
+    #[test]
+    fn structural_generation_preserves_schema_order_and_raw_xml() {
+        let mut document = Document::new();
+        document.add_paragraph("{% for item in items %}");
+        let mut generated = CT_P::new();
+        generated.runs.push(CT_R::new("section {{ item }}"));
+        generated
+            .extra_xml
+            .push((1, br#"<w:proofErr w:type="spellStart"/>"#.to_vec()));
+        generated.properties = Some(CT_PPr {
+            sect_pr: Some(CT_SectPr::default_letter()),
+            ..Default::default()
+        });
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(generated));
+        document.add_paragraph("{% endfor %}");
+
+        let row = |text: &str, raw: Option<Vec<u8>>| {
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(CT_R::new(text));
+            let mut cell = CT_Tc::new();
+            cell.content = vec![CellContent::Paragraph(paragraph)];
+            let mut row = CT_Row::new();
+            row.cells.push(cell);
+            if let Some(raw) = raw {
+                row.extra_xml.push((0, raw));
+            }
+            row
+        };
+        let mut table = CT_Tbl::new();
+        table.rows.push(row("{% for item in items %}", None));
+        table.rows.push(row(
+            "row {{ item }}",
+            Some(br#"<w:customRow w:val="kept"/>"#.to_vec()),
+        ));
+        table.rows.push(row("{% endfor %}", None));
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(table));
+
+        document
+            .render_template(&serde_json::json!({"items": ["one", "two"]}))
+            .unwrap();
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.document.body.content.len(), 3);
+        for content in &reopened.document.body.content[..2] {
+            let BodyContent::Paragraph(paragraph) = content else {
+                panic!("expected generated section-ending paragraph");
+            };
+            assert_eq!(
+                paragraph.extra_xml,
+                vec![(1, br#"<w:proofErr w:type="spellStart"/>"#.to_vec())]
+            );
+            assert!(
+                paragraph
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.sect_pr.as_ref())
+                    .is_some()
+            );
+        }
+        let BodyContent::Table(table) = &reopened.document.body.content[2] else {
+            panic!("expected generated table");
+        };
+        assert_eq!(table.rows.len(), 2);
+        assert_eq!(
+            table
+                .rows
+                .iter()
+                .map(|row| row.cells[0].text())
+                .collect::<Vec<_>>(),
+            ["row one", "row two"]
+        );
+        assert!(
+            table.rows.iter().all(|row| {
+                row.extra_xml == vec![(0, br#"<w:customRow w:val="kept"/>"#.to_vec())]
+            })
+        );
+        let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(xml.rfind("<w:p>").unwrap() < xml.rfind("<w:sectPr>").unwrap());
+    }
+
+    #[test]
+    fn repeated_rows_and_lists_preserve_properties_and_raw_xml() {
+        use rdocx_oxml::table::{
+            CT_TblGrid, CT_TblGridCol, CT_TblLook, CT_TblPr, CT_TcPr, CT_TrPr, VMerge,
+        };
+
+        let mut document = Document::new();
+        document.add_paragraph("{% for item in items %}");
+        document.add_numbered_list_item("List {{ item }}", 1);
+        document.add_paragraph("Detail {{ item }}");
+        document.add_paragraph("{% endfor %}");
+
+        let row_raw = br#"<q:rowData xmlns:q="urn:rdocx:f165" q:value="kept"/>"#.to_vec();
+        let cell_property_raw =
+            br#"<q:cellProperty xmlns:q="urn:rdocx:f165" q:value="kept"/>"#.to_vec();
+        let cell_raw = br#"<q:cellData xmlns:q="urn:rdocx:f165" q:value="kept"/>"#.to_vec();
+        let table_raw = br#"<q:tableData xmlns:q="urn:rdocx:f165" q:value="kept"/>"#.to_vec();
+        let control_xml = br#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:sdt><w:sdtPr><w:tag w:val="row-control"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>controlled</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sectPr/></w:body></w:document>"#;
+        let mut control_document = CT_Document::from_xml(control_xml).unwrap();
+        let BodyContent::ContentControl(control) = control_document.body.content.remove(0) else {
+            panic!("expected parsed content control");
+        };
+
+        let marker_row = |text: &str| {
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(CT_R::new(text));
+            let mut cell = CT_Tc::new();
+            cell.content = vec![CellContent::Paragraph(paragraph)];
+            let mut row = CT_Row::new();
+            row.cells.push(cell);
+            row
+        };
+        let template_row = |text: &str, merge: VMerge, header: bool| {
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(CT_R::new(text));
+            let mut properties = CT_TcPr {
+                grid_span: Some(2),
+                v_merge: Some(merge),
+                ..Default::default()
+            };
+            properties.extra_xml.push((3, cell_property_raw.clone()));
+            let mut cell = CT_Tc::new();
+            cell.properties = Some(properties);
+            cell.content = vec![
+                CellContent::Paragraph(paragraph),
+                CellContent::ContentControl(control.clone()),
+            ];
+            cell.extra_xml.push((0, cell_raw.clone()));
+            let mut row = CT_Row::new();
+            row.properties = Some(CT_TrPr {
+                header: Some(header),
+                cnf_style: Some("100000000000".to_owned()),
+                ..Default::default()
+            });
+            row.cells.push(cell);
+            row.extra_xml.push((0, row_raw.clone()));
+            row
+        };
+        let mut table = CT_Tbl::new();
+        table.properties = Some(CT_TblPr {
+            style_id: Some("BandedRows".to_owned()),
+            look: Some(CT_TblLook {
+                first_row: Some(true),
+                no_h_band: Some(false),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        table.grid = Some(CT_TblGrid {
+            columns: vec![
+                CT_TblGridCol { width: Twips(1800) },
+                CT_TblGridCol { width: Twips(1800) },
+                CT_TblGridCol { width: Twips(1800) },
+            ],
+        });
+        table.rows.push(marker_row("{% for item in items %}"));
+        table
+            .rows
+            .push(template_row("A {{ item }}", VMerge::Restart, true));
+        table
+            .rows
+            .push(template_row("B {{ item }}", VMerge::Continue, false));
+        table
+            .rows
+            .push(template_row("C {{ item }}", VMerge::Continue, false));
+        table.rows.push(marker_row("{% endfor %}"));
+        table.extra_xml.push((table.rows.len(), table_raw.clone()));
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(table));
+
+        assert_eq!(
+            document
+                .render_template(&serde_json::json!({"items": ["one", "two"]}))
+                .unwrap(),
+            10
+        );
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let paragraphs = reopened.paragraphs();
+        let numbered = paragraphs
+            .iter()
+            .filter_map(|paragraph| paragraph.numbering())
+            .collect::<Vec<_>>();
+        assert_eq!(numbered.len(), 2);
+        assert_eq!(numbered[0], numbered[1]);
+        assert_eq!(numbered[0].1, 1);
+
+        let table = reopened.document.body.tables().next().unwrap();
+        assert_eq!(table.rows.len(), 6);
+        assert_eq!(table.grid.as_ref().unwrap().columns.len(), 3);
+        assert_eq!(
+            table
+                .properties
+                .as_ref()
+                .unwrap()
+                .look
+                .as_ref()
+                .unwrap()
+                .no_h_band,
+            Some(false)
+        );
+        assert_eq!(table.extra_xml, vec![(6, table_raw)]);
+        for (index, row) in table.rows.iter().enumerate() {
+            assert_eq!(row.extra_xml, vec![(0, row_raw.clone())]);
+            assert_eq!(
+                row.properties.as_ref().unwrap().header,
+                (index % 3 == 0).then_some(true)
+            );
+            let cell = &row.cells[0];
+            assert_eq!(cell.extra_xml, vec![(0, cell_raw.clone())]);
+            let CellContent::ContentControl(control) = &cell.content[1] else {
+                panic!("expected repeated cell content control");
+            };
+            assert_eq!(
+                control.properties.as_ref().unwrap().tag.as_deref(),
+                Some("row-control")
+            );
+            let paragraph = control
+                .content
+                .iter()
+                .find_map(|content| match content {
+                    SdtContent::Paragraph(paragraph) => Some(paragraph),
+                    _ => None,
+                })
+                .expect("expected controlled paragraph");
+            assert_eq!(paragraph.text(), "controlled");
+            let properties = cell.properties.as_ref().unwrap();
+            assert_eq!(properties.grid_span, Some(2));
+            assert_eq!(
+                properties.v_merge,
+                Some(if index % 3 == 0 {
+                    VMerge::Restart
+                } else {
+                    VMerge::Continue
+                })
+            );
+            assert_eq!(properties.extra_xml, vec![(3, cell_property_raw.clone())]);
+        }
+
+        let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(xml.find("<w:trPr>").unwrap() < xml.find("<q:rowData").unwrap());
+        assert!(xml.find("<w:gridSpan").unwrap() < xml.find("<q:cellProperty").unwrap());
+        assert!(xml.find("<q:cellProperty").unwrap() < xml.find("<w:vMerge").unwrap());
+        assert!(xml.rfind("<w:tr>").unwrap() < xml.rfind("<q:tableData").unwrap());
+        assert!(xml.rfind("<q:tableData").unwrap() < xml.rfind("</w:tbl>").unwrap());
+    }
+
+    #[test]
+    fn conditions_use_explicit_json_truthiness() {
+        for (value, included) in [
+            (serde_json::json!(false), false),
+            (serde_json::Value::Null, false),
+            (serde_json::json!(0), false),
+            (serde_json::json!(""), false),
+            (serde_json::json!([]), false),
+            (serde_json::json!({}), false),
+            (serde_json::json!(true), true),
+            (serde_json::json!(-1), true),
+            (serde_json::json!("x"), true),
+            (serde_json::json!([1]), true),
+            (serde_json::json!({"x": 1}), true),
+        ] {
+            let mut document = Document::new();
+            document.add_paragraph("{% if value %}");
+            document.add_paragraph("included");
+            document.add_paragraph("{% endif %}");
+            assert_eq!(
+                document
+                    .render_template(&serde_json::json!({"value": value}))
+                    .unwrap(),
+                0
+            );
+            assert_eq!(document.paragraphs().len(), usize::from(included));
+        }
+    }
+
+    #[test]
+    fn structural_only_table_blocks_commit_the_candidate() {
+        let row = |text: &str| {
+            let mut cell = CT_Tc::new();
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(CT_R::new(text));
+            cell.content = vec![CellContent::Paragraph(paragraph)];
+            let mut row = CT_Row::new();
+            row.cells.push(cell);
+            row
+        };
+        let mut table = CT_Tbl::new();
+        table.rows.push(row("{% if show %}"));
+        table.rows.push(row("included"));
+        table.rows.push(row("{% endif %}"));
+        let mut document = Document::new();
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(table));
+
+        assert_eq!(
+            document
+                .render_template(&serde_json::json!({"show": false}))
+                .unwrap(),
+            0
+        );
+        let BodyContent::Table(table) = &document.document.body.content[0] else {
+            panic!("expected table");
+        };
+        assert!(table.rows.is_empty());
+    }
+
+    #[test]
+    fn nested_table_controls_stay_with_their_direct_table() {
+        let row = |text: &str| {
+            let mut cell = CT_Tc::new();
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(CT_R::new(text));
+            cell.content = vec![CellContent::Paragraph(paragraph)];
+            let mut row = CT_Row::new();
+            row.cells.push(cell);
+            row
+        };
+        let mut nested = CT_Tbl::new();
+        nested.rows.push(row("{% if show %}"));
+        nested.rows.push(row("nested"));
+        nested.rows.push(row("{% endif %}"));
+        let mut outer_cell = CT_Tc::new();
+        let mut outer_paragraph = CT_P::new();
+        outer_paragraph.runs.push(CT_R::new("outer"));
+        outer_cell
+            .content
+            .push(CellContent::Paragraph(outer_paragraph));
+        outer_cell.content.push(CellContent::Table(nested));
+        let mut outer_row = CT_Row::new();
+        outer_row.cells.push(outer_cell);
+        let mut outer = CT_Tbl::new();
+        outer.rows.push(outer_row);
+        let mut document = Document::new();
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(outer));
+
+        document
+            .render_template(&serde_json::json!({"show": true}))
+            .unwrap();
+        let BodyContent::Table(outer) = &document.document.body.content[0] else {
+            panic!("expected outer table");
+        };
+        let nested = outer.rows[0].cells[0]
+            .content
+            .iter()
+            .find_map(|content| match content {
+                CellContent::Table(table) => Some(table),
+                CellContent::Paragraph(_) | CellContent::ContentControl(_) => None,
+            })
+            .expect("expected nested table");
+        assert_eq!(nested.rows.len(), 1);
+        assert_eq!(nested.rows[0].cells[0].text(), "nested");
+    }
+
+    #[test]
+    fn direct_row_markers_reject_nested_table_content() {
+        let mut nested_cell = CT_Tc::new();
+        let mut nested_paragraph = CT_P::new();
+        nested_paragraph.runs.push(CT_R::new("must remain"));
+        nested_cell.content = vec![CellContent::Paragraph(nested_paragraph)];
+        let mut nested_row = CT_Row::new();
+        nested_row.cells.push(nested_cell);
+        let mut nested = CT_Tbl::new();
+        nested.rows.push(nested_row);
+
+        let mut marker_cell = CT_Tc::new();
+        let mut marker = CT_P::new();
+        marker.runs.push(CT_R::new("{% if show %}"));
+        marker_cell.content = vec![CellContent::Paragraph(marker)];
+        let mut nested_cell = CT_Tc::new();
+        nested_cell.content = vec![CellContent::Table(nested)];
+        let mut marker_row = CT_Row::new();
+        marker_row.cells.push(marker_cell);
+        marker_row.cells.push(nested_cell);
+        let mut table = CT_Tbl::new();
+        table.rows.push(marker_row);
+        for text in ["included", "{% endif %}"] {
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(CT_R::new(text));
+            let mut cell = CT_Tc::new();
+            cell.content = vec![CellContent::Paragraph(paragraph)];
+            let mut row = CT_Row::new();
+            row.cells.push(cell);
+            table.rows.push(row);
+        }
+        let mut document = Document::new();
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(table));
+        let before = document.document.to_xml().unwrap();
+
+        assert!(
+            document
+                .render_template(&serde_json::json!({"show": true}))
+                .is_err()
+        );
+        assert_eq!(document.document.to_xml().unwrap(), before);
+    }
+
+    #[test]
+    fn false_condition_scalar_leaves_are_preflighted() {
+        let mut document = Document::new();
+        document.add_paragraph("{% if show %}");
+        document.add_paragraph("{{ missing }}");
+        document.add_paragraph("{% endif %}");
+        let before = document.document.to_xml().unwrap();
+
+        assert!(
+            document
+                .render_template(&serde_json::json!({"show": false}))
+                .is_err()
+        );
+        assert_eq!(document.document.to_xml().unwrap(), before);
+    }
+
+    #[test]
+    fn empty_loop_bodies_are_preflighted_without_requiring_an_item() {
+        let mut valid = Document::new();
+        valid.add_paragraph("{% for item in items %}");
+        valid.add_paragraph("{{ item.name }}");
+        valid.add_paragraph("{% endfor %}");
+        assert_eq!(
+            valid
+                .render_template(&serde_json::json!({"items": []}))
+                .unwrap(),
+            0
+        );
+        assert!(valid.paragraphs().is_empty());
+
+        for invalid_body in ["{{ item.name", "{{ config.missing }}"] {
+            let mut document = Document::new();
+            document.add_paragraph("{% for item in items %}");
+            document.add_paragraph(invalid_body);
+            document.add_paragraph("{% endfor %}");
+            let before = document.document.to_xml().unwrap();
+
+            assert!(
+                document
+                    .render_template(&serde_json::json!({"items": [], "config": {}}))
+                    .is_err()
+            );
+            assert_eq!(document.document.to_xml().unwrap(), before);
+        }
+
+        let mut nested = Document::new();
+        for text in [
+            "{% for item in items %}",
+            "{% for child in config.missing %}",
+            "{{ child.name }}",
+            "{% endfor %}",
+            "{% endfor %}",
+        ] {
+            nested.add_paragraph(text);
+        }
+        let before = nested.document.to_xml().unwrap();
+        assert!(
+            nested
+                .render_template(&serde_json::json!({"items": [], "config": {}}))
+                .is_err()
+        );
+        assert_eq!(nested.document.to_xml().unwrap(), before);
+
+        let mut nested_scope = Document::new();
+        for text in [
+            "{% for item in items %}",
+            "{% for child in item.children %}",
+            "{{ settings.missing }}",
+            "{% endfor %}",
+            "{% endfor %}",
+        ] {
+            nested_scope.add_paragraph(text);
+        }
+        let before = nested_scope.document.to_xml().unwrap();
+        assert!(
+            nested_scope
+                .render_template(&serde_json::json!({
+                    "items": [{"children": [], "settings": {}}]
+                }))
+                .is_err()
+        );
+        assert_eq!(nested_scope.document.to_xml().unwrap(), before);
+    }
+
+    #[test]
+    fn repeated_table_level_controls_use_the_row_loop_scope() {
+        let xml = br#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl><w:tr><w:tc><w:p><w:r><w:t>{% for item in items %}</w:t></w:r></w:p></w:tc></w:tr><w:sdt><w:sdtPr><w:tag w:val="row-control"/></w:sdtPr><w:sdtContent><w:tr><w:tc><w:p><w:r><w:t>control {{ item.name }}</w:t></w:r></w:p></w:tc></w:tr></w:sdtContent></w:sdt><w:tr><w:tc><w:p><w:r><w:t>row {{ item.name }}</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>{% endfor %}</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sectPr/></w:body></w:document>"#;
+        let mut document = Document::new();
+        document.document = CT_Document::from_xml(xml).unwrap();
+
+        assert_eq!(
+            document
+                .render_template(&serde_json::json!({
+                    "items": [{"name": "one"}, {"name": "two"}]
+                }))
+                .unwrap(),
+            4
+        );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let BodyContent::Table(table) = &reopened.document.body.content[0] else {
+            panic!("expected table");
+        };
+        assert_eq!(
+            table
+                .rows
+                .iter()
+                .map(|row| row.cells[0].text())
+                .collect::<Vec<_>>(),
+            ["row one", "row two"]
+        );
+        assert_eq!(table.content_controls.len(), 2);
+        assert_eq!(
+            table
+                .content_controls
+                .iter()
+                .map(|(_, _, control)| {
+                    control
+                        .content
+                        .iter()
+                        .find_map(|content| match content {
+                            SdtContent::Row(row) => Some(row.cells[0].text()),
+                            _ => None,
+                        })
+                        .expect("expected controlled row")
+                })
+                .collect::<Vec<_>>(),
+            ["control one", "control two"]
+        );
+    }
+
+    fn template_test_row(text: &str) -> CT_Row {
+        let mut paragraph = CT_P::new();
+        paragraph.runs.push(CT_R::new(text));
+        let mut cell = CT_Tc::new();
+        cell.content.push(CellContent::Paragraph(paragraph));
+        let mut row = CT_Row::new();
+        row.cells.push(cell);
+        row
+    }
+
+    fn template_test_row_control(row: CT_Row) -> CT_Sdt {
+        let xml = br#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:sdt><w:sdtContent><w:p><w:r><w:t>placeholder</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sectPr/></w:body></w:document>"#;
+        let mut parsed = CT_Document::from_xml(xml).unwrap();
+        let BodyContent::ContentControl(mut control) = parsed.body.content.remove(0) else {
+            panic!("expected parsed content control");
+        };
+        control.content = vec![SdtContent::Row(row)];
+        control
+    }
+
+    fn template_test_table_with_control(open: &str, control: CT_Sdt, close: &str) -> Document {
+        let mut table = CT_Tbl::new();
+        table.rows.push(template_test_row(open));
+        table.rows.push(template_test_row("source"));
+        table.rows.push(template_test_row(close));
+        table.content_controls.push((1, 0, control));
+        let mut document = Document::new();
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(table));
+        document
+    }
+
+    #[test]
+    fn excluded_table_level_controls_are_preflighted() {
+        let cases = [
+            (
+                "{% for item in items %}",
+                "{% endfor %}",
+                "{{ config.missing }}",
+                serde_json::json!({"items": [], "config": {}}),
+            ),
+            (
+                "{% if show %}",
+                "{% endif %}",
+                "{{ unclosed",
+                serde_json::json!({"show": false}),
+            ),
+        ];
+        for (open, close, control_text, data) in cases {
+            let control = template_test_row_control(template_test_row(control_text));
+            let mut document = template_test_table_with_control(open, control, close);
+            let before = document.document.to_xml().unwrap();
+
+            assert!(document.render_template(&data).is_err());
+            assert_eq!(document.document.to_xml().unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn repeated_table_level_controls_validate_numbering() {
+        let mut numbered_row = template_test_row("{{ item.name }}");
+        let CellContent::Paragraph(paragraph) = &mut numbered_row.cells[0].content[0] else {
+            panic!("expected paragraph");
+        };
+        paragraph.properties = Some(CT_PPr {
+            num_id: Some(99),
+            num_ilvl: Some(0),
+            ..Default::default()
+        });
+        let control = template_test_row_control(numbered_row);
+        let mut document =
+            template_test_table_with_control("{% for item in items %}", control, "{% endfor %}");
+        let before = document.document.to_xml().unwrap();
+
+        assert!(
+            document
+                .render_template(&serde_json::json!({"items": [{"name": "one"}]}))
+                .is_err()
+        );
+        assert_eq!(document.document.to_xml().unwrap(), before);
     }
 
     #[test]

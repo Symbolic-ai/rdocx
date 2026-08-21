@@ -36,6 +36,26 @@ inputs, formatting pictures, and stable cached-display fallbacks. The oracle
 is test metadata only. It is not a runtime dependency and adds no binary
 fixture.
 
+The scalar template unit gate splits one tag across five differently formatted
+runs and proves that the first matched run supplies replacement formatting
+while unmatched prefix and suffix formatting remain intact. The structural
+regression gate combines a nested body loop, conditional inclusion, and table
+row loop in one readable JSON fixture. It compares exact paragraph and row
+order. Focused tests cover dotted and lexical lookup, loop shadowing and scope
+restoration, every JSON truthiness case, malformed and crossed controls, and
+atomic rejection. The round-trip test clones section-ending paragraphs and
+table rows, then proves their section properties and unmodelled XML remain in
+schema order after saving and reopening. Headers, footers, text boxes, and
+chart labels retain the scalar-only coverage shared with literal placeholder
+replacement. The repeating-table regression gate expands three adjacent
+template rows over ten records and compares all thirty rows in order. It also
+checks banding, grid spans, vertical merge restarts and continuations, and
+atomic rejection of an invalid repeated numbering reference. The continuous
+numbering regression proves that mixed list and ordinary paragraphs retain one
+`numId` and level without changing the numbering part. The paired round-trip
+test compares row, cell, table, numbering, and raw XML state after reopen and
+checks the raw children at their schema boundaries.
+
 ## The hash harness
 
 The single highest-value mechanism in the plan is

@@ -201,6 +201,23 @@ byte methods remain leave alone operations that preserve cache content and
 dirty spelling. Update-aware save methods opt into the same atomic operation
 before writing. The settings-level `w:updateFields` value remains untouched.
 
+The `rdocx` facade owns structured template evaluation over
+`serde_json::Value`. The focused `template` module recognizes scalar tags
+across ordinary run boundaries and pairs nested `for` and `if` controls with a
+container-aware stack parser. Top-level marker paragraphs clone body entries,
+including section-ending paragraphs and their section properties. Marker rows
+clone every row in a multi-row template group inside their owning table. The
+owning table is retained, and each row and cell is deep-cloned with its merge,
+banding, content-control, and ordered raw XML state. Numbered paragraphs in a
+loop retain their source `numId` and level, which keeps one continuous list
+without allocating definitions. Numbering references are validated before
+evaluation. Loop variables form lexical scopes, and dotted lookup searches the
+innermost scope before the root value. Structural controls are limited to the
+main body and its tables. Headers, footers, text boxes, and chart labels retain
+scalar-only replacement through the existing Word placeholder mapper. A
+successful render commits the staged document and package together and
+invalidates both layout caches once.
+
 The content-control model owns one recursive `CT_Sdt` grammar at block, row,
 cell, paragraph, and run placement boundaries. It reports tag, alias, numeric
 id, bounded control type, and custom XML binding metadata from `CT_SdtPr`.

@@ -35,6 +35,7 @@ rdocx-layout = { workspace = true, default-features = false }
 rdocx-html = { workspace = true }
 thiserror = { workspace = true }
 regex = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 rpptx = { workspace = true, features = ["default-template", "render"] }

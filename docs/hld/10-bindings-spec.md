@@ -249,6 +249,24 @@ caches and producer dirty spellings. These methods are additive native Rust
 APIs. Python, WASM, and CLI surfaces gain no field update methods and continue
 to preserve updates already made through their owned `Document`.
 
+Native Word callers render templates with
+`Document::render_template(&serde_json::Value)`. Scalar tags use
+`{{ path.to.value }}` syntax and may cross ordinary Word run boundaries.
+Dedicated marker paragraphs and rows use `{% for item in path %}` with
+`{% endfor %}`, or `{% if path %}` with `{% endif %}`. Blocks nest within one
+container. Loops require arrays and introduce lexical variables. Conditions
+treat false, null, zero, empty strings, empty arrays, and empty objects as
+false. Other JSON values are true. Structural generation is limited to the
+main body and its tables, while other stories retain scalar rendering. Missing
+paths, malformed markers, invalid scalar leaves, invalid numbering references,
+and crossed container boundaries fail without mutation. One row loop may own
+several adjacent template rows. Each iteration retains table banding, grid and
+merge properties, and preserved row and cell XML. Repeated list items retain
+one source numbering identity and level, so their sequence continues across
+iterations. The existing method remains additive on the pre-1.0 native facade.
+Python, WASM, and CLI surfaces gain no template method and continue to preserve
+a document rendered by native code.
+
 Native Word callers can also inspect content controls through
 `Document::content_controls` and the tag or alias lookup methods.
 `ContentControlRef` exposes immutable metadata and display text. Direct setters
