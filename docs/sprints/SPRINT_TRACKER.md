@@ -64,6 +64,7 @@ defended.
 | S47 | M14 | 2 | 2 | 0 | 8 | 2 | Added typed revision discovery and atomic accept and reject operations across content, properties, contextual markers, hyperlinks, tables, and controls. Microsoft Word 16.104 normalized-body parity passed, the full close gate passed with all 49 hashes unchanged, and no package was published. M14 continues in S48 for revision display and document protection |
 | S48 | M14 | 2 | 2 | 0 | 4 | 2 | Completed M14 with accepted and tracked revision rendering, deterministic change decorations, and typed document-protection intent. The mixed collaboration gate read and wrote revisions, comments, content controls, and bookmarks in one preserved package. The full close gate passed with all 49 hashes unchanged, and no package was published |
 | S49 | M16 | 4 | 4 | 0 | 12 | 4 | Established one recursive field grammar, deterministic evaluation against pinned Word results, atomic cache-update policies, and namespace-aware reader preservation. The full close gate passed with all 49 hashes unchanged, every package archive remained below 10 MiB, and the sprint review was clean on pass 1. M16 continues in S50 with template syntax, loops, conditionals, and repeating structures |
+| S50 | M16 | 3 | 3 | 0 | 10 | 3 | Added atomic JSON template rendering across run boundaries, nested loops and conditionals, multi-row table repetition, and continuous list numbering. The full close gate passed with all 49 hashes unchanged, all 22 package archives below 10 MiB, and the sprint review clean on pass 3 after four blocking interactions were remediated. M16 continues in S51 with mail merge, comparison, and watermarks |
 
 ## Completed features
 
@@ -339,6 +340,7 @@ five working days.
 | S47 | 2 | 2 | 5.00 |
 | S48 | 2 | 2 | 5.00 |
 | S49 | 4 | 4 | 5.00 |
+| S50 | 3 | 3 | 5.00 |
 
 ## Escalation record
 
@@ -391,3 +393,4 @@ was done about it. Empty is the expected state.
 | 2026-08-17 | Sprint estimate variance exceeded 30 percent | S47 | Record 2 actual days against 8 estimated. F-150 reused F-149's typed revision model, and the extended sprint review concentrated namespace and ordering investigation into one integrated path. Retain the milestone-defined S48 boundary |
 | 2026-08-17 | Sprint estimate variance exceeded 30 percent | S48 | Record 2 actual days against 4 estimated. The two stories used isolated workers, while the integrated review concentrated the milestone interaction proof into one mixed-package gate. Retain the dependency-defined S49 boundary |
 | 2026-08-20 | Sprint estimate variance exceeded 30 percent | S49 | Record 4 actual days against 12 estimated. The three dependent field stories reused one recursive source-preserving model, while the independent reader correction and bounded review loop concentrated preservation investigation into the same integrated gate. Retain the dependency-defined S50 boundary |
+| 2026-08-21 | Sprint estimate variance exceeded 30 percent | S50 | Record 3 actual days against 10 estimated. The strict feature chain reused one template evaluator across all three stories, while the bounded sprint review concentrated four interaction corrections into the same row and scope ownership path. Retain the dependency-defined S51 boundary |
