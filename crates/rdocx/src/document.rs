@@ -6495,6 +6495,91 @@ mod tests {
         );
     }
 
+    fn template_test_row(text: &str) -> CT_Row {
+        let mut paragraph = CT_P::new();
+        paragraph.runs.push(CT_R::new(text));
+        let mut cell = CT_Tc::new();
+        cell.content.push(CellContent::Paragraph(paragraph));
+        let mut row = CT_Row::new();
+        row.cells.push(cell);
+        row
+    }
+
+    fn template_test_row_control(row: CT_Row) -> CT_Sdt {
+        let xml = br#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:sdt><w:sdtContent><w:p><w:r><w:t>placeholder</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sectPr/></w:body></w:document>"#;
+        let mut parsed = CT_Document::from_xml(xml).unwrap();
+        let BodyContent::ContentControl(mut control) = parsed.body.content.remove(0) else {
+            panic!("expected parsed content control");
+        };
+        control.content = vec![SdtContent::Row(row)];
+        control
+    }
+
+    fn template_test_table_with_control(open: &str, control: CT_Sdt, close: &str) -> Document {
+        let mut table = CT_Tbl::new();
+        table.rows.push(template_test_row(open));
+        table.rows.push(template_test_row("source"));
+        table.rows.push(template_test_row(close));
+        table.content_controls.push((1, 0, control));
+        let mut document = Document::new();
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(table));
+        document
+    }
+
+    #[test]
+    fn excluded_table_level_controls_are_preflighted() {
+        let cases = [
+            (
+                "{% for item in items %}",
+                "{% endfor %}",
+                "{{ config.missing }}",
+                serde_json::json!({"items": [], "config": {}}),
+            ),
+            (
+                "{% if show %}",
+                "{% endif %}",
+                "{{ unclosed",
+                serde_json::json!({"show": false}),
+            ),
+        ];
+        for (open, close, control_text, data) in cases {
+            let control = template_test_row_control(template_test_row(control_text));
+            let mut document = template_test_table_with_control(open, control, close);
+            let before = document.document.to_xml().unwrap();
+
+            assert!(document.render_template(&data).is_err());
+            assert_eq!(document.document.to_xml().unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn repeated_table_level_controls_validate_numbering() {
+        let mut numbered_row = template_test_row("{{ item.name }}");
+        let CellContent::Paragraph(paragraph) = &mut numbered_row.cells[0].content[0] else {
+            panic!("expected paragraph");
+        };
+        paragraph.properties = Some(CT_PPr {
+            num_id: Some(99),
+            num_ilvl: Some(0),
+            ..Default::default()
+        });
+        let control = template_test_row_control(numbered_row);
+        let mut document =
+            template_test_table_with_control("{% for item in items %}", control, "{% endfor %}");
+        let before = document.document.to_xml().unwrap();
+
+        assert!(
+            document
+                .render_template(&serde_json::json!({"items": [{"name": "one"}]}))
+                .is_err()
+        );
+        assert_eq!(document.document.to_xml().unwrap(), before);
+    }
+
     #[test]
     fn replace_text_in_header_and_footer() {
         let mut doc = Document::new();

@@ -127,7 +127,12 @@ enum Block<T> {
 struct Evaluated<T> {
     source_index: usize,
     value: T,
-    scopes: Vec<Scope>,
+}
+
+#[derive(Debug, Clone)]
+struct TableRowItem {
+    row: CT_Row,
+    controls: Vec<(usize, CT_Sdt)>,
 }
 
 pub(crate) fn render(document: &mut Document, data: &Value) -> Result<usize> {
@@ -229,26 +234,40 @@ fn validate_body_content_numbering(
 }
 
 fn validate_table_numbering(table: &CT_Tbl, document: &Document, repeated: bool) -> Result<()> {
-    for (_, _, control) in &table.content_controls {
+    let blocks = parse_blocks(&table.rows, row_marker)?;
+    validate_row_numbering_blocks(&blocks, &table.content_controls, document, repeated)?;
+    for (_, _, control) in table
+        .content_controls
+        .iter()
+        .filter(|(at, _, _)| *at == table.rows.len())
+    {
         validate_control_numbering(control, document, repeated)?;
     }
-    let blocks = parse_blocks(&table.rows, row_marker)?;
-    validate_row_numbering_blocks(&blocks, document, repeated)
+    Ok(())
 }
 
 fn validate_row_numbering_blocks(
     blocks: &[Block<CT_Row>],
+    controls: &[(usize, usize, CT_Sdt)],
     document: &Document,
     repeated: bool,
 ) -> Result<()> {
     for block in blocks {
         match block {
-            Block::Item { value, .. } => validate_row_numbering(value, document, repeated)?,
+            Block::Item {
+                source_index,
+                value,
+            } => {
+                validate_row_numbering(value, document, repeated)?;
+                for (_, _, control) in controls.iter().filter(|(at, _, _)| at == source_index) {
+                    validate_control_numbering(control, document, repeated)?;
+                }
+            }
             Block::For { body, .. } => {
-                validate_row_numbering_blocks(body, document, true)?;
+                validate_row_numbering_blocks(body, controls, document, true)?;
             }
             Block::If { body, .. } => {
-                validate_row_numbering_blocks(body, document, repeated)?;
+                validate_row_numbering_blocks(body, controls, document, repeated)?;
             }
         }
     }
@@ -381,10 +400,25 @@ fn render_table(
     sentinels: &mut SentinelPool,
     structural_change: &mut bool,
 ) -> Result<usize> {
-    for (index, row) in table.rows.iter().enumerate() {
-        if row_marker(row)?.is_some()
-            && (table.extra_xml.iter().any(|(at, _)| *at == index)
-                || table.content_controls.iter().any(|(at, _, _)| *at == index))
+    let old_len = table.rows.len();
+    let old_controls = std::mem::take(&mut table.content_controls);
+    let mut controls_by_row = vec![Vec::new(); old_len];
+    let mut trailing_controls = Vec::new();
+    for (at, before, control) in old_controls {
+        if at < old_len {
+            controls_by_row[at].push((before, control));
+        } else if at == old_len {
+            trailing_controls.push((before, control));
+        }
+    }
+    let items = std::mem::take(&mut table.rows)
+        .into_iter()
+        .zip(controls_by_row)
+        .map(|(row, controls)| TableRowItem { row, controls })
+        .collect::<Vec<_>>();
+    for (index, item) in items.iter().enumerate() {
+        if row_marker(&item.row)?.is_some()
+            && (table.extra_xml.iter().any(|(at, _)| *at == index) || !item.controls.is_empty())
         {
             return Err(template_error(
                 "a marker row cannot carry table-level preserved siblings",
@@ -392,18 +426,29 @@ fn render_table(
         }
     }
 
-    let blocks = parse_blocks(&table.rows, row_marker)?;
+    let blocks = parse_blocks(&items, |item| row_marker(&item.row))?;
     *structural_change |= blocks_have_controls(&blocks);
-    let old_len = table.rows.len();
     let old_extra = std::mem::take(&mut table.extra_xml);
-    let old_controls = std::mem::take(&mut table.content_controls);
     let mut local_scopes = scopes.to_vec();
-    let mut render_item =
-        |row: &mut CT_Row, root: &Value, scopes: &[Scope], sentinels: &mut SentinelPool| {
-            let nested =
-                render_nested_tables_in_row(row, root, scopes, sentinels, structural_change)?;
-            Ok(nested + stage_row_scalars(row, root, scopes, sentinels)?)
-        };
+    let mut render_item = |item: &mut TableRowItem,
+                           root: &Value,
+                           scopes: &[Scope],
+                           sentinels: &mut SentinelPool| {
+        let mut count =
+            render_nested_tables_in_row(&mut item.row, root, scopes, sentinels, structural_change)?;
+        count += stage_row_scalars(&mut item.row, root, scopes, sentinels)?;
+        for (_, control) in &mut item.controls {
+            count += render_nested_tables_in_control(
+                control,
+                root,
+                scopes,
+                sentinels,
+                structural_change,
+            )?;
+            count += stage_control_scalars(control, root, scopes, sentinels)?;
+        }
+        Ok(count)
+    };
     let (evaluated, mut count) = evaluate_blocks(
         &blocks,
         root,
@@ -414,38 +459,27 @@ fn render_table(
 
     let mut extra_xml = Vec::new();
     let mut content_controls = Vec::new();
-    for (new_index, row) in evaluated.iter().enumerate() {
+    let new_len = evaluated.len();
+    let mut rows = Vec::with_capacity(new_len);
+    for (new_index, evaluated) in evaluated.into_iter().enumerate() {
         extra_xml.extend(
             old_extra
                 .iter()
-                .filter(|(at, _)| *at == row.source_index)
+                .filter(|(at, _)| *at == evaluated.source_index)
                 .map(|(_, raw)| (new_index, raw.clone())),
         );
-        for (_, before, control) in old_controls
-            .iter()
-            .filter(|(at, _, _)| *at == row.source_index)
-        {
-            let mut control = control.clone();
-            count += render_nested_tables_in_control(
-                &mut control,
-                root,
-                &row.scopes,
-                sentinels,
-                structural_change,
-            )?;
-            count += stage_control_scalars(&mut control, root, &row.scopes, sentinels)?;
-            content_controls.push((new_index, *before, control));
+        for (before, control) in evaluated.value.controls {
+            content_controls.push((new_index, before, control));
         }
+        rows.push(evaluated.value.row);
     }
-    let new_len = evaluated.len();
     extra_xml.extend(
         old_extra
             .iter()
             .filter(|(at, _)| *at == old_len)
             .map(|(_, raw)| (new_len, raw.clone())),
     );
-    for (_, before, control) in old_controls.iter().filter(|(at, _, _)| *at == old_len) {
-        let mut control = control.clone();
+    for (before, mut control) in trailing_controls {
         count += render_nested_tables_in_control(
             &mut control,
             root,
@@ -454,9 +488,9 @@ fn render_table(
             structural_change,
         )?;
         count += stage_control_scalars(&mut control, root, scopes, sentinels)?;
-        content_controls.push((new_len, *before, control));
+        content_controls.push((new_len, before, control));
     }
-    table.rows = evaluated.into_iter().map(|row| row.value).collect();
+    table.rows = rows;
     table.extra_xml = extra_xml;
     table.content_controls = content_controls;
     Ok(count)
@@ -737,7 +771,6 @@ where
                 output.push(Evaluated {
                     source_index: *source_index,
                     value,
-                    scopes: scopes.clone(),
                 });
             }
             Block::For { name, path, body } => {
