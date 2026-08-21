@@ -42,7 +42,7 @@ ceremony.
 | F-X035 | Tag rpptx-v0.4.0 | S | pending | - |
 | F-X036 | Tag v0.8.0 | S | pending | - |
 | F-X037 | Trace Word glyphs to source paragraphs | M | done | - |
-| F-X038 | Cache relayout work across document edits | L | pending | - |
+| F-X038 | Cache relayout work across document edits | L | in-progress | codex |
 
 ## Sequencing note
 

@@ -36,8 +36,8 @@ regenerated, never hand-edited.
 | M18, Format breadth                            | 8  | 0 | 0 | 8  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
-| X, Cross-cutting (opportunistic)            | 41 | 34 | 1 | 5  |
-| **Total** | **252** | **211** | **1** | **39** |
+| X, Cross-cutting (opportunistic)            | 41 | 34 | 2 | 4  |
+| **Total** | **252** | **211** | **2** | **38** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -438,5 +438,5 @@ regenerated, never hand-edited.
 | F-X035 | Tag rpptx-v0.4.0                            | S51 | S | pending |
 | F-X036 | Tag v0.8.0                                  | S51 | S | pending |
 | F-X037 | Trace Word glyphs to source paragraphs     | S51 | M | done |
-| F-X038 | Cache relayout work across document edits  | S51 | L | pending |
+| F-X038 | Cache relayout work across document edits  | S51 | L | in-progress |
 <!-- AUTOGEN:backlog-MX END -->

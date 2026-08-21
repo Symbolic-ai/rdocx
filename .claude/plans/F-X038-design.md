@@ -1,6 +1,6 @@
 # F-X038, Cache relayout work across document edits
 
-**Status**: draft
+**Status**: approved
 **Sprint**: S51
 **Size**: L
 **Depends on**: F-X037, F-X032
