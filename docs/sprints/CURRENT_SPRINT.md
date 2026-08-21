@@ -2,10 +2,12 @@
 
 **Milestone**: M16 Document automation.
 
-**Goal**: close M16 with mail merge, document comparison, and watermarks, the
-three automation capabilities that depend on the field, template, revision,
-header, and rendering foundations already in place. Keep each operation
-package-preserving and bounded to its declared document stories.
+**Goal**: close M16 with mail merge, document comparison, and watermarks, then
+ship the completed milestone with the community-requested ordered-body and
+complete-layout reader surfaces. Keep each operation package-preserving and
+bounded to its declared document stories. Establish reviewed release notes as
+the permanent publication contract before the incubating 0.4.0 and stable
+0.8.0 releases.
 
 ## Spec references
 
@@ -21,7 +23,9 @@ package-preserving and bounded to its declared document stories.
 - `docs/hld/12-testing-strategy.md`, for readable in-code fixtures, regression
   tests, deterministic golden rendering, and the hash-harness gate.
 - `docs/hld/14-development-backlog.md`, for the M16 end gate and the exact
-  F-166, F-167, and F-168 scope, dependencies, and test gates.
+  S51 story scope, dependencies, community contribution, and release gates.
+- `docs/hld/15-build-and-toolchain.md`, for the two release families, version
+  carriers, publication allowlists, and reviewed release SHA.
 
 ## The wave
 
@@ -30,16 +34,26 @@ package-preserving and bounded to its declared document stories.
 | F-166 | Mail merge | M | in-progress | codex |
 | F-167 | Document comparison | L | in-progress | codex |
 | F-168 | Watermarks | S | pending | - |
+| F-X032 | Expose complete Word layout results | S | pending | - |
+| F-X033 | Integrate PR 36 ordered body items | S | pending | - |
+| F-X034 | Reviewed release notes for every release | S | pending | - |
+| F-X035 | Tag rpptx-v0.4.0 | S | pending | - |
+| F-X036 | Tag v0.8.0 | S | pending | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-All three stories have their dependencies satisfied before S51 and have no
-dependency on another row in this wave. F-166 comes first because it composes
-the existing field and structural-template evaluators. F-167 follows as the
-flagship comparison path over body text, tables, and lists. F-168 completes the
-milestone through the independent header and renderer path.
+F-166 comes first because it composes the existing field and
+structural-template evaluators. F-167 follows as the flagship comparison path
+over body text, tables, and lists. F-168 completes the milestone through the
+independent header and renderer path. F-X032 then opens the existing layout
+result to external renderers. F-X033 integrates PR 36 only after the product
+wave is present on its sprint base, so current GitHub CI sees the real result
+and Pedro Assumpcao's commit remains in the merge record. F-X034 establishes
+reviewed release notes before either release tag. F-X035 publishes the missing
+incubating chart dependency at 0.4.0. F-X036 can prepare and publish stable
+0.8.0 only after that registry dependency is verified.
 
 ## Definition of done for this sprint
 
@@ -51,6 +65,14 @@ milestone through the independent header and renderer path.
   than revisions.
 - Text and image watermarks round-trip through header `w:pict` shapes and render
   behind body text on every page.
+- Third-party renderers can obtain positioned pages together with every font
+  used by shaping, including caller-provided fonts on WASM.
+- Direct body paragraphs, tables, content controls, and unsupported XML are
+  readable once each in exact source order through the PR 36 API.
+- Every release uses reviewed notes with highlights, user-visible changes,
+  compatibility guidance, and contributor credit.
+- The incubating 0.4.0 and stable 0.8.0 families publish only after their
+  separate reviewed-SHA approvals and registry verification.
 - Every operation preserves unrelated package parts, relationships, schema
   order, and the unchanged hash-harness baseline unless a reviewed plan
   declares an intentional delta.

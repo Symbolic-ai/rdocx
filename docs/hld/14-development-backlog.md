@@ -2190,6 +2190,90 @@ reviewed sprint SHA.
 required `ci-gate` while the filtered expensive jobs stay skipped, and a
 selected failing job makes the required gate fail.
 
+### F-X032, Expose complete Word layout results (S)
+
+Expose the cached normal-font `LayoutResult` and an uncached caller-font
+`LayoutResult` from `Document` so third-party renderers can consume positioned
+pages together with the exact `FontData` used for shaping. Accepted-default and
+`RenderOptions` variants use the existing layout paths. Cache-backed access
+returns `Arc<LayoutResult>`, caller-font access returns an owned result, and no
+new layout engine or font-set cache is introduced.
+
+**Depends on**: F-009, F-151.
+**Test gate**: regression. Every emitted glyph-run font id resolves to returned
+font data, repeated default calls share the accepted layout cache,
+caller-provided fonts appear in the owned result, and tracked layout does not
+populate the accepted cache.
+
+### F-X033, Integrate PR 36 ordered body items (S)
+
+Integrate Pedro Assumpcao's PR 36 through the active sprint branch while
+retaining the contributor commit and GitHub pull-request record. The additive
+native `Document::body_items` reader returns direct document-body children in
+source order as paragraph, table, body-level content-control, or preserved
+unsupported XML views. Existing recursive paragraph and table accessors retain
+their current semantics. Python, WASM, and CLI surfaces remain unchanged.
+
+The submitted checks ran against an older base. Retarget the pull request to
+the integrated sprint branch, run current-base GitHub CI, and merge it with a
+GitHub merge commit. Maintainer hardening and documentation remain separate
+from the contributor commit.
+
+**Depends on**: none.
+**Test gate**: integration. An in-code document with interleaved body
+paragraphs, tables, content controls, and unmodelled XML opens through the
+public facade and `body_items` reports every direct child once in exact source
+order. Current-base GitHub CI, the submitted focused test, the full package
+gate, and the unchanged hash harness also pass.
+
+### F-X034, Reviewed release notes for every release (S)
+
+Every release tag carries reviewed, human-written release notes rather than
+only GitHub's generated commit summary. The versioned `CHANGELOG.md` section
+for the exact tag records highlights, user-visible additions and fixes,
+compatibility or migration guidance, and contributor credit. Release
+preflight rejects a missing, empty, or placeholder section. The publish
+workflow renders that reviewed section and passes it to `gh release create`
+without replacing it with `--generate-notes`.
+
+**Depends on**: F-X025.
+**Test gate**: regression. Release-note extraction returns the exact versioned
+changelog section for both tag families, rejects missing or incomplete notes,
+and the publish workflow can create a GitHub release only from that reviewed
+output.
+
+### F-X035, Tag rpptx-v0.4.0 (S)
+
+Prepare and publish the complete incubating family at 0.4.0. This is the first
+incubating release containing `oxml-chart`, which is required by the current
+stable `rdocx` graph and was not published at 0.3.0. All 15 crates.io packages
+move together, `rpptx-wasm` remains unpublished, and the reviewed release notes
+name the chart addition, compatibility position, and contributors.
+
+**Depends on**: F-X034.
+**Test gate**: release. The incubating metadata regression, full verification,
+22-package dry run, archive inventory, supply-chain gate, and unchanged hash
+harness pass. After separate final approval, all 15 crates resolve from
+crates.io at 0.4.0 and the GitHub release uses the reviewed notes at the exact
+sprint SHA.
+
+### F-X036, Tag v0.8.0 (S)
+
+Prepare and publish the complete stable family at 0.8.0 after the incubating
+0.4.0 dependency graph is available. The minor boundary covers the intentional
+pre-1.0 low-level revision and field model changes plus the additive document
+automation, complete-layout, and ordered-body facade APIs. Only the exact seven
+stable crates publish. Python, WASM, npm, PyPI, and incubating publication stay
+unauthorised. The reviewed release notes describe the new APIs, fixes,
+compatibility boundary, and contributor credit.
+
+**Depends on**: F-X035.
+**Test gate**: release. The stable metadata regression, full verification,
+22-package dry run, archive inventory, supply-chain gate, and unchanged hash
+harness pass. After separate final approval, all seven stable crates resolve
+from crates.io at 0.8.0 and the GitHub release uses the reviewed notes at the
+exact sprint SHA while PR 36 credit remains visible.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this
