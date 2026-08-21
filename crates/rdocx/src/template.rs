@@ -127,6 +127,7 @@ pub(crate) fn render(document: &mut Document, data: &Value) -> Result<usize> {
     let original_sources = document.clone_for_template().template_sources()?;
     let mut sentinels = SentinelPool::new(&original_sources);
     let mut candidate = document.clone_for_template();
+    validate_repeated_numbering(&candidate)?;
     let (body_count, structural_change) = render_body(&mut candidate, data, &mut sentinels)?;
 
     let remaining_sources = candidate.template_sources()?;
@@ -175,6 +176,151 @@ pub(crate) fn render(document: &mut Document, data: &Value) -> Result<usize> {
     candidate.document.to_xml()?;
     document.commit_template(candidate);
     Ok(expected)
+}
+
+fn validate_repeated_numbering(document: &Document) -> Result<()> {
+    let blocks = parse_blocks(&document.document.body.content, body_marker)?;
+    validate_body_numbering_blocks(&blocks, document, false)
+}
+
+fn validate_body_numbering_blocks(
+    blocks: &[Block<BodyContent>],
+    document: &Document,
+    repeated: bool,
+) -> Result<()> {
+    for block in blocks {
+        match block {
+            Block::Item { value, .. } => {
+                validate_body_content_numbering(value, document, repeated)?;
+            }
+            Block::For { body, .. } => {
+                validate_body_numbering_blocks(body, document, true)?;
+            }
+            Block::If { body, .. } => {
+                validate_body_numbering_blocks(body, document, repeated)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_body_content_numbering(
+    content: &BodyContent,
+    document: &Document,
+    repeated: bool,
+) -> Result<()> {
+    match content {
+        BodyContent::Paragraph(paragraph) => {
+            validate_paragraph_numbering(paragraph, document, repeated)
+        }
+        BodyContent::Table(table) => validate_table_numbering(table, document, repeated),
+        BodyContent::ContentControl(control) => {
+            validate_control_numbering(control, document, repeated)
+        }
+        BodyContent::RawXml(_) => Ok(()),
+    }
+}
+
+fn validate_table_numbering(table: &CT_Tbl, document: &Document, repeated: bool) -> Result<()> {
+    for (_, _, control) in &table.content_controls {
+        validate_control_numbering(control, document, repeated)?;
+    }
+    let blocks = parse_blocks(&table.rows, row_marker)?;
+    validate_row_numbering_blocks(&blocks, document, repeated)
+}
+
+fn validate_row_numbering_blocks(
+    blocks: &[Block<CT_Row>],
+    document: &Document,
+    repeated: bool,
+) -> Result<()> {
+    for block in blocks {
+        match block {
+            Block::Item { value, .. } => validate_row_numbering(value, document, repeated)?,
+            Block::For { body, .. } => {
+                validate_row_numbering_blocks(body, document, true)?;
+            }
+            Block::If { body, .. } => {
+                validate_row_numbering_blocks(body, document, repeated)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_row_numbering(row: &CT_Row, document: &Document, repeated: bool) -> Result<()> {
+    for cell in &row.cells {
+        validate_cell_numbering(cell, document, repeated)?;
+    }
+    for (_, _, control) in &row.content_controls {
+        validate_control_numbering(control, document, repeated)?;
+    }
+    Ok(())
+}
+
+fn validate_cell_numbering(cell: &CT_Tc, document: &Document, repeated: bool) -> Result<()> {
+    for content in &cell.content {
+        match content {
+            CellContent::Paragraph(paragraph) => {
+                validate_paragraph_numbering(paragraph, document, repeated)?;
+            }
+            CellContent::Table(table) => {
+                validate_table_numbering(table, document, repeated)?;
+            }
+            CellContent::ContentControl(control) => {
+                validate_control_numbering(control, document, repeated)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_control_numbering(control: &CT_Sdt, document: &Document, repeated: bool) -> Result<()> {
+    for content in &control.content {
+        match content {
+            SdtContent::Paragraph(paragraph) => {
+                validate_paragraph_numbering(paragraph, document, repeated)?;
+            }
+            SdtContent::Table(table) => {
+                validate_table_numbering(table, document, repeated)?;
+            }
+            SdtContent::Row(row) => validate_row_numbering(row, document, repeated)?,
+            SdtContent::Cell(cell) => validate_cell_numbering(cell, document, repeated)?,
+            SdtContent::ContentControl(nested) => {
+                validate_control_numbering(nested, document, repeated)?;
+            }
+            SdtContent::Run(_) | SdtContent::RawXml(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_paragraph_numbering(
+    paragraph: &CT_P,
+    document: &Document,
+    repeated: bool,
+) -> Result<()> {
+    if !repeated {
+        return Ok(());
+    }
+    let Some(properties) = &paragraph.properties else {
+        return Ok(());
+    };
+    let Some(num_id) = properties.num_id else {
+        if properties.num_ilvl.is_some() {
+            return Err(template_error(
+                "a repeated paragraph numbering level has no numId",
+            ));
+        }
+        return Ok(());
+    };
+    let level = properties.num_ilvl.unwrap_or(0);
+    if !document.template_numbering_reference_exists(num_id, level) {
+        return Err(template_error(&format!(
+            "a repeated paragraph references missing numbering numId {num_id} level {level}"
+        )));
+    }
+    Ok(())
 }
 
 fn render_body(

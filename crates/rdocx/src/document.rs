@@ -2604,6 +2604,18 @@ impl Document {
         }
     }
 
+    pub(crate) fn template_numbering_reference_exists(&self, num_id: u32, level: u32) -> bool {
+        self.numbering
+            .as_ref()
+            .and_then(|numbering| numbering.get_abstract_num_for(num_id))
+            .is_some_and(|abstract_numbering| {
+                abstract_numbering
+                    .levels
+                    .iter()
+                    .any(|candidate| candidate.ilvl == level)
+            })
+    }
+
     pub(crate) fn template_sources(&mut self) -> Result<Vec<String>> {
         self.flush_to_package()?;
         let mut sources = crate::template::body_sources(&self.document);
@@ -6039,6 +6051,177 @@ mod tests {
         let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
         let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
         assert!(xml.rfind("<w:p>").unwrap() < xml.rfind("<w:sectPr>").unwrap());
+    }
+
+    #[test]
+    fn repeated_rows_and_lists_preserve_properties_and_raw_xml() {
+        use rdocx_oxml::table::{
+            CT_TblGrid, CT_TblGridCol, CT_TblLook, CT_TblPr, CT_TcPr, CT_TrPr, VMerge,
+        };
+
+        let mut document = Document::new();
+        document.add_paragraph("{% for item in items %}");
+        document.add_numbered_list_item("List {{ item }}", 1);
+        document.add_paragraph("Detail {{ item }}");
+        document.add_paragraph("{% endfor %}");
+
+        let row_raw = br#"<q:rowData xmlns:q="urn:rdocx:f165" q:value="kept"/>"#.to_vec();
+        let cell_property_raw =
+            br#"<q:cellProperty xmlns:q="urn:rdocx:f165" q:value="kept"/>"#.to_vec();
+        let cell_raw = br#"<q:cellData xmlns:q="urn:rdocx:f165" q:value="kept"/>"#.to_vec();
+        let table_raw = br#"<q:tableData xmlns:q="urn:rdocx:f165" q:value="kept"/>"#.to_vec();
+        let control_xml = br#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:sdt><w:sdtPr><w:tag w:val="row-control"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>controlled</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sectPr/></w:body></w:document>"#;
+        let mut control_document = CT_Document::from_xml(control_xml).unwrap();
+        let BodyContent::ContentControl(control) = control_document.body.content.remove(0) else {
+            panic!("expected parsed content control");
+        };
+
+        let marker_row = |text: &str| {
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(CT_R::new(text));
+            let mut cell = CT_Tc::new();
+            cell.content = vec![CellContent::Paragraph(paragraph)];
+            let mut row = CT_Row::new();
+            row.cells.push(cell);
+            row
+        };
+        let template_row = |text: &str, merge: VMerge, header: bool| {
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(CT_R::new(text));
+            let mut properties = CT_TcPr {
+                grid_span: Some(2),
+                v_merge: Some(merge),
+                ..Default::default()
+            };
+            properties.extra_xml.push((3, cell_property_raw.clone()));
+            let mut cell = CT_Tc::new();
+            cell.properties = Some(properties);
+            cell.content = vec![
+                CellContent::Paragraph(paragraph),
+                CellContent::ContentControl(control.clone()),
+            ];
+            cell.extra_xml.push((0, cell_raw.clone()));
+            let mut row = CT_Row::new();
+            row.properties = Some(CT_TrPr {
+                header: Some(header),
+                cnf_style: Some("100000000000".to_owned()),
+                ..Default::default()
+            });
+            row.cells.push(cell);
+            row.extra_xml.push((0, row_raw.clone()));
+            row
+        };
+        let mut table = CT_Tbl::new();
+        table.properties = Some(CT_TblPr {
+            style_id: Some("BandedRows".to_owned()),
+            look: Some(CT_TblLook {
+                first_row: Some(true),
+                no_h_band: Some(false),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        table.grid = Some(CT_TblGrid {
+            columns: vec![
+                CT_TblGridCol { width: Twips(1800) },
+                CT_TblGridCol { width: Twips(1800) },
+                CT_TblGridCol { width: Twips(1800) },
+            ],
+        });
+        table.rows.push(marker_row("{% for item in items %}"));
+        table
+            .rows
+            .push(template_row("A {{ item }}", VMerge::Restart, true));
+        table
+            .rows
+            .push(template_row("B {{ item }}", VMerge::Continue, false));
+        table
+            .rows
+            .push(template_row("C {{ item }}", VMerge::Continue, false));
+        table.rows.push(marker_row("{% endfor %}"));
+        table.extra_xml.push((table.rows.len(), table_raw.clone()));
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(table));
+
+        assert_eq!(
+            document
+                .render_template(&serde_json::json!({"items": ["one", "two"]}))
+                .unwrap(),
+            10
+        );
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let paragraphs = reopened.paragraphs();
+        let numbered = paragraphs
+            .iter()
+            .filter_map(|paragraph| paragraph.numbering())
+            .collect::<Vec<_>>();
+        assert_eq!(numbered.len(), 2);
+        assert_eq!(numbered[0], numbered[1]);
+        assert_eq!(numbered[0].1, 1);
+
+        let table = reopened.document.body.tables().next().unwrap();
+        assert_eq!(table.rows.len(), 6);
+        assert_eq!(table.grid.as_ref().unwrap().columns.len(), 3);
+        assert_eq!(
+            table
+                .properties
+                .as_ref()
+                .unwrap()
+                .look
+                .as_ref()
+                .unwrap()
+                .no_h_band,
+            Some(false)
+        );
+        assert_eq!(table.extra_xml, vec![(6, table_raw)]);
+        for (index, row) in table.rows.iter().enumerate() {
+            assert_eq!(row.extra_xml, vec![(0, row_raw.clone())]);
+            assert_eq!(
+                row.properties.as_ref().unwrap().header,
+                (index % 3 == 0).then_some(true)
+            );
+            let cell = &row.cells[0];
+            assert_eq!(cell.extra_xml, vec![(0, cell_raw.clone())]);
+            let CellContent::ContentControl(control) = &cell.content[1] else {
+                panic!("expected repeated cell content control");
+            };
+            assert_eq!(
+                control.properties.as_ref().unwrap().tag.as_deref(),
+                Some("row-control")
+            );
+            let paragraph = control
+                .content
+                .iter()
+                .find_map(|content| match content {
+                    SdtContent::Paragraph(paragraph) => Some(paragraph),
+                    _ => None,
+                })
+                .expect("expected controlled paragraph");
+            assert_eq!(paragraph.text(), "controlled");
+            let properties = cell.properties.as_ref().unwrap();
+            assert_eq!(properties.grid_span, Some(2));
+            assert_eq!(
+                properties.v_merge,
+                Some(if index % 3 == 0 {
+                    VMerge::Restart
+                } else {
+                    VMerge::Continue
+                })
+            );
+            assert_eq!(properties.extra_xml, vec![(3, cell_property_raw.clone())]);
+        }
+
+        let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(xml.find("<w:trPr>").unwrap() < xml.find("<q:rowData").unwrap());
+        assert!(xml.find("<w:gridSpan").unwrap() < xml.find("<q:cellProperty").unwrap());
+        assert!(xml.find("<q:cellProperty").unwrap() < xml.find("<w:vMerge").unwrap());
+        assert!(xml.rfind("<w:tr>").unwrap() < xml.rfind("<q:tableData").unwrap());
+        assert!(xml.rfind("<q:tableData").unwrap() < xml.rfind("</w:tbl>").unwrap());
     }
 
     #[test]

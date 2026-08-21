@@ -1,6 +1,6 @@
 # F-165, Repeating table rows and lists
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S50
 **Size**: M
 **Depends on**: F-164
@@ -96,14 +96,14 @@ invokes it.
 
 ## Implementation checklist
 
-- [ ] Extend row-loop evaluation to clone multi-row template groups in order.
-- [ ] Preserve table, row, cell, merge, banding, content-control, and raw XML
+- [x] Extend row-loop evaluation to clone multi-row template groups in order.
+- [x] Preserve table, row, cell, merge, banding, content-control, and raw XML
   state through repetition.
-- [ ] Preserve one numbering identity and level across repeated list items.
-- [ ] Validate row containers and numbering references before mutation.
-- [ ] Add the thirty-row and continuous-numbering regression fixtures.
-- [ ] Add round-trip assertions for table, list, and unmodelled XML state.
-- [ ] Update the HLD with table and list repetition invariants.
+- [x] Preserve one numbering identity and level across repeated list items.
+- [x] Validate row containers and numbering references before mutation.
+- [x] Add the thirty-row and continuous-numbering regression fixtures.
+- [x] Add round-trip assertions for table, list, and unmodelled XML state.
+- [x] Update the HLD with table and list repetition invariants.
 
 ## Open questions
 

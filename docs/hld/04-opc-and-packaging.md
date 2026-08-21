@@ -317,12 +317,19 @@ Template rendering follows the same staged package boundary. A stack parser
 pairs nested controls within one body or table-row container before evaluation.
 The evaluator clones typed body entries and rows into candidate sequences, so
 section properties, row properties, and ordered raw-child sidecars travel with
-their owner. Markers are removed only from the candidate. Scalar syntax and
-JSON values are resolved against lexical loop scopes before replacement reaches
-typed body content, relationship-resolved headers and footers, raw text boxes,
-or chart parts. Replacement values pass through collision-free sentinels, so a
-value that contains template syntax is not evaluated recursively. The live
-typed document and package are replaced only after every discovered tag is
-accounted for and the candidate document serializes successfully. Any control,
-lookup, scalar-type, parse, or serialization failure leaves package parts,
-typed content, and layout caches unchanged.
+their owner. A row loop may clone several adjacent template rows per iteration.
+The original table and its properties, grid, raw boundaries, content controls,
+and relationships remain in place. Cloned row and cell property sequences keep
+grid spans, vertical merge state, and unmodelled children byte for byte.
+Repeated numbered paragraphs keep their existing numbering part reference and
+level. No numbering relationship, instance, or abstract definition is added.
+Markers are removed only from the candidate. Scalar syntax and JSON values are
+resolved against lexical loop scopes before replacement reaches typed body
+content, relationship-resolved headers and footers, raw text boxes, or chart
+parts. Replacement values pass through collision-free sentinels, so a value
+that contains template syntax is not evaluated recursively. The live typed
+document and package are replaced only after every discovered tag is accounted
+for, every repeated numbering reference resolves, and the candidate document
+serializes successfully. Any control, lookup, numbering, scalar-type, parse, or
+serialization failure leaves package parts, typed content, and layout caches
+unchanged.

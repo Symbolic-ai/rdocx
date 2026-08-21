@@ -3288,3 +3288,152 @@ fn a_nested_loop_and_conditional_generate_the_expected_document() {
         .collect::<Vec<_>>();
     assert_eq!(row_text, ["Alpha:one", "Alpha:two", "Beta:three"]);
 }
+
+#[test]
+fn three_template_rows_over_ten_records_produce_thirty_preserved_rows() {
+    let body = r#"
+        <w:tbl>
+          <w:tblPr>
+            <w:tblStyle w:val="BandedRows"/>
+            <w:tblLook w:val="04A0" w:firstRow="1" w:noHBand="0"/>
+          </w:tblPr>
+          <w:tblGrid>
+            <w:gridCol w:w="1800"/><w:gridCol w:w="1800"/><w:gridCol w:w="1800"/>
+          </w:tblGrid>
+          <w:tr><w:tc><w:p><w:r><w:t>{% for record in records %}</w:t></w:r></w:p></w:tc></w:tr>
+          <w:tr>
+            <w:trPr><w:cnfStyle w:val="100000000000"/></w:trPr>
+            <w:tc><w:tcPr><w:gridSpan w:val="2"/><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>A {{ record.id }}</w:t></w:r></w:p></w:tc>
+            <w:tc><w:p><w:r><w:t>top</w:t></w:r></w:p></w:tc>
+          </w:tr>
+          <w:tr>
+            <w:tc><w:tcPr><w:gridSpan w:val="2"/><w:vMerge/></w:tcPr><w:p><w:r><w:t>B {{ record.id }}</w:t></w:r></w:p></w:tc>
+            <w:tc><w:p><w:r><w:t>middle</w:t></w:r></w:p></w:tc>
+          </w:tr>
+          <w:tr>
+            <w:tc><w:tcPr><w:gridSpan w:val="2"/><w:vMerge/></w:tcPr><w:p><w:r><w:t>C {{ record.id }}</w:t></w:r></w:p></w:tc>
+            <w:tc><w:p><w:r><w:t>bottom</w:t></w:r></w:p></w:tc>
+          </w:tr>
+          <w:tr><w:tc><w:p><w:r><w:t>{% endfor %}</w:t></w:r></w:p></w:tc></w:tr>
+        </w:tbl>
+        <w:sectPr/>
+    "#;
+    let mut document = document_with_content_controls(&wrap_word_body(body));
+    let records = (0..10)
+        .map(|id| serde_json::json!({"id": id}))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        document
+            .render_template(&serde_json::json!({"records": records}))
+            .unwrap(),
+        30
+    );
+    let body = body_from_document(&mut document);
+    let table = body.tables().next().unwrap();
+    assert_eq!(table.rows.len(), 30);
+    assert_eq!(table.grid.as_ref().unwrap().columns.len(), 3);
+    let properties = table.properties.as_ref().unwrap();
+    assert_eq!(properties.style_id.as_deref(), Some("BandedRows"));
+    let look = properties.look.as_ref().unwrap();
+    assert_eq!(look.first_row, Some(true));
+    assert_eq!(look.no_h_band, Some(false));
+
+    for (index, row) in table.rows.iter().enumerate() {
+        let cell_properties = row.cells[0].properties.as_ref().unwrap();
+        assert_eq!(cell_properties.grid_span, Some(2));
+        assert_eq!(
+            cell_properties.v_merge,
+            Some(if index % 3 == 0 {
+                rdocx_oxml::table::VMerge::Restart
+            } else {
+                rdocx_oxml::table::VMerge::Continue
+            })
+        );
+        let prefix = ["A", "B", "C"][index % 3];
+        assert_eq!(row.cells[0].text(), format!("{prefix} {}", index / 3));
+    }
+
+    let invalid_list = r#"
+        <w:p><w:r><w:t>{% for item in items %}</w:t></w:r></w:p>
+        <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="99"/></w:numPr></w:pPr><w:r><w:t>{{ item }}</w:t></w:r></w:p>
+        <w:p><w:r><w:t>{% endfor %}</w:t></w:r></w:p>
+        <w:sectPr/>
+    "#;
+    let mut invalid = document_with_content_controls(&wrap_word_body(invalid_list));
+    let before = invalid.to_bytes().unwrap();
+    assert!(
+        invalid
+            .render_template(&serde_json::json!({"items": ["value"]}))
+            .is_err()
+    );
+    assert_eq!(invalid.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn repeated_numbered_items_keep_one_continuous_sequence() {
+    let mut document = Document::new();
+    document.add_paragraph("{% for item in items %}");
+    document.add_numbered_list_item("Item {{ item.name }}", 2);
+    document.add_paragraph("Note {{ item.name }}");
+    document.add_paragraph("{% endfor %}");
+    let before = document.to_bytes().unwrap();
+    let before_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(before)).unwrap();
+    let numbering_before = before_package
+        .get_part("/word/numbering.xml")
+        .unwrap()
+        .to_vec();
+
+    assert_eq!(
+        document
+            .render_template(&serde_json::json!({
+                "items": [{"name": "one"}, {"name": "two"}, {"name": "three"}]
+            }))
+            .unwrap(),
+        6
+    );
+    let saved = document.to_bytes().unwrap();
+    let saved_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    assert_eq!(
+        saved_package.get_part("/word/numbering.xml").unwrap(),
+        numbering_before
+    );
+    let reopened = Document::from_bytes(&saved).unwrap();
+    let paragraphs = reopened.paragraphs();
+    assert_eq!(
+        paragraphs
+            .iter()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>(),
+        [
+            "Item one",
+            "Note one",
+            "Item two",
+            "Note two",
+            "Item three",
+            "Note three"
+        ]
+    );
+    let numbering = paragraphs
+        .iter()
+        .step_by(2)
+        .map(|paragraph| paragraph.numbering().unwrap())
+        .collect::<Vec<_>>();
+    assert!(numbering.iter().all(|value| *value == numbering[0]));
+    assert_eq!(numbering[0].1, 2);
+
+    let invalid_body = r#"
+        <w:p><w:r><w:t>{% for item in items %}</w:t></w:r></w:p>
+        <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="99"/></w:numPr></w:pPr><w:r><w:t>{{ item }}</w:t></w:r></w:p>
+        <w:p><w:r><w:t>{% endfor %}</w:t></w:r></w:p>
+        <w:sectPr/>
+    "#;
+    let mut invalid = document_with_content_controls(&wrap_word_body(invalid_body));
+    let before = invalid.to_bytes().unwrap();
+    assert!(
+        invalid
+            .render_template(&serde_json::json!({"items": ["value"]}))
+            .is_err()
+    );
+    assert_eq!(invalid.to_bytes().unwrap(), before);
+}
