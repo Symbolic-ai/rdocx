@@ -38,8 +38,8 @@ pub use comments::{BookmarkRef, CommentRef, RunPosition, RunRange};
 pub use comparison::ComparisonDiagnostic;
 pub use content_control::ContentControlRef;
 pub use document::{
-    AccessibilityIssue, Document, ImageInfo, IssueSeverity, LinkInfo, ListLevel, ListNumberFormat,
-    OutlineNode, RenderOptions,
+    AccessibilityIssue, BodyItemRef, Document, ImageInfo, IssueSeverity, LinkInfo, ListLevel,
+    ListNumberFormat, OutlineNode, RenderOptions,
 };
 pub use error::{Error, Result};
 pub use field::{FieldDateTime, FieldEvaluation, FieldEvaluationContext, FieldOutcome};
