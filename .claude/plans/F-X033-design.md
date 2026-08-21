@@ -1,6 +1,6 @@
 # F-X033, Integrate PR 36 ordered body items
 
-**Status**: draft
+**Status**: approved
 **Sprint**: S51
 **Size**: S
 **Depends on**: F-X038
