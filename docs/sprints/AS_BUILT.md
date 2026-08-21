@@ -7783,3 +7783,41 @@ deterministic, field ownership, and legacy result parity regressions.
 **Notes for future sessions.** Source ids are one-based and local to one
 result. F-X038 must rebind cached scalar ranges to current ids rather than
 retaining a prior layout's identity.
+
+### F-X032, Expose complete Word layout results
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Four native `Document` accessors now expose complete
+`WordLayoutResult` bundles. Accepted normal-font layouts share the existing
+`Arc` cache, tracked options remain uncached, and caller-font layouts return
+owned bundles with the exact font bytes and Word source map used by shaping.
+
+**Non-obvious choices.** Cached results use `Arc` so external renderers do not
+duplicate positioned pages, fonts, or provenance maps. Caller-provided font
+sets remain uncached because borrowed font inputs have no stable cache key.
+Existing PDF, raster, page, and caller-font PDF paths consume the same bundle
+paths as the new public accessors.
+
+**Deviations from the design plan.** None. Microscope review strengthened the
+tests with a distinct in-memory font family, an already-populated accepted
+cache, and a non-default tracked revision view.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, facade ownership,
+`docs/hld/08-rendering-spec.md`, layout result and cache behavior,
+`docs/hld/10-bindings-spec.md`, native public accessors,
+`docs/hld/12-testing-strategy.md`, public traversal and cache-isolation gates,
+and `docs/hld/14-development-backlog.md`, the issue 37 contract.
+
+**Tests.** `full_layout_exposes_resolvable_font_data_and_reuses_the_cache`,
+plus caller-font byte ownership, accepted and tracked cache isolation, public
+downstream traversal, WASM compilation, package dry-run, and archive-size
+checks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** F-X038 may reuse shaping and safe paragraph
+work, but it must preserve the accepted cache identity contract and rebuild
+result-local provenance ids for every returned layout.

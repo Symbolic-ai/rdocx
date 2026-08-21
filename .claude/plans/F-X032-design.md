@@ -133,7 +133,6 @@ layout paths and do not call the new accessors.
 
 ## Open questions
 
-None. The user approved F-X032 for S51. Its plan remains draft only because the
-new F-X037 dependency must land first. Cache-backed access uses `Arc`,
+None. The user approved F-X032 for S51. Cache-backed access uses `Arc`,
 caller-font access stays uncached, and `RenderOptions` variants are included
 from the first public version.

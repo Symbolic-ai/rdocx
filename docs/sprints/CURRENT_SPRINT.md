@@ -36,7 +36,7 @@ ceremony.
 | F-166 | Mail merge | M | done | - |
 | F-167 | Document comparison | L | done | - |
 | F-168 | Watermarks | S | done | - |
-| F-X032 | Expose complete Word layout results | S | in-progress | codex |
+| F-X032 | Expose complete Word layout results | S | done | - |
 | F-X033 | Integrate PR 36 ordered body items | S | pending | - |
 | F-X034 | Reviewed release notes for every release | S | in-progress | codex |
 | F-X035 | Tag rpptx-v0.4.0 | S | pending | - |
