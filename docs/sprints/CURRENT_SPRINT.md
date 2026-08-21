@@ -40,7 +40,7 @@ ceremony.
 | F-X033 | Integrate PR 36 ordered body items | S | done | - |
 | F-X034 | Reviewed release notes for every release | S | done | - |
 | F-X035 | Tag rpptx-v0.4.0 | S | done | - |
-| F-X036 | Tag v0.8.0 | S | pending | - |
+| F-X036 | Tag v0.8.0 | S | in-progress | codex |
 | F-X037 | Trace Word glyphs to source paragraphs | M | done | - |
 | F-X038 | Cache relayout work across document edits | L | done | - |
 
