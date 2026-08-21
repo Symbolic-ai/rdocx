@@ -1233,6 +1233,73 @@ fn default_render_methods_keep_the_accepted_view() {
     );
 }
 
+#[test]
+fn downstream_renderers_can_traverse_the_complete_public_layout_result() {
+    let mut document = Document::new();
+    document.add_paragraph("public layout integration");
+
+    let result = document.layout().expect("public layout should succeed");
+    let mut saw_resolvable_run = false;
+    for page in &result.layout.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                let font = result
+                    .layout
+                    .fonts
+                    .iter()
+                    .find(|font| font.id == run.font_id)
+                    .expect("glyph run font should resolve");
+                assert!(!font.data.is_empty());
+                if let Some(source) = run.source {
+                    assert!(result.source_node(source.node).is_some());
+                }
+                saw_resolvable_run = true;
+            }
+        });
+    }
+    assert!(saw_resolvable_run);
+}
+
+#[test]
+fn caller_font_layout_options_select_the_tracked_revision_projection() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>ordinary </w:t></w:r><w:ins w:id="1" w:author="Ada"><w:r><w:t>accepted</w:t></w:r></w:ins><w:del w:id="2" w:author="Ben"><w:r><w:delText> omitted</w:delText></w:r></w:del></w:p>"#,
+    );
+    let document = document_with_content_controls(&xml);
+    let (family, bytes) = oxml_layout::bundled_fonts::bundled_font_data()[0];
+    let accepted = document
+        .layout_with_fonts(&[(family, bytes)])
+        .expect("accepted caller-font layout should succeed");
+    let tracked = document
+        .layout_with_fonts_and_options(
+            &[(family, bytes)],
+            RenderOptions {
+                revision_view: RevisionView::Tracked,
+            },
+        )
+        .expect("tracked caller-font layout should succeed");
+
+    let visible_text = |result: &rdocx_layout::WordLayoutResult| {
+        let mut text = String::new();
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let oxml_layout::PositionedElement::Text(run) = element {
+                    text.push_str(&run.text);
+                }
+            });
+        }
+        text
+    };
+
+    let accepted_text = visible_text(&accepted);
+    let tracked_text = visible_text(&tracked);
+    assert_eq!(accepted.revision_view, RevisionView::Accepted);
+    assert_eq!(tracked.revision_view, RevisionView::Tracked);
+    assert!(accepted_text.contains("ordinary accepted"));
+    assert!(!accepted_text.contains("omitted"));
+    assert!(tracked_text.contains("ordinary accepted omitted"));
+}
+
 fn document_with_content_controls(document_xml: &str) -> Document {
     document_with_bound_content_controls(document_xml, None)
 }

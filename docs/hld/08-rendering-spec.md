@@ -446,11 +446,15 @@ them. Table cells do not use the shape autofit algorithm.
 
 ## Performance
 
-`Document` keeps normal-font and deterministic `LayoutResult` values in
-separate `Mutex<Option<Arc<_>>>` caches. `render_page_to_png`,
-`render_all_pages`, `to_pdf` and `layout_page` share the normal result. The
-deterministic page renderer uses its own result, while caller-supplied font
-layouts remain uncached because those fonts are not part of a stable cache key.
+`Document` keeps normal-font and deterministic `WordLayoutResult` values in
+separate `Mutex<Option<Arc<_>>>` caches. `layout`, option-taking accepted
+layout, `render_page_to_png`, `render_all_pages`, `to_pdf`, and `layout_page`
+share the normal result. The deterministic renderers use their own bundle.
+Tracked layouts and caller-supplied font layouts remain uncached because they
+must not populate or replace the accepted cache, and arbitrary font sets are
+not part of a stable cache key. Caller-font access returns an owned bundle.
+Every PDF and raster path borrows its `LayoutResult` field from the same bundle
+that owns the exact font data and Word source map.
 
 The low-level Word engine keeps its existing `LayoutResult` entry points and
 discards provenance there. `layout_document_with_provenance` and

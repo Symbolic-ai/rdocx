@@ -104,6 +104,18 @@ tests compare the existing low-level layout results after stripping provenance.
 Both WASM targets and the package dry-run cover the intentional exhaustive
 public literal change. All 49 hash entries remain unchanged.
 
+The native full-layout regression resolves every positioned glyph-run font id
+through the returned `WordLayoutResult`, resolves every attributed source id
+through the same bundle, and proves PDF reuses the accepted layout `Arc`. A
+caller-font fixture rewrites the family records of an in-memory TTF so neither
+its name nor bytes can be supplied by bundled fonts, then requires every
+sourced run to resolve to that exact owned font. The cache boundary populates
+accepted layout before tracked calls and proves they neither replace its `Arc`
+nor add an accepted invocation. Public integration coverage renders different
+accepted and tracked revision text through the caller-font option accessor.
+The workspace package dry-run, 10 MiB archive ceiling, and WASM target check
+cover the additive published API. All 49 hash entries remain unchanged.
+
 ## The hash harness
 
 The single highest-value mechanism in the plan is

@@ -310,6 +310,16 @@ projection. Parsed complex-field caches advance projection offsets, while new
 simple fields do not. Generated markers, evaluated fields, note labels, and
 non-bijective display transformations remain unattributed.
 
+The `rdocx` facade caches that complete `WordLayoutResult` for accepted normal
+and deterministic layout. `Document::layout` and
+`Document::layout_with_options` return a shared `Arc` for accepted normal-font
+layout, while tracked layout stays uncached. `Document::layout_with_fonts` and
+`Document::layout_with_fonts_and_options` return owned uncached bundles because
+arbitrary caller font sets have no stable cache key. PDF, raster, and cloned
+page access borrow the backend-neutral `layout` field from the same bundle, so
+external renderers receive the exact font bytes and source table used for each
+glyph run.
+
 `rdocx-layout` keeps the flow model: the engine, the paginator, blocks, tables
 and the style resolver. Slides do not paginate, so none of it transfers. The
 flow engine resolves Word relationship IDs to content-addressed `MediaId`

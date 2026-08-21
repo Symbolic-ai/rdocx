@@ -1,6 +1,6 @@
 # F-X032, Expose complete Word layout results
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S51
 **Size**: S
 **Depends on**: F-009, F-151, F-X037
@@ -120,15 +120,15 @@ layout paths and do not call the new accessors.
 
 ## Implementation checklist
 
-- [ ] Rename the private options helper without changing cache behavior.
-- [ ] Add the four native layout accessors in the existing facade file.
-- [ ] Route caller-font PDF rendering through the owned layout accessor.
-- [ ] Prove font-id resolution, cache sharing, caller-font ownership, options,
+- [x] Rename the private options helper without changing cache behavior.
+- [x] Add the four native layout accessors in the existing facade file.
+- [x] Route caller-font PDF rendering through the owned layout accessor.
+- [x] Prove font-id resolution, cache sharing, caller-font ownership, options,
   and WASM compilation.
-- [ ] Run the public-package and archive-size rider.
-- [ ] Run full verification and the unchanged hash harness.
-- [ ] Update exactly the HLD files listed above.
-- [ ] Comment on issue 37 with the reviewed API and release target after
+- [x] Run the public-package and archive-size rider.
+- [x] Run full verification and the unchanged hash harness.
+- [x] Update exactly the HLD files listed above.
+- [x] Comment on issue 37 with the reviewed API and release target after
   integration.
 
 ## Open questions

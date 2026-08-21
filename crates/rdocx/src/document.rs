@@ -97,9 +97,9 @@ pub struct Document {
     /// Whether this facade created the comments-extended part and may remove it when empty.
     pub(crate) comments_extended_owned: bool,
     /// Normal layout, including system font discovery, computed on first use.
-    layout_cache: Mutex<Option<Arc<oxml_layout::LayoutResult>>>,
+    layout_cache: Mutex<Option<Arc<rdocx_layout::WordLayoutResult>>>,
     /// Bundled-font-only layout used by deterministic rendering.
-    deterministic_layout_cache: Mutex<Option<Arc<oxml_layout::LayoutResult>>>,
+    deterministic_layout_cache: Mutex<Option<Arc<rdocx_layout::WordLayoutResult>>>,
 }
 
 enum ChartPackageSource<'a> {
@@ -614,7 +614,7 @@ impl Document {
     }
 
     /// Return the normal-font layout, computing it once after each mutation.
-    fn cached_layout(&self) -> Result<Arc<oxml_layout::LayoutResult>> {
+    fn cached_layout(&self) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
         let mut cache = self
             .layout_cache
             .lock()
@@ -626,13 +626,13 @@ impl Document {
         let input = self.build_layout_input();
         #[cfg(test)]
         record_layout_invocation();
-        let layout = Arc::new(rdocx_layout::layout_document(&input)?);
+        let layout = Arc::new(rdocx_layout::layout_document_with_provenance(&input)?);
         *cache = Some(Arc::clone(&layout));
         Ok(layout)
     }
 
     /// Return the bundled-font-only layout, computing it once after mutation.
-    fn cached_deterministic_layout(&self) -> Result<Arc<oxml_layout::LayoutResult>> {
+    fn cached_deterministic_layout(&self) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
         let mut cache = self
             .deterministic_layout_cache
             .lock()
@@ -644,16 +644,18 @@ impl Document {
         let input = self.build_layout_input();
         #[cfg(test)]
         record_layout_invocation();
-        let layout = Arc::new(rdocx_layout::layout_document_deterministic(&input)?);
+        let layout = Arc::new(rdocx_layout::layout_document_deterministic_with_provenance(
+            &input,
+        )?);
         *cache = Some(Arc::clone(&layout));
         Ok(layout)
     }
 
-    fn layout_with_options(
+    fn layout_for_options(
         &self,
         options: RenderOptions,
         deterministic: bool,
-    ) -> Result<Arc<oxml_layout::LayoutResult>> {
+    ) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
         if options.revision_view == rdocx_layout::RevisionView::Accepted {
             return if deterministic {
                 self.cached_deterministic_layout()
@@ -667,9 +669,9 @@ impl Document {
         #[cfg(test)]
         record_layout_invocation();
         let layout = if deterministic {
-            rdocx_layout::layout_document_deterministic(&input)?
+            rdocx_layout::layout_document_deterministic_with_provenance(&input)?
         } else {
-            rdocx_layout::layout_document(&input)?
+            rdocx_layout::layout_document_with_provenance(&input)?
         };
         Ok(Arc::new(layout))
     }
@@ -3197,7 +3199,57 @@ impl Document {
         count
     }
 
-    // ---- PDF conversion ----
+    // ---- Layout and PDF conversion ----
+
+    /// Return the cached normal-font layout with its Word source map.
+    ///
+    /// Repeated calls share the same accepted-view result until the document
+    /// is mutated.
+    pub fn layout(&self) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
+        self.layout_with_options(RenderOptions::default())
+    }
+
+    /// Return a normal-font layout with the selected revision view.
+    ///
+    /// Accepted-view calls share the normal layout cache. Tracked-view calls
+    /// remain uncached because they do not replace the accepted-view cache.
+    pub fn layout_with_options(
+        &self,
+        options: RenderOptions,
+    ) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
+        self.layout_for_options(options, false)
+    }
+
+    /// Return an uncached layout using user-provided font files.
+    ///
+    /// User-provided fonts take highest priority in font resolution. The
+    /// returned owned result retains the exact font bytes and Word source map
+    /// used by layout.
+    pub fn layout_with_fonts(
+        &self,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<rdocx_layout::WordLayoutResult> {
+        self.layout_with_fonts_and_options(font_files, RenderOptions::default())
+    }
+
+    /// Return an uncached caller-font layout with the selected revision view.
+    pub fn layout_with_fonts_and_options(
+        &self,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> Result<rdocx_layout::WordLayoutResult> {
+        let mut input = self.build_layout_input();
+        input.revision_view = options.revision_view;
+        for (family, data) in font_files {
+            input.fonts.push(rdocx_layout::FontFile {
+                family: family.to_string(),
+                data: data.to_vec(),
+            });
+        }
+        #[cfg(test)]
+        record_layout_invocation();
+        Ok(rdocx_layout::layout_document_with_provenance(&input)?)
+    }
 
     /// Render the document to PDF bytes.
     ///
@@ -3214,8 +3266,8 @@ impl Document {
 
     /// Render the document to PDF bytes with the selected revision view.
     pub fn to_pdf_with_options(&self, options: RenderOptions) -> Result<Vec<u8>> {
-        let layout = self.layout_with_options(options, false)?;
-        Ok(oxml_pdf::render_to_pdf(&layout))
+        let layout = self.layout_with_options(options)?;
+        Ok(oxml_pdf::render_to_pdf(&layout.layout))
     }
 
     /// Render the document to PDF bytes using bundled fonts without system
@@ -3229,8 +3281,8 @@ impl Document {
 
     /// Render the selected revision view to deterministic PDF bytes.
     pub fn to_pdf_deterministic_with_options(&self, options: RenderOptions) -> Result<Vec<u8>> {
-        let layout = self.layout_with_options(options, true)?;
-        Ok(oxml_pdf::render_to_pdf(&layout))
+        let layout = self.layout_for_options(options, true)?;
+        Ok(oxml_pdf::render_to_pdf(&layout.layout))
     }
 
     /// Render the document to PDF bytes with user-provided font files.
@@ -3255,18 +3307,8 @@ impl Document {
         font_files: &[(&str, &[u8])],
         options: RenderOptions,
     ) -> Result<Vec<u8>> {
-        let mut input = self.build_layout_input();
-        input.revision_view = options.revision_view;
-        for (family, data) in font_files {
-            input.fonts.push(rdocx_layout::FontFile {
-                family: family.to_string(),
-                data: data.to_vec(),
-            });
-        }
-        #[cfg(test)]
-        record_layout_invocation();
-        let layout = rdocx_layout::layout_document(&input)?;
-        Ok(oxml_pdf::render_to_pdf(&layout))
+        let layout = self.layout_with_fonts_and_options(font_files, options)?;
+        Ok(oxml_pdf::render_to_pdf(&layout.layout))
     }
 
     /// Save the document as a PDF file.
@@ -3365,8 +3407,12 @@ impl Document {
         dpi: f64,
         options: RenderOptions,
     ) -> Result<Option<Vec<u8>>> {
-        let layout = self.layout_with_options(options, false)?;
-        Ok(oxml_pdf::render_page_to_png(&layout, page_index, dpi))
+        let layout = self.layout_with_options(options)?;
+        Ok(oxml_pdf::render_page_to_png(
+            &layout.layout,
+            page_index,
+            dpi,
+        ))
     }
 
     /// Render a single page to PNG using bundled fonts without system font
@@ -3394,8 +3440,12 @@ impl Document {
         dpi: f64,
         options: RenderOptions,
     ) -> Result<Option<Vec<u8>>> {
-        let layout = self.layout_with_options(options, true)?;
-        Ok(oxml_pdf::render_page_to_png(&layout, page_index, dpi))
+        let layout = self.layout_for_options(options, true)?;
+        Ok(oxml_pdf::render_page_to_png(
+            &layout.layout,
+            page_index,
+            dpi,
+        ))
     }
 
     /// Render all pages of the document to PNG bytes.
@@ -3409,8 +3459,8 @@ impl Document {
         dpi: f64,
         options: RenderOptions,
     ) -> Result<Vec<Vec<u8>>> {
-        let layout = self.layout_with_options(options, false)?;
-        Ok(oxml_pdf::render_all_pages(&layout, dpi))
+        let layout = self.layout_with_options(options)?;
+        Ok(oxml_pdf::render_all_pages(&layout.layout, dpi))
     }
 
     /// Return a cloned positioned page from the cached normal-font layout.
@@ -3426,8 +3476,8 @@ impl Document {
         page_index: usize,
         options: RenderOptions,
     ) -> Result<Option<oxml_layout::PageFrame>> {
-        let layout = self.layout_with_options(options, false)?;
-        Ok(layout.pages.get(page_index).cloned())
+        let layout = self.layout_with_options(options)?;
+        Ok(layout.layout.pages.get(page_index).cloned())
     }
 
     /// Build a LayoutInput from the document's current state.
@@ -4646,6 +4696,48 @@ mod tests {
         LAYOUT_INVOCATIONS.get()
     }
 
+    fn caller_only_font() -> (&'static str, Vec<u8>) {
+        const FAMILY: &str = "Callira";
+        const SOURCE: &[u8] =
+            include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf").as_slice();
+
+        fn replace_all_same_length(data: &mut [u8], from: &[u8], to: &[u8]) -> usize {
+            assert_eq!(from.len(), to.len());
+            let mut replaced = 0;
+            let mut offset = 0;
+            while let Some(index) = data[offset..]
+                .windows(from.len())
+                .position(|window| window == from)
+            {
+                let start = offset + index;
+                data[start..start + from.len()].copy_from_slice(to);
+                offset = start + from.len();
+                replaced += 1;
+            }
+            replaced
+        }
+
+        let mut bytes = SOURCE.to_vec();
+        let ascii = replace_all_same_length(&mut bytes, b"Carlito", FAMILY.as_bytes());
+        let source_utf16 = "Carlito"
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect::<Vec<_>>();
+        let family_utf16 = FAMILY
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect::<Vec<_>>();
+        let utf16 = replace_all_same_length(&mut bytes, &source_utf16, &family_utf16);
+        assert!(ascii > 0 && utf16 > 0, "font family records were renamed");
+        assert!(
+            oxml_layout::bundled_fonts::bundled_font_data()
+                .iter()
+                .all(|(family, bundled)| *family != FAMILY && *bundled != bytes),
+            "the caller-only font must not match bundled family names or bytes"
+        );
+        (FAMILY, bytes)
+    }
+
     #[test]
     fn rendering_all_pages_performs_one_layout() {
         let mut doc = Document::new();
@@ -4806,6 +4898,124 @@ mod tests {
         doc.to_pdf_with_fonts(&[(family, font_data)]).unwrap();
         doc.to_pdf_with_fonts(&[(family, font_data)]).unwrap();
         assert_eq!(layout_invocations(), 4);
+    }
+
+    #[test]
+    fn full_layout_exposes_resolvable_font_data_and_reuses_the_cache() {
+        let mut doc = Document::new();
+        doc.add_paragraph("complete layout result");
+
+        reset_layout_invocations();
+        let first = doc.layout().expect("normal layout should succeed");
+        let second = doc
+            .layout_with_options(RenderOptions::default())
+            .expect("accepted layout should succeed");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(layout_invocations(), 1);
+
+        let mut sourced_runs = 0;
+        for page in &first.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let oxml_layout::PositionedElement::Text(run) = element {
+                    assert!(first.layout.fonts.iter().any(|font| font.id == run.font_id));
+                    if let Some(source) = run.source {
+                        assert!(first.source_node(source.node).is_some());
+                        sourced_runs += 1;
+                    }
+                }
+            });
+        }
+        assert!(sourced_runs > 0);
+
+        assert!(
+            !doc.to_pdf()
+                .expect("PDF should use cached layout")
+                .is_empty()
+        );
+        assert_eq!(layout_invocations(), 1);
+    }
+
+    #[test]
+    fn layout_with_fonts_returns_the_caller_font_mapping_without_caching() {
+        let mut doc = Document::new();
+        let (family, bytes) = caller_only_font();
+        doc.add_paragraph("")
+            .add_run("caller font result")
+            .font(family);
+
+        reset_layout_invocations();
+        let first = doc
+            .layout_with_fonts(&[(family, &bytes)])
+            .expect("caller-font layout should succeed");
+        let second = doc
+            .layout_with_fonts_and_options(&[(family, &bytes)], RenderOptions::default())
+            .expect("caller-font options layout should succeed");
+        assert_eq!(layout_invocations(), 2);
+
+        for result in [&first, &second] {
+            let mut positioned_runs = Vec::new();
+            for page in &result.layout.pages {
+                oxml_layout::walk(&page.elements, &mut |element, _| {
+                    if let oxml_layout::PositionedElement::Text(run) = element
+                        && run.source.is_some()
+                    {
+                        positioned_runs.push(run.clone());
+                    }
+                });
+            }
+            assert!(
+                !positioned_runs.is_empty(),
+                "caller-font text was positioned"
+            );
+            for run in positioned_runs {
+                let font = result
+                    .layout
+                    .fonts
+                    .iter()
+                    .find(|font| font.id == run.font_id)
+                    .expect("caller-font glyph run should resolve its font id");
+                assert_eq!(font.family, family);
+                assert_eq!(font.data, bytes);
+                let source = run
+                    .source
+                    .expect("caller-font text should retain source provenance");
+                assert!(result.source_node(source.node).is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn layout_options_keep_tracked_and_accepted_cache_ownership_separate() {
+        let mut doc = Document::new();
+        doc.add_paragraph("revision cache separation");
+        let tracked = RenderOptions {
+            revision_view: rdocx_layout::RevisionView::Tracked,
+        };
+
+        reset_layout_invocations();
+        let accepted_first = doc.layout().expect("accepted layout should succeed");
+        assert_eq!(layout_invocations(), 1);
+
+        let tracked_first = doc
+            .layout_with_options(tracked)
+            .expect("tracked layout should succeed");
+        let tracked_second = doc
+            .layout_with_options(tracked)
+            .expect("second tracked layout should succeed");
+        assert!(!Arc::ptr_eq(&tracked_first, &tracked_second));
+        assert_eq!(layout_invocations(), 3);
+
+        let accepted_second = doc.layout().expect("accepted cache should succeed");
+        assert!(Arc::ptr_eq(&accepted_first, &accepted_second));
+        assert_eq!(layout_invocations(), 3);
+        assert_eq!(
+            tracked_first.revision_view,
+            rdocx_layout::RevisionView::Tracked
+        );
+        assert_eq!(
+            accepted_first.revision_view,
+            rdocx_layout::RevisionView::Accepted
+        );
     }
 
     #[test]
@@ -7923,8 +8133,10 @@ mod watermark_tests {
         );
 
         let layout = document
-            .layout_with_options(RenderOptions::default(), true)
-            .unwrap();
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
         assert_eq!(layout.pages.len(), 2);
         assert!(layout.pages.iter().all(|page| {
             matches!(
@@ -7998,8 +8210,10 @@ mod watermark_tests {
                 .is_empty()
         );
         let layout = reopened
-            .layout_with_options(RenderOptions::default(), true)
-            .unwrap();
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
         assert_eq!(layout.pages.len(), 2);
         assert!(page_text(&layout, 1).contains("Company header"));
         assert!(matches!(
@@ -8040,8 +8254,10 @@ mod watermark_tests {
 
         let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
         let layout = reopened
-            .layout_with_options(RenderOptions::default(), true)
-            .unwrap();
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
         assert_eq!(layout.pages.len(), 2);
         assert!(page_text(&layout, 1).contains("default header"));
         assert!(!page_text(&layout, 1).contains("even header"));
@@ -8064,8 +8280,10 @@ mod watermark_tests {
         first.set_first_page_footer("");
         first.add_paragraph("body");
         let first_layout = first
-            .layout_with_options(RenderOptions::default(), true)
-            .unwrap();
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
         assert!(
             !first_layout.pages[0]
                 .elements
@@ -8087,8 +8305,10 @@ mod watermark_tests {
         even.set_text_watermark("DRAFT").unwrap();
         even.add_paragraph(&"body ".repeat(4_000));
         let even_layout = even
-            .layout_with_options(RenderOptions::default(), true)
-            .unwrap();
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
         assert!(matches!(
             even_layout.pages[1].elements.first(),
             Some(oxml_layout::PositionedElement::Group(_))
@@ -8148,8 +8368,10 @@ mod watermark_tests {
         );
         document.add_paragraph("body");
         let layout = document
-            .layout_with_options(RenderOptions::default(), true)
-            .unwrap();
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
         let oxml_layout::PositionedElement::Group(group) = &layout.pages[0].elements[0] else {
             panic!("expected watermark group");
         };
@@ -8177,8 +8399,10 @@ mod watermark_tests {
         );
         document.add_paragraph("body");
         let layout = document
-            .layout_with_options(RenderOptions::default(), true)
-            .unwrap();
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
         assert!(
             !layout.pages[0]
                 .elements
@@ -8213,8 +8437,10 @@ mod watermark_tests {
             }
             document.add_paragraph(&"body ".repeat(4_000));
             document
-                .layout_with_options(RenderOptions::default(), true)
+                .layout_for_options(RenderOptions::default(), true)
                 .unwrap()
+                .layout
+                .clone()
         };
         let disabled = render(None);
         let entity_false = render(Some(Some("&#48;")));
@@ -8236,8 +8462,10 @@ mod watermark_tests {
         document.set_raw_header_with_images(xml.into_bytes(), &[], HdrFtrType::Default);
         document.add_paragraph("body");
         let layout = document
-            .layout_with_options(RenderOptions::default(), true)
-            .unwrap();
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
         assert!(
             !layout.pages[0]
                 .elements
@@ -8261,8 +8489,10 @@ mod watermark_tests {
         document.set_text_watermark("DRAFT").unwrap();
         document.add_paragraph("body");
         let layout = document
-            .layout_with_options(RenderOptions::default(), true)
-            .unwrap();
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
         let oxml_layout::PositionedElement::Group(group) = &layout.pages[0].elements[0] else {
             panic!("expected watermark group");
         };
@@ -8292,8 +8522,10 @@ mod watermark_tests {
         document.set_text_watermark("DRAFT").unwrap();
         document.add_paragraph(&"body ".repeat(4_000));
         let layout = document
-            .layout_with_options(RenderOptions::default(), true)
-            .unwrap();
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
         assert!(layout.pages.len() > 2);
         assert!(layout.pages.iter().all(|page| {
             matches!(
@@ -8324,8 +8556,10 @@ mod watermark_tests {
         document.set_text_watermark("DRAFT").unwrap();
         document.add_paragraph(&"body ".repeat(4_000));
         let layout = document
-            .layout_with_options(RenderOptions::default(), true)
-            .unwrap();
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
         let pngs = oxml_pdf::render_all_pages(&layout, 72.0);
         assert!(pngs.len() > 1);
         assert!(pngs.iter().all(|png| png.starts_with(b"\x89PNG\r\n\x1a\n")));

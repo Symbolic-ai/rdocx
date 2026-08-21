@@ -2195,16 +2195,18 @@ selected failing job makes the required gate fail.
 Expose the cached normal-font `WordLayoutResult` and an uncached caller-font
 `WordLayoutResult` from `Document` so third-party renderers can consume
 positioned pages together with the exact `FontData` and Word source map used by
-layout. Accepted-default and `RenderOptions` variants use the existing layout
-paths. Cache-backed access returns `Arc<WordLayoutResult>`, caller-font access
-returns an owned result, and no new layout engine or font-set cache is
-introduced.
+layout. `layout` and `layout_with_options` return the shared accepted cache as
+`Arc<WordLayoutResult>`, while tracked options remain uncached.
+`layout_with_fonts` and `layout_with_fonts_and_options` return owned uncached
+results. PDF, raster, and page access borrow the neutral layout from those same
+bundles. No new layout engine or font-set cache is introduced.
 
 **Depends on**: F-009, F-151, F-X037.
 **Test gate**: regression. Every emitted glyph-run font id resolves to returned
 font data, repeated default calls share the accepted layout cache,
-caller-provided fonts appear in the owned result, and tracked layout does not
-populate the accepted cache.
+caller-only family names and bytes appear in the owned result, and tracked
+layout neither populates nor replaces the accepted cache. Public caller-font
+options must expose different accepted and tracked revision projections.
 
 ### F-X033, Integrate PR 36 ordered body items (S)
 

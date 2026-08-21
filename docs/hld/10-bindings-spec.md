@@ -91,7 +91,8 @@ borrowed nested handle can mutate without a rebind:
 `doc.paragraph_mut(3).unwrap().add_run("text").set_bold(true)`.
 
 **Threading.** `Document` remains `Send` and `Sync`. Its normal and
-deterministic layouts live in separate `Mutex<Option<Arc<LayoutResult>>>`
+deterministic layouts live in separate
+`Mutex<Option<Arc<WordLayoutResult>>>`
 caches, with a compile-time regression gate preserving that contract.
 `to_pdf`, `render_all_pages` and `to_bytes` run inside `py.allow_threads`, so a
 Python thread pool genuinely parallelises work across documents. Concurrent
@@ -336,9 +337,10 @@ struct literals must supply `None` when they do not own an exact source range.
 normal-font and deterministic provenance entry points. Node ids resolve only
 through the result-local Word source table, and ranges use Unicode scalar
 indices in the recorded revision view. The existing layout functions keep
-returning `LayoutResult`. Python, WASM, CLI, and the stable `rdocx::Document`
-facade remain unchanged by this low-level addition. The exhaustive literal
-change is part of the planned incubating 0.4.0 and stable 0.8.0 source boundary.
+returning `LayoutResult`. The `rdocx::Document` facade consumes the provenance
+entry points through additive native accessors, while Python, WASM, and CLI
+surfaces remain unchanged. The exhaustive literal change is part of the
+planned incubating 0.4.0 and stable 0.8.0 source boundary.
 
 Native callers resolve tracked changes through `accept_all`, `reject_all`, the
 exact-author pair, the inclusive RFC 3339 date-range pair, and the id pair.
@@ -366,6 +368,16 @@ raster output, page layout, deterministic rendering, and caller-supplied font
 paths. The existing methods keep their accepted default. Python, WASM, and CLI
 surfaces do not implicitly expose the selector and retain their existing
 rendering behavior.
+
+Native renderers obtain the complete positioned output through
+`Document::layout` and `Document::layout_with_options`. Accepted calls return a
+shared `Arc<WordLayoutResult>` from the normal-font cache, including pages,
+font bytes, revision view, and the result-local Word source map. Tracked calls
+stay uncached. `Document::layout_with_fonts` and
+`Document::layout_with_fonts_and_options` return owned uncached bundles whose
+font mapping contains the exact caller-provided bytes selected for shaping.
+The built-in PDF, raster, and page accessors consume these same paths. This is
+an additive pre-1.0 native Rust surface and does not add binding methods.
 
 Native Word callers author watermarks with `Document::set_text_watermark` and
 `Document::set_image_watermark`. Text uses fixed Word-like defaults of 468 by
