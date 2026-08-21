@@ -155,7 +155,8 @@ fallback otherwise. If dimensions cannot be determined, it returns
 
 Thanks to Pedro Assumpcao for the ordered-body contribution in PR 36 and the
 reader compatibility work included in this release. Thanks to `@emptinessform`
-for the issue 39 relayout measurements and cache proposal.
+for the Issue 37 complete-layout report and the Issue 39 relayout measurements
+and cache proposal.
 
 ## rpptx-v0.4.0
 

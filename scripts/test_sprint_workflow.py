@@ -3915,6 +3915,14 @@ class SprintWorkflowTests(unittest.TestCase):
         ):
             self.assertIn(claim, added, claim)
 
+        contributors = notes.split("### Contributors\n\n", 1)[1]
+        for credit in (
+            "@emptinessform",
+            "Issue 37 complete-layout report",
+            "Issue 39 relayout measurements",
+        ):
+            self.assertIn(credit, contributors, credit)
+
     def test_v0_8_0_notes_cover_native_collaboration_tranche(self) -> None:
         changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
         self.assert_stable_collaboration_release_notes_contract(changelog)
@@ -3935,6 +3943,18 @@ class SprintWorkflowTests(unittest.TestCase):
             mutated = changelog.replace(claim, "native collaboration capability", 1)
             self.assertNotEqual(mutated, changelog, claim)
             with self.subTest(claim=claim), self.assertRaises(AssertionError):
+                self.assert_stable_collaboration_release_notes_contract(mutated)
+
+    def test_v0_8_0_notes_reject_an_omitted_issue_reporter_credit(self) -> None:
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        for credit in (
+            "@emptinessform",
+            "Issue 37 complete-layout report",
+            "Issue 39 relayout measurements",
+        ):
+            mutated = changelog.replace(credit, "external report", 1)
+            self.assertNotEqual(mutated, changelog, credit)
+            with self.subTest(credit=credit), self.assertRaises(AssertionError):
                 self.assert_stable_collaboration_release_notes_contract(mutated)
 
     def test_stable_release_family_is_prepared_at_0_8_0(self) -> None:
