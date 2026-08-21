@@ -98,6 +98,8 @@ pub struct Document {
     pub(crate) comments_extended_owned: bool,
     /// Normal layout, including system font discovery, computed on first use.
     layout_cache: Mutex<Option<Arc<rdocx_layout::WordLayoutResult>>>,
+    /// Reusable normal-font engine retained across document edits.
+    normal_layout_engine: Mutex<Option<rdocx_layout::engine::Engine>>,
     /// Bundled-font-only layout used by deterministic rendering.
     deterministic_layout_cache: Mutex<Option<Arc<rdocx_layout::WordLayoutResult>>>,
 }
@@ -428,6 +430,7 @@ impl Document {
             comments_owned: false,
             comments_extended_owned: false,
             layout_cache: Mutex::new(None),
+            normal_layout_engine: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
         }
     }
@@ -458,6 +461,7 @@ impl Document {
             comments_owned: self.comments_owned,
             comments_extended_owned: self.comments_extended_owned,
             layout_cache: Mutex::new(None),
+            normal_layout_engine: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
         }
     }
@@ -597,6 +601,7 @@ impl Document {
             comments_owned: false,
             comments_extended_owned: false,
             layout_cache: Mutex::new(None),
+            normal_layout_engine: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
         })
     }
@@ -626,7 +631,14 @@ impl Document {
         let input = self.build_layout_input();
         #[cfg(test)]
         record_layout_invocation();
-        let layout = Arc::new(rdocx_layout::layout_document_with_provenance(&input)?);
+        let mut engine = self
+            .normal_layout_engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let engine = engine.get_or_insert_with(rdocx_layout::engine::Engine::new);
+        let layout = Arc::new(rdocx_layout::layout_document_with_reusable_engine(
+            engine, &input,
+        )?);
         *cache = Some(Arc::clone(&layout));
         Ok(layout)
     }
@@ -671,7 +683,12 @@ impl Document {
         let layout = if deterministic {
             rdocx_layout::layout_document_deterministic_with_provenance(&input)?
         } else {
-            rdocx_layout::layout_document_with_provenance(&input)?
+            let mut engine = self
+                .normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let engine = engine.get_or_insert_with(rdocx_layout::engine::Engine::new);
+            rdocx_layout::layout_document_with_reusable_engine(engine, &input)?
         };
         Ok(Arc::new(layout))
     }
@@ -3248,7 +3265,7 @@ impl Document {
         }
         #[cfg(test)]
         record_layout_invocation();
-        Ok(rdocx_layout::layout_document_with_provenance(&input)?)
+        Ok(rdocx_layout::layout_document_with_caller_fonts_and_provenance(&input)?)
     }
 
     /// Render the document to PDF bytes.
@@ -4985,6 +5002,19 @@ mod tests {
     }
 
     #[test]
+    fn caller_font_layout_does_not_fall_through_to_system_or_bundled_fonts() {
+        let mut doc = Document::new();
+        doc.add_paragraph("caller isolation requires an explicit font universe");
+        assert!(doc.layout_with_fonts(&[]).is_err());
+        assert!(
+            doc.normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn layout_options_keep_tracked_and_accepted_cache_ownership_separate() {
         let mut doc = Document::new();
         doc.add_paragraph("revision cache separation");
@@ -5004,6 +5034,12 @@ mod tests {
             .expect("second tracked layout should succeed");
         assert!(!Arc::ptr_eq(&tracked_first, &tracked_second));
         assert_eq!(layout_invocations(), 3);
+        assert!(
+            doc.normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
 
         let accepted_second = doc.layout().expect("accepted cache should succeed");
         assert!(Arc::ptr_eq(&accepted_first, &accepted_second));
@@ -5019,9 +5055,60 @@ mod tests {
     }
 
     #[test]
+    fn tracked_normal_layouts_retain_the_document_engine_without_caching_results() {
+        let mut doc = Document::new();
+        doc.add_paragraph("tracked engine reuse");
+        let tracked = RenderOptions {
+            revision_view: rdocx_layout::RevisionView::Tracked,
+        };
+
+        let first = doc
+            .layout_with_options(tracked)
+            .expect("first tracked layout");
+        let second = doc
+            .layout_with_options(tracked)
+            .expect("second tracked layout");
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert!(
+            doc.normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+        assert!(
+            doc.layout_cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn document_remains_send_and_sync() {
         fn assert_send_and_sync<T: Send + Sync>() {}
         assert_send_and_sync::<Document>();
+    }
+
+    #[test]
+    fn relayout_caches_are_bounded_and_recover_from_poison() {
+        let mut document = Document::new();
+        document.add_paragraph("layout after engine lock poison");
+        let document = Arc::new(document);
+        let poison = Arc::clone(&document);
+        assert!(
+            std::thread::spawn(move || {
+                let _engine = poison.normal_layout_engine.lock().unwrap();
+                panic!("poison normal layout engine lock for recovery coverage");
+            })
+            .join()
+            .is_err()
+        );
+
+        let first = document
+            .layout()
+            .expect("layout recovers from poisoned engine lock");
+        let second = document.layout().expect("recovered layout remains cached");
+        assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[test]

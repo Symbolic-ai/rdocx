@@ -26,7 +26,7 @@ pub enum RevisionView {
 }
 
 /// Image data keyed by relationship/embed ID.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageData {
     /// Raw image bytes (PNG, JPEG, etc.).
     pub data: Vec<u8>,

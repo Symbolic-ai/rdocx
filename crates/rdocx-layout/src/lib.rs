@@ -69,6 +69,37 @@ pub fn layout_document_with_provenance(input: &LayoutInput) -> Result<WordLayout
     })
 }
 
+/// Lay out a DOCX with a reusable normal-font engine.
+///
+/// This hidden facade hook lets `rdocx::Document` retain expensive normal-font
+/// work without exposing cache ownership as a second public abstraction.
+#[doc(hidden)]
+pub fn layout_document_with_reusable_engine(
+    engine: &mut engine::Engine,
+    input: &LayoutInput,
+) -> Result<WordLayoutResult> {
+    let (layout, source_nodes) = engine.layout_with_provenance(input)?;
+    Ok(WordLayoutResult {
+        layout,
+        revision_view: input.revision_view,
+        source_nodes,
+    })
+}
+
+/// Lay out a DOCX using only caller-supplied and document-embedded fonts.
+#[doc(hidden)]
+pub fn layout_document_with_caller_fonts_and_provenance(
+    input: &LayoutInput,
+) -> Result<WordLayoutResult> {
+    let (layout, source_nodes) =
+        engine::Engine::new_with_caller_fonts().layout_with_provenance(input)?;
+    Ok(WordLayoutResult {
+        layout,
+        revision_view: input.revision_view,
+        source_nodes,
+    })
+}
+
 /// Lay out a DOCX using bundled fonts without system font discovery.
 pub fn layout_document_deterministic(input: &LayoutInput) -> Result<LayoutResult> {
     engine::Engine::new_deterministic()?.layout(input)

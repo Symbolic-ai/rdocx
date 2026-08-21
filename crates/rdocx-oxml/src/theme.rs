@@ -7,7 +7,7 @@ use crate::error::Result;
 use crate::namespace::matches_local_name;
 
 /// Parsed theme information from `word/theme/theme1.xml`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Theme {
     /// Theme color scheme (dk1, dk2, lt1, lt2, accent1-6, hlink, folHlink).
     pub colors: ThemeColors,
@@ -18,7 +18,7 @@ pub struct Theme {
 }
 
 /// The 12 standard theme colors, stored as 6-character hex RGB strings.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ThemeColors {
     pub dk1: Option<String>,
     pub dk2: Option<String>,

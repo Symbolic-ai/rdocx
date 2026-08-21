@@ -1,13 +1,14 @@
 //! Layout engine orchestrator: ties all phases together.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
+use rdocx_oxml::borders::{CT_PBdr, CT_TabStop};
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_SectPr};
 use rdocx_oxml::drawing::WrapType;
 use rdocx_oxml::header_footer::{HdrFtrType, VmlWatermark};
 use rdocx_oxml::numbering::ST_LvlSuffix;
-use rdocx_oxml::properties::CT_PPr;
+use rdocx_oxml::properties::{CT_PPr, CT_RPr, CT_Shd};
 use rdocx_oxml::revision::{CT_Revision, RevisionContent, RevisionKind};
 use rdocx_oxml::shared::ST_HighlightColor;
 use rdocx_oxml::styles::CT_Styles;
@@ -25,9 +26,9 @@ use crate::style_resolver::{self, NumberingState};
 use crate::table;
 use crate::{WordSourcePath, WordStory};
 use oxml_layout::{
-    Color, Diagnostic, DocumentMetadata, FieldKind, FontManager, GlyphRun, GroupElement,
-    InlineItem, LayoutResult, NoteRef, NoteStream, PageFrame, Point, PositionedElement, Rect,
-    Result, SourceNodeId, SourceSpan, TextSegment, Transform, Underline, break_into_lines,
+    Color, Diagnostic, DocumentMetadata, FieldKind, FontId, FontManager, GlyphRun, GroupElement,
+    InlineItem, LayoutResult, LineItem, NoteRef, NoteStream, PageFrame, Point, PositionedElement,
+    Rect, Result, SourceNodeId, SourceSpan, TextSegment, Transform, Underline, break_into_lines,
 };
 
 #[derive(Clone, Copy)]
@@ -389,7 +390,56 @@ fn revision_is_visible(revision: &CT_Revision) -> bool {
 /// The layout engine.
 pub struct Engine {
     font_manager: FontManager,
+    paragraph_cache_context: Option<ParagraphCacheContext>,
+    paragraph_cache: VecDeque<ParagraphCacheEntry>,
+    paragraph_cache_bytes: usize,
+    paragraph_cache_hits: usize,
+    paragraph_cache_builds: usize,
+    pending_paragraph_cache: Option<VecDeque<ParagraphCacheEntry>>,
+    pending_paragraph_cache_bytes: usize,
+    #[cfg(test)]
+    pending_paragraph_cache_peak_entries: usize,
+    #[cfg(test)]
+    pending_paragraph_cache_peak_bytes: usize,
+    paragraph_cache_reads_enabled: bool,
 }
+
+#[derive(Clone, PartialEq)]
+struct ParagraphCacheContext {
+    styles: CT_Styles,
+    theme: Option<rdocx_oxml::theme::Theme>,
+}
+
+impl ParagraphCacheContext {
+    fn for_input(input: &LayoutInput) -> Self {
+        Self {
+            styles: input.styles.clone(),
+            theme: input.theme.clone(),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq)]
+struct ParagraphCacheKey {
+    paragraph: CT_P,
+    content_width_bits: u64,
+    revision_view: RevisionView,
+}
+
+struct ParagraphCacheEntry {
+    key: ParagraphCacheKey,
+    block: ParagraphBlock,
+    diagnostics: Vec<Diagnostic>,
+    font_trace: Vec<FontId>,
+    bytes: usize,
+}
+
+const PARAGRAPH_CACHE_MAX_ENTRIES: usize = 256;
+const PARAGRAPH_CACHE_MAX_BYTES: usize = 16 * 1024 * 1024;
+const CACHE_SOURCE_NODE: SourceNodeId = match SourceNodeId::new(1) {
+    Some(node) => node,
+    None => panic!("one is a valid source node id"),
+};
 
 impl Default for Engine {
     fn default() -> Self {
@@ -398,17 +448,37 @@ impl Default for Engine {
 }
 
 impl Engine {
-    pub fn new() -> Self {
-        Engine {
-            font_manager: FontManager::new(),
+    fn with_font_manager(font_manager: FontManager) -> Self {
+        Self {
+            font_manager,
+            paragraph_cache_context: None,
+            paragraph_cache: VecDeque::new(),
+            paragraph_cache_bytes: 0,
+            paragraph_cache_hits: 0,
+            paragraph_cache_builds: 0,
+            pending_paragraph_cache: None,
+            pending_paragraph_cache_bytes: 0,
+            #[cfg(test)]
+            pending_paragraph_cache_peak_entries: 0,
+            #[cfg(test)]
+            pending_paragraph_cache_peak_bytes: 0,
+            paragraph_cache_reads_enabled: false,
         }
+    }
+
+    pub fn new() -> Self {
+        Self::with_font_manager(FontManager::new())
     }
 
     /// Create an engine that resolves fonts without system font discovery.
     pub fn new_deterministic() -> Result<Self> {
-        Ok(Engine {
-            font_manager: FontManager::new_deterministic()?,
-        })
+        Ok(Self::with_font_manager(FontManager::new_deterministic()?))
+    }
+
+    /// Create an engine whose font universe is supplied entirely by the
+    /// layout input, without bundled or system-font discovery.
+    pub(crate) fn new_with_caller_fonts() -> Self {
+        Self::with_font_manager(FontManager::new_with_fonts(Vec::new()))
     }
 
     /// Lay out the entire document.
@@ -431,11 +501,63 @@ impl Engine {
         input: &LayoutInput,
         sources: Option<&SourceRegistry>,
     ) -> Result<LayoutResult> {
-        // Load user-provided / DOCX-embedded fonts (highest priority)
-        if !input.fonts.is_empty() {
-            self.font_manager.load_additional_fonts(&input.fonts);
+        // Load user-provided / DOCX-embedded fonts (highest priority). An exact
+        // unchanged set is a no-op in a reusable engine.
+        let fonts_changed = self.font_manager.load_additional_fonts(&input.fonts);
+        self.font_manager.begin_layout();
+
+        let paragraph_context = ParagraphCacheContext::for_input(input);
+        if fonts_changed {
+            self.paragraph_cache.clear();
+            self.paragraph_cache_bytes = 0;
+        }
+        let context_matches =
+            !fonts_changed && self.paragraph_cache_context.as_ref() == Some(&paragraph_context);
+        self.paragraph_cache_reads_enabled = context_matches;
+        self.pending_paragraph_cache = Some(VecDeque::new());
+        self.pending_paragraph_cache_bytes = 0;
+        #[cfg(test)]
+        {
+            self.pending_paragraph_cache_peak_entries = 0;
+            self.pending_paragraph_cache_peak_bytes = 0;
         }
 
+        let result = self.layout_transaction(input, sources);
+        let pending = self.pending_paragraph_cache.take().unwrap_or_default();
+        self.pending_paragraph_cache_bytes = 0;
+        self.paragraph_cache_reads_enabled = false;
+        if result.is_ok() {
+            if !context_matches {
+                self.paragraph_cache.clear();
+                self.paragraph_cache_bytes = 0;
+                self.paragraph_cache_context = Some(paragraph_context);
+            }
+            for entry in pending {
+                self.publish_paragraph_cache_entry(entry);
+            }
+        }
+        let current_fonts = self
+            .font_manager
+            .current_layout_fonts()
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        self.paragraph_cache.retain(|entry| {
+            entry
+                .font_trace
+                .iter()
+                .all(|font_id| current_fonts.contains(font_id))
+        });
+        self.paragraph_cache_bytes = self.paragraph_cache.iter().map(|entry| entry.bytes).sum();
+        self.font_manager.retain_current_fonts();
+        result
+    }
+
+    fn layout_transaction(
+        &mut self,
+        input: &LayoutInput,
+        sources: Option<&SourceRegistry>,
+    ) -> Result<LayoutResult> {
         let styles = &input.styles;
         let mut num_state = NumberingState::new();
         let media = MediaRegistry::new(&input.images);
@@ -474,13 +596,12 @@ impl Engine {
 
                     let source =
                         sources.and_then(|sources| sources.id(&WordStory::Document, &[body_index]));
-                    let mut para_block = layout_paragraph_with_source(
+                    let mut para_block = self.layout_body_paragraph(
                         para,
                         geometry.content_width(),
                         styles,
                         input,
                         &media,
-                        &mut self.font_manager,
                         &mut num_state,
                         &mut diagnostics,
                         source,
@@ -626,8 +747,14 @@ impl Engine {
         // Post-pagination pass: apply page background color
         apply_page_background(&mut pages, input);
 
-        // Collect font data
-        let fonts = self.font_manager.all_font_data();
+        // Remap persistent manager ids to result-local ids and omit faces that
+        // are no longer present in the current layout.
+        let fonts = if self.font_manager.every_loaded_font_is_current() {
+            self.font_manager.all_font_data()
+        } else {
+            let current_fonts = self.font_manager.current_layout_fonts().to_vec();
+            canonicalize_layout_fonts(&mut pages, &self.font_manager, &current_fonts)?
+        };
 
         // Convert core properties to document metadata
         let metadata = input.core_properties.as_ref().map(|cp| DocumentMetadata {
@@ -642,6 +769,501 @@ impl Engine {
         result.diagnostics = diagnostics;
         Ok(result)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn layout_body_paragraph(
+        &mut self,
+        paragraph: &CT_P,
+        content_width: f64,
+        styles: &CT_Styles,
+        input: &LayoutInput,
+        media: &MediaRegistry,
+        numbering: &mut NumberingState,
+        diagnostics: &mut Vec<Diagnostic>,
+        source_node: Option<SourceNodeId>,
+    ) -> Result<ParagraphBlock> {
+        if !paragraph_is_cache_safe(paragraph, styles) {
+            return layout_paragraph_with_source(
+                paragraph,
+                content_width,
+                styles,
+                input,
+                media,
+                &mut self.font_manager,
+                numbering,
+                diagnostics,
+                source_node,
+            );
+        }
+
+        let key = ParagraphCacheKey {
+            paragraph: paragraph.clone(),
+            content_width_bits: content_width.to_bits(),
+            revision_view: input.revision_view,
+        };
+        if self.paragraph_cache_reads_enabled
+            && let Some(index) = self
+                .paragraph_cache
+                .iter()
+                .position(|entry| entry.key == key)
+        {
+            let entry = self
+                .paragraph_cache
+                .remove(index)
+                .expect("paragraph cache index exists");
+            let mut block = entry.block.clone();
+            rebind_paragraph_source(&mut block, source_node);
+            diagnostics.extend(entry.diagnostics.iter().cloned());
+            self.font_manager
+                .replay_layout_font_trace(&entry.font_trace);
+            self.paragraph_cache.push_back(entry);
+            self.paragraph_cache_hits += 1;
+            return Ok(block);
+        }
+
+        let diagnostics_start = diagnostics.len();
+        self.font_manager.begin_paragraph_font_trace();
+        let block_result = layout_paragraph_with_source(
+            paragraph,
+            content_width,
+            styles,
+            input,
+            media,
+            &mut self.font_manager,
+            numbering,
+            diagnostics,
+            Some(CACHE_SOURCE_NODE),
+        );
+        let font_trace = self.font_manager.finish_paragraph_font_trace();
+        let mut block = block_result?;
+        self.paragraph_cache_builds += 1;
+
+        let cached_diagnostics = diagnostics[diagnostics_start..].to_vec();
+        if let Some(font_trace) = font_trace {
+            let bytes = paragraph_cache_entry_bytes(
+                &key.paragraph,
+                &block,
+                &cached_diagnostics,
+                font_trace.len(),
+            );
+            self.stage_paragraph_cache_entry(ParagraphCacheEntry {
+                key,
+                block: block.clone(),
+                diagnostics: cached_diagnostics,
+                font_trace,
+                bytes,
+            });
+        }
+
+        rebind_paragraph_source(&mut block, source_node);
+        Ok(block)
+    }
+
+    #[cfg(test)]
+    fn paragraph_cache_counts(&self) -> (usize, usize) {
+        (self.paragraph_cache_hits, self.paragraph_cache_builds)
+    }
+
+    fn publish_paragraph_cache_entry(&mut self, entry: ParagraphCacheEntry) {
+        if entry.bytes > PARAGRAPH_CACHE_MAX_BYTES {
+            return;
+        }
+        while self.paragraph_cache.len() >= PARAGRAPH_CACHE_MAX_ENTRIES
+            || self.paragraph_cache_bytes.saturating_add(entry.bytes) > PARAGRAPH_CACHE_MAX_BYTES
+        {
+            let Some(evicted) = self.paragraph_cache.pop_front() else {
+                break;
+            };
+            self.paragraph_cache_bytes = self.paragraph_cache_bytes.saturating_sub(evicted.bytes);
+        }
+        self.paragraph_cache_bytes += entry.bytes;
+        self.paragraph_cache.push_back(entry);
+    }
+
+    fn stage_paragraph_cache_entry(&mut self, entry: ParagraphCacheEntry) {
+        if entry.bytes > PARAGRAPH_CACHE_MAX_BYTES {
+            return;
+        }
+        let Some(pending) = self.pending_paragraph_cache.as_mut() else {
+            return;
+        };
+        while pending.len() >= PARAGRAPH_CACHE_MAX_ENTRIES
+            || self
+                .pending_paragraph_cache_bytes
+                .saturating_add(entry.bytes)
+                > PARAGRAPH_CACHE_MAX_BYTES
+        {
+            let Some(evicted) = pending.pop_front() else {
+                break;
+            };
+            self.pending_paragraph_cache_bytes = self
+                .pending_paragraph_cache_bytes
+                .saturating_sub(evicted.bytes);
+        }
+        self.pending_paragraph_cache_bytes += entry.bytes;
+        pending.push_back(entry);
+        #[cfg(test)]
+        {
+            self.pending_paragraph_cache_peak_entries =
+                self.pending_paragraph_cache_peak_entries.max(pending.len());
+            self.pending_paragraph_cache_peak_bytes = self
+                .pending_paragraph_cache_peak_bytes
+                .max(self.pending_paragraph_cache_bytes);
+        }
+    }
+}
+
+fn paragraph_is_cache_safe(paragraph: &CT_P, styles: &CT_Styles) -> bool {
+    if !paragraph.hyperlinks.is_empty()
+        || !paragraph.comment_ranges.is_empty()
+        || !paragraph.bookmark_markers.is_empty()
+        || !paragraph.extra_xml.is_empty()
+        || !paragraph.content_controls.is_empty()
+        || !paragraph.revisions.is_empty()
+    {
+        return false;
+    }
+
+    let style_id = paragraph
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.style_id.as_deref());
+    let resolved = style_resolver::resolve_paragraph_properties(style_id, styles);
+    if resolved.num_id.is_some()
+        || paragraph.properties.as_ref().is_some_and(|properties| {
+            properties.num_id.is_some()
+                || properties.sect_pr.is_some()
+                || properties.numbering_revision.is_some()
+                || !properties.numbering_revision_xml.is_empty()
+                || properties.change.is_some()
+                || !properties.revision_xml.is_empty()
+                || properties.rpr.as_ref().is_some_and(|rpr| {
+                    !rpr.revision_markers.is_empty()
+                        || rpr.change.is_some()
+                        || !rpr.revision_xml.is_empty()
+                        || !rpr.revision_xml_positions.is_empty()
+                })
+        })
+    {
+        return false;
+    }
+
+    paragraph.runs.iter().all(|run| {
+        run.alt_drawings.is_empty()
+            && run.extra_xml.is_empty()
+            && run.extra_xml_positions.is_empty()
+            && run.properties.as_ref().is_none_or(|rpr| {
+                rpr.revision_markers.is_empty()
+                    && rpr.change.is_none()
+                    && rpr.revision_xml.is_empty()
+                    && rpr.revision_xml_positions.is_empty()
+            })
+            && run.content.iter().all(|content| {
+                matches!(
+                    content,
+                    RunContent::Text(_) | RunContent::Tab | RunContent::Break(_)
+                )
+            })
+    })
+}
+
+fn canonicalize_layout_fonts(
+    pages: &mut [PageFrame],
+    font_manager: &FontManager,
+    current_fonts: &[FontId],
+) -> Result<Vec<oxml_layout::FontData>> {
+    fn collect(
+        elements: &[PositionedElement],
+        remap: &mut HashMap<FontId, FontId>,
+        order: &mut Vec<FontId>,
+    ) {
+        for element in elements {
+            match element {
+                PositionedElement::Text(run) => {
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        remap.entry(run.font_id)
+                    {
+                        let local = FontId(order.len() as u32);
+                        entry.insert(local);
+                        order.push(run.font_id);
+                    }
+                }
+                PositionedElement::Group(group) => collect(&group.children, remap, order),
+                _ => {}
+            }
+        }
+    }
+
+    fn rewrite(elements: &mut [PositionedElement], remap: &HashMap<FontId, FontId>) {
+        for element in elements {
+            match element {
+                PositionedElement::Text(run) => {
+                    run.font_id = remap[&run.font_id];
+                }
+                PositionedElement::Group(group) => rewrite(&mut group.children, remap),
+                _ => {}
+            }
+        }
+    }
+
+    let mut remap = HashMap::new();
+    let mut order = Vec::with_capacity(current_fonts.len());
+    for &font_id in current_fonts {
+        if let std::collections::hash_map::Entry::Vacant(entry) = remap.entry(font_id) {
+            let local = FontId(order.len() as u32);
+            entry.insert(local);
+            order.push(font_id);
+        }
+    }
+    for page in pages.iter() {
+        collect(&page.elements, &mut remap, &mut order);
+    }
+    let mut fonts = Vec::with_capacity(order.len());
+    for persistent_id in order {
+        let mut font = font_manager.font_data(persistent_id)?;
+        font.id = remap[&persistent_id];
+        fonts.push(font);
+    }
+    for page in pages {
+        rewrite(&mut page.elements, &remap);
+    }
+    Ok(fonts)
+}
+
+fn rebind_text_source(text: &mut TextSegment, source_node: Option<SourceNodeId>) {
+    match (text.source.as_mut(), source_node) {
+        (Some(source), Some(node)) => source.node = node,
+        (Some(_), None) => text.source = None,
+        (None, _) => {}
+    }
+}
+
+fn rebind_paragraph_source(block: &mut ParagraphBlock, source_node: Option<SourceNodeId>) {
+    for line in &mut block.lines {
+        for item in &mut line.items {
+            match item {
+                LineItem::Text(text) | LineItem::Marker(text) => {
+                    rebind_text_source(text, source_node)
+                }
+                LineItem::Tab {
+                    leader: Some(leader),
+                    ..
+                } => rebind_text_source(leader, source_node),
+                _ => {}
+            }
+        }
+    }
+    if let Some(reflow) = block.reflow.as_mut() {
+        for item in &mut reflow.items {
+            match item {
+                InlineItem::Text(text) | InlineItem::Marker(text) => {
+                    rebind_text_source(text, source_node)
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+fn paragraph_cache_entry_bytes(
+    paragraph: &CT_P,
+    block: &ParagraphBlock,
+    diagnostics: &[Diagnostic],
+    font_trace_len: usize,
+) -> usize {
+    fn option_string_bytes(value: &Option<String>) -> usize {
+        value.as_ref().map_or(0, String::capacity)
+    }
+    fn shading_bytes(shading: &CT_Shd) -> usize {
+        shading
+            .val
+            .capacity()
+            .saturating_add(option_string_bytes(&shading.color))
+            .saturating_add(option_string_bytes(&shading.fill))
+    }
+    fn run_properties_bytes(properties: &CT_RPr) -> usize {
+        [
+            &properties.style_id,
+            &properties.font_ascii,
+            &properties.font_hansi,
+            &properties.font_east_asia,
+            &properties.font_cs,
+            &properties.font_ascii_theme,
+            &properties.font_hansi_theme,
+            &properties.color,
+            &properties.color_theme,
+            &properties.vert_align,
+        ]
+        .into_iter()
+        .map(option_string_bytes)
+        .fold(0usize, usize::saturating_add)
+        .saturating_add(properties.shading.as_ref().map_or(0, shading_bytes))
+    }
+    fn border_bytes(borders: &CT_PBdr) -> usize {
+        [
+            &borders.top,
+            &borders.bottom,
+            &borders.left,
+            &borders.right,
+            &borders.between,
+            &borders.bar,
+        ]
+        .into_iter()
+        .map(|edge| {
+            edge.as_ref()
+                .and_then(|edge| edge.color.as_ref())
+                .map_or(0, String::capacity)
+        })
+        .fold(0usize, usize::saturating_add)
+    }
+    fn paragraph_properties_bytes(properties: &CT_PPr) -> usize {
+        option_string_bytes(&properties.style_id)
+            .saturating_add(option_string_bytes(&properties.line_rule))
+            .saturating_add(properties.borders.as_ref().map_or(0, border_bytes))
+            .saturating_add(properties.tabs.as_ref().map_or(0, |tabs| {
+                tabs.tabs
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<CT_TabStop>())
+            }))
+            .saturating_add(properties.shading.as_ref().map_or(0, shading_bytes))
+            .saturating_add(properties.rpr.as_ref().map_or(0, run_properties_bytes))
+    }
+    fn paragraph_key_bytes(paragraph: &CT_P) -> usize {
+        paragraph
+            .runs
+            .capacity()
+            .saturating_mul(std::mem::size_of::<CT_R>())
+            .saturating_add(
+                paragraph
+                    .runs
+                    .iter()
+                    .map(|run| {
+                        run.content
+                            .capacity()
+                            .saturating_mul(std::mem::size_of::<RunContent>())
+                            .saturating_add(
+                                run.content
+                                    .iter()
+                                    .map(|content| match content {
+                                        RunContent::Text(text) => text.text.capacity(),
+                                        _ => 0,
+                                    })
+                                    .fold(0usize, usize::saturating_add),
+                            )
+                            .saturating_add(run.properties.as_ref().map_or(0, run_properties_bytes))
+                    })
+                    .fold(0usize, usize::saturating_add),
+            )
+            .saturating_add(
+                paragraph
+                    .properties
+                    .as_ref()
+                    .map_or(0, paragraph_properties_bytes),
+            )
+    }
+    fn text_bytes(text: &TextSegment) -> usize {
+        text.text.capacity()
+            + text.glyph_ids.capacity() * std::mem::size_of::<u16>()
+            + text.advances.capacity() * std::mem::size_of::<f64>()
+            + text.hyperlink_url.as_ref().map_or(0, String::capacity)
+    }
+    fn inline_bytes(item: &InlineItem) -> usize {
+        match item {
+            InlineItem::Text(text) | InlineItem::Marker(text) => text_bytes(text),
+            InlineItem::Group { .. } => usize::MAX,
+            _ => 0,
+        }
+    }
+    fn line_item_bytes(item: &LineItem) -> usize {
+        match item {
+            LineItem::Text(text) | LineItem::Marker(text) => text_bytes(text),
+            LineItem::Tab { leader, .. } => leader.as_ref().map_or(0, text_bytes),
+            LineItem::Group { .. } => usize::MAX,
+            _ => 0,
+        }
+    }
+
+    let paragraph_bytes = paragraph_key_bytes(paragraph);
+    let line_bytes = block
+        .lines
+        .capacity()
+        .saturating_mul(std::mem::size_of::<oxml_layout::LayoutLine>())
+        .saturating_add(
+            block
+                .lines
+                .iter()
+                .map(|line| {
+                    line.items
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<LineItem>())
+                        .saturating_add(
+                            line.items
+                                .iter()
+                                .map(line_item_bytes)
+                                .fold(0usize, usize::saturating_add),
+                        )
+                })
+                .fold(0usize, usize::saturating_add),
+        );
+    let reflow_bytes = block.reflow.as_ref().map_or(0, |reflow| {
+        std::mem::size_of_val(reflow.as_ref())
+            .saturating_add(
+                reflow
+                    .items
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<InlineItem>()),
+            )
+            .saturating_add(
+                reflow
+                    .items
+                    .iter()
+                    .map(inline_bytes)
+                    .fold(0usize, usize::saturating_add),
+            )
+            .saturating_add(
+                reflow
+                    .params
+                    .tab_stops
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<oxml_layout::TabStop>()),
+            )
+            .saturating_add(
+                reflow
+                    .params
+                    .line_prefix_widths
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<f64>()),
+            )
+            .saturating_add(
+                reflow
+                    .params
+                    .line_suffix_widths
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<f64>()),
+            )
+    });
+    let diagnostic_bytes = diagnostics
+        .len()
+        .saturating_mul(std::mem::size_of::<Diagnostic>())
+        .saturating_add(
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.capacity())
+                .fold(0usize, usize::saturating_add),
+        );
+    std::mem::size_of::<ParagraphCacheEntry>()
+        .saturating_add(paragraph_bytes)
+        .saturating_add(line_bytes)
+        .saturating_add(reflow_bytes)
+        .saturating_add(if block.anchored.is_empty() {
+            0
+        } else {
+            usize::MAX
+        })
+        .saturating_add(block.heading_text.as_ref().map_or(0, String::capacity))
+        .saturating_add(block.borders.as_ref().map_or(0, border_bytes))
+        .saturating_add(font_trace_len * std::mem::size_of::<FontId>())
+        .saturating_add(diagnostic_bytes)
 }
 
 /// Apply page background color from `w:background` element to all pages.
@@ -2995,6 +3617,492 @@ mod tests {
             theme: None,
             fonts: Vec::new(),
         }
+    }
+
+    #[test]
+    fn warm_relayout_matches_cold_and_rebuilds_only_changed_safe_paragraphs() {
+        let mut input = make_input_with_text("first cache-safe paragraph");
+        for text in ["second cache-safe paragraph", "third cache-safe paragraph"] {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(text);
+            input.document.body.add_paragraph(paragraph);
+        }
+
+        let mut warm_engine = Engine::new_deterministic().expect("bundled fonts load");
+        let cold = warm_engine
+            .layout_with_provenance(&input)
+            .expect("cold layout succeeds");
+        let after_cold = warm_engine.paragraph_cache_counts();
+
+        let BodyContent::Paragraph(changed) = &mut input.document.body.content[1] else {
+            panic!("second body item is a paragraph");
+        };
+        changed.runs[0].content = vec![RunContent::Text(rdocx_oxml::text::CT_Text::new(
+            "changed cache-safe paragraph",
+        ))];
+
+        let warm = warm_engine
+            .layout_with_provenance(&input)
+            .expect("warm relayout succeeds");
+        let after_warm = warm_engine.paragraph_cache_counts();
+        let cold_after_edit = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("independent cold relayout succeeds");
+
+        assert_eq!(format!("{:?}", warm.0), format!("{:?}", cold_after_edit.0));
+        assert_eq!(warm.1, cold_after_edit.1);
+        assert_eq!(after_cold, (0, 3));
+        assert_eq!(after_warm, (2, 4));
+        assert_ne!(output_text(&cold.0), output_text(&warm.0));
+    }
+
+    #[test]
+    fn warm_relayout_rebinds_font_tables_and_ids_to_the_current_result() {
+        let mut input = make_input_with_text("font identity changes");
+        {
+            let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+                panic!("body paragraph");
+            };
+            paragraph.runs[0]
+                .properties
+                .get_or_insert_default()
+                .font_ascii = Some("Carlito".to_owned());
+        }
+
+        let mut warm_engine = Engine::new_deterministic().expect("bundled fonts load");
+        warm_engine.layout(&input).expect("prime warm font state");
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("body paragraph");
+        };
+        paragraph.runs[0]
+            .properties
+            .get_or_insert_default()
+            .font_ascii = Some("Caladea".to_owned());
+
+        let warm = warm_engine.layout(&input).expect("warm relayout succeeds");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold relayout succeeds");
+        assert_eq!(format!("{warm:?}"), format!("{cold:?}"));
+        assert_eq!(format!("{:?}", warm.fonts), format!("{:?}", cold.fonts));
+    }
+
+    #[test]
+    fn warm_relayout_canonicalizes_the_same_fonts_in_new_resolution_order() {
+        let mut input = make_input_with_text("first family");
+        let BodyContent::Paragraph(first) = &mut input.document.body.content[0] else {
+            panic!("body paragraph");
+        };
+        first.runs[0].properties.get_or_insert_default().font_ascii = Some("Carlito".to_owned());
+        let mut second = CT_P::new();
+        second
+            .add_run("second family")
+            .properties
+            .get_or_insert_default()
+            .font_ascii = Some("Caladea".to_owned());
+        input.document.body.add_paragraph(second);
+
+        let mut warm_engine = Engine::new_deterministic().expect("bundled fonts load");
+        warm_engine.layout(&input).expect("prime original order");
+        input.document.body.content.swap(0, 1);
+
+        let warm = warm_engine.layout(&input).expect("warm reordered layout");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold reordered layout");
+        assert_eq!(format!("{warm:?}"), format!("{cold:?}"));
+        assert_eq!(format!("{:?}", warm.fonts), format!("{:?}", cold.fonts));
+    }
+
+    #[test]
+    fn shared_layout_context_changes_cannot_serve_stale_blocks() {
+        let mut input = make_input_with_text("context-sensitive cache identity");
+        let mut warm_engine = Engine::new_deterministic().expect("bundled fonts load");
+        warm_engine.layout(&input).expect("prime context cache");
+
+        let normal = input
+            .styles
+            .styles
+            .iter_mut()
+            .find(|style| style.is_default)
+            .expect("default style");
+        normal.rpr.get_or_insert_default().font_ascii = Some("Caladea".to_owned());
+        let warm = warm_engine.layout(&input).expect("warm style mutation");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold style mutation");
+        assert_eq!(format!("{warm:?}"), format!("{cold:?}"));
+
+        input.numbering = Some(rdocx_oxml::numbering::CT_Numbering::new());
+        let warm = warm_engine.layout(&input).expect("warm numbering mutation");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold numbering mutation");
+        assert_eq!(format!("{warm:?}"), format!("{cold:?}"));
+
+        input.theme = Some(rdocx_oxml::theme::Theme::default());
+        let warm = warm_engine.layout(&input).expect("warm theme mutation");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold theme mutation");
+        assert_eq!(format!("{warm:?}"), format!("{cold:?}"));
+
+        input
+            .hyperlink_urls
+            .insert("rIdLink".to_owned(), "https://example.com".to_owned());
+        input.images.insert(
+            "rIdImage".to_owned(),
+            crate::input::ImageData {
+                data: vec![1, 2, 3],
+                content_type: "image/png".to_owned(),
+            },
+        );
+        let warm = warm_engine
+            .layout(&input)
+            .expect("warm relationship and image mutation");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold relationship and image mutation");
+        assert_eq!(format!("{warm:?}"), format!("{cold:?}"));
+
+        input.fonts.push(oxml_layout::FontFile {
+            family: "Embedded".to_owned(),
+            data: oxml_layout::bundled_fonts::bundled_font_data()[0]
+                .1
+                .to_vec(),
+        });
+        let warm = warm_engine.layout(&input).expect("warm font mutation");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold font mutation");
+        assert_eq!(format!("{warm:?}"), format!("{cold:?}"));
+
+        let contextual = rdocx_oxml::CT_Document::from_xml(
+            br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:hyperlink r:id="rIdLink"><w:r><w:t>link</w:t></w:r></w:hyperlink></w:p><w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p></w:body></w:document>"#,
+        )
+        .expect("contextual paragraphs parse");
+        for content in &contextual.body.content {
+            let BodyContent::Paragraph(paragraph) = content else {
+                continue;
+            };
+            assert!(!paragraph_is_cache_safe(paragraph, &input.styles));
+        }
+    }
+
+    #[test]
+    fn alternate_content_drawings_bypass_paragraph_reuse() {
+        let document = rdocx_oxml::CT_Document::from_xml(
+            br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><w:body><w:p><w:r><w:t>ordinary text</w:t></w:r><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor behindDoc="0"><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="914400" cy="457200"/><a:graphic><a:graphicData><wps:wsp><wps:spPr><a:prstGeom prst="rect"/></wps:spPr></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice></mc:AlternateContent></w:r></w:p></w:body></w:document>"#,
+        )
+        .expect("AlternateContent drawing parses");
+        let BodyContent::Paragraph(paragraph) = &document.body.content[0] else {
+            panic!("body paragraph");
+        };
+        assert!(!paragraph.runs[1].alt_drawings.is_empty());
+        assert!(!paragraph_is_cache_safe(
+            paragraph,
+            &CT_Styles::new_default()
+        ));
+    }
+
+    #[test]
+    fn warm_provenance_rebinds_to_current_word_source_nodes() {
+        let mut input = make_input_with_text("first paragraph");
+        for text in ["second paragraph", "third paragraph"] {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(text);
+            input.document.body.add_paragraph(paragraph);
+        }
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine
+            .layout_with_provenance(&input)
+            .expect("prime paragraph cache");
+
+        let moved = input.document.body.content.remove(2);
+        input.document.body.content.insert(0, moved);
+        let mut inserted = CT_P::new();
+        inserted.add_run("new paragraph");
+        input
+            .document
+            .body
+            .content
+            .insert(1, BodyContent::Paragraph(inserted));
+        let (layout, sources) = engine
+            .layout_with_provenance(&input)
+            .expect("warm provenance layout");
+
+        for page in &layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                let PositionedElement::Text(run) = element else {
+                    return;
+                };
+                let Some(span) = run.source else {
+                    return;
+                };
+                let path = &sources[span.node.get() as usize - 1];
+                assert_eq!(path.story, WordStory::Document);
+                let BodyContent::Paragraph(paragraph) =
+                    &input.document.body.content[path.children[0]]
+                else {
+                    panic!("source path resolves to a body paragraph");
+                };
+                let text = paragraph.text();
+                let resolved = text
+                    .chars()
+                    .skip(span.char_start as usize)
+                    .take((span.char_end - span.char_start) as usize)
+                    .collect::<String>();
+                assert_eq!(resolved, run.text);
+            });
+        }
+        assert_eq!(engine.paragraph_cache_counts(), (3, 4));
+    }
+
+    #[test]
+    fn cold_and_warm_diagnostics_are_identical() {
+        let mut input = make_input_with_text("");
+        input.document = rdocx_oxml::CT_Document::from_xml(
+            br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>cache-safe prefix</w:t></w:r></w:p><w:p><w:fldSimple w:instr="REF missing"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p></w:body></w:document>"#,
+        )
+        .expect("diagnostic document parses");
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let cold = engine.layout(&input).expect("cold layout succeeds");
+        let warm = engine.layout(&input).expect("warm layout succeeds");
+        assert!(!cold.diagnostics.is_empty());
+        assert_eq!(cold.diagnostics, warm.diagnostics);
+        assert_eq!(engine.paragraph_cache_counts(), (1, 1));
+
+        let (valid_family, valid_bytes) = oxml_layout::bundled_fonts::bundled_font_data()[0];
+        let (invalid_family, invalid_source) = oxml_layout::bundled_fonts::bundled_font_data()[4];
+        let mut invalid_bytes = invalid_source.to_vec();
+        let table_count = u16::from_be_bytes([invalid_bytes[4], invalid_bytes[5]]) as usize;
+        let head_offset = (0..table_count)
+            .find_map(|table| {
+                let record = 12 + table * 16;
+                (&invalid_bytes[record..record + 4] == b"head").then(|| {
+                    u32::from_be_bytes(
+                        invalid_bytes[record + 8..record + 12]
+                            .try_into()
+                            .expect("head offset"),
+                    ) as usize
+                })
+            })
+            .expect("font has head table");
+        invalid_bytes[head_offset + 18..head_offset + 20].copy_from_slice(&0u16.to_be_bytes());
+
+        let mut failing = Engine::with_font_manager(FontManager::new_with_fonts(vec![(
+            valid_family.to_owned(),
+            valid_bytes.to_vec(),
+        )]));
+        let mut failing_input = make_input_with_text("cache-safe successful prefix");
+        let BodyContent::Paragraph(prefix) = &mut failing_input.document.body.content[0] else {
+            panic!("prefix paragraph");
+        };
+        prefix.runs[0].properties.get_or_insert_default().font_ascii =
+            Some(valid_family.to_owned());
+        let mut later = CT_P::new();
+        later
+            .add_run("late font failure")
+            .properties
+            .get_or_insert_default()
+            .font_ascii = Some(invalid_family.to_owned());
+        failing_input.document.body.add_paragraph(later);
+        failing_input.fonts.push(oxml_layout::FontFile {
+            family: invalid_family.to_owned(),
+            data: invalid_bytes,
+        });
+        assert!(failing.layout(&failing_input).is_err());
+        assert!(failing.paragraph_cache.is_empty());
+        assert_eq!(failing.paragraph_cache_counts(), (0, 1));
+    }
+
+    #[test]
+    fn paragraph_relayout_cache_is_bounded() {
+        let mut input = make_input_with_text("bounded paragraph 0");
+        for index in 1..(PARAGRAPH_CACHE_MAX_ENTRIES + 20) {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(&format!("bounded paragraph {index}"));
+            input.document.body.add_paragraph(paragraph);
+        }
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("bounded layout succeeds");
+        assert!(engine.paragraph_cache.len() <= PARAGRAPH_CACHE_MAX_ENTRIES);
+        assert!(engine.paragraph_cache_bytes <= PARAGRAPH_CACHE_MAX_BYTES);
+        assert!(engine.pending_paragraph_cache_peak_entries <= PARAGRAPH_CACHE_MAX_ENTRIES);
+        assert!(engine.pending_paragraph_cache_peak_bytes <= PARAGRAPH_CACHE_MAX_BYTES);
+    }
+
+    #[test]
+    fn transactional_paragraph_staging_is_bounded_before_publication() {
+        let mut input = make_input_with_text("staged paragraph 0");
+        for index in 1..(PARAGRAPH_CACHE_MAX_ENTRIES * 2) {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(&format!("staged paragraph {index}"));
+            input.document.body.add_paragraph(paragraph);
+        }
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine
+            .layout(&input)
+            .expect("transactional layout succeeds");
+        assert_eq!(
+            engine.pending_paragraph_cache_peak_entries,
+            PARAGRAPH_CACHE_MAX_ENTRIES
+        );
+        assert!(engine.pending_paragraph_cache_peak_bytes <= PARAGRAPH_CACHE_MAX_BYTES);
+    }
+
+    #[test]
+    fn paragraph_relayout_cache_enforces_the_reflow_byte_ceiling() {
+        let input = make_input_with_text("reflow accounting template");
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("template layout succeeds");
+        let template = engine
+            .paragraph_cache
+            .front()
+            .expect("safe paragraph cached")
+            .block
+            .clone();
+        let mut retained = match &template.lines[0].items[0] {
+            LineItem::Text(text) => text.clone(),
+            other => panic!("expected text line item, got {other:?}"),
+        };
+        retained.advances = vec![0.0; PARAGRAPH_CACHE_MAX_BYTES / 8 + 1];
+
+        let mut block = template;
+        block.reflow = Some(Box::new(block::ParagraphReflow {
+            items: vec![InlineItem::Text(retained)],
+            params: oxml_layout::LineBreakParams::default(),
+        }));
+        let BodyContent::Paragraph(paragraph) = &input.document.body.content[0] else {
+            panic!("body paragraph");
+        };
+        let bytes = paragraph_cache_entry_bytes(paragraph, &block, &[], 0);
+        assert!(bytes > PARAGRAPH_CACHE_MAX_BYTES);
+
+        engine.paragraph_cache.clear();
+        engine.paragraph_cache_bytes = 0;
+        engine.publish_paragraph_cache_entry(ParagraphCacheEntry {
+            key: ParagraphCacheKey {
+                paragraph: paragraph.clone(),
+                content_width_bits: PageGeometry::default().content_width().to_bits(),
+                revision_view: RevisionView::Accepted,
+            },
+            block,
+            diagnostics: Vec::new(),
+            font_trace: Vec::new(),
+            bytes,
+        });
+        assert!(engine.paragraph_cache.is_empty());
+        assert_eq!(engine.paragraph_cache_bytes, 0);
+    }
+
+    #[test]
+    fn tab_heavy_paragraph_in_wrapping_document_counts_reflow_parameter_buffers() {
+        use rdocx_oxml::borders::{CT_TabStop, CT_Tabs};
+        use rdocx_oxml::drawing::{AnchorAlignH, WrapType};
+        use rdocx_oxml::shared::ST_TabJc;
+        use rdocx_oxml::units::Twips;
+
+        let mut input =
+            make_wrapping_document(WrapType::Square, Some(AnchorAlignH::Left), 100.0, 40.0, 5.0);
+        let retained_per_stop =
+            std::mem::size_of::<CT_TabStop>() + std::mem::size_of::<oxml_layout::TabStop>();
+        let stop_count = PARAGRAPH_CACHE_MAX_BYTES / retained_per_stop + 1;
+        let mut paragraph = CT_P::new();
+        paragraph.properties = Some(CT_PPr {
+            tabs: Some(CT_Tabs {
+                tabs: (0..stop_count)
+                    .map(|_| CT_TabStop::new(ST_TabJc::Left, Twips(720)))
+                    .collect(),
+            }),
+            ..CT_PPr::default()
+        });
+        paragraph.add_run("cache-safe paragraph with many owned tab definitions");
+        assert!(paragraph_is_cache_safe(&paragraph, &input.styles));
+        input.document.body.add_paragraph(paragraph);
+
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("tab-heavy layout succeeds");
+        assert!(engine.paragraph_cache.is_empty());
+        assert_eq!(engine.paragraph_cache_bytes, 0);
+    }
+
+    #[test]
+    fn paragraph_relayout_cache_counts_all_reflow_parameter_vectors() {
+        let input = make_input_with_text("reflow parameter accounting template");
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("template layout succeeds");
+        let mut block = engine
+            .paragraph_cache
+            .front()
+            .expect("safe paragraph cached")
+            .block
+            .clone();
+        let BodyContent::Paragraph(paragraph) = &input.document.body.content[0] else {
+            panic!("body paragraph");
+        };
+        let baseline = paragraph_cache_entry_bytes(paragraph, &block, &[], 0);
+        let reflow = block.reflow.as_mut().expect("cache retains reflow inputs");
+        reflow.params.tab_stops = vec![
+            oxml_layout::TabStop {
+                pos_pt: 36.0,
+                align: oxml_layout::TabAlign::Left,
+                leader: None,
+            };
+            3
+        ];
+        reflow.params.line_prefix_widths = vec![0.0; 5];
+        reflow.params.line_suffix_widths = vec![0.0; 7];
+        let with_parameters = paragraph_cache_entry_bytes(paragraph, &block, &[], 0);
+        let expected =
+            3 * std::mem::size_of::<oxml_layout::TabStop>() + 12 * std::mem::size_of::<f64>();
+        assert_eq!(with_parameters - baseline, expected);
+    }
+
+    #[test]
+    fn paragraph_relayout_cache_counts_fixed_storage_in_owned_keys() {
+        let input = make_input_with_text("key accounting template");
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("template layout succeeds");
+        let block = engine
+            .paragraph_cache
+            .front()
+            .expect("safe paragraph cached")
+            .block
+            .clone();
+
+        let mut paragraph = CT_P::new();
+        let mut run = CT_R::new("");
+        let content_count = PARAGRAPH_CACHE_MAX_BYTES / std::mem::size_of::<RunContent>() + 1;
+        run.content = std::iter::repeat_n(RunContent::Tab, content_count).collect();
+        paragraph.runs.push(run);
+        assert!(paragraph_is_cache_safe(&paragraph, &input.styles));
+        let bytes = paragraph_cache_entry_bytes(&paragraph, &block, &[], 0);
+        assert!(bytes > PARAGRAPH_CACHE_MAX_BYTES);
+
+        engine.paragraph_cache.clear();
+        engine.paragraph_cache_bytes = 0;
+        engine.publish_paragraph_cache_entry(ParagraphCacheEntry {
+            key: ParagraphCacheKey {
+                paragraph,
+                content_width_bits: PageGeometry::default().content_width().to_bits(),
+                revision_view: RevisionView::Accepted,
+            },
+            block,
+            diagnostics: Vec::new(),
+            font_trace: Vec::new(),
+            bytes,
+        });
+        assert!(engine.paragraph_cache.is_empty());
+        assert_eq!(engine.paragraph_cache_bytes, 0);
     }
 
     #[test]

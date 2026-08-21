@@ -449,12 +449,46 @@ them. Table cells do not use the shape autofit algorithm.
 `Document` keeps normal-font and deterministic `WordLayoutResult` values in
 separate `Mutex<Option<Arc<_>>>` caches. `layout`, option-taking accepted
 layout, `render_page_to_png`, `render_all_pages`, `to_pdf`, and `layout_page`
-share the normal result. The deterministic renderers use their own bundle.
-Tracked layouts and caller-supplied font layouts remain uncached because they
-must not populate or replace the accepted cache, and arbitrary font sets are
-not part of a stable cache key. Caller-font access returns an owned bundle.
-Every PDF and raster path borrows its `LayoutResult` field from the same bundle
-that owns the exact font data and Word source map.
+share the normal result. The normal path also retains one synchronized
+`rdocx-layout::Engine` after mutation invalidates that completed result. The
+deterministic renderers use their own bundle. Tracked layouts remain uncached
+and use the normal engine with a distinct revision-view paragraph identity.
+Caller-supplied font layouts construct an isolated engine, remain uncached, and
+cannot observe bundled or system fonts. Caller-font access returns an owned
+bundle. Every PDF and raster path borrows its `LayoutResult` field from the same
+bundle that owns the exact font data and Word source map.
+
+Normal `FontManager` construction clones one process-lifetime snapshot of the
+bundled and system face table. Installing, removing, or replacing a system font
+therefore takes effect after process restart. File-backed faces share an
+`Arc<[u8]>` by canonical file identity, including distinct TTC collection
+indices, through a 256-entry and 128 MiB process cache. Poisoned process locks
+recover by rebuilding the requested entry. Deterministic managers build from
+bundled fonts only. Caller-font managers build from caller bytes only.
+
+Each reusable font manager keeps exact shaping results keyed by `FontId`, owned
+source text, and floating-point size bits. The memo is capped at 2,048 entries
+and 16 MiB. Resolution, coverage misses, coverage fallbacks, and per-paragraph
+font traces also have explicit bounds. Loading a different additional font set
+rebuilds face identity and clears all dependent memo state.
+
+The Word engine caches only ordinary context-independent body paragraphs. The
+entry key compares the complete typed paragraph, content width, revision view,
+styles, theme, and additional font set. Numbering, drawings including
+`AlternateContent`, fields, hyperlinks, relationships, media, generated
+markers, and other traversal-sensitive input bypass reuse. Each entry owns its
+block, diagnostics, and exact bounded font-resolution trace. Both the published
+and transaction-pending queues are capped at 256 entries and 16 MiB using
+retained-capacity accounting for all owned block and reflow buffers. Oversized
+entries bypass retention.
+
+Cache publication is a whole-layout transaction. A late error publishes none
+of the staged entries. A hit replays diagnostics and the font trace, then
+rebinds placeholder scalar provenance to the source node allocated for the
+current `WordLayoutResult`. After success, active faces are retained in
+first-resolution order and stale faces and entries are removed. This makes warm
+and cold pages, font ids, font bytes, diagnostics, revision view, and resolved
+source provenance equal.
 
 The low-level Word engine keeps its existing `LayoutResult` entry points and
 discards provenance there. `layout_document_with_provenance` and
@@ -517,10 +551,11 @@ same type from the preceding section. No selected first or even variant borrows
 default header, footer, or watermark content.
 
 Every public document mutation and mutable-accessor entry point clears both
-caches before changing or exposing content. Rendering every page through the
-single-page entry point therefore performs one layout per font mode instead of
-one layout per page. The presentation facade follows the same ownership model
-when it is added.
+completed result caches before changing or exposing content. It preserves the
+normal engine so safe paragraph and shaping work can be reused after an edit.
+Rendering every page through the single-page entry point therefore performs one
+layout per font mode instead of one layout per page. The presentation facade
+follows the same ownership model when it is added.
 
 ```rust
 pub fn layout_presentation(input: &RenderInput) -> Result<LayoutResult>;

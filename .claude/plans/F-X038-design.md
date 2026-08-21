@@ -1,6 +1,6 @@
 # F-X038, Cache relayout work across document edits
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S51
 **Size**: L
 **Depends on**: F-X037, F-X032
@@ -151,17 +151,17 @@ must not change layout, fonts, diagnostics, generated packages, or renders.
 
 ## Implementation checklist
 
-- [ ] Share normal system-font discovery without changing deterministic fonts.
-- [ ] Share file-backed bytes by file identity across TTC indices.
-- [ ] Add a bounded exact-key shaping memo with complete font invalidation.
-- [ ] Retain one synchronized normal-font engine per document.
-- [ ] Cache only context-independent body paragraphs with complete invalidation.
-- [ ] Replay diagnostics and publish entries only after successful layout.
-- [ ] Rebind cached scalar spans to current result-local source ids.
-- [ ] Prove cold and warm equality, bounds, poison recovery, and threading.
-- [ ] Run no-default, WASM, package, archive-size, and full verification riders.
-- [ ] Update exactly the HLD files listed above.
-- [ ] Credit `@emptinessform` and document the process-lifetime system-font
+- [x] Share normal system-font discovery without changing deterministic fonts.
+- [x] Share file-backed bytes by file identity across TTC indices.
+- [x] Add a bounded exact-key shaping memo with complete font invalidation.
+- [x] Retain one synchronized normal-font engine per document.
+- [x] Cache only context-independent body paragraphs with complete invalidation.
+- [x] Replay diagnostics and publish entries only after successful layout.
+- [x] Rebind cached scalar spans to current result-local source ids.
+- [x] Prove cold and warm equality, bounds, poison recovery, and threading.
+- [x] Run no-default, WASM, package, archive-size, and full verification riders.
+- [x] Update exactly the HLD files listed above.
+- [x] Credit `@emptinessform` and document the process-lifetime system-font
   snapshot in the 0.4.0 and 0.8.0 release notes.
 
 ## Open questions

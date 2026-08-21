@@ -2324,23 +2324,27 @@ new simple fields do not.
 
 ### F-X038, Cache relayout work across document edits (L)
 
-Reuse the expensive normal-font work an interactive editor repeats after every
-document mutation. Discover bundled plus system fonts once per process, share
-file-backed face bytes by file identity, memoise shaping with complete exact
-keys, and retain one bounded normal-font paragraph cache per document. Keep
-deterministic and caller-provided fonts isolated from the system snapshot.
+The normal-font path reuses the expensive work an interactive editor repeats
+after every document mutation. Bundled plus system fonts are discovered once
+per process. File-backed face bytes are shared by canonical file identity.
+Shaping uses complete exact keys, and each document retains one synchronized
+normal engine with a bounded paragraph cache. Deterministic and caller-provided
+fonts remain isolated from the system snapshot.
 
-Only context-independent body paragraphs may reuse blocks. Changes to styles,
-numbering, theme, embedded fonts, media, hyperlinks, relationships, or revision
-view invalidate or bypass affected entries. Cache diagnostics with each block,
-publish entries only after successful layout, and rebind cached scalar ranges
-to the current F-X037 result-local source nodes. Bounds and poisoned-lock
-recovery are required behavior for long-running processes.
+Only context-independent body paragraphs reuse blocks. The complete context and
+key compare styles, theme, embedded fonts, width, revision view, and typed
+paragraph content. Numbering, drawings, fields, hyperlinks, media,
+relationships, and other traversal-sensitive content bypass reuse. Diagnostics
+and exact bounded font traces travel with each block. Whole-layout publication
+is transactional, and cached scalar ranges are rebound to the current F-X037
+result-local source nodes. Process, shaping, coverage, trace, pending, and
+published caches have explicit entry and true retained-byte bounds. Poisoned
+process locks recover without disabling later layout.
 
 Issue 39 supplied the profiling, cache decomposition, and prototype. Credit
 `@emptinessform` in both release families. The reported 1,144 ms to 101 ms
 improvement is evidence, not a machine-independent CI threshold. Normal system
-font discovery becomes a process-lifetime snapshot, so installing or replacing
+font discovery is a process-lifetime snapshot, so installing or replacing
 system fonts requires a process restart. Deterministic and caller-font behavior
 does not change.
 

@@ -311,18 +311,39 @@ simple fields do not. Generated markers, evaluated fields, note labels, and
 non-bijective display transformations remain unattributed.
 
 The `rdocx` facade caches that complete `WordLayoutResult` for accepted normal
-and deterministic layout. `Document::layout` and
-`Document::layout_with_options` return a shared `Arc` for accepted normal-font
-layout, while tracked layout stays uncached. `Document::layout_with_fonts` and
-`Document::layout_with_fonts_and_options` return owned uncached bundles because
-arbitrary caller font sets have no stable cache key. PDF, raster, and cloned
-page access borrow the backend-neutral `layout` field from the same bundle, so
-external renderers receive the exact font bytes and source table used for each
-glyph run.
+and deterministic layout. It also retains one synchronized normal-font
+`rdocx-layout::Engine` across document edits. Mutation clears completed result
+caches but preserves the engine's bounded paragraph and shaping work.
+`Document::layout` and `Document::layout_with_options` return a shared `Arc`
+for accepted normal-font layout. A tracked result stays uncached, while its
+revision-view cache identity prevents reuse of accepted paragraph blocks.
+`Document::layout_with_fonts` and `Document::layout_with_fonts_and_options`
+construct isolated engines and return owned uncached bundles because arbitrary
+caller font sets have no stable cache key. Deterministic layout also retains
+its separate result cache and never enters the normal engine. PDF, raster, and
+cloned page access borrow the backend-neutral `layout` field from the same
+bundle, so external renderers receive the exact font bytes and source table
+used for each glyph run.
 
 `rdocx-layout` keeps the flow model: the engine, the paginator, blocks, tables
 and the style resolver. Slides do not paginate, so none of it transfers. The
-flow engine resolves Word relationship IDs to content-addressed `MediaId`
+normal Word engine caches only ordinary body paragraphs that are independent
+of traversal state. Its exact identity includes the paragraph, width, revision
+view, styles, theme, and active embedded fonts. Numbering, drawings, fields,
+hyperlinks, relationships, generated markers, and other contextual content
+bypass reuse. A successful whole-document layout publishes staged entries,
+including their diagnostics and exact font-resolution trace. Failure publishes
+nothing. Cached scalar ranges use a placeholder source node and are rebound to
+the current result-local node before pagination.
+
+The same engine owns bounded loaded-face, coverage, shaping, and paragraph
+state. Paragraph entries count all retained owned buffers, including reflow tab
+stops, against both entry and byte ceilings. Font traces are bounded and shrunk
+before retention. Active fonts are canonicalized by first resolution order so
+a warm layout returns the same font table and ids as a cold layout, including a
+legitimate working set larger than the memo ceilings.
+
+The flow engine resolves Word relationship IDs to content-addressed `MediaId`
 values before pagination, and page output carries the resolved bytes and MIME
 type rather than a relationship-scoped placeholder. One `MediaRegistry` per
 layout compares complete bytes, assigns deterministic alternate IDs when two

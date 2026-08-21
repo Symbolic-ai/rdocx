@@ -37,8 +37,10 @@ impl FontManager {
 ```
 
 The constructor starts with a fresh font database and loads only the checked-in
-bundled font bytes. It never calls system-font discovery. Document-embedded
-fonts remain explicit layout inputs, so they are deterministic too.
+bundled font bytes. It never calls system-font discovery or clones the normal
+process snapshot. Document-embedded fonts remain explicit layout inputs, so
+they are deterministic too. Caller-font construction starts from an empty
+database and likewise cannot observe bundled or system fonts.
 
 `Engine::new_deterministic()` and `layout_document_deterministic()` carry that
 database through layout. The public facade exposes
@@ -50,7 +52,20 @@ input without changing the normal PDF API. Existing constructors and rendering
 methods still load system fonts for library users.
 
 The hash harness, golden-PNG gate and SSIM harness use the deterministic path.
-The normal rendering API does not change its font-discovery behaviour.
+The normal rendering API still discovers system fonts, but now captures the
+bundled plus system face table once per process. Installing, removing, or
+replacing system fonts requires a process restart. File-backed font bytes use a
+separate bounded process cache keyed by canonical file identity, so faces at
+different TTC indices share one byte buffer. Both process caches are compiled
+only with `system-fonts`, and poisoned file-cache locks recover by rebuilding
+the requested entry.
+
+Reusable managers bound shaping to 2,048 entries and 16 MiB, file bytes to 256
+entries and 128 MiB, and coverage, resolution, and paragraph traces by explicit
+entry ceilings. The reusable Word engine bounds both pending and published
+paragraph entries at 256 entries and 16 MiB with retained-capacity accounting.
+These caches add no feature flag or dependency and remain available in the
+default-off graphs without enabling host discovery.
 
 `rpptx-render::layout_presentation_deterministic` applies the same rule to a
 whole presentation. It shares page lowering with

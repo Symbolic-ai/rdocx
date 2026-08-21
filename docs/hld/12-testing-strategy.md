@@ -128,6 +128,26 @@ accepted and tracked revision text through the caller-font option accessor.
 The workspace package dry-run, 10 MiB archive ceiling, and WASM target check
 cover the additive published API. All 49 hash entries remain unchanged.
 
+The relayout-cache gate compares a warm normal-font result with a fresh cold
+engine after editing one safe body paragraph. Pages, font table order and ids,
+font bytes, diagnostics, revision view, and every resolved provenance span must
+match exactly, while only the changed safe paragraph rebuilds. Focused cases
+cover actual mutation invalidation, style and theme context changes, unsafe
+numbering, fields, hyperlinks, media, relationships, ordinary and
+`AlternateContent` drawings, nonempty diagnostic replay, late transactional
+failure, paragraph reorder and insertion, caller-font isolation, TTC indices,
+and a legitimate active set larger than 256 faces.
+
+Boundary tests exercise the exact shaping identity, process font discovery,
+canonical file-byte identity, lock poison recovery, bounded resolution and
+coverage state, bounded and shrunk per-paragraph font traces, and both pending
+and published paragraph queues. Structural byte tests use retained capacities
+for owned keys, blocks, glyph data, diagnostics, font traces, and reflow
+parameters including tab stops. Oversized entries must bypass retention.
+Repeated and concurrent focused tests preserve `Document: Send + Sync`. The
+no-default feature test, both WASM checks, committed-graph package dry-runs,
+archive-size ceiling, and unchanged 49-entry hash harness are required riders.
+
 ## The hash harness
 
 The single highest-value mechanism in the plan is

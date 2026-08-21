@@ -92,8 +92,9 @@ borrowed nested handle can mutate without a rebind:
 
 **Threading.** `Document` remains `Send` and `Sync`. Its normal and
 deterministic layouts live in separate
-`Mutex<Option<Arc<WordLayoutResult>>>`
-caches, with a compile-time regression gate preserving that contract.
+`Mutex<Option<Arc<WordLayoutResult>>>` caches. One private normal-font engine
+lives behind a separate mutex and survives result invalidation, with a
+compile-time regression gate preserving that threading contract.
 `to_pdf`, `render_all_pages` and `to_bytes` run inside `py.allow_threads`, so a
 Python thread pool genuinely parallelises work across documents. Concurrent
 rendering of one document shares the immutable cached result after the first
@@ -372,10 +373,15 @@ rendering behavior.
 Native renderers obtain the complete positioned output through
 `Document::layout` and `Document::layout_with_options`. Accepted calls return a
 shared `Arc<WordLayoutResult>` from the normal-font cache, including pages,
-font bytes, revision view, and the result-local Word source map. Tracked calls
-stay uncached. `Document::layout_with_fonts` and
+font bytes, revision view, and the result-local Word source map. After a
+mutation, the retained normal engine may reuse bounded context-independent
+paragraph and shaping work while rebuilding the completed result. Tracked calls
+stay uncached and use a distinct revision-view paragraph identity.
+`Document::layout_with_fonts` and
 `Document::layout_with_fonts_and_options` return owned uncached bundles whose
 font mapping contains the exact caller-provided bytes selected for shaping.
+They construct a caller-only engine and cannot observe the normal process font
+snapshot. Deterministic calls remain isolated on the bundled-font-only path.
 The built-in PDF, raster, and page accessors consume these same paths. This is
 an additive pre-1.0 native Rust surface and does not add binding methods.
 
