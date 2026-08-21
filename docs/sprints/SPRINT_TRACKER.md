@@ -283,6 +283,7 @@ defended.
 | F-X032 | S51 | S | 1 | 1 | 2026-08-21 | Complete cached and caller-font Word layout bundles for external renderers |
 | F-X034 | S51 | S | 1 | 1 | 2026-08-21 | Reviewed changelog notes enforced before publication and published unchanged |
 | F-X038 | S51 | L | 4 | 1 | 2026-08-21 | Bounded warm relayout caches with exact cold-layout output and provenance |
+| F-X033 | S51 | S | 1 | 1 | 2026-08-21 | Ordered direct Word body items with Pedro Assumpcao's merge record preserved |
 
 ## Velocity
 

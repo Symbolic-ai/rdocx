@@ -104,6 +104,28 @@ pub struct CT_SectPr {
 
 #[allow(non_snake_case)]
 impl CT_SectPr {
+    fn empty() -> Self {
+        Self {
+            page_width: None,
+            page_height: None,
+            orientation: None,
+            margin_top: None,
+            margin_right: None,
+            margin_bottom: None,
+            margin_left: None,
+            gutter: None,
+            header_distance: None,
+            footer_distance: None,
+            section_type: None,
+            columns: None,
+            title_pg: None,
+            header_refs: Vec::new(),
+            footer_refs: Vec::new(),
+            extra_xml: Vec::new(),
+            change: None,
+        }
+    }
+
     /// Default US Letter page with 1-inch margins.
     pub fn default_letter() -> Self {
         CT_SectPr {
@@ -166,25 +188,7 @@ impl CT_SectPr {
         word_prefixes: &[String],
         owner_bindings: &[(String, String)],
     ) -> Result<Self> {
-        let mut sect = CT_SectPr {
-            page_width: None,
-            page_height: None,
-            orientation: None,
-            margin_top: None,
-            margin_right: None,
-            margin_bottom: None,
-            margin_left: None,
-            gutter: None,
-            header_distance: None,
-            footer_distance: None,
-            section_type: None,
-            columns: None,
-            title_pg: None,
-            header_refs: Vec::new(),
-            footer_refs: Vec::new(),
-            extra_xml: Vec::new(),
-            change: None,
-        };
+        let mut sect = Self::empty();
         let mut change_raw_index = 0usize;
         let mut buf = Vec::new();
 
@@ -743,7 +747,14 @@ impl CT_Body {
                 }
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
-                    if !matches_local_name(name.as_ref(), b"body") {
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"p", &prefixes) {
+                        content.push(BodyContent::Paragraph(CT_P::new()));
+                    } else if is_word_element(name.as_ref(), b"tbl", &prefixes) {
+                        content.push(BodyContent::Table(CT_Tbl::new()));
+                    } else if is_word_element(name.as_ref(), b"sectPr", &prefixes) {
+                        sect_pr = Some(CT_SectPr::empty());
+                    } else {
                         content.push(BodyContent::RawXml(capture_empty_element(e)?));
                     }
                 }
@@ -1044,6 +1055,37 @@ mod tests {
             paragraph.properties.as_ref().unwrap().jc,
             Some(crate::shared::ST_Jc::Center)
         );
+    }
+
+    #[test]
+    fn self_closing_modeled_body_children_are_typed_by_namespace() {
+        let xml = format!(
+            r#"<document xmlns="{W_NS}" xmlns:q="{W_NS}" xmlns:ext="urn:producer"><body><p/><q:tbl/><ext:p ext:flag="keep"/><ext:body/><q:sectPr/></body></document>"#
+        );
+        let parsed = CT_Document::from_xml(xml.as_bytes()).unwrap();
+
+        assert!(matches!(parsed.body.content[0], BodyContent::Paragraph(_)));
+        assert!(matches!(parsed.body.content[1], BodyContent::Table(_)));
+        let BodyContent::RawXml(raw) = &parsed.body.content[2] else {
+            panic!("foreign paragraph must remain raw");
+        };
+        assert_eq!(raw, br#"<ext:p ext:flag="keep"/>"#);
+        let BodyContent::RawXml(raw) = &parsed.body.content[3] else {
+            panic!("foreign body must remain raw");
+        };
+        assert_eq!(raw, br#"<ext:body/>"#);
+        assert!(parsed.body.sect_pr.is_some());
+        assert_eq!(parsed.body.content.len(), 4);
+
+        let written = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+        assert!(written.contains("<w:p"), "{written}");
+        assert!(written.contains("<w:tbl>"));
+        assert!(written.contains(r#"<ext:p ext:flag="keep"/>"#));
+        assert!(written.contains("<ext:body/>"));
+        assert!(written.contains("<w:sectPr"));
+        let reparsed = CT_Document::from_xml(written.as_bytes()).unwrap();
+        assert_eq!(reparsed.body.content.len(), 4);
+        assert!(reparsed.body.sect_pr.is_some());
     }
 
     #[test]

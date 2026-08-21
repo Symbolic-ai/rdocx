@@ -7903,3 +7903,41 @@ retained-byte bounds, no-default, WASM, package, and threading regressions.
 process-lifetime snapshot, so installing or replacing host fonts requires a
 process restart. Release notes for 0.4.0 and 0.8.0 must credit
 `@emptinessform` for the issue 39 measurements and cache proposal.
+
+### F-X033, Integrate PR 36 ordered body items
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Pedro Assumpcao's additive `Document::body_items` reader
+now exposes direct Word body paragraphs, tables, body content controls, and
+preserved unsupported XML in source order. The contribution landed through
+GitHub PR 36 with its original commit and merge record intact.
+
+**Non-obvious choices.** Existing `paragraphs()` and `tables()` accessors stay
+recursive, while `body_items()` is deliberately direct. Self-closing Word
+paragraphs and tables normalize to typed empty values, and a self-closing
+section-properties child remains schema-final state rather than an unsupported
+body item. Every foreign or unsupported empty child remains raw XML.
+
+**Deviations from the design plan.** The plan was revised after microscope
+review exposed the self-closing parser boundary. Three passes added expanded
+name checks and unconditional raw fallback without broadening the public API.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, direct body ownership,
+`docs/hld/10-bindings-spec.md`, the native-only reader,
+`docs/hld/12-testing-strategy.md`, public opened-package evidence, and
+`docs/hld/14-development-backlog.md`, the PR 36 integration contract.
+
+**Tests.** `public_body_items_preserve_opened_document_order`,
+`body_items_preserve_paragraph_table_control_and_raw_order`, and
+`self_closing_modeled_body_children_are_typed_by_namespace`, plus fresh
+current-base GitHub CI run 32516942671, full workspace verification, package
+dry-run, and archive inventory.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Direct body order is now public, but nested
+content-control and table traversal remains owned by the existing recursive
+accessors. Preserve contributor credit through the PR 36 merge record.

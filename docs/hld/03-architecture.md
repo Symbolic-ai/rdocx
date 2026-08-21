@@ -497,6 +497,14 @@ table, row, cell, and run once while retaining the surrounding `CT_Sdt` for
 metadata lookup. The facade consumes this single WordprocessingML ownership
 tree and does not maintain a second content-control representation.
 
+`Document::body_items` exposes the direct body ownership vector without
+flattening it. Its borrowed items distinguish paragraphs, tables, body-level
+content controls, and preserved unsupported XML in exact source order. The
+recursive `paragraphs()` and `tables()` accessors keep their existing behavior.
+Self-closing Word paragraphs and tables normalize to typed empty values, while
+self-closing final section properties remain outside the item vector. Empty
+foreign and unsupported children remain captured raw rather than being lost.
+
 Revision traversal follows that ownership tree through the main body, tables,
 cells, and content controls. `Document::revisions` reports every valid modeled
 revision once in document order as a borrowed `RevisionRef`. The facade does

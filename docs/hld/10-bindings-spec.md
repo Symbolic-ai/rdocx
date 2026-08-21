@@ -291,6 +291,14 @@ package-preserving facade. These methods are additive native APIs. They do not
 implicitly add Python, WASM, or CLI methods, and the existing binding surfaces
 remain unchanged.
 
+Native Word callers inspect direct body order through
+`Document::body_items`. Each `BodyItemRef` borrows one paragraph, table,
+body-level content control, or preserved unsupported XML child. It does not
+flatten control content, and it does not change the recursive semantics of
+`paragraphs()` or `tables()`. The API is additive on `rdocx` only. Python,
+WASM, and CLI surfaces gain no ordered-body method and continue to preserve a
+document opened and saved through their existing owners.
+
 Native Word callers inspect tracked changes through `Document::revisions`.
 Each immutable `RevisionRef` exposes the revision id, author, optional
 timestamp, and `RevisionKind`. Results recursively cover the main document

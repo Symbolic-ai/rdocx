@@ -5,7 +5,7 @@ use oxml_opc::relationship::rel_types;
 use rdocx::paragraph::Alignment;
 use rdocx::table::VerticalAlignment;
 use rdocx::{
-    BorderStyle, Length, ListLevel, RunPosition, RunRange, SectionBreak, StyleBuilder,
+    BodyItemRef, BorderStyle, Length, ListLevel, RunPosition, RunRange, SectionBreak, StyleBuilder,
     TabAlignment, TabLeader, UnderlineStyle,
 };
 use rdocx::{Document, PackageReadLimits, RevisionKind};
@@ -50,6 +50,68 @@ fn document_xml(document: &mut Document) -> Vec<u8> {
     let bytes = document.to_bytes().unwrap();
     let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
     package.get_part("/word/document.xml").unwrap().to_vec()
+}
+
+#[test]
+fn public_body_items_preserve_opened_document_order() {
+    let mut seed = Document::new();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let document_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:p="urn:producer">
+  <w:body>
+    <w:p><w:r><w:t>first</w:t></w:r></w:p>
+    <w:p/>
+    <w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="1440"/></w:tblGrid><w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+    <w:sdt><w:sdtPr><w:tag w:val="public"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r></w:p></w:sdtContent></w:sdt>
+    <p:opaque p:flag="keep"><p:child/></p:opaque>
+    <w:p><w:r><w:t>last</w:t></w:r></w:p>
+    <w:sectPr/>
+  </w:body>
+</w:document>"#;
+    package.set_part("/word/document.xml", document_xml.to_vec());
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+
+    let document = Document::from_bytes(input.get_ref()).unwrap();
+    let items = document
+        .body_items()
+        .map(|item| match item {
+            BodyItemRef::Paragraph(paragraph) => format!("paragraph:{}", paragraph.text()),
+            BodyItemRef::Table(table) => format!(
+                "table:{}:{}",
+                table.row_count(),
+                table.cell(0, 0).unwrap().text()
+            ),
+            BodyItemRef::ContentControl(control) => {
+                format!("control:{}:{}", control.tag().unwrap(), control.text())
+            }
+            BodyItemRef::UnsupportedXml(raw) => {
+                format!("raw:{}", std::str::from_utf8(raw).unwrap())
+            }
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        items,
+        [
+            "paragraph:first",
+            "paragraph:",
+            "table:1:cell",
+            "control:public:control",
+            "raw:<p:opaque p:flag=\"keep\"><p:child/></p:opaque>",
+            "paragraph:last",
+        ]
+    );
+    assert_eq!(
+        document
+            .paragraphs()
+            .iter()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>(),
+        ["first", "", "control", "last"]
+    );
+    assert_eq!(document.tables().len(), 1);
 }
 
 #[test]

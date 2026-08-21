@@ -25,6 +25,14 @@ a reintroduction is obvious from the test name alone rather than from a diff.
 The existing file is the model: `zero_column_tables_do_not_panic`,
 `saving_is_reproducible`.
 
+The ordered-body integration gate opens an in-code package through the public
+Word facade and compares the exact direct sequence of paragraphs, a table, a
+body content control, preserved producer XML, and a final paragraph. It also
+proves that recursive paragraph and table accessors retain their existing
+results. The adjacent low-level regression uses default and aliased Word
+namespaces for self-closing paragraphs, tables, and final section properties,
+while foreign same-local-name empty children remain byte-preserved raw XML.
+
 The release-notes regression gate validates both release tag families through
 the same deterministic parser used by publication. It requires one exact
 version section, the complete ordered heading set, meaningful rendered

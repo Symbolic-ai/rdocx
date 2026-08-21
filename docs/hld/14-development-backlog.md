@@ -2215,7 +2215,9 @@ retaining the contributor commit and GitHub pull-request record. The additive
 native `Document::body_items` reader returns direct document-body children in
 source order as paragraph, table, body-level content-control, or preserved
 unsupported XML views. Existing recursive paragraph and table accessors retain
-their current semantics. Python, WASM, and CLI surfaces remain unchanged.
+their current semantics. Self-closing modeled Word body children normalize to
+the same typed ownership as paired elements, while foreign and unsupported
+empty children remain raw. Python, WASM, and CLI surfaces remain unchanged.
 
 The submitted checks ran against an older base. Retarget the pull request to
 the integrated sprint branch, run current-base GitHub CI, and merge it with a

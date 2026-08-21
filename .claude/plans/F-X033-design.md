@@ -1,6 +1,6 @@
 # F-X033, Integrate PR 36 ordered body items
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S51
 **Size**: S
 **Depends on**: F-X038
@@ -24,6 +24,8 @@ request record while proving the API over the current sprint result.
 - `docs/hld/12-testing-strategy.md`, "Test taxonomy" and integration tests.
 - `docs/hld/14-development-backlog.md`, "F-X033, Integrate PR 36 ordered body
   items".
+- `docs/hld/04-opc-and-packaging.md`, "Package integrity".
+- `docs/hld/06-presentationml-model.md`, "Preservation strategy".
 - GitHub PR 36, `Expose ordered document body items`, contributor commit
   `79390535acba0a116b25ac986b863bdb941c8f15`.
 
@@ -55,6 +57,13 @@ conflict against this plan and the active S51 plans, then run a new microscope
 over the integrated PR range. The old-base checks are evidence about the
 submitted patch, not a substitute for current-tree verification.
 
+The opened-document hardening also normalizes self-closing modeled Word body
+children. Empty `w:p` and `w:tbl` elements become their typed empty values,
+and empty `w:sectPr` becomes the body section properties rather than an extra
+unsupported item. Foreign and otherwise unsupported empty elements remain
+raw bytes. This keeps `body_items()` independent of the producer's lexical
+choice without broadening the modeled element set.
+
 ## Rejected alternatives
 
 - Squash or reimplement the patch. That loses the contributor commit and
@@ -71,6 +80,7 @@ submitted patch, not a substitute for current-tree verification.
 |---|---|---|
 | unit | `body_items_preserve_paragraph_table_control_and_raw_order` | The submitted direct mapping reports all four variants in order |
 | integration, gate | `public_body_items_preserve_opened_document_order` | An opened in-code document reports every direct paragraph, table, control, and raw child once in exact source order |
+| unit | `self_closing_modeled_body_children_are_typed_by_namespace` | Word and aliased empty paragraphs, tables, and section properties are typed while foreign same-local-name elements remain raw |
 | regression | existing recursive accessor tests | `paragraphs()` and `tables()` retain their existing recursive semantics |
 | integration | current-base GitHub CI | The retargeted PR passes the complete repository check graph before merge |
 | packaging | rdocx dry run and archive inventory | The additive public enum and method package without archive growth beyond the limit |
@@ -92,6 +102,10 @@ hash harness also pass.
 - **Public API of a published crate**. Read HLD 10 and the structural rules.
   The native reader is additive, with no binding expansion. Run the workspace
   package dry run and enforce the 10 MiB archive ceiling.
+- **Any parser or serializer**. Read HLD 04 "Package integrity" and HLD 06
+  "Preservation strategy". Prove namespace-aware empty-element parsing,
+  schema-final section-property ordering, canonical typed output, and exact
+  preservation of foreign and unsupported empty children.
 
 The GitHub integration also requires a current sprint branch, a current-base
 CI result, a merge commit, and a public merge record that retains
@@ -105,15 +119,17 @@ uses it.
 
 ## Implementation checklist
 
-- [ ] Confirm the exact contributor head and current GitHub check state.
-- [ ] Integrate F-168, F-X032, and F-X034 before retargeting the PR.
-- [ ] Push only the reviewed current sprint base and retarget PR 36.
-- [ ] Require current-base GitHub CI and merge with a GitHub merge commit.
-- [ ] Add the public open-and-traverse integration gate separately.
-- [ ] Run microscope over the current-base integrated result.
-- [ ] Run full verification, packaging, and the unchanged hash harness.
-- [ ] Update exactly the HLD files listed above.
-- [ ] Preserve Pedro Assumpcao's contributor commit and GitHub merge record.
+- [x] Confirm the exact contributor head and current GitHub check state.
+- [x] Integrate F-168, F-X032, and F-X034 before retargeting the PR.
+- [x] Push only the reviewed current sprint base and retarget PR 36.
+- [x] Require current-base GitHub CI and merge with a GitHub merge commit.
+- [x] Add the public open-and-traverse integration gate separately.
+- [x] Normalize self-closing modeled Word body children without consuming
+  foreign same-local-name or unsupported XML.
+- [x] Run microscope over the current-base integrated result.
+- [x] Run full verification, packaging, and the unchanged hash harness.
+- [x] Update exactly the HLD files listed above.
+- [x] Preserve Pedro Assumpcao's contributor commit and GitHub merge record.
 
 ## Open questions
 
