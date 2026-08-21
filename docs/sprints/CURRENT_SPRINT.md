@@ -33,7 +33,7 @@ the permanent publication contract before the incubating 0.4.0 and stable
 |------|-------|------|--------|-------|
 | F-166 | Mail merge | M | in-progress | codex |
 | F-167 | Document comparison | L | in-progress | codex |
-| F-168 | Watermarks | S | pending | - |
+| F-168 | Watermarks | S | in-progress | codex |
 | F-X032 | Expose complete Word layout results | S | pending | - |
 | F-X033 | Integrate PR 36 ordered body items | S | pending | - |
 | F-X034 | Reviewed release notes for every release | S | pending | - |

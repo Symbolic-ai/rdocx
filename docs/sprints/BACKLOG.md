@@ -31,13 +31,13 @@ regenerated, never hand-edited.
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
 | M14, Word collaboration layer                  | 9  | 9 | 0 | 0  |
 | M15, Charts beyond PowerPoint                  | 4  | 4 | 0 | 0  |
-| M16, Document automation                       | 10 | 7 | 2 | 1  |
+| M16, Document automation                       | 10 | 7 | 3 | 0  |
 | M17, Security and compliance                   | 7  | 0 | 0 | 7  |
 | M18, Format breadth                            | 8  | 0 | 0 | 8  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
 | X, Cross-cutting (opportunistic)            | 39 | 32 | 0 | 6  |
-| **Total** | **250** | **206** | **2** | **41** |
+| **Total** | **250** | **206** | **3** | **40** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -328,7 +328,7 @@ regenerated, never hand-edited.
 | F-165 | Repeating table rows and lists               | S50  | M | done |
 | F-166 | Mail merge                                   | S51  | M | in-progress |
 | F-167 | Document comparison                          | S51  | L | in-progress |
-| F-168 | Watermarks                                   | S51  | S | pending |
+| F-168 | Watermarks                                   | S51  | S | in-progress |
 <!-- AUTOGEN:backlog-M16 END -->
 
 ### M17, Security and compliance
