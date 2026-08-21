@@ -25,7 +25,7 @@ const CUSTOM_XML_PROPS_NS: &[u8] =
 /// Read-only view of one structured document tag in document order.
 #[derive(Debug, Clone, Copy)]
 pub struct ContentControlRef<'a> {
-    inner: &'a CT_Sdt,
+    pub(crate) inner: &'a CT_Sdt,
 }
 
 impl ContentControlRef<'_> {
