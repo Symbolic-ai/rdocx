@@ -1029,19 +1029,37 @@ fn resolve_value<'a>(
                 .map(ResolvedValue::Value);
         }
     }
+    let mut saw_deferred = false;
     for scope in scopes.iter().rev() {
         if scope.deferred {
-            if path.first().is_some_and(|component| {
-                root.as_object()
-                    .is_some_and(|object| object.contains_key(component))
-            }) {
-                return traverse_path(root, path, &display_path).map(ResolvedValue::Value);
-            }
-            return Ok(ResolvedValue::Deferred);
+            saw_deferred = true;
+            continue;
         }
         if let Some(value) = try_traverse_path(&scope.value, path) {
             return Ok(ResolvedValue::Value(value));
         }
+    }
+    if let Some(value) = try_traverse_path(root, path) {
+        return Ok(ResolvedValue::Value(value));
+    }
+    if saw_deferred {
+        for scope in scopes.iter().rev().filter(|scope| !scope.deferred) {
+            if path.first().is_some_and(|component| {
+                scope
+                    .value
+                    .as_object()
+                    .is_some_and(|object| object.contains_key(component))
+            }) {
+                return traverse_path(&scope.value, path, &display_path).map(ResolvedValue::Value);
+            }
+        }
+        if path.first().is_some_and(|component| {
+            root.as_object()
+                .is_some_and(|object| object.contains_key(component))
+        }) {
+            return traverse_path(root, path, &display_path).map(ResolvedValue::Value);
+        }
+        return Ok(ResolvedValue::Deferred);
     }
     traverse_path(root, path, &display_path).map(ResolvedValue::Value)
 }

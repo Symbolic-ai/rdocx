@@ -6447,6 +6447,26 @@ mod tests {
                 .is_err()
         );
         assert_eq!(nested.document.to_xml().unwrap(), before);
+
+        let mut nested_scope = Document::new();
+        for text in [
+            "{% for item in items %}",
+            "{% for child in item.children %}",
+            "{{ settings.missing }}",
+            "{% endfor %}",
+            "{% endfor %}",
+        ] {
+            nested_scope.add_paragraph(text);
+        }
+        let before = nested_scope.document.to_xml().unwrap();
+        assert!(
+            nested_scope
+                .render_template(&serde_json::json!({
+                    "items": [{"children": [], "settings": {}}]
+                }))
+                .is_err()
+        );
+        assert_eq!(nested_scope.document.to_xml().unwrap(), before);
     }
 
     #[test]
