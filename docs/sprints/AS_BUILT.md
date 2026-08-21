@@ -7821,3 +7821,85 @@ checks.
 **Notes for future sessions.** F-X038 may reuse shaping and safe paragraph
 work, but it must preserve the accepted cache identity contract and rebuild
 result-local provenance ids for every returned layout.
+
+### F-X034, Reviewed release notes for every release
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** A canonical `/release-notes TAG` ceremony now derives one
+reviewed GitHub release body from `CHANGELOG.md`. It requires meaningful
+Highlights, Added, Fixed, Compatibility, and Contributors sections for either
+release family. Publication validates the notes before crates.io commands and
+creates the GitHub release from the exact reviewed bytes.
+
+**Non-obvious choices.** The validator parses visible Markdown structure
+conservatively. Headings hidden in comments, fences, or raw HTML do not count,
+and syntax-only links, references, code markers, HTML, or invisible Unicode do
+not satisfy a required section. Rendering preserves the accepted source body
+byte for byte. The generated Codex adapter points to the canonical command.
+
+**Deviations from the design plan.** None. Eleven microscope passes tightened
+CommonMark boundaries, semantic emptiness, canonical SemVer, pre-publication
+ordering, exact executable checks, and artifact immutability.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`, mutation-sensitive
+workflow evidence, `docs/hld/14-development-backlog.md`, the permanent notes
+ceremony, and `docs/hld/15-build-and-toolchain.md`, pre-publication validation
+and exact GitHub body publication.
+
+**Tests.** `test_release_notes_require_complete_reviewed_changelog_sections`
+and four adjacent release-workflow tests, plus the 62-test workflow suite,
+generated-skill validation, publication-order mutation tests, and the full
+integrated verification gate.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Every future release story must run the notes
+ceremony, review its rendered body, and verify the published body byte for byte.
+The ceremony never replaces the separate final release approval.
+
+### F-X038, Cache relayout work across document edits
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Normal layouts now reuse a process-lifetime system-font
+snapshot, bounded file-byte and exact-key shaping caches, one lazy synchronized
+`Document` engine, and a bounded cache for context-independent body paragraphs.
+Warm layouts remain byte-equivalent to cold layouts while rebuilding only
+changed safe paragraphs.
+
+**Non-obvious choices.** Deterministic and caller-font paths remain isolated.
+Paragraph entries publish only after the whole layout succeeds, replay exact
+font-resolution traces and diagnostics, and rebind scalar ranges to the current
+result-local source ids. Context-sensitive paragraphs bypass reuse. Every
+persistent and transaction-local cache has an entry or retained-byte ceiling,
+including reflow buffers and active font faces.
+
+**Deviations from the design plan.** None. Four microscope passes strengthened
+font-table identity, late-failure rollback, caller and tracked isolation,
+AlternateContent safety, TTC sharing, poison reuse, active-face correctness,
+transaction staging, trace capacity release, and exact retained-memory
+accounting.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, persistent engine
+ownership, `docs/hld/08-rendering-spec.md`, safe paragraph reuse and provenance,
+`docs/hld/10-bindings-spec.md`, unchanged public facade behavior,
+`docs/hld/12-testing-strategy.md`, warm and cold equality gates,
+`docs/hld/14-development-backlog.md`, the issue 39 contract, and
+`docs/hld/15-build-and-toolchain.md`, process-lifetime font discovery.
+
+**Tests.** `warm_relayout_matches_cold_and_rebuilds_only_changed_safe_paragraphs`,
+plus exact font order, 257 active families, TTC byte sharing, context mutation,
+late failure, diagnostics, current provenance, poison recovery, transaction and
+retained-byte bounds, no-default, WASM, package, and threading regressions.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Normal system-font discovery is a
+process-lifetime snapshot, so installing or replacing host fonts requires a
+process restart. Release notes for 0.4.0 and 0.8.0 must credit
+`@emptinessform` for the issue 39 measurements and cache proposal.

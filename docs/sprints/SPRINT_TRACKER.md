@@ -281,6 +281,8 @@ defended.
 | F-168 | S51 | S | 1 | 1 | 2026-08-21 | Preserved VML text and image watermarks behind every applicable page |
 | F-X037 | S51 | M | 2 | 1 | 2026-08-21 | Exact Word story and Unicode scalar provenance for positioned glyph runs |
 | F-X032 | S51 | S | 1 | 1 | 2026-08-21 | Complete cached and caller-font Word layout bundles for external renderers |
+| F-X034 | S51 | S | 1 | 1 | 2026-08-21 | Reviewed changelog notes enforced before publication and published unchanged |
+| F-X038 | S51 | L | 4 | 1 | 2026-08-21 | Bounded warm relayout caches with exact cold-layout output and provenance |
 
 ## Velocity
 
