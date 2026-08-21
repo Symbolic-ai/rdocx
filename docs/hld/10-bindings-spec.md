@@ -348,7 +348,7 @@ through the result-local Word source table, and ranges use Unicode scalar
 indices in the recorded revision view. The existing layout functions keep
 returning `LayoutResult`. The `rdocx::Document` facade consumes the provenance
 entry points through additive native accessors, while Python, WASM, and CLI
-surfaces remain unchanged. The exhaustive literal change is prepared in the
+surfaces remain unchanged. The exhaustive literal change is published in the
 incubating 0.4.0 family and remains part of the planned stable 0.8.0 source
 boundary.
 

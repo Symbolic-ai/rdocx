@@ -7941,3 +7941,41 @@ dry-run, and archive inventory.
 **Notes for future sessions.** Direct body order is now public, but nested
 content-control and table traversal remains owned by the existing recursive
 accessors. Preserve contributor credit through the PR 36 merge record.
+
+### F-X035, Tag rpptx-v0.4.0
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The complete 15-package shared OOXML and PowerPoint family
+is published on crates.io at 0.4.0. This is the first release of `oxml-chart`.
+The local `rpptx-wasm` package moved with the family but remains unpublished.
+GitHub release `rpptx-v0.4.0` contains the reviewed changelog body unchanged.
+
+**Non-obvious choices.** The release used one annotated tag at reviewed SHA
+`9dee4335c531ca24abbdc995294edbb48c00183f`. Workflow run 32527109236 skipped
+the stable allowlist, published the incubating crates in dependency order, and
+created the GitHub release only after archive and release-note validation.
+Independent checks downloaded every selected registry version and confirmed
+`mantissaman` as owner. The remote tag peels to the reviewed SHA, and the
+published release body is byte-identical to a fresh notes render.
+
+**Deviations from the design plan.** None. The separately approved release
+completed every deferred publication checklist item.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`, the published
+incubating source boundary, and `docs/hld/15-build-and-toolchain.md`, the
+published package family and reviewed tag.
+
+**Tests.** `test_incubating_release_family_is_prepared_at_0_4_0`, the 63-test
+workflow suite, full workspace verification, patched 22-package dry run,
+archive inventories, both WASM checks, `cargo info` and owner checks for all 15
+published crates, remote tag verification, and byte-exact GitHub release-note
+comparison.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Stable 0.8.0 may now be prepared against the
+published 0.4.0 dependency family. It requires its own reviewed SHA and a new
+explicit `/release v0.8.0` approval before any stable tag or publication.

@@ -1,6 +1,6 @@
 # F-X035, Tag rpptx-v0.4.0
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S51
 **Size**: S
 **Depends on**: F-X034, F-X037, F-X038
@@ -132,10 +132,10 @@ release metadata only. Any output delta blocks release preparation.
 - [x] Run full verification, the 49-entry hash gate, the patched 22-package
   dry run, archive inventory and size checks, both WASM checks, no-default
   layout, docs, README tests, and supply-chain checks.
-- [ ] Run microscope and a clean sprint review at the exact prepared SHA.
-- [ ] Stop at `/release` final approval with the exact SHA, package set,
+- [x] Run microscope and a clean sprint review at the exact prepared SHA.
+- [x] Stop at `/release` final approval with the exact SHA, package set,
   rendered notes, tag, remote, and workflow reported to the user.
-- [ ] After approval, verify all 15 registry entries and owners plus the exact
+- [x] After approval, verify all 15 registry entries and owners plus the exact
   GitHub release target and note bytes before completing the story.
 
 ## Open questions
