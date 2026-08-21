@@ -1,9 +1,9 @@
 # F-X032, Expose complete Word layout results
 
-**Status**: approved
+**Status**: draft
 **Sprint**: S51
 **Size**: S
-**Depends on**: F-009, F-151
+**Depends on**: F-009, F-151, F-X037
 
 ## Problem
 
@@ -30,26 +30,27 @@ cannot obtain that intermediate result.
 
 ## Approach
 
-Expose the existing layout paths through four additive native methods:
+After F-X037 lands the Word-specific provenance bundle, expose the existing
+layout paths through four additive native methods:
 
 ```rust
-pub fn layout(&self) -> Result<Arc<oxml_layout::LayoutResult>>;
+pub fn layout(&self) -> Result<Arc<rdocx_layout::WordLayoutResult>>;
 
 pub fn layout_with_options(
     &self,
     options: RenderOptions,
-) -> Result<Arc<oxml_layout::LayoutResult>>;
+) -> Result<Arc<rdocx_layout::WordLayoutResult>>;
 
 pub fn layout_with_fonts(
     &self,
     font_files: &[(&str, &[u8])],
-) -> Result<oxml_layout::LayoutResult>;
+) -> Result<rdocx_layout::WordLayoutResult>;
 
 pub fn layout_with_fonts_and_options(
     &self,
     font_files: &[(&str, &[u8])],
     options: RenderOptions,
-) -> Result<oxml_layout::LayoutResult>;
+) -> Result<rdocx_layout::WordLayoutResult>;
 ```
 
 Rename the current private two-argument `layout_with_options` helper to
@@ -60,14 +61,19 @@ uncached results because arbitrary borrowed font sets have no stable cache key.
 Route `to_pdf_with_fonts_and_options` through the new caller-font accessor so
 there is one implementation path.
 
-Return `Arc` for cached layouts. Cloning `LayoutResult` would duplicate pages
-and every font byte merely to hide a standard-library ownership type. Do not
-re-export low-level layout types, add another cache, or add a binding surface.
+Return `Arc` for cached layouts. Cloning `WordLayoutResult` would duplicate
+pages, fonts, and the source map merely to hide a standard-library ownership
+type. PDF and raster consumers borrow `result.layout`, while external renderers
+can traverse its pages and fonts and resolve `SourceSpan::node` through the
+same bundle. Do not add another cache or a binding surface.
 
 ## Rejected alternatives
 
 - Return a cloned cached result. This duplicates potentially large font files
   and defeats the cache's sharing contract.
+- Return a bare `LayoutResult`. That would separate issue 37 from the source
+  map requested in issue 38 and force another public signature change before
+  0.8.0.
 - Cache caller-provided fonts. A stable content key and eviction policy are not
   part of this requested accessor.
 - Expose pages and fonts through separate methods. That can separate a page
@@ -79,7 +85,7 @@ re-export low-level layout types, add another cache, or add a binding surface.
 
 | Category | Test | Asserts |
 |---|---|---|
-| regression, gate | `full_layout_exposes_resolvable_font_data_and_reuses_the_cache` | Every glyph-run font id resolves to returned `FontData`, repeated accepted calls share one cache invocation, and PDF uses the same layout |
+| regression, gate | `full_layout_exposes_resolvable_font_data_and_reuses_the_cache` | Every glyph-run font id and source id resolve through the returned bundle, repeated accepted calls share one cache invocation, and PDF uses the same layout |
 | regression | `layout_with_fonts_returns_the_caller_font_mapping_without_caching` | Caller font bytes and family appear in the owned result and repeated calls perform separate layouts |
 | regression | `layout_options_keep_tracked_and_accepted_cache_ownership_separate` | Tracked output honors `RenderOptions` without populating or replacing the accepted cache |
 | integration | public API compile coverage | A downstream-style call can traverse pages, glyph runs, fonts, and raw font bytes through public types |
@@ -127,6 +133,7 @@ layout paths and do not call the new accessors.
 
 ## Open questions
 
-None. The user approved F-X032 for S51. Cache-backed access uses `Arc`,
+None. The user approved F-X032 for S51. Its plan remains draft only because the
+new F-X037 dependency must land first. Cache-backed access uses `Arc`,
 caller-font access stays uncached, and `RenderOptions` variants are included
 from the first public version.

@@ -759,7 +759,7 @@ spreadsheets. Nothing later is a prerequisite for anything earlier.
 |---|---|---|---|
 | S45 to S46 | M15, then M14 opens | 4 plus 5 | 12 plus 15 |
 | S47 to S48 | M14 completes | 4 | 13 |
-| S49 to S51 | M16, document automation | 14 | 36 |
+| S49 to S51 | M16, document automation | 15 | 39 |
 | S52 to S53 | M17, security and compliance | 7 | 23 |
 | S54 to S56 | M18, format breadth | 8 | 26 |
 | S57 to S60 | M19, spreadsheets | 12 | 44 |
@@ -872,13 +872,16 @@ and stable trains.
 | F-X034 | Reviewed release notes for every release | S |
 | F-X035 | Tag rpptx-v0.4.0 | S |
 | F-X036 | Tag v0.8.0 | S |
+| F-X037 | Trace Word glyphs to source paragraphs | M |
 
 F-167 is the flagship of every commercial library in this category. It is scoped
 to body text, tables and list structure, with formatting-only differences
 recorded as a diagnostic, which is what keeps it one story. The community API
-stories remain additive. The incubating release precedes stable 0.8.0 because
-`oxml-chart` must exist on crates.io before the stable dependency graph can
-publish. Both release tags retain separate final approval boundaries.
+surface combines complete layouts, source provenance, and direct ordered body
+items. The incubating release precedes stable 0.8.0 because `oxml-chart` and
+the low-level provenance types must exist on crates.io before the stable
+dependency graph can publish. Both release tags retain separate final approval
+boundaries.
 
 #### Sprint S52, Encryption
 

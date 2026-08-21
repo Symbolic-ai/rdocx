@@ -2192,14 +2192,15 @@ selected failing job makes the required gate fail.
 
 ### F-X032, Expose complete Word layout results (S)
 
-Expose the cached normal-font `LayoutResult` and an uncached caller-font
-`LayoutResult` from `Document` so third-party renderers can consume positioned
-pages together with the exact `FontData` used for shaping. Accepted-default and
-`RenderOptions` variants use the existing layout paths. Cache-backed access
-returns `Arc<LayoutResult>`, caller-font access returns an owned result, and no
-new layout engine or font-set cache is introduced.
+Expose the cached normal-font `WordLayoutResult` and an uncached caller-font
+`WordLayoutResult` from `Document` so third-party renderers can consume
+positioned pages together with the exact `FontData` and Word source map used by
+layout. Accepted-default and `RenderOptions` variants use the existing layout
+paths. Cache-backed access returns `Arc<WordLayoutResult>`, caller-font access
+returns an owned result, and no new layout engine or font-set cache is
+introduced.
 
-**Depends on**: F-009, F-151.
+**Depends on**: F-009, F-151, F-X037.
 **Test gate**: regression. Every emitted glyph-run font id resolves to returned
 font data, repeated default calls share the accepted layout cache,
 caller-provided fonts appear in the owned result, and tracked layout does not
@@ -2254,7 +2255,7 @@ stable `rdocx` graph and was not published at 0.3.0. All 15 crates.io packages
 move together, `rpptx-wasm` remains unpublished, and the reviewed release notes
 name the chart addition, compatibility position, and contributors.
 
-**Depends on**: F-X034.
+**Depends on**: F-X034, F-X037.
 **Test gate**: release. The incubating metadata regression, full verification,
 22-package dry run, archive inventory, supply-chain gate, and unchanged hash
 harness pass. After separate final approval, all 15 crates resolve from
@@ -2271,12 +2272,43 @@ stable crates publish. Python, WASM, npm, PyPI, and incubating publication stay
 unauthorised. The reviewed release notes describe the new APIs, fixes,
 compatibility boundary, and contributor credit.
 
-**Depends on**: F-X035.
+**Depends on**: F-166, F-167, F-168, F-X032, F-X033, F-X035.
 **Test gate**: release. The stable metadata regression, full verification,
 22-package dry run, archive inventory, supply-chain gate, and unchanged hash
 harness pass. After separate final approval, all seven stable crates resolve
 from crates.io at 0.8.0 and the GitHub release uses the reviewed notes at the
 exact sprint SHA while PR 36 credit remains visible.
+
+### F-X037, Trace Word glyphs to source paragraphs (M)
+
+Carry format-neutral source spans through shaping, both line-splitting stages,
+pagination, and positioned glyph output. `rdocx-layout` returns a typed
+`WordLayoutResult` whose result-local side table resolves each source node to a
+document, table, nested-table, header, footer, footnote, or endnote paragraph
+path. Character ranges use Unicode scalar indices in the selected revision
+projection. Generated markers, dynamically evaluated fields, and text whose
+display transformation cannot preserve an exact source slice remain
+unattributed rather than reporting a false location.
+
+The existing `layout_document` functions retain their `LayoutResult` return
+type and discard provenance. New provenance variants return the Word-specific
+bundle. F-X032 exposes that bundle through cached and caller-font facade paths,
+so external renderers receive pages, fonts, and source resolution together.
+
+This is an intentional low-level pre-1.0 source break for exhaustive
+`TextSegment` and `GlyphRun` literals and belongs in the planned 0.4.0 and
+0.8.0 release notes. It does not add rendering support for content that the
+current layout engine skips.
+
+**Depends on**: F-009, F-151.
+**Test gate**: regression. Every attributed glyph run resolves to one exact
+Word paragraph path and Unicode-scalar range whose projected text equals the
+run text across ASCII, CJK, wrapping, tables, nested tables, headers, footers,
+footnotes, endnotes, and both revision views. Both splitting stages preserve
+contiguous ranges. Generated markers, evaluated fields, and non-bijective text
+transformations remain unattributed. Caller-font and cached layouts carry the
+same complete source map, packaged crates remain below 10 MiB, WASM checks
+pass, and all 49 hash entries remain unchanged.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

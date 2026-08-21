@@ -4,7 +4,8 @@
 
 **Goal**: close M16 with mail merge, document comparison, and watermarks, then
 ship the completed milestone with the community-requested ordered-body and
-complete-layout reader surfaces. Keep each operation package-preserving and
+complete-layout reader surfaces, including traceable glyph provenance for
+viewer and editor integrations. Keep each operation package-preserving and
 bounded to its declared document stories. Establish reviewed release notes as
 the permanent publication contract before the incubating 0.4.0 and stable
 0.8.0 releases through a reusable `/release-notes` ceremony.
@@ -39,6 +40,7 @@ the permanent publication contract before the incubating 0.4.0 and stable
 | F-X034 | Reviewed release notes for every release | S | pending | - |
 | F-X035 | Tag rpptx-v0.4.0 | S | pending | - |
 | F-X036 | Tag v0.8.0 | S | pending | - |
+| F-X037 | Trace Word glyphs to source paragraphs | M | pending | - |
 
 ## Sequencing note
 
@@ -47,12 +49,14 @@ Rows are listed in dependency order, not F-ID order.
 F-166 comes first because it composes the existing field and
 structural-template evaluators. F-167 follows as the flagship comparison path
 over body text, tables, and lists. F-168 completes the milestone through the
-independent header and renderer path. F-X032 then opens the existing layout
-result to external renderers. F-X033 integrates PR 36 only after the product
-wave is present on its sprint base, so current GitHub CI sees the real result
-and Pedro Assumpcao's commit remains in the merge record. F-X034 establishes
-reviewed release notes before either release tag. F-X035 publishes the missing
-incubating chart dependency at 0.4.0. F-X036 can prepare and publish stable
+independent header and renderer path. F-X037 then carries exact Word source
+provenance through the layout engine. F-X032 opens that combined layout result
+to external renderers without shipping an intermediate public signature.
+F-X033 integrates PR 36 only after the product wave is present on its sprint
+base, so current GitHub CI sees the real result and Pedro Assumpcao's commit
+remains in the merge record. F-X034 establishes reviewed release notes before
+either release tag. F-X035 publishes the missing incubating chart dependency
+and low-level provenance types at 0.4.0. F-X036 can prepare and publish stable
 0.8.0 only after that registry dependency is verified.
 
 ## Definition of done for this sprint
@@ -67,6 +71,8 @@ incubating chart dependency at 0.4.0. F-X036 can prepare and publish stable
   behind body text on every page.
 - Third-party renderers can obtain positioned pages together with every font
   used by shaping, including caller-provided fonts on WASM.
+- Every attributed glyph run resolves to one exact Word story path and Unicode
+  scalar range, while generated text remains truthfully unattributed.
 - Direct body paragraphs, tables, content controls, and unsupported XML are
   readable once each in exact source order through the PR 36 API.
 - Every release uses reviewed notes with highlights, user-visible changes,
